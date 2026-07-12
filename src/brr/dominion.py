@@ -14,19 +14,11 @@ seed files, and resolving the self-inject index into a wake-time digest
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass
-import os
 import re
-import time
 from pathlib import Path
 
 from . import gitops
-
-try:
-    import fcntl  # POSIX-only; brr targets Linux/macOS hosts + containers.
-except ImportError:  # pragma: no cover - non-POSIX fallback
-    fcntl = None
 
 
 DEFAULT_BRANCH = "brr-home"
@@ -208,46 +200,16 @@ def ensure_dominion(
     return path
 
 
-@contextlib.contextmanager
 def _commit_lock(dominion_dir: Path, timeout: float):
     """Hold an exclusive cross-process lock for the dominion commit step.
 
-    The lock file lives in the shared ``.brr/`` dir (the worktree's
-    parent), not inside the worktree, so it never lands in the dominion's
-    own history. ``fcntl.flock`` is advisory and per-open-file-description,
-    which is exactly what serializes two *separate processes* (a daemon
-    thought and an ad-hoc session) — a ``threading.Lock`` would only cover
-    threads of one process. Yields True when held, False when the lock
-    couldn't be acquired within *timeout* (caller skips rather than races)
-    or locking is unavailable on the platform (degrade to no-op lock).
+    The lock file lives in the shared ``.brr/`` dir (the worktree's parent),
+    not inside the worktree, so it never lands in the dominion's own
+    history. The locking itself is :func:`brr.gitops.file_lock` — the same
+    primitive the knowledge capture net uses, since both serialize the same
+    hazard: two processes touching one shared git index.
     """
-    if fcntl is None:  # pragma: no cover - non-POSIX
-        yield True
-        return
-    lock_path = dominion_dir.parent / COMMIT_LOCK_FILE
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    except OSError:
-        yield True  # can't make a lock file — proceed best-effort
-        return
-    acquired = False
-    try:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(0.05)
-        yield acquired
-    finally:
-        if acquired:
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    return gitops.file_lock(dominion_dir.parent / COMMIT_LOCK_FILE, timeout)
 
 
 def mark_needs_sync(brr_dir: Path, reason: str) -> None:
@@ -258,29 +220,22 @@ def mark_needs_sync(brr_dir: Path, reason: str) -> None:
     itself — pull / merge / resolve / push is git-layer dissonance resolution,
     the agent's judgement, not the daemon's (``kb/design-self-scheduled-
     thoughts.md`` → sync companion). Cleared by the next successful push.
+
+    The mechanism is shared with the knowledge chain's marker
+    (:func:`brr.gitops.write_sync_marker`) — two memories, one divergence
+    protocol.
     """
-    try:
-        brr_dir.mkdir(parents=True, exist_ok=True)
-        (brr_dir / SYNC_MARKER_FILE).write_text(reason.strip() + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
     """Clear the dominion sync-needed marker (best-effort)."""
-    try:
-        (brr_dir / SYNC_MARKER_FILE).unlink(missing_ok=True)
-    except OSError:
-        pass
+    gitops.clear_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
 def needs_sync(brr_dir: Path) -> str | None:
     """Return the dominion sync-needed reason, or ``None`` when in sync."""
-    try:
-        text = (brr_dir / SYNC_MARKER_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return text or None
+    return gitops.read_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
 def commit(

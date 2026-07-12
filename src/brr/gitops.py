@@ -63,6 +63,38 @@ def file_lock(lock_path: Path, timeout: float = 30.0):
         os.close(fd)
 
 
+# ── Divergence markers ───────────────────────────────────────────────
+#
+# One protocol, two memories. A capture net (dominion, knowledge) pushes
+# best-effort; a *rejected* push is never swallowed — it writes a marker to
+# the gitignored runtime dir, the wake prompt surfaces it, and the resident
+# reconciles by hand (fetch / merge / resolve / push is judgement, not a
+# reflex the daemon should fake). A successful push clears it.
+
+
+def write_sync_marker(brr_dir: Path, name: str, reason: str) -> None:
+    try:
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        (brr_dir / name).write_text(reason.strip() + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_sync_marker(brr_dir: Path, name: str) -> None:
+    try:
+        (brr_dir / name).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def read_sync_marker(brr_dir: Path, name: str) -> str | None:
+    try:
+        text = (brr_dir / name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
 @dataclass
 class BranchUpdateResult:
     """Result of fast-forwarding a local branch to another ref."""
