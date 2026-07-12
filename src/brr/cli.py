@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("up", help="start the daemon")
     p.add_argument("--dev-reload", action="store_true", default=None,
-                   help="developer: re-exec daemon when brr package files change")
+                   help="developer: re-exec daemon when brnrd package files change")
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop the daemon")
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--foreground", action="store_true",
                    help="run the foreground daemon instead of the installed service")
     p.add_argument("--dev-reload", action="store_true", default=None,
-                   help="developer: re-exec daemon when brr package files change")
+                   help="developer: re-exec daemon when brnrd package files change")
     p.set_defaults(func=cmd_daemon_up)
 
     p = daemon_sub.add_parser("down", help="stop the daemon")
@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
         "run",
         help="run one scenario in a sandbox (spends real runner quota)")
     p.add_argument("--scenario", default="simple-ask",
-                   help="scenario name (see `brr bench scenarios`)")
+                   help="scenario name (see `brnrd bench scenarios`)")
     p.add_argument("--shell", default="claude-haiku",
                    help="runner profile to pin in the sandbox")
     p.add_argument("--root", default=None,
@@ -311,7 +311,7 @@ def cmd_run(args):
     brr = _brr_dir()
     pid = daemon_mod.read_pid(brr)
     if pid:
-        print(f"[brr] warning: daemon running (pid {pid}) — concurrent writes possible")
+        print(f"[brnrd] warning: daemon running (pid {pid}) — concurrent writes possible")
 
     from . import runner
     runner.run_task(args.instruction)
@@ -332,11 +332,11 @@ def cmd_agent_inject(args):
 
     repo_root = _maybe_repo_root()
     if repo_root is None:
-        print("[brr agent inject] not inside a git repo", file=sys.stderr)
+        print("[brnrd agent inject] not inside a git repo", file=sys.stderr)
         return 2
     text = prompts.build_injected_context(repo_root, task_text=args.task)
     if not text.strip():
-        print("[brr agent inject] no dominion here yet — bootstrap one with "
+        print("[brnrd agent inject] no dominion here yet — bootstrap one with "
               "`brnrd init` or by starting the daemon", file=sys.stderr)
         return 1
     print(text)
@@ -412,7 +412,7 @@ def _format_portal_state(payload: dict) -> str:
         if isinstance(payload.get("resources"), dict) else {}
     )
     lines = [
-        "[brr portal state] "
+        "[brnrd portal state] "
         f"run={run.get('id') or '-'} "
         f"event={run.get('event_id') or '-'} "
         f"phase={run.get('phase') or '-'} "
@@ -562,7 +562,7 @@ def cmd_runners_list(args):
 
     # ── Text output ──────────────────────────────────────────────────
     if current_runner_err and not current_runner:
-        print(f"[brr runners] note: could not resolve current runner — "
+        print(f"[brnrd runners] note: could not resolve current runner — "
               f"{current_runner_err}", file=sys.stderr)
 
     def _mark(row: dict) -> str:
@@ -638,7 +638,7 @@ def cmd_bench_run(args):
 
     scenario = bench.SCENARIOS.get(args.scenario)
     if scenario is None:
-        print(f"[brr] unknown scenario '{args.scenario}' — see `brr bench scenarios`")
+        print(f"[brnrd] unknown scenario '{args.scenario}' — see `brnrd bench scenarios`")
         return 2
     if args.timeout:
         scenario = dataclasses.replace(scenario, timeout_seconds=args.timeout)
@@ -647,17 +647,17 @@ def cmd_bench_run(args):
         if args.root
         else bench.default_root(scenario.name, args.shell)
     )
-    print(f"[brr] bench: {scenario.name} @ {args.shell} → {root}")
-    print("[brr] bench: spawning sandbox daemon (spends real runner quota)…")
+    print(f"[brnrd] bench: {scenario.name} @ {args.shell} → {root}")
+    print("[brnrd] bench: spawning sandbox daemon (spends real runner quota)…")
     transcript, results = bench.run_scenario(scenario, shell=args.shell, root=root)
     passed = sum(1 for r in results if r.passed)
     for r in results:
         mark = "✓" if r.passed else "✗"
         print(f"  {mark} {r.name}: {r.detail}")
     status = "TIMED OUT — " if transcript.timed_out else ""
-    print(f"[brr] bench: {status}{passed}/{len(results)} probes ✓")
-    print(f"[brr] bench: report → {root / 'report.md'}")
-    print(f"[brr] bench: transcript → {root / 'transcript.md'}")
+    print(f"[brnrd] bench: {status}{passed}/{len(results)} probes ✓")
+    print(f"[brnrd] bench: report → {root / 'report.md'}")
+    print(f"[brnrd] bench: transcript → {root / 'transcript.md'}")
     return 0 if passed == len(results) else 1
 
 
@@ -670,12 +670,12 @@ def cmd_portal_state(args):
     if payload is None:
         if error and path is not None:
             print(
-                f"[brr portal state] could not read {path}: {error}",
+                f"[brnrd portal state] could not read {path}: {error}",
                 file=sys.stderr,
             )
             return 2
         print(
-            "[brr portal state] no live portal-state.json found "
+            "[brnrd portal state] no live portal-state.json found "
             "(run inside a daemon wake or pass --path)",
             file=sys.stderr,
         )
@@ -714,7 +714,7 @@ def cmd_portal_facets(args):
         return 0
 
     live = resources is not None
-    header = "[brr portal facets] boundary facet catalogue"
+    header = "[brnrd portal facets] boundary facet catalogue"
     print(header + (" (with live status)" if live else " (schema only)"))
     for row in rows:
         flag = "required" if row["required"] else "optional"
@@ -764,7 +764,7 @@ def cmd_review(args):
         if args.json:
             print(_json.dumps({"ok": False, "error": str(e)}))
         else:
-            print(f"[brr review] {e}")
+            print(f"[brnrd review] {e}")
         return 2
 
     if args.pr_title:
@@ -799,7 +799,7 @@ def cmd_review(args):
         return 0
 
     if not args.check:
-        print("[brr review] pass `--check`, `--pr-title`, or `--pr-body` "
+        print("[brnrd review] pass `--check`, `--pr-title`, or `--pr-body` "
               "(the local render/serve surface is a follow-up)")
         return 0
 
@@ -823,7 +823,7 @@ def cmd_review(args):
             print(f"  {issue.format()}")
         n_cards = len(loaded.get("cards") or [])
         scope = "against repo" if repo_root else "structure-only (no repo)"
-        print(f"[brr review] {path.name}: {n_cards} cards, "
+        print(f"[brnrd review] {path.name}: {n_cards} cards, "
               f"{len(errors)} error(s), {len(warnings)} warning(s) — {scope}")
     return 1 if errors else 0
 
@@ -912,9 +912,9 @@ def cmd_down(args):
     from . import daemon as daemon_mod
     brr = _brr_dir()
     if daemon_mod.stop(brr):
-        print("[brr] daemon stopped")
+        print("[brnrd] daemon stopped")
     else:
-        print("[brr] daemon not running")
+        print("[brnrd] daemon not running")
 
 
 def cmd_daemon_up(args):
@@ -986,7 +986,7 @@ def _fmt_ts(epoch: float) -> str:
 
 
 def _ergonomics_empty_hint() -> None:
-    print("[brr ergonomics] no records found. This view reads the on-disk "
+    print("[brnrd ergonomics] no records found. This view reads the on-disk "
           "store, which only `ergonomics=local` writes to. The default "
           "(`ergonomics=log`) surfaces findings on the daemon log instead; "
           "set `ergonomics=local` in .brr/config to persist them here.")
@@ -1013,7 +1013,7 @@ def cmd_ergonomics_summary(args):
         _ergonomics_empty_hint()
         return 0
 
-    print(f"[brr ergonomics] {len(records)} record(s) over {args.days}d, "
+    print(f"[brnrd ergonomics] {len(records)} record(s) over {args.days}d, "
           f"{len(summaries)} issue(s):")
     for s in summaries:
         print(
@@ -1057,7 +1057,7 @@ def cmd_ergonomics_clear(args):
     if args.before:
         before_ts = datetime.fromisoformat(args.before).replace(tzinfo=timezone.utc).timestamp()
     removed = ergonomics.clear_records(_brr_dir(), before_ts=before_ts)
-    print(f"[brr ergonomics] cleared {removed} record(s)")
+    print(f"[brnrd ergonomics] cleared {removed} record(s)")
     return 0
 
 
@@ -1066,7 +1066,7 @@ def _portal_state_path(explicit: str | None) -> Path | None:
         return Path(explicit)
     # Inside a wake the daemon hands the resident the live portal path as
     # ``BRR_PORTAL_STATE`` (the delivery contract). Honour it first so
-    # ``brr portal state`` / ``brr portal facets`` resolve on demand without a
+    # ``brnrd portal state`` / ``brnrd portal facets`` resolve on demand without a
     # ``--path``, which is the whole point of "see them on demand".
     import os
 

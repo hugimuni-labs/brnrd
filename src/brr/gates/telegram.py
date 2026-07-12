@@ -270,27 +270,27 @@ def auth(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = input("Telegram bot token (from @BotFather): ").strip()
     if not token:
-        print("[brr] No token provided.")
+        print("[brnrd] No token provided.")
         return
     try:
         resp = _api_call(token, "getMe")
         bot = resp.get("result", {})
-        print(f"[brr] Authenticated as @{bot.get('username', '?')}")
+        print(f"[brnrd] Authenticated as @{bot.get('username', '?')}")
     except Exception as e:
-        print(f"[brr] Authentication failed: {e}")
+        print(f"[brnrd] Authentication failed: {e}")
         return
     state["token"] = token
     _save_state(brr_dir, state)
-    print("[brr] Token saved. Start the daemon, then send the bot a message.")
+    print("[brnrd] Token saved. Start the daemon, then send the bot a message.")
 
 
 def bind(brr_dir: Path) -> None:
     """Optionally restrict Telegram to a single chat/topic."""
     state = _load_state(brr_dir)
     if "token" not in state:
-        print("[brr] Run `brr auth telegram` first.")
+        print("[brnrd] Run `brnrd auth telegram` first.")
         return
-    print("[brr] Telegram works with just `brr auth telegram`.")
+    print("[brnrd] Telegram works with just `brnrd auth telegram`.")
     chat_id = input(
         "Optional chat ID to restrict to (leave empty to accept all): "
     ).strip()
@@ -298,30 +298,30 @@ def bind(brr_dir: Path) -> None:
         state.pop("chat_id", None)
         state.pop("topic_id", None)
         _save_state(brr_dir, state)
-        print("[brr] Telegram will accept messages from any chat.")
+        print("[brnrd] Telegram will accept messages from any chat.")
         return
     try:
         state["chat_id"] = int(chat_id)
     except ValueError:
-        print("[brr] Chat ID must be a number.")
+        print("[brnrd] Chat ID must be a number.")
         return
     topic_id = input("Topic/thread ID (leave empty for none): ").strip()
     if topic_id:
         try:
             state["topic_id"] = int(topic_id)
         except ValueError:
-            print("[brr] Topic ID must be a number.")
+            print("[brnrd] Topic ID must be a number.")
             return
     else:
         state.pop("topic_id", None)
     try:
-        _send_message(state["token"], state["chat_id"], "brr bound.", state.get("topic_id"))
-        print("[brr] Test message sent.")
+        _send_message(state["token"], state["chat_id"], "brnrd bound.", state.get("topic_id"))
+        print("[brnrd] Test message sent.")
     except Exception as e:
-        print(f"[brr] Failed: {e}")
+        print(f"[brnrd] Failed: {e}")
         return
     _save_state(brr_dir, state)
-    print("[brr] Binding saved")
+    print("[brnrd] Binding saved")
 
 
 def setup(brr_dir: Path) -> None:

@@ -174,7 +174,7 @@ class WorktreeEnv(HostEnv):
                     f"at {exc.checkout_path}; starting on {run_branch_name!r} "
                     f"from {branch_plan.seed_ref!r} instead"
                 )
-                print(f"[brr] run {task.id}: {notice}")
+                print(f"[brnrd] run {task.id}: {notice}")
                 task.meta["branch_setup"] = "target-checked-out-elsewhere"
                 task.meta["branch_setup_notice"] = notice
                 task.meta["target_branch_checkout_path"] = str(exc.checkout_path)
@@ -246,14 +246,14 @@ class WorktreeEnv(HostEnv):
 
         if outcome.keep_worktree:
             print(
-                f"[brr] run {task.id}: keeping worktree at {worktree_path} "
+                f"[brnrd] run {task.id}: keeping worktree at {worktree_path} "
                 f"({outcome.keep_reason})"
             )
             return task
 
         if worktree.has_uncommitted_changes(worktree_path):
             print(
-                f"[brr] run {task.id}: keeping worktree at {worktree_path} "
+                f"[brnrd] run {task.id}: keeping worktree at {worktree_path} "
                 "(uncommitted changes left behind)"
             )
             return task
@@ -348,7 +348,7 @@ class WorktreeEnv(HostEnv):
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
             if detail:
-                print(f"[brr] warning: could not delete {branch}: {detail}")
+                print(f"[brnrd] warning: could not delete {branch}: {detail}")
 
 
 @dataclass
@@ -870,7 +870,7 @@ class DockerEnv(WorktreeEnv):
             if result.returncode != 0:
                 detail = result.stderr.strip() or result.stdout.strip()
                 print(
-                    "[brr] warning: failed to remove docker container "
+                    "[brnrd] warning: failed to remove docker container "
                     f"{container}: {detail}"
                 )
         return task
