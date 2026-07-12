@@ -122,4 +122,4 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         _save_progress_for_run(brr_dir, run_id, entry)
 
     except Exception as exc:
-        print(f"[brr:github] render_update error for {run_id}: {exc}")
+        print(f"[brnrd:github] render_update error for {run_id}: {exc}")

@@ -299,7 +299,7 @@ regardless of status, so a human can recover work.
   a brr checkout. If you're on an older daemon, set that by hand or rebuild
   after pulling. For non-brr repos, rebuild the runner image when brr itself
   changes (``brnrd init -i``).
-- **`brr review` runs the wrong tool (image-renderer help)** — PyPI's
+- **`brnrd review` runs the wrong tool (image-renderer help)** — PyPI's
   ``brr`` package is an unrelated terminal image renderer. Older bundled
   Dockerfiles ``pip install 'brr>=0.1.0'`` pulled that by mistake.
   Rebuild from the current bundled Dockerfile (`brnrd init -i`): it copies

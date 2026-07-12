@@ -149,12 +149,12 @@ def _deliver_pull_request(
     title = _event_field(event, "title", "github_title")
     base = _event_field(event, "base", "github_base")
     if not repo or not head or not base or not title or not body.strip():
-        print("[brr:github] pull-request delivery missing repo/head/base/title/body")
+        print("[brnrd:github] pull-request delivery missing repo/head/base/title/body")
         return
     url = prs.open_or_refresh_pr(
         token, repo, head=head, title=title, body=body, base=base,
     )
-    print(f"[brr:github] pull request delivered -> {url or head}")
+    print(f"[brnrd:github] pull request delivered -> {url or head}")
 
 
 def _deliver_responses(

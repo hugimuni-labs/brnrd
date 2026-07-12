@@ -35,7 +35,7 @@ wheels = [
 ]
 
 [[package]]
-name = "brr"
+name = "brnrd"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -68,7 +68,7 @@ postgres = [
 
 [package.metadata]
 requires-dist = [
-    { name = "brr", extras = ["backend"], marker = "extra == 'dev'" },
+    { name = "brnrd", extras = ["backend"], marker = "extra == 'dev'" },
     { name = "fastapi", marker = "extra == 'backend'", specifier = ">=0.110" },
     { name = "httpx", marker = "extra == 'backend'", specifier = ">=0.27" },
     { name = "jinja2", marker = "extra == 'backend'", specifier = ">=3.1" },
