@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import account, home_link
+from brr import account, gitops, home_link
 
 
 def _cfg(home: Path) -> dict:
@@ -89,7 +89,8 @@ def test_adopts_existing_github_repo_when_gh_repo_view_finds_one(tmp_path, monke
             return _cp(0)
         if args[:2] == ["repo", "view"]:
             name = args[2].split("/", 1)[1]
-            return _cp(0, stdout=f'{{"url": "https://github.com/acme/{name}"}}\n')
+            return _cp(0, stdout=f'{{"url": "https://github.com/acme/{name}", '
+                                 f'"visibility": "PRIVATE"}}\n')
         raise AssertionError(f"unexpected gh call: {args}")
 
     monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
@@ -198,7 +199,8 @@ def test_push_failure_names_the_repo_and_leaves_origin_wired(tmp_path, monkeypat
     monkeypatch.setattr(home_link, "_clone_url", clone_url)
     monkeypatch.setattr(home_link, "_run_gh", lambda args: (
         _cp(0) if args[:2] == ["auth", "status"]
-        else _cp(0, stdout=f'{{"url": "https://github.com/acme/{args[2].split("/",1)[1]}"}}\n')
+        else _cp(0, stdout=f'{{"url": "https://github.com/acme/'
+                          f'{args[2].split("/",1)[1]}", "visibility": "PRIVATE"}}\n')
     ))
 
     seen = []
@@ -210,7 +212,6 @@ def test_push_failure_names_the_repo_and_leaves_origin_wired(tmp_path, monkeypat
     # dominion succeeded and was reported before the knowledge failure surfaced
     assert [r.slot for r in seen] == ["dominion"]
     ctx = account.resolve_context(repo_root, _cfg(home), create=False)
-    from brr import gitops
     assert gitops.default_remote(ctx.dominion_repo) == "origin"
     knowledge_root = account.knowledge_path(ctx)
     # origin is left wired on the failed repo too — half-wired, but said plainly
@@ -236,3 +237,53 @@ def test_resolve_owner_failure_is_actionable(monkeypatch):
     monkeypatch.setattr(home_link, "_run_gh", lambda args: _cp(1, stderr="boom"))
     with pytest.raises(home_link.HomeLinkError, match="pass --owner"):
         home_link.resolve_owner(None)
+
+
+def test_refuses_to_adopt_a_public_repo(tmp_path, monkeypatch):
+    """The create path was careful (`--private`); the *adopt* path was never
+    asked. Wiring origin to an existing public `brnrd-home` would push the
+    agent's memory onto a public profile — the same shape as the overflow gist
+    that shipped `--public` while the design page argued for data-minimization."""
+    home = tmp_path / "home"
+    repo_root = tmp_path / "repo"
+    monkeypatch.setattr(home_link, "_clone_url", lambda owner, name: "unused")
+
+    def fake_run_gh(args):
+        if args[:2] == ["auth", "status"]:
+            return _cp(0)
+        if args[:2] == ["repo", "view"]:
+            name = args[2].split("/", 1)[1]
+            return _cp(0, stdout=f'{{"url": "https://github.com/acme/{name}", '
+                                 f'"visibility": "PUBLIC"}}\n')
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
+
+    with pytest.raises(home_link.HomeLinkError) as excinfo:
+        home_link.link_home(repo_root, _cfg(home), owner="acme")
+
+    message = str(excinfo.value)
+    assert "public" in message
+    assert "isn't private" in message
+    # And nothing was wired: a refusal must leave no half-configured remote.
+    ctx = account.resolve_context(repo_root, _cfg(home), create=False)
+    assert gitops.default_remote(ctx.dominion_repo) is None
+
+
+def test_unreadable_visibility_is_refused_too(tmp_path, monkeypatch):
+    """Unknown is not a licence. Refusing is cheap and recoverable; a public
+    push of agent memory is neither."""
+    home = tmp_path / "home"
+    repo_root = tmp_path / "repo"
+
+    def fake_run_gh(args):
+        if args[:2] == ["auth", "status"]:
+            return _cp(0)
+        if args[:2] == ["repo", "view"]:
+            return _cp(0, stdout='{"url": "https://github.com/acme/brnrd-home"}\n')
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(home_link, "_run_gh", fake_run_gh)
+
+    with pytest.raises(home_link.HomeLinkError):
+        home_link.link_home(repo_root, _cfg(home), owner="acme")
