@@ -78,6 +78,22 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_setup)
 
+    home_p = sub.add_parser("home", help="manage the resolved brnrd home")
+    home_sub = home_p.add_subparsers(dest="home_command", required=True)
+    p = home_sub.add_parser(
+        "link",
+        help="back up the agent's memory + knowledge base to private GitHub repos",
+    )
+    p.add_argument("--yes", action="store_true",
+                   help="skip the confirmation prompt (required when not on a TTY)")
+    p.add_argument("--owner", default=None,
+                   help="GitHub owner/org for the backup repos (default: `gh api user` login)")
+    p.add_argument("--dominion-name", default=None,
+                   help="repo name for the memory backup (default: brnrd-home)")
+    p.add_argument("--knowledge-name", default=None,
+                   help="repo name for the knowledge backup (default: brnrd-knowledge)")
+    p.set_defaults(func=cmd_home_link)
+
     p = sub.add_parser("up", help="start the daemon")
     p.add_argument("--dev-reload", action="store_true", default=None,
                    help="developer: re-exec daemon when brnrd package files change")
@@ -889,6 +905,47 @@ def cmd_add(args):
     label = account.repo_label(repo_root, target_cfg)
     account.register_repo(ctx, repo_root, label=label)
     print(f"[brnrd] added {label} to account home {ctx.dominion_repo}")
+
+
+def cmd_home_link(args):
+    import sys
+
+    from . import config as conf
+    from . import home_link
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise SystemExit(
+                "[brnrd] `brnrd home link` needs --yes when not running interactively"
+            )
+        from .adopt import _confirm
+
+        print()
+        if not _confirm(
+            "Back up the agent's memory and knowledge base to private GitHub repos?",
+            default=True,
+        ):
+            print("[brnrd] cancelled — nothing changed")
+            return
+
+    def _report(result: "home_link.RepoLinkResult") -> None:
+        state = "pushed" if result.pushed else "already up to date"
+        print(f"[brnrd] {result.slot}: {result.action} → {result.remote_url} ({state})")
+
+    try:
+        home_link.link_home(
+            repo_root,
+            cfg,
+            owner=args.owner,
+            dominion_name=args.dominion_name or home_link.DEFAULT_DOMINION_NAME,
+            knowledge_name=args.knowledge_name or home_link.DEFAULT_KNOWLEDGE_NAME,
+            on_result=_report,
+        )
+    except home_link.HomeLinkError as exc:
+        raise SystemExit(f"[brnrd] {exc}")
 
 
 def cmd_setup(args):

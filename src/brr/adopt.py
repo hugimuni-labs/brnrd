@@ -138,6 +138,9 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     _run_setup(runner_name, repo_root)
     _verify(repo_root)
 
+    if interactive and sys.stdin.isatty():
+        _offer_home_link(repo_root)
+
 
 def _interactive_configure(available: list[str]) -> tuple[str, dict]:
     """Ask the user a few setup questions. Returns (runner, config_overrides)."""
@@ -195,6 +198,39 @@ def _configure_environment() -> dict:
                 )
 
     return overrides
+
+
+def _offer_home_link(repo_root: Path) -> None:
+    """Ask the single git-durability question, then wire both home repos.
+
+    Unification, not a second setup flow: one question covers the
+    dominion (memory) and knowledge repos in one shot — see
+    ``home_link.link_home``. Skipped entirely, with no question asked,
+    when ``gh`` isn't on PATH: init must never depend on ``gh`` for its
+    own success, and asking a question whose only answer is "can't" is
+    the exact user-fatigue this brief warned against.
+    """
+    from . import home_link
+
+    if not home_link.gh_available():
+        return
+
+    print()
+    if not _confirm(
+        "Back up the agent's memory and knowledge base to private GitHub repos?",
+        default=True,
+    ):
+        return
+
+    try:
+        results = home_link.link_home(repo_root, conf.load_config(repo_root))
+    except home_link.HomeLinkError as exc:
+        print(f"[brnrd] git durability setup skipped: {exc}")
+        return
+
+    for result in results:
+        state = "pushed" if result.pushed else "already up to date"
+        print(f"[brnrd] {result.slot}: {result.action} → {result.remote_url} ({state})")
 
 
 def _build_default_docker_image() -> bool:
