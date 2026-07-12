@@ -327,7 +327,10 @@ def build(
         "kind": spec_scm.kind, "required": spec_scm.required,
         "branch": branch,
         "pr_number": pr if pr_recorded else None,
-        "pr_state": "open" if pr_recorded else "none",
+        # `.pr` is a network-free handle, not authoritative forge state. It
+        # proves only that a PR was recorded during this run; calling it open
+        # becomes false the moment the resident merges it in the same wake.
+        "pr_state": "recorded" if pr_recorded else "none",
         "summary": f"PR #{pr}" if pr_recorded else None,
         "note": None if pr_recorded else "no PR recorded for this branch yet",
     }
@@ -360,8 +363,7 @@ def facet_value(facet: dict[str, object] | None) -> str:
     facet = facet if isinstance(facet, dict) else {}
     status = facet.get("status")
     if status == KNOWN:
-        pr_state = str(facet.get("pr_state") or "").strip()
-        if pr_state == "open" and facet.get("pr_number"):
+        if facet.get("pr_number"):
             return f"PR #{facet.get('pr_number')}"
         summary = str(facet.get("summary") or "").strip()
         return summary or "known"
