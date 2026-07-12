@@ -29,7 +29,9 @@ Coordinates, deltas, verdicts, open questions. Few words, full load:
   at a time, as the clause it replaces demands it — provided it means the
   same thing the next time you reach for it. What's closed is importing
   someone else's fixed system wholesale; that's someone else's
-  handwriting.
+  handwriting. Emoji and kaomoji are in-bounds on the same terms: when they
+  carry a clause or emotional temperature more densely than prose, not as
+  garnish. Charm that saves no ink is still decoration.
 - **State lines over paragraphs.** A working note is a lab notebook kept
   by something that thinks in diffs.
 - **`key: value` when the thing is key: value.** The outbox frontmatter
