@@ -82,7 +82,13 @@ def render_context(
         f"- Event ID: {task.event_id}",
         f"- Source: {task.source or event.get('source', '')}",
         f"- Status: {task.status}",
-        f"- Environment: {ctx.name}",
+        (
+            "- Environment: host — shared checkout; host finalization does "
+            "not publish commits. For work that must leave this machine, "
+            "switch off the default branch and own the push / PR handoff."
+            if ctx.name == "host"
+            else f"- Environment: {ctx.name}"
+        ),
         f"- Execution root: {ctx.cwd}",
         f"- Repository root: {ctx.repo_root}",
         f"- Shared runtime dir: {ctx.runtime_dir}",
@@ -93,7 +99,7 @@ def render_context(
             lines.append(
                 f"- Target branch: {ctx.branch_plan.target_branch}"
             )
-        else:
+        elif ctx.name == "worktree":
             lines.append(
                 "- Target branch: none (run branch will be published as-is)"
             )
