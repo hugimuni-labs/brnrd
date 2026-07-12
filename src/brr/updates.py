@@ -138,7 +138,7 @@ def _render_console(packet: UpdatePacket) -> None:
     if packet.type in _QUIET_TYPES:
         return
     payload = packet.payload or {}
-    bits = [f"[brr:update] {packet.type}"]
+    bits = [f"[brnrd:update] {packet.type}"]
     if packet.conversation_key:
         bits.append(f"conv={packet.conversation_key}")
     for key in ("run_id", "event_id", "branch", "stage", "kind", "error"):

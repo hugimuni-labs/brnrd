@@ -166,7 +166,7 @@ def build_closed_run_row(
     mismatch = core_mismatch(expected_core, resolved_core)
     if mismatch:
         print(
-            f"[brr:run-ledger] WARNING: run {task.id} was dispatched with "
+            f"[brnrd:run-ledger] WARNING: run {task.id} was dispatched with "
             f"core={expected_core!r} but the Shell observed "
             f"{resolved_core!r} — the configured core pin was not respected.",
             file=sys.stderr,

@@ -1,6 +1,6 @@
 # Portals — the shape of a daemon run, and the seams you steer it through
 
-How an average daemon run unfolds under the brr daemon, and the
+How an average daemon run unfolds under the brnrd daemon, and the
 control-file protocol — the **portals** — you steer it through. This is
 the *manual* — read it when a run's shape is unfamiliar or you need to
 look up a control file. It is **inspected, not injected**: a wake carries
@@ -50,7 +50,7 @@ other so they don't drift.
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout to fold in waiting work or explicitly leave it queued; never edit or remove it. |
-| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brr portal state`; never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
 The daemon also injects runner environment variables for the live
 surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
@@ -72,8 +72,8 @@ already pending before runner exit into the same thought. A follow-up that
 arrives after the runner has returned cannot be folded by a hook; the
 daemon-owned attending floor below can keep the slot/card warm briefly, but
 that follow-up becomes the next run. Any runner can also pull state
-directly — read `portal-state.json` / `inbox.json`, or run `brr portal
-state` for the text view. (The earlier `brr portal wrap -- <command>`
+directly — read `portal-state.json` / `inbox.json`, or run `brnrd portal
+state` for the text view. (The earlier `brnrd portal wrap -- <command>`
 shell wrapper was retired when the boundary back channel landed — it
 only fired around shell calls the resident remembered to prefix, was
 opt-in per command, and was one-directional; the back channel strictly
@@ -276,7 +276,7 @@ attending floor ends or yields.
    renderer supplies that label. Send an outbox trajectory note before a
    long stretch or at a fork. A Tier 2 boundary-back-channel runner gets
    fresh `portal-state` surfaced automatically at its supported seams;
-   otherwise re-read `portal-state.json` (or run `brr portal state`) at
+   otherwise re-read `portal-state.json` (or run `brnrd portal state`) at
    natural seams. `inbox.json` remains the focused
    pending-events view when you only need that list. A related follow-up
    that appears while you are still thinking should fold into this wake
