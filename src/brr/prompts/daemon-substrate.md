@@ -138,7 +138,11 @@ where a run turns to the world — inbound (`inbox.json`,
   "comment"|"message", ...}`, and ≤1 `{"kind": "summary", "text": "..."}`
   to head the receipt. Feeds the dashboard's collapsed receipt
   (`kb/design-run-relics.md`, #200/#317); the chat card doesn't render it
-  yet (named gap). Control file, never delivered.
+  yet (named gap). Treat produce you can name as yours to compose with: a
+  summary may give the receipt its spine, and a relevant issue, kb page, or
+  message may be a useful glint in the reply. Reinforce the work when that
+  helps the reader; do not turn every receipt into ornament or duplicate the
+  daemon's auto-derived facts. Control file, never delivered.
 - remote reader — the user reads replies in a chat client (Telegram /
   Slack); link a kb page with the kb URL the portal provides; when none is
   available, use its basename only (`subject-envs.md`). For other files use
