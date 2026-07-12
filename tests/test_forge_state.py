@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from brr import forge_state, forges, prompts, run_context, worktree
+from brr.run import Run
 
 from _helpers import commit_files, init_git_repo
 
@@ -151,6 +152,10 @@ def _repo_with_worktree(tmp_path: Path) -> Path:
     wt_path, branch = worktree.create(repo, run_id)
     # Add an unpushed commit on the worktree branch.
     commit_files(wt_path, {"feature.txt": "wip\n"}, message="feature")
+    Run(
+        id=run_id, event_id="evt-test", body="work", status="running",
+        meta={"seed_ref": "main", "has_new_commit": True},
+    ).save(repo / ".brr" / "runs")
     return repo
 
 
@@ -171,6 +176,25 @@ def test_build_forge_state_lists_worktrees(tmp_path):
     assert wt["current"] is True
     # forge branch URL derived from origin remote
     assert wt["branch_url"] == "https://github.com/Gurio/brr/tree/brr/run-test-1"
+
+
+def test_build_forge_state_hides_commitless_placeholder_branch_url(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    run_id = "run-no-commit"
+    worktree.create(repo, run_id)
+    Run(
+        id=run_id, event_id="evt-noop", body="audit", status="running",
+        meta={"seed_ref": "main", "has_new_commit": False},
+    ).save(repo / ".brr" / "runs")
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id=run_id,
+    )
+
+    assert facet is not None
+    entry = next(w for w in facet["worktrees"] if w["run_id"] == run_id)
+    assert entry["branch"] == "brr/run-no-commit"
+    assert "branch_url" not in entry
 
 
 def test_build_forge_state_threads_cross_reference(tmp_path):
