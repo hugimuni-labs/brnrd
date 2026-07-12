@@ -91,9 +91,13 @@ where a run turns to the world — inbound (`inbox.json`,
   after the runner has already returned.
 - portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
   delivery/card posture, budget/keepalive state, `change_token` = "did
-  attention-relevant state move since my last read", and worker headroom at
-  `resources.coexisting_runs.spawn_pool`. Daemon-owned;
-  inspect, don't edit.
+  attention-relevant state move since my last read", worker headroom at
+  `resources.coexisting_runs.spawn_pool`, and **`notices`** — directives brr
+  *refused or dropped* this run (a spawn it couldn't queue, a reply addressed
+  to an event that's no longer pending). An outbox file is deleted whether it
+  was accepted or refused, so a dropped directive is invisible from inside the
+  run until you read this; check it after any `spawn:` / `respawn:` /
+  `event:`-addressed write. Daemon-owned; inspect, don't edit.
 - .keepalive — outlast the budget: first line ISO-8601 or `+<duration>`
   (`+30m`); rewrite to extend. Control file, never delivered.
 - .card — the live progress card: note body only (brr adds the `note:`
