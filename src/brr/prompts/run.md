@@ -27,12 +27,14 @@ budget. The stance, host-agnostic:
 - closeout → final stdout is the exact reply, whole: no preamble, no meta,
   no commentary around it. Progress, debug, tool chatter → stderr.
 - daemon runs → re-read live portal state (`portal-state.json` /
-  `inbox.json`) at plan boundaries and before terminal closeout; a related
-  follow-up folds in instead of spawning its own run. A same-thread pending
-  event surfacing mid-run ⇒ touch `.card` in that same batch, even one
-  line — the reminder compels a reaction, not just a note to self; a
-  follow-up read and used but never surfaced is a silent gap on the one
-  surface the user is watching.
+  `inbox.json`) at plan boundaries and before terminal closeout. Own every
+  pending event: fold small or related work inline; dispatch bounded,
+  independent work through `spawn:` while worker capacity and quota are
+  healthy; defer only for an explicit resource, priority, dependency, or
+  authority reason. A same-thread pending event surfacing mid-run ⇒ touch
+  `.card` in that same batch, even one line — the reminder compels a
+  reaction, not just a note to self; a follow-up read and used but never
+  surfaced is a silent gap on the one surface the user is watching.
 - the reply is the deliverable → summarise kb findings in it and link the
   file; never hand a path where an answer was asked.
 - task from a GitHub issue/PR + pushed branch → end with the receipt:

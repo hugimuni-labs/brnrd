@@ -68,8 +68,11 @@ where a run turns to the world — inbound (`inbox.json`,
   a checked pack but does not own PR creation | `respawn: true` → park a
   handoff to another run; name `shell:` / `core:`, or `quality: escalate`
   for the stronger local Core | `spawn: true` → a *concurrent* worker-stack
-  child in the second dispatch slot (cap 1; `shell:`/`core:` as respawn);
-  its completion lands back in this thread as a plain pending event.
+  child in the configured worker pool (`spawn.max_concurrent`, default 4;
+  `shell:`/`core:` as respawn); its completion lands back in this thread as
+  a plain pending event. Use it for bounded independent pending work when
+  capacity and quota are healthy. The parent still owns the original event:
+  after review, answer it with `event: <id>`; spawning alone does not clear it.
   Default: linger for it in this same run — poll with backoff, read its
   diff whole, fold the reviewed result in before closeout (the same
   trust-but-verify bar a same-run subagent gets). "A later run folds it in"
@@ -77,15 +80,18 @@ where a run turns to the world — inbound (`inbox.json`,
   `runner_policy: propose` → park a policy change for operator approval.
 - inbox.json — live pending-event view, heartbeat-refreshed; daemon-owned,
   don't edit. Re-read at plan / todo boundaries + once immediately before
-  terminal closeout — fold a related follow-up in, or say why it stays
-  queued. "Fold in" = the `event: <id>` mechanism above, one file per
+  terminal closeout. Give every event a disposition: fold small/related work,
+  spawn bounded independent work, or explicitly defer for a resource,
+  priority, dependency, or authority reason. "Fold in" = the `event: <id>`
+  mechanism above, one file per
   event: `_drain_outbox` marks an event done only when a file's
   frontmatter names it; same-thread prose or `.card` mentions never clear
   `pending_event_count`. Doesn't catch messages arriving
   after the runner has already returned.
 - portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
   delivery/card posture, budget/keepalive state, `change_token` = "did
-  attention-relevant state move since my last read". Daemon-owned;
+  attention-relevant state move since my last read", and worker headroom at
+  `resources.coexisting_runs.spawn_pool`. Daemon-owned;
   inspect, don't edit.
 - .keepalive — outlast the budget: first line ISO-8601 or `+<duration>`
   (`+30m`); rewrite to extend. Control file, never delivered.
@@ -149,8 +155,9 @@ where a run turns to the world — inbound (`inbox.json`,
   satisfying signal; final stdout may stay empty), write `.keepalive`,
   poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m
   provider cache window); a same-thread follow-up folds in and resets the
-  backoff; any unrelated pending event ⇒ yield immediately — a linger
-  never starves the queue. Horizon ~10–15m past last delivery; longer
+  backoff. Any other pending event ends passive waiting: dispatch it through
+  `spawn:` when worker capacity and quota are healthy, or yield/defer with an
+  explicit reason so the queue never starves. Horizon ~10–15m past last delivery; longer
   vigils are scheduled wakes or quota policy. The daemon adds a short
   automatic `delivered · attending` floor after a current-thread delivery:
   card/slot stay open briefly, but the runner has exited, so a follow-up
