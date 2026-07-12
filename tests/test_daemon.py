@@ -3454,7 +3454,7 @@ def test_resources_facet_remote_scm_pr_not_created_is_absent():
 def test_resources_facet_remote_scm_known_when_pr_recorded():
     facet = daemon._resources_facet(None, branch="brr/feature", pr_number="207")
     assert facet["remote_scm"]["status"] == "known"
-    assert facet["remote_scm"]["pr_state"] == "open"
+    assert facet["remote_scm"]["pr_state"] == "recorded"
     assert facet["remote_scm"]["pr_number"] == "207"
     assert facet["remote_scm"]["note"] is None
 
