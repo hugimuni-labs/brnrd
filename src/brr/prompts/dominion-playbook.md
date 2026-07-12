@@ -122,7 +122,8 @@ Follow-through:
   past expected completion, same `conversation_key`, whose job is to read
   the child's diff whole and fold a *reviewed* reply into the thread. An
   unread hunk that arrives looking like an answer is still unread.
-- `spawn:` = concurrent worker pool (`spawn.max_concurrent`, default 4).
+- `spawn:` = concurrent worker pool; read live headroom from portal-state
+  (`resources.coexisting_runs.spawn_pool`), never from a remembered cap.
   Default: linger in
   this same run — poll with backoff until the completion event lands →
   review inline → fold before closeout. The scheduled-wake fallback is
