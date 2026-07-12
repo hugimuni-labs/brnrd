@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-07-09. Structural arc: `plan-agent-orientation-layering.md`
+> Revision: 2026-07-12. Structural arc: `plan-agent-orientation-layering.md`
 > in the kb (see "Knowledge base" below for where that is — not a
 > repo-relative link, since the kb's physical location is no longer fixed
 > to this tree). Bump this date when you restructure universal sections so
@@ -32,6 +32,10 @@ Three stages, and how to read this file in each:
   + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) plus Build and run and Code guidelines. Skip Workflow →
   *When the brnrd daemon runs you* — that machinery isn't in play here.
+  When a brnrd dominion exists for this repo, `brnrd agent inject` prints
+  the live wake context a resident gets — memory digest, pitfalls matched
+  to your task, recent activity, kb health — and is the fastest way to
+  orient beyond this file.
 
 - **brnrd daemon run.** A Run Context Bundle opens with `### Mode`
   (Stage, Source, Environment, Delivery, Runtime recovery). That
