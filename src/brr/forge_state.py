@@ -18,7 +18,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import forges, worktree
+from . import forges, gitops, worktree
+from .run import Run
+
+
+def _run_has_new_commit(repo_root: Path, run_id: str) -> bool:
+    """Read the finalized commit verdict cached on a run manifest."""
+    task = Run.from_file(
+        gitops.shared_brr_dir(repo_root) / "runs" / run_id / "run.md"
+    )
+    return bool(task and task.meta.get("has_new_commit") is True)
 
 
 def parse_forge_thread(key: str) -> tuple[str, int] | None:
@@ -108,7 +117,7 @@ def _worktrees_facet(
             entry["dirty"] = worktree.has_uncommitted_changes(info.path)
         except Exception:
             entry["dirty"] = False
-        if remote_url and info.branch:
+        if remote_url and info.branch and _run_has_new_commit(repo_root, info.run_id):
             url = forges.view_branch_url(remote_url, info.branch, **overrides)
             if url:
                 entry["branch_url"] = url

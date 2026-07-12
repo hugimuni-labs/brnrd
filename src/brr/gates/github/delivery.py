@@ -57,7 +57,7 @@ def _branch_footer(repo: str, task: Run) -> str:
     GitHub's PR-creation form so clicking it is one step from merging.
     """
     branch = task.meta.get("publish_branch")
-    if not branch:
+    if not branch or task.meta.get("has_new_commit") is not True:
         return ""
     base_url = f"https://github.com/{repo}"
     tree_url = f"{base_url}/tree/{quote(branch, safe='/')}"
