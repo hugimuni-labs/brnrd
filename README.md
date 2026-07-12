@@ -26,15 +26,25 @@ hosts the dashboard without moving agent work off your machine.
 pip install brnrd
 ```
 
-To try it without installing anything:
+Coming from the AI-coding-tool world, where everything ships through npm:
+
+```bash
+npx brnrd init
+```
+
+`npx brnrd` is a bootstrapping installer, not a port — first run creates a
+durable virtualenv, installs brnrd from PyPI into it, and hands over. It needs a
+Python on the machine; it will not download one.
+
+Or, with `uv` already installed:
 
 ```bash
 uvx brnrd            # zero-install run, straight from PyPI
 ```
 
-`uvx` runs brnrd in a throwaway environment — good for a first look, wrong for
+`uvx` uses a throwaway environment — good for a first look, wrong for
 `brnrd daemon install`, which needs a real install to point a long-lived
-service at.
+service at. `npx brnrd` and `pip install` both give you one.
 
 Or run from a local checkout while developing or customizing brnrd itself:
 
