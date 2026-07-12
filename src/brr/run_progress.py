@@ -612,6 +612,15 @@ def _project(
                     setattr(view, key, val)
             if "committed" in record:
                 view.committed = bool(record["committed"])
+                if not view.committed:
+                    # The branch named during preparation was only execution
+                    # scaffolding. Once the terminal verdict proves the run
+                    # made no commit, remove it (and any defensive stale URL)
+                    # from the completed card rather than leaving a false
+                    # receipt in the sticky header.
+                    view.branch_name = None
+                    view.display_base = None
+                    view.view_url = None
             _mark_latest_attempt_succeeded(view, ts)
             _close_open_phase(view, ts)
             view.phase_history.append(PhaseEntry(
