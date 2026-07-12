@@ -69,3 +69,14 @@ def test_render_context_omits_section_with_no_body_and_no_attachments(tmp_path):
     rendered = run_context.render_context(_make_task(), event, _make_ctx(tmp_path))
 
     assert "Original Event Body" not in rendered
+
+
+def test_render_context_names_host_publication_ownership(tmp_path):
+    ctx = _make_ctx(tmp_path)
+    ctx.name = "host"
+
+    rendered = run_context.render_context(_make_task(), {}, ctx)
+
+    assert "Environment: host — shared checkout" in rendered
+    assert "host finalization does not publish commits" in rendered
+    assert "own the push / PR handoff" in rendered
