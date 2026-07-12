@@ -335,7 +335,56 @@ def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     assert rows[0]["five_hour_pct_delta"] == 2.0
     assert rows[0]["usd_subscription_attributed"] == 1.0
     assert rows[0]["estimate_vs_actual"] == "actual"
+    assert task.terminal_reply == "ledger done"
     assert not (tmp_path / ".brr" / "outbox" / "evt-ledger").exists()
+
+
+def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
+    tmp_path, monkeypatch,
+):
+    """Reply archival must not race the gate for its delivery queue file."""
+    task = Run(
+        id="run-reply-race",
+        event_id="evt-reply-race",
+        body="answer",
+        status="done",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    responses = tmp_path / ".brr" / "responses"
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+    seen: dict[str, str] = {}
+
+    def fake_archive(_repo, *, body, **_kwargs):
+        seen["body"] = body
+        return "replies/Gurio__brr/run-reply-race.md"
+
+    monkeypatch.setattr(daemon.knowledge, "archive_reply", fake_archive)
+    monkeypatch.setattr(daemon.knowledge, "capture", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        daemon.knowledge,
+        "knowledge_file_url",
+        lambda *_a, **_k: "https://example.test/reply",
+    )
+
+    # No response file exists: this is the state after a fast gate has sent
+    # the terminal response and cleaned its queue entry.
+    daemon._capture_knowledge(
+        tmp_path,
+        {},
+        task,
+        event={"id": task.event_id, "source": "telegram"},
+        responses_dir=responses,
+        outbox_dir=outbox,
+        terminal_reply="stable terminal reply",
+    )
+
+    assert seen["body"] == "stable terminal reply"
+    assert daemon.relics.read_reported(outbox) == [{
+        "kind": "reply",
+        "path": "replies/Gurio__brr/run-reply-race.md",
+        "url": "https://example.test/reply",
+    }]
 
 
 def test_run_worker_finalize_reads_task_classification_control(tmp_path, monkeypatch):
@@ -2055,6 +2104,7 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
     response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-run-fail")
     assert response is not None
     assert "runner failed after 1 attempt(s): connection dropped" in response
+    assert task.terminal_reply == response
 
 
 def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
