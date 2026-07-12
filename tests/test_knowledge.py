@@ -9,6 +9,80 @@ from brr.prompts import _build_knowledge_sources_block
 from _helpers import init_git_repo
 
 
+def _commit(repo: Path, message: str = "commit") -> None:
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-q", "-m", message],
+        cwd=repo, check=True,
+    )
+
+
+def _knowledge_remote_chain(tmp_path: Path, *, forge: bool) -> tuple[Path, dict]:
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    knowledge_repo = home / "knowledge"
+    page = knowledge_repo / "repos" / "Gurio__brr" / "design-managed-delivery.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("pushed page\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=knowledge_repo, check=True)
+    _commit(knowledge_repo, "seed knowledge")
+    if forge:
+        subprocess.run(
+            ["git", "remote", "add", "origin",
+             "git@github.com:hugimuni-labs/brnrd-knowledge.git"],
+            cwd=knowledge_repo, check=True,
+        )
+        # A network-free stand-in for a successful push: the resolver's
+        # contract is the remote-tracking ref, not local branch existence.
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=knowledge_repo, check=True,
+        )
+    subprocess.run(
+        ["git", "clone", "-q", str(knowledge_repo), str(repo / ".brnrd-kb")],
+        check=True,
+    )
+    cfg = _account_cfg(repo, home)
+    return repo, cfg
+
+
+def test_kb_url_resolves_two_hop_local_origin_to_forge(tmp_path):
+    repo, cfg = _knowledge_remote_chain(tmp_path, forge=True)
+
+    assert knowledge.kb_base_url(repo, cfg) == (
+        "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/"
+        "repos/Gurio__brr/"
+    )
+    assert knowledge.kb_page_url(repo, "design-managed-delivery.md", cfg) == (
+        "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/"
+        "repos/Gurio__brr/design-managed-delivery.md"
+    )
+
+    # A page committed only to the ultimate local repository is not linkable
+    # until its forge remote-tracking ref advances to include it.
+    unpushed = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "new.md"
+    unpushed.write_text("not pushed\n", encoding="utf-8")
+    _commit(tmp_path / "home" / "knowledge", "local only")
+    assert knowledge.kb_page_url(repo, "new.md", cfg) is None
+
+    pushed_page = (
+        tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr"
+        / "design-managed-delivery.md"
+    )
+    pushed_page.write_text("new local content\n", encoding="utf-8")
+    _commit(tmp_path / "home" / "knowledge", "unpushed page update")
+    assert knowledge.kb_page_url(repo, "design-managed-delivery.md", cfg) is None
+
+
+def test_kb_url_returns_none_when_remote_chain_has_no_forge(tmp_path):
+    repo, cfg = _knowledge_remote_chain(tmp_path, forge=False)
+
+    assert knowledge.kb_base_url(repo, cfg) is None
+    assert knowledge.kb_page_url(repo, "design-managed-delivery.md", cfg) is None
+
+
 def test_prompt_injects_home_knowledge_without_repo_kb(tmp_path):
     repo = tmp_path / "repo"
     init_git_repo(repo)
