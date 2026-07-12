@@ -469,7 +469,10 @@ def _run_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 "runner": _runner_payload(task.meta),
                 "status": task.status,
                 "phase": str(task.meta.get("publish_status") or ""),
-                "branch": str(task.meta.get("branch_name") or task.meta.get("publish_branch") or ""),
+                "branch": (
+                    str(task.meta.get("branch_name") or task.meta.get("publish_branch") or "")
+                    if task.meta.get("has_new_commit") is True else ""
+                ),
                 "pr_number": task.meta.get("pr_number"),
                 "started_at": started,
                 "updated_at": updated,
