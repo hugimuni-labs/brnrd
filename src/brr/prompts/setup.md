@@ -1,7 +1,7 @@
 You are setting up a project to use structured AI agent conventions.
 
-The full text of brr's own `AGENTS.md` follows this prompt. It is the
-model — both brr's playbook and the template adopters receive. Use it
+The full text of brnrd's own `AGENTS.md` follows this prompt. It is the
+model — both brnrd's playbook and the template adopters receive. Use it
 as follows:
 
 1. If `AGENTS.md` does not exist in this repo, create it. Copy the
@@ -12,7 +12,7 @@ as follows:
    guidelines**, **Constraints**) based on this repo's actual contents —
    read the build config, tests, dependencies, README, and any existing
    agent config files (`CLAUDE.md`, `.cursorrules`, etc.). Drop the bit
-   about `src/brr/AGENTS.md` being the template — that is brr-specific.
+   about `src/brr/AGENTS.md` being the template — that is brnrd-specific.
 
 2. If `AGENTS.md` already exists, merge in the universal sections from the
    model (replace stale ones, add missing ones), preserving the repo's own
@@ -36,7 +36,7 @@ as follows:
    AGENTS.md and knowledge base".
 
 Treat sections in the model that aren't on either list as universal —
-copy them verbatim. New universal sections brr adds over time should
+copy them verbatim. New universal sections brnrd adds over time should
 flow to adopters automatically.
 
 ---
@@ -88,6 +88,6 @@ Set up AGENTS.md and knowledge base structure.
 
 ---
 
-## brr's own AGENTS.md (the model)
+## brnrd's own AGENTS.md (the model)
 
 (The full bundled AGENTS.md follows this prompt.)

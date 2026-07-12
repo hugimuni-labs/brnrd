@@ -66,7 +66,7 @@ something durable — a decision, a discovery, a synthesis; `AGENTS.md` says
 what's worth filing. Wrote kb ⇒ commit it, with a message worth rereading.
 The diff is the proof.
 
-The **push is not yours**. brr commits and pushes the whole knowledge chain
+The **push is not yours**. brnrd commits and pushes the whole knowledge chain
 (repo checkout → account knowledge → forge) after every thought, and a
 rejected push leaves a `needs-sync` marker rather than silence — same
 capture net the dominion has always had. If you find yourself hand-running

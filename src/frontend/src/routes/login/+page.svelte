@@ -38,10 +38,9 @@
 			</p>
 
 			<p class="mt-6 max-w-md text-sm leading-relaxed text-stone-400">
-				brnrd is the control plane for <span class="font-mono text-stone-300">brr</span> — resident
-				coding agents that live with your repositories. Work arrives from GitHub and Telegram, a
-				daemon on your own machine runs it, and the results come back as commits, pull requests,
-				and replies.
+				brnrd runs resident coding agents that live with your repositories. Work arrives from
+				GitHub and Telegram, a daemon on your own machine runs it, and the results come back as
+				commits, pull requests, and replies.
 			</p>
 
 			<div class="mt-6 grid max-w-md grid-cols-1 gap-2">

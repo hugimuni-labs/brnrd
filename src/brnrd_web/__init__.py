@@ -1,4 +1,16 @@
-"""brnrd_web dashboard package."""
+"""brnrd_web — the brnrd dashboard.
+
+Copyright (C) 2026 HugiMuni SAS.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at
+your option) any later version. It is distributed WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License (``LICENSE``
+in this package) for details, and ``LICENSE-OVERVIEW.md`` at the repo root
+for why this package is AGPL while the daemon core is MIT.
+"""
 
 from __future__ import annotations
 

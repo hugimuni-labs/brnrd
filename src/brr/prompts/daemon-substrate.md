@@ -52,9 +52,9 @@ where a run turns to the world — inbound (`inbox.json`,
 
 - stdout — a compatibility fallback, not the delivery model. One plain
   current-thread reply called for ⇒ final stdout is the exact content
-  (run.md §Delivery holds the closeout discipline). brr captures stdout to
+  (run.md §Delivery holds the closeout discipline). brnrd captures stdout to
   the bundle-named response path — never write that file yourself. An
-  addressed run must leave a satisfying signal; none ⇒ brr sends an
+  addressed run must leave a satisfying signal; none ⇒ brnrd sends an
   explicit failure note rather than dropping the thread.
 - outbox — one markdown file in the run's outbox dir = one chat message,
   delivered mid-thought, in order (stage `*.tmp`, rename = atomic). Quick
@@ -92,7 +92,7 @@ where a run turns to the world — inbound (`inbox.json`,
 - portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
   delivery/card posture, budget/keepalive state, `change_token` = "did
   attention-relevant state move since my last read", worker headroom at
-  `resources.coexisting_runs.spawn_pool`, and **`notices`** — directives brr
+  `resources.coexisting_runs.spawn_pool`, and **`notices`** — directives brnrd
   *refused or dropped* this run (a spawn it couldn't queue, a reply addressed
   to an event that's no longer pending). An outbox file is deleted whether it
   was accepted or refused, so a dropped directive is invisible from inside the
@@ -100,7 +100,7 @@ where a run turns to the world — inbound (`inbox.json`,
   `event:`-addressed write. Daemon-owned; inspect, don't edit.
 - .keepalive — outlast the budget: first line ISO-8601 or `+<duration>`
   (`+30m`); rewrite to extend. Control file, never delivered.
-- .card — the live progress card: note body only (brr adds the `note:`
+- .card — the live progress card: note body only (brnrd adds the `note:`
   label); rewrite as context shifts, empty/delete to withdraw. Control
   file, never delivered — narrating here is not narrating to the thread.
   Write a first line among the run's earliest actions ("orienting:
@@ -127,7 +127,7 @@ where a run turns to the world — inbound (`inbox.json`,
   append-only (`brr.relics.append(outbox_dir, kind, **fields)`, or append
   the line directly). Commits, pushed branch, a self-reported PR, and your
   **terminal reply** auto-derive at closeout — write nothing for those. The
-  reply archive: brr persists this run's final user-facing message into the
+  reply archive: brnrd persists this run's final user-facing message into the
   knowledge repo (`replies/<repo>/<run-id>.md`, outside the kb page tree)
   and reports it as a `{"kind": "reply", "url": …}` relic, so the run's
   answer of record is durable and linkable instead of buried in a chat
@@ -144,7 +144,7 @@ where a run turns to the world — inbound (`inbox.json`,
   available, use its basename only (`subject-envs.md`). For other files use
   basenames (`run_progress.py`), never host paths like
   `.brr/worktrees/<run-id>/kb/foo.md` — they don't exist on the user's
-  machine and won't render. brr appends the
+  machine and won't render. brnrd appends the
   forge-hosted branch URL to the card when one exists; don't fabricate
   one.
 - next move — an addressed reply *ends* with where the loop stands:

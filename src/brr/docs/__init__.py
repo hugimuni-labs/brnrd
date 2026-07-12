@@ -1,6 +1,6 @@
 """Bundled tool documentation.
 
-Tool-level docs (how brr works, pipeline, internals) ship with the
+Tool-level docs (how brnrd works, pipeline, internals) ship with the
 package as ``*.md`` files in this folder. Users can override any
 topic per-repo by dropping a file at ``.brr/docs/<topic>.md``.
 

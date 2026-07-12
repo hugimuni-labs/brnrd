@@ -1,9 +1,9 @@
 # Execution environments
 
-How brr places a runner invocation: where the agent's working directory
+How brnrd places a runner invocation: where the agent's working directory
 lives, how isolation is achieved, and how credentials reach the runner.
 
-This document ships with the `brr` tool. Users can override it per-repo
+This document ships with the `brnrd` tool. Users can override it per-repo
 by dropping a file at `.brr/docs/envs.md`.
 
 ## At a glance
@@ -12,7 +12,7 @@ by dropping a file at `.brr/docs/envs.md`.
 | ----------- | ------------------------------------------- | ----------------- | ----------------------------- | ------------------------------------ |
 | `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A runs       |
 | `worktree`  | `.brr/worktrees/<run-id>/` (`brr/<run-id>` branch) | Inherited | Working dir + branch | Default for code work |
-| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes brr + common dev tools |
+| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes brnrd + common dev tools |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
 `kb/design-env-interface.md` if you want to follow that work.
@@ -73,7 +73,7 @@ step. When the event named a `target_branch` but the agent
 kept the run branch, the push uses a refspec
 (`git push origin brr/<run-id>:<expected>`) so the daemon never
 touches the local target ref. When the agent rewrote the expected
-branch locally (the PR-rebase case) and brr captured the remote OID
+branch locally (the PR-rebase case) and brnrd captured the remote OID
 at task start, the push uses `--force-with-lease` against that OID.
 Other branches stay ordinary pushes.
 
@@ -105,7 +105,7 @@ sensible default.
 
 Two paths cover both API-key and subscription-only auth:
 
-1. **Env-var pass-through.** When set on the daemon's environment, brr
+1. **Env-var pass-through.** When set on the daemon's environment, brnrd
    forwards `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
    `GOOGLE_API_KEY`, `GITHUB_TOKEN`, and `GH_TOKEN` into the container.
    Add more with `docker.env=KEY1,KEY2`.
@@ -125,7 +125,7 @@ leaves `gh` with an account it can't authenticate, which makes
 `gh auth status` exit non-zero and confuses agents even when other
 operations would have worked.
 
-Instead, brr resolves a token explicitly on every Docker task — checking
+Instead, brnrd resolves a token explicitly on every Docker task — checking
 stored gate state, daemon env vars (`GITHUB_TOKEN` / `GH_TOKEN`), then
 `gh auth token` on the host — and injects it as `GITHUB_TOKEN` inside
 the container. The Docker command also configures git to rewrite common
@@ -150,7 +150,7 @@ CLI stays authenticated with whatever the agent saw last.
 
 ### File ownership inside the container
 
-The container runs as the **host user's UID**: brr passes
+The container runs as the **host user's UID**: brnrd passes
 `-u "$(id -u):$(id -g)"` and `-e HOME=/brr-home` to `docker run`, and
 the bundled image bakes a writable `/brr-home` (mode 1777) so any UID
 can use it as HOME. The bind-mounted repo's `.git/objects/` therefore
@@ -159,7 +159,7 @@ up after the daemon runs.
 
 Without intervention, git would also refuse to operate on the
 bind-mounted repo because its on-disk owner doesn't match the
-container's UID register (CVE-2022-24765). brr passes
+container's UID register (CVE-2022-24765). brnrd passes
 `safe.directory='*'` via git's `GIT_CONFIG_*` env vars so the agent
 can `git status`, `git commit`, and `git diff` without per-image
 configuration. This works against any image — including ones you build
@@ -181,8 +181,8 @@ The image must:
 - Have your configured runner CLI on `PATH` (`claude`, `codex`,
   `gemini`, or whatever you set `runner=` to).
 - Have `git` available — the agent commits inside the container.
-- Have the shell and repo tools your agents are expected to use. brr's
-  bundled runner image includes the `brr` CLI and its small runtime
+- Have the shell and repo tools your agents are expected to use. brnrd's
+  bundled runner image includes the `brnrd` CLI and its small runtime
   dependency set (`requests`), plus `bash`, `git`, `ssh`/`scp`, Python
   (`python`, `python3`, `pip`, venv support), `rg`, `curl`, `wget`,
   `jq`, `rsync`, `zip`/`unzip`, and a small native build toolchain
@@ -203,8 +203,8 @@ It does *not* need:
 - Your project's installed dependencies, databases, cloud CLIs, or
   language SDKs beyond Node and Python. See "Layering project tooling"
   below.
-- An API key baked in. brr wires credentials at run time.
-- A `safe.directory` config baked in. brr wires that at run time.
+- An API key baked in. brnrd wires credentials at run time.
+- A `safe.directory` config baked in. brnrd wires that at run time.
 
 ### Minimum viable image
 
@@ -257,7 +257,7 @@ work out manually.
 
 ## Durability contract
 
-Across all envs, brr only guarantees three kinds of output survive:
+Across all envs, brnrd only guarantees three kinds of output survive:
 
 1. **Git commits** on whatever branch the agent left checked out in
    the worktree (recorded in `task.meta["branch_name"]`), reachable
@@ -283,7 +283,7 @@ regardless of status, so a human can recover work.
 - **`docker env requires docker.image in .brr/config`** — set
   `docker.image=` to a built or pulled image reference.
 - **`fatal: detected dubious ownership in repository`** — should not
-  appear with a recent brr; if it does, your container's git is older
+  appear with a recent brnrd; if it does, your container's git is older
   than 2.31 or strips `GIT_CONFIG_*` env vars. Update git in the image
   or add `RUN git config --system --add safe.directory '*'` to the
   Dockerfile.
@@ -293,23 +293,23 @@ regardless of status, so a human can recover work.
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
 - **`brnrd docs <topic>` missing a topic the checkout has** — when dogfooding
-  brr itself in docker, the bind-mounted ``src/`` should win over the
-  image's baked ``pip install /opt/brr``. Recent brr injects
+  brnrd itself in docker, the bind-mounted ``src/`` should win over the
+  image's baked ``pip install /opt/brr``. Recent brnrd injects
   ``PYTHONPATH=<repo>/src`` automatically when the mounted tree looks like
-  a brr checkout. If you're on an older daemon, set that by hand or rebuild
-  after pulling. For non-brr repos, rebuild the runner image when brr itself
+  a brnrd checkout. If you're on an older daemon, set that by hand or rebuild
+  after pulling. For non-brr repos, rebuild the runner image when brnrd itself
   changes (``brnrd init -i``).
 - **`brnrd review` runs the wrong tool (image-renderer help)** — PyPI's
-  ``brr`` package is an unrelated terminal image renderer. Older bundled
-  Dockerfiles ``pip install 'brr>=0.1.0'`` pulled that by mistake.
+  ``brnrd`` package is an unrelated terminal image renderer. Older bundled
+  Dockerfiles ``pip install 'brnrd>=0.1.0'`` pulled that by mistake.
   Rebuild from the current bundled Dockerfile (`brnrd init -i`): it copies
   this checkout into the build context and ``pip install /opt/brr``.
-  Custom images: never ``pip install brr`` from PyPI; install from a git
+  Custom images: never ``pip install brnrd`` from PyPI; install from a git
   URL or ``COPY`` + ``pip install .`` instead.
-- **`brr`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
+- **`brnrd`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
   local image from the current bundled Dockerfile (`brnrd init -i` can do this
   during setup). Older `brr-runner:*` images predate the baseline dev toolbox
-  and brr's self-tooling install.
+  and brnrd's self-tooling install.
 - **File ownership leaked to root on host** — should not happen with
   a recent brr-runner image, which runs as the host UID. If you see
   it, you're likely on a stale image — rebuild from the current

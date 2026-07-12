@@ -22,7 +22,7 @@ from brr.runner import (
 )
 
 _RUNNER_BASE = (
-    "You are a brr runner. Follow the supplied prompt and operate on the "
+    "You are a brnrd runner. Follow the supplied prompt and operate on the "
     "files available in the working directory."
 )
 

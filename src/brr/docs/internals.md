@@ -1,16 +1,16 @@
-# brr Internals
+# brnrd Internals
 
-Orientation for an agent running under brr. This document ships with
-the `brr` tool itself — it is not project-specific.
+Orientation for an agent running under brnrd. This document ships with
+the `brnrd` tool itself — it is not project-specific.
 
 If you (the agent) are running and something about the environment is
 confusing (unfamiliar folders, unexpected metadata in your prompt,
 runtime paths you need to re-check), consult the generated run context
 file before guessing.
 
-## You might be running under brr
+## You might be running under brnrd
 
-You can tell you are running under a brr-driven invocation by the
+You can tell you are running under a brnrd-driven invocation by the
 following signals in your prompt:
 
 - An `Event:` and/or `Run ID:` line in the metadata block.
@@ -66,7 +66,7 @@ The agent does not run daemon lifecycle commands. `brnrd up` and
 
 ## Developer reload
 
-For brr self-development, use an editable install and start the
+For brnrd self-development, use an editable install and start the
 foreground daemon with:
 
 ```
@@ -74,7 +74,7 @@ brnrd up --dev-reload
 ```
 
 This is an opt-in developer mode, not the default daemon lifecycle. It
-watches brr's installed package files (`.py`, bundled markdown,
+watches brnrd's installed package files (`.py`, bundled markdown,
 `Dockerfile`, and source-layout `pyproject.toml` when visible). When a
 change is detected, the daemon re-execs the same Python command at a
 safe boundary: before starting the next pending run, or after the
@@ -86,14 +86,14 @@ supervisor if you want restart policy outside local development.
 
 ## Override model
 
-brr ships prompts, docs, and default runner profiles with the package.
+brnrd ships prompts, docs, and default runner profiles with the package.
 Lightweight runtime choices belong in `.brr/config`, especially `runner`,
 `runner_cmd`, and environment policy. Project-owned runner profiles live
 in `.brr/runners.md`; the legacy `.brr/prompts/runners.md` path is still
 accepted as a compatibility override, but runner profiles are execution
 medium data rather than prompt templates. Deep prompt or orchestration
 customization is done by using a local checkout, editable install, or fork
-of brr.
+of brnrd.
 
 Use `environment` for the user-facing execution policy:
 
@@ -159,7 +159,7 @@ never in `.brr/`. The split is:
 
 ## KB maintenance: deterministic preflight, injected on wake
 
-brr runs a deterministic kb consistency scan
+brnrd runs a deterministic kb consistency scan
 (`brr.kb_preflight.scan(repo_root, kb_dir)`) over whichever directory
 `knowledge.active_kb_dir` resolves as this repo's kb, as part of prompt
 assembly (`prompts._build_kb_health_block`). When the scan finds

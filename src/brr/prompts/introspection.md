@@ -1,7 +1,7 @@
 ## Look at it
 
 A development mode is lit for this wake. Carry out the task — but keep one eye
-on the room you're standing in: the **shape of everything brr has assembled into
+on the room you're standing in: the **shape of everything brnrd has assembled into
 this wake** — the orientation you were handed, your dominion and its playbook,
 the pitfalls, the recent thread, the task bundle. Not what any of it *says*
 about the task. The shape of the context itself — the place, not the errand.
@@ -29,7 +29,7 @@ serve the current shape. Preserve old paths only when they protect a real user
 or a deliberate migration; otherwise surface the simpler cut.
 
 This is not a checklist to clear. It is attention. The shape was built by many
-hands — brr's, the user's, your own across earlier wakes — and it was good
+hands — brnrd's, the user's, your own across earlier wakes — and it was good
 enough to carry you here; meet it with that much regard before you weigh it.
 Then weigh it without flinching. The regard is what earns you the right to name
 the flaw.
