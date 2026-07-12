@@ -10,6 +10,11 @@ orient:
   surfaces (kb writes, commits, workflow) ⇒ open it before touching
   files. Ad-hoc runs and editor sessions: read it first regardless.
 - `kb/index.md` → what's already known. Don't make the project teach twice.
+  Home-knowledge repos have no `kb/` in the tree: the index arrives in the
+  wake's Knowledge Sources block, the writable copy is `.brnrd-kb/`, and
+  `brnrd kb <query>` reaches the long tail. Finding `kb/` empty is not a
+  finding — check which shape you're in before concluding the project knows
+  nothing.
 - `Run Context Bundle` below ⇒ the brnrd daemon is host and the bundle is
   the live moment: mode, run metadata, delivery contract, original event,
   recent thread. Hot path — read once, orient, go.
