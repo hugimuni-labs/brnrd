@@ -215,7 +215,8 @@ def derive_auto(
     override_base = cfg.get("forge.url_base") or None
 
     if branch:
-        for sha, subject in _commits_since_seed(repo_root, branch, seed_ref)[:_MAX_RECORDS]:
+        commits = _commits_since_seed(repo_root, branch, seed_ref)
+        for sha, subject in commits[:_MAX_RECORDS]:
             url = (
                 forges.commit_url(
                     remote_url, sha,
@@ -224,14 +225,15 @@ def derive_auto(
                 if remote_url else None
             )
             out.append({"kind": "commit", "sha": sha, "subject": subject, "url": url})
-        branch_url = (
-            forges.view_branch_url(
-                remote_url, branch,
-                override_kind=override_kind, override_url_base=override_base,
+        if commits:
+            branch_url = (
+                forges.view_branch_url(
+                    remote_url, branch,
+                    override_kind=override_kind, override_url_base=override_base,
+                )
+                if remote_url else None
             )
-            if remote_url else None
-        )
-        out.append({"kind": "branch", "name": branch, "url": branch_url})
+            out.append({"kind": "branch", "name": branch, "url": branch_url})
 
     pr_number = _read_pr_control(outbox_dir)
     if pr_number and remote_url:
