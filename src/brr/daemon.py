@@ -70,6 +70,7 @@ from . import prompts
 from . import codex_status
 from . import codex_usage
 from . import protocol
+from . import relics
 from . import run_context
 from . import run_ledger
 from . import runner
@@ -4277,6 +4278,73 @@ def _notify_spawn_parent_of_crash(
         print(f"[brnrd] spawn-crash notify failed for {spawn_event_id}: {exc}")
 
 
+def _capture_knowledge(
+    repo_root: Path,
+    cfg: dict,
+    task: Run,
+    *,
+    event: dict | None = None,
+    responses_dir: Path | None = None,
+    outbox_dir: Path | None = None,
+) -> None:
+    """Archive this run's terminal reply, then commit + push the knowledge chain.
+
+    The counterpart to :func:`_capture_dominion` for the *other* durable
+    memory. Two steps, in this order, because the second makes the first
+    linkable:
+
+    1. **Archive the terminal reply** — the run's answer of record, written
+       to ``replies/<repo>/<run-id>.md`` in the knowledge repo and reported
+       as a ``reply`` relic. Must land before ``append_closed_run``, which
+       is where relics are collected.
+    2. **Capture the kb** — commit and push what the resident wrote this
+       thought (``knowledge.capture``, #357). Until this existed, nothing in
+       brnrd ever pushed the kb: every write depended on a resident
+       remembering a manual three-step dance, and a run that forgot left
+       durable prose sitting uncommitted in a working tree.
+
+    Best-effort throughout: a failure here must never break a delivered run.
+    """
+    if not bool(cfg.get("knowledge.capture", True)):
+        return
+    reply_rel: str | None = None
+    if (
+        bool(cfg.get("knowledge.archive_replies", True))
+        and event is not None
+        and responses_dir is not None
+    ):
+        eid = str(event.get("id") or "")
+        body = protocol.read_response(responses_dir, eid) if eid else ""
+        if body and body.strip():
+            reply_rel = knowledge.archive_reply(
+                repo_root,
+                run_id=task.id,
+                body=body,
+                repo_label=str(task.meta.get("repo_label") or "") or None,
+                meta={
+                    "event": eid,
+                    "source": str(event.get("source") or ""),
+                    "thread": str(
+                        (event.get("meta") or {}).get("conversation_key") or ""
+                    ),
+                    "runner": str(task.meta.get("runner") or ""),
+                    "delivered_at": _format_utc_after(0),
+                },
+                cfg=cfg,
+            )
+
+    moved = knowledge.capture(
+        repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
+    )
+    if moved:
+        print(f"[brnrd] knowledge: captured kb after {task.id}")
+    if reply_rel:
+        url = knowledge.knowledge_file_url(repo_root, reply_rel, cfg)
+        relics.append(
+            outbox_dir, "reply", path=reply_rel, **({"url": url} if url else {}),
+        )
+
+
 def _capture_dominion(
     repo_root: Path,
     cfg: dict,
@@ -5020,6 +5088,16 @@ def _run_worker_and_finalize(
         )
         if control_classification:
             task.meta["task_classification"] = control_classification
+        # Before the ledger: the reply archive reports a ``reply`` relic, and
+        # ``append_closed_run`` is what collects relics.
+        _capture_knowledge(
+            repo_root,
+            cfg,
+            task,
+            event=event,
+            responses_dir=responses_dir,
+            outbox_dir=outbox_path,
+        )
         try:
             run_ledger.append_closed_run(
                 repo_root,

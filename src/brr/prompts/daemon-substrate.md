@@ -121,8 +121,13 @@ where a run turns to the world — inbound (`inbox.json`,
   never delivered.
 - .relics.jsonl — this run's produce manifest, one JSON object per line,
   append-only (`brr.relics.append(outbox_dir, kind, **fields)`, or append
-  the line directly). Commits, pushed branch, and a self-reported PR
-  auto-derive from git + `.pr` at closeout — write nothing for those.
+  the line directly). Commits, pushed branch, a self-reported PR, and your
+  **terminal reply** auto-derive at closeout — write nothing for those. The
+  reply archive: brr persists this run's final user-facing message into the
+  knowledge repo (`replies/<repo>/<run-id>.md`, outside the kb page tree)
+  and reports it as a `{"kind": "reply", "url": …}` relic, so the run's
+  answer of record is durable and linkable instead of buried in a chat
+  scroll. Terminal replies only — interims are thinking out loud.
   Worth a line: `{"kind": "issue", "number": 317, "action": "closed"}`,
   `{"kind": "kb", "path": "design-run-relics.md", "url": "<portal kb
   base + page, after push>"}`, `{"kind":
