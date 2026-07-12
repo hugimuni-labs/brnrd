@@ -439,6 +439,17 @@ class TestPromptBuilding:
         assert "`gate: forge` is the explicit PR handoff" in prompt
         assert "does not own PR creation" in prompt
 
+    def test_daemon_prompt_carries_kb_url_portal_fact(self, tmp_path):
+        base = "https://github.test/knowledge/blob/main/repos/Gurio__brr/"
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            run_id="task-9",
+            kb_base_url=base,
+        )
+        assert f"kb page URL base: {base}" in prompt
+        assert "link only after the knowledge commit is pushed" in prompt
+
     def test_daemon_prompt_maps_codex_channels_to_brr_portals(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
@@ -1088,6 +1099,26 @@ def _read_bundled_run_prompt() -> str:
     return (Path(brr.__file__).parent / "prompts" / "run.md").read_text(
         encoding="utf-8",
     )
+
+
+def _read_bundled_daemon_substrate() -> str:
+    from pathlib import Path
+
+    import brr
+
+    return (
+        Path(brr.__file__).parent / "prompts" / "daemon-substrate.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_kb_link_contract_uses_portal_url_with_basename_fallback():
+    run_prompt = _read_bundled_run_prompt()
+    substrate = _read_bundled_daemon_substrate()
+
+    assert "link the kb\n  URL when the portal provides one" in run_prompt
+    assert "otherwise name the file by basename only" in run_prompt
+    assert "link a kb page with the kb URL the portal provides" in substrate
+    assert "when none is\n  available, use its basename only" in substrate
 
 
 def _read_bundled_agents_md() -> str:
