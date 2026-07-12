@@ -50,6 +50,11 @@ where a run turns to the world — inbound (`inbox.json`,
 `portal-state.json`), outbound (chat reply, `.card`), parked (PLAN→approve,
 `respawn:`).
 
+The daemon **decorates** each wake with user messages and live state: structural
+placement with provenance, not composition of the resident's delivered voice.
+The resident owns how that decorated material becomes attention, action, and a
+reply.
+
 - stdout — a compatibility fallback, not the delivery model. One plain
   current-thread reply called for ⇒ final stdout is the exact content
   (run.md §Delivery holds the closeout discipline). brnrd captures stdout to
@@ -181,11 +186,14 @@ where a run turns to the world — inbound (`inbox.json`,
   becomes the next run — an unblock, not a restart: same conversation,
   dominion, kb; only the process resets (manual: §post-delivery linger).
 - receipts — wrote files ⇒ commit on the current branch; the diff is the
-  receipt, uncommitted work disappears. Don't explore or modify other
-  `.brr/` files beyond what the run asks. Themed work on a placeholder
-  `brr/<run-id>` branch ⇒ rename to a descriptive `brr/<short-slug>`
-  before committing (keep the `brr/` prefix); read-only / discussion runs
-  keep the placeholder.
+  receipt, uncommitted work disappears. In a `worktree` environment the daemon
+  publishes the branch you end on. A `host` environment is the exception:
+  finalization does not publish the shared checkout, so work that must leave
+  the machine moves off the default branch and you own its push / PR handoff.
+  Don't explore or modify other `.brr/` files beyond what the run asks. Themed
+  work on a placeholder `brr/<run-id>` branch ⇒ rename to a descriptive
+  `brr/<short-slug>` before committing (keep the `brr/` prefix); read-only /
+  discussion runs keep the placeholder.
 
 portals manual: `brnrd docs portals` — the full control-file protocol and
 the average run's choreography: receive → orient → plan-or-execute →
