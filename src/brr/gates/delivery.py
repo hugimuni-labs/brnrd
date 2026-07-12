@@ -59,10 +59,18 @@ def post_gist(content: str, filename: str = "result.md") -> str | None:
     never needs gist credentials (see ``kb/design-managed-delivery.md`` →
     "Why gists stay daemon-side"). Returns None if ``gh`` is unavailable
     or fails, leaving the caller to truncate.
+
+    **Secret, not public.** This carries an agent's overflowed final answer —
+    code, kb excerpts, whatever the run happened to be holding — and it used
+    to pass ``--public``, which contradicts the data-minimization argument
+    that section is written to defend (the diffense pack gist has always been
+    secret; these two disagreed). A secret gist is unlisted, not private, so
+    the chat link still resolves for anyone holding it; the only thing given
+    up is being indexed on the user's public profile, which was never wanted.
     """
     try:
         result = subprocess.run(
-            ["gh", "gist", "create", "--public", "-f", filename, "-"],
+            ["gh", "gist", "create", "-f", filename, "-"],
             input=content, capture_output=True, text=True, timeout=30,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
