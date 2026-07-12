@@ -19,6 +19,15 @@ from brr.gates import cloud  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 
+class _StopLoop(BaseException):
+    """Sentinel to break `run_loop`'s `while True`.
+
+    Deliberately a BaseException: the loop catches `Exception` broadly (that is
+    the point of it), so a RuntimeError sentinel would be swallowed and retried
+    forever — a hang, not a test.
+    """
+
+
 def _make_brnrd():
     forwarder = CapturingForwarder()
     app = create_app(
@@ -898,11 +907,13 @@ def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "_register", lambda *_a, **_k: None)
 
     def stop_after_one(*_a, **_k):
-        raise cloud.BrnrdAuthError("stop the loop for the test")
+        # NB: not a BrnrdAuthError — a 401 is retried now, not fatal.
+        raise _StopLoop
 
     monkeypatch.setattr(cloud, "_loop_once", stop_after_one)
 
-    cloud.run_loop(brr_dir, inbox_dir, responses_dir)
+    with pytest.raises(_StopLoop):
+        cloud.run_loop(brr_dir, inbox_dir, responses_dir)
 
     assert len(started) == 1
     target, args, daemon, name = started[0]
@@ -1101,12 +1112,8 @@ def test_request_raises_auth_error_on_401(monkeypatch):
         cloud._request("http://brnrd", "GET", "/v1/daemons/inbox", token="bad")
 
 
-def test_run_loop_exits_on_auth_error(tmp_path, monkeypatch):
-    import threading
-
+def _auth_error_state(tmp_path):
     brr_dir = tmp_path / ".brr"
-    inbox_dir = brr_dir / "inbox"
-    responses_dir = brr_dir / "responses"
     cloud._save_state(
         brr_dir,
         {
@@ -1116,19 +1123,71 @@ def test_run_loop_exits_on_auth_error(tmp_path, monkeypatch):
             "since": 0,
         },
     )
+    return brr_dir, brr_dir / "inbox", brr_dir / "responses"
+
+
+def test_run_loop_survives_auth_error_instead_of_exiting(tmp_path, monkeypatch):
+    """A 401 must not end the cloud gate.
+
+    It used to `return`, which killed cloud ingestion for the life of the
+    process: chat messages to the cloud bot vanished with no error on any
+    surface the user can see, while the daemon went on reporting itself
+    healthy. Live failure 2026-07-12 — a restart *during* the outage hit the
+    same exit on the register path, so restarting didn't help either.
+    """
+    brr_dir, inbox_dir, responses_dir = _auth_error_state(tmp_path)
+    polls = []
 
     def fail_request(*_a, **_k):
         raise cloud.BrnrdAuthError("invalid token")
 
-    monkeypatch.setattr(cloud, "_request", fail_request)
-    thread = threading.Thread(
-        target=cloud.run_loop,
-        args=(brr_dir, inbox_dir, responses_dir),
-        daemon=True,
-    )
-    thread.start()
-    thread.join(timeout=2)
-    assert not thread.is_alive()
+    def loop_once(*_a, **_k):
+        polls.append(1)
+        if len(polls) >= 3:
+            raise _StopLoop  # sentinel: we got this far
+        raise cloud.BrnrdAuthError("invalid token")
+
+    monkeypatch.setattr(cloud, "_request", fail_request)  # register 401s too
+    monkeypatch.setattr(cloud, "_loop_once", loop_once)
+    monkeypatch.setattr(cloud.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cloud, "_dashboard_publish_loop", lambda *_a, **_k: None)
+
+    with pytest.raises(_StopLoop):
+        cloud.run_loop(brr_dir, inbox_dir, responses_dir)
+
+    assert len(polls) == 3  # a 401 on register and on poll no longer ends the gate
+
+
+def test_run_loop_retries_auth_then_recovers_and_registers(tmp_path, monkeypatch):
+    """The transient case, end to end: register 401s (server mid-deploy), the
+    first poll 401s, then the server comes back — the gate keeps draining and
+    re-registers its capabilities instead of needing a manual restart."""
+    brr_dir, inbox_dir, responses_dir = _auth_error_state(tmp_path)
+    registers = []
+    polls = []
+
+    def register(*_a, **_k):
+        registers.append(1)
+        if len(registers) == 1:
+            raise cloud.BrnrdAuthError("invalid token")
+
+    def loop_once(*_a, **_k):
+        polls.append(1)
+        if len(polls) == 1:
+            raise cloud.BrnrdAuthError("invalid token")
+        if len(polls) > 2:
+            raise _StopLoop
+
+    monkeypatch.setattr(cloud, "_register", register)
+    monkeypatch.setattr(cloud, "_loop_once", loop_once)
+    monkeypatch.setattr(cloud.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(cloud, "_dashboard_publish_loop", lambda *_a, **_k: None)
+
+    with pytest.raises(_StopLoop):
+        cloud.run_loop(brr_dir, inbox_dir, responses_dir)
+
+    assert len(registers) == 2  # retried after the first successful poll
+    assert len(polls) == 3  # 401 → retry → drained
 
 
 def test_stale_cursor_from_older_db_epoch_heals_end_to_end(tmp_path, monkeypatch):
