@@ -99,6 +99,11 @@ class Run:
                           done / error / conflict.
         source:           The gate that produced the originating event.
         conversation_key: Stable gate-thread fingerprint, when known.
+        terminal_reply:   Ephemeral copy of the terminal response. The gate
+                          owns and may delete the response file as soon as the
+                          event becomes deliverable; closeout consumers use
+                          this copy instead of racing that delivery cleanup.
+                          Deliberately excluded from the run manifest.
         meta:             Arbitrary metadata carried from the event plus
                           runtime annotations (response path, branch
                           name when finalize promotes one, trace dirs,
@@ -112,6 +117,7 @@ class Run:
     status: str = "pending"
     source: str = ""
     conversation_key: str = ""
+    terminal_reply: str | None = field(default=None, repr=False)
     meta: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
