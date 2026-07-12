@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from typing import Iterable
 
-from . import account, config as conf
+from . import account, config as conf, forges, gitops
 
 CHECKOUT_DIRNAME = ".brnrd-kb"
 _MAX_SOURCE_BYTES = 2048
@@ -28,6 +28,200 @@ class SearchHit:
     path: Path
     line_no: int
     line: str
+
+
+@dataclass(frozen=True)
+class KnowledgeForgeLocation:
+    """A knowledge scope projected through its local remotes to a forge."""
+
+    remote_url: str
+    branch: str
+    scope_path: str
+    repo_root: Path
+    pushed_ref: str
+
+
+def kb_base_url(repo_root: Path, cfg: dict | None = None) -> str | None:
+    """Return the forge blob URL prefix for this repo's knowledge pages.
+
+    Home knowledge checkouts commonly point at a local account repository,
+    whose own remote points at the forge.  Follow that chain rather than
+    stopping at the first filesystem URL.  The final branch must have a
+    remote-tracking ref, so a local-only or never-pushed knowledge branch is
+    deliberately not advertised.
+    """
+
+    location = _knowledge_forge_location(repo_root, cfg)
+    if location is None:
+        return None
+    marker = "__brnrd_kb_page__.md"
+    rel = "/".join(part for part in (location.scope_path, marker) if part)
+    url = forges.view_blob_url(location.remote_url, location.branch, rel)
+    if not url or not url.endswith(marker):
+        return None
+    return url[: -len(marker)]
+
+
+def kb_page_url(
+    repo_root: Path,
+    page_path: str,
+    cfg: dict | None = None,
+) -> str | None:
+    """Return a forge URL for *page_path* only when that page is pushed."""
+
+    location = _knowledge_forge_location(repo_root, cfg)
+    if location is None:
+        return None
+    rel = _knowledge_page_relpath(location.scope_path, page_path)
+    if rel is None or not _path_matches_pushed_ref(
+        location.repo_root, location.branch, location.pushed_ref, rel,
+    ):
+        return None
+    return forges.view_blob_url(location.remote_url, location.branch, rel)
+
+
+def _knowledge_forge_location(
+    repo_root: Path, cfg: dict | None,
+) -> KnowledgeForgeLocation | None:
+    """Resolve the active knowledge scope through at most eight remotes."""
+
+    cfg = cfg if cfg is not None else conf.load_config(repo_root)
+    start, scope = _knowledge_repo_and_scope(repo_root, cfg)
+    if start is None or scope is None:
+        return None
+    git_root = _git_toplevel(start)
+    if git_root is None:
+        return None
+    try:
+        scope_path = scope.resolve().relative_to(git_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    if scope_path == ".":
+        scope_path = ""
+
+    branch = gitops.current_branch(git_root)
+    seen: set[Path] = set()
+    for _ in range(8):
+        try:
+            resolved_root = git_root.resolve()
+        except OSError:
+            return None
+        if resolved_root in seen or branch in ("", "HEAD"):
+            return None
+        seen.add(resolved_root)
+        remote = (
+            gitops.branch_remote(git_root, branch)
+            or gitops.default_remote(git_root)
+        )
+        if not remote:
+            return None
+        upstream = gitops.branch_upstream(git_root, branch)
+        remote_branch = (
+            upstream.split("/", 1)[1]
+            if upstream and upstream.startswith(f"{remote}/") else branch
+        )
+        url = gitops.remote_url(git_root, remote)
+        if not url:
+            return None
+        if forges.detect_forge(url) is not None:
+            pushed_ref = f"refs/remotes/{remote}/{remote_branch}"
+            if gitops.rev_parse(git_root, pushed_ref) is None:
+                return None
+            return KnowledgeForgeLocation(
+                remote_url=url,
+                branch=remote_branch,
+                scope_path=scope_path,
+                repo_root=git_root,
+                pushed_ref=pushed_ref,
+            )
+
+        next_root = _local_remote_repo(git_root, url)
+        if next_root is None:
+            return None
+        git_root = next_root
+        branch = remote_branch
+    return None
+
+
+def _knowledge_repo_and_scope(
+    repo_root: Path, cfg: dict,
+) -> tuple[Path | None, Path | None]:
+    checkout = repo_root / CHECKOUT_DIRNAME
+    try:
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        split = (
+            ctx.kind == "account"
+            and account.knowledge_split_mode(cfg) == "per-repo"
+        )
+        label = account.repo_label(repo_root, cfg)
+        if checkout.is_dir():
+            scope = (
+                checkout / "repos" / account.slug_repo_label(label)
+                if split else checkout
+            )
+            return checkout, scope
+        knowledge_root = account.knowledge_path(ctx)
+        scope = account.repo_knowledge_path(ctx, label) if split else knowledge_root
+        if knowledge_root.is_dir():
+            return knowledge_root, scope
+    except Exception:
+        pass
+    repo_kb = repo_root / "kb"
+    if repo_kb.is_dir():
+        return repo_root, repo_kb
+    return None, None
+
+
+def _git_toplevel(path: Path) -> Path | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], cwd=path,
+        capture_output=True, text=True, check=False,
+    )
+    return Path(result.stdout.strip()) if result.returncode == 0 else None
+
+
+def _local_remote_repo(repo_root: Path, url: str) -> Path | None:
+    raw = url[7:] if url.startswith("file://") else url
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = repo_root / candidate
+    root = _git_toplevel(candidate) if candidate.is_dir() else None
+    return root.resolve() if root is not None else None
+
+
+def _knowledge_page_relpath(scope_path: str, page_path: str) -> str | None:
+    raw = str(page_path or "").strip().replace("\\", "/").lstrip("/")
+    checkout_prefix = f"{CHECKOUT_DIRNAME}/"
+    if raw.startswith(checkout_prefix):
+        raw = raw[len(checkout_prefix):]
+    if not raw or any(part in ("", ".", "..") for part in raw.split("/")):
+        return None
+    if scope_path and not (raw == scope_path or raw.startswith(f"{scope_path}/")):
+        # ``kb/foo.md`` was the historical relic spelling even for home
+        # knowledge.  Its ``kb/`` is a logical label, not a directory there.
+        if raw.startswith("kb/"):
+            raw = raw[3:]
+        raw = f"{scope_path}/{raw}"
+    return raw
+
+
+def _path_matches_pushed_ref(
+    repo_root: Path, branch: str, pushed_ref: str, rel_path: str,
+) -> bool:
+    """Return whether the branch's page content is present on the forge ref."""
+
+    local_blob = _object_id(repo_root, f"{branch}:{rel_path}")
+    pushed_blob = _object_id(repo_root, f"{pushed_ref}:{rel_path}")
+    return bool(local_blob and local_blob == pushed_blob)
+
+
+def _object_id(repo_root: Path, spec: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", spec], cwd=repo_root,
+        capture_output=True, text=True, check=False,
+    )
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else None
 
 
 def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
