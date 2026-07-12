@@ -2,9 +2,65 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+try:  # pragma: no cover - POSIX only, and every supported host is POSIX
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
+
+
+@contextlib.contextmanager
+def file_lock(lock_path: Path, timeout: float = 30.0):
+    """Hold an exclusive cross-process advisory lock at *lock_path*.
+
+    Serializes the index-touching step of two *separate processes* sharing
+    one git worktree — a daemon thought and an ad-hoc session, or two
+    concurrent runs capturing the same account-scoped repo. ``fcntl.flock``
+    is advisory and per-open-file-description, which is exactly that scope;
+    a ``threading.Lock`` would only cover threads of one process.
+
+    Yields True when the lock is held, False when it couldn't be acquired
+    within *timeout* (the caller skips rather than races). Degrades to a
+    no-op lock (yields True) when locking is unavailable or the lock file
+    can't be created — capture is best-effort and must never become the
+    thing that fails.
+
+    The lock file must live *outside* the worktree it guards, or it lands
+    in that repo's own history.
+    """
+    if fcntl is None:  # pragma: no cover - non-POSIX
+        yield True
+        return
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        yield True
+        return
+    acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 @dataclass
