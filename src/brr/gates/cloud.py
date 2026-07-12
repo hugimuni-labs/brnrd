@@ -44,6 +44,13 @@ class BrnrdAuthError(RuntimeError):
 
 _AUTH_HINT = "Re-run `brnrd connect` to link this daemon to your brnrd repo."
 
+# A 401 is retried, not fatal — see `run_loop`. Slow cadence, because the one
+# case that deserves patience (a transient server-side auth failure) resolves
+# on its own, and the one that doesn't (a truly bad token) should keep saying
+# so once every five minutes rather than kill the gate on its way out.
+_AUTH_RETRY_MIN_S = 5
+_AUTH_RETRY_CAP_S = 300
+
 
 # Gateway-transient statuses worth a short retry: the hosted brnrd sits
 # behind a router that answers 502/503/504 for the duration of a deploy
@@ -243,13 +250,19 @@ def bind(brr_dir: Path) -> None:
 
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
+    registered = False
     try:
         _register(brr_dir, state)
-    except BrnrdAuthError as e:
-        print(f"[brnrd:cloud] auth failed: {e}")
-        return
+        registered = True
     except Exception as e:
-        print(f"[brnrd:cloud] register failed: {e}")
+        # A failed register is never fatal, not even a 401. The hosted brnrd
+        # answers with whatever its router has during a deploy window, and a
+        # daemon that gives up here is a daemon whose cloud gate is dead until
+        # someone notices — which is exactly what a restart *during* the
+        # outage used to reproduce (2026-07-12: messages to the cloud bot
+        # vanished, the restart didn't help, the daemon looked healthy).
+        # The poll loop below re-attempts registration once it gets through.
+        print(f"[brnrd:cloud] register failed: {e}, will retry")
     threading.Thread(
         target=_dashboard_publish_loop,
         args=(brr_dir, inbox_dir),
@@ -257,13 +270,31 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         name="cloud-dashboard-publish",
     ).start()
     backoff = 1
+    auth_backoff = _AUTH_RETRY_MIN_S
     while True:
         try:
             _loop_once(brr_dir, inbox_dir, responses_dir)
             backoff = 1
+            auth_backoff = _AUTH_RETRY_MIN_S
+            if not registered:
+                try:
+                    _register(brr_dir, _load_state(brr_dir))
+                    registered = True
+                    print("[brnrd:cloud] re-registered after recovery")
+                except Exception as e:  # keep draining; capabilities lag, chat works
+                    print(f"[brnrd:cloud] re-register failed: {e}")
         except BrnrdAuthError as e:
-            print(f"[brnrd:cloud] auth failed: {e}")
-            return
+            # 401 used to end the thread. Auth failure is not reliably
+            # permanent — a mid-deploy router, a cold start, a token the
+            # server re-issues — and the failure mode of exiting is the worst
+            # one available: chat messages disappear with no error anywhere
+            # the user can see, while `brr up` keeps reporting a healthy
+            # daemon. Retrying at a slow cadence costs one request per five
+            # minutes and keeps a genuinely bad token loudly visible instead
+            # of silently terminal.
+            print(f"[brnrd:cloud] auth failed: {e}, retrying in {auth_backoff}s")
+            time.sleep(auth_backoff)
+            auth_backoff = min(auth_backoff * 2, _AUTH_RETRY_CAP_S)
         except Exception as e:
             print(f"[brnrd:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
