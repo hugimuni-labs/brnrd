@@ -358,6 +358,16 @@ Two physical shapes, chosen per repo, not per task:
   exclusive; a home-knowledge repo can still have a legacy or
   deliberately-portable repo `kb/` layered in) → repo `docs/`.
 
+**Write through the checkout; the push is brnrd's.** `.brnrd-kb/` is the
+writable surface — a real git repo an agent can commit to with a message.
+The account path (`<home>/knowledge/`) is machinery: it is what
+`active_kb_dir`, the preflight and the graph stats read, and brnrd keeps the
+two in step. After every thought `knowledge.capture()` commits both, pushes
+checkout → account → forge, and marks a rejected push instead of swallowing
+it. So: edit in `.brnrd-kb/`, commit if you have something to say in the
+message, and **never hand-run a push chain** — if a page seems to need one to
+reach the forge, that's a bug to report, not a ritual to learn.
+
 **This repo dogfoods home knowledge, not a committed `kb/`.** `Gurio/brr`
 is public, and a committed `kb/` was carrying maintainer-personal and
 pre-decision material in public git history — moved 2026-07-09 to the

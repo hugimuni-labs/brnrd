@@ -3769,3 +3769,101 @@ def test_run_worker_threads_level_quota_into_prompt(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert captured["runner_quota"] == "session 88% left; week 40% left"
+
+
+def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
+    """``shell:``/``core:`` are optional — the child dispatches on the account
+    default. They used to be *required*, and a spawn without them was dropped
+    with the only trace a print to the daemon's uncaptured stdout: the prompt
+    contract said optional, the code said mandatory, and the resident waited
+    for a worker that never existed."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox, "telegram", "original task", status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\ntask_classification: setup-assist\n---\nbounded side task\n",
+        encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task, responses, event_id, outbox, inbox, stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"spawn": 1}
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    assert len(spawned) == 1
+    child = protocol._read_event(spawned[0])
+    assert child["body"].strip() == "bounded side task"
+    assert child["worker"] is True
+    assert child["spawn_immediate"] is True
+    # No shell/core keys — dispatch resolves the account default.
+    assert "shell" not in child
+    assert "core" not in child
+
+
+def test_refused_spawn_leaves_a_notice_the_running_resident_can_read(tmp_path):
+    """A refused directive must never look like a working one. The file is
+    deleted either way, so the refusal has to land where the resident reads:
+    the portal, not the daemon's stdout."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\n---\nnested work\n", encoding="utf-8",
+    )
+    # A worker-stack run: nesting is refused by design.
+    task = Run(
+        id="run-worker", event_id=event_id, body="original", source="telegram",
+        meta={"worker": True},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert "no nested spawns" in notices[0]["text"]
+
+
+def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
+    """The other silent drop: a reply addressed to an event that isn't pending
+    is deleted undelivered."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "reply.md").write_text(
+        "---\nevent: evt-does-not-exist\n---\nanswer\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert "evt-does-not-exist" in notices[0]["text"]
+    assert "NOT delivered" in notices[0]["text"]
