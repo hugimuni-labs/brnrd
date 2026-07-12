@@ -31,9 +31,9 @@ Three stages, and how to read this file in each:
   universal sections (Stewardship, Workflow → Orientation + Run types
   + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) plus Build and run and Code guidelines. Skip Workflow →
-  *When the brr daemon runs you* — that machinery isn't in play here.
+  *When the brnrd daemon runs you* — that machinery isn't in play here.
 
-- **brr daemon run.** A Run Context Bundle opens with `### Mode`
+- **brnrd daemon run.** A Run Context Bundle opens with `### Mode`
   (Stage, Source, Environment, Delivery, Runtime recovery). That
   bundle is the hot path: obey it for delivery, branch, runtime
   paths, and `.brr/` access — it overrides the generic workflow
@@ -45,7 +45,7 @@ Three stages, and how to read this file in each:
   daemon runs you* backs it up; everything else (Stewardship, kb,
   artifacts, operating rules, self-review, guardrails) applies uniformly.
 
-- **brr setup stage.** A specialised prompt (`setup.md`) narrows the
+- **brnrd setup stage.** A specialised prompt (`setup.md`) narrows the
   scope to initial adoption. Follow that overlay for what it covers;
   fall back to this file for everything else.
 
@@ -190,14 +190,14 @@ to read these by hand at all.
      last 10-15 entries.
    - Shell: `grep '^## \[' kb/log.md | tail -10` to skim headings,
      then targeted reads of any entry you want in full.
-   - When the brr daemon is hosting you, the prompt already embeds a
+   - When the brnrd daemon is hosting you, the prompt already embeds a
      `Recent Activity (from kb/log.md)` extract plus the bundle's
      recent-turns block (under `### Communication snapshot`) — those
      satisfy this step unless you need older history than the extract
      carries.
 3. If a **dominion** exists here, read its playbook — your standing
    self-orientation as this repo's resident, which past wakes may have
-   reshaped. In current brr daemon runs, the Run Context Bundle names the
+   reshaped. In current brnrd daemon runs, the Run Context Bundle names the
    account-scoped dominion path; older repo-local installs may still use
    `.brr/dominion/playbook.md` as a legacy fallback. Its daemon mechanics
    (scheduled wakes, outbox delivery, liveness) only bind when brr hosts you;
@@ -268,7 +268,7 @@ Don't force-push to `main` / `master`. Don't bypass hooks
 (`--no-verify`). If a rebase would rewrite commits you didn't
 author, stop and surface the conflict instead.
 
-### When the brr daemon runs you
+### When the brnrd daemon runs you
 
 Everything in this subsection applies only when you're being launched
 by `brnrd up` / the daemon worker — the Run Context Bundle's `### Mode`
@@ -642,9 +642,9 @@ Before marking a task complete:
   Workflow, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) apply to every brr-managed project; project-specific sections
   (Project, Build and run, Code guidelines, Constraints) are rewritten per
-  repo by the setup agent. The Workflow → *When the brr daemon runs you*
+  repo by the setup agent. The Workflow → *When the brnrd daemon runs you*
   subsection is universal too — adopters keep it because their playbook may
-  be read by a brr daemon, even if they themselves run brr only by hand.
+  be read by a brnrd daemon, even if they themselves run brnrd only by hand.
 - `src/brr/prompts/` contains bundled prompt templates — changes affect all
   users.
 - Gate implementations (`src/brr/gates/`) follow the file protocol spec in

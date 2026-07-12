@@ -184,7 +184,7 @@ def _warn_on_legacy_fallback(cfg: dict[str, Any]) -> None:
     mode = str(raw).strip().lower()
     if mode and mode != "preserve":
         print(
-            f"[brr] warning: branch.fallback={raw!r} is no longer "
+            f"[brnrd] warning: branch.fallback={raw!r} is no longer "
             "supported (only 'preserve' remains); ignoring."
         )
         _LEGACY_FALLBACK_WARNED = True

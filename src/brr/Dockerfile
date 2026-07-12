@@ -1,4 +1,4 @@
-# brr runner image — bundles claude, codex, and gemini CLIs alongside a
+# brnrd runner image — bundles claude, codex, and gemini CLIs alongside a
 # practical baseline toolbox for daemon-launched development work. node:22-slim
 # is the base because all three runner CLIs are distributed via npm.
 #
@@ -54,7 +54,7 @@ RUN apt-get update \
 COPY pyproject.toml README.md /opt/brr/
 COPY src /opt/brr/src
 RUN pip install --no-cache-dir /opt/brr \
-    && python3 -m brr review --help >/dev/null
+    && brnrd review --help >/dev/null
 
 # GitHub CLI via the official upstream APT source. Debian's own ``gh``
 # package is sometimes years out of date (e.g. 2.46.x), and ``gh pr

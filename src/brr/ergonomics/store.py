@@ -1,7 +1,7 @@
 """Read side of the local ergonomics store.
 
 ``LocalErgoProxy`` writes ``.brr/ergonomics/<YYYY-MM-DD>.jsonl``; this
-module reads it back for the ``brr ergonomics`` CLI. Kept separate from
+module reads it back for the ``brnrd ergonomics`` CLI. Kept separate from
 the proxy so the read path has no write-side imports (proxy imports
 ``ergonomics_dir`` from here, not the other way around).
 """
