@@ -3,7 +3,7 @@
 Covers the record shape, the Null/Log/Local proxies + owner-aware
 resolution, the local store (read/summarize/clear), each probe's
 detection logic, the orchestrator's never-raise contract, and the
-``brr ergonomics`` CLI handlers.
+``brnrd ergonomics`` CLI handlers.
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ def _log_record(issue="stale_image", severity="warn", **kw):
 def test_log_proxy_emits_warn_to_stdout(capsys):
     LogErgoProxy().emit(_log_record(detail={"hint": "rebuild the image"}))
     out = capsys.readouterr().out
-    assert "[brr:ergo] warn stale_image" in out
+    assert "[brnrd:ergo] warn stale_image" in out
     assert "rebuild the image" in out
 
 
@@ -169,7 +169,7 @@ def test_log_proxy_dedups_within_window(capsys):
     now = time.time()
     proxy.emit(_log_record(timestamp=now))
     proxy.emit(_log_record(timestamp=now + 1))       # same signature → silent
-    assert capsys.readouterr().out.count("[brr:ergo]") == 1
+    assert capsys.readouterr().out.count("[brnrd:ergo]") == 1
 
 
 def test_log_proxy_relogs_after_window_and_per_signature(capsys):
@@ -178,7 +178,7 @@ def test_log_proxy_relogs_after_window_and_per_signature(capsys):
     proxy.emit(_log_record(timestamp=now))
     proxy.emit(_log_record(timestamp=now + 500))     # window elapsed → again
     proxy.emit(_log_record(image="other:tag", timestamp=now))  # new sig → again
-    assert capsys.readouterr().out.count("[brr:ergo]") == 3
+    assert capsys.readouterr().out.count("[brnrd:ergo]") == 3
 
 
 # ── local store ─────────────────────────────────────────────────────
@@ -398,7 +398,7 @@ def test_probe_run_prep_default_logs(tmp_path, monkeypatch, capsys):
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path, cfg={}, ctx=_ctx(),
     )
     assert [r.issue for r in records] == ["x"]
-    assert "[brr:ergo] warn x" in capsys.readouterr().out
+    assert "[brnrd:ergo] warn x" in capsys.readouterr().out
     assert store.read_records(tmp_path) == []  # log proxy writes no store
 
 

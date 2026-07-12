@@ -53,7 +53,7 @@ def test_bundled_runner_image_has_baseline_dev_tools():
 def test_bundled_runner_image_installs_brr_cli_and_runtime_deps():
     """The default agent image should carry brr's own CLI surface.
 
-    Docker tasks often need ``brr review`` or other local tooling while
+    Docker tasks often need ``brnrd review`` or other local tooling while
     dogfooding brr itself. The image installs this checkout from the build
     context — never ``pip install brr`` from PyPI (name taken by an unrelated
     terminal image renderer).
@@ -63,7 +63,7 @@ def test_bundled_runner_image_installs_brr_cli_and_runtime_deps():
     assert "COPY src /opt/brr/src" in text
     assert "pip install --no-cache-dir /opt/brr" in text
     assert "'requests>=2.31,<3'" in text
-    assert "python3 -m brr review --help" in text
+    assert "brnrd review --help" in text
     assert "'brr>=0.1.0'" not in text
 
 

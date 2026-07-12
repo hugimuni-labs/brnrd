@@ -195,7 +195,7 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
 
 
 def test_build_injected_context_matches_runner_injection(tmp_path):
-    """`brr agent inject` (build_injected_context) hands a wrapper exactly
+    """`brnrd agent inject` (build_injected_context) hands a wrapper exactly
     the wake-context the runner path injects — same blocks, so a non-brr
     harness orients the resident with the identical self-inject semantic."""
     repo = _repo(tmp_path)

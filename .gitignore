@@ -17,6 +17,7 @@ out.html
 # ad-hoc UI screenshots dropped in repo root for a resident to read;
 # handoff scratch, not repo history
 /screenshots/
+/ht/
 
 # Local scratch / contributor-specific
 .local/

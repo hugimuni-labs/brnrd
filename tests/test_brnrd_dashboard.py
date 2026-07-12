@@ -258,6 +258,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
                 "status": "known",
                 "windows": [{"label": "5h window", "used": None, "limit": None, "percent": 61.0}],
                 "credits": None,
+                "reset_credits": None,
             }
         ]
 

@@ -1,14 +1,36 @@
 [project]
-name = "brr"
+name = "brnrd"
 version = "0.1.0"
 description = "Structured guardrails for AI agent work, managed from a chat"
-authors = [ { name = "brr Contributors" } ]
+authors = [ { name = "HugiMuni" } ]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31,<3"]
+license = "MIT AND AGPL-3.0-only"
+license-files = [
+  "LICENSE",
+  "LICENSE-OVERVIEW.md",
+  "src/brr/LICENSE",
+  "src/brnrd/LICENSE",
+  "src/brnrd_web/LICENSE",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Homepage = "https://brnrd.dev"
+Repository = "https://github.com/Gurio/brr"
+Issues = "https://github.com/Gurio/brr/issues"
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 # Per-package license split (see LICENSE-OVERVIEW.md): the daemon
@@ -16,10 +38,12 @@ build-backend = "setuptools.build_meta"
 # pulled by the `backend` extra) is AGPLv3.
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["brr*", "brnrd*", "brnrd_web*"]
 
 [tool.setuptools.package-data]
-brr = ["AGENTS.md", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md", "diffense/*.html", "data/*.json"]
-brnrd_web = ["templates/*.html", "static/*.css"]
+brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md", "diffense/*.html", "data/*.json"]
+brnrd = ["LICENSE"]
+brnrd_web = ["LICENSE", "templates/*.html", "static/*.css"]
 
 [project.optional-dependencies]
 backend = [
@@ -37,11 +61,10 @@ backend = [
 postgres = [
   "psycopg[binary]>=3.1",
 ]
-dev = ["pytest>=7.0", "brr[backend]"]
+dev = ["pytest>=7.0", "brnrd[backend]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
-worktree-hygiene-report = "brr.worktree:main_worktree_hygiene"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -23,15 +23,15 @@ its title and body.
 
 ## Procedure
 
-1. **Validate first.** `brr review --check <Review pack path>` must pass
+1. **Validate first.** `brnrd review --check <Review pack path>` must pass
    — a dead locator, a dangling card edge, or a missing axis means the
    pack is not done. Fix every error it reports.
 
 2. **Project the PR body and title from the pack.**
 
    ```
-   brr review <Review pack path> --pr-body --relay
-   brr review <Review pack path> --pr-title --fallback-title <branch>
+   brnrd review <Review pack path> --pr-body --relay
+   brnrd review <Review pack path> --pr-title --fallback-title <branch>
    ```
 
    `--relay` makes a **rich review link**: it first writes the pack JSON
