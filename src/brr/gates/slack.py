@@ -5,7 +5,7 @@ Credentials and runtime state live in ``.brr/gates/slack.json``.
 Required setup:
 - Create a Slack app with ``channels:history``, ``channels:read``,
   ``chat:write`` scopes.
-- Run ``brr setup slack`` to save the bot token and choose the channel.
+- Run ``brnrd setup slack`` to save the bot token and choose the channel.
 """
 
 from __future__ import annotations
@@ -79,39 +79,39 @@ def auth(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = input("Slack bot token (xoxb-...): ").strip()
     if not token:
-        print("[brr] No token provided.")
+        print("[brnrd] No token provided.")
         return
     try:
         _slack_api(token, "auth.test")
-        print("[brr] Token validated.")
+        print("[brnrd] Token validated.")
     except Exception as e:
-        print(f"[brr] Auth failed: {e}")
+        print(f"[brnrd] Auth failed: {e}")
         return
     state["token"] = token
     _save_state(brr_dir, state)
-    print("[brr] Token saved")
+    print("[brnrd] Token saved")
 
 
 def bind(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     if "token" not in state:
-        print("[brr] Run `brr auth slack` first.")
+        print("[brnrd] Run `brnrd auth slack` first.")
         return
     channel = input("Slack channel ID (C0...): ").strip()
     if not channel:
-        print("[brr] No channel provided.")
+        print("[brnrd] No channel provided.")
         return
     state["channel"] = channel
     try:
         _slack_api(state["token"], "chat.postMessage", {
-            "channel": channel, "text": "brr bound.",
+            "channel": channel, "text": "brnrd bound.",
         })
-        print("[brr] Test message sent.")
+        print("[brnrd] Test message sent.")
     except Exception as e:
-        print(f"[brr] Failed: {e}")
+        print(f"[brnrd] Failed: {e}")
         return
     _save_state(brr_dir, state)
-    print("[brr] Binding saved")
+    print("[brnrd] Binding saved")
 
 
 def setup(brr_dir: Path) -> None:

@@ -1,7 +1,7 @@
 """Interactive setup: token paste / repo binding / trigger selection.
 
 ``setup(brr_dir)`` is the one-step CLI entry; ``auth`` and ``bind``
-stay separate so ``brr auth github`` and ``brr bind github`` keep
+stay separate so ``brnrd auth github`` and ``brnrd bind github`` keep
 working independently.
 """
 
@@ -32,7 +32,7 @@ def auth(brr_dir: Path) -> None:
     if token is None:
         token = input("GitHub personal access token (repo scope): ").strip()
         if not token:
-            print("[brr] No token provided.")
+            print("[brnrd] No token provided.")
             return
         source = "stored"
     elif not state_dict.get("token"):
@@ -43,7 +43,7 @@ def auth(brr_dir: Path) -> None:
     try:
         login = state._validate_token(token)
     except Exception as exc:
-        print(f"[brr] GitHub auth failed: {exc}")
+        print(f"[brnrd] GitHub auth failed: {exc}")
         return
 
     state_dict["bot_login"] = login
@@ -55,7 +55,7 @@ def auth(brr_dir: Path) -> None:
         state_dict.pop("token", None)
     state_dict["token_source"] = source
     state._save_state(brr_dir, state_dict)
-    print(f"[brr] GitHub auth ok: @{login} (source={source})")
+    print(f"[brnrd] GitHub auth ok: @{login} (source={source})")
 
 
 def _prompt_trigger(label: str, default: str) -> str | None:
@@ -83,14 +83,14 @@ def _prompt_bool_trigger(label: str, default: bool = False) -> bool:
         return True
     if raw in ("off", "no", "false", "none", "disable", "disabled"):
         return False
-    print(f"[brr] Unrecognised value '{raw}' — keeping {default_label}.")
+    print(f"[brnrd] Unrecognised value '{raw}' — keeping {default_label}.")
     return default
 
 
 def bind(brr_dir: Path) -> None:
     state_dict = state._load_state(brr_dir)
     if state.resolve_token(state_dict) is None:
-        print("[brr] Run `brr auth github` first.")
+        print("[brnrd] Run `brnrd auth github` first.")
         return
 
     repo_root = brr_dir.parent
@@ -101,7 +101,7 @@ def bind(brr_dir: Path) -> None:
     )
     repo = input(prompt).strip() or (detected or "")
     if not repo or "/" not in repo:
-        print("[brr] Repo must look like 'owner/name'.")
+        print("[brnrd] Repo must look like 'owner/name'.")
         return
     state_dict["repo"] = repo
 
@@ -114,7 +114,7 @@ def bind(brr_dir: Path) -> None:
         triggers = {"any": True}
         state_dict["triggers"] = triggers
         state._save_state(brr_dir, state_dict)
-        print(f"[brr] GitHub gate bound: repo={repo} triggers=['any']")
+        print(f"[brnrd] GitHub gate bound: repo={repo} triggers=['any']")
         return
     triggers.pop("any", None)
 
@@ -129,7 +129,7 @@ def bind(brr_dir: Path) -> None:
 
     label = _prompt_trigger(
         "Label to watch on issues",
-        str(triggers.get("label") or "brr"),
+        str(triggers.get("label") or "brnrd"),
     )
     if label is None:
         triggers.pop("label", None)
@@ -138,7 +138,7 @@ def bind(brr_dir: Path) -> None:
 
     mention = _prompt_trigger(
         "Mention string to watch in comments",
-        str(triggers.get("mention") or "@brr-bot"),
+        str(triggers.get("mention") or "@brnrd-bot"),
     )
     if mention is None:
         triggers.pop("mention", None)
@@ -147,13 +147,13 @@ def bind(brr_dir: Path) -> None:
 
     if not triggers:
         print(
-            "[brr] No triggers configured — at least one of opened / label / mention "
+            "[brnrd] No triggers configured — at least one of opened / label / mention "
             "required.",
         )
         return
     state_dict["triggers"] = triggers
     state._save_state(brr_dir, state_dict)
-    print(f"[brr] GitHub gate bound: repo={repo} triggers={list(triggers)}")
+    print(f"[brnrd] GitHub gate bound: repo={repo} triggers={list(triggers)}")
 
 
 def setup(brr_dir: Path) -> None:

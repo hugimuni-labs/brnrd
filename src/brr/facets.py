@@ -7,9 +7,9 @@ answer (``kb/design-resident-boundary.md`` §1, §8) is to stop choosing them by
 editorial taste — three renderers that happen to list the same keys — and
 **derive them from the walls we already agreed**, defining the set *here, once*.
 "By schema, not by convention." The three renderers (the daemon JSON snapshot,
-the woven hook line, ``brr portal state``) project from :data:`FACETS` so they
+the woven hook line, ``brnrd portal state``) project from :data:`FACETS` so they
 can never drift on *which* facets they carry, and an operator can list the
-catalogue on demand with ``brr portal facets``.
+catalogue on demand with ``brnrd portal facets``.
 
 A slot earns facet status iff it is one of:
 
@@ -61,7 +61,7 @@ class FacetSpec:
     """One facet's identity in the catalogue — the schema, not its live value.
 
     ``fills`` is the operator-facing one-liner: what a collector would put in
-    this slot and why it might be empty. It is what ``brr portal facets`` prints
+    this slot and why it might be empty. It is what ``brnrd portal facets`` prints
     so an operator can see *what the implemented facets are* without reading the
     code.
     """
@@ -388,7 +388,7 @@ def render_line(resources: dict[str, object] | None) -> str | None:
 def describe_facets(
     resources: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
-    """The facet catalogue for operator inspection (``brr portal facets``).
+    """The facet catalogue for operator inspection (``brnrd portal facets``).
 
     Returns one row per schema facet: its identity (key / label / kind /
     required), the ``fills`` blurb describing what a collector would put there,

@@ -2,7 +2,7 @@
 
 Short orientation for agents running under brr. If you see a `Run
 Context Bundle` with an `Event:` or `Run ID:` line in your prompt, you
-are inside a brr daemon wake, not a standalone session. Most of what you
+are inside a brnrd daemon wake, not a standalone session. Most of what you
 need is already in the prompt. Use this page when you need a refresher.
 
 ## At a glance

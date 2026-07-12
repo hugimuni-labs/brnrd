@@ -1,6 +1,6 @@
 """Inline a review pack into the renderer template -> a self-contained HTML file.
 
-Spike-stage seed of the eventual ``brr review`` render/serve step. Reads
+Spike-stage seed of the eventual ``brnrd review`` render/serve step. Reads
 ``template.html`` (generic over any pack) and substitutes the pack JSON
 into its embedded ``<script>`` tag, so the output opens in any browser
 with no server and no dependencies.

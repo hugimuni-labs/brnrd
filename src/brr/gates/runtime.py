@@ -101,7 +101,7 @@ def run_loop(
                 time.sleep(poll_interval)
             backoff = 1
         except Exception as e:  # noqa: BLE001 - gate threads must not die
-            print(f"[brr:{label}] error: {e}, retrying in {backoff}s")
+            print(f"[brnrd:{label}] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)
 
@@ -156,7 +156,7 @@ def deliver_stream(
                     protocol.partials_dir(responses_dir, eid),
                 )
         except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
-            print(f"[brr:{source}] delivery error for {eid}: {e}")
+            print(f"[brnrd:{source}] delivery error for {eid}: {e}")
             continue
 
 

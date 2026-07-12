@@ -152,8 +152,8 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert cloud.is_configured(brr_dir)
     assert ("POST", "/v1/accounts/pair") in seen
     assert output == [
-        "[brr] Approve this daemon at: u",
-        "[brr] Connected to brnrd repo proj_x.",
+        "[brnrd] Approve this daemon at: u",
+        "[brnrd] Connected to brnrd repo proj_x.",
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
         "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]

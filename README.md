@@ -1,34 +1,35 @@
-# brr
+# brnrd
 
-![Local agents go brr](./media/brr-logo.gif)
+![brnrd](https://github.com/Gurio/brr/raw/main/media/brr-logo.gif)
 
 Structured AI agent playbook with persistent knowledge base and remote execution.
 
-brr produces `AGENTS.md` — a playbook that encodes your project's conventions,
+brnrd produces `AGENTS.md` — a playbook that encodes your project's conventions,
 workflow, and guardrails.  Any AI tool that reads it (Claude Code, Cursor, Codex,
-Gemini) gets the same behavior.  brr adds a remote execution layer: a daemon that
+Gemini) gets the same behavior.  brnrd adds a remote execution layer: a daemon that
 accepts tasks from Telegram, Slack, GitHub (issue labels and PR / issue
 mentions), or anything that writes a file.
 
 **Two layers of value:**
 
-1. **Playbook only** — `AGENTS.md` + `kb/` work with any AI tool, no brr needed.
+1. **Playbook only** — `AGENTS.md` + `kb/` work with any AI tool, no brnrd needed.
    Copy the conventions, use them everywhere.
-2. **Full tool** — brr daemon handles remote execution, gate I/O, knowledge
+2. **Full tool** — the brnrd daemon handles remote execution, gate I/O, knowledge
    persistence, and git push.
 
-No database, no cloud, no lock-in.
+Execution stays local. The optional managed service relays remote events and
+hosts the dashboard without moving agent work off your machine.
 
 ## Install
 
 ```bash
-pip install brr
+pip install brnrd
 ```
 
-Or run from a local checkout while developing or customizing brr itself:
+Or run from a local checkout while developing or customizing brnrd itself:
 
 ```bash
-git clone https://github.com/user/brr
+git clone https://github.com/Gurio/brr
 /path/to/brr/brnrd init
 ```
 
@@ -41,7 +42,7 @@ pip install -e /path/to/brr
 Forks work with normal Python packaging too:
 
 ```bash
-pip install git+https://github.com/you/brr.git
+pip install git+https://github.com/Gurio/brr.git
 ```
 
 ## Quick start
@@ -63,7 +64,7 @@ From Telegram (or Slack, or a task file):
 > review the latest PR for security issues
 ```
 
-## What brr creates
+## What brnrd creates
 
 `brnrd init` sets up:
 
@@ -83,7 +84,7 @@ AGENTS.md + kb/         universal: works with any AI tool
   ├── Cursor reads it
   ├── Codex reads it
   │
-  └── brr adds remote execution:
+  └── brnrd adds remote execution:
 
   ┌─────────┐    .brr/inbox/    ┌────────┐    runner    ┌──────────┐
   │  Gates  │───────────────────│ Daemon │──────────────│  Runner  │
@@ -97,7 +98,7 @@ The daemon scans the inbox and runs workers.  The runner is whatever AI CLI
 you have installed.
 
 Telegram works with just a bot token.  Once the daemon is running, send the
-bot a message; brr records the chat ID from each message and replies there.
+bot a message; brnrd records the chat ID from each message and replies there.
 
 ## CLI
 
@@ -146,12 +147,12 @@ or service-specific plugins fit behind the same internal protocol.
 Daemon git operations are publish-plan driven. Each task starts on a
 fresh `brr/<task-id>` branch from a resolved seed ref. When the event
 names a target branch (`branch_target`, `target_branch`, `base_branch`,
-or legacy `branch`), brr seeds from `<remote>/<target>` and publishes
+or legacy `branch`), brnrd seeds from `<remote>/<target>` and publishes
 under that name after the run. Without a structured target the task
 branch is preserved as-is and published for human routing when a remote
 is configured.
 
-Docker mode wires credentials automatically: brr forwards
+Docker mode wires credentials automatically: brnrd forwards
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
 `GOOGLE_API_KEY` from the daemon's environment, and bind-mounts your
 host's `~/.claude/`, `~/.codex/`, `~/.gemini/` (when present) into the
@@ -159,7 +160,7 @@ container so subscription auth works without extra config. See
 `src/brr/docs/envs.md` for the full breakdown — image expectations, the
 bundled runner image, and the durability contract.
 
-Branching is mostly task-internal.  brr uses branches/worktrees to stage
+Branching is mostly task-internal.  brnrd uses branches/worktrees to stage
 reviewable code changes or continue an explicitly named branch, but users
 usually only choose the environment policy.
 
@@ -170,21 +171,24 @@ environment policy.
 ## Development
 
 ```bash
-git clone https://github.com/user/brr
+git clone https://github.com/Gurio/brr
 cd brr
 pip install -e ".[dev]"
 pytest
 ```
 
-For remote-assisted brr development, run the daemon from the editable
+For remote-assisted brnrd development, run the daemon from the editable
 install with developer reload enabled:
 
 ```bash
 brnrd up --dev-reload
 ```
 
-The daemon re-execs itself between tasks when brr package files change.
+The daemon re-execs itself between tasks when brnrd package files change.
 
 ## License
 
-MIT
+The local daemon core in `src/brr/` is MIT licensed. The managed backend and
+dashboard in `src/brnrd/` and `src/brnrd_web/` are AGPLv3 licensed. See
+[`LICENSE-OVERVIEW.md`](https://github.com/Gurio/brr/blob/main/LICENSE-OVERVIEW.md) for the package boundary and
+install details.

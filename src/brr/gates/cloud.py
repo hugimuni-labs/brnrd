@@ -61,7 +61,7 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
     for attempt, sleep_s in enumerate((*_RETRY_SLEEPS_S, None)):
         resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
         if resp.status_code in _RETRY_STATUSES and sleep_s is not None:
-            print(f"[brr:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(_RETRY_SLEEPS_S)} in {sleep_s:.0f}s")
+            print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(_RETRY_SLEEPS_S)} in {sleep_s:.0f}s")
             time.sleep(sleep_s)
             continue
         break
@@ -116,7 +116,7 @@ def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | 
     try:
         result = _request(state["brnrd_url"], "POST", "/v1/daemons/pack", token=state["token"], json=body)
     except Exception as e:
-        print(f"[brr:cloud] pack relay failed: {e}")
+        print(f"[brnrd:cloud] pack relay failed: {e}")
         return None
     url = result.get("render_url")
     return url if isinstance(url, str) and url else None
@@ -186,13 +186,13 @@ def propose_config_change(
         # account to run `brnrd connect` when the real story is e.g. a 422
         # (server allowlist out of lockstep — observed live 2026-07-11) or
         # a deploy-window 502. The error detail is the actionable part.
-        print(f"[brr:cloud] config-change proposal mint failed: {e}")
+        print(f"[brnrd:cloud] config-change proposal mint failed: {e}")
         return {"error": str(e)}
 
 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
-    out(f"[brr] Approve this daemon at: {pair['pair_url']}")
+    out(f"[brnrd] Approve this daemon at: {pair['pair_url']}")
     deadline = time.monotonic() + timeout_s
     while True:
         status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
@@ -214,7 +214,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         "since": state.get("since", 0),
     })
     _save_state(brr_dir, state)
-    out(f"[brr] Connected to brnrd repo {status['repo_id']}.")
+    out(f"[brnrd] Connected to brnrd repo {status['repo_id']}.")
     pair = status.get("telegram_pair") or {}
     if isinstance(pair, dict):
         deep_link = str(pair.get("deep_link") or "").strip()
@@ -230,7 +230,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
 
 
 def setup(brr_dir: Path) -> None:
-    print("[brr] Run `brnrd connect` to link this daemon to a brnrd repo.")
+    print("[brnrd] Run `brnrd connect` to link this daemon to a brnrd repo.")
 
 
 def auth(brr_dir: Path) -> None:
@@ -246,10 +246,10 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     try:
         _register(brr_dir, state)
     except BrnrdAuthError as e:
-        print(f"[brr:cloud] auth failed: {e}")
+        print(f"[brnrd:cloud] auth failed: {e}")
         return
     except Exception as e:
-        print(f"[brr:cloud] register failed: {e}")
+        print(f"[brnrd:cloud] register failed: {e}")
     threading.Thread(
         target=_dashboard_publish_loop,
         args=(brr_dir, inbox_dir),
@@ -262,10 +262,10 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             _loop_once(brr_dir, inbox_dir, responses_dir)
             backoff = 1
         except BrnrdAuthError as e:
-            print(f"[brr:cloud] auth failed: {e}")
+            print(f"[brnrd:cloud] auth failed: {e}")
             return
         except Exception as e:
-            print(f"[brr:cloud] error: {e}, retrying in {backoff}s")
+            print(f"[brnrd:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
 
@@ -311,7 +311,7 @@ def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
         try:
             _dashboard_publish_tick(brr_dir, inbox_dir)
         except Exception as e:
-            print(f"[brr:cloud] dashboard publish loop error: {e}")
+            print(f"[brnrd:cloud] dashboard publish loop error: {e}")
         time.sleep(_DASHBOARD_PUBLISH_INTERVAL_S)
 
 
@@ -547,7 +547,7 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] activity publish failed: {e}")
+        print(f"[brnrd:cloud] activity publish failed: {e}")
 
 
 def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
@@ -572,7 +572,7 @@ def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
             "decision_ledger_md": ledger.read_text() if ledger.exists() else "",
         }
     except Exception as e:
-        print(f"[brr:cloud] plans snapshot skipped: {e}")
+        print(f"[brnrd:cloud] plans snapshot skipped: {e}")
         return None
 
 
@@ -592,7 +592,7 @@ def _publish_plans(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] plans publish failed: {e}")
+        print(f"[brnrd:cloud] plans publish failed: {e}")
 
 
 def _quota_window(
@@ -793,7 +793,7 @@ def _publish_quota(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] quota publish failed: {e}")
+        print(f"[brnrd:cloud] quota publish failed: {e}")
 
 
 def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
@@ -820,7 +820,7 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
     try:
         profiles = runner.available_runner_catalog(repo_root, selected=default)
     except Exception as e:
-        print(f"[brr:cloud] runner catalog read failed: {e}")
+        print(f"[brnrd:cloud] runner catalog read failed: {e}")
         profiles = []
     return {"profiles": profiles, "default": default}
 
@@ -844,7 +844,7 @@ def _publish_runners(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] runners publish failed: {e}")
+        print(f"[brnrd:cloud] runners publish failed: {e}")
         return
     wake_request.clear_consumed(brr_dir, acked)
     pending = body.get("pending_wake_request") if isinstance(body, dict) else None
@@ -968,7 +968,7 @@ def _publish_live_runs(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] live-runs publish failed: {e}")
+        print(f"[brnrd:cloud] live-runs publish failed: {e}")
 
 
 def _github_repo_label(label: str, repo_root: Path) -> str | None:
@@ -1093,7 +1093,7 @@ def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] pr-review-queue publish failed: {e}")
+        print(f"[brnrd:cloud] pr-review-queue publish failed: {e}")
 
 
 def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
@@ -1134,7 +1134,7 @@ def _publish_run_ledger(brr_dir: Path, state: dict) -> None:
             timeout=10,
         )
     except Exception as e:
-        print(f"[brr:cloud] run-ledger publish failed: {e}")
+        print(f"[brnrd:cloud] run-ledger publish failed: {e}")
 
 
 class _CloudCardTransport:

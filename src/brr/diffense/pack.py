@@ -3,7 +3,7 @@
 A *pack* is the JSON artifact a runner emits to describe a change for
 review (see ``kb/design-diffense.md``). This module is the locked
 contract every producer and renderer agrees on, and the engine behind
-``brr review --check``: it loads a pack, validates its structure and
+``brnrd review --check``: it loads a pack, validates its structure and
 card graph, resolves every code/kb locator against the repo, and runs
 the cheap end of the six-clamp discipline as lints.
 

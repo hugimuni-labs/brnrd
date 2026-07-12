@@ -1540,13 +1540,13 @@ def test_bind_enter_accepts_label_and_mention_defaults(tmp_path, monkeypatch):
     state._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     # Inputs: repo, any-prompt (Enter=skip), opened (Enter=off),
-    # label (Enter=brr), mention (Enter=@brr-bot)
+    # label (Enter=brnrd), mention (Enter=@brnrd-bot)
     monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "", ""))
 
     github.bind(brr_dir)
 
     saved = state._load_state(brr_dir)
-    assert saved["triggers"] == {"label": "brr", "mention": "@brr-bot"}
+    assert saved["triggers"] == {"label": "brnrd", "mention": "@brnrd-bot"}
 
 
 def test_bind_off_disables_label(tmp_path, monkeypatch):
@@ -1561,7 +1561,7 @@ def test_bind_off_disables_label(tmp_path, monkeypatch):
 
     saved = state._load_state(brr_dir)
     assert "label" not in saved["triggers"]
-    assert saved["triggers"]["mention"] == "@brr-bot"
+    assert saved["triggers"]["mention"] == "@brnrd-bot"
 
 
 def test_bind_typed_value_overrides_default(tmp_path, monkeypatch):

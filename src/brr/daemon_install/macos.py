@@ -140,7 +140,7 @@ def install(
 ) -> InstallResult:
     brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
-        raise SystemExit("[brr] cannot find `brnrd` on PATH; install the CLI before registering launchd")
+        raise SystemExit("[brnrd] cannot find `brnrd` on PATH; install the CLI before registering launchd")
 
     ensure_project_registry(config_home=config_home)
     launch_agents_dir(home=home).mkdir(parents=True, exist_ok=True)
@@ -259,7 +259,7 @@ def _run_launchctl(
     )
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise SystemExit(detail or f"[brr] launchctl {' '.join(args)} failed")
+        raise SystemExit(detail or f"[brnrd] launchctl {' '.join(args)} failed")
     return result
 
 

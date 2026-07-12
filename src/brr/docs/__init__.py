@@ -59,7 +59,7 @@ def format_listing(repo_root: Path | None = None) -> str:
     """Human-readable listing of bundled docs."""
     topics = list_topics(repo_root)
     if not topics:
-        return "[brr] no bundled docs available"
+        return "[brnrd] no bundled docs available"
     lines = ["Available brnrd docs:", ""]
     overrides = _override_dir(repo_root)
     for topic in topics:
