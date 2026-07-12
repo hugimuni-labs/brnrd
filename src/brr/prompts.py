@@ -801,6 +801,7 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     communication_snapshot: dict[str, Any] | None = None,
+    kb_base_url: str | None = None,
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
@@ -864,6 +865,7 @@ def build_daemon_prompt(
         context_path=context_path,
         recent_conversation=recent_conversation,
         communication_snapshot=communication_snapshot,
+        kb_base_url=kb_base_url,
         pending_events=pending_events,
         present=present,
         event_body=event_body,
@@ -949,6 +951,7 @@ def _build_run_context_bundle(
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     communication_snapshot: dict[str, Any] | None = None,
+    kb_base_url: str | None = None,
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None,
@@ -1069,6 +1072,11 @@ def _build_run_context_bundle(
             f"- portal state: `{outbox_path}/portal-state.json` (env "
             "`BRR_PORTAL_STATE`) — pending events, posture, `change_token`"
         )
+        if kb_base_url:
+            sections.append(
+                f"- kb page URL base: {kb_base_url} — append the page path; "
+                "link only after the knowledge commit is pushed"
+            )
         if runner_medium == "codex":
             sections.append(
                 "- codex Shell: native progress/final channels are "

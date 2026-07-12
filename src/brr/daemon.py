@@ -64,6 +64,7 @@ from . import claude_status
 from . import claude_usage
 from . import gitops
 from . import hooks as hooks_mod
+from . import knowledge
 from . import presence
 from . import prompts
 from . import codex_status
@@ -1794,6 +1795,10 @@ def _run_worker(
     if branch_name:
         task.meta["branch_name"] = branch_name
     branch_setup_notice = task.meta.get("branch_setup_notice") or None
+    # Resolve once during run assembly.  ``portal-state.json`` refreshes every
+    # heartbeat, so carrying this avoids turning a stable URL into repeated git
+    # archaeology on a hot path.
+    task.meta["kb_base_url"] = knowledge.kb_base_url(run_root, cfg)
 
     # Deterministic ergonomics probes run once the env is prepared (so
     # the resolved image/token/worktree state is visible). Routing is
@@ -2089,6 +2094,7 @@ def _run_worker(
             context_path=str(context_path),
             recent_conversation=recent_conversation,
             communication_snapshot=communication_snapshot,
+            kb_base_url=task.meta.get("kb_base_url"),
             pending_events=pending_events_snapshot,
             present=present_snapshot,
             event_body=event_body_for_prompt,
@@ -3253,6 +3259,7 @@ def _write_live_portal_state(
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
+            "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
             # Task-classification presence: the ledger's only rollup-by-shape
             # join key (``run_ledger.py`` §``task_classification``), and one a
             # resident can go a whole run without writing since nothing
