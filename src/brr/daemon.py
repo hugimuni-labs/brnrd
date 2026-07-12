@@ -4393,13 +4393,14 @@ def _capture_knowledge(
     Best-effort throughout: a failure here must never break a delivered run.
     """
     if not bool(cfg.get("knowledge.capture", True)):
+        task.meta["reply_archive"] = "disabled"
         return
     reply_rel: str | None = None
-    if (
-        bool(cfg.get("knowledge.archive_replies", True))
-        and event is not None
-        and responses_dir is not None
-    ):
+    if not bool(cfg.get("knowledge.archive_replies", True)):
+        task.meta["reply_archive"] = "disabled"
+    elif event is None or responses_dir is None:
+        task.meta["reply_archive"] = "skipped"
+    else:
         eid = str(event.get("id") or "")
         # The response path is a delivery queue entry, not an archive: a gate
         # may already have sent and deleted it once the event became ``done``.
@@ -4425,6 +4426,9 @@ def _capture_knowledge(
                 },
                 cfg=cfg,
             )
+            task.meta["reply_archive"] = "archived" if reply_rel else "failed"
+        else:
+            task.meta["reply_archive"] = "skipped"
 
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
@@ -4636,6 +4640,7 @@ def _persist_run_state_doc(
         "runner_class",
         "target_branch",
         "publish_status",
+        "reply_archive",
         "success_signal",
     ):
         value = task.meta.get(key)
@@ -4664,6 +4669,9 @@ def _persist_run_state_doc(
         lines.append(f"- runner: {runner_name}")
     if branch:
         lines.append(f"- branch: {branch}")
+    reply_archive = task.meta.get("reply_archive")
+    if reply_archive:
+        lines.append(f"- reply archive: {reply_archive}")
     if task.body:
         summary = " ".join(task.body.split())
         if len(summary) > 240:
