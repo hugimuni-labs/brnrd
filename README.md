@@ -33,8 +33,10 @@ npx brnrd init
 ```
 
 `npx brnrd` is a bootstrapping installer, not a port — first run creates a
-durable virtualenv, installs brnrd from PyPI into it, and hands over. It needs a
-Python on the machine; it will not download one.
+durable virtualenv, installs brnrd from PyPI into it, and hands over. If Python
+is absent, it downloads a checksum-verified uv binary and lets uv provision a
+managed CPython. Everything it installs stays under `~/.local/share/brnrd` (or
+`$BRNRD_HOME`); it does not modify your system Python or PATH.
 
 Or, with `uv` already installed:
 
