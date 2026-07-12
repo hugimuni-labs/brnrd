@@ -7,7 +7,7 @@
 > cached workspace-rule injections can detect drift against the file on
 > disk.
 
-This file is brr's playbook — the contract every AI tool follows in
+This file is brnrd's playbook — the contract every AI tool follows in
 this repo, and the template adopters receive when they run `brnrd init`.
 The canonical copy lives at `src/brr/AGENTS.md`; the repo root
 `AGENTS.md` is a symlink. Python >=3.10; see [`README.md`](README.md)
@@ -17,7 +17,7 @@ for the user-facing product overview.
 
 These rules are the repository contract for any AI tool reading the repo.
 They divide into **universal** sections that apply in every stage and
-**brr-stage** material that only applies when brr's daemon, runner, or
+**brnrd-stage** material that only applies when brnrd's daemon, runner, or
 setup orchestrator is hosting you. When an orchestrator prompt supplies
 a narrower stage contract — the daemon's Run Context Bundle, the setup
 prompt — follow that contract for the points it addresses and keep
@@ -26,7 +26,7 @@ AGENTS.md as the base for everything else.
 Three stages, and how to read this file in each:
 
 - **Ad-hoc agent session** (Cursor, Codex CLI, Claude Code, plain
-  editor with no brr in the loop). No Run Context Bundle. No
+  editor with no brnrd in the loop). No Run Context Bundle. No
   `.brr/conversations/`. No preflight runs on this session. Read the
   universal sections (Stewardship, Workflow → Orientation + Run types
   + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
@@ -37,11 +37,11 @@ Three stages, and how to read this file in each:
   (Stage, Source, Environment, Delivery, Runtime recovery). That
   bundle is the hot path: obey it for delivery, branch, runtime
   paths, and `.brr/` access — it overrides the generic workflow
-  wording for those points. When brr hosts you as a **resident**, your
+  wording for those points. When brnrd hosts you as a **resident**, your
   own playbook — kept in the dominion path named by the wake prompt and
   injected on wake from its self-inject index — is your standing self-orientation;
   this file is the repo contract that playbook rests on, so read them as
-  complementary layers rather than rivals. Workflow → *When the brr
+  complementary layers rather than rivals. Workflow → *When the brnrd
   daemon runs you* backs it up; everything else (Stewardship, kb,
   artifacts, operating rules, self-review, guardrails) applies uniformly.
 
@@ -75,8 +75,10 @@ don't have these drift cases.
 `gpt-5-codex`). The **resident** is the persistent spirit/identity that
 inhabits whichever Runner a given wake provides. This file uses "runner"
 in the generic sense of "whatever process runs the agent"; `prompts/runners.md`
-catalogs the concrete Shell+Core profiles. In user-facing config, the
-knobs are `shell=` and `core=`, not a `runner=` profile selector.
+catalogs the concrete Shell+Core profiles. In user-facing config the knobs
+are `shell=` (pin the CLI) and `core=` (pin the model); `runner=<profile>` is
+the older selector, still read by `runner.py` and still written by `adopt.py`
+at init, so treat it as live legacy rather than gone.
 
 ## Stewardship
 
@@ -200,11 +202,11 @@ to read these by hand at all.
    reshaped. In current brnrd daemon runs, the Run Context Bundle names the
    account-scoped dominion path; older repo-local installs may still use
    `.brr/dominion/playbook.md` as a legacy fallback. Its daemon mechanics
-   (scheduled wakes, outbox delivery, liveness) only bind when brr hosts you;
+   (scheduled wakes, outbox delivery, liveness) only bind when brnrd hosts you;
    the ownership and memory stance applies whenever you act here.
-   - Under brr it's already injected as the *Your dominion (working
+   - Under brnrd it's already injected as the *Your dominion (working
      memory)* block — so this step is for plain editor sessions.
-   - It's gitignored runtime; skip it if brr hasn't bootstrapped a
+   - It's gitignored runtime; skip it if brnrd hasn't bootstrapped a
      dominion here yet.
 4. If continuing previous work, read the relevant subject hubs
    (`kb/subject-*.md`) and any plan / design / decision pages the
@@ -273,7 +275,7 @@ author, stop and surface the conflict instead.
 Everything in this subsection applies only when you're being launched
 by `brnrd up` / the daemon worker — the Run Context Bundle's `### Mode`
 section confirms the stage. In an ad-hoc session (Cursor, Codex CLI,
-Claude Code without brr orchestrating), skip the subsection — the
+Claude Code without brnrd orchestrating), skip the subsection — the
 machinery it describes isn't in play.
 
 **Daemon freshness.** Before resolving the branch plan for a task, the
@@ -298,9 +300,9 @@ Two opt-out knobs in `.brr/config`, both default-on:
 
 **Branch and commit nuance.** Every worktree starts on a fresh
 `brr/<run-id>` branch from the seed ref named in the bundle. If the
-bundle names an auto-land branch, staying on the run branch lets brr
+bundle names an auto-land branch, staying on the run branch lets brnrd
 fast-forward that target after the run. If no auto-land branch is
-named, commit on `brr/<run-id>`; brr preserves and publishes that
+named, commit on `brr/<run-id>`; brnrd preserves and publishes that
 run branch for human routing when a remote is configured. Use
 `git switch -c <name>` first only when the work belongs on a different
 branch. If a checkout on your chosen name collides with a concurrent
@@ -323,7 +325,7 @@ task explicitly requires.
 ## Knowledge base
 
 **The kb** is a persistent, LLM-maintained knowledge base. It compounds
-across sessions. Maintenance is everyone's job — brr's daemon, ad-hoc
+across sessions. Maintenance is everyone's job — brnrd's daemon, ad-hoc
 Cursor sessions, direct Claude Code or Codex invocations, anyone editing
 the repo. Everything below (state-first writing, memory layers, graph
 topology, lifecycle markers, log format, health checks) is maintenance
@@ -647,10 +649,10 @@ Before marking a task complete:
 ## Constraints
 
 - `.brr/` is a runtime directory (gitignored) — do not commit its contents.
-- `src/brr/AGENTS.md` is brr's playbook *and* the template adopters receive
+- `src/brr/AGENTS.md` is brnrd's playbook *and* the template adopters receive
   via `brnrd init`. Universal sections (How to read this playbook, Stewardship,
   Workflow, Knowledge base, Artifacts, Operating rules, Self-review,
-  Guardrails) apply to every brr-managed project; project-specific sections
+  Guardrails) apply to every brnrd-managed project; project-specific sections
   (Project, Build and run, Code guidelines, Constraints) are rewritten per
   repo by the setup agent. The Workflow → *When the brnrd daemon runs you*
   subsection is universal too — adopters keep it because their playbook may

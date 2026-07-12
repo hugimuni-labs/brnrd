@@ -16,7 +16,7 @@ regions *in the generated stream itself*, so turning-to-the-world is how
 the stream advances rather than a filename you must remember — lives in
 `kb/design-portal-grammar.md`. This manual describes what ships now.)
 
-This document ships with `brr`. Override it per-repo by dropping a file
+This document ships with `brnrd`. Override it per-repo by dropping a file
 at `.brr/docs/portals.md`.
 
 ## The grammar — control files as portals
@@ -62,7 +62,7 @@ handles so a runner does not have to copy paths out of prose.
 
 Fresh state reaches the runner two ways. A **Tier 2 runner with a
 boundary back channel** gets it pushed automatically: at each runner
-boundary brr flushes the outbox and `.card` immediately (no heartbeat
+boundary brnrd flushes the outbox and `.card` immediately (no heartbeat
 wait) and, when the runner supports live injection, weaves a compact
 `portal-state` delta back into context, so the INBOUND-CHECK is automatic
 rather than "remember to read `inbox.json`." That mechanism is the runner's
@@ -91,7 +91,7 @@ Code-changing runs have the lean PR handoff today through `gate: forge`.
 What remains future portal work is a richer branch-keyed desired-state
 surface — draft/review posture, issue links, labels, refresh policy, and
 delivery acknowledgements — not the basic ability to ask the forge for a
-PR. Keep this as a portal/gate handoff rather than a broad public `brr`
+PR. Keep this as a portal/gate handoff rather than a broad public `brnrd`
 subcommand; diffense is optional review enrichment, not a requirement for
 publishing a branch.
 
@@ -135,7 +135,7 @@ Two more run surfaces live outside the outbox:
 
 - **stdout** — the compatibility/current-thread fallback. When the
   situation calls for one plain current-thread reply, print the exact
-  intended content, nothing else; progress and debug go to stderr. brr
+  intended content, nothing else; progress and debug go to stderr. brnrd
   captures stdout to the response path in your bundle. It is one satisfying
   signal, not the definition of delivery. The daemon only needs an
   operational receipt that the run did not disappear; when something is
@@ -325,6 +325,6 @@ all the way down that ladder, retire the pitfall that stood in for it.
 ## See also
 
 - `brnrd docs active-task` — the shorter orientation refresher.
-- `brnrd docs execution-map` — how an event flows through brr end to end.
-- `brnrd docs brr-internals` — the `.brr/` layout and internals.
+- `brnrd docs execution-map` — how an event flows through brnrd end to end.
+- `brnrd docs internals` — the `.brr/` layout and internals.
 - AGENTS.md — the repo contract every wake rests on.

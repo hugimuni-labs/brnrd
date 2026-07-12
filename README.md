@@ -1,6 +1,6 @@
 # brnrd
 
-![brnrd](https://github.com/Gurio/brr/raw/main/media/brr-logo.gif)
+![brnrd](https://github.com/Gurio/brr/raw/main/media/brnrd-logo.png)
 
 Structured AI agent playbook with persistent knowledge base and remote execution.
 
@@ -97,6 +97,12 @@ From Telegram (or Slack, or a task file):
 - **`.brr/`** — runtime directory (gitignored): inbox, responses, config,
   gate state.
 
+One name, one tool: **brnrd**. You'll also see `brr` inside the machinery —
+the `.brr/` state directory, the `brr/…` branch prefix, the `brr` Python
+package. That's the embedded runtime substrate, kept stable because real
+state lives there; it isn't a second product and you never have to install,
+run, or think about it.
+
 ## Architecture
 
 ```
@@ -157,8 +163,10 @@ for the spec and a bash example.
 **Runners** are CLI commands on PATH: any process that can operate files
 from a prompt, print the final reply to stdout, and stream progress to
 stderr. Built-in profiles cover `claude`, `codex`, and `gemini`; manage
-project-specific profiles in `.brr/runners.md`, set `runner=<name>` in
-`.brr/config`, or use `runner_cmd` for one custom command.
+project-specific profiles in `.brr/runners.md`. Pin what runs with `shell=`
+(which CLI) and `core=` (which model) in `.brr/config`, or use `runner_cmd`
+for one custom command. Left unset, brnrd picks cost-aware from the profiles
+available on PATH. (`runner=<profile>` is the older pin; still honoured.)
 
 **Environments** are daemon backends.  Configure the user-facing policy
 with `environment=<auto|host|worktree|docker>` in `.brr/config`.
@@ -168,7 +176,7 @@ to worktree behavior.  The concrete built-ins today are `host`,
 or service-specific plugins fit behind the same internal protocol.
 
 Daemon git operations are publish-plan driven. Each task starts on a
-fresh `brr/<task-id>` branch from a resolved seed ref. When the event
+fresh `brr/<run-id>` branch from a resolved seed ref. When the event
 names a target branch (`branch_target`, `target_branch`, `base_branch`,
 or legacy `branch`), brnrd seeds from `<remote>/<target>` and publishes
 under that name after the run. Without a structured target the task
@@ -211,7 +219,12 @@ The daemon re-execs itself between tasks when brnrd package files change.
 
 ## License
 
-The local daemon core in `src/brr/` is MIT licensed. The managed backend and
-dashboard in `src/brnrd/` and `src/brnrd_web/` are AGPLv3 licensed. See
-[`LICENSE-OVERVIEW.md`](https://github.com/Gurio/brr/blob/main/LICENSE-OVERVIEW.md) for the package boundary and
-install details.
+**What you run on your own machine is MIT.** The local daemon core
+(`src/brr/`) is MIT licensed — fork it, vendor it, embed it, no strings. The
+managed backend and dashboard (`src/brnrd/`, `src/brnrd_web/`) are AGPLv3: the
+surface a competitor would rehost is the surface that carries copyleft.
+
+The boundary was drawn before adoption, on purpose, so the terms never have to
+change after it. See
+[`LICENSE-OVERVIEW.md`](https://github.com/Gurio/brr/blob/main/LICENSE-OVERVIEW.md)
+for the reasoning and the packaging details.

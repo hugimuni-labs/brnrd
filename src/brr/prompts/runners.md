@@ -1,6 +1,6 @@
 ---
 claude:
-  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
   provider: anthropic
   owner: user
@@ -10,7 +10,7 @@ claude:
 claude-bare-api-only:
   binary: claude
   shell: claude
-  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory."'
   provider: anthropic
   owner: user
   class: balanced
@@ -18,7 +18,7 @@ claude-bare-api-only:
   auth_variant: anthropic-api-key
   auth_env: ANTHROPIC_API_KEY
 codex:
-  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
+  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brnrd runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
   provider: openai
   owner: user
@@ -33,7 +33,7 @@ gemini:
   class: economy
   cost_rank: 10
 ---
-Bundled runner profiles for brr.
+Bundled runner profiles for brnrd.
 
 Each profile names a **Shell** (the CLI invocation on PATH: `claude`,
 `codex`, `gemini`) and, optionally, a **Core** (the model and its
@@ -42,7 +42,7 @@ selectable Runner. The **resident** inhabits whichever Runner this wake
 was given; `prompts/runners.md` (this file) catalogs what's available.
 
 The runner contract is deliberately abstract: a runner is a process that
-can intelligently operate files in its working directory. brr passes the
+can intelligently operate files in its working directory. brnrd passes the
 assembled prompt as the final command argument, captures stdout as the
 plain current-thread output artifact, treats stderr as progress/debug
 output, and interprets the exit status as the process result. The runner
@@ -69,7 +69,7 @@ works. See `kb/design-runner-back-channel.md` for the full design.
   gets a pointer instead of the prompt inline, and reads it with the same
   file tools it already has.
 - **Tier 1 (optional).** Prints a final reply on stdout (progress/debug on
-  stderr). brr captures stdout as the plain current-thread reply. This is
+  stderr). brnrd captures stdout as the plain current-thread reply. This is
   the `response_path` capture above.
 - **Tier 2 (optional).** *Boundary injection*: at each tool/turn boundary the
   resident's outbound messages flush event-driven (not heartbeat-polled) **and**
@@ -81,12 +81,12 @@ works. See `kb/design-runner-back-channel.md` for the full design.
   load-bearing for *correctness*, but it is the substrate of a fuller resident.
 
 Boundary injection rides each runner's **native lifecycle hooks**: the runner
-invokes a brr callback (`brnrd hook <phase>`) at tool/turn boundaries and weaves
+invokes a brnrd callback (`brnrd hook <phase>`) at tool/turn boundaries and weaves
 the JSON result back into its context. A profile opts in with a `hooks:
-<flavour>` field. brr owns the abstract phases (`post-tool` / `stop` /
+<flavour>` field. brnrd owns the abstract phases (`post-tool` / `stop` /
 `session-start`) and renders one neutral result into each flavour's native
 fields. The *config-install mechanism* is runner-specific:
-  - **claude** — `hooks: claude`. brr writes a per-run
+  - **claude** — `hooks: claude`. brnrd writes a per-run
     `.claude/settings.local.json` registering `PostToolBatch` / `Stop` /
     `SessionStart` → `brnrd hook <phase>`. Injection lands via
     `hookSpecificOutput.additionalContext`; `Stop` `decision:block` continues
@@ -94,17 +94,17 @@ fields. The *config-install mechanism* is runner-specific:
     2.1.191. `PostToolBatch` (not `PostToolUse`) is the post-tool seam — once
     per tool batch, after every result, before the next model call.
   - **codex** — `hooks: codex`. Codex's project-`.codex/config.toml` install
-    hangs under repo-trust, so brr injects the hook config as runner argv
+    hangs under repo-trust, so brnrd injects the hook config as runner argv
     (`-c hooks.<Event>=[…]`) paired with `--dangerously-bypass-hook-trust` in
     the profile cmd. Codex exposes `PostToolUse` / `Stop` / `SessionStart` (no
     `PostToolBatch`) and accepts the same `hookSpecificOutput` injection
     envelope. **Fire-verified** `PostToolUse` + injection on codex-cli 0.141.0.
-  - **gemini** — `hooks: gemini` as *intent*. brr can render native hook config
+  - **gemini** — `hooks: gemini` as *intent*. brnrd can render native hook config
     once an emitter exists and a runtime precheck gates activation; firing is
     unverified until a live test (the precheck asserts prerequisites, not
     firing).
 
-brr only installs hook config for a profile that explicitly declares `hooks:`.
+brnrd only installs hook config for a profile that explicitly declares `hooks:`.
 It never infers hooks from the runner name; a profile with no `hooks:` field
 (the `--bare` auth variant, a `runner_cmd` override) uses the heartbeat-polled
 fallback (outbox drain + `portal-state.json` refresh on the daemon timer),
@@ -114,7 +114,7 @@ Reliability rests on a clean child env. A parent agent session can leak
 `CLAUDE_CODE_SAFE_MODE=1` into a spawned `claude`, which **silently disables
 settings-file hooks** while logging a reassuring "managed settings-file hooks
 still run" — the false negative that earlier made hooks look unfireable under
-`--print` and drove a now-retired streaming workaround. brr strips that
+`--print` and drove a now-retired streaming workaround. brnrd strips that
 contaminant (and parent session-identity vars) from every runner subprocess env
 via `runner.clean_runner_environ()`, so hooks fire as they would for a normal
 top-level run. `--setting-sources local` is kept for settings **isolation**: it
@@ -123,26 +123,26 @@ collateral damage of `--safe-mode`.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
-same frontmatter shape; brr reads that before the bundled defaults. The
+same frontmatter shape; brnrd reads that before the bundled defaults. The
 legacy `.brr/prompts/runners.md` override is still accepted, but new
 configuration should use `.brr/runners.md` because runner profiles are
 Shell+Core execution config, not prompt templates. For a one-off command,
 `runner_cmd` in `.brr/config` remains the smallest override.
 
-Each frontmatter key is a runner name. During detection brr checks
+Each frontmatter key is a runner name. During detection brnrd checks
 whether the profile's CLI is on PATH — either the key itself (`claude`,
 `codex`, `gemini`) or an explicit `binary` field for alias profiles such
 as `claude-bare-api-only`.
 
 The profile captures the headless invocation: non-interactive mode plus
 tool/approval bypass, since the daemon needs the runner to act without
-prompts. Claude profiles also request ``--output-format json``; brr unwraps
+prompts. Claude profiles also request ``--output-format json``; brnrd unwraps
 the JSON ``result`` back into the response file and uses the accounting fields
 for terminal spend/context facets. Repository orientation, AGENTS.md, dominion
 context, and the Run Context Bundle belong in the assembled prompt, not in
 these command strings.
 
-- `cmd` — base command. brr appends the prompt as the final argument.
+- `cmd` — base command. brnrd appends the prompt as the final argument.
 - `binary` — optional PATH binary for alias profiles. When set, the
   profile must be named explicitly via `shell=`/`core=` in `.brr/config`
   (not auto-detected).
@@ -164,14 +164,14 @@ with none is an uncosted Runner the selector uses as-is:
   benchmark-cache hints. These may derive `class` when no hand-set class exists,
   but never override an explicit `class` and never act as a hard selector.
 
-The selection *policy* is brr's, not a table the user hand-tunes: the user
+The selection *policy* is brnrd's, not a table the user hand-tunes: the user
 sets `shell=`/`core=` (or leaves unset for auto) and optional
 `runner_policy=` (`cost-aware` | `fixed`) in `.brr/config`, and the
 resident picks the cheapest adequate available Runner from there. See
 `kb/design-runner-cores.md`.
 
 Automatic fallback is narrower than first selection. When a runner exits with a
-classified quota/auth/provider failure, brr may retry the same run in the same
+classified quota/auth/provider failure, brnrd may retry the same run in the same
 prepared worktree on another local Runner. That fallback excludes paid relay
 profiles, stays in the same or a cheaper class, and avoids the same failure
 domain where metadata makes that visible. Relay remains behind spend-plan
@@ -180,14 +180,14 @@ consent.
 Quality escalation is a different path. It is resident-authored, not automatic
 triage: after reading the repo, a cheap Runner can drop an outbox message with
 `respawn: true` and either an explicit `shell:` / `core:` or
-`quality: escalate`. The latter asks brr's deterministic selector for the
+`quality: escalate`. The latter asks brnrd's deterministic selector for the
 stronger local Core advertised in `portal-state.json`
 (`resources.runner.quality_escalation`) and queues a fresh event for the same
 conversation. Relay profiles remain excluded here too; paid handoff waits for
 the spend-consent flow.
 
-Auto mode also reads brr's bundled Core registry. For each Shell declared in
-the active `runners.md`, brr materializes registry rows such as `claude-haiku`
+Auto mode also reads brnrd's bundled Core registry. For each Shell declared in
+the active `runners.md`, brnrd materializes registry rows such as `claude-haiku`
 or `codex-mini` as invokable profiles by inserting the Core's model flag into
 the base Shell command and inheriting hook/quota metadata from that Shell.
 Those generated profiles let `core=haiku` and cost-aware auto-selection choose a
@@ -204,7 +204,7 @@ Core registry materializes model-pinned profiles for that auth variant too
 model / class / cost metadata stays in `runner_cores.py`, not in a second static
 profile catalog.
 
-When the resident chooses a plain current-thread stdout reply, brr reads it
+When the resident chooses a plain current-thread stdout reply, brnrd reads it
 from stdout and writes it to the event's response file automatically;
 runners do not need a per-CLI flag for that. Other delivery shapes ride the
 outbox / gate / commit / noop portals named in the run prompt. Progress,
@@ -216,7 +216,7 @@ Users can override `cmd` per-repo by setting `runner_cmd` in
 substituted before exec.
 
 Quota and price signals are metadata about a Core, not part of the
-command string. Today brr reads them from `runner.quota.*`,
+command string. Today brnrd reads them from `runner.quota.*`,
 `BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`; a fuller Runner/Core
 registry can grow from this contract without making built-in commands
 pretend to know provider billing.
