@@ -39,9 +39,9 @@ def _handle_api_error(exc: GitHubAPIError) -> int:
         # Unauthorised / forbidden / not-found is not transient. Surface
         # the failure to the operator and back off gently so we don't
         # spam logs.
-        print(f"[brr:github] {exc} — backing off {_BACKOFF_MAX}s")
+        print(f"[brnrd:github] {exc} — backing off {_BACKOFF_MAX}s")
         return _BACKOFF_MAX
-    print(f"[brr:github] {exc} — backing off {_POLL_INTERVAL}s")
+    print(f"[brnrd:github] {exc} — backing off {_POLL_INTERVAL}s")
     return _POLL_INTERVAL
 
 
@@ -95,7 +95,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             sleep_seconds = _handle_api_error(exc)
             backoff = 1
         except Exception as exc:
-            print(f"[brr:github] error: {exc}, retrying in {backoff}s")
+            print(f"[brnrd:github] error: {exc}, retrying in {backoff}s")
             sleep_seconds = backoff
             backoff = min(backoff * 2, _BACKOFF_MAX)
         time.sleep(max(1, int(sleep_seconds)))

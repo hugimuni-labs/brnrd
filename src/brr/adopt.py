@@ -54,7 +54,7 @@ def _timed_input(prompt: str, default: str, timeout: int = 10) -> str:
         return value.strip() or default
     except (TimeoutError, EOFError):
         signal.alarm(0)
-        print(f"\n[brr] no input — using default: {default}")
+        print(f"\n[brnrd] no input — using default: {default}")
         return default
     finally:
         signal.signal(signal.SIGALRM, old)
@@ -85,7 +85,7 @@ def _pick_option(
         pass
     if choice in options:
         return choice
-    print(f"  [brr] unrecognised — using default: {default}")
+    print(f"  [brnrd] unrecognised — using default: {default}")
     return default
 
 
@@ -107,7 +107,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     """Initialize a repository for brr management."""
     if url:
         name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        print(f"[brr] cloning {url}")
+        print(f"[brnrd] cloning {url}")
         subprocess.run(["git", "clone", url, name], check=True)
         os.chdir(name)
 
@@ -118,7 +118,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     available = runner.detect_all_runners(repo_root)
     if not available:
         raise SystemExit(
-            "[brr] no runner found on PATH (claude, codex, gemini).\n"
+            "[brnrd] no runner found on PATH (claude, codex, gemini).\n"
             "       Install one and re-run `brnrd init`."
         )
 
@@ -128,7 +128,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
         runner_name = available[0]
         cfg_overrides = {}
 
-    print(f"[brr] runner: {runner_name}")
+    print(f"[brnrd] runner: {runner_name}")
 
     if cfg_overrides:
         cfg = conf.load_config(repo_root)
@@ -141,7 +141,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
 
 def _interactive_configure(available: list[str]) -> tuple[str, dict]:
     """Ask the user a few setup questions. Returns (runner, config_overrides)."""
-    print("[brr] interactive setup")
+    print("[brnrd] interactive setup")
     cfg: dict = {}
 
     if len(available) == 1:
@@ -190,7 +190,7 @@ def _configure_environment() -> dict:
             built = _build_default_docker_image()
             if not built:
                 print(
-                    f"  [brr] image not built — brr will fail until "
+                    f"  [brnrd] image not built — brnrd will fail until "
                     f"`{_DEFAULT_DOCKER_IMAGE}` exists locally."
                 )
 
@@ -206,7 +206,7 @@ def _build_default_docker_image() -> bool:
     image renderer. Returns True iff the build succeeded.
     """
     if not _BUNDLED_DOCKERFILE.exists():
-        print("  [brr] bundled Dockerfile not found; cannot build")
+        print("  [brnrd] bundled Dockerfile not found; cannot build")
         return False
 
     repo_root = Path(__file__).resolve().parent.parent.parent
@@ -214,11 +214,11 @@ def _build_default_docker_image() -> bool:
     readme = repo_root / "README.md"
     src = repo_root / "src"
     if not pyproject.is_file() or not readme.is_file() or not src.is_dir():
-        print("  [brr] checkout layout incomplete; cannot build runner image")
+        print("  [brnrd] checkout layout incomplete; cannot build runner image")
         return False
 
     print(
-        f"  [brr] building {_DEFAULT_DOCKER_IMAGE} "
+        f"  [brnrd] building {_DEFAULT_DOCKER_IMAGE} "
         "(this can take a few minutes)…"
     )
     with tempfile.TemporaryDirectory(prefix="brr-build-") as ctx:
@@ -232,9 +232,9 @@ def _build_default_docker_image() -> bool:
             check=False,
         )
     if result.returncode != 0:
-        print(f"  [brr] docker build failed (exit {result.returncode})")
+        print(f"  [brnrd] docker build failed (exit {result.returncode})")
         return False
-    print(f"  [brr] image ready: {_DEFAULT_DOCKER_IMAGE}")
+    print(f"  [brnrd] image ready: {_DEFAULT_DOCKER_IMAGE}")
     return True
 
 
@@ -243,7 +243,7 @@ def _ensure_repo() -> Path:
     try:
         return gitops.ensure_git_repo()
     except (RuntimeError, SystemExit):
-        print("[brr] not a git repo — running git init")
+        print("[brnrd] not a git repo — running git init")
         subprocess.run(["git", "init"], check=True)
         return gitops.ensure_git_repo()
 
@@ -290,7 +290,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
     else:
         gi.write_text(f"# brr runtime\n{marker}\n", encoding="utf-8")
 
-    print("[brr] .brr/ directory ready")
+    print("[brnrd] .brr/ directory ready")
 
 
 def _bootstrap_dominion(repo_root: Path) -> None:
@@ -308,9 +308,9 @@ def _bootstrap_dominion(repo_root: Path) -> None:
     ))
     try:
         path = dominion.ensure_dominion(repo_root, branch=branch)
-        print(f"[brr] dominion ready: {path} (branch {branch})")
+        print(f"[brnrd] dominion ready: {path} (branch {branch})")
     except Exception as exc:  # noqa: BLE001
-        print(f"[brr] dominion setup skipped: {exc}")
+        print(f"[brnrd] dominion setup skipped: {exc}")
 
 
 def _run_setup(runner_name: str, repo_root: Path) -> None:
@@ -330,18 +330,18 @@ def _run_setup(runner_name: str, repo_root: Path) -> None:
         ],
     )
 
-    print("[brr] running setup...")
+    print("[brnrd] running setup...")
     result = runner.invoke_runner(runner_name, invocation, cfg=cfg)
     try:
         result.raise_for_error()
     except RuntimeError as e:
-        print(f"[brr] setup failed: {e}")
-        print("[brr] re-run `brnrd init` to retry")
+        print(f"[brnrd] setup failed: {e}")
+        print("[brnrd] re-run `brnrd init` to retry")
         raise SystemExit(1)
     if not result.validation_ok:
         missing = ", ".join(artifact.label for artifact in result.missing_artifacts)
-        print(f"[brr] setup failed: missing required output(s): {missing}")
-        print("[brr] re-run `brnrd init` to retry")
+        print(f"[brnrd] setup failed: missing required output(s): {missing}")
+        print("[brnrd] re-run `brnrd init` to retry")
         raise SystemExit(1)
     if result.output.strip():
         print(result.output)
@@ -356,12 +356,12 @@ def _verify(repo_root: Path) -> None:
     ok = True
     for path, label in [(agents, "AGENTS.md"), (kb_index, "kb/index.md"), (kb_log, "kb/log.md")]:
         if path.exists():
-            print(f"[brr] ✓ {label}")
+            print(f"[brnrd] ✓ {label}")
         else:
-            print(f"[brr] ✗ {label} missing — the runner may not have created it")
+            print(f"[brnrd] ✗ {label} missing — the runner may not have created it")
             ok = False
 
     if ok:
-        print("[brr] init complete")
+        print("[brnrd] init complete")
     else:
-        print("[brr] init incomplete — re-run `brnrd init` to retry")
+        print("[brnrd] init incomplete — re-run `brnrd init` to retry")

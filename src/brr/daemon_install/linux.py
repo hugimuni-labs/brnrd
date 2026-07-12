@@ -12,7 +12,7 @@ from typing import Callable
 
 SERVICE_UNIT = "brr.service"
 SYSTEMD_UNIT = """[Unit]
-Description=brr daemon (machine-scoped multi-project multiplexer)
+Description=brnrd daemon (machine-scoped multi-project multiplexer)
 After=network-online.target
 Wants=network-online.target
 
@@ -81,10 +81,10 @@ def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProce
     try:
         result = subprocess.run(command, check=False)
     except FileNotFoundError:
-        raise SystemExit(f"[brr] required command not found: {command[0]}")
+        raise SystemExit(f"[brnrd] required command not found: {command[0]}")
     if check and result.returncode != 0:
         rendered = " ".join(command)
-        raise SystemExit(f"[brr] command failed ({result.returncode}): {rendered}")
+        raise SystemExit(f"[brnrd] command failed ({result.returncode}): {rendered}")
     return result
 
 
@@ -136,7 +136,7 @@ def maybe_enable_linger(
         enable = True
     elif not prompt or not sys.stdin.isatty():
         print(
-            "[brr] linger is not enabled; the service may wait for first login "
+            "[brnrd] linger is not enabled; the service may wait for first login "
             "before starting. Run `sudo loginctl enable-linger $USER` to "
             "change that."
         )
@@ -149,14 +149,14 @@ def maybe_enable_linger(
         )
 
     if not enable:
-        print("[brr] skipping linger; brr will start after user login")
+        print("[brnrd] skipping linger; brnrd will start after user login")
         return False
 
     _run(["sudo", "loginctl", "enable-linger", user])
     marker = linger_marker_path()
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(user + "\n", encoding="utf-8")
-    print(f"[brr] enabled linger for {user}")
+    print(f"[brnrd] enabled linger for {user}")
     return True
 
 
@@ -176,7 +176,7 @@ def maybe_disable_linger(
         disable = True
     elif not prompt or not sys.stdin.isatty():
         print(
-            "[brr] leaving linger enabled; brr enabled it earlier, but other "
+            "[brnrd] leaving linger enabled; brr enabled it earlier, but other "
             "user services may rely on it."
         )
         marker.unlink(missing_ok=True)
@@ -190,9 +190,9 @@ def maybe_disable_linger(
 
     if disable:
         _run(["sudo", "loginctl", "disable-linger", user], check=False)
-        print(f"[brr] disabled linger for {user}")
+        print(f"[brnrd] disabled linger for {user}")
     else:
-        print("[brr] leaving linger enabled")
+        print("[brnrd] leaving linger enabled")
     marker.unlink(missing_ok=True)
     return disable
 
@@ -204,11 +204,11 @@ def install(
     assume_yes_linger: bool = False,
 ) -> None:
     if not supported():
-        raise SystemExit("[brr] daemon install on this platform is not implemented yet")
+        raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
 
     service_path = write_unit_file()
     registry_path = ensure_projects_registry()
-    print(f"[brr] wrote {service_path}")
+    print(f"[brnrd] wrote {service_path}")
 
     maybe_enable_linger(prompt=prompt_linger, assume_yes=assume_yes_linger)
 
@@ -218,10 +218,10 @@ def install(
         _run(["systemctl", "--user", "start", SERVICE_UNIT])
 
     if "[[projects]]" in registry_path.read_text(encoding="utf-8"):
-        print(f"[brr] project registry: {registry_path}")
+        print(f"[brnrd] project registry: {registry_path}")
     else:
-        print("[brr] no projects registered yet — run `brnrd init` in a repo to add one")
-    print("[brr] next: `brnrd daemon status`, `brnrd daemon logs`, `brnrd daemon uninstall`")
+        print("[brnrd] no projects registered yet — run `brnrd init` in a repo to add one")
+    print("[brnrd] next: `brnrd daemon status`, `brnrd daemon logs`, `brnrd daemon uninstall`")
 
 
 def uninstall(
@@ -230,7 +230,7 @@ def uninstall(
     assume_yes_disable_linger: bool = False,
 ) -> None:
     if not supported():
-        raise SystemExit("[brr] daemon uninstall on this platform is not implemented yet")
+        raise SystemExit("[brnrd] daemon uninstall on this platform is not implemented yet")
 
     _run(["systemctl", "--user", "stop", SERVICE_UNIT], check=False)
     _run(["systemctl", "--user", "disable", SERVICE_UNIT], check=False)
@@ -240,7 +240,7 @@ def uninstall(
         prompt=prompt_linger,
         assume_yes=assume_yes_disable_linger,
     )
-    print("[brr] daemon service uninstalled")
+    print("[brnrd] daemon service uninstalled")
 
 
 def start_service() -> int:

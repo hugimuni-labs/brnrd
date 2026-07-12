@@ -173,11 +173,11 @@ def format_delta(
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
     lines: list[str] = []
     if seed:
-        header = "brr portal seed"
+        header = "brnrd portal seed"
     elif stop:
-        header = "brr portal closeout"
+        header = "brnrd portal closeout"
     else:
-        header = "brr portal update"
+        header = "brnrd portal update"
     # Framing, not just data: a bare count reads as ambient telemetry and
     # habituates fast — a maintainer caught this live (2026-07-05) when two
     # follow-ups sat unacknowledged on the outward-facing card for 8 minutes

@@ -1029,8 +1029,8 @@ def run_task(instruction: str) -> str:
 
     prompt = _prompts.build_run_prompt(instruction, repo_root)
 
-    print(f"[brr] running: {instruction}")
-    print(f"[brr] runner: {runner_name}")
+    print(f"[brnrd] running: {instruction}")
+    print(f"[brnrd] runner: {runner_name}")
     result = invoke_runner(
         runner_name,
         RunnerInvocation(

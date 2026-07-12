@@ -14,7 +14,7 @@ Three proxies ship today:
   by issue-signature within a window. No disk, no tokens — the
   zero-config default for user-owned runs.
 - ``LocalErgoProxy`` — opt-in (``ergonomics=local``). Appends JSONL to
-  ``.brr/ergonomics/<YYYY-MM-DD>.jsonl`` for ``brr ergonomics`` to read.
+  ``.brr/ergonomics/<YYYY-MM-DD>.jsonl`` for ``brnrd ergonomics`` to read.
 
 ``BrnrdErgoProxy`` (batched HTTPS to brnrd, the operator-owned sink) is
 a later slice gated on managed compute + the brnrd ergonomics endpoint.
@@ -101,14 +101,14 @@ def _format_log_line(record: Record) -> str:
         raw = record.detail.get("hint")
         if raw:
             hint = f" — {raw}"
-    return f"[brr:ergo] {record.severity} {record.issue}{where}{hint}"
+    return f"[brnrd:ergo] {record.severity} {record.issue}{where}{hint}"
 
 
 class LocalErgoProxy:
     """Append records as JSONL under the shared ``.brr/ergonomics`` dir.
 
     One file per UTC day so the store rotates without a sweeper and
-    ``brr ergonomics clear --before`` can drop whole days by filename.
+    ``brnrd ergonomics clear --before`` can drop whole days by filename.
     Appends are guarded by a process-local lock; cross-process writers
     (daemon + a concurrent CLI) rely on append-mode atomicity for
     single short lines, which is sufficient for this low-rate stream.
