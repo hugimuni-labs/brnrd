@@ -998,7 +998,14 @@ def _build_run_context_bundle(
     if source:
         sections.append(f"- Source: {source}")
     if environment:
-        sections.append(f"- Environment: {environment}")
+        environment_line = f"- Environment: {environment}"
+        if environment == "host":
+            environment_line += (
+                " — shared checkout; host finalization does not publish "
+                "commits. For work that must leave this machine, switch off "
+                "the default branch and own the push / PR handoff."
+            )
+        sections.append(environment_line)
     if runner_medium:
         sections.append(
             f"- Runner: {runner_medium} — the Shell+Core this thought runs "
