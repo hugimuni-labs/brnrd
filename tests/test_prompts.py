@@ -695,6 +695,21 @@ class TestPromptBuilding:
         assert "Environment:" not in prompt
         assert "Runtime recovery:" not in prompt
 
+    def test_daemon_prompt_names_host_publication_ownership(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-123",
+            environment="host",
+        )
+
+        assert "Environment: host — shared checkout" in prompt
+        assert "host finalization does not publish commits" in prompt
+        assert "own the push / PR handoff" in prompt
+
     def test_daemon_prompt_describes_preserved_run_branch(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
