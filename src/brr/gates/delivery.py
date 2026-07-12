@@ -67,6 +67,19 @@ def post_gist(content: str, filename: str = "result.md") -> str | None:
     secret; these two disagreed). A secret gist is unlisted, not private, so
     the chat link still resolves for anyone holding it; the only thing given
     up is being indexed on the user's public profile, which was never wanted.
+
+    **Why this survives the reply archive** (2026-07-12, `knowledge.capture`).
+    A run's terminal reply is now persisted into the knowledge repo and linked
+    from its relics, which looks like it makes the gist redundant. It doesn't,
+    for two reasons — the second is the load-bearing one:
+
+    1. a gist URL must exist *at send time*; a knowledge-repo URL only exists
+       after a push, so folding them together would put a ``git push`` on the
+       latency path of every over-long reply;
+    2. an install whose knowledge repo has **no forge remote** (the default —
+       ``brnrd home link`` is an opt-in) has no archive to link *at all*. There,
+       a gist is the only durable surface the overflow has. Pastebin-shaped and
+       unglamorous, and correct until a more generic offload shape exists.
     """
     try:
         result = subprocess.run(
