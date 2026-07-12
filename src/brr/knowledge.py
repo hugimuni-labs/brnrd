@@ -436,27 +436,20 @@ def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
 
 
 def needs_sync(brr_dir: Path) -> str | None:
-    """Return the knowledge sync-needed reason, or ``None`` when in sync."""
-    try:
-        text = (brr_dir / SYNC_MARKER_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return text or None
+    """Return the knowledge sync-needed reason, or ``None`` when in sync.
+
+    Same divergence protocol as the dominion's marker — one mechanism
+    (:func:`brr.gitops.read_sync_marker`), two memories.
+    """
+    return gitops.read_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
 def mark_needs_sync(brr_dir: Path, reason: str) -> None:
-    try:
-        brr_dir.mkdir(parents=True, exist_ok=True)
-        (brr_dir / SYNC_MARKER_FILE).write_text(reason.strip() + "\n", encoding="utf-8")
-    except OSError:
-        pass
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
-    try:
-        (brr_dir / SYNC_MARKER_FILE).unlink(missing_ok=True)
-    except OSError:
-        pass
+    gitops.clear_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
 def capture(
