@@ -192,6 +192,73 @@ class TestConfigureEnvironment:
         assert cfg["docker.image"] == adopt._DEFAULT_DOCKER_IMAGE
 
 
+class TestOfferHomeLink:
+    """The single git-durability question at the tail of interactive init."""
+
+    def test_no_gh_asks_nothing(self, monkeypatch, tmp_path):
+        from brr import home_link
+
+        monkeypatch.setattr(home_link, "gh_available", lambda: False)
+        confirm_calls: list = []
+        monkeypatch.setattr(adopt, "_confirm", lambda *a, **kw: confirm_calls.append((a, kw)) or True)
+
+        adopt._offer_home_link(tmp_path)
+
+        assert confirm_calls == [], "gh absent must skip the question entirely, not just decline it"
+
+    def test_declining_the_one_question_links_nothing(self, monkeypatch, tmp_path):
+        from brr import home_link
+
+        monkeypatch.setattr(home_link, "gh_available", lambda: True)
+        monkeypatch.setattr(adopt, "_confirm", lambda *a, **kw: False)
+        called: list = []
+        monkeypatch.setattr(home_link, "link_home", lambda *a, **kw: called.append(1))
+
+        adopt._offer_home_link(tmp_path)
+
+        assert called == []
+
+    def test_accepting_asks_exactly_once_for_both_repos(self, monkeypatch, tmp_path):
+        """One confirm, one link_home call — never a second per-repo question."""
+        from brr import home_link
+
+        monkeypatch.setattr(home_link, "gh_available", lambda: True)
+        confirm_calls: list = []
+        monkeypatch.setattr(
+            adopt, "_confirm", lambda *a, **kw: confirm_calls.append((a, kw)) or True,
+        )
+        link_calls: list = []
+
+        def fake_link_home(repo_root, cfg, **kwargs):
+            link_calls.append((repo_root, kwargs))
+            return [
+                home_link.RepoLinkResult("dominion", tmp_path, "https://x/d", "created", True),
+                home_link.RepoLinkResult("knowledge", tmp_path, "https://x/k", "created", True),
+            ]
+
+        monkeypatch.setattr(home_link, "link_home", fake_link_home)
+
+        adopt._offer_home_link(tmp_path)
+
+        assert len(confirm_calls) == 1, "must ask exactly one question, not one per repo"
+        assert len(link_calls) == 1
+
+    def test_link_failure_is_reported_not_raised(self, monkeypatch, tmp_path, capsys):
+        from brr import home_link
+
+        monkeypatch.setattr(home_link, "gh_available", lambda: True)
+        monkeypatch.setattr(adopt, "_confirm", lambda *a, **kw: True)
+
+        def boom(*a, **kw):
+            raise home_link.HomeLinkError("gh is not authenticated — run `gh auth login` first")
+
+        monkeypatch.setattr(home_link, "link_home", boom)
+
+        adopt._offer_home_link(tmp_path)  # must not raise
+
+        assert "gh is not authenticated" in capsys.readouterr().out
+
+
 class TestBuildDefaultDockerImage:
     def test_returns_false_when_dockerfile_missing(self, monkeypatch, tmp_path):
         monkeypatch.setattr(adopt, "_BUNDLED_DOCKERFILE", tmp_path / "missing")
