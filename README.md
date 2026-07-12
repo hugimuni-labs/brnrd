@@ -26,6 +26,16 @@ hosts the dashboard without moving agent work off your machine.
 pip install brnrd
 ```
 
+To try it without installing anything:
+
+```bash
+uvx brnrd            # zero-install run, straight from PyPI
+```
+
+`uvx` runs brnrd in a throwaway environment — good for a first look, wrong for
+`brnrd daemon install`, which needs a real install to point a long-lived
+service at.
+
 Or run from a local checkout while developing or customizing brnrd itself:
 
 ```bash

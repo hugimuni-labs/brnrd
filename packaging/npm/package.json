@@ -1,0 +1,23 @@
+{
+  "name": "brnrd",
+  "version": "0.1.0",
+  "description": "Launcher for brnrd — structured guardrails for AI agent work, managed from a chat. brnrd is a Python tool; this package only starts it.",
+  "keywords": ["ai", "agent", "cli", "launcher", "brnrd"],
+  "homepage": "https://github.com/Gurio/brr",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gurio/brr.git",
+    "directory": "packaging/npm"
+  },
+  "license": "MIT",
+  "bin": {
+    "brnrd": "bin/brnrd.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/brnrd.js",
+    "README.md"
+  ]
+}
