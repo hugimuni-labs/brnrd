@@ -395,8 +395,10 @@ def _build_inter_run_plan_block(repo_root: Path) -> str:
     return (
         "## Active inter-run plan\n\n"
         "Persisted between wakes in the account dominion — the plan you left "
-        "yourself. Update `plans/<repo>/active.md` (or retire it by emptying "
-        "the file) as the work evolves.\n\n"
+        f"yourself. Update `{plan_path}` (absolute — not relative to your "
+        "dominion directory; a copy left under the dominion's own `plans/` is "
+        "never injected) or retire it by emptying the file as the work "
+        "evolves.\n\n"
         f"{body}"
     )
 
