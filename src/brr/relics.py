@@ -25,7 +25,7 @@ Append format — one JSON object per line, at least a ``"kind"`` key:
 
     {"kind": "summary", "text": "Closed #200 and #317 as one relics feature."}
     {"kind": "issue", "number": 317, "action": "closed", "url": "https://..."}
-    {"kind": "kb", "path": "kb/design-run-relics.md"}
+    {"kind": "kb", "path": "design-run-relics.md", "url": "https://..."}
 
 Everything here is best-effort: a malformed line, a missing git repo, an
 unparseable remote — all degrade to "fewer relics", never a closeout
@@ -44,6 +44,7 @@ from typing import Any
 from . import config as conf
 from . import forges
 from . import gitops
+from . import knowledge
 
 CONTROL_NAME = ".relics.jsonl"
 
@@ -264,6 +265,18 @@ def collect(
     reported = read_reported(outbox_dir)
     summary = [r for r in reported if r.get("kind") == "summary"][:1]
     rest_reported = [r for r in reported if r.get("kind") != "summary"]
+    if repo_root is not None:
+        for record in rest_reported:
+            if record.get("kind") != "kb":
+                continue
+            url = knowledge.kb_page_url(repo_root, str(record.get("path") or ""))
+            # A reported URL is only trustworthy if the page's current blob
+            # is present at the forge-tracking ref.  Replace it from the
+            # resolver or remove it rather than preserving a plausible 404
+            # (or a link to stale pre-edit content).
+            record.pop("url", None)
+            if url:
+                record["url"] = url
     auto = derive_auto(repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir)
     return summary + auto + rest_reported
 
