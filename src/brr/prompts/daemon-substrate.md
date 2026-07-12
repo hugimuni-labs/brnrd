@@ -68,7 +68,8 @@ where a run turns to the world — inbound (`inbox.json`,
   a checked pack but does not own PR creation | `respawn: true` → park a
   handoff to another run; name `shell:` / `core:`, or `quality: escalate`
   for the stronger local Core | `spawn: true` → a *concurrent* worker-stack
-  child in the configured worker pool (`spawn.max_concurrent`, default 4;
+  child in the configured worker pool (live capacity in `portal-state.json`
+  → `resources.coexisting_runs.spawn_pool`, never a numeral memorised here;
   `shell:`/`core:` as respawn); its completion lands back in this thread as
   a plain pending event. Use it for bounded independent pending work when
   capacity and quota are healthy. The parent still owns the original event:
