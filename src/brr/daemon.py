@@ -1653,6 +1653,7 @@ def _run_worker(
             )
         body = _deduplicated_event_body()
         resp_path = protocol.response_path(responses_dir, eid)
+        task.terminal_reply = body
         protocol.write_response(responses_dir, eid, body)
         _record_response_artifact(emit, task, resp_path)
         _set_event_status_if_present(event, "done")
@@ -2357,6 +2358,11 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
                 _record_response_artifact(emit, task, resp_path)
+            # Snapshot before marking the event deliverable. Gate delivery
+            # owns the response file and deletes it after a successful send;
+            # closeout (reply archive + relic collection) runs concurrently
+            # with that gate and must not race it for the only copy.
+            terminal_reply = protocol.read_response(responses_dir, eid)
             task.update_status("done", runs_dir)
             _set_event_status_if_present(event, "done")
             emit("finalizing", run_id=task.id, stage="done")
@@ -2367,6 +2373,7 @@ def _run_worker(
             # kb/review-daemon-coherence-2026-06.md §4).
             with _branch_lock(branch_plan.target_branch):
                 task = env_backend.finalize(env_ctx, task, runs_dir)
+            task.terminal_reply = terminal_reply
             _cleanup_traces_on_success(brr_dir, runs_dir, task)
             _emit_preserved_containers(emit, task)
             attend_result = _post_delivery_attend(
@@ -4365,6 +4372,7 @@ def _capture_knowledge(
     event: dict | None = None,
     responses_dir: Path | None = None,
     outbox_dir: Path | None = None,
+    terminal_reply: str | None = None,
 ) -> None:
     """Archive this run's terminal reply, then commit + push the knowledge chain.
 
@@ -4393,7 +4401,13 @@ def _capture_knowledge(
         and responses_dir is not None
     ):
         eid = str(event.get("id") or "")
-        body = protocol.read_response(responses_dir, eid) if eid else ""
+        # The response path is a delivery queue entry, not an archive: a gate
+        # may already have sent and deleted it once the event became ``done``.
+        # Normal runner paths snapshot the body before that transition; the
+        # file read remains as a compatibility fallback for synthetic callers.
+        body = terminal_reply
+        if body is None:
+            body = protocol.read_response(responses_dir, eid) if eid else ""
         if body and body.strip():
             reply_rel = knowledge.archive_reply(
                 repo_root,
@@ -5012,15 +5026,13 @@ def _write_terminal_failure_response(
         return False
     if _response_has_body(response_path):
         return False
-    protocol.write_response(
-        responses_dir,
-        event["id"],
-        _terminal_failure_body(
-            reason,
-            relay_candidate=relay_candidate,
-            relay_plan=relay_plan,
-        ),
+    body = _terminal_failure_body(
+        reason,
+        relay_candidate=relay_candidate,
+        relay_plan=relay_plan,
     )
+    task.terminal_reply = body
+    protocol.write_response(responses_dir, event["id"], body)
     _record_response_artifact(emit, task, response_path)
     _set_event_status_if_present(event, "done")
     return True
@@ -5176,6 +5188,7 @@ def _run_worker_and_finalize(
             event=event,
             responses_dir=responses_dir,
             outbox_dir=outbox_path,
+            terminal_reply=task.terminal_reply,
         )
         try:
             run_ledger.append_closed_run(
