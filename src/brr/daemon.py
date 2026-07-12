@@ -3223,6 +3223,11 @@ def _write_live_portal_state(
                 "pending_outbox_file_count": len(pending_files),
                 "needs_attention": bool(events or pending_files),
             },
+            # Directives brr refused or dropped this run (a spawn it could
+            # not queue, a reply addressed to an event that no longer
+            # exists). Silence here used to be indistinguishable from
+            # success — the file is deleted either way.
+            "notices": _read_outbox_notices(outbox_dir),
             "inbound": {
                 "current_event": current_event_id,
                 "events": events,
@@ -3388,9 +3393,10 @@ def _queue_respawn_request(
     event_id: str,
     fm: dict,
     body: str,
+    outbox_dir: Path | None = None,
 ) -> bool:
     if inbox_dir is None:
-        print("[brnrd] outbox: respawn request had no inbox; dropping")
+        _record_outbox_notice(outbox_dir, "respawn dropped: no inbox to queue into")
         return False
     proposed = str(
         fm.get("proposed_runner")
@@ -3416,7 +3422,7 @@ def _queue_respawn_request(
     carry = str(fm.get("carry_forward") or "").strip()
     new_body = body.strip() or carry or task.body
     if not new_body.strip():
-        print("[brnrd] outbox: respawn request had no body; dropping")
+        _record_outbox_notice(outbox_dir, "respawn dropped: the request had no body")
         return False
     worker = _truthy(fm.get("worker"))
     reserved = {
@@ -3483,6 +3489,57 @@ def _queue_respawn_request(
     return True
 
 
+NOTICES_FILE = ".notices.jsonl"
+_MAX_NOTICES = 12
+
+
+def _record_outbox_notice(outbox_dir: Path | None, text: str) -> None:
+    """Tell the *running resident* that brr refused or dropped its directive.
+
+    Every drop path in the outbox drain used to end at a ``print()`` — and
+    the daemon's stdout is captured nowhere. From inside the run, a spawn
+    that was refused and a spawn that is quietly working look identical:
+    the file vanishes either way. That is the same silent-failure shape as
+    a 401 that kills a gate thread while the daemon reports healthy; the
+    fix is the same too — put the failure where the reader already looks.
+
+    Notices land in the run's own outbox dir and are surfaced in
+    ``portal-state.json`` (``notices``), which residents re-read at plan
+    boundaries and before closeout. Control file, never delivered.
+    """
+    print(f"[brnrd] outbox: {text}")
+    if outbox_dir is None:
+        return
+    try:
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "text": text},
+            ensure_ascii=False,
+        )
+        with (outbox_dir / NOTICES_FILE).open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _read_outbox_notices(outbox_dir: Path | None) -> list[dict[str, str]]:
+    if outbox_dir is None:
+        return []
+    try:
+        lines = (outbox_dir / NOTICES_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, str]] = []
+    for line in lines[-_MAX_NOTICES:]:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("text"):
+            out.append(record)
+    return out
+
+
 def _queue_spawn_request(
     emit: _WorkerEmit,
     task: Run,
@@ -3490,6 +3547,7 @@ def _queue_spawn_request(
     event_id: str,
     fm: dict,
     body: str,
+    outbox_dir: Path | None = None,
 ) -> bool:
     """Queue a concurrent worker-stack child (``spawn:``, slice 1).
 
@@ -3510,22 +3568,28 @@ def _queue_spawn_request(
     no business creating further daemon-dispatched work anyway.
     """
     if bool(task.meta.get("worker")):
-        print(
-            "[brnrd] outbox: spawn request from a worker-stack run refused "
-            "(no nested spawns)"
+        _record_outbox_notice(
+            outbox_dir,
+            "spawn refused: a worker-stack run cannot spawn (no nested spawns). "
+            "Do the work inline, or hand it back to the resident.",
         )
         return False
     if inbox_dir is None:
-        print("[brnrd] outbox: spawn request had no inbox; dropping")
+        _record_outbox_notice(outbox_dir, "spawn dropped: no inbox to queue into")
         return False
+    # ``shell:``/``core:`` are optional — absent, the child dispatches on the
+    # account's configured default, exactly like any fresh event (nothing
+    # below needs them; ``meta`` simply omits the keys). Until 2026-07-12 a
+    # spawn without them was *dropped*, with the only trace a print to the
+    # daemon's uncaptured stdout: the prompt contract said the keys were
+    # optional, the code required them, and a resident who believed the
+    # contract sat waiting for a worker that never existed. Caught by living
+    # it — this run's own setup-assist spawn vanished that way.
     proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
     core = str(fm.get("core") or "").strip()
-    if not proposed and not core:
-        print("[brnrd] outbox: spawn request had no shell/core; dropping")
-        return False
     new_body = body.strip()
     if not new_body:
-        print("[brnrd] outbox: spawn request had no body; dropping")
+        _record_outbox_notice(outbox_dir, "spawn dropped: the request had no body")
         return False
     source = str(fm.get("source") or "spawn")
     meta: dict = {"worker": True}
@@ -3704,7 +3768,7 @@ def _drain_outbox(
             continue
         if _truthy(fm.get("respawn")):
             if _queue_respawn_request(
-                emit, task, repo_root, inbox_dir, event_id, fm, body
+                emit, task, repo_root, inbox_dir, event_id, fm, body, outbox_dir,
             ):
                 promoted += 1
                 if stats is not None:
@@ -3712,7 +3776,9 @@ def _drain_outbox(
             fpath.unlink(missing_ok=True)
             continue
         if _truthy(fm.get("spawn")):
-            if _queue_spawn_request(emit, task, inbox_dir, event_id, fm, body):
+            if _queue_spawn_request(
+                emit, task, inbox_dir, event_id, fm, body, outbox_dir,
+            ):
                 promoted += 1
                 if stats is not None:
                     stats["spawn"] = stats.get("spawn", 0) + 1
@@ -3726,6 +3792,7 @@ def _drain_outbox(
             # and cleans up; it never wakes a thought.
             if _deliver_out_of_bound(
                 emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
+                outbox_dir,
             ):
                 promoted += 1
                 if stats is not None:
@@ -3739,7 +3806,11 @@ def _drain_outbox(
         if cross and target_event is None:
             # Unknown or already-handled target — don't deliver to the
             # wrong thread; drop with a console note.
-            print(f"[brnrd] outbox: no deliverable event {target!r}; dropping reply")
+            _record_outbox_notice(
+                outbox_dir,
+                f"reply dropped: event {target} is not pending (already handled, "
+                f"or the id is wrong) — the message was NOT delivered",
+            )
             fpath.unlink(missing_ok=True)
             continue
         ppath = protocol.write_partial(responses_dir, target, body) if body else None
@@ -3813,6 +3884,7 @@ def _deliver_out_of_bound(
     gate: str,
     fm: dict,
     body: str,
+    outbox_dir: Path | None = None,
 ) -> bool:
     """Queue an agent-initiated message to a gate destination.
 
@@ -3826,10 +3898,17 @@ def _deliver_out_of_bound(
     Returns True when queued.
     """
     if inbox_dir is None or not body:
-        print(f"[brnrd] outbox: gate {gate!r} message had no body/inbox; dropping")
+        _record_outbox_notice(
+            outbox_dir, f"gate message dropped: gate {gate!r} had no body/inbox",
+        )
         return False
     if not _gate_can_deliver(emit.brr_dir, gate):
-        print(f"[brnrd] outbox: gate {gate!r} is not a configured gate; dropping message")
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate message dropped: {gate!r} is not a configured gate — the "
+            f"`gate:` key takes a bare gate name (e.g. `telegram`), not a "
+            f"thread string; the message was NOT delivered",
+        )
         return False
     # Never let agent-written frontmatter override the reserved event keys
     # (a stray `status:` would resurrect the event as pending and spawn a
