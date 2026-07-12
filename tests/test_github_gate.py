@@ -2055,13 +2055,21 @@ def test_branch_footer_ignores_branch_name_before_finalize():
 def test_branch_footer_includes_tree_and_compare_links():
     task = Run(
         id="t", event_id="e", body="b", source="github",
-        meta={"publish_branch": "brr/task-abc"},
+        meta={"publish_branch": "brr/task-abc", "has_new_commit": True},
     )
     footer = delivery._branch_footer("owner/repo", task)
     assert "brr/task-abc" in footer
     assert "https://github.com/owner/repo/tree/brr/task-abc" in footer
     assert "compare/brr/task-abc?expand=1" in footer
     assert "Compare & open PR" in footer
+
+
+def test_branch_footer_hides_publish_branch_without_a_commit():
+    task = Run(
+        id="t", event_id="e", body="b", source="github",
+        meta={"publish_branch": "brr/task-abc", "has_new_commit": False},
+    )
+    assert delivery._branch_footer("owner/repo", task) == ""
 
 
 def test_find_task_for_event(tmp_path):
@@ -2093,7 +2101,7 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
         body="do something",
         source="github",
         meta={"github_repo": "owner/repo", "github_issue_number": 5,
-              "publish_branch": "brr/task-deliver"},
+              "publish_branch": "brr/task-deliver", "has_new_commit": True},
     )
     task.save(brr_dir / "runs")
 
