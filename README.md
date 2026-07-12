@@ -131,6 +131,7 @@ bot a message; brnrd records the chat ID from each message and replies there.
 | `brnrd bind <repo> <gate>` | Bind a repo-local gate               |
 | `brnrd connect [url]`    | Connect this daemon to brnrd service  |
 | `brnrd add <repo>`       | Add a repo to the connected account home |
+| `brnrd home link`        | Back up the agent's memory + knowledge base to private GitHub repos (one question, idempotent) |
 | `brnrd kb "<query>"`     | Search home/repo knowledge            |
 | `brnrd up`               | Start the daemon (foreground)         |
 | `brnrd down`             | Stop the foreground daemon            |
