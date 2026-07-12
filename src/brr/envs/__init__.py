@@ -313,13 +313,12 @@ class WorktreeEnv(HostEnv):
                 keep_reason="detached HEAD",
             )
 
-        if final_branch == initial_branch and not worktree.has_commits_beyond(
-            worktree_path, plan.seed_ref,
-        ):
+        if not worktree.has_commits_beyond(worktree_path, plan.seed_ref):
             return _FinalizeOutcome(
                 status="nothing",
                 publish_branch=None,
-                delete_run_branch=True,
+                delete_run_branch=final_branch == initial_branch,
+                delete_unused_initial=final_branch != initial_branch,
             )
 
         if final_branch != initial_branch:

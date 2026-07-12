@@ -109,6 +109,21 @@ def test_derive_auto_without_branch_or_pr_is_empty(tmp_path: Path):
     assert relics.derive_auto(repo, branch=None, seed_ref=None, outbox_dir=None) == []
 
 
+def test_derive_auto_hides_branch_when_it_has_no_commit_beyond_seed(tmp_path: Path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "checkout", "-b", "brr/noop"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    assert relics.derive_auto(
+        repo, branch="brr/noop", seed_ref="main", outbox_dir=None,
+    ) == []
+
+
 def test_derive_auto_none_repo_root_is_empty():
     assert relics.derive_auto(None, branch="x", seed_ref=None, outbox_dir=None) == []
 
