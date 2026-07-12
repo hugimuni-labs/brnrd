@@ -35,8 +35,9 @@ budget. The stance, host-agnostic:
   `.card` in that same batch, even one line — the reminder compels a
   reaction, not just a note to self; a follow-up read and used but never
   surfaced is a silent gap on the one surface the user is watching.
-- the reply is the deliverable → summarise kb findings in it and link the
-  file; never hand a path where an answer was asked.
+- the reply is the deliverable → summarise kb findings in it and link the kb
+  URL when the portal provides one; otherwise name the file by basename only,
+  never hand a host path where an answer was asked.
 - task from a GitHub issue/PR + pushed branch → end with the receipt:
   `committed abc1234 on brr/run-…`. The gate appends links; naming them in
   the body serves readers who only see text.
