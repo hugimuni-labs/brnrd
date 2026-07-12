@@ -172,6 +172,36 @@ def test_collect_at_most_one_summary(tmp_path: Path):
     assert out == [{"kind": "summary", "text": "first"}]
 
 
+def test_collect_adds_resolved_url_to_kb_relic(tmp_path: Path, monkeypatch):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "kb", path="design-managed-delivery.md")
+    expected = "https://example.test/blob/main/design-managed-delivery.md"
+    monkeypatch.setattr(relics.knowledge, "kb_page_url", lambda *_: expected)
+
+    out = relics.collect(tmp_path, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert out == [{
+        "kind": "kb",
+        "path": "design-managed-delivery.md",
+        "url": expected,
+    }]
+
+
+def test_collect_drops_unverified_reported_kb_url(tmp_path: Path, monkeypatch):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(
+        outbox, "kb", path="new.md",
+        url="https://example.test/blob/main/new.md",
+    )
+    monkeypatch.setattr(relics.knowledge, "kb_page_url", lambda *_: None)
+
+    out = relics.collect(tmp_path, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert out == [{"kind": "kb", "path": "new.md"}]
+
+
 def test_counts_by_kind_excludes_summary():
     relic_list = [
         {"kind": "summary", "text": "x"},
