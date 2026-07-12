@@ -1675,6 +1675,11 @@ def _run_worker(
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
+    # Persist the comparison base and the current verdict once, on the run
+    # manifest. User-facing readers can then suppress the mechanically-created
+    # placeholder branch without paying a git probe on every dashboard tick.
+    task.meta["seed_ref"] = branch_plan.seed_ref
+    task.meta["has_new_commit"] = False
     _record_task_runner(task, runner_name, runner_meta)
     _persist_run_state_doc(
         account_context, task, repo_label=repo_label, stage="created", cfg=cfg,
@@ -2334,6 +2339,7 @@ def _run_worker(
             )
         except Exception:
             has_new_commit = False
+        task.meta["has_new_commit"] = has_new_commit
         satisfied, signal = _result_satisfied_delivery(
             result, output_stats, event, has_new_commit=has_new_commit,
         )
@@ -4377,6 +4383,7 @@ def _capture_worktree(
         seed_ref = getattr(branch_plan, "seed_ref", None)
         if seed_ref and not worktree.has_commits_beyond(run_root, seed_ref):
             return
+        task.meta["has_new_commit"] = True
         task.meta["publish_branch"] = branch
         task.meta["branch_name"] = branch
         task.save(runs_dir)
@@ -4453,20 +4460,27 @@ def _persist_run_state_doc(
     ]
     if task.conversation_key:
         lines.append(f"conversation_key: {task.conversation_key}")
+    has_new_commit = task.meta.get("has_new_commit") is True
     for key in (
         "runner_name",
         "runner_shell",
         "runner_core",
         "runner_class",
-        "branch_name",
         "target_branch",
-        "publish_branch",
         "publish_status",
         "success_signal",
     ):
         value = task.meta.get(key)
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
+    branch = (
+        task.meta.get("branch_name") or task.meta.get("publish_branch")
+    ) if has_new_commit else None
+    if branch:
+        for key in ("branch_name", "publish_branch"):
+            value = task.meta.get(key)
+            if value not in (None, ""):
+                lines.append(f"{key}: {value}")
     lines.extend([
         "---",
         f"# Run {task.id}",
@@ -4480,7 +4494,6 @@ def _persist_run_state_doc(
     runner_name = task.meta.get("runner_name")
     if runner_name:
         lines.append(f"- runner: {runner_name}")
-    branch = task.meta.get("branch_name") or task.meta.get("publish_branch")
     if branch:
         lines.append(f"- branch: {branch}")
     if task.body:
