@@ -1,6 +1,6 @@
 # Gates — file protocol spec
 
-A gate connects brr to an external channel (Telegram, Slack, GitHub,
+A gate connects brnrd to an external channel (Telegram, Slack, GitHub,
 or anything else).  Gates communicate with the daemon exclusively
 through the filesystem — no shared memory, no function calls.
 
@@ -118,7 +118,7 @@ The daemon imports configured gates and calls `run_loop` in a thread.  See
 
 ### Folder-watcher gates
 
-If you want a "drop a markdown file into a folder and brr picks it up"
+If you want a "drop a markdown file into a folder and brnrd picks it up"
 flow — for example over Obsidian git-sync, the GitHub web editor, or a
 script that drops files into a watched dir — write it as a bash script
 gate using the protocol above. The minimal example earlier in this file

@@ -1,6 +1,6 @@
 # Active Run — orientation guide
 
-Short orientation for agents running under brr. If you see a `Run
+Short orientation for agents running under brnrd. If you see a `Run
 Context Bundle` with an `Event:` or `Run ID:` line in your prompt, you
 are inside a brnrd daemon wake, not a standalone session. Most of what you
 need is already in the prompt. Use this page when you need a refresher.
@@ -23,7 +23,7 @@ the prompt. It contains:
   for read-only recovery when the inline bundle is not enough.
 - The original event body when it fits inline.
 
-Read it once at the start of the run. You should not need `brr`
+Read it once at the start of the run. You should not need `brnrd`
 inspection commands to orient yourself.
 
 ## When to read the context file
@@ -39,7 +39,7 @@ knowledge, and agents should not edit it.
 ## What to write
 
 - Plain current-thread closeout → print the exact intended user-visible
-  reply as stdout. brr captures it to the response path; agents should not
+  reply as stdout. brnrd captures it to the response path; agents should not
   write that response file directly. Other shapes should leave the right
   operational receipt and use the bundle's portals when they need to
   communicate.
@@ -65,12 +65,12 @@ outcomes:
 - **Q&A / read-only** — answer in the response file and stop. No
   commit needed.
 - **Work with an auto-land target** — commit on the current branch.
-  brr fast-forwards the named target after the run.
+  brnrd fast-forwards the named target after the run.
 - **Work with no auto-land target** — commit on the current run
-  branch. brr preserves it for human routing and publishes it when a
+  branch. brnrd preserves it for human routing and publishes it when a
   remote is configured.
 - **Work for a different branch** — run `git switch -c <meaningful-name>`
-  before committing. brr preserves whatever branch you end up on without
+  before committing. brnrd preserves whatever branch you end up on without
   merging.
 
 If something feels off — unfamiliar metadata, a missing path, an
