@@ -105,8 +105,20 @@ def resolve_owner(explicit: str | None = None) -> str:
 
 
 def _repo_view(owner: str, name: str) -> dict[str, Any] | None:
-    """Return ``{"url": ...}`` for an existing ``owner/name`` repo, or None."""
-    result = _run_gh(["repo", "view", f"{owner}/{name}", "--json", "url"])
+    """Return ``{"url": …, "visibility": …}`` for ``owner/name``, or None.
+
+    ``visibility`` is not decoration: the *adopt* path wires origin to a repo
+    that already exists, and adopting a **public** one would push the agent's
+    memory and kb prose straight onto a public profile — the exact outcome
+    this module's own docstring calls non-negotiable, arrived at through the
+    one door that wasn't checking. (Same shape as the overflow gist that
+    shipped ``--public`` against the design page arguing for
+    data-minimization: the creating path was careful, the adopting path was
+    never asked.)
+    """
+    result = _run_gh([
+        "repo", "view", f"{owner}/{name}", "--json", "url,visibility",
+    ])
     if result.returncode != 0:
         return None
     try:
@@ -210,6 +222,17 @@ def _clone_url(owner: str, name: str) -> str:
 def _link_one(*, slot: str, repo_path: Path, owner: str, name: str) -> RepoLinkResult:
     info = _repo_view(owner, name)
     if info is not None:
+        # Explicit PRIVATE or nothing: an unreadable visibility is not a
+        # licence to push memory into it. Refusing is cheap and recoverable;
+        # a public push is neither.
+        visibility = str(info.get("visibility") or "unknown").strip().upper()
+        if visibility != "PRIVATE":
+            raise HomeLinkError(
+                f"{slot}: {owner}/{name} already exists and is {visibility.lower()} — "
+                f"refusing to push agent memory to a repo that isn't private. "
+                f"Make it private on GitHub, or pass a different name "
+                f"(--{slot}-name)."
+            )
         url = str(info.get("url") or f"https://github.com/{owner}/{name}")
         action = "adopted"
     else:
