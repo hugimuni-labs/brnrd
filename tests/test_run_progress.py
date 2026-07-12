@@ -527,6 +527,62 @@ def test_render_text_compact_omits_view_line_without_url(tmp_path):
     assert "view:" not in text
 
 
+def test_terminal_card_hides_branch_when_run_committed_nothing(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:no-commit:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-no-commit", event_id="evt-no-commit",
+        env="worktree", status="running",
+        seed_ref="main", target_branch=None,
+        branch_name="brr/run-no-commit",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-no-commit", env="worktree")
+    _emit(
+        brr_dir, key, "env_prepared", run_id="run-no-commit",
+        env="worktree", branch_name="brr/run-no-commit",
+    )
+    _emit(brr_dir, key, "attempt_started", run_id="run-no-commit", attempt=1)
+    _emit(brr_dir, key, "finalizing", run_id="run-no-commit", stage="done")
+    _emit(
+        brr_dir, key, "done", run_id="run-no-commit",
+        event_id="evt-no-commit", committed=False,
+    )
+
+    view = run_progress.project_run(brr_dir, key, "run-no-commit")
+    assert view is not None
+    assert view.branch_name is None
+    assert "brr/run-no-commit" not in run_progress.render_text(view, compact=True)
+
+
+def test_terminal_card_keeps_branch_when_run_has_a_commit(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:committed:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-committed", event_id="evt-committed",
+        env="worktree", status="running",
+        seed_ref="main", target_branch=None,
+        branch_name="brr/run-committed",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-committed", env="worktree")
+    _emit(
+        brr_dir, key, "env_prepared", run_id="run-committed",
+        env="worktree", branch_name="brr/run-committed",
+    )
+    _emit(brr_dir, key, "attempt_started", run_id="run-committed", attempt=1)
+    _emit(brr_dir, key, "finalizing", run_id="run-committed", stage="done")
+    _emit(
+        brr_dir, key, "done", run_id="run-committed",
+        event_id="evt-committed", committed=True,
+    )
+
+    view = run_progress.project_run(brr_dir, key, "run-committed")
+    assert view is not None
+    assert view.branch_name == "brr/run-committed"
+    assert "brr/run-committed" in run_progress.render_text(view, compact=True)
+
+
 def test_render_text_compact_omits_arrow_without_target_branch(tmp_path):
     """When there is no explicit expected publish target, the header shows
     just the branch name. The seed_ref (where the branch was cut from) is a
