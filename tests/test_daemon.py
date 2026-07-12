@@ -3302,6 +3302,9 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     assert _read_facet()["status"] == "unimplemented"
+    assert _read_facet()["spawn_pool"] == {
+        "max_concurrent": 4, "active": None, "available": None,
+    }
 
     # brr_dir given, nobody else present → affirmative-absent.
     daemon._write_live_portal_state(
@@ -3309,12 +3312,15 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
         brr_dir=brr_dir,
     )
     assert _read_facet()["status"] == "absent"
+    assert _read_facet()["spawn_pool"] == {
+        "max_concurrent": 4, "active": 0, "available": 4,
+    }
 
     # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
     # known, self excluded by run_id.
     presence.register(
         brr_dir, kind="daemon", stream="other", run_id="run-sibling",
-        label="fix the frontend build",
+        label="fix the frontend build", is_subspawn=True,
     )
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
@@ -3323,6 +3329,9 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
     facet = _read_facet()
     assert facet["status"] == "known"
     assert "fix the frontend build" in facet["summary"]
+    assert facet["spawn_pool"] == {
+        "max_concurrent": 4, "active": 1, "available": 3,
+    }
 
 
 def test_resources_facet_level_collector_flips_empty_to_absent():
