@@ -1,20 +1,35 @@
-# brnrd (npx launcher)
-
-**brnrd is a Python tool.** This npm package is a launcher: it exists so that
-`npx brnrd` lands on something honest instead of a 404 or a squatter.
+# brnrd
 
 ```bash
-npx brnrd init      # hands off to `uvx brnrd` (or `pipx run brnrd`)
+npx brnrd init
 ```
 
-The real installs, in preference order:
+**brnrd is a Python program.** This npm package is a bootstrapping installer: on
+first run it creates a durable virtualenv, installs `brnrd` from PyPI into it,
+and hands over. Every run after that is just a launch.
+
+It exists because brnrd's users already live in npx — that is how the AI coding
+tools ship — and most of them have Node without having `uv` or `pipx`. A
+launcher that only forwarded to `uvx` would be useless to exactly the person it
+was written for.
+
+The install is **durable, not ephemeral** (`~/.local/share/brnrd/venv`, or
+`$BRNRD_HOME`), so `npx brnrd daemon install` works: the service unit points at
+a directory that will still be there tomorrow.
+
+It never downloads a Python and never pipes a script into a shell. If no Python
+is present, it says so and stops — that is a requirement no launcher can conjure
+away. If `uv` happens to be installed it is used as an accelerator; the result is
+identical.
+
+Equivalent, if you'd rather not go through npm at all:
 
 ```bash
-pip install brnrd   # normal install — required for `brnrd daemon install`
-uvx brnrd           # zero-install run, straight from PyPI
+pip install brnrd
+uvx brnrd            # zero-install run, if you have uv
 ```
 
-The launcher will refuse `daemon install`: a long-lived service unit must not
-point at an ephemeral environment.
+The launcher's version *is* the payload's version: `npx brnrd@0.1.0` installs
+brnrd 0.1.0.
 
-Source, docs, and the actual product: https://github.com/Gurio/brr
+Source and docs: https://github.com/Gurio/brr
