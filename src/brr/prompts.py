@@ -640,7 +640,7 @@ def _build_injected_blocks(
 
 
 def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> str:
-    """brr's assembled wake-context, for ``brr agent inject`` and agent wrappers.
+    """brr's assembled wake-context, for ``brnrd agent inject`` and agent wrappers.
 
     Returns the **full** injected context a daemon task wake receives: the
     base blocks (dominion digest, pitfalls, recent-activity log, kb health)
@@ -648,7 +648,7 @@ def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> 
     introspection invitation) when their config toggles are on.  The result
     mirrors what ``_join_prompt_parts`` embeds minus the preamble (AGENTS.md
     / runner template) and the trailing task bundle, giving a faithful
-    "what did this wake see?" answer via ``brr agent inject``.
+    "what did this wake see?" answer via ``brnrd agent inject``.
 
     ``task_text`` lets the caller pull in pitfalls whose triggers match the
     work at hand.
@@ -963,14 +963,14 @@ def _build_run_context_bundle(
     sections: list[str] = ["---", "## Run Context Bundle"]
     sections.append("")
     sections.append(
-        "_From the brr daemon: the runtime facts for *this* thought — run "
+        "_From the brnrd daemon: the runtime facts for *this* thought — run "
         "metadata, environment, and the delivery contract. Operational and "
         "per-thought, not durable memory (that's your dominion)._"
     )
 
     sections.append("")
     sections.append("### Mode")
-    sections.append("- Stage: brr daemon run")
+    sections.append("- Stage: brnrd daemon run")
     if source:
         sections.append(f"- Source: {source}")
     if environment:

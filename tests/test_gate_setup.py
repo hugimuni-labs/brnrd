@@ -39,7 +39,6 @@ def test_slack_setup_saves_token_and_channel(tmp_path, monkeypatch):
     }
     assert calls == [
         ("xoxb-secret", "auth.test", None),
-        ("xoxb-secret", "chat.postMessage", {"channel": "C123", "text": "brr bound."}),
+        ("xoxb-secret", "chat.postMessage", {"channel": "C123", "text": "brnrd bound."}),
     ]
-
 

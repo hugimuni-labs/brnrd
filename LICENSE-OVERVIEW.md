@@ -1,22 +1,23 @@
 # License overview
 
-This repository is a monorepo whose sub-packages ship under
-different licenses, aligned with the package boundary (see
-[`kb/decision-monorepo-structure.md`](kb/decision-monorepo-structure.md)
-and [`kb/decision-licensing-and-defense.md`](kb/decision-licensing-and-defense.md)).
+This repository is a monorepo whose sub-packages ship under different
+licenses, aligned with the package boundaries below.
 
 | Path | Component | License |
 |------|-----------|---------|
-| repo root `LICENSE` | the brr daemon core distribution | MIT |
+| repo root `LICENSE` | the brnrd distribution's daemon core | MIT |
 | `src/brr/` (`src/brr/LICENSE`) | daemon core | MIT |
-| `src/brnrd/` (`src/brnrd/LICENSE`) | brnrd backend (`brr[backend]` extra) | AGPLv3 |
-| `src/brnrd_web/` | dashboard (not yet present) | AGPLv3 when it lands |
+| `src/brnrd/` (`src/brnrd/LICENSE`) | brnrd backend (`brnrd[backend]` extra) | AGPLv3 |
+| `src/brnrd_web/` (`src/brnrd_web/LICENSE`) | dashboard | AGPLv3 |
 
 What this means in practice:
 
-- `pip install brr` installs only the MIT-licensed daemon core.
-- `pip install brr[backend]` additionally installs the
-  AGPLv3-licensed brnrd backend. Running a modified brnrd backend
+- The wheel contains all three import packages; extras select their runtime
+  dependencies, not which licensed source files are present.
+- `pip install brnrd` installs the dependencies needed by the MIT-licensed
+  daemon core.
+- `pip install brnrd[backend]` additionally installs the dependencies needed
+  to run the AGPLv3-licensed backend and dashboard. Running a modified backend
   as a network service triggers the AGPL's source-availability
   obligation; the permissive daemon core is unaffected.
 

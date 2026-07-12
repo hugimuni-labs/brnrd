@@ -1,4 +1,4 @@
-"""Tests for the seam bench (brr bench) — the lesser-light probe loop.
+"""Tests for the seam bench (brnrd bench) — the lesser-light probe loop.
 
 Only the deterministic core is CI-testable: sandbox prep, probe
 evaluation over synthetic transcripts, report rendering, CLI wiring.

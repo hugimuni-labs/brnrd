@@ -24,7 +24,7 @@ def _parse_value(val: str) -> Any:
 
 
 def load_config(repo_root: Path) -> dict[str, Any]:
-    """Load brr config from ``.brr/config`` in the given repo root."""
+    """Load brnrd config from ``.brr/config`` in the given repo root."""
     from . import gitops
 
     path = gitops.shared_brr_dir(repo_root) / "config"

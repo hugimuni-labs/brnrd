@@ -280,7 +280,7 @@ class TestPromptBuilding:
             diffense=True,
         )
         assert "Review pack (diffense)" in prompt
-        assert "brr review --check" in prompt
+        assert "brnrd review --check" in prompt
         # The heavy publish plumbing is now inspected, not injected: the
         # block points at `brnrd docs review-pack` instead of re-narrating
         # the relay/gist/frontmatter procedure every diffense wake.
@@ -649,7 +649,7 @@ class TestPromptBuilding:
             context_path="/repo/.brr/runs/task-123/context.md",
         )
         assert "### Mode" in prompt
-        assert "Stage: brr daemon run" in prompt
+        assert "Stage: brnrd daemon run" in prompt
         assert "Source: telegram" in prompt
         assert "Environment: docker" in prompt
         assert "Delivery: situational outputs captured by brr" in prompt
@@ -674,7 +674,7 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "### Mode" in prompt
-        assert "Stage: brr daemon run" in prompt
+        assert "Stage: brnrd daemon run" in prompt
         assert "Delivery: situational outputs captured by brr" in prompt
         assert "Source:" not in prompt
         assert "Environment:" not in prompt

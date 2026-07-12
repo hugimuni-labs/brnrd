@@ -10,7 +10,7 @@ from brr.daemon_install import linux
 def test_render_systemd_unit_matches_machine_scoped_template():
     unit = linux.render_systemd_unit()
 
-    assert "Description=brr daemon (machine-scoped multi-project multiplexer)" in unit
+    assert "Description=brnrd daemon (machine-scoped multi-project multiplexer)" in unit
     assert "ExecStart=/usr/bin/env brnrd daemon up --foreground" in unit
     assert "Environment=BRR_INSTALL_MANAGED=1" in unit
     assert "WorkingDirectory" not in unit

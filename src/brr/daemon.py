@@ -28,7 +28,7 @@ Liveness is enforced from the heartbeat: each tick checks an
 agent-extensible budget (``runner.timeout_seconds``, pushed out by a
 keepalive the agent writes) and kills a runner that outlives it via
 ``runner.kill_active``; the runner's own ``communicate`` timeout is the
-final backstop if the heartbeat path wedges. ``brr down`` / SIGTERM flip
+final backstop if the heartbeat path wedges. ``brnrd down`` / SIGTERM flip
 the loop flag and kill the in-flight runner, so the single-flight slot is
 reclaimed promptly rather than waiting out a long budget.
 """
@@ -317,7 +317,7 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
             continue
         if not hasattr(mod, "is_configured") or not mod.is_configured(brr_dir):
             continue
-        print(f"[brr] starting gate: {name}")
+        print(f"[brnrd] starting gate: {name}")
         t = threading.Thread(
             target=mod.run_loop,
             args=(brr_dir, inbox_dir, responses_dir),
@@ -442,7 +442,7 @@ def publish(
         }
         if task.conversation_key:
             emit("push_started", **push_payload)
-        print(f"[brr] pushing {push_branch}...")
+        print(f"[brnrd] pushing {push_branch}...")
         with _branch_lock(remote_branch):
             push = subprocess.run(
                 push_cmd, cwd=repo_root,
@@ -836,11 +836,11 @@ def _queue_runner_policy_proposal(
     account_context: account.AccountContext | None,
 ) -> bool:
     if account_context is None or not account_context.enabled:
-        print("[brr] outbox: runner-policy proposal had no account context; dropping")
+        print("[brnrd] outbox: runner-policy proposal had no account context; dropping")
         return False
     proposed = body.strip()
     if not proposed:
-        print("[brr] outbox: runner-policy proposal had no policy body; dropping")
+        print("[brnrd] outbox: runner-policy proposal had no policy body; dropping")
         return False
 
     scope = _runner_policy_scope(fm)
@@ -1129,7 +1129,7 @@ def _queue_config_change_proposal(
     requested_value = str(raw_value).strip()
 
     if account_context is None or not account_context.enabled:
-        print("[brr] outbox: config-change proposal had no account context; dropping")
+        print("[brnrd] outbox: config-change proposal had no account context; dropping")
         message = (
             f"Config-change proposal for `{key}` needs an account context "
             "(cross-repo dominion) to park and escalate; this repo doesn't "
@@ -1564,7 +1564,7 @@ def _run_worker(
             runner_wake_note = "requested from the dashboard spool rack"
         else:
             print(
-                f"[brr] wake request {wake_req['request_id']} names unknown "
+                f"[brnrd] wake request {wake_req['request_id']} names unknown "
                 f"profile '{requested_profile}'; dropping it"
             )
         wake_request_mod.consume(brr_dir, wake_req["request_id"])
@@ -1736,7 +1736,7 @@ def _run_worker(
     outbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_dir = inbox_dir or (brr_dir / "inbox")
 
-    print(f"[brr] run {task.id} (event {eid}): env={task.env}")
+    print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
     task.meta["outbox_path"] = str(outbox_dir)
@@ -1765,7 +1765,7 @@ def _run_worker(
             outbox_path=outbox_dir,
         )
     except RuntimeError as e:
-        print(f"[brr] run {task.id}: env setup failed: {e}")
+        print(f"[brnrd] run {task.id}: env setup failed: {e}")
         task.update_status("error", runs_dir)
         _write_terminal_failure_response(
             emit,
@@ -1980,7 +1980,7 @@ def _run_worker(
                     flavour=declared_hooks_flavour,
                     path="<argv -c hooks.*>",
                 )
-                print(f"[brr] worker {eid}: installed codex hook config via argv")
+                print(f"[brnrd] worker {eid}: installed codex hook config via argv")
         elif (
             declared_hooks_flavour
             and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
@@ -1997,7 +1997,7 @@ def _run_worker(
                     path=str(hook_config_path),
                 )
                 print(
-                    f"[brr] worker {eid}: installed "
+                    f"[brnrd] worker {eid}: installed "
                     f"{declared_hooks_flavour} hook config at {hook_config_path}"
                 )
         return meta, quota, env, extra_args
@@ -2107,7 +2107,7 @@ def _run_worker(
         prompt_mode = "normal"
         fallback_notice = None
 
-        print(f"[brr] worker {eid}: attempt {attempt}")
+        print(f"[brnrd] worker {eid}: attempt {attempt}")
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
 
         attempt_started_monotonic = time.monotonic()
@@ -2296,7 +2296,7 @@ def _run_worker(
         try:
             result.raise_for_error()
         except RuntimeError as e:
-            print(f"[brr] worker {eid}: runner error: {e}")
+            print(f"[brnrd] worker {eid}: runner error: {e}")
             detail = result.error_detail() or str(e)
             timed_out = result.returncode == 124
             last_failure = {
@@ -2338,7 +2338,7 @@ def _run_worker(
             result, output_stats, event, has_new_commit=has_new_commit,
         )
         if satisfied:
-            print(f"[brr] worker {eid}: response ready ({signal})")
+            print(f"[brnrd] worker {eid}: response ready ({signal})")
             task.meta["success_signal"] = signal
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
@@ -2452,7 +2452,7 @@ def _run_worker(
         if will_retry:
             clean_retries_used += 1
             prompt_mode = "stdout_retry"
-            print(f"[brr] worker {eid}: {retry_reason}, retrying...")
+            print(f"[brnrd] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
                 run_id=task.id,
@@ -2485,7 +2485,7 @@ def _run_worker(
             )
             prompt_mode = "fallback"
             print(
-                f"[brr] worker {eid}: {previous_runner} failed "
+                f"[brnrd] worker {eid}: {previous_runner} failed "
                 f"({failure_kind}); falling back to {runner_name}"
             )
             emit(
@@ -2506,9 +2506,9 @@ def _run_worker(
         break
 
     if last_failure and last_failure.get("timed_out"):
-        print(f"[brr] worker {eid}: timed out, giving up")
+        print(f"[brnrd] worker {eid}: timed out, giving up")
     else:
-        print(f"[brr] worker {eid}: gave up after {attempt} attempt(s)")
+        print(f"[brnrd] worker {eid}: gave up after {attempt} attempt(s)")
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.update_status("error", runs_dir)
@@ -3002,7 +3002,7 @@ def _resources_facet(
     schema (``kb/design-resident-boundary.md`` §1 — "by schema, not by
     convention"). The schema, the three-state honesty, and the per-Shell level
     asymmetry all live in ``facets``; this keeps the daemon's construction call
-    in one place so the JSON snapshot, the woven hook line, and ``brr portal
+    in one place so the JSON snapshot, the woven hook line, and ``brnrd portal
     state`` can never drift on which facets they carry.
 
     ``coexisting`` is ``None`` unless the call site has a presence snapshot to
@@ -3356,7 +3356,7 @@ def _queue_respawn_request(
     body: str,
 ) -> bool:
     if inbox_dir is None:
-        print("[brr] outbox: respawn request had no inbox; dropping")
+        print("[brnrd] outbox: respawn request had no inbox; dropping")
         return False
     proposed = str(
         fm.get("proposed_runner")
@@ -3373,7 +3373,7 @@ def _queue_respawn_request(
         ) or ""
     if not proposed and not core:
         print(
-            "[brr] outbox: respawn request had no runner/core/"
+            "[brnrd] outbox: respawn request had no runner/core/"
             "quality target; dropping"
         )
         return False
@@ -3382,7 +3382,7 @@ def _queue_respawn_request(
     carry = str(fm.get("carry_forward") or "").strip()
     new_body = body.strip() or carry or task.body
     if not new_body.strip():
-        print("[brr] outbox: respawn request had no body; dropping")
+        print("[brnrd] outbox: respawn request had no body; dropping")
         return False
     worker = _truthy(fm.get("worker"))
     reserved = {
@@ -3424,7 +3424,7 @@ def _queue_respawn_request(
     if quality_target:
         meta["respawn_quality"] = quality_target
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
-    print(f"[brr] outbox: queued respawn request ({new_path.stem})")
+    print(f"[brnrd] outbox: queued respawn request ({new_path.stem})")
     if emit.conversation_key:
         conversations.append_artifact(
             emit.brr_dir, emit.conversation_key,
@@ -3477,21 +3477,21 @@ def _queue_spawn_request(
     """
     if bool(task.meta.get("worker")):
         print(
-            "[brr] outbox: spawn request from a worker-stack run refused "
+            "[brnrd] outbox: spawn request from a worker-stack run refused "
             "(no nested spawns)"
         )
         return False
     if inbox_dir is None:
-        print("[brr] outbox: spawn request had no inbox; dropping")
+        print("[brnrd] outbox: spawn request had no inbox; dropping")
         return False
     proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
     core = str(fm.get("core") or "").strip()
     if not proposed and not core:
-        print("[brr] outbox: spawn request had no shell/core; dropping")
+        print("[brnrd] outbox: spawn request had no shell/core; dropping")
         return False
     new_body = body.strip()
     if not new_body:
-        print("[brr] outbox: spawn request had no body; dropping")
+        print("[brnrd] outbox: spawn request had no body; dropping")
         return False
     source = str(fm.get("source") or "spawn")
     meta: dict = {"worker": True}
@@ -3531,7 +3531,7 @@ def _queue_spawn_request(
     if reason:
         meta["spawn_reason"] = reason
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
-    print(f"[brr] outbox: queued concurrent spawn ({new_path.stem})")
+    print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
     # as if it had just fired itself, rather than firing redundantly right
     # after related event-driven work already happened — see
@@ -3705,7 +3705,7 @@ def _drain_outbox(
         if cross and target_event is None:
             # Unknown or already-handled target — don't deliver to the
             # wrong thread; drop with a console note.
-            print(f"[brr] outbox: no deliverable event {target!r}; dropping reply")
+            print(f"[brnrd] outbox: no deliverable event {target!r}; dropping reply")
             fpath.unlink(missing_ok=True)
             continue
         ppath = protocol.write_partial(responses_dir, target, body) if body else None
@@ -3792,10 +3792,10 @@ def _deliver_out_of_bound(
     Returns True when queued.
     """
     if inbox_dir is None or not body:
-        print(f"[brr] outbox: gate {gate!r} message had no body/inbox; dropping")
+        print(f"[brnrd] outbox: gate {gate!r} message had no body/inbox; dropping")
         return False
     if not _gate_can_deliver(emit.brr_dir, gate):
-        print(f"[brr] outbox: gate {gate!r} is not a configured gate; dropping message")
+        print(f"[brnrd] outbox: gate {gate!r} is not a configured gate; dropping message")
         return False
     # Never let agent-written frontmatter override the reserved event keys
     # (a stray `status:` would resurrect the event as pending and spawn a
@@ -3810,7 +3810,7 @@ def _deliver_out_of_bound(
     )
     new_eid = new_path.stem
     protocol.write_response(responses_dir, new_eid, body)
-    print(f"[brr] outbox: queued out-of-bound message to gate {gate!r} ({new_eid})")
+    print(f"[brnrd] outbox: queued out-of-bound message to gate {gate!r} ({new_eid})")
     if emit.conversation_key:
         conversations.append_artifact(
             emit.brr_dir, emit.conversation_key,
@@ -4119,11 +4119,11 @@ def _fire_due_schedules(
                     else _repo_label(repo_root, {}, cfg)
                 ),
             )
-            print(f"[brr] schedule: fired {entry.id}")
+            print(f"[brnrd] schedule: fired {entry.id}")
         if new_state != loaded_state:
             schedule_mod.save_state(brr_dir, new_state)
     except Exception as exc:  # noqa: BLE001 - scheduling must never wedge the loop
-        print(f"[brr] schedule: skipped tick ({exc})")
+        print(f"[brnrd] schedule: skipped tick ({exc})")
 
 
 def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
@@ -4196,7 +4196,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             spawn_parent_run_id=parent_run_id,
         )
     except OSError as exc:
-        print(f"[brr] spawn-completion notify failed for {task.id}: {exc}")
+        print(f"[brnrd] spawn-completion notify failed for {task.id}: {exc}")
 
 
 def _notify_spawn_parent_of_crash(
@@ -4241,7 +4241,7 @@ def _notify_spawn_parent_of_crash(
             spawn_failed=True,
         )
     except OSError as exc:
-        print(f"[brr] spawn-crash notify failed for {spawn_event_id}: {exc}")
+        print(f"[brnrd] spawn-crash notify failed for {spawn_event_id}: {exc}")
 
 
 def _capture_dominion(
@@ -4306,7 +4306,7 @@ def _capture_dominion(
             push=push and bool(remote),
         )
         if committed:
-            print(f"[brr] dominion: captured working memory after {task.id}")
+            print(f"[brnrd] dominion: captured working memory after {task.id}")
 
 
 def _capture_worktree(
@@ -4353,16 +4353,16 @@ def _capture_worktree(
                 run_root,
                 f"brr salvage: in-flight work from interrupted run {task.id}",
             ):
-                print(f"[brr] salvage: committed in-flight work for {task.id}")
+                print(f"[brnrd] salvage: committed in-flight work for {task.id}")
         seed_ref = getattr(branch_plan, "seed_ref", None)
         if seed_ref and not worktree.has_commits_beyond(run_root, seed_ref):
             return
         task.meta["publish_branch"] = branch
         task.meta["branch_name"] = branch
         task.save(runs_dir)
-        print(f"[brr] salvage: arming publish of {branch} for failed {task.id}")
+        print(f"[brnrd] salvage: arming publish of {branch} for failed {task.id}")
     except Exception as e:  # best-effort — never let salvage break the give-up path
-        print(f"[brr] salvage: skipped for {task.id} ({e})")
+        print(f"[brnrd] salvage: skipped for {task.id} ({e})")
 
 
 def _record_response_artifact(
@@ -4953,7 +4953,7 @@ def _run_worker_and_finalize(
             # backstop, not a fix for one bug: always retire the event
             # rather than leave it "processing" forever.
             print(
-                f"[brr] run for {eid}: crashed before producing a Run:\n"
+                f"[brnrd] run for {eid}: crashed before producing a Run:\n"
                 f"{traceback.format_exc()}"
             )
             _set_event_status_if_present(event, "error")
@@ -4969,7 +4969,7 @@ def _run_worker_and_finalize(
         if event.get("status") != "done":
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
-            print(f"[brr] run {task.id}: failed")
+            print(f"[brnrd] run {task.id}: failed")
 
         outbox_path = (
             Path(str(task.meta["outbox_path"]))
@@ -4989,7 +4989,7 @@ def _run_worker_and_finalize(
                 work_dir=repo_root,
             )
         except Exception as exc:  # noqa: BLE001 - ledger must not block delivery
-            print(f"[brr] run {task.id}: run-ledger append failed: {exc}")
+            print(f"[brnrd] run {task.id}: run-ledger append failed: {exc}")
 
         publish(repo_root, task)
         repo_label = str(task.meta.get("repo_label") or _repo_label(repo_root, event, cfg))
@@ -5197,10 +5197,10 @@ def start(
 
     existing_pid = read_pid(brr_dir)
     if existing_pid and not reload_mod.is_reexec_for_current_process(existing_pid):
-        raise SystemExit("[brr] daemon already running")
+        raise SystemExit("[brnrd] daemon already running")
     reload_mod.clear_reexec_marker()
     if not (repo_root / "AGENTS.md").exists():
-        raise SystemExit("[brr] run `brnrd init` first")
+        raise SystemExit("[brnrd] run `brnrd init` first")
 
     _write_pid(brr_dir)
     running = True
@@ -5240,9 +5240,9 @@ def start(
                     cfg.get("dominion_branch", dominion.DEFAULT_BRANCH),
                 )),
             )
-            print(f"[brr] dominion ready: {dpath}")
+            print(f"[brnrd] dominion ready: {dpath}")
         except Exception as exc:  # noqa: BLE001
-            print(f"[brr] dominion bootstrap skipped: {exc}")
+            print(f"[brnrd] dominion bootstrap skipped: {exc}")
 
     if account_context.enabled and account_context.dominion_repo.exists():
         try:
@@ -5252,16 +5252,16 @@ def start(
             )
             dominion.seed_account_dominion(repo_dominion)
         except Exception as exc:  # noqa: BLE001
-            print(f"[brr] account dominion seed skipped: {exc}")
-        print(f"[brr] account dominion ready: {account_context.dominion_repo}")
+            print(f"[brnrd] account dominion seed skipped: {exc}")
+        print(f"[brnrd] account dominion ready: {account_context.dominion_repo}")
 
     gate_threads = _start_account_gates(account_context, repo_root)
     if not gate_threads:
-        print("[brr] warning: no gates configured — inbox will only receive events from `brnrd run` or scripts")
+        print("[brnrd] warning: no gates configured — inbox will only receive events from `brnrd run` or scripts")
 
     if reload_watcher is not None:
-        print("[brr] developer reload enabled")
-    print(f"[brr] daemon started (pid {os.getpid()}, single-flight)")
+        print("[brnrd] developer reload enabled")
+    print(f"[brnrd] daemon started (pid {os.getpid()}, single-flight)")
 
     # Single-flight: one thought off the main thread at a time. A
     # one-slot executor keeps the clean future lifecycle (done / result /
@@ -5314,7 +5314,7 @@ def start(
                 except Exception as exc:  # noqa: BLE001
                     # The thought crashed before returning a Run; the
                     # operator sees the traceback in the daemon console.
-                    print(f"[brr] thought crashed: {exc}")
+                    print(f"[brnrd] thought crashed: {exc}")
                 current = None
 
             # Reap any concurrent worker-stack children that have finished,
@@ -5333,7 +5333,7 @@ def start(
                     try:
                         spawn_task = future.result()
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[brr] spawned child crashed: {exc}")
+                        print(f"[brnrd] spawned child crashed: {exc}")
                         if spawn["event"] is not None:
                             _notify_spawn_parent_of_crash(
                                 spawn["inbox_dir"], spawn["event"], exc,
@@ -5345,7 +5345,7 @@ def start(
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
             if reload_requested and current is None:
-                print("[brr] package files changed; re-execing daemon")
+                print("[brnrd] package files changed; re-execing daemon")
                 pool.shutdown(wait=True)
                 reload_mod.reexec()  # noreturn on success
 
@@ -5456,7 +5456,7 @@ def start(
                 for target in spawn_candidates:
                     event = target.event
                     eid = event["id"]
-                    print(f"[brr] processing (concurrent spawn): {eid}")
+                    print(f"[brnrd] processing (concurrent spawn): {eid}")
                     protocol.set_status(event, "processing")
                     future = pool.submit(
                         _run_worker_and_finalize,
@@ -5514,7 +5514,7 @@ def start(
                         repo_suffix = (
                             f" [{target.repo_label}]" if target.repo_label else ""
                         )
-                        print(f"[brr] processing: {eid}{repo_suffix}{suffix}")
+                        print(f"[brnrd] processing: {eid}{repo_suffix}{suffix}")
                         protocol.update_event_meta(
                             event,
                             defer_until=None,
@@ -5548,7 +5548,7 @@ def start(
 
             for t in gate_threads:
                 if not t.is_alive():
-                    print(f"[brr] warning: gate thread {t.name} died")
+                    print(f"[brnrd] warning: gate thread {t.name} died")
 
     finally:
         # Shutdown requested (signal): kill the in-flight runner so we
@@ -5565,7 +5565,7 @@ def start(
         # slice; would need ``kill_active`` to become a small registry.
         if current is not None and not current.done():
             if runner.kill_active():
-                print("[brr] shutdown: terminated in-flight runner")
+                print("[brnrd] shutdown: terminated in-flight runner")
         pool.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
-        print("[brr] daemon stopped")
+        print("[brnrd] daemon stopped")

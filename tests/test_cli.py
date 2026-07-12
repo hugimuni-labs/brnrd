@@ -554,7 +554,7 @@ def test_setup_falls_back_to_auth_then_bind(monkeypatch, tmp_path):
     ]
 
 
-# ── brr runners list (step 2, design-runner-cores.md) ───────────────────────
+# ── brnrd runners list (step 2, design-runner-cores.md) ───────────────────────
 
 
 def test_runners_list_text_output(monkeypatch, capsys):
