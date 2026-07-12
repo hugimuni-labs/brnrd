@@ -1,0 +1,62 @@
+{
+  "version": "0.11.28",
+  "python": "3.12",
+  "checksums": "https://github.com/astral-sh/uv/releases/download/0.11.28/sha256.sum",
+  "assets": {
+    "darwin-arm64": {
+      "archive": "uv-aarch64-apple-darwin.tar.gz",
+      "sha256": "33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232",
+      "size": 22568053
+    },
+    "darwin-x64": {
+      "archive": "uv-x86_64-apple-darwin.tar.gz",
+      "sha256": "2ad79983127ffca7d77b77ce6a24278d7e4f7b817a1acf72fea5f8124b4aac5e",
+      "size": 24355900
+    },
+    "linux-arm64-gnu": {
+      "archive": "uv-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "03e9fe0a81b0718d0bc84625de3885df6cc3f89a8b6af6121d6b9f6113fb6533",
+      "size": 24689886
+    },
+    "linux-arm64-musl": {
+      "archive": "uv-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "da10cdfa7d92212b7acb62021a0fd61bcf8580c58c3632ec915d10c3a1a7906b",
+      "size": 24563837
+    },
+    "linux-ia32-gnu": {
+      "archive": "uv-i686-unknown-linux-gnu.tar.gz",
+      "sha256": "f8d01e918dd4d5eabdd4caee78e8adbc3993a70f3b82395fa6b23fcf791925d9",
+      "size": 26193950
+    },
+    "linux-ia32-musl": {
+      "archive": "uv-i686-unknown-linux-musl.tar.gz",
+      "sha256": "c869415e44e13000d9daae15cec7bcfaf0735915a8d6e66402d459f6bed35710",
+      "size": 25423736
+    },
+    "linux-x64-gnu": {
+      "archive": "uv-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224",
+      "size": 26411870
+    },
+    "linux-x64-musl": {
+      "archive": "uv-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "f02146b371c35c287d860f003ece7345c86e358a3fd70a9b63700cd141ee7fb4",
+      "size": 26595337
+    },
+    "win32-arm64": {
+      "archive": "uv-aarch64-pc-windows-msvc.zip",
+      "sha256": "3248109afad3ec59baad299d324ff53de17e2d9a3b3e21580ffd26744b11e036",
+      "size": 23878916
+    },
+    "win32-ia32": {
+      "archive": "uv-i686-pc-windows-msvc.zip",
+      "sha256": "01975deb06072edfc1f18435c25737d8d378dc849b918cd580768ab3b7641e85",
+      "size": 23382175
+    },
+    "win32-x64": {
+      "archive": "uv-x86_64-pc-windows-msvc.zip",
+      "sha256": "0a23463216d09c6a72ff80ef5dc5a795f07dc1575cb84d24596c2f124a441b7b",
+      "size": 25568726
+    }
+  }
+}
