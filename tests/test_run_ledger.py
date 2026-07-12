@@ -17,6 +17,7 @@ _ROW_FIELDS = {
     "repo_label",
     "source_system",
     "external_refs",
+    "reply_archive",
     "task_classification",
     "parent_run_id",
     "is_subspawn",
@@ -110,6 +111,7 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["tokens_cache_creation"] == 5
     assert row["context_window_used"] == 12.5
     assert row["external_refs"] == []
+    assert row["reply_archive"] is None
     assert row["estimate_vs_actual"] == "actual"
 
 
