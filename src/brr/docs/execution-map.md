@@ -1,8 +1,8 @@
 # Execution Map
 
-How an event flows through brr, and where each artifact lives.
+How an event flows through brnrd, and where each artifact lives.
 
-This document ships with the `brr` tool. Users can override it
+This document ships with the `brnrd` tool. Users can override it
 per-repo by dropping a file at `.brr/docs/execution-map.md`.
 
 ## Pipeline
@@ -42,7 +42,7 @@ branch sprouted from the seed ref. New run IDs start with `run-`, so the
 default branch is `brr/run-...`. If the plan has no auto-land target,
 commits on that run branch are preserved for human routing and
 published when a remote is configured. The agent can still switch to a
-named branch at runtime; brr preserves the branch it ends on.
+named branch at runtime; brnrd preserves the branch it ends on.
 
 ### 3. Execution
 
@@ -69,9 +69,9 @@ resident contract, then the resident's dominion digest (per its
 `self-inject` index). It also injects task-scoped surfaces such as matched
 pitfalls, recent `kb/log.md` activity, and, when the deterministic kb
 preflight isn't clean, a `kb health` block of findings for the resident to
-fold into its work (see [`brr-internals.md`](brr-internals.md) → KB
+fold into its work (see [`internals.md`](internals.md) → KB
 maintenance). The daemon path additionally injects `daemon-substrate.md` —
-brr's driver's manual for the daemon-only machinery (single-flight, the
+brnrd's driver's manual for the daemon-only machinery (single-flight, the
 capture-at-sleep net, self-scheduled wakes) that the host-agnostic dominion
 playbook leaves out; `brnrd run` skips it. `brnrd agent inject` prints this
 assembled wake-context (identity core + dominion digest + matched pitfalls +
@@ -79,7 +79,7 @@ recent log) so a non-brr wrapper can reuse the same orientation semantic.
 
 ### 4. Response
 
-When the resident chooses a plain current-thread reply, brr captures stdout
+When the resident chooses a plain current-thread reply, brnrd captures stdout
 and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
 headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
 goes to stderr, so no per-runner output flag is needed for the common
@@ -98,7 +98,7 @@ files after a successful send, while the progress card can continue to show
 post-response housekeeping.
 
 The agent may *also* stream replies mid-thought (the multi-response
-protocol; see [`brr-internals.md`](brr-internals.md) → Multi-response).
+protocol; see [`internals.md`](internals.md) → Multi-response).
 It drops markdown files in its per-event outbox (`.brr/outbox/<event-id>/`);
 the daemon drains them on every heartbeat and once after the runner
 returns, promoting each to a per-event partials queue
@@ -129,7 +129,7 @@ migration) with a serialized commit — on success and failure alike — so
 working-memory edits survive to the next wake without the agent committing by
 hand. The commit step is serialized across processes by a file lock so a
 concurrent ad-hoc session never races the shared git index. A remote push
-happens only when the account dominion repo already has a remote; brr does not
+happens only when the account dominion repo already has a remote; brnrd does not
 create a forge repo by default.
 
 If the runner exits cleanly but produces no satisfying signal, the daemon
@@ -162,7 +162,7 @@ Best-effort, gated by `salvage.enabled` (default on), and silent when the
 branch carries no commits beyond the seed.
 
 When `brnrd up --dev-reload` or `dev_reload=true` is active, this is also
-the safe boundary where the daemon may re-exec itself if brr package
+the safe boundary where the daemon may re-exec itself if brnrd package
 files changed. Reload never interrupts a running worker.
 
 ## Artifact locations
