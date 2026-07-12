@@ -351,7 +351,7 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     assert "unavailable" not in ctx
 
 
-def test_seed_surfaces_open_pr_posture(tmp_path):
+def test_seed_surfaces_recorded_pr_posture(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
         resources={
@@ -359,7 +359,7 @@ def test_seed_surfaces_open_pr_posture(tmp_path):
             "spend": {"status": "unimplemented"},
             "context_window": {"status": "unimplemented"},
             "coexisting_runs": {"status": "unimplemented"},
-            "remote_scm": {"status": "known", "pr_state": "open",
+            "remote_scm": {"status": "known", "pr_state": "recorded",
                            "pr_number": "207", "branch": "brr/x"},
         },
     )
