@@ -116,7 +116,7 @@ def test_render_line_carries_every_schema_facet_in_order():
 def test_facet_value_renders_states():
     assert facets.facet_value({"status": "known", "summary": "42%"}) == "42%"
     assert (
-        facets.facet_value({"status": "known", "pr_state": "open",
+        facets.facet_value({"status": "known", "pr_state": "recorded",
                             "pr_number": "9"}) == "PR #9"
     )
     assert facets.facet_value(
