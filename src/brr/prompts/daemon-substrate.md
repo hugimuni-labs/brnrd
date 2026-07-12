@@ -124,15 +124,18 @@ where a run turns to the world — inbound (`inbox.json`,
   the line directly). Commits, pushed branch, and a self-reported PR
   auto-derive from git + `.pr` at closeout — write nothing for those.
   Worth a line: `{"kind": "issue", "number": 317, "action": "closed"}`,
-  `{"kind": "kb", "path": "kb/design-run-relics.md"}`, `{"kind":
+  `{"kind": "kb", "path": "design-run-relics.md", "url": "<portal kb
+  base + page, after push>"}`, `{"kind":
   "comment"|"message", ...}`, and ≤1 `{"kind": "summary", "text": "..."}`
   to head the receipt. Feeds the dashboard's collapsed receipt
   (`kb/design-run-relics.md`, #200/#317); the chat card doesn't render it
   yet (named gap). Control file, never delivered.
 - remote reader — the user reads replies in a chat client (Telegram /
-  Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
-  never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
-  exist on the user's machine and won't render. brr appends the
+  Slack); link a kb page with the kb URL the portal provides; when none is
+  available, use its basename only (`subject-envs.md`). For other files use
+  basenames (`run_progress.py`), never host paths like
+  `.brr/worktrees/<run-id>/kb/foo.md` — they don't exist on the user's
+  machine and won't render. brr appends the
   forge-hosted branch URL to the card when one exists; don't fabricate
   one.
 - next move — an addressed reply *ends* with where the loop stands:
