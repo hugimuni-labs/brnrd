@@ -253,7 +253,21 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
             "runner_class": "balanced",
             "publish_status": "coding",
             "branch_name": "brr/activity",
+            "has_new_commit": True,
             "pr_number": 205,
+        },
+    ).save(brr_dir / "runs")
+    Run(
+        id="run-cloud-audit",
+        event_id="evt-audit",
+        body="read-only audit",
+        status="running",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={
+            "publish_status": "nothing",
+            "branch_name": "brr/run-cloud-audit",
+            "has_new_commit": False,
         },
     ).save(brr_dir / "runs")
     dom = brr_dir / "dominion"
@@ -281,6 +295,7 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
     assert rows["run:run-cloud-activity"]["runner"]["shell"] == "codex"
     assert rows["run:run-cloud-activity"]["phase"] == "coding"
     assert rows["run:run-cloud-activity"]["branch"] == "brr/activity"
+    assert rows["run:run-cloud-audit"]["branch"] == ""
     assert rows["schedule:daily-sweep"]["kind"] == "scheduled"
     assert rows[f"respawn:{respawn.stem}"]["defer_until"].startswith("2999-01-01T01:00:00")
 
