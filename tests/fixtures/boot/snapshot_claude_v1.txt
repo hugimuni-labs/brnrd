@@ -4,9 +4,10 @@
 # DO NOT EDIT BY HAND — regeneration is the only sanctioned path.
 
 brnrd boot · score v1 · depth compact
-body: claude-sonnet (claude / claude-sonnet-4-6) Tier 2 hooks installed
+body: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
 host: daemon · worktree · resident-owned
-attention: evt-fixture-0001 · requested from the dashboard spool rack
+continuity: ✗ first wake
+attention: evt-fixture-0001
 posture: brr/fixture-branch · session 72% left (resets 10:30pm); week 57% left · budget 120m
 next:
   1. read the task — the verbatim event body is the last block below
@@ -559,7 +560,7 @@ hooks:
 source manifest:
     block                                   owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)        daemon-live  runtime          632  computed
+  ✓ Boot kernel (action-first score)        daemon-live  runtime          662  computed
   ✓ Operational preamble (run.md)           product      contract       5,843  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)             product      contract       3,448  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)  product      substrate     13,047  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
@@ -582,9 +583,9 @@ cost ledger:
   substrate      13,047 B  41.1%
   contract        9,291 B  29.3%
   identity        5,449 B  17.2%
-  runtime         3,917 B  12.4%
+  runtime         3,947 B  12.4%
   unattributed       10 B
-  wake total     31,714 B
+  wake total     31,744 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

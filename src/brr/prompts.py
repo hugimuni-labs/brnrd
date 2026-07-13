@@ -1183,6 +1183,8 @@ def build_boot_score(
     environment: str | None = None,
     event_ids: tuple[str, ...] = (),
     body_provenance: str | None = None,
+    source_gate: str | None = None,
+    continuity: "BootContinuity | None" = None,
     pending_count: int = 0,
     budget: str | None = None,
     quota: str | None = None,
@@ -1217,7 +1219,7 @@ def build_boot_score(
     - ``hooks``: the abstract phase set with per-phase installed/fired state.
     """
     from .bootscore import (
-        BootScore, BootBody, BootHost, BootAttention, BootPosture,
+        BootScore, BootBody, BootHost, BootAttention, BootContinuity, BootPosture,
         DEPTH_COMPACT, SCHEMA_VERSION,
     )
 
@@ -1271,10 +1273,17 @@ def build_boot_score(
         schema_version=SCHEMA_VERSION,
         depth=DEPTH_COMPACT,
         body=BootBody(
-            name=runner_name, shell=runner_shell, core=runner_core, tier=tier
+            name=runner_name,
+            shell=runner_shell,
+            core=runner_core,
+            tier=tier,
+            # Why this body — *not* where the attention came from. These were
+            # one field until 2026-07-13; see BootBody.provenance.
+            provenance=body_provenance,
         ),
         host=BootHost(kind=kind, environment=environment, publication_owner=pub_owner),
-        attention=BootAttention(event_ids=event_ids, body_provenance=body_provenance),
+        continuity=continuity if continuity is not None else BootContinuity(),
+        attention=BootAttention(event_ids=event_ids, source_gate=source_gate),
         posture=BootPosture(
             pending_count=pending_count,
             budget=budget,
@@ -1322,6 +1331,8 @@ def build_daemon_prompt_with_score(
     runner_shell = kwargs.get("runner_shell")
     runner_core = kwargs.get("runner_core")
     body_provenance = kwargs.get("body_provenance")
+    source_gate = kwargs.get("source_gate")
+    continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
     worker = bool(kwargs.get("worker", False))
     diffense = bool(kwargs.get("diffense", False))
@@ -1402,6 +1413,8 @@ def build_daemon_prompt_with_score(
         runner_shell=str(runner_shell) if runner_shell else None,
         runner_core=str(runner_core) if runner_core else None,
         body_provenance=str(body_provenance) if body_provenance else None,
+        source_gate=str(source_gate) if source_gate else None,
+        continuity=continuity,
         environment=str(environment) if environment else None,
         event_ids=(event_id,),
         pending_count=len(pending_events),
@@ -1524,6 +1537,8 @@ def build_daemon_prompt(
     runner_shell: str | None = None,
     runner_core: str | None = None,
     body_provenance: str | None = None,
+    source_gate: str | None = None,
+    continuity: Any | None = None,
     hooks_installed: bool | None = None,
     diffense: bool = False,
     worker: bool = False,
@@ -1609,6 +1624,8 @@ def build_daemon_prompt(
         runner_shell=runner_shell,
         runner_core=runner_core,
         body_provenance=body_provenance,
+        source_gate=source_gate,
+        continuity=continuity,
         environment=environment,
         event_ids=(event_id,) if event_id else (),
         pending_count=len(pending_events or []),
