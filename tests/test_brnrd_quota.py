@@ -5,6 +5,8 @@ CPS plan/ledger mirror.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -102,6 +104,45 @@ def test_daemon_quota_snapshot_replaces_shells():
     )
     assert replaced.status_code == 200
     assert replaced.json()["shells"][0]["windows"] == []
+
+
+def test_daemon_quota_round_trips_gate_health():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    gates = [
+        {
+            "gate": "telegram",
+            "last_poll_ok": "2026-07-13T12:00:00+00:00",
+            "age_seconds": 12,
+            "last_error": None,
+            "status": "ok",
+        },
+        {
+            "gate": "github",
+            "last_poll_ok": None,
+            "age_seconds": None,
+            "last_error": "bad credentials",
+            "status": "never",
+        },
+    ]
+    posted = client.put(
+        "/v1/daemons/quota",
+        json={"shells": [], "gates": gates},
+        headers=daemon_headers,
+    )
+
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["gates"] == gates
+
+    from brnrd.models import Daemon
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(Daemon).one()
+        assert json.loads(daemon.gate_health_json) == gates
 
 
 def test_daemon_quota_round_trips_updated_at_and_credits():

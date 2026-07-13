@@ -274,6 +274,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     while True:
         try:
             _loop_once(brr_dir, inbox_dir, responses_dir)
+            runtime.record_loop_health(brr_dir, "cloud", ok=True)
             backoff = 1
             auth_backoff = _AUTH_RETRY_MIN_S
             if not registered:
@@ -292,10 +293,12 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             # daemon. Retrying at a slow cadence costs one request per five
             # minutes and keeps a genuinely bad token loudly visible instead
             # of silently terminal.
+            runtime.record_loop_health(brr_dir, "cloud", ok=False, error=str(e))
             print(f"[brnrd:cloud] auth failed: {e}, retrying in {auth_backoff}s")
             time.sleep(auth_backoff)
             auth_backoff = min(auth_backoff * 2, _AUTH_RETRY_CAP_S)
         except Exception as e:
+            runtime.record_loop_health(brr_dir, "cloud", ok=False, error=str(e))
             print(f"[brnrd:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
@@ -925,6 +928,11 @@ def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return [shell for shell in shells if shell is not None]
 
 
+def _gate_health_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """Configured ingestion paths, including quiet paths with no poll yet."""
+    return runtime.gate_health_rows(brr_dir)
+
+
 def _publish_quota(brr_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
@@ -934,7 +942,10 @@ def _publish_quota(brr_dir: Path, state: dict) -> None:
             "PUT",
             "/v1/daemons/quota",
             token=state["token"],
-            json={"shells": _quota_snapshot(brr_dir)},
+            json={
+                "shells": _quota_snapshot(brr_dir),
+                "gates": _gate_health_snapshot(brr_dir),
+            },
             timeout=10,
         )
     except Exception as e:
