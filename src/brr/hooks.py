@@ -31,6 +31,7 @@ fields. Keeping that split is what lets one endpoint serve three runners.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -98,6 +99,27 @@ def _read_json(path: Path | None) -> dict[str, Any]:
 
 def _read_hook_state(ctx: HookContext) -> dict[str, Any]:
     return _read_json(ctx.state_path)
+
+
+FIRED_KEY = "fired"
+
+
+def _utc_now_iso() -> str:
+    return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _record_fired(state: dict[str, Any], phase: str) -> None:
+    """Stamp *phase*'s last-fired time into the hook state.
+
+    The BootScore's hook contract reports this back (``brnrd prompts show``),
+    so the phase set can be seen *firing* rather than merely declared.  Kept
+    per-phase: a post-tool hook firing says nothing about session-start.
+    """
+    fired = state.get(FIRED_KEY)
+    if not isinstance(fired, dict):
+        fired = {}
+    fired[phase] = _utc_now_iso()
+    state[FIRED_KEY] = fired
 
 
 def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
@@ -361,6 +383,7 @@ def compute_neutral(
     """
     portal = _read_json(ctx.portal_state_path)
     state = _read_hook_state(ctx)
+    _record_fired(state, phase)
     inject: str | None = None
     block = False
     block_reason: str | None = None
