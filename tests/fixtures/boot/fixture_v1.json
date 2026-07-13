@@ -1,0 +1,67 @@
+{
+  "_meta": {
+    "schema": "boot-fixture-v1",
+    "captured": "2026-07-13",
+    "description": "Versioned inputs for the boot replay harness. Drive build_daemon_prompt through these to regenerate the claude/codex snapshots. The fixture is deliberately minimal — enough inputs to exercise all code paths (runner_medium, runner_catalog, event metadata, communication snapshot) without coupling to live domain state."
+  },
+  "shared": {
+    "task": "Implement a small feature, commit, and push a branch.",
+    "event_id": "evt-fixture-0001",
+    "response_path": "/tmp/brr-fixture-response.md",
+    "run_id": "run-fixture-0001",
+    "source": "spawn",
+    "environment": "worktree",
+    "branch_name": "brr/fixture-branch",
+    "repo_label": "Acme/my-repo",
+    "seed_ref": "main",
+    "branch_source": "fresh",
+    "host_context_branch": "main",
+    "runtime_dir": "/tmp/brr-fixture-runtime",
+    "context_path": "/tmp/brr-fixture-runtime/runs/run-fixture-0001/context.md",
+    "outbox_path": "/tmp/brr-fixture-outbox",
+    "budget_seconds": 7200,
+    "event_body": "Implement a small feature, commit, and push a branch.",
+    "communication_snapshot": {
+      "current_thread": "spawn:default",
+      "user_commitment": "full",
+      "related_threads": []
+    },
+    "runner_catalog": [
+      {
+        "name": "claude-haiku",
+        "shell": "claude",
+        "model": "claude-haiku-4-5-20251001",
+        "class": "economy",
+        "cost_rank": 10,
+        "quota_source": "claude-local"
+      },
+      {
+        "name": "claude",
+        "shell": "claude",
+        "model": "claude-sonnet-4-6",
+        "class": "balanced",
+        "cost_rank": 30,
+        "quota_source": "claude-local",
+        "selected": false
+      },
+      {
+        "name": "codex-mini",
+        "shell": "codex",
+        "model": "gpt-5.6-luna",
+        "class": "economy",
+        "cost_rank": 20,
+        "quota_source": "codex-local"
+      }
+    ]
+  },
+  "runners": {
+    "claude": {
+      "runner_medium": "claude-sonnet",
+      "runner_quota": "session 72% left (resets 10:30pm); week 57% left"
+    },
+    "codex": {
+      "runner_medium": "codex",
+      "runner_quota": "week 80% left (resets Sunday)"
+    }
+  }
+}
