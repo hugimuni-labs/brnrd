@@ -413,7 +413,7 @@ def cmd_prompts_show(args):
         repo_root,
         is_daemon=True,
         is_worker=False,
-        runner_medium=runner_medium,
+        runner_shell=runner_medium,
         runner_core=runner_core,
         hooks_installed=hooks_installed,
         hook_stamps=hook_stamps,

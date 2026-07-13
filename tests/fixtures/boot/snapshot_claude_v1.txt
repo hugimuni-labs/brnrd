@@ -489,7 +489,7 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Stage: brnrd daemon run
 - Source: spawn
 - Environment: worktree
-- Runner: claude-sonnet — the Shell+Core this thought runs in. A failure here (quota exhausted, provider error) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
+- Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core this thought runs in. A failure here (quota exhausted, provider error) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
 - Quota: session 72% left (resets 10:30pm); week 57% left
 - Delivery: situational outputs captured by brr (see Delivery contract below)
 - Budget: ~120m of wall-clock runtime before brr kills this thought to reclaim the single-flight slot. Bound uncertain long-running commands yourself (own timeout, or background + poll); extend the deadline if you genuinely need longer (see Delivery contract).
@@ -536,7 +536,7 @@ Implement a small feature, commit, and push a branch.
 
 brnrd boot · schema v1 · depth compact
 
-  body: claude-sonnet · Tier 2 hooks installed
+  body: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed
   host: daemon · worktree · resident-owned
   posture: session 72% left (resets 10:30pm); week 57% left · brr/fixture-branch
 
