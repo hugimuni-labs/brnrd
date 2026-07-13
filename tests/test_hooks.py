@@ -9,14 +9,19 @@ from brr import hooks
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
             resources=None, budget=None, outbound=None, card=None,
-            task_classification=None):
+            task_classification=None, current_event="evt-1"):
+    # ``current_event`` mirrors production: the daemon always writes the key,
+    # set for an addressed run and None for an unaddressed one (a scheduled
+    # wake). Pass ``current_event=None`` to model the unaddressed shape — the
+    # fixture must be able to express both, or a guard that depends on the
+    # distinction can be "green" against a portal state that cannot occur.
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
             "pending_event_count": pending,
             "pending_outbox_file_count": 0,
         },
-        "inbound": {"events": events or []},
+        "inbound": {"current_event": current_event, "events": events or []},
         "outbound": outbound or {
             "replies_current": 0,
             "replies_other": 0,
@@ -408,6 +413,16 @@ def test_stop_flags_no_outbound_messages(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "current event has no reply yet" in ctx
+
+
+def test_stop_reply_guard_silent_on_an_unaddressed_run(tmp_path):
+    # A scheduled wake has no current event, so "the current event has no
+    # reply" is not a warning there — it is a false statement. The guard must
+    # only assert a fact the run can be proven wrong about.
+    _portal(tmp_path, token="t1", pending=0, current_event=None)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "current event has no reply yet" not in ctx
 
 
 def test_stop_silent_on_outbound_when_something_sent(tmp_path):

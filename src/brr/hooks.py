@@ -239,17 +239,28 @@ def format_delta(
                 ".keepalive if the work needs it, else wind down."
             )
     replied_current = outbound.get("replies_current")
-    any_delivery = replied_current or outbound.get("replies_other") or outbound.get("outbound_messages")
+    any_delivery = (
+        replied_current
+        or outbound.get("replies_other")
+        or outbound.get("outbound_messages")
+    )
     if any_delivery:
         lines.append(
             f"- delivery so far: current={outbound.get('replies_current', 0)} "
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
-    if stop and not replied_current:
-        # Affirmative-empty: an addressed run that reaches closeout having
-        # sent nothing is suspicious, not silent. Surface the absence at the
-        # boundary so a forgotten reply is caught before the slot is gone.
+    # Affirmative-empty: an *addressed* run that reaches closeout without
+    # answering its own event is suspicious, not silent — surface the absence
+    # at the boundary, before the slot is gone.
+    #
+    # Gated on ``inbound.current_event`` because the warning names a fact:
+    # "the current event has no reply". A scheduled wake has no current event
+    # to reply to, so on those runs the sentence is not merely noisy — it is
+    # false. A guard may only assert something the run can be proven wrong
+    # about; the moment it nags about a chore that does not apply, it teaches
+    # the reader to skip the channel, and it is gone the one night it is right.
+    if stop and not replied_current and inbound.get("current_event"):
         lines.append(
             "- delivery: current event has no reply yet — confirm this run "
             "answered the event it owes before ending."
@@ -320,7 +331,7 @@ def format_delta(
     # the affirmative signal, not noise.
     if (
         not seed and not stop and pending == 0 and pending_files == 0
-            and not any_delivery and not rendered_resources and not card_stale
+        and not any_delivery and not rendered_resources and not card_stale
     ):
         return None
     return "\n".join(lines)
