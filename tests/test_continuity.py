@@ -75,6 +75,47 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
     assert "spool rack" not in att
 
 
+# ── The queue is the resident's, and only the resident's ──────────────────────
+
+
+def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
+    """The 2026-07-13 incident, pinned.
+
+    ``pending_count`` is the **parent's** queue — events addressed to the
+    resident, in the resident's gate thread.  It leaked into the worker kernel,
+    which handed a spawned worker, at position 1, in the imperative:
+
+        next:
+          2. answer 12 queued events — one outbox file each, `event: <id>`
+
+    Two workers (claude-haiku, codex-mini) did precisely that: they answered
+    twelve of the user's messages to the resident, in the resident's thread,
+    with no context for any of them.
+
+    ``worker.md`` says the spawning conversation "is not yours to hold or
+    extend" — in prose, *below* the kernel.  The kernel won.  Which is the boot
+    thesis confirmed from its ugly end: **the imperative list at the hot slot is
+    what gets acted on; the prose contract beneath it is what gets skimmed.**
+    """
+    from brr.prompts import _build_orientation
+
+    def actions(*, is_worker: bool) -> list[str]:
+        return [
+            s.action
+            for s in _build_orientation(
+                is_daemon=True,
+                is_worker=is_worker,
+                environment="worktree",
+                pending_count=12,
+                has_event_body=True,
+            )
+        ]
+
+    assert not any("queued event" in a for a in actions(is_worker=True))
+    # …and the resident still gets it: the fix is a gate, not a deletion.
+    assert any("queued event" in a for a in actions(is_worker=False))
+
+
 # ── Continuity ────────────────────────────────────────────────────────────────
 
 
