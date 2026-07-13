@@ -409,20 +409,86 @@ def _runner_available(name: str, profiles: dict[str, dict[str, Any]]) -> bool:
     return True
 
 
+def _compose_shell_core(
+    shell_pin: str, core_pin: str, profiles: dict[str, dict[str, Any]]
+) -> str | None:
+    """Resolve ``shell=`` + ``core=`` to the Shell+Core profile both name.
+
+    ``shell:`` + ``core:`` set together mean one thing everywhere they can
+    be written (spawn/respawn frontmatter, .brr/config, a tap): *this Shell
+    running this Core*. Until 2026-07-13 the exact-pin path returned the
+    shell pin outright and ``core=`` degraded to a stderr warning — found
+    live when a spawn requesting ``shell: codex`` + ``core: gpt-5.4``
+    dispatched a child whose argv carried no model flag at all: it ran the
+    Shell's config-default model (a *stronger*, costlier core than
+    requested — the economics leak both ways). The 2026-07-09 warn was the
+    visibility half; this is the resolution half.
+
+    Returns the composed profile name, or ``None`` when composition is not
+    possible — the shell pin already pins a *different* model (a genuine
+    conflict, the caller warns), or no available profile of that shell
+    family matches the core.
+    """
+    pin_profile = profiles.get(shell_pin) or {}
+    pin_model = str(pin_profile.get("model") or "").strip().lower()
+    core_lower = core_pin.strip().lower()
+    if pin_model:
+        if pin_model == core_lower or pin_model.startswith(core_lower):
+            return shell_pin  # already the combined profile
+        return None  # conflicting explicit pins — warn, shell wins
+    shell_family = str(
+        pin_profile.get("shell") or pin_profile.get("binary") or shell_pin
+    ).strip()
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        family = str(
+            profile.get("shell") or profile.get("binary") or name
+        ).strip()
+        if family != shell_family:
+            continue
+        model = str(profile.get("model") or "").strip().lower()
+        model_match = bool(model) and (
+            model == core_lower or model.startswith(core_lower)
+        )
+        name_lower = name.lower()
+        name_match = (
+            name_lower == core_lower or name_lower.endswith(f"-{core_lower}")
+        )
+        if not (model_match or name_match):
+            continue
+        if not _runner_available(name, profiles):
+            continue
+        matches.append((name, profile))
+    if not matches:
+        return None
+
+    def _rank(item: tuple[str, dict[str, Any]]) -> tuple[int, float, str]:
+        name, profile = item
+        model = str(profile.get("model") or "").strip().lower()
+        exact = 0 if model == core_lower else 1
+        try:
+            cost = float(profile.get("cost_rank"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            cost = float("inf")
+        return (exact, cost, name)
+
+    return min(matches, key=_rank)[0]
+
+
 def _warn_if_shell_shadows_core(
     shell_pin: str, core_pin: str, profiles: dict[str, dict[str, Any]]
 ) -> None:
-    """``shell=`` is an exact-pin that wins outright over ``core=`` (see
-    :func:`resolve_runner`'s own precedence docs) — a config that sets both
-    expecting them to compose (``shell=claude`` + ``core=claude-fable-5``)
-    silently gets the Shell's bare default model, with ``core=`` never
-    consulted at all. Caught live 2026-07-09: several days of runs resolved
-    to the base ``claude`` profile (Claude Code's own CLI-default model)
-    while the operator believed ``core=`` had pinned ``claude-fable-5`` —
-    nothing failed, so nothing surfaced it until quota usage on the pinned
-    model stopped moving. Warn once per resolution instead of failing
-    silently; this does not change which runner gets picked, only whether
-    the mismatch is visible.
+    """Called when :func:`_compose_shell_core` found no composition: the
+    shell pin names a profile pinned to a *different* model, or no
+    available profile of the pinned shell's family matches ``core=``. The
+    shell pin still wins (an exact pin must stay predictable); this makes
+    the dropped core visible instead of silent. History: caught live
+    2026-07-09 — several days of runs resolved to the base ``claude``
+    profile while the operator believed ``core=`` had pinned
+    ``claude-fable-5``; nothing failed, so nothing surfaced it until quota
+    usage on the pinned model stopped moving.
     """
     profile = profiles.get(shell_pin) or {}
     model = str(profile.get("model") or "").strip().lower()
@@ -431,13 +497,12 @@ def _warn_if_shell_shadows_core(
         return  # shell_pin already names a profile pinned to this core
     resolved = model or "default"
     print(
-        f"brr: .brr/config sets both shell={shell_pin!r} and "
-        f"core={core_pin!r}, but shell= is an exact profile pin and wins "
-        f"outright — core= is not consulted. This run resolves to "
-        f"model={resolved!r}, not {core_pin!r}. To pin Shell+Core "
-        f"together, set shell= to the combined profile name (e.g. "
-        "shell=claude-fable) or drop shell= and let core= filter "
-        "cost-aware auto-selection.",
+        f"brr: shell={shell_pin!r} and core={core_pin!r} were both set, "
+        f"but they don't compose — no available {shell_pin!r}-family "
+        f"profile matches that core, so core= is not consulted. This run "
+        f"resolves to model={resolved!r}, not {core_pin!r}. Check the core "
+        "id against `brnrd runners list`, or drop shell= and let core= "
+        "filter cost-aware auto-selection.",
         file=sys.stderr,
     )
 
@@ -633,6 +698,9 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
     if explicit_pin:
         if _runner_available(explicit_pin, profiles):
             if core_pin and shell_pin:
+                composed = _compose_shell_core(shell_pin, core_pin, profiles)
+                if composed is not None:
+                    return composed
                 _warn_if_shell_shadows_core(shell_pin, core_pin, profiles)
             return explicit_pin
         raise RuntimeError(
