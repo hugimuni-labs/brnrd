@@ -157,6 +157,41 @@ def test_dashboard_repos_api_returns_repo_management_payload():
     assert body["oauth_ready"] is True
 
 
+def test_dashboard_repos_api_returns_latest_daemon_gate_health():
+    import json
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token, repo="Gurio/brr")
+    gates = [
+        {
+            "gate": "telegram",
+            "last_poll_ok": "2026-07-13T12:00:00+00:00",
+            "age_seconds": 9,
+            "last_error": None,
+            "status": "ok",
+        }
+    ]
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-health-dashboard",
+                repo_id=repo_id,
+                token_id="tok-health-dashboard",
+                daemon_name="laptop",
+                gate_health_json=json.dumps(gates),
+            )
+        )
+        db.commit()
+
+    response = client.get("/v1/dashboard/repos")
+
+    assert response.status_code == 200
+    assert response.json()["connected_repos"][0]["gates"] == gates
+
+
 def test_dashboard_connect_repo_api_enables_repo():
     client = _client()
     _login(client, login="Gurio")
