@@ -377,6 +377,16 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                     # staring at a stale-and-empty quota panel is exactly who
                     # needs to know four resets are sitting there.
                     "reset_credits": shell.get("reset_credits"),
+                    # Spend posture (2026-07-13): `None`/absent when the
+                    # daemon build predates this field; a shell with no cost
+                    # collector at all (Codex today) reports an explicit
+                    # `{"status": "unimplemented", "reason": ...}` rather
+                    # than silently omitting the field, so the dashboard can
+                    # tell "we don't track this yet" apart from "we tracked
+                    # it and there's nothing to show." Survives staleness
+                    # like `reset_credits` — an "unimplemented" verdict
+                    # doesn't decay the way a percentage does.
+                    "spend": shell.get("spend"),
                     "_reported_at": reported_at,
                 }
     out = list(real.values())

@@ -4,6 +4,13 @@
 // dashboard_live_runs_api`), sourced from the local presence registry
 // (`src/brr/presence.py`) via the daemon's `PUT /v1/daemons/live-runs` publish.
 
+export interface LiveRunRunner {
+	name?: string;
+	shell?: string;
+	core?: string;
+	class?: string;
+}
+
 export interface LiveRun {
 	id: string;
 	kind: string;
@@ -20,6 +27,12 @@ export interface LiveRun {
 	// (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
 	parent_run_id: string | null;
 	is_subspawn: boolean;
+	// Which Shell+Core this thought is running on
+	// (`cloud.py::_runner_payload`, same shape Activity/respawn rows already
+	// carry) — sourced from the presence entry now that `presence.register`
+	// records it at registration time. `{}` on an entry from before this
+	// field shipped, or an ad-hoc session that never selected a Runner.
+	runner: LiveRunRunner;
 	// #200's remaining slice (progress-card richness): the run's current
 	// lifecycle phase (`queued`/`preparing`/`running`/`finalizing`/...,
 	// `src/brr/run_progress.py::PHASES`) and the live `.card` note text,

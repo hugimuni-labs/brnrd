@@ -88,6 +88,10 @@ def register(
     now: float | None = None,
     parent_run_id: str | None = None,
     is_subspawn: bool = False,
+    runner_name: str | None = None,
+    runner_shell: str | None = None,
+    runner_core: str | None = None,
+    runner_class: str | None = None,
 ) -> dict[str, Any]:
     """Record a participant as present; return its entry (with ``id``).
 
@@ -104,6 +108,13 @@ def register(
     thought at the same joining key the ledger already uses, rather than
     only after the run closes (kb/design-multi-workstream-concurrency.md
     "Ranked moves" #1).
+
+    *runner_name* / *runner_shell* / *runner_core* / *runner_class* mirror
+    the same fields ``daemon.py``'s ``_record_task_runner`` already persists
+    on the run manifest (``task.meta``), carried here too at registration
+    time so the *live* view can name which Shell+Core a running thought is
+    on — previously only the closed-run ledger could answer that
+    (brnrd.dev live-run dashboard posture, 2026-07-13).
     """
     pdir = _presence_dir(brr_dir)
     pdir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +133,10 @@ def register(
         "last_seen": ts,
         "parent_run_id": parent_run_id or "",
         "is_subspawn": bool(is_subspawn),
+        "runner_name": runner_name or "",
+        "runner_shell": runner_shell or "",
+        "runner_core": runner_core or "",
+        "runner_class": runner_class or "",
     }
     _atomic_write(pdir / f"{eid}.json", json.dumps(entry))
     return entry

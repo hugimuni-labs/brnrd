@@ -27,6 +27,16 @@
 		else expanded.add(id);
 	}
 
+	// Shell+Core the run is on ("claude · sonnet"), or `null` when the
+	// presence entry predates this field / never selected a Runner (an
+	// ad-hoc session). Deliberately just shell/core, not `class` — the
+	// spool rack already shows cost class per profile; this card only
+	// needs to answer "which Runner is this run on."
+	function runnerLabel(run: LiveRun): string | null {
+		const bits = [run.runner?.shell, run.runner?.core].filter(Boolean);
+		return bits.length ? bits.join(' · ') : null;
+	}
+
 	function clock(iso: string | null): string {
 		if (!iso) return '—';
 		const t = Date.parse(iso);
@@ -127,6 +137,7 @@
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}
 				{@const isOpen = expanded.has(run.id)}
+				{@const runner = runnerLabel(run)}
 				<div
 					class="subpanel p-2.5 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
@@ -168,7 +179,9 @@
 								>
 							{/if}
 						</p>
-						<p class="truncate text-stone-500">{secondary}</p>
+						<p class="truncate text-stone-500">
+							{secondary}{#if runner}<span class="text-stone-600"> · {runner}</span>{/if}
+						</p>
 						{#if run.card_text && !isOpen}
 							<!-- Progress-card note (`.card`, `run_progress.py`'s
 							     `agent_card_text`) — one truncated line collapsed;
@@ -203,6 +216,7 @@
 							{/if}
 							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-stone-500">
 								<span>run: {run.run_id || run.id}</span>
+								<span>runner: {runner ?? '—'}</span>
 								<span>phase: {run.phase ?? '—'}</span>
 								<span>started: {clock(run.started_at)}</span>
 								<span>heartbeat: {clock(run.last_seen)}</span>

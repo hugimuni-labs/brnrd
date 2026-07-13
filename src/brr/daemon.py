@@ -1730,6 +1730,14 @@ def _run_worker(
             repo_label=repo_label, label=live_run_label,
             parent_run_id=task.meta.get("spawn_parent_run_id") or None,
             is_subspawn=bool(task.meta.get("spawn_immediate")),
+            # Same Shell+Core fields `_record_task_runner` (above) just
+            # persisted on the run manifest — carried into presence too so
+            # the *live* dashboard view can name which Runner a running
+            # thought is on, not only the closed-run ledger.
+            runner_name=task.meta.get("runner_name") or None,
+            runner_shell=task.meta.get("runner_shell") or None,
+            runner_core=task.meta.get("runner_core") or None,
+            runner_class=task.meta.get("runner_class") or None,
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
