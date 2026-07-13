@@ -407,7 +407,7 @@ def test_stop_flags_no_outbound_messages(tmp_path):
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "no outbound messages sent yet" in ctx
+    assert "current event has no reply yet" in ctx
 
 
 def test_stop_silent_on_outbound_when_something_sent(tmp_path):
@@ -418,8 +418,20 @@ def test_stop_silent_on_outbound_when_something_sent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "no outbound messages sent yet" not in ctx
+    assert "current event has no reply yet" not in ctx
     assert "delivery so far" in ctx
+
+
+def test_stop_keeps_current_reply_guard_after_other_delivery(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 1},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "delivery so far" in ctx
+    assert "current event has no reply yet" in ctx
 
 
 def test_long_running_surfaced_when_over_soft_budget(tmp_path):
