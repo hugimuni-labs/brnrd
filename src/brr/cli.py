@@ -242,6 +242,29 @@ def main(argv: list[str] | None = None) -> None:
                    help="include bundled Cores whose Shell is not on PATH")
     p.set_defaults(func=cmd_runners_list)
 
+    prompts_p = sub.add_parser(
+        "prompts",
+        help="inspect the prompt assembly: source manifest, boot score")
+    prompts_sub = prompts_p.add_subparsers(dest="prompts_command", required=True)
+
+    p = prompts_sub.add_parser(
+        "show",
+        help="print the boot source manifest — every block considered for a "
+             "wake, with owner, authority, freshness, and location. "
+             "Deterministic and network-free. (--boot is the default view; "
+             "the flag is accepted for future expansion)")
+    p.add_argument(
+        "--boot", action="store_true", default=True,
+        help="show the boot source manifest (default; currently the only view)")
+    p.add_argument(
+        "--json", action="store_true",
+        help="emit machine-readable JSON instead of human-readable text")
+    p.add_argument(
+        "--runner", default=None,
+        help="runner profile name to include in the score body "
+             "(e.g. claude-sonnet, codex)")
+    p.set_defaults(func=cmd_prompts_show)
+
     bench_p = sub.add_parser(
         "bench",
         help="probe daemon/runner seams with a scripted lesser-light run")
@@ -339,6 +362,61 @@ def cmd_worktree_hygiene(args):
     from . import worktree
 
     return worktree.main_worktree_hygiene()
+
+
+def cmd_prompts_show(args):
+    """``brnrd prompts show [--boot] [--json] [--runner PROFILE]``.
+
+    Prints the boot source manifest: every block that would enter a wake here,
+    with owner, authority, freshness/revision, location, and whether it is
+    currently present or silent.  Deterministic and network-free.
+    """
+    import json
+    import sys
+
+    from . import prompts, bootscore
+
+    repo_root = _maybe_repo_root()
+
+    # Resolve optional runner profile to shell/core
+    runner_medium: str | None = None
+    runner_core: str | None = None
+    if getattr(args, "runner", None):
+        from . import runner_select
+        try:
+            all_runners = list(runner_select.load_runners(repo_root).values()
+                               if repo_root else [])
+            found = runner_select._find_runner(all_runners, args.runner)
+            if found is not None:
+                runner_medium = found.shell
+                runner_core = found.model
+            else:
+                runner_medium = args.runner
+        except Exception:
+            runner_medium = args.runner
+
+    score = prompts.build_boot_score(
+        repo_root,
+        is_daemon=True,
+        is_worker=False,
+        runner_medium=runner_medium,
+        runner_core=runner_core,
+    )
+
+    if getattr(args, "json", False):
+        import dataclasses
+        out = {
+            "schema_version": score.schema_version,
+            "depth": score.depth,
+            "body": dataclasses.asdict(score.body),
+            "host": dataclasses.asdict(score.host),
+            "contracts": [dataclasses.asdict(c) for c in score.contracts],
+            "hooks": [dataclasses.asdict(h) for h in score.hooks],
+        }
+        print(json.dumps(out, indent=2))
+    else:
+        print(bootscore.format_manifest(score))
+    return 0
 
 
 def cmd_agent_inject(args):
