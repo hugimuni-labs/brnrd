@@ -692,7 +692,53 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         # account — only the app-server seam knows about these, and a quota row
         # that reads 4% left while four resets go unused is telling half a truth.
         "reset_credits": quota.get("reset_credits_available"),
+        # Claude's shell carries a proven per-run USD figure in `credits`
+        # (`_claude_credits_block`, sourced from the headless result JSON's
+        # `total_cost_usd`); Codex's CLI result JSON has no equivalent
+        # accounting field, so there is nothing bounded to read here — named
+        # explicitly rather than just omitting the key, which reads
+        # identically to "unknown" from the dashboard (brnrd.dev live-run
+        # dashboard posture, 2026-07-13: "do not fabricate or infer spend
+        # from model names").
+        "spend": {
+            "status": "unimplemented",
+            "reason": "no per-run cost figure in the Codex CLI's result JSON yet",
+        },
     }
+
+
+def _claude_week_model_windows(
+    levels: dict[str, Any], buckets: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Per-model weekly windows (Fable's own pool today) as real windows.
+
+    ``claude_usage.parse_usage_text`` already parses ``Current week
+    (Fable)`` alongside the primary ``Current week`` line into
+    ``levels["week_models"][label]`` (full reset info) and the deduped
+    percentage into ``quota.buckets.week_models[label]`` — but until now
+    nothing here ever read either, so a Fable-heavy account's own weekly
+    pool was silently dropped from the dashboard: not wrong, just never
+    published, which reads identically to "unknown" from the outside (the
+    brnrd.dev live-run dashboard report this closes, 2026-07-13). One window
+    per labeled model, sorted for a stable publish order.
+    """
+    bucket_pcts = buckets.get("week_models") if isinstance(buckets, dict) else None
+    meta = levels.get("week_models") if isinstance(levels, dict) else None
+    if not isinstance(bucket_pcts, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for label in sorted(bucket_pcts):
+        bucket = bucket_pcts.get(label)
+        if not isinstance(bucket, dict):
+            continue
+        pct = bucket.get("remaining_percentage")
+        if pct is None:
+            continue
+        label_meta = meta.get(label) if isinstance(meta, dict) else None
+        reset = label_meta.get("reset") if isinstance(label_meta, dict) else None
+        resets_at = label_meta.get("resets_at") if isinstance(label_meta, dict) else None
+        out.append(_quota_window(f"weekly ({label})", pct, reset, resets_at))
+    return out
 
 
 def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
@@ -720,7 +766,13 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     week = buckets.get("week") if isinstance(buckets.get("week"), dict) else {}
     session_pct = session.get("remaining_percentage")
     week_pct = week.get("remaining_percentage")
-    if session_pct is None and week_pct is None and credits is None:
+    week_model_windows = _claude_week_model_windows(
+        levels if isinstance(levels, dict) else {}, buckets
+    )
+    if (
+        session_pct is None and week_pct is None
+        and not week_model_windows and credits is None
+    ):
         return None
     return {
         "shell": "claude",
@@ -737,6 +789,7 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
             _quota_window(
                 "weekly", week_pct, levels.get("week_reset"), levels.get("week_resets_at")
             ),
+            *week_model_windows,
         ],
         "credits": credits,
     }
@@ -953,6 +1006,16 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # still live*, not only after it closes into the ledger.
                 "parent_run_id": str(entry.get("parent_run_id") or "") or None,
                 "is_subspawn": bool(entry.get("is_subspawn")),
+                # Shell+Core the running thought is on — same
+                # name/shell/core/class shape `_runner_payload` already
+                # produces for Activity/respawn rows, now carried on the
+                # presence entry itself (`presence.register`'s runner_*
+                # kwargs) so the live view can answer "which Runner is this"
+                # while a run is still in flight, not only after it closes
+                # into the ledger (brnrd.dev live-run dashboard posture,
+                # 2026-07-13). ``{}`` when the entry predates this field or
+                # no runner was selected yet (ad-hoc session presence).
+                "runner": _runner_payload(entry),
                 # #200 remaining slice: live phase + progress-card note,
                 # None when there's no conversation record yet (a
                 # just-registered entry) or projection failed.
