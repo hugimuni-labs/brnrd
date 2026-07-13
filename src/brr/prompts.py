@@ -838,6 +838,8 @@ def _join_prompt_parts(
     task_text: str | None = None,
     diffense: bool = False,
     inject_blocks: bool = True,
+    prepared_injected_blocks: list[str] | None = None,
+    prepared_introspection_block: str | None = None,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer.
 
@@ -852,7 +854,15 @@ def _join_prompt_parts(
     """
     parts = [preamble]
     if inject_blocks:
-        parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
+        # The scored builder supplies this pair from one source read.  The
+        # ordinary path stays lazy, but a replay/inspection run must not
+        # build the prompt and its manifest from two independently-read
+        # views of dominion and knowledge state.
+        parts.extend(
+            prepared_injected_blocks
+            if prepared_injected_blocks is not None
+            else _build_injected_blocks(repo_root, task_text=task_text)
+        )
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
@@ -862,7 +872,11 @@ def _join_prompt_parts(
         # whole shape it has just read (opt-in dev mode). Placed here so it
         # can refer to everything above and sit fresh against the task
         # bundle.
-        introspection_block = _build_introspection_block(repo_root)
+        introspection_block = (
+            prepared_introspection_block
+            if prepared_introspection_block is not None
+            else _build_introspection_block(repo_root)
+        )
         if introspection_block:
             parts.append(introspection_block)
     parts.append(trailer)
@@ -1054,6 +1068,7 @@ def build_boot_score(
     task_text: str | None = None,
     has_diffense: bool = False,
     has_introspection: bool = False,
+    contracts: list[Any] | None = None,
 ) -> "BootScore":
     """Assemble a :class:`BootScore` for inspection without building the full prompt.
 
@@ -1077,29 +1092,31 @@ def build_boot_score(
 
     effective_root = repo_root if repo_root is not None else Path.cwd()
 
-    # Preamble + substrate + toggle blocks
-    preamble_contracts = _collect_preamble_contracts(
-        effective_root,
-        is_worker=is_worker,
-        is_daemon=is_daemon,
-        has_diffense=has_diffense,
-        has_introspection=has_introspection,
-    )
-
-    # Inject-stack blocks (skipped for workers)
-    if not is_worker:
-        _, inject_contracts = _build_injected_blocks_with_contracts(
-            effective_root, task_text=task_text
+    if contracts is None:
+        # Preamble + substrate + toggle blocks
+        preamble_contracts = _collect_preamble_contracts(
+            effective_root,
+            is_worker=is_worker,
+            is_daemon=is_daemon,
+            has_diffense=has_diffense,
+            has_introspection=has_introspection,
         )
-    else:
-        inject_contracts = []
 
-    # Ordered: preamble blocks first, then inject stack (mirrors prompt order)
-    # Split preamble at the run-context-bundle entry — inject stack sits between
-    # weave/substrate and the runtime trailer.
-    pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
-    runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
-    all_contracts = pre_inject + inject_contracts + runtime_entries
+        # Inject-stack blocks (skipped for workers)
+        if not is_worker:
+            _, inject_contracts = _build_injected_blocks_with_contracts(
+                effective_root, task_text=task_text
+            )
+        else:
+            inject_contracts = []
+
+        # Ordered: preamble blocks first, then inject stack (mirrors prompt
+        # order). The runtime trailer comes after the inject stack.
+        pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
+        runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
+        all_contracts = pre_inject + inject_contracts + runtime_entries
+    else:
+        all_contracts = contracts
 
     # Runner tier from env or passed value
     tier: str | None = None
@@ -1151,8 +1168,6 @@ def build_daemon_prompt_with_score(
     """
     from . import config as conf
 
-    prompt = build_daemon_prompt(task, event_id, response_path, repo_root, **kwargs)
-
     runner_medium = kwargs.get("runner_medium")
     environment = kwargs.get("environment")
     worker = bool(kwargs.get("worker", False))
@@ -1169,7 +1184,37 @@ def build_daemon_prompt_with_score(
     has_introspection = not worker and bool(
         cfg.get("introspect.enabled", cfg.get("introspect_enabled", False))
     )
-    has_diff = diffense and not worker
+    has_diff = diffense
+
+    if worker:
+        injected_blocks: list[str] = []
+        inject_contracts: list[Any] = []
+        introspection_block = ""
+    else:
+        injected_blocks, inject_contracts = _build_injected_blocks_with_contracts(
+            repo_root, task_text=pitfall_text or None
+        )
+        introspection_block = _build_introspection_block(repo_root)
+
+    preamble_contracts = _collect_preamble_contracts(
+        repo_root,
+        is_worker=worker,
+        is_daemon=True,
+        has_diffense=has_diff,
+        has_introspection=bool(introspection_block),
+    )
+    pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
+    runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
+    contracts = pre_inject + inject_contracts + runtime_entries
+
+    # The prompt and its inspection score now share the same injected blocks
+    # and manifest.  A changing dominion/kb cannot make the CLI explain a
+    # different wake than the one the runner actually received.
+    prompt = build_daemon_prompt(
+        task, event_id, response_path, repo_root, **kwargs,
+        _prepared_injected_blocks=injected_blocks,
+        _prepared_introspection_block=introspection_block,
+    )
 
     score = build_boot_score(
         repo_root,
@@ -1184,7 +1229,8 @@ def build_daemon_prompt_with_score(
         branch=str(branch_name) if branch_name else None,
         task_text=pitfall_text or None,
         has_diffense=has_diff,
-        has_introspection=has_introspection,
+        has_introspection=bool(introspection_block),
+        contracts=contracts,
     )
 
     return prompt, score
@@ -1308,6 +1354,8 @@ def build_daemon_prompt(
     runner_catalog: list[dict[str, Any]] | None = None,
     diffense: bool = False,
     worker: bool = False,
+    _prepared_injected_blocks: list[str] | None = None,
+    _prepared_introspection_block: str | None = None,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -1377,6 +1425,8 @@ def build_daemon_prompt(
     return _join_prompt_parts(
         preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
         inject_blocks=not worker,
+        prepared_injected_blocks=_prepared_injected_blocks,
+        prepared_introspection_block=_prepared_introspection_block,
     )
 
 

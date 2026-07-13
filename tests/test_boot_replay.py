@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -72,11 +73,12 @@ def _build_kwargs(fixture: dict[str, Any], runner_key: str) -> dict[str, Any]:
 
 
 def _run_phases(
-    repo_root: Path, task: str, kwargs: dict[str, Any]
-) -> tuple[str, str]:
-    """Run both prompt-assembly phases and return (prompt_text, manifest_text)."""
+    repo_root: Path, task: str, kwargs: dict[str, Any], fixture: dict[str, Any]
+) -> tuple[str, str, str, str]:
+    """Run the production prompt, portal, and hook phases from one fixture."""
     from brr.prompts import build_daemon_prompt_with_score
     from brr.bootscore import format_manifest
+    from brr import hooks
 
     kw = dict(kwargs)
     task_val = kw.pop("task", task)
@@ -87,7 +89,19 @@ def _run_phases(
         task_val, event_id, response_path, repo_root, **kw
     )
     manifest = format_manifest(score)
-    return prompt, manifest
+    portal = fixture["portal_state"]
+    portal_text = hooks.format_delta(portal, seed=True) or ""
+    portal_path = repo_root / ".brr" / "portal-state.json"
+    portal_path.write_text(json.dumps(portal), encoding="utf-8")
+    hook_payload, hook_code = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", {
+        "BRR_RUN_ID": "run-fixture-0001",
+        "BRR_EVENT_ID": event_id,
+        "BRR_RUNNER": "claude",
+        "BRR_OUTBOX_DIR": str(repo_root / ".brr"),
+        "BRR_PORTAL_STATE": str(portal_path),
+    })
+    assert hook_code == 0
+    return prompt, manifest, portal_text, json.dumps(hook_payload, sort_keys=True)
 
 
 def _normalize(text: str, repo_root: Path) -> str:
@@ -99,10 +113,18 @@ def _normalize(text: str, repo_root: Path) -> str:
     Replacing them with ``{REPO_ROOT}`` before storing / comparing makes the
     snapshot stable while still exercising all code paths.
     """
-    return text.replace(str(repo_root), "{REPO_ROOT}")
+    from brr import prompts
+
+    text = text.replace(str(repo_root), "{REPO_ROOT}")
+    text = text.replace(str(prompts._PROMPTS_DIR.parent), "{PACKAGE_ROOT}")
+    # mtimes describe freshness at inspection time; they are intentionally
+    # live metadata and cannot make a replay fixture machine-specific.
+    return re.sub(r" \[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\]", " [mtime]", text)
 
 
-def _snapshot_text(prompt: str, manifest: str, runner_key: str, repo_root: Path) -> str:
+def _snapshot_text(
+    prompt: str, manifest: str, portal: str, hook: str, runner_key: str, repo_root: Path
+) -> str:
     """Compose the snapshot file content."""
     header = (
         f"# Boot snapshot — runner: {runner_key} — prompt schema v{_schema_version()}\n"
@@ -112,7 +134,11 @@ def _snapshot_text(prompt: str, manifest: str, runner_key: str, repo_root: Path)
         "\n"
     )
     normalized_prompt = _normalize(prompt, repo_root)
-    return header + normalized_prompt + "\n\n" + _PHASE_SEP + "\n" + manifest
+    return (
+        header + normalized_prompt + "\n\n" + _PHASE_SEP + "\n" + manifest
+        + "\n\n--- phase: portal ---\n\n" + portal
+        + "\n\n--- phase: session-start hook ---\n\n" + hook
+    )
 
 
 def _schema_version() -> str:
@@ -152,8 +178,8 @@ class TestBootReplay:
         kwargs = _build_kwargs(fixture, "claude")
         task = kwargs.pop("task", fixture["shared"]["task"])
 
-        prompt, manifest = _run_phases(empty_repo, task, kwargs)
-        snapshot = _snapshot_text(prompt, manifest, "claude", empty_repo)
+        prompt, manifest, portal, hook = _run_phases(empty_repo, task, kwargs, fixture)
+        snapshot = _snapshot_text(prompt, manifest, portal, hook, "claude", empty_repo)
 
         if _UPDATE or not SNAPSHOT_CLAUDE.exists():
             SNAPSHOT_CLAUDE.write_text(snapshot, encoding="utf-8")
@@ -174,8 +200,8 @@ class TestBootReplay:
         kwargs = _build_kwargs(fixture, "codex")
         task = kwargs.pop("task", fixture["shared"]["task"])
 
-        prompt, manifest = _run_phases(empty_repo, task, kwargs)
-        snapshot = _snapshot_text(prompt, manifest, "codex", empty_repo)
+        prompt, manifest, portal, hook = _run_phases(empty_repo, task, kwargs, fixture)
+        snapshot = _snapshot_text(prompt, manifest, portal, hook, "codex", empty_repo)
 
         if _UPDATE or not SNAPSHOT_CODEX.exists():
             SNAPSHOT_CODEX.write_text(snapshot, encoding="utf-8")
