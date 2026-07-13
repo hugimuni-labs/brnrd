@@ -16,6 +16,7 @@ import json
 import subprocess
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -442,3 +443,81 @@ def test_render_caps_the_resolved_tail(render):
     assert "#300 MERGED" in rendered         # newest resolution (10m ago)
     assert "#313 MERGED" not in rendered     # oldest (140m ago), past the cap
     assert "4 older resolutions in the last 24h omitted" in rendered
+
+
+class TestFailedRefreshCannotLookFresh:
+    """A refresh that failed must never render as a current reading.
+
+    Parent review of PR #384.  The module's own docstring states the rule
+    (``absent != unknown != none``) and the first implementation broke it one
+    function down: a failed ``gh`` call preserved the previous rows *and*
+    stamped ``fetched_at`` with the attempt time, so hour-old PR state came
+    back as ``status="fresh"``, age 0s.  An offline or logged-out ``gh`` would
+    have silently frozen the Forge block at whatever it last saw — the exact
+    failure-indistinguishable-from-success this cache exists to end.
+    """
+
+    def _seed(self, root, fetched_at="2026-07-13T19:00:00Z"):
+        from brr import forge_pr_cache as c
+
+        (root / ".brr").mkdir(parents=True, exist_ok=True)
+        c.cache_path(root).write_text(json.dumps({
+            "schema": 1,
+            "fetched_at": fetched_at,
+            "repo": "Gurio/brr",
+            "prs": [{
+                "number": 373, "title": "t", "state": "OPEN", "branch": "brr/a",
+                "url": "", "draft": False, "merged_at": None, "closed_at": None,
+            }],
+            "error": None,
+        }), encoding="utf-8")
+
+    def test_failed_refresh_over_good_cache_reports_error_not_fresh(self, tmp_path):
+        from brr import forge_pr_cache as c
+
+        self._seed(tmp_path)
+        with mock.patch.object(c.subprocess, "run", side_effect=OSError("gh: not found")):
+            c.refresh(tmp_path)
+
+        state = c.read_state(tmp_path)
+        assert state["status"] == "error", "a failed refresh must never read as fresh"
+        assert state["error"]
+        assert state["prs"], "the last good rows are still worth showing"
+
+    def test_fetched_at_describes_the_data_not_the_attempt(self, tmp_path):
+        """The kept rows keep their true age; the failed attempt gets its own field."""
+        from brr import forge_pr_cache as c
+
+        self._seed(tmp_path, fetched_at="2026-07-13T19:00:00Z")
+        with mock.patch.object(c.subprocess, "run", side_effect=OSError("boom")):
+            payload = c.refresh(tmp_path)
+
+        assert payload["fetched_at"] == "2026-07-13T19:00:00Z", (
+            "carrying rows forward under a new timestamp is how stale data "
+            "passes for current"
+        )
+        assert payload["last_attempt_at"] != payload["fetched_at"]
+
+        state = c.read_state(tmp_path, now=c.parse_iso("2026-07-13T20:00:00Z"))
+        assert state["age_seconds"] == pytest.approx(3600, abs=5)
+
+    def test_note_names_both_the_failure_and_the_age_of_what_it_shows(self, tmp_path):
+        from brr import forge_state
+
+        note = forge_state.pr_state_note({
+            "status": "error",
+            "error": "gh: not found",
+            "age_seconds": 4400,
+            "has_rows": True,
+        })
+        assert "FAILED" in note
+        assert "gh: not found" in note
+        assert "73m" in note, "a reader cannot judge a row without its age"
+
+    def test_error_with_no_rows_still_says_unknown(self, tmp_path):
+        from brr import forge_state
+
+        note = forge_state.pr_state_note({
+            "status": "error", "error": "gh: not found", "has_rows": False,
+        })
+        assert "unknown" in note
