@@ -749,6 +749,15 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         # failed probe can never make a frozen rollout look live.
         "updated_at": levels.get("updated_at"),
         "windows": windows,
+        # Trailing burn (`codex_status.recent_burn`). Not a window and never
+        # drawn as one: a *rate*, derived from the timestamped rollout samples
+        # brr already tails. It exists because OpenAI stopped publishing the 5h
+        # window for this account on 2026-07-12 (proven at the source: the
+        # app-server now reports exactly one window), so the short-horizon
+        # question that bar answered — am I burning too fast right now? — lost
+        # its only instrument. A weekly percentage cannot answer it: 53% left is
+        # calm at a drip and an alarm at six points an hour. This says which.
+        "burn": codex_status.recent_burn(),
         # Free "Full reset (Weekly + 5 hr)" grants sitting unredeemed on the
         # account — only the app-server seam knows about these, and a quota row
         # that reads 4% left while four resets go unused is telling half a truth.
