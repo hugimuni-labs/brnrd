@@ -413,6 +413,7 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.quota_updated_at is not None
         shells = {row["shell"]: row for row in json_mod.loads(daemon.quota_json)}
+        gates = json_mod.loads(daemon.gate_health_json)
     assert shells["claude"]["windows"][0]["percent"] == 61.0
     assert shells["claude"]["windows"][1]["percent"] == 48.0
     assert shells["codex"]["windows"][0]["percent"] == 82.0
@@ -423,6 +424,15 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     assert shells["claude"]["windows"][1]["resets_at"] == 1783900000.0
     assert shells["codex"]["windows"][0]["resets_at"] == 1783350000.0
     assert shells["codex"]["windows"][1]["resets_at"] == 1783890000.0
+    assert gates == [
+        {
+            "gate": "cloud",
+            "last_poll_ok": None,
+            "age_seconds": None,
+            "last_error": None,
+            "status": "never",
+        }
+    ]
 
 
 def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
@@ -1315,6 +1325,9 @@ def test_run_loop_survives_auth_error_instead_of_exiting(tmp_path, monkeypatch):
         cloud.run_loop(brr_dir, inbox_dir, responses_dir)
 
     assert len(polls) == 3  # a 401 on register and on poll no longer ends the gate
+    health = cloud.runtime.load_health(brr_dir, "cloud")
+    assert health["last_poll_ok"] is None
+    assert health["last_error"] == "invalid token"
 
 
 def test_run_loop_retries_auth_then_recovers_and_registers(tmp_path, monkeypatch):
@@ -1347,6 +1360,9 @@ def test_run_loop_retries_auth_then_recovers_and_registers(tmp_path, monkeypatch
 
     assert len(registers) == 2  # retried after the first successful poll
     assert len(polls) == 3  # 401 → retry → drained
+    health = cloud.runtime.load_health(brr_dir, "cloud")
+    assert health["last_poll_ok"] is not None
+    assert health["last_error"] == "invalid token"
 
 
 def test_stale_cursor_from_older_db_epoch_heals_end_to_end(tmp_path, monkeypatch):

@@ -11,13 +11,16 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from .. import protocol
 
 _BACKOFF_MAX = 120
 _PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+GATE_HEALTH_DEGRADED_AFTER_S = 300
+_BUILTIN_GATES = ("telegram", "slack", "github", "cloud")
 
 
 # ── Gate state file (.brr/gates/<gate>.json) ─────────────────────────
@@ -38,6 +41,125 @@ def save_state(brr_dir: Path, gate: str, state: dict) -> None:
     path = state_path(brr_dir, gate)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+# ── Per-gate health (.brr/gates/<gate>.health.json) ────────────────
+
+
+def health_path(brr_dir: Path, gate: str) -> Path:
+    return brr_dir / "gates" / f"{gate}.health.json"
+
+
+def load_health(brr_dir: Path, gate: str) -> dict:
+    path = health_path(brr_dir, gate)
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def record_health(
+    brr_dir: Path,
+    gate: str,
+    *,
+    ok: bool,
+    error: str | None = None,
+) -> None:
+    """Atomically record one ingestion-loop outcome without touching cursor state."""
+    now = datetime.now(timezone.utc).isoformat()
+    health = load_health(brr_dir, gate)
+    health.setdefault("last_poll_ok", None)
+    health.setdefault("last_error", None)
+    health.setdefault("last_error_at", None)
+    if ok:
+        health["last_poll_ok"] = now
+    else:
+        health["last_error"] = error
+        health["last_error_at"] = now
+
+    path = health_path(brr_dir, gate)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(health, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def configured_gates(brr_dir: Path) -> list[str]:
+    """Return configured built-in ingestion gates for this runtime directory."""
+    from . import import_gate
+
+    configured: list[str] = []
+    for gate in _BUILTIN_GATES:
+        try:
+            module = import_gate(gate)
+            if module.is_configured(brr_dir):
+                configured.append(gate)
+        except (ImportError, OSError, ValueError, json.JSONDecodeError):
+            continue
+    return configured
+
+
+def gate_health_rows(
+    brr_dir: Path,
+    *,
+    gates: Iterable[str] | None = None,
+    now: datetime | None = None,
+    degraded_after_s: int = GATE_HEALTH_DEGRADED_AFTER_S,
+) -> list[dict]:
+    """Classify configured gates from their last successful poll timestamp."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    rows: list[dict] = []
+    for gate in gates if gates is not None else configured_gates(brr_dir):
+        health = load_health(brr_dir, gate)
+        last_poll_ok = health.get("last_poll_ok")
+        age_seconds: int | None = None
+        if isinstance(last_poll_ok, str):
+            try:
+                polled_at = datetime.fromisoformat(last_poll_ok.replace("Z", "+00:00"))
+                if polled_at.tzinfo is None:
+                    polled_at = polled_at.replace(tzinfo=timezone.utc)
+                age_seconds = max(0, int((now - polled_at).total_seconds()))
+            except ValueError:
+                last_poll_ok = None
+        status = (
+            "never"
+            if age_seconds is None
+            else "degraded" if age_seconds > degraded_after_s else "ok"
+        )
+        last_error = health.get("last_error")
+        rows.append(
+            {
+                "gate": gate,
+                "last_poll_ok": last_poll_ok,
+                "age_seconds": age_seconds,
+                "last_error": last_error if isinstance(last_error, str) else None,
+                "status": status,
+            }
+        )
+    return rows
+
+
+def record_loop_health(
+    brr_dir: Path | None,
+    gate: str | None,
+    *,
+    ok: bool,
+    error: str | None = None,
+) -> None:
+    if brr_dir is None or gate is None:
+        return
+    try:
+        record_health(brr_dir, gate, ok=ok, error=error)
+    except OSError as exc:
+        print(f"[brnrd:{gate}] health record failed: {exc}")
 
 
 # ── Per-run progress-card state ──────────────────────────────────────
@@ -86,6 +208,8 @@ def run_loop(
     label: str,
     poll_interval: float = 0.0,
     backoff_max: int = _BACKOFF_MAX,
+    brr_dir: Path | None = None,
+    gate: str | None = None,
 ) -> None:
     """Run *loop_once* forever, retrying with exponential backoff.
 
@@ -97,10 +221,12 @@ def run_loop(
     while True:
         try:
             loop_once()
+            record_loop_health(brr_dir, gate, ok=True)
             if poll_interval:
                 time.sleep(poll_interval)
             backoff = 1
         except Exception as e:  # noqa: BLE001 - gate threads must not die
+            record_loop_health(brr_dir, gate, ok=False, error=str(e))
             print(f"[brnrd:{label}] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)

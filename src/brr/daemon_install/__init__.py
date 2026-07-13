@@ -63,9 +63,13 @@ def uninstall(
 def status(*, direct_brr_dir: Path | None = None) -> int:
     if linux.supported():
         if linux.service_installed():
-            return linux.status()
+            code = linux.status()
+            _print_gate_health(direct_brr_dir)
+            return code
         print("[brnrd] daemon service not installed")
-        return _print_direct_status(direct_brr_dir)
+        code = _print_direct_status(direct_brr_dir)
+        _print_gate_health(direct_brr_dir)
+        return code
 
     if _is_macos():
         service = macos.status()
@@ -85,6 +89,7 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
         print(f"[brnrd] logs: {service.log_dir}")
         _print_projects(service.enabled_projects)
         direct_code = _print_direct_status(direct_brr_dir)
+        _print_gate_health(direct_brr_dir)
         if service.loaded is True:
             return 0
         if service.installed:
@@ -93,7 +98,9 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
 
     system = platform.system() or "this platform"
     print(f"[brnrd] native service: unsupported on {system} in this build")
-    return _print_direct_status(direct_brr_dir)
+    code = _print_direct_status(direct_brr_dir)
+    _print_gate_health(direct_brr_dir)
+    return code
 
 
 def logs(*, follow: bool = True, lines: int = 80) -> int | None:
@@ -166,3 +173,24 @@ def _print_direct_status(direct_brr_dir: Path | None) -> int:
         return 3
     print(f"[brnrd] foreground daemon: running (pid {pid})")
     return 0
+
+
+def _print_gate_health(brr_dir: Path | None) -> None:
+    if brr_dir is None:
+        return
+
+    from brr.gates import runtime
+
+    rows = runtime.gate_health_rows(brr_dir)
+    if not rows:
+        print("[brnrd] gates: none configured")
+        return
+    print("[brnrd] gates:")
+    for row in rows:
+        age = "never" if row["age_seconds"] is None else f'{row["age_seconds"]}s ago'
+        detail = (
+            f'  - {row["gate"]}: {row["status"]}; last successful poll {age}'
+        )
+        if row["last_error"]:
+            detail += f'; last error: {row["last_error"]}'
+        print(detail)
