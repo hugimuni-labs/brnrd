@@ -5,9 +5,18 @@ type, context window) is **not** a CLI subcommand and cannot be invoked
 head-less. But the numbers it shows are written to disk continuously: every
 ``token_count`` event in a session's *rollout file*
 (``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl``) carries a ``rate_limits``
-block with ``primary`` (the 5h window) and ``secondary`` (the weekly window),
-each as ``used_percent`` + ``window_minutes`` + ``resets_at``, alongside
-``plan_type`` and ``model_context_window``.
+block with a ``primary`` and a ``secondary`` window, each as ``used_percent`` +
+``window_minutes`` + ``resets_at``, alongside ``plan_type`` and
+``model_context_window``.
+
+**Which window sits in which slot is not fixed.** It was long enough
+(primary = the 5h window, secondary = the weekly one) that brr encoded the
+assumption positionally — and 2026-07-13 a Plus account reported ``primary``
+carrying the *weekly* window (``windowDurationMins: 10080``) with ``secondary:
+null``, which made the dashboard label a weekly number "5h window" and report
+the weekly window as unavailable. ``window_minutes`` is the only thing OpenAI
+actually asserts about a window's identity, so every reader classifies off the
+duration, never the slot.
 
 So brr reads the *same data ``/status`` would print* by tailing the active run's
 rollout file — no ``/status`` call, no extra subscription credits, no API key.
@@ -198,6 +207,18 @@ def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> d
                 # instant, not just "resets HH:MMZ" text.
                 "primary_resets_at": _num(primary.get("resets_at")),
                 "secondary_resets_at": _num(secondary.get("resets_at")),
+                # Each window's *duration*, carried through structurally rather
+                # than only rendered into `summary` above. The slot a window
+                # arrives in is not its identity: observed live 2026-07-13
+                # (codex-cli 0.144.1, Plus account) the app-server returned the
+                # **weekly** window as `primary` (`windowDurationMins: 10080`)
+                # with `secondary: null` — so a reader that assumes
+                # primary=5h/secondary=weekly labels the weekly number "5h" and
+                # reports weekly as unknown. `window_minutes` is what OpenAI
+                # actually states about a window; everything downstream should
+                # classify off it (see `gates/cloud.py::_codex_quota_windows`).
+                "primary_window_minutes": _num(primary.get("window_minutes")),
+                "secondary_window_minutes": _num(secondary.get("window_minutes")),
             }
         plan = rate.get("plan_type")
         if isinstance(plan, str) and plan.strip():
