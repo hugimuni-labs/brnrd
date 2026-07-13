@@ -49,6 +49,7 @@ import time
 import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import NamedTuple
 
 from . import account
 from . import branching
@@ -84,6 +85,24 @@ from . import sync
 from . import updates
 from . import worktree
 from .run import Run
+
+class _RunnerRuntime(NamedTuple):
+    """What resolving a runner profile yields for one attempt.
+
+    Named rather than a bare tuple on purpose: this is unpacked at two call
+    sites — the initial resolve and the *fallback* resolve after a runner
+    failure — and the fallback path has no test coverage.  A bare tuple grown
+    by one field silently breaks the untested site with a ValueError that only
+    surfaces in production, mid-failure, which is the worst possible moment.
+    Attribute access makes new fields free and arity drift impossible.
+    """
+
+    meta: dict[str, object] | None
+    quota: str | None
+    env: dict[str, str]
+    extra_args: list[str]
+    hooks_installed: bool
+
 
 _SCAN_INTERVAL = 3
 _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
@@ -1960,9 +1979,7 @@ def _run_worker(
     card_state: dict[str, object] = {}
     run_started_monotonic = time.monotonic()
 
-    def _runner_runtime(
-        name: str,
-    ) -> tuple[dict[str, object] | None, str | None, dict[str, str], list[str]]:
+    def _runner_runtime(name: str) -> _RunnerRuntime:
         meta = runner.profile_metadata(name, repo_root)
         quota = runner_quota.describe_runner_quota(name, cfg, brr_dir)
         # Native hook config is opt-in through a profile's explicit ``hooks:``
@@ -1990,9 +2007,16 @@ def _run_worker(
         # settings file written into the worktree (claude), or config-override
         # argv injected into the runner command (codex).
         extra_args: list[str] = []
+        # The hook decision is a *fact this run knows* — returned explicitly so
+        # the BootScore reports what was actually wired, rather than re-probing
+        # from the daemon process (where the runner's own env does not exist).
+        # Not stashed on `meta`: that can be None for an unknown profile, and
+        # its None-ness is meaningful.
+        hooks_installed = False
         if declared_hooks_flavour == "codex":
             if hooks_mod.codex_hook_capability():
                 extra_args = hooks_mod.codex_hook_args()
+                hooks_installed = True
                 emit(
                     "hooks_installed",
                     run_id=task.id,
@@ -2009,6 +2033,7 @@ def _run_worker(
                 declared_hooks_flavour, run_root
             )
             if hook_config_path is not None:
+                hooks_installed = True
                 emit(
                     "hooks_installed",
                     run_id=task.id,
@@ -2020,11 +2045,14 @@ def _run_worker(
                     f"[brnrd] worker {eid}: installed "
                     f"{declared_hooks_flavour} hook config at {hook_config_path}"
                 )
-        return meta, quota, env, extra_args
+        return _RunnerRuntime(meta, quota, env, extra_args, hooks_installed)
 
-    runner_meta, quota_summary, runner_env, extra_runner_args = _runner_runtime(
-        runner_name
-    )
+    runtime = _runner_runtime(runner_name)
+    runner_meta = runtime.meta
+    quota_summary = runtime.quota
+    runner_env = runtime.env
+    extra_runner_args = runtime.extra_args
+    run_hooks_installed = runtime.hooks_installed
     runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
     _record_task_runner(task, runner_name, runner_meta)
     run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
@@ -2085,7 +2113,7 @@ def _run_worker(
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
 
-        prompt = prompts.build_daemon_prompt(
+        prompt, boot_score = prompts.build_daemon_prompt_with_score(
             prompt_instruction,
             eid,
             str(env_ctx.response_path_env),
@@ -2119,12 +2147,16 @@ def _run_worker(
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
             worker=bool(task.meta.get("worker")),
+            hooks_installed=run_hooks_installed,
         )
         if attempt == 1:
             # Persist the assembled prompt so "what did this wake see?" has
             # an honest answer even on successful runs (traces are cleaned up
-            # on success; the run directory persists).
+            # on success; the run directory persists).  The BootScore lands
+            # beside it: same question, structured answer — which blocks
+            # entered, who owns them, which were silent.
             run_context.write_prompt_file(brr_dir, task, prompt)
+            run_context.write_boot_score(brr_dir, task, boot_score)
         prompt_mode = "normal"
         fallback_notice = None
 
@@ -2495,9 +2527,12 @@ def _run_worker(
             # A wake-request note would now be a lie: the requested body
             # failed and this is the fallback, not the tapped profile.
             runner_wake_note = None
-            runner_meta, quota_summary, runner_env, extra_runner_args = (
-                _runner_runtime(runner_name)
-            )
+            runtime = _runner_runtime(runner_name)
+            runner_meta = runtime.meta
+            quota_summary = runtime.quota
+            runner_env = runtime.env
+            extra_runner_args = runtime.extra_args
+            run_hooks_installed = runtime.hooks_installed
             runner_catalog = runner.available_runner_catalog(
                 repo_root, selected=runner_name,
             )

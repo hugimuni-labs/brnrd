@@ -125,7 +125,15 @@ def _normalize(text: str, repo_root: Path) -> str:
 def _snapshot_text(
     prompt: str, manifest: str, portal: str, hook: str, runner_key: str, repo_root: Path
 ) -> str:
-    """Compose the snapshot file content."""
+    """Compose the snapshot file content.
+
+    Every section is normalized, not just the prompt.  The manifest is the one
+    section that actually carries absolute paths and file mtimes, and it was
+    previously concatenated raw — so the stored snapshot embedded the
+    generating machine's home directory and checkout times, and the test could
+    only pass on the machine that wrote it.  ``test_snapshots_are_machine_
+    independent`` now holds this shut.
+    """
     header = (
         f"# Boot snapshot — runner: {runner_key} — prompt schema v{_schema_version()}\n"
         "# Captured by the boot replay harness; regenerate with:\n"
@@ -133,12 +141,13 @@ def _snapshot_text(
         "# DO NOT EDIT BY HAND — regeneration is the only sanctioned path.\n"
         "\n"
     )
-    normalized_prompt = _normalize(prompt, repo_root)
-    return (
-        header + normalized_prompt + "\n\n" + _PHASE_SEP + "\n" + manifest
-        + "\n\n--- phase: portal ---\n\n" + portal
-        + "\n\n--- phase: session-start hook ---\n\n" + hook
+    body = (
+        _normalize(prompt, repo_root) + "\n\n" + _PHASE_SEP + "\n"
+        + _normalize(manifest, repo_root)
+        + "\n\n--- phase: portal ---\n\n" + _normalize(portal, repo_root)
+        + "\n\n--- phase: session-start hook ---\n\n" + _normalize(hook, repo_root)
     )
+    return header + body
 
 
 def _schema_version() -> str:
@@ -331,15 +340,31 @@ class TestBootScore:
         # Dominion is absent in an empty repo
         assert not by_key["dominion"].present
 
-    def test_run_prompt_with_score(self, empty_repo):
-        """build_run_prompt_with_score also returns a BootScore."""
-        from brr.prompts import build_run_prompt_with_score
-        from brr.bootscore import BootScore
+    def test_snapshots_are_machine_independent(self):
+        """A stored snapshot must contain no fact only this machine knows.
 
-        prompt, score = build_run_prompt_with_score("Task", empty_repo)
-        assert isinstance(prompt, str)
-        assert isinstance(score, BootScore)
-        # Non-daemon: no daemon-substrate in contracts
+        The bug: ``_snapshot_text`` normalized the prompt but concatenated the
+        *manifest* raw — and the manifest is the only section carrying absolute
+        paths and file mtimes.  The snapshots therefore embedded the generating
+        machine's home directory, and the suite was green only where it was
+        written.  Checked directly against the stored bytes, so no future
+        composition change can reintroduce it quietly.
+        """
+        for path in (SNAPSHOT_CLAUDE, SNAPSHOT_CODEX):
+            stored = path.read_text(encoding="utf-8")
+            assert "/home/" not in stored, f"{path.name} embeds a home directory"
+            assert "/Users/" not in stored, f"{path.name} embeds a home directory"
+            assert not re.search(r"\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\]", stored), (
+                f"{path.name} embeds a raw file mtime — checkout time is not "
+                "content, and differs on every clone"
+            )
+            assert "{PACKAGE_ROOT}" in stored  # the placeholder is actually used
+
+    def test_ad_hoc_score_omits_daemon_substrate(self, empty_repo):
+        """A non-daemon score carries the preamble but not the substrate block."""
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(empty_repo, is_daemon=False, task_text="Task")
         keys = {c.block_key for c in score.contracts}
         assert "daemon-substrate" not in keys
         assert "run-preamble" in keys
@@ -393,13 +418,12 @@ class TestBootScore:
             "must produce identical text."
         )
 
-    def test_hooks_list_covers_all_abstract_phases(self, empty_repo, monkeypatch):
-        """The BootScore hooks list covers all three abstract daemon phases."""
+    def test_hooks_list_covers_all_abstract_phases(self, empty_repo):
+        """The BootScore hooks list covers all three abstract daemon phases.
+
+        No env-clearing needed: the score is a pure function of its arguments.
+        """
         from brr.prompts import build_boot_score
-        # Clear hook env so installed=False in this test context
-        monkeypatch.delenv("BRR_RUNNER", raising=False)
-        monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
-        monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
 
         score = build_boot_score(empty_repo)
         phase_names = {h.name for h in score.hooks}
@@ -408,3 +432,69 @@ class TestBootScore:
         assert "session-start" in phase_names
         for hook in score.hooks:
             assert hook.declared  # all phases are always declared
+
+    def test_unknown_hook_state_is_not_a_denial(self, empty_repo):
+        """No hook facts supplied ⇒ ``installed`` is None (unknown), not False.
+
+        The bug this pins: an env-var probe reported "not-installed" whenever
+        it was asked outside a wake — i.e. in the operator's terminal, the only
+        place ``prompts show`` is ever run — while the hooks were firing.
+        ``absent != unknown != off``.
+        """
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(empty_repo)
+        assert all(h.installed is None for h in score.hooks)
+        assert score.body.tier is None  # not "Tier 2", not "Tier 1" — unknown
+
+    def test_hook_stamps_are_per_phase(self, empty_repo):
+        """A phase that fired never lends its timestamp to a phase that didn't."""
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(
+            empty_repo,
+            hooks_installed=True,
+            hook_stamps={"post-tool": "2026-07-13T19:00:00Z"},
+        )
+        by_name = {h.name: h for h in score.hooks}
+        assert by_name["post-tool"].last_fired == "2026-07-13T19:00:00Z"
+        assert by_name["stop"].last_fired is None
+        assert by_name["session-start"].last_fired is None
+        assert all(h.installed is True for h in score.hooks)
+
+    def test_hook_stamps_round_trip_through_hooks_module(self, tmp_path):
+        """The key the score reads is the key the hooks module writes.
+
+        Pins the seam that was broken on merge: ``last_fired`` was read from a
+        key no writer in brnrd ever wrote, so every hook reported "unknown"
+        forever.  This fails if the two sides drift apart again.
+        """
+        import json
+
+        from brr import hooks as hooks_mod
+        from brr.prompts import read_hook_stamps
+
+        state = {}
+        hooks_mod._record_fired(state, hooks_mod.PHASE_POST_TOOL)
+        (tmp_path / hooks_mod.HOOK_STATE_NAME).write_text(
+            json.dumps(state), encoding="utf-8"
+        )
+
+        stamps = read_hook_stamps(tmp_path)
+        assert hooks_mod.PHASE_POST_TOOL in stamps
+        assert stamps[hooks_mod.PHASE_POST_TOOL].endswith("Z")
+        assert hooks_mod.PHASE_STOP not in stamps
+
+    def test_boot_score_json_carries_attention_and_posture(self, empty_repo):
+        """``to_dict`` serializes what the text view shows — no silent drops."""
+        from brr.bootscore import to_dict
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(
+            empty_repo, event_ids=("evt-1",), branch="brr/x", pending_count=2
+        )
+        payload = to_dict(score)
+        assert payload["attention"]["event_ids"] == ("evt-1",)
+        assert payload["posture"]["branch"] == "brr/x"
+        assert payload["posture"]["pending_count"] == 2
+        assert payload["hooks"] and payload["contracts"]
