@@ -88,6 +88,10 @@ class Daemon(Base):
     # dashboard-side half of #237; see kb/design-dashboard-live-surface.md.
     quota_json: Mapped[str] = mapped_column(Text, default="[]")
     quota_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Per-ingestion-path liveness (#360), piggybacked on the quota publish.
+    # Each row carries the source poll timestamp so a quiet gate remains
+    # distinguishable from a dead one.
+    gate_health_json: Mapped[str] = mapped_column(Text, default="[]")
     # Live/coexisting-runs snapshot (#258), mirrored from the local presence
     # registry via `PUT /v1/daemons/live-runs` — see
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".

@@ -769,6 +769,7 @@ def _repo_view_out(row: dict[str, Any], *, github_bot_user_login: str) -> dict[s
         "daemon_last_seen": row["daemon_last_seen"],
         "daemon_last_seen_at": _iso(row.get("daemon_last_seen_at")),
         "latest_daemon_name": row["latest_daemon_name"],
+        "gates": row["gates"],
         "setup_command": row["setup_command"],
         "telegram_pair_enabled": True,
         "bot_invite_enabled": repo.forge == "github" and bool(github_bot_user_login),

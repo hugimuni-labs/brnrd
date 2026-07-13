@@ -134,6 +134,8 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
         label="slack",
         poll_interval=_POLL_INTERVAL,
+        brr_dir=brr_dir,
+        gate="slack",
     )
 
 

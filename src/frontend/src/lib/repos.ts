@@ -24,9 +24,18 @@ export interface ConnectedRepo {
 	daemon_last_seen: string;
 	daemon_last_seen_at: string | null;
 	latest_daemon_name: string;
+	gates: GateHealth[];
 	setup_command: string;
 	telegram_pair_enabled: boolean;
 	bot_invite_enabled: boolean;
+}
+
+export interface GateHealth {
+	gate: string;
+	last_poll_ok: string | null;
+	age_seconds: number | null;
+	last_error: string | null;
+	status: 'ok' | 'degraded' | 'never';
 }
 
 export interface GitHubInstallation {

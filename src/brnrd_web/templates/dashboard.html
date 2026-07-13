@@ -106,6 +106,13 @@
                       This repo is enabled in brnrd. Pair a local daemon from a checkout when you want it to drain work.
                     {% endif %}
                   </p>
+                  {% if row.gates %}
+                    <div class="form-note">
+                      {% for gate in row.gates %}
+                        <div><code>{{ gate.gate }}</code> · {{ gate.status }} · last successful poll {% if gate.age_seconds is none %}never{% else %}{{ gate.age_seconds }}s ago{% endif %}{% if gate.last_error %} · {{ gate.last_error }}{% endif %}</div>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
                   {% if row.daemon_status != "online" %}
                     <details class="setup-details">
                       <summary>Set up local daemon</summary>

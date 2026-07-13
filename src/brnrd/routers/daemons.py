@@ -205,11 +205,18 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
     daemon.quota_json = json.dumps([shell.model_dump() for shell in payload.shells], separators=(",", ":"))
+    daemon.gate_health_json = json.dumps(
+        [gate.model_dump() for gate in payload.gates], separators=(",", ":")
+    )
     daemon.quota_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.QuotaOut(shells=payload.shells, quota_updated_at=now)
+    return schemas.QuotaOut(
+        shells=payload.shells,
+        gates=payload.gates,
+        quota_updated_at=now,
+    )
 
 
 @router.put("/runners", response_model=schemas.RunnersOut)

@@ -362,6 +362,8 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     runtime.run_loop(
         lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
         label="telegram",
+        brr_dir=brr_dir,
+        gate="telegram",
     )
 
 

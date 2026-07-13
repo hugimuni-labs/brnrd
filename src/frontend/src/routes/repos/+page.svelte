@@ -12,12 +12,7 @@
 		type RepoActionResponse,
 		type ReposResponse
 	} from '$lib/repos';
-	import {
-		STATUS_GOOD,
-		STATUS_UNKNOWN,
-		STATUS_WARN,
-		statusDotStyle
-	} from '$lib/statusPalette';
+	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 
 	let data = $state<ReposResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -29,7 +24,9 @@
 	let manualBranch = $state('');
 
 	const connectedRepos = $derived(data?.connected_repos ?? []);
-	const availableInstalled = $derived(data?.installed_repos.filter((repo) => !repo.connected) ?? []);
+	const availableInstalled = $derived(
+		data?.installed_repos.filter((repo) => !repo.connected) ?? []
+	);
 	const connectedInstalled = $derived(data?.installed_repos.filter((repo) => repo.connected) ?? []);
 
 	async function refresh() {
@@ -120,6 +117,19 @@
 		return STATUS_UNKNOWN;
 	}
 
+	function gateColor(status: string): string {
+		if (status === 'ok') return STATUS_GOOD;
+		if (status === 'degraded') return STATUS_WARN;
+		return STATUS_UNKNOWN;
+	}
+
+	function gateAge(age: number | null): string {
+		if (age === null) return 'never';
+		if (age < 60) return `${age}s ago`;
+		if (age < 3600) return `${Math.floor(age / 60)}m ago`;
+		return `${Math.floor(age / 3600)}h ago`;
+	}
+
 	function daemonLevel(status: string): string {
 		if (status === 'online') return 'ample';
 		if (status === 'offline') return 'low';
@@ -206,7 +216,7 @@
 	     track is max-content-sized, and the nowrap truncate text pushes
 	     cards wider than the container on narrow viewports (live-caught on
 	     mobile 2026-07-11 — installed-repo cards overflowing the panel). -->
-	<div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+		<div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
 			<div class="subpanel p-3">
 				<p class="font-mono text-[10px] tracking-wide text-stone-500 uppercase">signed in</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
@@ -273,12 +283,45 @@
 										</p>
 									{:else if repo.daemon_status === 'offline'}
 										<p class="mt-2 text-sm text-stone-400">
-											Last heartbeat {repo.daemon_last_seen}. Start the local daemon to drain queued work.
+											Last heartbeat {repo.daemon_last_seen}. Start the local daemon to drain queued
+											work.
 										</p>
 									{:else}
 										<p class="mt-2 text-sm text-stone-400">
 											Pair a local daemon from a checkout when this repo should drain work.
 										</p>
+									{/if}
+									{#if repo.gates.length > 0}
+										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">
+											{#each repo.gates as gate (gate.gate)}
+												{@const color = gateColor(gate.status)}
+												<div class="border border-stone-800 bg-stone-950/40 px-2 py-1.5">
+													<div
+														class="flex items-center justify-between gap-2 font-mono text-[11px]"
+													>
+														<span class="flex items-center gap-1.5 text-stone-300">
+															<span
+																class="inline-block h-1.5 w-1.5 rounded-full"
+																style={`background: ${color}`}
+															></span>
+															{gate.gate}
+														</span>
+														<span style={`color: ${color}`}>{gate.status}</span>
+													</div>
+													<p class="mt-0.5 font-mono text-[10px] text-stone-600">
+														poll {gateAge(gate.age_seconds)}
+													</p>
+													{#if gate.last_error}
+														<p
+															class="mt-1 line-clamp-2 text-[11px] text-amber-700"
+															title={gate.last_error}
+														>
+															{gate.last_error}
+														</p>
+													{/if}
+												</div>
+											{/each}
+										</div>
 									{/if}
 									{#if repo.daemon_status !== 'online'}
 										<details class="mt-2">
@@ -287,7 +330,9 @@
 												>setup command</summary
 											>
 											<pre
-												class="mt-2 overflow-x-auto border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] text-stone-300"><code>{repo.setup_command}</code></pre>
+												class="mt-2 overflow-x-auto border border-stone-800 bg-stone-950/50 p-2 font-mono text-[11px] text-stone-300"><code
+													>{repo.setup_command}</code
+												></pre>
 										</details>
 									{/if}
 								</div>
@@ -315,7 +360,9 @@
 											class="cursor-pointer border border-stone-700 bg-stone-950/70 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-200 uppercase hover:text-amber-100 disabled:cursor-wait disabled:opacity-50"
 											disabled={pendingAction !== null}
 											onclick={() => confirmDisconnect(repo)}
-											>{actionBusy(`disconnect:${repo.id}`) ? 'disconnecting' : 'confirm disconnect'}</button
+											>{actionBusy(`disconnect:${repo.id}`)
+												? 'disconnecting'
+												: 'confirm disconnect'}</button
 										>
 										<button
 											type="button"

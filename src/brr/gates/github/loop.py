@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .. import runtime
 from . import delivery, polling, state
 from .client import GitHubAPIError
 from .constants import _BACKOFF_MAX, _POLL_INTERVAL
@@ -90,11 +91,14 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     while True:
         try:
             sleep_seconds = _loop_once(brr_dir, inbox_dir, responses_dir)
+            runtime.record_loop_health(brr_dir, "github", ok=True)
             backoff = 1
         except GitHubAPIError as exc:
+            runtime.record_loop_health(brr_dir, "github", ok=False, error=str(exc))
             sleep_seconds = _handle_api_error(exc)
             backoff = 1
         except Exception as exc:
+            runtime.record_loop_health(brr_dir, "github", ok=False, error=str(exc))
             print(f"[brnrd:github] error: {exc}, retrying in {backoff}s")
             sleep_seconds = backoff
             backoff = min(backoff * 2, _BACKOFF_MAX)

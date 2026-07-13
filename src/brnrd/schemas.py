@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -255,6 +255,14 @@ class QuotaShellIn(BaseModel):
     credits: QuotaCreditsIn | None = None
 
 
+class GateHealthIn(BaseModel):
+    gate: str = Field(min_length=1, max_length=32)
+    last_poll_ok: str | None = None
+    age_seconds: int | None = Field(default=None, ge=0)
+    last_error: str | None = None
+    status: Literal["ok", "degraded", "never"]
+
+
 class QuotaReport(BaseModel):
     """Runner-quota snapshot a daemon pushes for itself (#237).
 
@@ -265,10 +273,12 @@ class QuotaReport(BaseModel):
     """
 
     shells: list[QuotaShellIn] = Field(default_factory=list)
+    gates: list[GateHealthIn] = Field(default_factory=list)
 
 
 class QuotaOut(BaseModel):
     shells: list[QuotaShellIn]
+    gates: list[GateHealthIn] = Field(default_factory=list)
     quota_updated_at: datetime | None = None
 
 

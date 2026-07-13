@@ -476,7 +476,9 @@ def test_run_loop_starts_dedicated_delivery_loop(tmp_path, monkeypatch):
         def start(self):
             self.target(*self.args, **self.kwargs)
 
-    def fake_run_loop(_loop_once, *, label, poll_interval=0.0, backoff_max=120):
+    def fake_run_loop(
+        _loop_once, *, label, poll_interval=0.0, backoff_max=120, **_health
+    ):
         calls.append((label, poll_interval))
 
     monkeypatch.setattr(telegram.threading, "Thread", FakeThread)
