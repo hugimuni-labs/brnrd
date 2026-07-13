@@ -150,3 +150,39 @@ def test_probe_never_raises_when_codex_is_missing(_no_codex_app_server_probe):
     # never-raises contract is actually exercised, not asserted against a stub.
     real_probe = _no_codex_app_server_probe
     assert real_probe(codex_bin="brr-no-such-binary-xyz") is None
+
+
+# The same endpoint, same CLI (0.144.1), a *different account* — captured live
+# 2026-07-13 from the Plus account whose weekly quota the dashboard was
+# reporting as unavailable. The weekly window arrives in `primary`, and
+# `secondary` is null: the slot a window sits in is not its identity.
+WEEKLY_IN_PRIMARY_RESULT = {
+    "rateLimits": {
+        "limitId": "codex",
+        "planType": "plus",
+        "primary": {"usedPercent": 41, "windowDurationMins": 10080, "resetsAt": 1784490643},
+        "secondary": None,
+        "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+    },
+    "rateLimitResetCredits": {"availableCount": 3, "credits": []},
+}
+
+
+def test_parse_rate_limits_carries_each_windows_duration():
+    """`window_minutes` is the only thing OpenAI asserts about a window's
+    identity, so it must survive the parse structurally — not just as text
+    inside the rendered `summary`. Downstream (the dashboard publish) labels
+    off it; before this, readers guessed from the slot and a weekly window
+    delivered in `primary` was published as the 5h one."""
+    quota = codex_usage.parse_rate_limits(LIVE_RESULT)["quota"]
+    assert quota["primary_window_minutes"] == 300
+    assert quota["secondary_window_minutes"] == 10080
+
+    weekly_first = codex_usage.parse_rate_limits(WEEKLY_IN_PRIMARY_RESULT)["quota"]
+    assert weekly_first["primary_window_minutes"] == 10080
+    assert weekly_first["primary_remaining_percent"] == 59.0
+    # No second window on this account at all — absent, not zero, not unknown.
+    assert weekly_first["secondary_window_minutes"] is None
+    assert weekly_first["secondary_remaining_percent"] is None
+    # The rendered summary already named it by duration; the numbers now agree.
+    assert weekly_first["summary"].startswith("7d 59% left")

@@ -1459,3 +1459,113 @@ def test_propose_config_change_reports_mint_failure(tmp_path, monkeypatch):
         )
         is None
     )
+
+
+def test_codex_quota_publishes_the_weekly_window_when_it_arrives_in_the_primary_slot(
+    tmp_path, monkeypatch
+):
+    """The reported bug (2026-07-13, live Plus account, codex-cli 0.144.1):
+    the dashboard showed Codex's weekly quota as unavailable while the number
+    was right there. `account/rateLimits/read` returned the **weekly** window
+    (`windowDurationMins: 10080`) in the `primary` slot with `secondary: null`,
+    and this publish labelled windows *positionally* — so 59%-left-weekly was
+    published as "5h window", and "weekly" was published with `percent: None`,
+    which the dashboard draws as unknown.
+
+    A window is now named by its own duration, and a slot the account doesn't
+    report is omitted rather than published as a null-percent window (absent
+    and unknown are different claims, and only one of them is true)."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "updated_at": "2026-07-13T15:17:15Z",
+            "quota": {
+                "primary_remaining_percent": 59.0,
+                "primary_window_minutes": 10080,
+                "primary_resets_at": 1784490643.0,
+                "secondary_remaining_percent": None,
+                "secondary_window_minutes": None,
+                "secondary_resets_at": None,
+            },
+        },
+    )
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    assert shell is not None
+    labels = {w["label"]: w for w in shell["windows"]}
+    assert labels["weekly"]["percent"] == 59.0
+    assert labels["weekly"]["resets_at"] == 1784490643.0
+    assert "5h window" not in labels
+    assert [w["label"] for w in shell["windows"]] == ["weekly"]
+
+
+def test_codex_quota_keeps_labelling_the_classic_two_window_layout(tmp_path, monkeypatch):
+    """The historical shape (primary = 5h, secondary = weekly) must still
+    render exactly as before — the fix is duration-driven labelling, not a
+    special case for one account's layout."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "quota": {
+                "primary_remaining_percent": 67.0,
+                "primary_window_minutes": 300,
+                "secondary_remaining_percent": 94.0,
+                "secondary_window_minutes": 10080,
+            }
+        },
+    )
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    labels = {w["label"]: w["percent"] for w in shell["windows"]}
+    assert labels == {"5h window": 67.0, "weekly": 94.0}
+
+
+def test_codex_quota_falls_back_to_slot_labels_when_no_duration_is_known(tmp_path, monkeypatch):
+    """A snapshot cached by an older brr (or a rollout event that omitted
+    `window_minutes`) carries no duration at all. There the slot really is the
+    only evidence there is, so the historical positional labels stand — and a
+    warm cache from before this change must not blank the panel."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "quota": {
+                "primary_remaining_percent": 82.0,
+                "secondary_remaining_percent": 70.0,
+            }
+        },
+    )
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    labels = {w["label"]: w["percent"] for w in shell["windows"]}
+    assert labels == {"5h window": 82.0, "weekly": 70.0}
+
+
+def test_codex_quota_names_an_unrecognized_window_after_itself(tmp_path, monkeypatch):
+    """OpenAI has changed this shape once already. An unknown duration is still
+    a real, known number — publish it under a self-describing label rather than
+    dropping it or forcing it into one of the two labels we happen to know."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "quota": {
+                "primary_remaining_percent": 50.0,
+                "primary_window_minutes": 1440,
+                "secondary_remaining_percent": None,
+            }
+        },
+    )
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    assert [w["label"] for w in shell["windows"]] == ["1d window"]

@@ -649,6 +649,68 @@ def _quota_window(
     }
 
 
+# A Codex rate-limit window is identified by its *duration*, not by the slot
+# (`primary`/`secondary`) it happens to arrive in — see
+# `codex_status.py`'s module docstring for the live case that proved it.
+_CODEX_WINDOW_LABELS: dict[int, str] = {
+    300: "5h window",   # the classic `primary`
+    10080: "weekly",    # the classic `secondary` — and, since 2026-07-13, sometimes `primary`
+}
+
+
+def _codex_window_label(window_minutes: float | None, fallback: str) -> str:
+    """A quota window's display label, derived from how long the window is.
+
+    Falls back to the historical positional label only when the snapshot
+    carries no duration at all (a cache written by an older brr, or a rollout
+    event that omitted ``window_minutes``) — there, the slot is genuinely the
+    only evidence available, and guessing beyond it would be fabrication.
+    """
+    if window_minutes is None:
+        return fallback
+    minutes = int(window_minutes)
+    known = _CODEX_WINDOW_LABELS.get(minutes)
+    if known:
+        return known
+    # An unrecognized duration is still a real window and still worth showing:
+    # name it after itself rather than dropping it or forcing it into one of
+    # the two labels we know (OpenAI has changed this shape once already).
+    if minutes % 1440 == 0:
+        return f"{minutes // 1440}d window"
+    if minutes % 60 == 0:
+        return f"{minutes // 60}h window"
+    return f"{minutes}m window"
+
+
+def _codex_quota_windows(quota: dict[str, Any]) -> list[dict[str, Any]]:
+    """The Codex windows the account actually reports, labelled by duration.
+
+    Two changes from the positional read this replaces, both about not lying:
+
+    - a window is labelled from its own ``window_minutes``, so a weekly window
+      delivered in the ``primary`` slot renders as ``weekly`` (the reported bug:
+      the number was there, under the wrong name, while ``weekly`` published
+      ``percent: null`` and the dashboard drew it as unavailable);
+    - a slot the account does not report is *omitted* rather than published as a
+      null-percent window. An absent window and an unknown window look identical
+      on the panel, and only one of them is true — today's Plus account simply
+      has no separate 5h limit to show.
+    """
+    windows: list[dict[str, Any]] = []
+    for slot, fallback in (("primary", "5h window"), ("secondary", "weekly")):
+        percent = quota.get(f"{slot}_remaining_percent")
+        if percent is None:
+            continue
+        windows.append(
+            _quota_window(
+                _codex_window_label(quota.get(f"{slot}_window_minutes"), fallback),
+                percent,
+                resets_at=quota.get(f"{slot}_resets_at"),
+            )
+        )
+    return windows
+
+
 def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     """Codex's quota row: the app-server probe, backstopped by the rollout read.
 
@@ -672,9 +734,8 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     quota = levels.get("quota") if isinstance(levels, dict) else None
     if not isinstance(quota, dict):
         return None
-    primary = quota.get("primary_remaining_percent")
-    secondary = quota.get("secondary_remaining_percent")
-    if primary is None and secondary is None:
+    windows = _codex_quota_windows(quota)
+    if not windows:
         return None
     return {
         "shell": "codex",
@@ -684,10 +745,7 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         # dashboard measures staleness off the same clock for both shells and a
         # failed probe can never make a frozen rollout look live.
         "updated_at": levels.get("updated_at"),
-        "windows": [
-            _quota_window("5h window", primary, resets_at=quota.get("primary_resets_at")),
-            _quota_window("weekly", secondary, resets_at=quota.get("secondary_resets_at")),
-        ],
+        "windows": windows,
         # Free "Full reset (Weekly + 5 hr)" grants sitting unredeemed on the
         # account — only the app-server seam knows about these, and a quota row
         # that reads 4% left while four resets go unused is telling half a truth.
