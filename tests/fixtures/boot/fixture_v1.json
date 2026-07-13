@@ -2,7 +2,7 @@
   "_meta": {
     "schema": "boot-fixture-v1",
     "captured": "2026-07-13",
-    "description": "Versioned inputs for the boot replay harness. Drive build_daemon_prompt through these to regenerate the claude/codex snapshots. The fixture is deliberately minimal — enough inputs to exercise all code paths (runner_medium, runner_catalog, event metadata, communication snapshot) without coupling to live domain state. Hook posture is declared here (hooks_installed), not inherited from the environment: a fixture that reads ambient BRR_* state renders differently inside a wake than on CI."
+    "description": "Versioned inputs for the boot replay harness. Drive build_daemon_prompt through these to regenerate the claude/codex snapshots. The fixture is deliberately minimal \u2014 enough inputs to exercise all code paths (runner_medium, runner_catalog, event metadata, communication snapshot) without coupling to live domain state. Hook posture is declared here (hooks_installed), not inherited from the environment: a fixture that reads ambient BRR_* state renders differently inside a wake than on CI."
   },
   "shared": {
     "task": "Implement a small feature, commit, and push a branch.",
@@ -57,11 +57,18 @@
   },
   "runners": {
     "claude": {
-      "runner_medium": "claude-sonnet",
+      "runner_medium": "claude-sonnet (requested from the dashboard spool rack)",
+      "runner_name": "claude-sonnet",
+      "runner_shell": "claude",
+      "runner_core": "claude-sonnet-4-6",
+      "body_provenance": "requested from the dashboard spool rack",
       "runner_quota": "session 72% left (resets 10:30pm); week 57% left"
     },
     "codex": {
       "runner_medium": "codex",
+      "runner_name": "codex",
+      "runner_shell": "codex",
+      "runner_core": "gpt-5.6-terra",
       "runner_quota": "week 80% left (resets Sunday)"
     }
   },
@@ -76,6 +83,7 @@
       "pending_outbox_file_count": 0
     },
     "inbound": {
+      "current_event": "evt-fixture-0001",
       "events": []
     },
     "outbound": {
