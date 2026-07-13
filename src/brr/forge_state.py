@@ -230,6 +230,7 @@ def _pr_state_facet(
             "fetched_at": state.get("fetched_at"),
             "age_seconds": state.get("age_seconds"),
             "error": state.get("error"),
+            "has_rows": False,
             "standalone": [],
         }
 
@@ -264,6 +265,10 @@ def _pr_state_facet(
         "fetched_at": state.get("fetched_at"),
         "age_seconds": state.get("age_seconds"),
         "error": state.get("error"),
+        # Whether *any* row is being shown (standalone, or folded onto a
+        # worktree entry).  A failed refresh that is still displaying kept rows
+        # must say so with their age — see :func:`pr_state_note`.
+        "has_rows": bool(by_branch),
         "standalone": standalone,
     }
 
@@ -383,6 +388,17 @@ def pr_state_note(pr_state: Any) -> str:
         return "PR state: unknown (no local cache yet — the daemon refreshes it on its tick)"
     if status == "error":
         error = str(pr_state.get("error") or "").strip() or "refresh failed"
+        # A failed refresh may still be showing rows kept from an earlier good
+        # fetch.  Then the honest line is not "unknown" — it is *these rows, and
+        # this is how old they are, and the refresh that would have corrected
+        # them failed*.  Naming the age is what lets a reader judge whether to
+        # trust a row; hiding it is how stale data passes for current.
+        if pr_state.get("has_rows"):
+            age = format_age(pr_state.get("age_seconds"))
+            return (
+                f"PR state from {age} ago — the refresh since then FAILED "
+                f"({error}); treat these rows as possibly out of date"
+            )
         return f"PR state: unknown (last refresh failed: {error})"
     age = format_age(pr_state.get("age_seconds"))
     return f"PR state as of {age} ago (stale)"
