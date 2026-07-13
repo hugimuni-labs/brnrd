@@ -295,6 +295,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
                 "credits": None,
                 "reset_credits": None,
                 "spend": None,
+                "burn": None,
             }
         ]
 
@@ -303,6 +304,87 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         stale = _quota_views(db, [repo], runner_stats=[])
         assert stale[0]["status"] == "stale"
         assert stale[0]["windows"][0]["percent"] is None
+
+
+def test_dashboard_carries_the_burn_rate_and_drops_it_when_the_report_goes_stale():
+    """The Codex burn rate (2026-07-13) is the dashboard's only short-horizon
+    reading now that OpenAI has stopped publishing the 5h window — so it has to
+    reach the panel. It also *decays*, unlike `reset_credits`: a rate measured
+    off a daemon that went quiet hours ago describes an account that may have
+    been idle since, and "burning 22 points every 4 hours" is a lie the moment
+    it stops being current."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _quota_views
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+    burn = {
+        "window_minutes": 10080.0,
+        "hours": 5.0,
+        "burned_percent": 22.0,
+        "to_remaining_percent": 53.0,
+        "projected_remaining_percent": 23.2,
+        "sustainable": False,
+    }
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, pid)
+        db.add(
+            Daemon(
+                id="dmn-burn-1",
+                repo_id=pid,
+                token_id="tok-burn-1",
+                daemon_name="laptop",
+                quota_json=json.dumps(
+                    [
+                        {
+                            "shell": "codex",
+                            "status": "known",
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "windows": [
+                                {"label": "weekly", "used": None, "limit": None, "percent": 53.0}
+                            ],
+                            "reset_credits": 3,
+                            "burn": burn,
+                        }
+                    ]
+                ),
+                quota_updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        assert _quota_views(db, [repo], runner_stats=[])[0]["burn"] == burn
+
+        daemon = db.get(Daemon, "dmn-burn-1")
+        daemon.quota_updated_at = datetime.now(timezone.utc) - timedelta(seconds=999)
+        daemon.quota_json = json.dumps(
+            [
+                {
+                    "shell": "codex",
+                    "status": "known",
+                    "updated_at": (
+                        datetime.now(timezone.utc) - timedelta(seconds=999)
+                    ).isoformat(),
+                    "windows": [
+                        {"label": "weekly", "used": None, "limit": None, "percent": 53.0}
+                    ],
+                    "reset_credits": 3,
+                    "burn": burn,
+                }
+            ]
+        )
+        db.commit()
+
+        stale = _quota_views(db, [repo], runner_stats=[])[0]
+        assert stale["status"] == "stale"
+        assert stale["burn"] is None
+        # …while a granted reset credit does not decay, and still shows.
+        assert stale["reset_credits"] == 3
 
 
 def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():

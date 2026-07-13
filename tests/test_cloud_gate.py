@@ -1585,3 +1585,51 @@ def test_codex_quota_names_an_unrecognized_window_after_itself(tmp_path, monkeyp
     shell = cloud._codex_quota_shell(tmp_path / ".brr")
 
     assert [w["label"] for w in shell["windows"]] == ["1d window"]
+
+
+def test_codex_quota_row_carries_the_trailing_burn(tmp_path, monkeypatch):
+    """With the 5h window gone from OpenAI's payload (2026-07-12), the weekly
+    percentage is the *only* number left — and a percentage alone can't say
+    whether the account is drifting or sprinting. The row carries the derived
+    burn rate so the dashboard can answer the question the 5h bar used to."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "updated_at": "2026-07-13T18:14:40Z",
+            "quota": {
+                "primary_remaining_percent": 53.0,
+                "primary_window_minutes": 10080,
+                "primary_resets_at": 1784490643.0,
+                "secondary_remaining_percent": None,
+            },
+        },
+    )
+    burn = {"window_minutes": 10080.0, "burned_percent": 22.0, "sustainable": False}
+    monkeypatch.setattr(cloud.codex_status, "recent_burn", lambda *a, **k: burn)
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    assert shell is not None
+    assert shell["burn"] == burn
+
+
+def test_codex_quota_burn_is_absent_when_the_evidence_is_too_thin(tmp_path, monkeypatch):
+    """No rollouts, one sample, or a span too short to project from: the row
+    ships `burn: None` rather than a rate invented from noise."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "updated_at": "2026-07-13T18:14:40Z",
+            "quota": {"primary_remaining_percent": 53.0, "primary_window_minutes": 10080},
+        },
+    )
+    monkeypatch.setattr(cloud.codex_status, "recent_burn", lambda *a, **k: None)
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    assert shell is not None
+    assert shell["burn"] is None

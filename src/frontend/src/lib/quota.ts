@@ -45,10 +45,34 @@ export interface QuotaSpend {
 	reason?: string | null;
 }
 
+export interface QuotaBurn {
+	/** Which window the burn is measured against (Codex reports only the weekly
+	 *  one since 2026-07-12 — see `brr/codex_status.py::recent_burn`). */
+	window_minutes: number;
+	/** Horizon the rate was measured over, and projected forward across. */
+	hours: number;
+	span_minutes: number;
+	samples: number;
+	from_remaining_percent: number;
+	to_remaining_percent: number;
+	burned_percent: number;
+	/** Where the current rate lands the window `hours` from now. */
+	projected_remaining_percent: number;
+	/** Epoch seconds the window hits zero at this rate — null when not burning. */
+	exhausts_at: number | null;
+	/** True when the window resets before this rate could exhaust it: a pace you
+	 *  can keep. False is the reading the old 5h bar used to give you. */
+	sustainable: boolean;
+}
+
 export interface QuotaShell {
 	shell: string;
 	status: 'known' | 'stale' | 'unknown' | string;
 	windows: QuotaWindow[];
+	/** Derived short-horizon burn rate — Codex only, and only on daemon builds
+	 *  since 2026-07-13. Absent when the evidence is too thin to project from
+	 *  (fewer than two samples, or a span under 30 minutes). */
+	burn?: QuotaBurn | null;
 	/** Present only for shells with a proven per-run spend figure (Claude
 	 *  today; absent, not null, on shells/builds with no such collector). */
 	credits?: QuotaCredits | null;
