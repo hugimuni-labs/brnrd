@@ -569,6 +569,144 @@ def test_claude_quota_shell_credits_absent_without_a_spend_snapshot(tmp_path):
     assert shell["credits"] is None
 
 
+def test_claude_quota_shell_surfaces_per_model_weekly_windows(tmp_path):
+    """brnrd.dev live-run dashboard posture (2026-07-13): `claude_usage.py`
+    already parses a per-model weekly pool ("Current week (Fable)")
+    alongside the primary week bucket, but until now `_claude_quota_shell`
+    never read `levels["week_models"]`/`buckets["week_models"]` — that real,
+    known number was silently dropped, which reads identically to
+    "unknown" from the dashboard side. It must now ride along as its own
+    window, not collapse into nothing."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-fable-week"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {
+                        "session": {"remaining_percentage": 61.0},
+                        "week": {"remaining_percentage": 41.0},
+                        "week_models": {"Fable": {"remaining_percentage": 25.0}},
+                    }
+                },
+                "week_models": {
+                    "Fable": {
+                        "used_percentage": 75.0,
+                        "reset": "resets Jul 16 (Europe/Berlin)",
+                        "resets_at": 1784390000.0,
+                    }
+                },
+                "updated_at": "2026-07-13T12:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    labels = {w["label"]: w for w in shell["windows"]}
+    assert labels["5h window"]["percent"] == 61.0
+    assert labels["weekly"]["percent"] == 41.0
+    assert labels["weekly (Fable)"]["percent"] == 25.0
+    assert labels["weekly (Fable)"]["reset"] == "resets Jul 16 (Europe/Berlin)"
+    assert labels["weekly (Fable)"]["resets_at"] == 1784390000.0
+
+
+def test_claude_quota_shell_reports_when_only_per_model_week_is_known(tmp_path):
+    """A Fable-only capture (no bare "Current week" line ever parsed, no
+    session bucket, no credits) used to return `None` entirely — dropping
+    real, known data — because the early-exit guard only ever checked the
+    primary session/week percentages. It must still publish a shell so the
+    dashboard can show what's actually known instead of nothing."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-fable-only"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {"week_models": {"Fable": {"remaining_percentage": 25.0}}}
+                },
+                "week_models": {"Fable": {"used_percentage": 75.0, "reset": None, "resets_at": None}},
+                "updated_at": "2026-07-13T12:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    labels = {w["label"]: w for w in shell["windows"]}
+    assert labels["5h window"]["percent"] is None
+    assert labels["weekly"]["percent"] is None
+    assert labels["weekly (Fable)"]["percent"] == 25.0
+
+
+def test_codex_quota_shell_reports_spend_as_unimplemented(tmp_path, monkeypatch):
+    """The Codex CLI's result JSON carries no per-run cost figure the way
+    Claude's does (`_claude_credits_block`) — this must read as an explicit
+    "we don't track this yet, here's why" rather than a field that's just
+    absent, which looks identical to "unknown" on the dashboard (brnrd.dev
+    live-run dashboard posture, 2026-07-13: "render that as unimplemented
+    with its reason")."""
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {
+            "quota": {
+                "primary_remaining_percent": 82.0,
+                "secondary_remaining_percent": 70.0,
+            }
+        },
+    )
+
+    shell = cloud._codex_quota_shell(tmp_path / ".brr")
+
+    assert shell is not None
+    assert shell["spend"]["status"] == "unimplemented"
+    assert shell["spend"]["reason"]
+
+
+def test_live_runs_snapshot_carries_selected_shell_and_core(tmp_path):
+    """brnrd.dev live-run dashboard posture (2026-07-13): the live-runs
+    card previously had no way to say which Shell+Core a running thought
+    was on — only the closed-run ledger recorded it. `presence.register`
+    now carries the same runner_* fields `daemon.py` already persists on
+    the run manifest, and the publish snapshot must surface them the same
+    shape `_runner_payload` already produces for Activity rows."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:1:", run_id="run-with-runner",
+        repo_label="Gurio/brr", pid=os.getpid(),
+        runner_name="claude-sonnet", runner_shell="claude",
+        runner_core="claude-sonnet-4-6", runner_class="balanced",
+    )
+    presence.register(
+        brr_dir, kind="session", stream="cursor:1:", run_id="run-without-runner",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="no-runner-entry",
+    )
+
+    rows = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}
+    assert rows["run-with-runner"]["runner"] == {
+        "name": "claude-sonnet", "shell": "claude",
+        "core": "claude-sonnet-4-6", "class": "balanced",
+    }
+    # An entry with no runner selected (or from before this field shipped)
+    # gets the empty dict `_runner_payload` already returns for that case,
+    # not a missing key or a fabricated default.
+    assert rows["run-without-runner"]["runner"] == {}
+
+
 def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     """#258: the local presence registry mirrors into the account-scoped
     live/coexisting-runs view, the same publish shape as quota (#237)."""
