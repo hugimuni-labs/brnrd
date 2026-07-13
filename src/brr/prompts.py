@@ -1869,12 +1869,51 @@ def _format_communication_snapshot(
     return "\n".join(lines)
 
 
+def _format_pr_state(pr_state: Any) -> list[str]:
+    """Lines for the PR-state cache: its trustworthiness, then homeless PRs.
+
+    Reads the facet only — the cache behind it is filled by the daemon tick
+    (:mod:`brr.forge_pr_cache`), so nothing here touches the network. An absent
+    or failed cache says *unknown* out loud rather than rendering as "no PRs".
+    """
+    lines: list[str] = []
+    note = forge_state.pr_state_note(pr_state)
+    if note:
+        lines.append(f"- {note}")
+    if not isinstance(pr_state, dict):
+        return lines
+    standalone, omitted = forge_state.standalone_prs(pr_state)
+    if standalone:
+        lines.append("- PRs in flight or just resolved (no local worktree):")
+        for pr in standalone:
+            marker = forge_state.format_pr(pr)
+            if not marker:
+                continue
+            branch = str(pr.get("branch") or "").strip()
+            branch_bit = f" (`{branch}`)" if branch else ""
+            # Link the open ones only: those are the actionable queue. A merged
+            # PR's number and age already carry everything the wake needs.
+            url = str(pr.get("url") or "").strip()
+            link = (
+                f" — {url}"
+                if url and str(pr.get("state") or "").upper() == "OPEN"
+                else ""
+            )
+            lines.append(f"  - {marker}{branch_bit}{link}")
+        if omitted:
+            noun = "resolution" if omitted == 1 else "resolutions"
+            lines.append(f"  - {omitted} older {noun} in the last 24h omitted")
+    return lines
+
+
 def _format_forge_state(forge: Any) -> str:
     """Render the forge-state facet: in-flight worktrees + issues/PRs in play.
 
     Network-free local picture (co-maintainer §5): the resident's worktrees
-    and unpushed work, and the GitHub threads its conversations are about.
-    Returns an empty string when the facet is absent or empty.
+    and unpushed work, the PR state cached beside each branch, and the GitHub
+    threads its conversations are about. A branch's PR marker is the point of
+    the block — a wake that *sees* ``#382 MERGED`` cannot go on claiming #382
+    awaits review. Returns an empty string when the facet is absent or empty.
     """
     if not isinstance(forge, dict) or not forge:
         return ""
@@ -1911,13 +1950,21 @@ def _format_forge_state(forge: Any) -> str:
             detail = f" ({'; '.join(bits)})" if bits else ""
             tag = f" [{tid}]" if tid else ""
             link = f" — {url}" if url else ""
-            lines.append(f"  - `{branch}`{tag}{detail}{link}")
+            pr = forge_state.format_pr(wt.get("pr"))
+            pr_marker = f" → {pr}" if pr else ""
+            lines.append(f"  - `{branch}`{tag}{detail}{pr_marker}{link}")
         omitted = worktree_summary["omitted"]
         if omitted:
             noun = "branch" if omitted == 1 else "branches"
             lines.append(f"  - {omitted} clean pushed {noun} omitted")
 
     threads = forge.get("threads")
+    has_threads = isinstance(threads, list) and bool(threads)
+    if worktree_summary["total"] or has_threads:
+        # Only speak about PR state when the block has a body at all — an
+        # empty facet still renders as nothing.
+        lines.extend(_format_pr_state(forge.get("pr_state")))
+
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
         for th in threads:

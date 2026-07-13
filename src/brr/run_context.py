@@ -299,6 +299,36 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_pr_state(pr_state: Any) -> list[str]:
+    """PR-cache trustworthiness + open PRs with no local worktree (plain)."""
+    lines: list[str] = []
+    note = forge_state.pr_state_note(pr_state)
+    if note:
+        lines.append(f"- {note}")
+    if not isinstance(pr_state, dict):
+        return lines
+    standalone, omitted = forge_state.standalone_prs(pr_state)
+    if standalone:
+        lines.append("- PRs in flight or just resolved (no local worktree):")
+        for pr in standalone:
+            marker = forge_state.format_pr(pr)
+            if not marker:
+                continue
+            branch = str(pr.get("branch") or "").strip()
+            branch_bit = f" ({branch})" if branch else ""
+            url = str(pr.get("url") or "").strip()
+            link = (
+                f" — {url}"
+                if url and str(pr.get("state") or "").upper() == "OPEN"
+                else ""
+            )
+            lines.append(f"  - {marker}{branch_bit}{link}")
+        if omitted:
+            noun = "resolution" if omitted == 1 else "resolutions"
+            lines.append(f"  - {omitted} older {noun} in the last 24h omitted")
+    return lines
+
+
 def _render_forge_state(forge: Any) -> str:
     """Render the forge-state facet for the context file (plain, no backticks)."""
     if not isinstance(forge, dict) or not forge:
@@ -335,12 +365,17 @@ def _render_forge_state(forge: Any) -> str:
             tag = f" [{tid}]" if tid else ""
             url = str(wt.get("branch_url") or "").strip()
             link = f" — {url}" if url else ""
-            lines.append(f"  - {branch}{tag}{detail}{link}")
+            pr = forge_state.format_pr(wt.get("pr"))
+            pr_marker = f" → {pr}" if pr else ""
+            lines.append(f"  - {branch}{tag}{detail}{pr_marker}{link}")
         omitted = worktree_summary["omitted"]
         if omitted:
             noun = "branch" if omitted == 1 else "branches"
             lines.append(f"  - {omitted} clean pushed {noun} omitted")
     threads = forge.get("threads")
+    if worktree_summary["total"] or (isinstance(threads, list) and threads):
+        # Only speak about PR state when the block has a body at all.
+        lines.extend(_render_pr_state(forge.get("pr_state")))
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
         for th in threads:
