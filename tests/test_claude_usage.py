@@ -3,7 +3,13 @@
 import json
 from datetime import datetime, timezone
 
+from datetime import timedelta
+
 from brr import claude_usage
+
+
+def _now_stamp():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _USAGE_SCREEN = """
@@ -245,3 +251,93 @@ def test_load_or_refresh_snapshot_writes_negative_cache(tmp_path, monkeypatch):
 
     assert levels["error"] == "no quota buckets parsed from /usage screen"
     assert claude_usage.load_snapshot(tmp_path)["error"] == levels["error"]
+
+
+def _usage_snapshot(stamp, *, credits=True, models=True):
+    levels = {
+        "source": "claude /usage PTY",
+        "updated_at": stamp,
+        "session_used_percentage": 6.0,
+        "quota": {"summary": "session 94% left", "buckets": {"session": {"remaining_percentage": 94.0}}},
+    }
+    if credits:
+        levels["usage_credits"] = {
+            "spent_amount": 4.2,
+            "limit_amount": 50.0,
+            "summary": "usage credits $4.20 of $50.00",
+        }
+    if models:
+        levels["week_models"] = {"fable": {"used_percentage": 75.0, "reset": "Jul 17"}}
+        levels["quota"]["buckets"]["week_models"] = {"fable": {"remaining_percentage": 25.0}}
+    return levels
+
+
+def test_a_rate_limited_scrape_does_not_erase_credits_it_never_saw(tmp_path, monkeypatch):
+    """The reported loss (2026-07-13): the Claude credits row disappeared from
+    the dashboard. Not the parser, not the account — `/usage` fetches its
+    per-model and credits region asynchronously and prints "unavailable (rate
+    limited)" when it can't, so a heartbeat refresh that lands in that window
+    parses cleanly with those sections simply *absent*, and the snapshot write
+    replaced a complete reading with a partial one. A section that failed to
+    render is not a section that is gone."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    claude_usage.write_snapshot(outbox, _usage_snapshot(_now_stamp()))
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: _usage_snapshot(_now_stamp(), credits=False, models=False),
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert levels is not None
+    assert levels["usage_credits"]["spent_amount"] == 4.2
+    # …and it says out loud that it wasn't seen this time round: a dollar
+    # figure must never pass itself off as freshly scraped.
+    assert levels["usage_credits"]["carried_from"]
+    # The Fable weekly row rides the same async region and carries with it,
+    # including its pacing bucket — the two halves of one reading stay in step.
+    assert levels["week_models"]["fable"]["used_percentage"] == 75.0
+    assert levels["quota"]["buckets"]["week_models"]["fable"]["remaining_percentage"] == 25.0
+    # Everything the scrape *did* prove is the fresh reading, not the old one.
+    assert levels["session_used_percentage"] == 6.0
+
+
+def test_credits_turned_off_overwrites_rather_than_carrying(tmp_path, monkeypatch):
+    """An explicit "usage credits are off" is the panel stating a fact, not
+    failing to render one — it replaces the carried block immediately, or the
+    dashboard would haunt an account that has genuinely switched them off."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    claude_usage.write_snapshot(outbox, _usage_snapshot(_now_stamp()))
+    off = _usage_snapshot(_now_stamp(), credits=False)
+    off["usage_credits"] = {"enabled": False, "summary": "usage credits off"}
+    monkeypatch.setattr(claude_usage, "capture_levels", lambda **kw: off)
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert levels["usage_credits"] == {"enabled": False, "summary": "usage credits off"}
+    assert "carried_from" not in levels["usage_credits"]
+
+
+def test_a_section_stops_carrying_once_the_reading_is_stale(tmp_path, monkeypatch):
+    """Carrying is a bridge across a flaky panel, not a preservation order: a
+    reading old enough that the account could plausibly have changed underneath
+    it drops out rather than being shown as if it were still true."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    old = datetime.now(timezone.utc) - timedelta(hours=13)
+    claude_usage.write_snapshot(
+        outbox, _usage_snapshot(old.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    )
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: _usage_snapshot(_now_stamp(), credits=False, models=False),
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert "usage_credits" not in levels
+    assert "week_models" not in levels
