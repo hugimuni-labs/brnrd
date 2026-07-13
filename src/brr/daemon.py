@@ -58,6 +58,7 @@ from . import dev_reload as reload_mod
 from . import dominion
 from . import envs
 from . import facets
+from . import forge_pr_cache
 from . import forge_state
 from . import forges
 from . import claude_status
@@ -5586,6 +5587,13 @@ def start(
                 cfg,
                 account_context=account_context,
             )
+
+            # Keep the local PR-state cache warm, off the loop thread, so the
+            # wake's Forge block can render `#382 MERGED` beside a branch while
+            # prompt assembly itself stays network-free (forge_pr_cache's whole
+            # reason to exist). TTL-guarded: at most one `gh` round-trip every
+            # few minutes, and never two at once.
+            forge_pr_cache.refresh_if_stale_async(repo_root)
 
             # One scan feeds both dispatch decisions below — a spawn-
             # marked event is never a resident-lead candidate and vice
