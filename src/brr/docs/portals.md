@@ -247,6 +247,49 @@ applies after the successful `current_reply` path for a configured gate
 thread. Terminal `done` still renders the final `delivered` state after the
 attending floor ends or yields.
 
+## The continuity line — the loop closing across wakes
+
+The boot kernel opens with a `continuity:` line that names what changed
+since the resident last stood in this checkout. This is the **world's
+readout**, not the resident's prose — read from the prior wake's persisted
+boot-score, the local git history, and the forge cache, never from the
+dominion's authored memory or the active plan.
+
+The point is a distinction the earlier frames missed. A resident perceives
+many things about its own past — the active plan, the decision ledger,
+authored Recent Activity — and every line of it is prose the resident wrote
+to itself last wake. That is a message in a bottle: exactly as good as last
+wake's discipline, and free to drift from the world in silence. Authored
+memory never brings bad news about itself.
+
+The continuity line closes the loop — last wake's action → this wake's
+perception — using **observed facts**: PRs that actually merged, commits the
+dominion actually took, whether the memory that was supposed to be here is
+readable. The `mount` field is three-state and the `✗` is load-bearing:
+
+- `✓` — the prior wake's boot-score.json was found and parses (the mount holds).
+- `✗ first wake` — no prior score exists; this is an ordinary and useful fact.
+- `✗ unreachable` — the memory is *supposed* to be here and is not; act on this before trusting a single injected block.
+
+A ✓ mount renders the rest of the line: `continuity: ✓ run-id age · shipped
+#386 #387 · dominion +2`. These numbers are what actually happened:
+
+- `run-id age` — e.g., `run-260713-2251-ropg 2h ago`; the prior wake's id and how long ago it ran.
+- `shipped` — PRs that reached MERGED since the prior wake (only if any).
+- `dominion +N` — commits the dominion actually committed since the prior wake (only if nonzero).
+
+A second, indented `drift:` line renders only when the resident's account of
+itself and the world's have come apart:
+
+- `dominion has N uncommitted change(s) — the capture net did not close on a prior wake`
+- `dominion push was rejected (…) — the remote diverged; reconcile before trusting injected memory`
+
+Drift earns its own line precisely because it is the case a resident must not
+skim past. It is the boot telling the wake that its own prose and its own
+repository disagree about what it did. A drift line that cries wolf every
+wake trains the resident to stop reading — and the value of this line is that
+it is rare and true.
+
 ## The choreography — an average daemon run
 
 1. **Receive.** A wake lands with a Run Context Bundle: the lead event, the
