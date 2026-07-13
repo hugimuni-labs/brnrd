@@ -33,6 +33,11 @@ export interface QuotaCredits {
 	reset?: string | null;
 	resets_at?: number | null;
 	run_spend_summary?: string | null;
+	/** ISO stamp of the last scrape that actually *saw* these credits. Present
+	 *  only when the reading was carried across a rate-limited `/usage` panel
+	 *  (see `brr/claude_usage.py::carry_forward_sections`) — the figure is real,
+	 *  it just wasn't confirmed on this tick, and the panel says so. */
+	carried_from?: string | null;
 }
 
 export interface QuotaSpend {
