@@ -548,12 +548,12 @@ hooks:
 source manifest:
   block                        owner          authority    present   location / freshness
   ------------------------------------------------------------------------------------------
-  ✓ Operational preamble (run.md) product        contract      /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/run.md  [2026-07-13T17:37:13Z]
-  ✓ Working register (weave.md) product        contract      /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/weave.md  [2026-07-13T17:37:13Z]
-  ✓ Daemon mechanics (daemon-substrate.md) product        substrate     /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/daemon-substrate.md  [2026-07-13T17:37:13Z]
-  · diffense review-pack prompt product        config        /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/diffense.md  [2026-07-13T17:37:13Z]
-  · Introspection dev-mode invitation product        config        /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/introspection.md  [2026-07-13T17:37:13Z]
-  ✓ Resident identity core      product        identity      /home/gurio/src/misc/brr/.brr/worktrees/run-260713-1737-jfjd/src/brr/prompts/identity-core.md  [2026-07-13T17:37:13Z]
+  ✓ Operational preamble (run.md) product        contract      /home/gurio/src/misc/brr/src/brr/prompts/run.md  [2026-07-12T17:18:16Z]
+  ✓ Working register (weave.md) product        contract      /home/gurio/src/misc/brr/src/brr/prompts/weave.md  [2026-07-12T21:46:19Z]
+  ✓ Daemon mechanics (daemon-substrate.md) product        substrate     /home/gurio/src/misc/brr/src/brr/prompts/daemon-substrate.md  [2026-07-12T22:02:45Z]
+  · diffense review-pack prompt product        config        /home/gurio/src/misc/brr/src/brr/prompts/diffense.md  [2026-07-12T10:35:57Z]
+  · Introspection dev-mode invitation product        config        /home/gurio/src/misc/brr/src/brr/prompts/introspection.md  [2026-07-12T17:18:16Z]
+  ✓ Resident identity core      product        identity      /home/gurio/src/misc/brr/src/brr/prompts/identity-core.md  [2026-07-12T21:46:19Z]
   · Dominion digest (self-inject) resident       memory        computed
   · Active inter-run plan (CS5) resident       plan          computed
   · Stored runner policy (CS6)  resident       policy        computed
@@ -565,3 +565,12 @@ source manifest:
   ✓ Run Context Bundle (runtime facts) daemon-live    runtime       computed
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
+
+--- phase: portal ---
+
+[brnrd portal seed] 0 pending event(s), 0 undelivered outbox file(s).
+- budget: 60s of 7200s used.
+
+--- phase: session-start hook ---
+
+{"hookSpecificOutput": {"additionalContext": "[brnrd portal seed] 0 pending event(s), 0 undelivered outbox file(s).\n- budget: 60s of 7200s used.", "hookEventName": "SessionStart"}}
