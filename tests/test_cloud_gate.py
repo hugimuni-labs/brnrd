@@ -738,6 +738,8 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         brr_dir, kind="daemon", stream="telegram:155783668:",
         label="Add live run labels", run_id="run-live-test",
         repo_label="Gurio/brr", pid=os.getpid(),
+        runner_name="codex-terra", runner_shell="codex",
+        runner_core="gpt-5.6-terra", runner_class="balanced",
     )
     # #200's remaining slice: a live run with real conversation records
     # (phase-advancing lifecycle packets + a `.card` note) should fold its
@@ -788,6 +790,10 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     assert resident["kind"] == "daemon"
     assert resident["is_subspawn"] is False
     assert resident["parent_run_id"] is None
+    assert resident["runner"] == {
+        "name": "codex-terra", "shell": "codex",
+        "core": "gpt-5.6-terra", "class": "balanced",
+    }
     assert resident["phase"] == "running"
     assert resident["card_text"] == "scoping the remaining #200 slice"
     assert resident["card_updated_at"] is not None
