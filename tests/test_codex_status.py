@@ -3,6 +3,9 @@ source for the Codex Shell (§8). Verified live 2026-06-28: ``token_count``
 events in a rollout JSONL carry ``rate_limits`` (5h + weekly)."""
 
 import json
+from datetime import datetime, timezone
+
+import pytest
 
 from brr import codex_status, facets
 
@@ -176,3 +179,111 @@ def test_parse_token_count_carries_each_windows_duration():
     assert weekly_in_primary["primary_window_minutes"] == 10080.0
     assert weekly_in_primary["primary_remaining_percent"] == 59.0
     assert weekly_in_primary["secondary_window_minutes"] is None
+
+
+def _burn_rollout(path, samples, *, window_minutes=10080, resets_at=1784490642):
+    """A rollout file carrying `(iso_timestamp, used_percent)` token_count events."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "timestamp": stamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "rate_limits": {
+                            "primary": {
+                                "used_percent": used,
+                                "window_minutes": window_minutes,
+                                "resets_at": resets_at,
+                            },
+                            "secondary": None,
+                        },
+                    },
+                }
+            )
+            for stamp, used in samples
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_recent_burn_measures_the_climb_and_projects_the_landing(tmp_path, monkeypatch):
+    """The reading that replaces the 5h window OpenAI stopped publishing
+    (2026-07-12): with only a weekly percentage left, "53% left" cannot say
+    whether the account is drifting or sprinting. The burn does — measured off
+    the rollout samples brr already tails, never off a fabricated window."""
+    now = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc).timestamp()
+    _burn_rollout(
+        tmp_path / ".codex" / "sessions" / "2026" / "07" / "13" / "rollout-a.jsonl",
+        [
+            ("2026-07-13T14:00:00.000Z", 26.0),
+            ("2026-07-13T16:00:00.000Z", 37.0),
+            ("2026-07-13T18:00:00.000Z", 47.0),
+        ],
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    burn = codex_status.recent_burn(now=now)
+    assert burn is not None
+    assert burn["window_minutes"] == 10080.0
+    assert burn["burned_percent"] == 21.0          # 26% used → 47% used
+    assert burn["to_remaining_percent"] == 53.0
+    assert burn["span_minutes"] == 240.0
+    # 21 points per 4h → 26.25 in the next 5h → 53 - 26.25 ≈ 26.8 left.
+    assert burn["projected_remaining_percent"] == 26.8
+    # …and empty ~10h out, well before the weekly window resets → not a pace
+    # this account can hold.
+    assert burn["sustainable"] is False
+    assert burn["exhausts_at"] == pytest.approx(now + (53.0 / (21.0 / 240.0)) * 60.0)
+
+
+def test_recent_burn_ignores_samples_from_a_window_that_has_since_reset(
+    tmp_path, monkeypatch
+):
+    """A spent reset credit restarts the window: `used_percent` drops back to
+    near zero (live 2026-07-12, weekly 39% → 1%). Measured naively that reads as
+    a *negative* burn and would paint a sprinting account as idle. Only samples
+    from the window that is currently live count."""
+    now = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc).timestamp()
+    root = tmp_path / ".codex" / "sessions" / "2026" / "07" / "13"
+    _burn_rollout(
+        root / "rollout-old.jsonl",
+        [("2026-07-13T14:00:00.000Z", 39.0), ("2026-07-13T14:30:00.000Z", 40.0)],
+        resets_at=1783000000,
+    )
+    _burn_rollout(
+        root / "rollout-new.jsonl",
+        [("2026-07-13T15:00:00.000Z", 1.0), ("2026-07-13T18:00:00.000Z", 2.0)],
+        resets_at=1784490642,
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    burn = codex_status.recent_burn(now=now)
+    assert burn is not None
+    assert burn["samples"] == 2
+    assert burn["burned_percent"] == 1.0        # not −38: the old window is gone
+    assert burn["to_remaining_percent"] == 98.0
+    # 1 point in 3h → ~294h to empty, and the weekly window (2026-07-19) resets
+    # ~145h out: the window wins the race, so this pace is one you can hold.
+    assert burn["sustainable"] is True
+
+
+def test_recent_burn_refuses_to_project_from_a_span_too_short_to_mean_anything(
+    tmp_path, monkeypatch
+):
+    """Two samples ten minutes apart can 'prove' any rate at all. A projection
+    built on that is a guess wearing a bar — and the whole point of this reading
+    is that it replaced a bar which had stopped being true."""
+    now = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc).timestamp()
+    _burn_rollout(
+        tmp_path / ".codex" / "sessions" / "2026" / "07" / "13" / "rollout-a.jsonl",
+        [("2026-07-13T17:50:00.000Z", 40.0), ("2026-07-13T18:00:00.000Z", 47.0)],
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    assert codex_status.recent_burn(now=now) is None
+
+
+def test_recent_burn_absent_without_rollouts(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent"))
+    assert codex_status.recent_burn() is None
