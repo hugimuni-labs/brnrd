@@ -30,22 +30,40 @@ _AGENTS_PATH = Path(__file__).resolve().parent / "AGENTS.md"
 # ── Template I/O ─────────────────────────────────────────────────────
 
 
-def read_prompt(name: str, repo_root: Path | None = None) -> str:
-    """Return a prompt template, preferring a per-repo override.
+def effective_prompt_path(name: str, repo_root: Path | None = None) -> Path:
+    """The path a prompt template *would* be read from.
 
     Order: ``<repo>/.brr/prompts/<name>`` then the bundled
-    ``src/brr/prompts/<name>``.  Returns ``""`` when neither exists so
-    callers can detect a missing template without a ``try/except``.
+    ``src/brr/prompts/<name>``.  Returns the bundled path when neither exists,
+    so callers can report a location for an absent template.
+
+    The single source of resolution truth: :func:`read_prompt` reads through
+    it and the BootScore manifest reports through it.  A manifest that
+    re-derives this itself is a manifest that lies the day the lookup order
+    grows a layer.
     """
     if repo_root:
         from . import gitops
 
-        override = gitops.shared_brr_dir(repo_root) / "prompts" / name
-        if override.exists():
-            return override.read_text(encoding="utf-8")
-    bundled = _PROMPTS_DIR / name
-    if bundled.exists():
-        return bundled.read_text(encoding="utf-8")
+        try:
+            override = gitops.shared_brr_dir(repo_root) / "prompts" / name
+            if override.exists():
+                return override
+        except OSError:
+            pass
+    return _PROMPTS_DIR / name
+
+
+def read_prompt(name: str, repo_root: Path | None = None) -> str:
+    """Return a prompt template, preferring a per-repo override.
+
+    Resolution lives in :func:`effective_prompt_path`.  Returns ``""`` when
+    no template exists so callers can detect a missing template without a
+    ``try/except``.
+    """
+    path = effective_prompt_path(name, repo_root)
+    if path.exists():
+        return path.read_text(encoding="utf-8")
     return ""
 
 
@@ -634,7 +652,7 @@ def _build_injected_blocks_with_contracts(
     contracts: list[ContractEntry] = []
 
     # 1. Resident identity core
-    ic_path = _PROMPTS_DIR / "identity-core.md"
+    ic_path = effective_prompt_path("identity-core.md", repo_root)
     identity_core = _build_identity_core_block(repo_root)
     contracts.append(ContractEntry(
         block_key="identity-core",
@@ -904,87 +922,67 @@ def _collect_preamble_contracts(
 
     entries: list[Any] = []
 
+    def _file_entry(
+        name: str, *, block_key: str, label: str, authority: str, present: bool | None = None
+    ) -> Any:
+        """One manifest row for a file-backed prompt block.
+
+        Location comes from :func:`effective_prompt_path` — the same resolution
+        the reader uses — so an override reports as the override.
+        """
+        path = effective_prompt_path(name, repo_root)
+        exists = path.exists()
+        return ContractEntry(
+            block_key=block_key,
+            label=label,
+            owner=OWNER_PRODUCT,
+            authority=authority,
+            freshness=_mtime_iso(path),
+            location=str(path),
+            present=exists if present is None else (present and exists),
+        )
+
     # Preamble: run.md / worker.md
-    preamble_name = "worker.md" if is_worker else "run.md"
-    preamble_path = _PROMPTS_DIR / preamble_name
-    # Try repo override path first (mirrors read_prompt logic)
-    try:
-        from . import gitops
-        override = gitops.shared_brr_dir(repo_root) / "prompts" / preamble_name
-        if override.exists():
-            effective_path: Path = override
-        else:
-            effective_path = preamble_path
-    except Exception:
-        effective_path = preamble_path
-    entries.append(ContractEntry(
+    entries.append(_file_entry(
+        "worker.md" if is_worker else "run.md",
         block_key="worker-preamble" if is_worker else "run-preamble",
-        label="Worker preamble (worker.md)" if is_worker else "Operational preamble (run.md)",
-        owner=OWNER_PRODUCT,
+        label="Worker preamble (worker.md)" if is_worker
+              else "Operational preamble (run.md)",
         authority=AUTHORITY_CONTRACT,
-        freshness=_mtime_iso(effective_path),
-        location=str(effective_path),
-        present=effective_path.exists(),
     ))
 
     # weave.md — rides every runner path
-    weave_path = _PROMPTS_DIR / "weave.md"
-    try:
-        from . import gitops
-        w_override = gitops.shared_brr_dir(repo_root) / "prompts" / "weave.md"
-        weave_eff: Path = w_override if w_override.exists() else weave_path
-    except Exception:
-        weave_eff = weave_path
-    entries.append(ContractEntry(
+    entries.append(_file_entry(
+        "weave.md",
         block_key="weave",
         label="Working register (weave.md)",
-        owner=OWNER_PRODUCT,
         authority=AUTHORITY_CONTRACT,
-        freshness=_mtime_iso(weave_eff),
-        location=str(weave_eff),
-        present=weave_eff.exists(),
     ))
 
     # daemon-substrate.md — daemon paths only
     if is_daemon:
-        sub_path = _PROMPTS_DIR / "daemon-substrate.md"
-        try:
-            from . import gitops
-            s_override = gitops.shared_brr_dir(repo_root) / "prompts" / "daemon-substrate.md"
-            sub_eff: Path = s_override if s_override.exists() else sub_path
-        except Exception:
-            sub_eff = sub_path
-        entries.append(ContractEntry(
+        entries.append(_file_entry(
+            "daemon-substrate.md",
             block_key="daemon-substrate",
             label="Daemon mechanics (daemon-substrate.md)",
-            owner=OWNER_PRODUCT,
             authority=AUTHORITY_SUBSTRATE,
-            freshness=_mtime_iso(sub_eff),
-            location=str(sub_eff),
-            present=sub_eff.exists(),
         ))
 
-    # Config-toggle blocks
-    diff_path = _PROMPTS_DIR / "diffense.md"
-    entries.append(ContractEntry(
+    # Config-toggle blocks — present only when the toggle is on *and* the
+    # template exists.
+    entries.append(_file_entry(
+        "diffense.md",
         block_key="diffense",
         label="diffense review-pack prompt",
-        owner=OWNER_PRODUCT,
         authority=AUTHORITY_CONFIG,
-        freshness=_mtime_iso(diff_path),
-        location=str(diff_path),
-        present=has_diffense and diff_path.exists(),
+        present=has_diffense,
     ))
-
-    intr_path = _PROMPTS_DIR / "introspection.md"
-    entries.append(ContractEntry(
+    entries.append(_file_entry(
+        "introspection.md",
         block_key="introspection",
         label="Introspection dev-mode invitation",
-        owner=OWNER_PRODUCT,
         authority=AUTHORITY_CONFIG,
-        freshness=_mtime_iso(intr_path),
-        location=str(intr_path),
-        present=has_introspection and intr_path.exists(),
+        present=has_introspection,
     ))
 
     # Run Context Bundle — daemon-live runtime trailer
@@ -1003,51 +1001,87 @@ def _collect_preamble_contracts(
     return entries
 
 
-def _collect_hooks_info(repo_root: Path | None = None) -> list[Any]:
-    """Return a :class:`BootHook` list for the abstract phase set.
+def probe_shell_hook_capability(shell: str | None) -> bool | None:
+    """Can *shell* actually take brr's hook config here?  ``None`` = unknown.
 
-    ``declared`` is always ``True`` for the three abstract phases — they are
-    part of the daemon's back-channel contract.  ``installed`` reflects
-    whether the runner is wired to call ``brnrd hook``.  ``last_fired``
-    is read from the per-run ``.hook-state.json`` when a hook-state path is
-    discoverable, otherwise ``"unknown"``.
+    The real prechecks (:func:`brr.hooks.hook_capability` for file-config
+    Shells, :func:`brr.hooks.codex_hook_capability` for argv-config codex) —
+    not a guess from an environment variable.  No Shell named ⇒ ``None``:
+    *unknown from here* is a legitimate answer and the honest one.
     """
-    from .bootscore import BootHook
     from . import hooks as _hooks
 
-    # The abstract phases are declared by the daemon's phase contract.
-    declared_phases = list(_hooks.PHASES)  # ("post-tool", "stop", "session-start")
+    if not shell or not shell.strip():
+        return None
+    base = shell.split()[0].strip()
+    if base == "codex":
+        return _hooks.codex_hook_capability()
+    return _hooks.hook_capability(base or None, Path.cwd())
 
-    # installed: cheaply check the runner env for the hooks env var
-    import os
-    runner_env = os.environ.get("BRR_RUNNER", "")
-    hook_outbox = os.environ.get("BRR_OUTBOX_DIR") or os.environ.get("BRR_PORTAL_STATE")
-    installed = bool(runner_env and hook_outbox)
 
-    # last_fired: look for hook-state.json in the outbox dir
-    last_fired = "unknown"
-    if hook_outbox:
-        try:
-            import json
-            state_path = Path(hook_outbox)
-            if state_path.suffix == ".json":
-                state_path = state_path.parent
-            hook_state_file = state_path / _hooks.HOOK_STATE_NAME
-            if hook_state_file.exists():
-                state = json.loads(hook_state_file.read_text(encoding="utf-8"))
-                if isinstance(state, dict) and state.get("last_fired"):
-                    last_fired = str(state["last_fired"])
-        except Exception:
-            pass
+def read_hook_stamps(state_dir: Path | None) -> dict[str, str]:
+    """Per-phase last-fired stamps from a run's ``.hook-state.json``.
 
+    Explicit argument, never an ambient environment read: a score built for a
+    *fixture* or for a run that has not started yet must not absorb whatever
+    wake happens to be firing hooks in the surrounding process.  (The boot
+    replay harness caught exactly that leak — a live wall-clock stamp landing
+    in a versioned snapshot.)
+    """
+    if state_dir is None:
+        return {}
+    import json
+
+    from . import hooks as _hooks
+
+    path = Path(state_dir)
+    if path.suffix == ".json":
+        path = path.parent
+    state_file = path / _hooks.HOOK_STATE_NAME
+    try:
+        if not state_file.exists():
+            return {}
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(state, dict):
+        return {}
+    stamps = state.get(_hooks.FIRED_KEY)
+    return {str(k): str(v) for k, v in stamps.items()} if isinstance(stamps, dict) else {}
+
+
+def _collect_hooks_info(
+    *,
+    installed: bool | None = None,
+    hook_stamps: dict[str, str] | None = None,
+) -> list[Any]:
+    """Return a :class:`BootHook` list for the abstract phase set.
+
+    A pure function of its arguments — every caller supplies what it actually
+    knows, and nothing is inferred from ambient process state:
+
+    - ``declared`` is always ``True``: the three abstract phases are the
+      daemon's back-channel contract.
+    - ``installed`` is three-state — ``True`` (wired), ``False`` (this Shell
+      cannot take the config), ``None`` (*unknown from here*).  The daemon
+      passes the fact it holds; the CLI probes; nobody guesses.  Reporting
+      "not-installed" for "I cannot see from here" is how a live hook told the
+      only operator looking that it was dead.
+    - ``last_fired`` is per phase.  A post-tool hook firing says nothing about
+      session-start, so a single stamp is never copied across all three.
+    """
+    from . import hooks as _hooks
+    from .bootscore import BootHook
+
+    stamps = hook_stamps or {}
     return [
         BootHook(
             name=phase,
             declared=True,
             installed=installed,
-            last_fired=last_fired,
+            last_fired=str(stamps[phase]) if stamps.get(phase) else None,
         )
-        for phase in declared_phases
+        for phase in _hooks.PHASES  # ("post-tool", "stop", "session-start")
     ]
 
 
@@ -1069,26 +1103,34 @@ def build_boot_score(
     has_diffense: bool = False,
     has_introspection: bool = False,
     contracts: list[Any] | None = None,
+    hooks_installed: bool | None = None,
+    hook_stamps: dict[str, str] | None = None,
 ) -> "BootScore":
     """Assemble a :class:`BootScore` for inspection without building the full prompt.
 
-    Used by ``brnrd prompts show`` and the replay test harness.  Deterministic
-    and network-free.  When ``repo_root`` is ``None`` the inject-blocks
-    contracts reflect only the bundled product templates (no dominion, no
-    plan, no knowledge sources).
+    Used by the daemon (every wake), ``brnrd prompts show``, and the replay
+    test harness.  Deterministic and network-free.  When ``repo_root`` is
+    ``None`` the inject-blocks contracts reflect only the bundled product
+    templates (no dominion, no plan, no knowledge sources).
+
+    Hook facts are **passed in, never sniffed**: ``hooks_installed`` is the
+    caller's known answer (the daemon installed the config, so it reports it;
+    the CLI probes with :func:`probe_shell_hook_capability`), and
+    ``hook_stamps`` are per-phase last-fired times from an explicitly named
+    run (:func:`read_hook_stamps`).  Both default to "unknown / none", which
+    is what keeps this deterministic — a score built for a fixture cannot
+    absorb the wall clock of whatever wake is firing hooks around it.
 
     The returned score carries:
 
     - ``contracts``: every block considered for the given prompt type,
       with ``present`` reflecting whether the source exists today.
-    - ``hooks``: the abstract phase set with installed/fired state from
-      the runner env, or ``"unknown"`` when the CLI is called outside a wake.
+    - ``hooks``: the abstract phase set with per-phase installed/fired state.
     """
     from .bootscore import (
         BootScore, BootBody, BootHost, BootAttention, BootPosture,
         DEPTH_COMPACT, SCHEMA_VERSION,
     )
-    from . import config as conf
 
     effective_root = repo_root if repo_root is not None else Path.cwd()
 
@@ -1118,19 +1160,23 @@ def build_boot_score(
     else:
         all_contracts = contracts
 
-    # Runner tier from env or passed value
-    tier: str | None = None
-    import os
-    if os.environ.get("BRR_RUNNER"):
-        tier = "Tier 2 hooks installed"
-
     # Host kind
     kind = "daemon" if is_daemon else "ad-hoc"
     pub_owner = "resident-owned" if not is_worker else "worker"
 
-    # Quota string from the runner_medium hint
-    cfg = conf.load_config(effective_root) if repo_root else {}
-    _ = cfg  # reserved for future profile-based quota lookup
+    hooks_info = _collect_hooks_info(
+        installed=hooks_installed, hook_stamps=hook_stamps
+    )
+
+    # tier is a *reading*, not a label: it reports what the hook contract
+    # actually says, including that it cannot be known from here.
+    installed = hooks_info[0].installed if hooks_info else None
+    if installed is None:
+        tier = None
+    elif installed:
+        tier = "Tier 2 hooks installed"
+    else:
+        tier = "Tier 1 heartbeat-polled (no hooks)"
 
     return BootScore(
         schema_version=SCHEMA_VERSION,
@@ -1145,7 +1191,7 @@ def build_boot_score(
             branch=branch,
         ),
         contracts=all_contracts,
-        hooks=_collect_hooks_info(repo_root),
+        hooks=hooks_info,
     )
 
 
@@ -1162,12 +1208,14 @@ def build_daemon_prompt_with_score(
     returned ``BootScore`` is the source manifest for the assembled prompt —
     the inspectable middle between the versioned sources and the rendered text.
 
-    For the prompt text alone use the original :func:`build_daemon_prompt`;
-    this variant is used by the replay harness and any caller that needs the
-    manifest.
-    """
-    from . import config as conf
+    This is the daemon's path: every wake builds its score here, and the
+    daemon persists it to ``.brr/runs/<run-id>/boot-score.json``.  For the
+    prompt text alone use :func:`build_daemon_prompt`.
 
+    ``hooks_installed`` (keyword) is the run's own hook-config decision; the
+    daemon knows it because it installed the config, and the score should not
+    re-guess it from a process that is not the runner.
+    """
     runner_medium = kwargs.get("runner_medium")
     environment = kwargs.get("environment")
     worker = bool(kwargs.get("worker", False))
@@ -1177,13 +1225,13 @@ def build_daemon_prompt_with_score(
     budget_seconds = kwargs.get("budget_seconds")
     runner_quota = kwargs.get("runner_quota")
     branch_name = kwargs.get("branch_name")
+    hooks_installed = kwargs.pop("hooks_installed", None)
 
     pitfall_text = "\n".join(t for t in (task, event_body or "") if t)
 
-    cfg = conf.load_config(repo_root)
-    has_introspection = not worker and bool(
-        cfg.get("introspect.enabled", cfg.get("introspect_enabled", False))
-    )
+    # The introspection toggle is read inside _build_introspection_block (it
+    # returns "" when off), so its rendered emptiness *is* the toggle state —
+    # no second config read needed to know whether the block is present.
     has_diff = diffense
 
     if worker:
@@ -1231,24 +1279,9 @@ def build_daemon_prompt_with_score(
         has_diffense=has_diff,
         has_introspection=bool(introspection_block),
         contracts=contracts,
+        hooks_installed=hooks_installed,
     )
 
-    return prompt, score
-
-
-def build_run_prompt_with_score(task: str, repo_root: Path) -> "tuple[str, BootScore]":
-    """Build the run prompt and return it together with the BootScore.
-
-    The same as :func:`build_run_prompt` but also produces the inspectable
-    source manifest.
-    """
-    prompt = build_run_prompt(task, repo_root)
-    score = build_boot_score(
-        repo_root,
-        is_daemon=False,
-        is_worker=False,
-        task_text=task,
-    )
     return prompt, score
 
 
