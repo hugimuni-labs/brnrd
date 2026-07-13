@@ -122,14 +122,15 @@ def test_resolve_runner_shell_pin(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only-sonnet"
 
 
-def test_resolve_runner_shell_pin_shadows_mismatched_core_pin(
-    tmp_path, monkeypatch, capsys
-):
-    """shell= wins outright over core= — real footgun caught live 2026-07-09:
-    a config setting both, expecting them to compose, silently ran the
-    Shell's bare-default model for days while core= was never consulted.
-    The resolution is unchanged (shell= still wins); a stderr warning now
-    makes the mismatch visible instead of silent.
+def test_resolve_runner_shell_plus_core_compose(tmp_path, monkeypatch, capsys):
+    """shell= + core= compose to the Shell+Core profile both name.
+
+    The 2026-07-09 footgun (both set, expecting composition, silently
+    running the Shell's bare-default model) got a warning first; as of
+    2026-07-13 the resolution itself is fixed — a base-shell pin plus a
+    core pin resolves to the matching generated profile. Found live: a
+    spawn requesting shell:codex + core:gpt-5.4 dispatched a child with no
+    model flag in argv at all, running the *stronger* config-default core.
     """
     (tmp_path / ".brr").mkdir()
     (tmp_path / ".brr" / "config").write_text(
@@ -153,11 +154,103 @@ def test_resolve_runner_shell_pin_shadows_mismatched_core_pin(
         "which",
         lambda name: "/usr/bin/claude" if name == "claude" else None,
     )
+    assert resolve_runner(tmp_path) == "claude-fable"
+    assert capsys.readouterr().err == ""
+
+
+def test_resolve_runner_event_shell_plus_core_compose(tmp_path, monkeypatch):
+    """The live #358 shape: spawn frontmatter shell: codex + core: gpt-5.4
+    must dispatch the generated codex-gpt-5.4 profile, not the bare codex
+    base profile (whose command carries no model flag)."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=codex-terra\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex": {"binary": "codex", "cmd": "codex exec"},
+            "codex-terra": {
+                "binary": "codex",
+                "cmd": "codex exec --model gpt-5.6-terra",
+                "model": "gpt-5.6-terra",
+                "class": "balanced",
+            },
+            "codex-gpt-5.4": {
+                "shell": "codex",
+                "binary": "codex",
+                "cmd": "codex exec --model gpt-5.4",
+                "model": "gpt-5.4",
+                "class": "balanced",
+                "generated_core": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+    assert (
+        resolve_runner(tmp_path, {"shell": "codex", "core": "gpt-5.4"})
+        == "codex-gpt-5.4"
+    )
+
+
+def test_resolve_runner_shell_core_conflict_warns(tmp_path, monkeypatch, capsys):
+    """A shell pin already model-pinned to a *different* core is a genuine
+    conflict: shell= wins (exact pins stay predictable), stderr says so."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude-fable\ncore=gpt-5.4\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-fable": {
+                "binary": "claude",
+                "cmd": "claude --model claude-fable-5 --print",
+                "model": "claude-fable-5",
+                "class": "economy",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    assert resolve_runner(tmp_path) == "claude-fable"
+    err = capsys.readouterr().err
+    assert "shell='claude-fable'" in err
+    assert "core='gpt-5.4'" in err
+    assert "not consulted" in err
+
+
+def test_resolve_runner_shell_core_no_match_warns(tmp_path, monkeypatch, capsys):
+    """No profile of the pinned shell's family matches core= — shell= wins,
+    stderr makes the dropped core visible."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude\ncore=no-such-model\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"binary": "claude", "cmd": "claude --print"},
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
     assert resolve_runner(tmp_path) == "claude"
     err = capsys.readouterr().err
-    assert "shell='claude'" in err
-    assert "core='claude-fable-5'" in err
-    assert "not consulted" in err
+    assert "core='no-such-model'" in err
 
 
 def test_resolve_runner_shell_pin_matching_core_pin_stays_quiet(
