@@ -28,6 +28,34 @@ def write_prompt_file(brr_dir: Path, task: Run, prompt: str) -> Path | None:
         return None
 
 
+def write_boot_score(brr_dir: Path, task: Run, score: Any) -> Path | None:
+    """Write the wake's BootScore to `.brr/runs/<run-id>/boot-score.json`.
+
+    The structured half of the answer ``prompt.md`` gives in prose: which
+    blocks entered this wake, who owns them, what authority they carry, where
+    they came from, and which were in scope but silent.  Persisted for the
+    *same* reason — the run directory outlives the run, so a wake stays
+    inspectable after the fact rather than only in a replayed reconstruction.
+
+    Non-fatal on error; the run continues regardless.
+    """
+    import json
+
+    from . import bootscore
+
+    context_dir = brr_dir / "runs" / task.id
+    context_dir.mkdir(parents=True, exist_ok=True)
+    path = context_dir / "boot-score.json"
+    try:
+        path.write_text(
+            json.dumps(bootscore.to_dict(score), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return path
+    except (OSError, TypeError):
+        return None
+
+
 def write_context_file(
     brr_dir: Path,
     task: Run,

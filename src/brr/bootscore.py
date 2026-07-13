@@ -15,9 +15,16 @@ resident plan/ledger entries, operator policy.
 
 One source model feeds:
 
-- the daemon prompt (rendered unchanged; BootScore is the inspectable middle);
+- the daemon prompt (rendered unchanged; BootScore is the inspectable middle).
+  Every daemon wake persists its score to ``.brr/runs/<run-id>/boot-score.json``,
+  beside the ``prompt.md`` it explains — the structured half of "what did this
+  wake see?";
 - the ``brnrd prompts show`` CLI;
 - the boot replay test harness.
+
+A field lands here only with a consumer that reads it.  Slice 2's orientation
+kernel and Slice 4's worked depth arrive with their renderers, not before —
+an unpopulated field in an IR whose selling point is *facts* is just a claim.
 
 Slice 2 will render the compact kernel at the prompt's hot edge.
 Slice 3 will extend the ``SessionStart`` capsule from the BootScore.
@@ -25,7 +32,7 @@ Slice 3 will extend the ``SessionStart`` capsule from the BootScore.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 # ── Schema version ────────────────────────────────────────────────────────────
 
@@ -56,7 +63,6 @@ OWNER_DAEMON_LIVE = "daemon-live"  # computed fresh each wake by the daemon
 # ── Depth levels ──────────────────────────────────────────────────────────────
 
 DEPTH_COMPACT = "compact"   # hot score + source manifest + relevant injected slice (Slice 1)
-DEPTH_WORKED = "worked"     # same + per-Shell recorded execution trace (Slice 4)
 
 
 # ── IR dataclasses ────────────────────────────────────────────────────────────
@@ -127,28 +133,26 @@ class BootPosture:
 
 
 @dataclass(frozen=True)
-class BootOrientationStep:
-    """One ordered step in the wake orientation plan."""
-
-    priority: int
-    action: str             # e.g. ``"card: orienting …"``
-    reason: str | None = None
-
-
-@dataclass(frozen=True)
 class BootHook:
     """One hook's declared / installed / last-fired state.
 
     ``declared`` means the daemon's abstract phase contract names it.
-    ``installed`` means the runner has an active hook configuration for it.
-    ``last_fired`` is an ISO timestamp from hook-state memory, or ``"unknown"``
-    when no state file was found (honest value — never silently omit).
+
+    ``installed`` is **three-state**, and the distinction is the point:
+    ``True`` (wired), ``False`` (this Shell cannot take the config), and
+    ``None`` (*unknown from here* — asked outside a wake with no Shell named).
+    Collapsing unknown into "not installed" is how a live hook reports itself
+    dead to the one operator looking; ``absent ≠ unknown ≠ off`` is the same
+    rule the credits panel learned on 2026-07-13.
+
+    ``last_fired`` is an ISO timestamp written by :mod:`brr.hooks` when the
+    phase actually fires, or ``None`` when it has not fired in this run.
     """
 
-    name: str                       # e.g. ``"SessionStart"``
-    declared: bool = False          # named in the daemon's abstract phase set
-    installed: bool = False         # wired in the runner's hook config
-    last_fired: str | None = None   # ISO timestamp or ``"unknown"``
+    name: str                        # e.g. ``"session-start"``
+    declared: bool = False           # named in the daemon's abstract phase set
+    installed: bool | None = False   # True | False | None (unknown from here)
+    last_fired: str | None = None    # ISO timestamp, or None (never fired here)
 
 
 @dataclass
@@ -159,8 +163,8 @@ class BootScore:
     rendered text the wake sees.  Assembly and rendering are now two phases
     with an explicit intermediate; the rendered output is unchanged.
 
-    Slice 1 produces only ``DEPTH_COMPACT``; ``DEPTH_WORKED`` (per-Shell
-    execution traces) arrives in Slice 4.
+    Slice 1 produces only ``DEPTH_COMPACT``; worked depth (per-Shell execution
+    traces) arrives in Slice 4, with the renderer that reads it.
     """
 
     schema_version: str = SCHEMA_VERSION
@@ -170,9 +174,32 @@ class BootScore:
     host: BootHost = field(default_factory=BootHost)
     attention: BootAttention = field(default_factory=BootAttention)
     posture: BootPosture = field(default_factory=BootPosture)
-    orientation_steps: list[BootOrientationStep] = field(default_factory=list)
     contracts: list[ContractEntry] = field(default_factory=list)
     hooks: list[BootHook] = field(default_factory=list)
+
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+
+
+def to_dict(score: BootScore) -> dict:
+    """Serialize a score to a plain dict — the one shape both consumers get.
+
+    Used by ``brnrd prompts show --json`` *and* by the per-run
+    ``boot-score.json`` the daemon persists.  One function, so the operator's
+    view and the run's record cannot quietly disagree about what a wake read.
+    The earlier CLI-local serializer silently dropped ``attention`` and
+    ``posture`` — facts the text view was printing all along.
+    """
+    return {
+        "schema_version": score.schema_version,
+        "depth": score.depth,
+        "body": asdict(score.body),
+        "host": asdict(score.host),
+        "attention": asdict(score.attention),
+        "posture": asdict(score.posture),
+        "contracts": [asdict(c) for c in score.contracts],
+        "hooks": [asdict(h) for h in score.hooks],
+    }
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -226,29 +253,41 @@ def format_manifest(score: BootScore) -> str:
     if score.hooks:
         lines.append("hooks:")
         for hook in score.hooks:
-            flags = []
-            flags.append("declared" if hook.declared else "undeclared")
-            flags.append("installed" if hook.installed else "not-installed")
-            fired = hook.last_fired or "unknown"
+            flags = ["declared" if hook.declared else "undeclared"]
+            if hook.installed is None:
+                flags.append("installed=unknown (ask inside a wake, or pass --runner)")
+            else:
+                flags.append("installed" if hook.installed else "not-installed")
+            fired = hook.last_fired or "not fired here"
             lines.append(f"  {hook.name}: {', '.join(flags)}; last-fired={fired}")
         lines.append("")
 
-    # Source manifest
+    # Source manifest.  Column widths are derived from the content: a label
+    # wider than its pad used to shunt every later column out of alignment.
     lines.append("source manifest:")
-    lines.append(
-        f"  {'block':<28} {'owner':<14} {'authority':<12} {'present':<8}  location / freshness"
+    label_w = max([len(e.label) for e in score.contracts] + [len("block")]) + 2
+    owner_w = max([len(e.owner) for e in score.contracts] + [len("owner")]) + 2
+    auth_w = max([len(e.authority) for e in score.contracts] + [len("authority")]) + 2
+    header = (
+        f"    {'block':<{label_w}}{'owner':<{owner_w}}{'authority':<{auth_w}}"
+        "location / freshness"
     )
-    lines.append("  " + "-" * 90)
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
 
     for entry in score.contracts:
+        # The presence mark *is* the present column — it leads the row.
         present_mark = "✓" if entry.present else "·"
         loc = entry.location
         if entry.freshness:
             loc = f"{loc}  [{entry.freshness}]"
         lines.append(
-            f"  {present_mark} {entry.label:<27} {entry.owner:<14} {entry.authority:<12}  {loc}"
+            f"  {present_mark} {entry.label:<{label_w}}{entry.owner:<{owner_w}}"
+            f"{entry.authority:<{auth_w}}{loc}"
         )
 
+    lines.append("")
+    lines.append("  ✓ present in this wake · · in scope but silent (absent source or toggle off)")
     lines.append("")
     lines.append(
         f"depth: {score.depth} · "
