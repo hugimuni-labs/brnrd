@@ -1068,7 +1068,31 @@ def _build_orientation(
             reason="the card is the surface the user watches while you think",
         ))
 
-    if pending_count:
+    # The queue belongs to the *resident*, and only to the resident.
+    #
+    # This was gated on ``pending_count`` alone, and it caused a live incident on
+    # 2026-07-13. ``pending_count`` is the **parent's** queue — events addressed
+    # to the resident, in the resident's gate thread. A spawned worker inherited
+    # it and was handed, at position 1, in the imperative:
+    #
+    #     next:
+    #       2. answer 12 queued events — one outbox file each, `event: <id>`
+    #
+    # Two workers (claude-haiku, codex-mini) did exactly that: they answered
+    # twelve of the user's messages to the resident, in the resident's thread,
+    # with no context for any of them.
+    #
+    # ``worker.md`` states plainly that the spawning conversation "is not yours
+    # to hold or extend" — and it states it in *prose*, *below* this list. The
+    # kernel overrode it. That is the whole thesis of the boot work confirmed
+    # from the wrong end: **the imperative action-list at the hot slot is what
+    # gets acted on; the prose contract beneath it is what gets skimmed.** The
+    # kernel did not misfire. It worked perfectly, and carried a wrong
+    # instruction with total authority.
+    #
+    # A worker has no gate authority, no `event:` disposition to make, and no
+    # standing in that thread. It must never see this step.
+    if pending_count and not is_worker:
         plural = "s" if pending_count != 1 else ""
         steps.append(OrientationStep(
             action=f"answer {pending_count} queued event{plural}",
