@@ -93,6 +93,18 @@
 				{/if}
 			</div>
 		{/each}
+		{#if !shell.credits && shell.spend?.status === 'unimplemented'}
+			<!-- Explicit "we don't track this" line for a shell with no cost
+			     collector at all (Codex today) — the honesty bar the maintainer
+			     asked for: unimplemented-with-a-reason reads differently from a
+			     silently missing field, which looked identical to "unknown"
+			     (brnrd.dev live-run dashboard posture, 2026-07-13). Suppressed
+			     when `credits` is present (Claude) — that block already speaks
+			     for spend and this would just be noise underneath it. -->
+			<div class="font-mono text-[11px] text-stone-600">
+				spend: unimplemented{shell.spend.reason ? ` — ${shell.spend.reason}` : ''}
+			</div>
+		{/if}
 		{#if shell.reset_credits}
 			<!-- Unredeemed free "Full reset" grants (Codex, via the app-server
 			     quota probe — #315). Deliberately a line, not a track: it is a
@@ -170,6 +182,11 @@
 								{shell.credits.reset}
 							{/if}
 						</span>
+					</div>
+				{/if}
+				{#if shell.credits.run_spend_summary && shell.credits.run_spend_summary !== shell.credits.summary}
+					<div class="mt-1 font-mono text-[11px] text-stone-500">
+						latest run: {shell.credits.run_spend_summary}
 					</div>
 				{/if}
 			</div>
