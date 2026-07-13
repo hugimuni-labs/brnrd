@@ -913,6 +913,13 @@ def _claude_credits_block(
                 "reset": usage.get("reset"),
                 "resets_at": usage.get("resets_at"),
                 "summary": usage.get("summary") or block.get("summary"),
+                # Set when this credits reading was carried across a `/usage`
+                # scrape whose async region came back rate-limited
+                # (`claude_usage.carry_forward_sections`). The number is real —
+                # it just wasn't seen *this* tick, and a dollar figure that
+                # can't say when it was last confirmed is a dollar figure that
+                # will eventually be believed at the wrong moment.
+                "carried_from": usage.get("carried_from"),
                 "run_spend_summary": spend.get("summary") if isinstance(spend, dict) else None,
                 "updated_at": (
                     usage_levels.get("updated_at")
