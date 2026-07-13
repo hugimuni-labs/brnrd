@@ -711,9 +711,38 @@ def load_or_refresh_snapshot(
         env=env,
         wait_for_credits=wait_for_credits,
     )
-    levels = carry_forward_sections(load_snapshot(outbox_dir), levels)
+    levels = carry_forward_sections(_previous_snapshot(outbox_dir), levels)
     write_snapshot(outbox_dir, levels)
     return levels
+
+
+def _previous_snapshot(outbox_dir: Path) -> dict[str, Any] | None:
+    """The most recent usage snapshot to carry async sections from.
+
+    This dir's own snapshot first — the common case, a heartbeat refreshing a
+    file it already wrote. Failing that, the newest snapshot any *sibling* run
+    left behind: snapshots are per-run, so a new run's outbox starts empty, and
+    a first scrape that lands on a rate-limited `/usage` panel would otherwise
+    have nothing to carry from and would publish the credits row as gone. The
+    run boundary is exactly where the reported loss became visible, so it is
+    exactly where the carry has to reach across.
+    """
+    own = load_snapshot(outbox_dir)
+    if own is not None:
+        return own
+    try:
+        siblings = sorted(
+            (p for p in outbox_dir.parent.glob(f"*/{SNAPSHOT_NAME}") if p.parent != outbox_dir),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return None
+    for path in siblings:
+        found = load_snapshot(path.parent)
+        if found is not None:
+            return found
+    return None
 
 
 # Sections of the `/usage` panel that render *asynchronously* and can simply

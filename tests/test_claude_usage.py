@@ -341,3 +341,27 @@ def test_a_section_stops_carrying_once_the_reading_is_stale(tmp_path, monkeypatc
 
     assert "usage_credits" not in levels
     assert "week_models" not in levels
+
+
+def test_carry_reaches_across_the_run_boundary(tmp_path, monkeypatch):
+    """Snapshots are per-run, so a new run's outbox starts empty — and the run
+    boundary is exactly where the reported loss became visible. A first scrape
+    that lands on a rate-limited panel carries from the newest snapshot a
+    sibling run left behind, rather than publishing the credits row as gone."""
+    outbox_root = tmp_path / "outbox"
+    old_run = outbox_root / "evt-old"
+    new_run = outbox_root / "evt-new"
+    old_run.mkdir(parents=True)
+    new_run.mkdir(parents=True)
+    claude_usage.write_snapshot(old_run, _usage_snapshot(_now_stamp()))
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: _usage_snapshot(_now_stamp(), credits=False, models=False),
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(new_run, max_age_seconds=0)
+
+    assert levels["usage_credits"]["spent_amount"] == 4.2
+    assert levels["usage_credits"]["carried_from"]
+    assert levels["week_models"]["fable"]["used_percentage"] == 75.0
