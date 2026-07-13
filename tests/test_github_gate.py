@@ -1510,6 +1510,35 @@ def test_loop_once_noop_when_unconfigured(tmp_path):
     assert protocol.list_pending(inbox) == []
 
 
+@pytest.mark.parametrize("failure", [None, RuntimeError("network down")])
+def test_run_loop_records_github_health(tmp_path, monkeypatch, failure):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    class StopLoop(BaseException):
+        pass
+
+    def loop_once(*_args):
+        if failure is not None:
+            raise failure
+        return constants._POLL_INTERVAL
+
+    monkeypatch.setattr(loop, "_loop_once", loop_once)
+    monkeypatch.setattr(loop.time, "sleep", lambda _seconds: (_ for _ in ()).throw(StopLoop()))
+
+    with pytest.raises(StopLoop):
+        loop.run_loop(brr_dir, inbox, responses)
+
+    health = loop.runtime.load_health(brr_dir, "github")
+    if failure is None:
+        assert health["last_poll_ok"] is not None
+        assert health["last_error"] is None
+    else:
+        assert health["last_poll_ok"] is None
+        assert health["last_error"] == "network down"
+
+
 def test_extract_issue_number():
     assert parse._extract_issue_number(
         "https://api.github.com/repos/o/r/issues/42",

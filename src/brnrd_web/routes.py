@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -221,6 +222,14 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
             daemon_status = "missing"
             daemon_label = "Waiting for local daemon"
         last_activity = _dt(latest.last_seen_at if latest else None) or _dt(repo.updated_at) or _dt(repo.created_at)
+        gate_health: list[dict] = []
+        if latest is not None:
+            try:
+                parsed_health = json.loads(latest.gate_health_json or "[]")
+                if isinstance(parsed_health, list):
+                    gate_health = [row for row in parsed_health if isinstance(row, dict)]
+            except (TypeError, ValueError):
+                pass
         views.append(
             {
                 "repo": repo,
@@ -230,6 +239,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_last_seen": _age_label(latest.last_seen_at if latest else None),
                 "daemon_last_seen_at": _dt(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
+                "gates": gate_health,
                 "setup_command": f"cd {repo.repo_name}\nbrnrd connect https://brnrd.dev\nbrnrd up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
