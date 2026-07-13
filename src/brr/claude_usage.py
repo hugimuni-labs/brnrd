@@ -711,5 +711,82 @@ def load_or_refresh_snapshot(
         env=env,
         wait_for_credits=wait_for_credits,
     )
+    levels = carry_forward_sections(load_snapshot(outbox_dir), levels)
     write_snapshot(outbox_dir, levels)
     return levels
+
+
+# Sections of the `/usage` panel that render *asynchronously* and can simply
+# fail to appear — Claude Code fetches them separately and prints
+# "Per-model breakdown unavailable (rate limited — try again in a moment)" in
+# their place. A scrape that lands in that window parses cleanly; it just has
+# no per-model rows and no usage-credits block in it.
+_ASYNC_SECTIONS = ("usage_credits", "week_models")
+
+# How long a section may be carried across a scrape that didn't render it.
+# Long enough to ride out the panel's rate-limit windows, short enough that a
+# section which is genuinely *gone* (credits turned off, plan changed) leaves
+# the dashboard within a working session rather than haunting it. An explicit
+# "usage credits are off" still overwrites immediately — that is the panel
+# stating a fact, not failing to render one.
+_CARRY_MAX_AGE_SECONDS = 12 * 3600.0
+
+
+def carry_forward_sections(
+    previous: dict[str, Any] | None,
+    fresh: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep async `/usage` sections a fresh scrape failed to render.
+
+    The reported regression (2026-07-13, "we have lost the claude credits"):
+    the dashboard's Claude credits row vanished. Nothing had changed in the
+    parser or the panel — a heartbeat refresh had simply caught `/usage` while
+    its per-model/credits region was rate-limited, and the snapshot write
+    replaced a *complete* reading with a partial one. Field by field, known
+    became unknown, and stayed that way until a lucky scrape restored it.
+
+    A section that fails to render is not a section that is gone. Absence of
+    evidence, again — the same shape as Codex's positional window labels, one
+    layer down. So a missing async section carries forward from the previous
+    snapshot (bounded by :data:`_CARRY_MAX_AGE_SECONDS`), with ``carried_from``
+    stamped on the credits block so a dollar figure can never pass itself off
+    as freshly seen. Everything the scrape *did* prove — session, week, resets —
+    is taken from the fresh reading, unconditionally.
+    """
+    if not isinstance(previous, dict):
+        return fresh
+    prior_stamp = previous.get("updated_at")
+    if not _within_carry_window(prior_stamp):
+        return fresh
+    for section in _ASYNC_SECTIONS:
+        if section in fresh or section not in previous:
+            continue
+        carried = previous[section]
+        if section == "usage_credits" and isinstance(carried, dict):
+            carried = {**carried, "carried_from": prior_stamp}
+        fresh[section] = carried
+    # The per-model weekly buckets ride inside `quota.buckets` for pacing
+    # (`runner_quota.binding_quota_remaining_pct`); carrying `week_models`
+    # without them would leave the two halves of the same reading disagreeing.
+    carried_models = fresh.get("week_models")
+    quota = fresh.get("quota")
+    if isinstance(carried_models, dict) and isinstance(quota, dict):
+        buckets = quota.setdefault("buckets", {})
+        prior_buckets = (previous.get("quota") or {}).get("buckets") or {}
+        prior_models = prior_buckets.get("week_models")
+        if isinstance(prior_models, dict) and "week_models" not in buckets:
+            buckets["week_models"] = prior_models
+    return fresh
+
+
+def _within_carry_window(stamp: Any, now: float | None = None) -> bool:
+    if not isinstance(stamp, str) or not stamp.strip():
+        return False
+    try:
+        moment = datetime.fromisoformat(stamp.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    age = (time.time() if now is None else now) - moment.timestamp()
+    return 0 <= age <= _CARRY_MAX_AGE_SECONDS

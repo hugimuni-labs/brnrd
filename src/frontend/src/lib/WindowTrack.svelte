@@ -247,6 +247,16 @@
 						latest run: {shell.credits.run_spend_summary}
 					</div>
 				{/if}
+				{#if shell.credits.carried_from}
+					<!-- Carried across a rate-limited `/usage` panel: the figure is
+					     real, it just wasn't re-confirmed on this tick. Said out loud
+					     rather than silently redrawn as fresh — the alternative was
+					     what shipped before, where a partial scrape simply *deleted*
+					     the row and the operator watched their credits vanish. -->
+					<div class="mt-1 font-mono text-[11px] text-stone-600">
+						last confirmed {shell.credits.carried_from}
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
