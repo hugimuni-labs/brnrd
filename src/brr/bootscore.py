@@ -90,10 +90,19 @@ class ContractEntry:
 
 @dataclass(frozen=True)
 class BootBody:
-    """The Shell + Core + hook-capability tier for this wake."""
+    """The Shell + Core + hook-capability tier for this wake.
 
+    These are the *resolved* runner facts, not the display label the prompt
+    prints.  The daemon knows them before it builds a line of prompt — it
+    writes them into ``run.md`` in the same second — so a ``None`` here means
+    the score was built without a body (a fixture, a replay, an ad-hoc CLI
+    render), never "this wake has no Core".  A score that cannot name the body
+    it is scoring is not an inspection.
+    """
+
+    name: str | None = None    # runner profile, e.g. ``"claude-fable"``
     shell: str | None = None   # e.g. ``"claude"`` or ``"codex"``
-    core: str | None = None    # e.g. ``"claude-sonnet-4-6"``
+    core: str | None = None    # e.g. ``"claude-fable-5"``
     tier: str | None = None    # e.g. ``"Tier 2 hooks installed"``
 
 
@@ -219,12 +228,20 @@ def format_manifest(score: BootScore) -> str:
 
     # Body / Host summary
     body = score.body
-    if body.shell or body.core or body.tier:
+    if body.name or body.shell or body.core or body.tier:
+        # Name the resolved Shell+Core, not just the profile label: the label
+        # is what was *asked for*, the shell/core pair is what was *issued*.
+        # Those two have diverged in production before (a core pin silently
+        # dropped, the wake running a stronger body than the one requested),
+        # and the divergence is invisible unless both are printed.
         runner_parts = [p for p in (body.shell, body.core) if p]
+        detail = f" ({' / '.join(runner_parts)})" if runner_parts else ""
         tier_str = f" · {body.tier}" if body.tier else ""
-        if runner_parts:
-            runner_str = " / ".join(runner_parts)
-            lines.append(f"  body: {runner_str}{tier_str}")
+        label = body.name or (" / ".join(runner_parts) if runner_parts else None)
+        if label and body.name and detail:
+            lines.append(f"  body: {label}{detail}{tier_str}")
+        elif label:
+            lines.append(f"  body: {label}{tier_str}")
         elif body.tier:
             lines.append(f"  body: unknown{tier_str}")
 

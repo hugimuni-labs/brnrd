@@ -1090,7 +1090,8 @@ def build_boot_score(
     *,
     is_daemon: bool = True,
     is_worker: bool = False,
-    runner_medium: str | None = None,
+    runner_name: str | None = None,
+    runner_shell: str | None = None,
     runner_core: str | None = None,
     environment: str | None = None,
     event_ids: tuple[str, ...] = (),
@@ -1181,7 +1182,9 @@ def build_boot_score(
     return BootScore(
         schema_version=SCHEMA_VERSION,
         depth=DEPTH_COMPACT,
-        body=BootBody(shell=runner_medium, core=runner_core, tier=tier),
+        body=BootBody(
+            name=runner_name, shell=runner_shell, core=runner_core, tier=tier
+        ),
         host=BootHost(kind=kind, environment=environment, publication_owner=pub_owner),
         attention=BootAttention(event_ids=event_ids, body_provenance=body_provenance),
         posture=BootPosture(
@@ -1217,6 +1220,14 @@ def build_daemon_prompt_with_score(
     re-guess it from a process that is not the runner.
     """
     runner_medium = kwargs.get("runner_medium")
+    # Resolved runner facts for the score. Popped, not read: they are the
+    # score's business, and ``build_daemon_prompt`` below does not take them —
+    # it prints the *display label* (``runner_medium``), which is what was
+    # requested. The score records what was actually issued.
+    runner_name = kwargs.pop("runner_name", None)
+    runner_shell = kwargs.pop("runner_shell", None)
+    runner_core = kwargs.pop("runner_core", None)
+    body_provenance = kwargs.pop("body_provenance", None)
     environment = kwargs.get("environment")
     worker = bool(kwargs.get("worker", False))
     diffense = bool(kwargs.get("diffense", False))
@@ -1268,7 +1279,10 @@ def build_daemon_prompt_with_score(
         repo_root,
         is_daemon=True,
         is_worker=worker,
-        runner_medium=str(runner_medium) if runner_medium else None,
+        runner_name=str(runner_name) if runner_name else None,
+        runner_shell=str(runner_shell) if runner_shell else None,
+        runner_core=str(runner_core) if runner_core else None,
+        body_provenance=str(body_provenance) if body_provenance else None,
         environment=str(environment) if environment else None,
         event_ids=(event_id,),
         pending_count=len(pending_events),
