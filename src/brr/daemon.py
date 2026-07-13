@@ -1539,6 +1539,48 @@ def _start_account_gates(
     return threads
 
 
+def _build_continuity_facet(
+    brr_dir: Path,
+    *,
+    repo_root: Path,
+    run_id: str,
+    forge_facet: Any | None = None,
+) -> Any:
+    """Assemble the boot score's continuity facet — Slice 3.
+
+    Never raises and never blocks the wake.  Continuity is an orientation aid;
+    a resident that cannot boot because its own memory was awkward to read is a
+    worse outcome than one that boots to an honest ``✗ unreachable``.
+    """
+    from . import continuity as continuity_mod
+
+    try:
+        cfg = conf.load_config(repo_root)
+        candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+        # The account home repo — the git root the capture net commits into.
+        dominion_repo = candidates[0].capture_root if candidates else None
+
+        prs: list[Any] = []
+        if isinstance(forge_facet, dict):
+            pr_state = forge_facet.get("pr_state")
+            if isinstance(pr_state, dict):
+                rows = pr_state.get("standalone")
+                if isinstance(rows, list):
+                    prs = rows
+
+        return continuity_mod.build_continuity(
+            brr_dir,
+            current_run_id=run_id,
+            dominion_repo=dominion_repo,
+            prs=prs,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[brnrd] continuity facet unavailable: {exc}")
+        from .bootscore import BootContinuity
+
+        return BootContinuity(mount="✗ unreachable")
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -2152,7 +2194,23 @@ def _run_worker(
             runner_name=runner_name,
             runner_shell=task.meta.get("runner_shell") or None,
             runner_core=task.meta.get("runner_core") or None,
+            # Why this body. NOT where the attention came from — those were one
+            # field until 2026-07-13, and the kernel confidently told its first
+            # live reader that its attention had arrived "from the dashboard
+            # spool rack" when the user had in fact typed it into telegram.
             body_provenance=runner_wake_note or None,
+            # Who is speaking. The one thing the attention line exists to say.
+            source_gate=str(event.get("source") or "") or None,
+            continuity=_build_continuity_facet(
+                brr_dir,
+                repo_root=repo_root,
+                run_id=task.id,
+                forge_facet=(
+                    communication_snapshot.get("forge")
+                    if communication_snapshot
+                    else None
+                ),
+            ),
             runner_quota=quota_summary,
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
