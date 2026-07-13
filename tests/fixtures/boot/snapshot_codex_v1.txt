@@ -537,7 +537,7 @@ Implement a small feature, commit, and push a branch.
 
 brnrd boot · schema v1 · depth compact
 
-  body: codex · Tier 2 hooks installed
+  body: codex (codex / gpt-5.6-terra) · Tier 2 hooks installed
   host: daemon · worktree · resident-owned
   posture: week 80% left (resets Sunday) · brr/fixture-branch
 
