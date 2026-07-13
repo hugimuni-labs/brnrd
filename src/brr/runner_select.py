@@ -285,7 +285,7 @@ def automatic_fallback_runner(
     if failure_kind not in AUTO_FALLBACK_FAILURES:
         return None
 
-    current_profile = _find_runner(runners, current)
+    current_profile = find_runner(runners, current)
     if current_profile is None:
         return None
 
@@ -352,7 +352,7 @@ def quality_escalation_runner(
     escalation. If no target-class candidate exists, fall back to the cheapest
     strictly stronger local candidate.
     """
-    current_profile = _find_runner(runners, current)
+    current_profile = find_runner(runners, current)
     if current_profile is None:
         return None
 
@@ -396,7 +396,7 @@ def quality_escalation_runner(
     return sorted(stronger, key=_quality_key)[0]
 
 
-def _find_runner(runners: list[RunnerProfile], name: str) -> RunnerProfile | None:
+def find_runner(runners: list[RunnerProfile], name: str) -> RunnerProfile | None:
     for runner in runners:
         if runner.name == name or runner.profile == name:
             return runner
