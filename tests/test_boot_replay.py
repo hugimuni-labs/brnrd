@@ -513,6 +513,130 @@ class TestBootScore:
         assert stamps[hooks_mod.PHASE_POST_TOOL].endswith("Z")
         assert hooks_mod.PHASE_STOP not in stamps
 
+    # ── Slice 2: the action-first kernel ─────────────────────────────────────
+
+    def test_prompt_opens_with_the_kernel_the_score_describes(self, empty_repo):
+        """The block the wake reads *is* the block the score explains.
+
+        The whole point of an inspectable middle is that inspection and delivery
+        cannot drift.  If the kernel were rendered from one construction and the
+        persisted score from another, ``boot-score.json`` would describe a wake
+        nobody had.  One builder, checked byte-for-byte.
+        """
+        from brr.bootscore import format_kernel
+        from brr.prompts import build_daemon_prompt_with_score
+
+        prompt, score = build_daemon_prompt_with_score(
+            "Task", "evt-001", "/tmp/r.md", empty_repo,
+            runner_name="claude-fable", runner_shell="claude",
+            runner_core="claude-fable-5", environment="host",
+            event_body="Task", hooks_installed=True,
+        )
+        assert prompt.startswith(format_kernel(score)), (
+            "the prompt must open with the kernel, and it must be the same "
+            "kernel the BootScore renders"
+        )
+
+    def test_kernel_is_the_first_thing_read(self, empty_repo):
+        """Position is the payload: nothing precedes the kernel, not even run.md.
+
+        Slice 2's move is about *where*, not only *what*.  A kernel buried under
+        30 KB of standing contract is the haystack it was built to end.
+        """
+        from brr.prompts import build_daemon_prompt
+
+        prompt = build_daemon_prompt(
+            "Task", "evt-001", "/tmp/r.md", empty_repo, event_body="Task",
+        )
+        assert prompt.splitlines()[0].startswith("brnrd boot ·")
+
+    def test_kernel_names_the_body_not_just_the_label(self, empty_repo):
+        """Requested label and issued body have diverged in production before."""
+        from brr.prompts import build_daemon_prompt
+
+        prompt = build_daemon_prompt(
+            "Task", "evt-001", "/tmp/r.md", empty_repo,
+            runner_medium="claude-fable (requested from the dashboard spool rack)",
+            runner_name="claude-fable", runner_shell="claude",
+            runner_core="claude-fable-5",
+        )
+        kernel = prompt.split("\n\n", 1)[0]
+        assert "claude / claude-fable-5" in kernel
+
+    def test_orientation_is_derived_from_posture_not_boilerplate(self, empty_repo):
+        """Steps appear because a fact about *this* wake obliges them.
+
+        A ``next:`` list identical in every wake would be one more constant to
+        skim past — precisely the failure the kernel exists to fix.
+        """
+        from brr.prompts import build_boot_score
+
+        host = build_boot_score(
+            empty_repo, environment="host", pending_count=3, has_event_body=True
+        )
+        actions = [s.action for s in host.orientation]
+        assert "branch before you edit" in actions
+        assert "answer 3 queued events" in actions
+
+        worktree = build_boot_score(
+            empty_repo, environment="worktree", pending_count=0, has_event_body=True
+        )
+        actions = [s.action for s in worktree.orientation]
+        assert "branch before you edit" not in actions   # the daemon publishes it
+        assert not any(a.startswith("answer") for a in actions)  # nothing queued
+
+    def test_worker_kernel_omits_resident_only_steps(self, empty_repo):
+        """A worker never writes a card — ``worker.md`` does not grant it one."""
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(empty_repo, is_worker=True, has_event_body=True)
+        actions = [s.action for s in score.orientation]
+        assert not any("card" in a for a in actions)
+
+    def test_cost_ledger_measures_the_wake_not_the_disk(self, empty_repo):
+        """Bytes are what entered the prompt, and they add up to the whole bill.
+
+        A trimmed block (log tail, dominion digest) weighs less than its file;
+        a toggled-off block weighs nothing at all.  The manifest's job is to say
+        which, and to reconcile: measured blocks + joins == the rendered prompt.
+        """
+        from brr.prompts import build_daemon_prompt_with_score
+
+        prompt, score = build_daemon_prompt_with_score(
+            "Task", "evt-001", "/tmp/r.md", empty_repo, event_body="Task",
+        )
+        assert score.prompt_bytes == len(prompt.encode("utf-8"))
+
+        by_key = {c.block_key: c for c in score.contracts}
+        # The kernel pays rent in its own ledger.
+        assert by_key["boot-kernel"].bytes > 0
+        # The bundle is measured by the only function that can weigh it.
+        assert by_key["run-context-bundle"].bytes > 0
+        # Absent blocks are measured-and-empty, never "unweighed".
+        assert by_key["dominion"].present is False
+        assert by_key["dominion"].bytes == 0
+
+        measured = sum(c.bytes or 0 for c in score.contracts if c.present)
+        # Everything unaccounted for is the "\n\n" between blocks — a handful of
+        # bytes, not a missing block.
+        assert 0 <= score.prompt_bytes - measured < 200
+
+    def test_unrendered_score_reports_unweighed_not_zero(self, empty_repo):
+        """``brnrd prompts show`` renders no bundle; its size is unknown, not 0.
+
+        ``absent != unknown != none``, the rule this module has now learned three
+        separate times.  A CLI inspection that printed ``0 B`` for the Run
+        Context Bundle would be asserting the wake carries no runtime facts.
+        """
+        from brr.prompts import build_boot_score
+
+        score = build_boot_score(empty_repo, is_daemon=True)
+        by_key = {c.block_key: c for c in score.contracts}
+        assert by_key["run-context-bundle"].bytes is None
+        assert score.prompt_bytes is None
+        # But the file-backed blocks it *can* weigh, it does.
+        assert by_key["identity-core"].bytes > 0
+
     def test_boot_score_json_carries_attention_and_posture(self, empty_repo):
         """``to_dict`` serializes what the text view shows — no silent drops."""
         from brr.bootscore import to_dict

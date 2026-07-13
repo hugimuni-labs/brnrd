@@ -3,6 +3,17 @@
 #   BOOT_UPDATE_SNAPSHOTS=1 pytest tests/test_boot_replay.py -v
 # DO NOT EDIT BY HAND — regeneration is the only sanctioned path.
 
+brnrd boot · score v1 · depth compact
+body: codex (codex / gpt-5.6-terra) Tier 2 hooks installed
+host: daemon · worktree · resident-owned
+attention: evt-fixture-0001
+posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
+next:
+  1. read the task — the verbatim event body is the last block below
+  2. write .card + .task-classification — the card is the surface the user watches while you think
+  3. act — deltas arrive at every tool boundary; never poll
+below: reference · `brnrd prompts show` names every block and its cost
+
 You wake mid-project: code with a memory, worked by other hands — people,
 agents, you-before — who left their reasoning where you'd find it. Read
 first, touch second. Not as a stranger; as a steady hand.
@@ -547,25 +558,34 @@ hooks:
   session-start: declared, installed; last-fired=not fired here
 
 source manifest:
-    block                                   owner        authority  location / freshness
-  --------------------------------------------------------------------------------------
-  ✓ Operational preamble (run.md)           product      contract   {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)             product      contract   {PACKAGE_ROOT}/prompts/weave.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)  product      substrate  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  · diffense review-pack prompt             product      config     {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
-  · Introspection dev-mode invitation       product      config     {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
-  ✓ Resident identity core                  product      identity   {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
-  · Dominion digest (self-inject)           resident     memory     computed
-  · Active inter-run plan (CS5)             resident     plan       computed
-  · Stored runner policy (CS6)              resident     policy     computed
-  · Decision ledger (CS7)                   resident     ledger     computed
-  · Task-matched pitfalls                   resident     memory     computed
-  · Knowledge sources (home+repo+docs)      project      knowledge  computed
-  · Recent activity (kb/log.md tail)        daemon-live  activity   computed
-  · kb health (deterministic preflight)     daemon-live  health     computed
-  ✓ Run Context Bundle (runtime facts)      daemon-live  runtime    computed
+    block                                   owner        authority      bytes  location / freshness
+  -------------------------------------------------------------------------------------------------
+  ✓ Boot kernel (action-first score)        daemon-live  runtime          557  computed
+  ✓ Operational preamble (run.md)           product      contract       5,843  {PACKAGE_ROOT}/prompts/run.md  [mtime]
+  ✓ Working register (weave.md)             product      contract       3,448  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)  product      substrate     13,047  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  · diffense review-pack prompt             product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
+  · Introspection dev-mode invitation       product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
+  ✓ Resident identity core                  product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
+  · Dominion digest (self-inject)           resident     memory             0  computed
+  · Active inter-run plan (CS5)             resident     plan               0  computed
+  · Stored runner policy (CS6)              resident     policy             0  computed
+  · Decision ledger (CS7)                   resident     ledger             0  computed
+  · Task-matched pitfalls                   resident     memory             0  computed
+  · Knowledge sources (home+repo+docs)      project      knowledge          0  computed
+  · Recent activity (kb/log.md tail)        daemon-live  activity           0  computed
+  · kb health (deterministic preflight)     daemon-live  health             0  computed
+  ✓ Run Context Bundle (runtime facts)      daemon-live  runtime        3,415  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
+
+cost ledger:
+  substrate      13,047 B  41.1%
+  contract        9,291 B  29.2%
+  identity        5,449 B  17.2%
+  runtime         3,972 B  12.5%
+  unattributed       10 B
+  wake total     31,769 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
