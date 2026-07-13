@@ -365,3 +365,32 @@ def test_carry_reaches_across_the_run_boundary(tmp_path, monkeypatch):
     assert levels["usage_credits"]["spent_amount"] == 4.2
     assert levels["usage_credits"]["carried_from"]
     assert levels["week_models"]["fable"]["used_percentage"] == 75.0
+
+
+def test_carry_heals_a_hole_a_partial_scrape_already_wrote(tmp_path, monkeypatch):
+    """The newest snapshot is often the *damaged* one — a partial scrape landed
+    and wrote the hole to disk. Carrying "from the newest snapshot" would then
+    carry the hole itself, and the credits row would stay gone until a complete
+    scrape happened to land. Each section is taken from the newest snapshot that
+    actually has it."""
+    outbox_root = tmp_path / "outbox"
+    complete = outbox_root / "evt-complete"
+    damaged = outbox_root / "evt-damaged"
+    complete.mkdir(parents=True)
+    damaged.mkdir(parents=True)
+    claude_usage.write_snapshot(complete, _usage_snapshot(_now_stamp()))
+    # …and then a rate-limited scrape wrote a credits-less snapshot over it,
+    # in a newer run's dir. That partial file is the freshest thing on disk.
+    claude_usage.write_snapshot(
+        damaged, _usage_snapshot(_now_stamp(), credits=False, models=False)
+    )
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: _usage_snapshot(_now_stamp(), credits=False, models=False),
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(damaged, max_age_seconds=0)
+
+    assert levels["usage_credits"]["spent_amount"] == 4.2
+    assert levels["week_models"]["fable"]["used_percentage"] == 75.0
