@@ -711,38 +711,46 @@ def load_or_refresh_snapshot(
         env=env,
         wait_for_credits=wait_for_credits,
     )
-    levels = carry_forward_sections(_previous_snapshot(outbox_dir), levels)
+    levels = carry_forward_sections(_carry_candidates(outbox_dir), levels)
     write_snapshot(outbox_dir, levels)
     return levels
 
 
-def _previous_snapshot(outbox_dir: Path) -> dict[str, Any] | None:
-    """The most recent usage snapshot to carry async sections from.
+def _carry_candidates(outbox_dir: Path) -> list[dict[str, Any]]:
+    """Snapshots to carry async sections from, newest first.
 
-    This dir's own snapshot first — the common case, a heartbeat refreshing a
-    file it already wrote. Failing that, the newest snapshot any *sibling* run
-    left behind: snapshots are per-run, so a new run's outbox starts empty, and
-    a first scrape that lands on a rate-limited `/usage` panel would otherwise
-    have nothing to carry from and would publish the credits row as gone. The
-    run boundary is exactly where the reported loss became visible, so it is
-    exactly where the carry has to reach across.
+    Own dir first (a heartbeat refreshing a file it already wrote), then every
+    sibling run's snapshot by recency. Two reasons it has to be a *list* and not
+    just the latest one:
+
+    - snapshots are written per run, so a new run's outbox starts empty — and
+      the run boundary is exactly where the reported loss became visible;
+    - a partial scrape that already landed leaves a snapshot with the section
+      *missing*, and carrying "from the newest snapshot" would then carry the
+      hole itself. The damage would heal only when a complete scrape happened to
+      land. Reading per section, newest-first, heals it on the very next tick.
     """
+    candidates: list[dict[str, Any]] = []
     own = load_snapshot(outbox_dir)
     if own is not None:
-        return own
+        candidates.append(own)
     try:
         siblings = sorted(
-            (p for p in outbox_dir.parent.glob(f"*/{SNAPSHOT_NAME}") if p.parent != outbox_dir),
-            key=lambda p: p.stat().st_mtime,
+            (
+                path
+                for path in outbox_dir.parent.glob(f"*/{SNAPSHOT_NAME}")
+                if path.parent != outbox_dir
+            ),
+            key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
     except OSError:
-        return None
+        return candidates
     for path in siblings:
         found = load_snapshot(path.parent)
         if found is not None:
-            return found
-    return None
+            candidates.append(found)
+    return candidates
 
 
 # Sections of the `/usage` panel that render *asynchronously* and can simply
@@ -762,7 +770,7 @@ _CARRY_MAX_AGE_SECONDS = 12 * 3600.0
 
 
 def carry_forward_sections(
-    previous: dict[str, Any] | None,
+    previous: dict[str, Any] | list[dict[str, Any]] | None,
     fresh: dict[str, Any],
 ) -> dict[str, Any]:
     """Keep async `/usage` sections a fresh scrape failed to render.
@@ -776,35 +784,46 @@ def carry_forward_sections(
 
     A section that fails to render is not a section that is gone. Absence of
     evidence, again — the same shape as Codex's positional window labels, one
-    layer down. So a missing async section carries forward from the previous
-    snapshot (bounded by :data:`_CARRY_MAX_AGE_SECONDS`), with ``carried_from``
-    stamped on the credits block so a dollar figure can never pass itself off
-    as freshly seen. Everything the scrape *did* prove — session, week, resets —
-    is taken from the fresh reading, unconditionally.
+    layer down. So a missing async section is taken from the newest snapshot
+    that actually *has* it (bounded by :data:`_CARRY_MAX_AGE_SECONDS`), with
+    ``carried_from`` stamped on the credits block so a dollar figure can never
+    pass itself off as freshly seen. Everything the scrape *did* prove —
+    session, week, resets — is taken from the fresh reading, unconditionally.
+
+    *previous* is a list of candidate snapshots, newest first (a lone dict is
+    accepted for callers that have only one). Searching per section rather than
+    trusting the single newest snapshot is what heals a hole that has already
+    been written: the newest snapshot is often the partial one.
     """
-    if not isinstance(previous, dict):
-        return fresh
-    prior_stamp = previous.get("updated_at")
-    if not _within_carry_window(prior_stamp):
+    candidates = [previous] if isinstance(previous, dict) else list(previous or [])
+    candidates = [
+        snapshot
+        for snapshot in candidates
+        if isinstance(snapshot, dict) and _within_carry_window(snapshot.get("updated_at"))
+    ]
+    if not candidates:
         return fresh
     for section in _ASYNC_SECTIONS:
-        if section in fresh or section not in previous:
+        if section in fresh:
             continue
-        carried = previous[section]
+        source = next((s for s in candidates if section in s), None)
+        if source is None:
+            continue
+        carried = source[section]
         if section == "usage_credits" and isinstance(carried, dict):
-            carried = {**carried, "carried_from": prior_stamp}
+            carried = {**carried, "carried_from": source.get("updated_at")}
         fresh[section] = carried
-    # The per-model weekly buckets ride inside `quota.buckets` for pacing
-    # (`runner_quota.binding_quota_remaining_pct`); carrying `week_models`
-    # without them would leave the two halves of the same reading disagreeing.
-    carried_models = fresh.get("week_models")
-    quota = fresh.get("quota")
-    if isinstance(carried_models, dict) and isinstance(quota, dict):
-        buckets = quota.setdefault("buckets", {})
-        prior_buckets = (previous.get("quota") or {}).get("buckets") or {}
-        prior_models = prior_buckets.get("week_models")
-        if isinstance(prior_models, dict) and "week_models" not in buckets:
-            buckets["week_models"] = prior_models
+        # The per-model weekly buckets ride inside `quota.buckets` for pacing
+        # (`runner_quota.binding_quota_remaining_pct`); carrying `week_models`
+        # without them would leave the two halves of one reading disagreeing.
+        if section == "week_models":
+            quota = fresh.get("quota")
+            prior_models = ((source.get("quota") or {}).get("buckets") or {}).get(
+                "week_models"
+            )
+            if isinstance(quota, dict) and isinstance(prior_models, dict):
+                buckets = quota.setdefault("buckets", {})
+                buckets.setdefault("week_models", prior_models)
     return fresh
 
 
