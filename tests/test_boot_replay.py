@@ -374,18 +374,46 @@ class TestBootScore:
         from brr.prompts import build_boot_score
         from brr.bootscore import BootScore
 
-        score = build_boot_score(empty_repo, is_daemon=True, runner_medium="codex")
+        score = build_boot_score(empty_repo, is_daemon=True, runner_shell="codex")
         assert isinstance(score, BootScore)
         assert score.body.shell == "codex"
         assert score.host.kind == "daemon"
         assert len(score.contracts) >= 5
+
+    def test_scored_daemon_prompt_names_the_body_it_runs_in(self, empty_repo):
+        """The daemon's own path must resolve Shell+Core, not just a label.
+
+        Regression: the daemon passed only its *display label*
+        ("claude-fable (requested from the dashboard spool rack)") as the
+        shell and never passed the core at all — so every wake persisted a
+        boot-score.json reading ``"core": null`` while ``run.md``, written into
+        the same directory in the same second, named the core exactly. The
+        artifact built to make boot honest could not say what body it was in.
+        """
+        from brr.prompts import build_daemon_prompt_with_score
+
+        _, score = build_daemon_prompt_with_score(
+            "Task", "evt-001", "/tmp/r.md", empty_repo,
+            runner_medium="claude-fable (requested from the dashboard spool rack)",
+            runner_name="claude-fable",
+            runner_shell="claude",
+            runner_core="claude-fable-5",
+            body_provenance="requested from the dashboard spool rack",
+            environment="host",
+        )
+        assert score.body.name == "claude-fable"
+        assert score.body.shell == "claude"
+        assert score.body.core == "claude-fable-5"
+        assert score.attention.body_provenance == (
+            "requested from the dashboard spool rack"
+        )
 
     def test_format_manifest_output(self, empty_repo):
         """format_manifest renders a parseable human-readable text."""
         from brr.prompts import build_boot_score
         from brr.bootscore import format_manifest
 
-        score = build_boot_score(empty_repo, is_daemon=True, runner_medium="claude",
+        score = build_boot_score(empty_repo, is_daemon=True, runner_shell="claude",
                                   runner_core="claude-sonnet-4-6")
         text = format_manifest(score)
         assert "brnrd boot" in text
