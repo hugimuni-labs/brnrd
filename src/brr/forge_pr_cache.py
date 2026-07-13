@@ -129,6 +129,12 @@ def read_state(
 
     if prs is None:
         status = "error" if error else "absent"
+    elif error:
+        # Rows we kept from an earlier good fetch, behind a refresh that failed.
+        # They may be perfectly current or hours out of date — we cannot know,
+        # and "fresh" is the one answer that is definitely wrong.  This is the
+        # rule this whole module exists to enforce, turned on itself.
+        status = "error"
     elif age is None or age >= stale_after:
         status = "stale"
     else:
@@ -250,12 +256,17 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
                     payload["prs"] = [row for row in shaped if row]
 
     if payload["prs"] is None:
-        # Keep the last good rows visible (aged, honestly) instead of dropping
-        # to nothing on one bad refresh.
+        # Keep the last good rows visible instead of dropping to nothing on one
+        # bad refresh — but *aged honestly*.  `fetched_at` describes the DATA,
+        # not the attempt: carrying the rows forward under a fresh timestamp is
+        # how an offline `gh` makes hour-old PR state read as current, which is
+        # precisely the failure-indistinguishable-from-success this cache was
+        # built to end.  The attempt gets its own field.
         previous = load(repo_root)
         if isinstance(previous, dict) and isinstance(previous.get("prs"), list):
             payload["prs"] = previous["prs"]
-            payload["stale_since"] = previous.get("fetched_at")
+            payload["fetched_at"] = previous.get("fetched_at")
+        payload["last_attempt_at"] = _utc_now_iso()
     _write(repo_root, payload)
     return payload
 
