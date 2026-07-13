@@ -353,6 +353,11 @@ class LiveRunIn(BaseModel):
     # (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
     parent_run_id: str | None = Field(default=None, max_length=64)
     is_subspawn: bool = False
+    # Shell+Core identity from the daemon presence registry. Keep the
+    # existing cloud payload's small, sparse shape (``{}`` when a runner has
+    # not been selected) so the API does not discard the fields before the
+    # dashboard reads the stored snapshot.
+    runner: dict[str, str] = Field(default_factory=dict)
     # #200's remaining slice (progress-card richness): the run's current
     # lifecycle phase and live `.card` note text, projected by
     # `src/brr/run_progress.py::project_run` at publish time
