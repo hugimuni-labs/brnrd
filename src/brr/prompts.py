@@ -627,6 +627,17 @@ def _mtime_iso(path: Path) -> str | None:
         return None
 
 
+def _rendered_bytes(block: str) -> int:
+    """UTF-8 size of a block **as rendered into this wake**.
+
+    Not the file on disk: a dominion digest or a log tail is trimmed to the
+    wake budget before it enters, and the trimmed size is the one that costs
+    attention.  An empty block measures 0 — present=False, bytes=0, which is
+    a measurement, not the ``None`` that means *never weighed*.
+    """
+    return len(block.encode("utf-8"))
+
+
 def _build_injected_blocks_with_contracts(
     repo_root: Path, *, task_text: str | None = None
 ) -> tuple[list[str], list["ContractEntry"]]:
@@ -662,6 +673,7 @@ def _build_injected_blocks_with_contracts(
         freshness=_mtime_iso(ic_path),
         location=str(ic_path),
         present=bool(identity_core),
+        bytes=_rendered_bytes(identity_core),
     ))
     if identity_core:
         blocks.append(identity_core)
@@ -676,6 +688,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(dominion_block),
+        bytes=_rendered_bytes(dominion_block),
     ))
     if dominion_block:
         blocks.append(dominion_block)
@@ -690,6 +703,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(inter_run_plan),
+        bytes=_rendered_bytes(inter_run_plan),
     ))
     if inter_run_plan:
         blocks.append(inter_run_plan)
@@ -704,6 +718,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(runner_policy),
+        bytes=_rendered_bytes(runner_policy),
     ))
     if runner_policy:
         blocks.append(runner_policy)
@@ -718,6 +733,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(decision_ledger),
+        bytes=_rendered_bytes(decision_ledger),
     ))
     if decision_ledger:
         blocks.append(decision_ledger)
@@ -732,6 +748,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(pitfalls_block),
+        bytes=_rendered_bytes(pitfalls_block),
     ))
     if pitfalls_block:
         blocks.append(pitfalls_block)
@@ -746,6 +763,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(knowledge_block),
+        bytes=_rendered_bytes(knowledge_block),
     ))
     if knowledge_block:
         blocks.append(knowledge_block)
@@ -760,6 +778,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(context),
+        bytes=_rendered_bytes(context),
     ))
     if context:
         blocks.append(context)
@@ -774,6 +793,7 @@ def _build_injected_blocks_with_contracts(
         freshness=None,
         location="computed",
         present=bool(kb_health_block),
+        bytes=_rendered_bytes(kb_health_block),
     ))
     if kb_health_block:
         blocks.append(kb_health_block)
@@ -853,6 +873,7 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
+    kernel: str | None = None,
     task_text: str | None = None,
     diffense: bool = False,
     inject_blocks: bool = True,
@@ -870,7 +891,9 @@ def _join_prompt_parts(
     wake asking for diffense is out of scope for now; whatever the caller
     passes is honored as-is).
     """
-    parts = [preamble]
+    # The kernel leads.  Everything after it is reference the wake may consult;
+    # the kernel is the wake's own first move (``bootscore.format_kernel``).
+    parts = [kernel, preamble] if kernel else [preamble]
     if inject_blocks:
         # The scored builder supplies this pair from one source read.  The
         # ordinary path stays lazy, but a replay/inspection run must not
@@ -932,6 +955,11 @@ def _collect_preamble_contracts(
         """
         path = effective_prompt_path(name, repo_root)
         exists = path.exists()
+        is_present = exists if present is None else (present and exists)
+        # The rendered block, not the file: every reader of these templates
+        # strips them before joining.  A toggle-off block measures 0 — it did
+        # not enter this wake, whatever its file weighs.
+        text = read_prompt(name, repo_root).strip() if is_present else ""
         return ContractEntry(
             block_key=block_key,
             label=label,
@@ -939,7 +967,8 @@ def _collect_preamble_contracts(
             authority=authority,
             freshness=_mtime_iso(path),
             location=str(path),
-            present=exists if present is None else (present and exists),
+            present=is_present,
+            bytes=_rendered_bytes(text),
         )
 
     # Preamble: run.md / worker.md
@@ -985,7 +1014,10 @@ def _collect_preamble_contracts(
         present=has_introspection,
     ))
 
-    # Run Context Bundle — daemon-live runtime trailer
+    # Run Context Bundle — daemon-live runtime trailer.  ``bytes`` stays None
+    # here: this function is also the CLI's path, where no bundle is rendered
+    # and its size is genuinely *unknown*, not zero.  The daemon stamps the
+    # real figure in :func:`build_daemon_prompt_with_score`.
     if is_daemon:
         from .bootscore import OWNER_DAEMON_LIVE, AUTHORITY_RUNTIME
         entries.append(ContractEntry(
@@ -999,6 +1031,61 @@ def _collect_preamble_contracts(
         ))
 
     return entries
+
+
+def _build_orientation(
+    *,
+    is_daemon: bool,
+    is_worker: bool,
+    environment: str | None,
+    pending_count: int,
+    has_event_body: bool,
+) -> list[Any]:
+    """The kernel's ``next:`` list — ordered actions, derived from posture.
+
+    Deterministic.  Every step is a *fact about this wake* plus the action it
+    obliges; none of them is an inference about what the resident intends.
+    That boundary is the whole reason the daemon is allowed to write this list
+    at all (``design-native-boot-sequence.md`` §1: facts and pointers, not
+    generated interpretations).
+
+    Ordering is execution order, not authority order: what is being asked →
+    make yourself visible → the constraint that will bite → the queue → go.
+    """
+    from .bootscore import OrientationStep
+
+    steps: list[Any] = []
+
+    if has_event_body:
+        steps.append(OrientationStep(
+            action="read the task",
+            reason="the verbatim event body is the last block below",
+        ))
+
+    if is_daemon and not is_worker:
+        steps.append(OrientationStep(
+            action="write .card + .task-classification",
+            reason="the card is the surface the user watches while you think",
+        ))
+
+    if pending_count:
+        plural = "s" if pending_count != 1 else ""
+        steps.append(OrientationStep(
+            action=f"answer {pending_count} queued event{plural}",
+            reason="one outbox file each, `event: <id>`; nothing else clears them",
+        ))
+
+    if (environment or "").strip() == "host":
+        steps.append(OrientationStep(
+            action="branch before you edit",
+            reason="host checkout — your push, or the work never leaves this machine",
+        ))
+
+    steps.append(OrientationStep(
+        action="act",
+        reason="deltas arrive at every tool boundary; never poll",
+    ))
+    return steps
 
 
 def probe_shell_hook_capability(shell: str | None) -> bool | None:
@@ -1101,6 +1188,7 @@ def build_boot_score(
     quota: str | None = None,
     branch: str | None = None,
     task_text: str | None = None,
+    has_event_body: bool = False,
     has_diffense: bool = False,
     has_introspection: bool = False,
     contracts: list[Any] | None = None,
@@ -1193,6 +1281,13 @@ def build_boot_score(
             quota=quota,
             branch=branch,
         ),
+        orientation=_build_orientation(
+            is_daemon=is_daemon,
+            is_worker=is_worker,
+            environment=environment,
+            pending_count=pending_count,
+            has_event_body=has_event_body,
+        ),
         contracts=all_contracts,
         hooks=hooks_info,
     )
@@ -1219,15 +1314,14 @@ def build_daemon_prompt_with_score(
     daemon knows it because it installed the config, and the score should not
     re-guess it from a process that is not the runner.
     """
-    runner_medium = kwargs.get("runner_medium")
-    # Resolved runner facts for the score. Popped, not read: they are the
-    # score's business, and ``build_daemon_prompt`` below does not take them —
-    # it prints the *display label* (``runner_medium``), which is what was
-    # requested. The score records what was actually issued.
-    runner_name = kwargs.pop("runner_name", None)
-    runner_shell = kwargs.pop("runner_shell", None)
-    runner_core = kwargs.pop("runner_core", None)
-    body_provenance = kwargs.pop("body_provenance", None)
+    # Resolved runner facts. Read, not popped: since Slice 2 the *prompt* needs
+    # them too — the kernel names the body the wake is running in, where the
+    # Mode line only prints the display label (what was *requested*). Those two
+    # have diverged in production; the wake should be able to see it.
+    runner_name = kwargs.get("runner_name")
+    runner_shell = kwargs.get("runner_shell")
+    runner_core = kwargs.get("runner_core")
+    body_provenance = kwargs.get("body_provenance")
     environment = kwargs.get("environment")
     worker = bool(kwargs.get("worker", False))
     diffense = bool(kwargs.get("diffense", False))
@@ -1236,7 +1330,7 @@ def build_daemon_prompt_with_score(
     budget_seconds = kwargs.get("budget_seconds")
     runner_quota = kwargs.get("runner_quota")
     branch_name = kwargs.get("branch_name")
-    hooks_installed = kwargs.pop("hooks_installed", None)
+    hooks_installed = kwargs.get("hooks_installed")
 
     pitfall_text = "\n".join(t for t in (task, event_body or "") if t)
 
@@ -1264,16 +1358,41 @@ def build_daemon_prompt_with_score(
     )
     pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
     runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
-    contracts = pre_inject + inject_contracts + runtime_entries
+
+    from .bootscore import (
+        ContractEntry, OWNER_DAEMON_LIVE, AUTHORITY_RUNTIME, replace_bytes,
+    )
+
+    # The kernel is a block of the wake and pays rent like every other one.
+    # A ledger that omits the auditor is not a ledger.
+    kernel_entry = ContractEntry(
+        block_key="boot-kernel",
+        label="Boot kernel (action-first score)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_RUNTIME,
+        freshness=None,
+        location="computed",
+        present=True,
+    )
+    contracts = [kernel_entry] + pre_inject + inject_contracts + runtime_entries
 
     # The prompt and its inspection score now share the same injected blocks
     # and manifest.  A changing dominion/kb cannot make the CLI explain a
     # different wake than the one the runner actually received.
+    sizes: dict[str, int] = {}
     prompt = build_daemon_prompt(
         task, event_id, response_path, repo_root, **kwargs,
         _prepared_injected_blocks=injected_blocks,
         _prepared_introspection_block=introspection_block,
+        _size_sink=sizes,
     )
+
+    # Stamp the two blocks only the renderer could weigh (the kernel it built
+    # and the bundle it computed); the rest measured themselves at build time.
+    contracts = [
+        replace_bytes(c, sizes[c.block_key]) if c.block_key in sizes else c
+        for c in contracts
+    ]
 
     score = build_boot_score(
         repo_root,
@@ -1290,11 +1409,13 @@ def build_daemon_prompt_with_score(
         quota=str(runner_quota) if runner_quota else None,
         branch=str(branch_name) if branch_name else None,
         task_text=pitfall_text or None,
+        has_event_body=bool((event_body or task or "").strip()),
         has_diffense=has_diff,
         has_introspection=bool(introspection_block),
         contracts=contracts,
         hooks_installed=hooks_installed,
     )
+    score.prompt_bytes = sizes.get("_prompt")
 
     return prompt, score
 
@@ -1399,10 +1520,16 @@ def build_daemon_prompt(
     runner_medium: str | None = None,
     runner_quota: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
+    runner_name: str | None = None,
+    runner_shell: str | None = None,
+    runner_core: str | None = None,
+    body_provenance: str | None = None,
+    hooks_installed: bool | None = None,
     diffense: bool = False,
     worker: bool = False,
     _prepared_injected_blocks: list[str] | None = None,
     _prepared_introspection_block: str | None = None,
+    _size_sink: dict[str, int] | None = None,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -1466,15 +1593,50 @@ def build_daemon_prompt(
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nRun instruction: {task}"
+
+    # The action-first kernel (Slice 2).  Built from the same
+    # :func:`build_boot_score` the daemon persists, so the block the wake reads
+    # and the block the score describes cannot drift — ``contracts=[]`` because
+    # the kernel names the *move*, not the map, and skipping the manifest scan
+    # keeps this path as cheap as it was.
+    from .bootscore import format_kernel
+
+    kernel = format_kernel(build_boot_score(
+        repo_root,
+        is_daemon=True,
+        is_worker=worker,
+        runner_name=runner_name,
+        runner_shell=runner_shell,
+        runner_core=runner_core,
+        body_provenance=body_provenance,
+        environment=environment,
+        event_ids=(event_id,) if event_id else (),
+        pending_count=len(pending_events or []),
+        budget=f"{budget_seconds // 60}m" if budget_seconds else None,
+        quota=runner_quota,
+        branch=branch_name,
+        has_event_body=bool((event_body or task or "").strip()),
+        contracts=[],
+        hooks_installed=hooks_installed,
+    ))
+
     # Match pitfalls against the run instruction and the original event text — the
     # triggers the resident recorded tend to echo how a request is phrased.
     pitfall_text = "\n".join(t for t in (task, event_body) if t)
-    return _join_prompt_parts(
-        preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
+    prompt = _join_prompt_parts(
+        preamble, repo_root, trailer, kernel=kernel,
+        task_text=pitfall_text, diffense=diffense,
         inject_blocks=not worker,
         prepared_injected_blocks=_prepared_injected_blocks,
         prepared_introspection_block=_prepared_introspection_block,
     )
+    if _size_sink is not None:
+        # Only what this function alone can measure: the bundle is computed
+        # here and nowhere else, and the total must include the kernel.
+        _size_sink["boot-kernel"] = _rendered_bytes(kernel)
+        _size_sink["run-context-bundle"] = _rendered_bytes(trailer)
+        _size_sink["_prompt"] = _rendered_bytes(prompt)
+    return prompt
 
 
 # ── Run Context Bundle internals ─────────────────────────────────────
