@@ -175,6 +175,19 @@
 				available
 			</div>
 		{/if}
+		{#if shell.credits && shell.credits.enabled === false}
+			<!-- Credits explicitly *off* on the account (`/usage` prints "usage
+			     credits are off"). This used to hide the row entirely — and that
+			     is what "we have lost the claude credits" actually was: the panel
+			     had shown €8.69/€40 on 2026-07-08, the setting went off, and the
+			     row simply stopped existing. A disabled ceiling and a ceiling that
+			     was never there look identical when both render as nothing, and
+			     only one of them is something the operator can turn back on. -->
+			<div class="font-mono text-[11px] text-stone-500">
+				usage credits <span class="text-stone-400">off</span> — no metered spillover past the
+				subscription windows
+			</div>
+		{/if}
 		{#if shell.credits && shell.credits.enabled !== false && (shell.credits.summary || (shell.credits.remaining_percentage !== null && shell.credits.remaining_percentage !== undefined) || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}
 			{@const creditsPct = shell.credits.remaining_percentage ?? null}
 			{@const creditsLevel = quotaLevel(creditsPct)}
