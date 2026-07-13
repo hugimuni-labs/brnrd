@@ -63,5 +63,13 @@
       "runner_medium": "codex",
       "runner_quota": "week 80% left (resets Sunday)"
     }
+  },
+  "portal_state": {
+    "run": {"id": "run-fixture-0001", "event_id": "evt-fixture-0001", "phase": "running"},
+    "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+    "inbound": {"events": []},
+    "outbound": {"replies_current": 0, "replies_other": 0, "outbound_messages": 0},
+    "budget": {"elapsed_seconds": 60, "budget_seconds": 7200},
+    "change_token": "fixture-v1"
   }
 }
