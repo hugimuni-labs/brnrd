@@ -34,6 +34,37 @@ def test_register_then_list(tmp_path):
     assert [e["id"] for e in active] == [entry["id"]]
 
 
+def test_register_carries_runner_fields(tmp_path):
+    """Shell+Core threaded into presence at registration time (2026-07-13)
+    so the live-runs dashboard can name which Runner a running thought is
+    on, not only the closed-run ledger after it finishes."""
+    brr = tmp_path / ".brr"
+    entry = presence.register(
+        brr, kind="daemon", run_id="t1",
+        runner_name="claude-sonnet", runner_shell="claude",
+        runner_core="claude-sonnet-4-6", runner_class="balanced",
+    )
+    assert entry["runner_name"] == "claude-sonnet"
+    assert entry["runner_shell"] == "claude"
+    assert entry["runner_core"] == "claude-sonnet-4-6"
+    assert entry["runner_class"] == "balanced"
+
+    active = presence.list_active(brr)
+    assert active[0]["runner_shell"] == "claude"
+
+
+def test_register_runner_fields_default_to_empty(tmp_path):
+    """A caller that doesn't pass runner fields (older code path, or a
+    plain ad-hoc session) still gets a well-formed entry, not a KeyError
+    downstream when `_runner_payload` reads it."""
+    brr = tmp_path / ".brr"
+    entry = presence.register(brr, kind="session", run_id="t1")
+    assert entry["runner_name"] == ""
+    assert entry["runner_shell"] == ""
+    assert entry["runner_core"] == ""
+    assert entry["runner_class"] == ""
+
+
 def test_list_is_oldest_first(tmp_path):
     brr = tmp_path / ".brr"
     a = presence.register(brr, kind="daemon", run_id="a", now=100.0)
