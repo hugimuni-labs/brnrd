@@ -35,6 +35,16 @@ export interface QuotaCredits {
 	run_spend_summary?: string | null;
 }
 
+export interface QuotaSpend {
+	/** `'unimplemented'` is the live case today: a shell with no cost/spend
+	 *  collector at all (Codex), named explicitly with `reason` rather than
+	 *  the field just being absent, which reads identically to "unknown" on
+	 *  the dashboard. Claude's proven per-run figure rides the `credits`
+	 *  block above instead of this field. */
+	status: 'unimplemented' | string;
+	reason?: string | null;
+}
+
 export interface QuotaShell {
 	shell: string;
 	status: 'known' | 'stale' | 'unknown' | string;
@@ -47,6 +57,9 @@ export interface QuotaShell {
 	 *  reading them (the session-rollout seam never carried them). A window at
 	 *  4% left means something different when four resets sit unused. */
 	reset_credits?: number | null;
+	/** Explicit spend posture for a shell with no `credits` block — see
+	 *  `QuotaSpend`. Absent on daemon builds older than 2026-07-13. */
+	spend?: QuotaSpend | null;
 }
 
 export interface QuotaResponse {
