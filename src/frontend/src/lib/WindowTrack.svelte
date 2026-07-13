@@ -184,6 +184,11 @@
 						</span>
 					</div>
 				{/if}
+				{#if shell.credits.run_spend_summary && shell.credits.run_spend_summary !== shell.credits.summary}
+					<div class="mt-1 font-mono text-[11px] text-stone-500">
+						latest run: {shell.credits.run_spend_summary}
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
