@@ -2,7 +2,7 @@
   "_meta": {
     "schema": "boot-fixture-v1",
     "captured": "2026-07-13",
-    "description": "Versioned inputs for the boot replay harness. Drive build_daemon_prompt through these to regenerate the claude/codex snapshots. The fixture is deliberately minimal — enough inputs to exercise all code paths (runner_medium, runner_catalog, event metadata, communication snapshot) without coupling to live domain state."
+    "description": "Versioned inputs for the boot replay harness. Drive build_daemon_prompt through these to regenerate the claude/codex snapshots. The fixture is deliberately minimal — enough inputs to exercise all code paths (runner_medium, runner_catalog, event metadata, communication snapshot) without coupling to live domain state. Hook posture is declared here (hooks_installed), not inherited from the environment: a fixture that reads ambient BRR_* state renders differently inside a wake than on CI."
   },
   "shared": {
     "task": "Implement a small feature, commit, and push a branch.",
@@ -52,7 +52,8 @@
         "cost_rank": 20,
         "quota_source": "codex-local"
       }
-    ]
+    ],
+    "hooks_installed": true
   },
   "runners": {
     "claude": {
@@ -65,11 +66,27 @@
     }
   },
   "portal_state": {
-    "run": {"id": "run-fixture-0001", "event_id": "evt-fixture-0001", "phase": "running"},
-    "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
-    "inbound": {"events": []},
-    "outbound": {"replies_current": 0, "replies_other": 0, "outbound_messages": 0},
-    "budget": {"elapsed_seconds": 60, "budget_seconds": 7200},
+    "run": {
+      "id": "run-fixture-0001",
+      "event_id": "evt-fixture-0001",
+      "phase": "running"
+    },
+    "attention": {
+      "pending_event_count": 0,
+      "pending_outbox_file_count": 0
+    },
+    "inbound": {
+      "events": []
+    },
+    "outbound": {
+      "replies_current": 0,
+      "replies_other": 0,
+      "outbound_messages": 0
+    },
+    "budget": {
+      "elapsed_seconds": 60,
+      "budget_seconds": 7200
+    },
     "change_token": "fixture-v1"
   }
 }

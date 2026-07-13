@@ -251,18 +251,14 @@ def main(argv: list[str] | None = None) -> None:
         "show",
         help="print the boot source manifest — every block considered for a "
              "wake, with owner, authority, freshness, and location. "
-             "Deterministic and network-free. (--boot is the default view; "
-             "the flag is accepted for future expansion)")
-    p.add_argument(
-        "--boot", action="store_true", default=True,
-        help="show the boot source manifest (default; currently the only view)")
+             "Deterministic and network-free.")
     p.add_argument(
         "--json", action="store_true",
         help="emit machine-readable JSON instead of human-readable text")
     p.add_argument(
         "--runner", default=None,
-        help="runner profile name to include in the score body "
-             "(e.g. claude-sonnet, codex)")
+        help="runner profile to score for (e.g. claude-sonnet, codex) — also "
+             "resolves that Shell's real hook capability")
     p.set_defaults(func=cmd_prompts_show)
 
     bench_p = sub.add_parser(
@@ -365,7 +361,7 @@ def cmd_worktree_hygiene(args):
 
 
 def cmd_prompts_show(args):
-    """``brnrd prompts show [--boot] [--json] [--runner PROFILE]``.
+    """``brnrd prompts show [--json] [--runner PROFILE]``.
 
     Prints the boot source manifest: every block that would enter a wake here,
     with owner, authority, freshness/revision, location, and whether it is
@@ -374,26 +370,44 @@ def cmd_prompts_show(args):
     import json
     import sys
 
-    from . import prompts, bootscore
+    from . import bootscore, prompts, runner
 
     repo_root = _maybe_repo_root()
 
-    # Resolve optional runner profile to shell/core
+    # Resolve an optional runner profile to its Shell + Core.  The catalog is
+    # the public surface that already answers this (it is what the wake's own
+    # Runner block is built from) — the earlier code reached into runner_select
+    # for a `.shell` attribute RunnerProfile does not have, and a bare
+    # `except Exception` swallowed the AttributeError into a wrong answer.
     runner_medium: str | None = None
     runner_core: str | None = None
     if getattr(args, "runner", None):
-        from . import runner_select
-        try:
-            all_runners = list(runner_select.load_runners(repo_root).values()
-                               if repo_root else [])
-            found = runner_select._find_runner(all_runners, args.runner)
-            if found is not None:
-                runner_medium = found.shell
-                runner_core = found.model
-            else:
-                runner_medium = args.runner
-        except Exception:
-            runner_medium = args.runner
+        name = str(args.runner)
+        catalog = runner.available_runner_catalog(repo_root, selected=name)
+        match = next((r for r in catalog if r.get("name") == name), None)
+        if match is None:
+            known = ", ".join(sorted(str(r.get("name")) for r in catalog)) or "none"
+            print(
+                f"brnrd: unknown runner profile {name!r}. Known profiles: {known}",
+                file=sys.stderr,
+            )
+            return 1
+        runner_medium = match.get("shell") or name
+        runner_core = match.get("model")
+
+    # Hook facts, in order of authority: inside a wake the hooks are provably
+    # wired (and their fired stamps are readable); with a Shell named, probe
+    # its real capability; otherwise the honest answer is "unknown from here".
+    import os
+
+    wake_outbox = os.environ.get("BRR_OUTBOX_DIR") or os.environ.get("BRR_PORTAL_STATE")
+    in_wake = bool(os.environ.get("BRR_RUNNER") and wake_outbox)
+    if in_wake:
+        hooks_installed: bool | None = True
+        hook_stamps = prompts.read_hook_stamps(Path(wake_outbox))
+    else:
+        hooks_installed = prompts.probe_shell_hook_capability(runner_medium)
+        hook_stamps = {}
 
     score = prompts.build_boot_score(
         repo_root,
@@ -401,19 +415,12 @@ def cmd_prompts_show(args):
         is_worker=False,
         runner_medium=runner_medium,
         runner_core=runner_core,
+        hooks_installed=hooks_installed,
+        hook_stamps=hook_stamps,
     )
 
     if getattr(args, "json", False):
-        import dataclasses
-        out = {
-            "schema_version": score.schema_version,
-            "depth": score.depth,
-            "body": dataclasses.asdict(score.body),
-            "host": dataclasses.asdict(score.host),
-            "contracts": [dataclasses.asdict(c) for c in score.contracts],
-            "hooks": [dataclasses.asdict(h) for h in score.hooks],
-        }
-        print(json.dumps(out, indent=2))
+        print(json.dumps(bootscore.to_dict(score), indent=2))
     else:
         print(bootscore.format_manifest(score))
     return 0
