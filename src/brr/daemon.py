@@ -2144,6 +2144,15 @@ def _run_worker(
                 if runner_wake_note
                 else runner_name
             ),
+            # The score gets the *resolved* body, not the display label above.
+            # We already wrote these three into run.md (see ``runner_shell`` /
+            # ``runner_core`` in task.meta); a boot score that reports
+            # ``core: null`` while run.md names the core in the same directory,
+            # in the same second, is not an inspection of anything.
+            runner_name=runner_name,
+            runner_shell=task.meta.get("runner_shell") or None,
+            runner_core=task.meta.get("runner_core") or None,
+            body_provenance=runner_wake_note or None,
             runner_quota=quota_summary,
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
