@@ -154,3 +154,25 @@ def test_facets_levels_collector_bool_back_compat():
     res = facets.build(levels={}, levels_collector=True)
     assert res["spend"]["status"] == "absent"
     assert res["context_window"]["status"] == "absent"
+
+
+def test_parse_token_count_carries_each_windows_duration():
+    """The rollout seam must hand downstream readers the same structural
+    duration the app-server seam does (2026-07-13): a window's slot is not its
+    identity — a weekly window can arrive as `primary` — so `window_minutes`
+    has to survive the parse, not just get rendered into the summary text."""
+    quota = codex_status.parse_token_count(_PAYLOAD)["quota"]
+    assert quota["primary_window_minutes"] == 300.0
+    assert quota["secondary_window_minutes"] == 10080.0
+
+    weekly_in_primary = codex_status.parse_token_count(
+        {
+            "rate_limits": {
+                "primary": {"used_percent": 41.0, "window_minutes": 10080},
+                "secondary": None,
+            }
+        }
+    )["quota"]
+    assert weekly_in_primary["primary_window_minutes"] == 10080.0
+    assert weekly_in_primary["primary_remaining_percent"] == 59.0
+    assert weekly_in_primary["secondary_window_minutes"] is None
