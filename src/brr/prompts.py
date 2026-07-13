@@ -597,6 +597,172 @@ def _build_introspection_block(repo_root: Path) -> str:
     return read_prompt("introspection.md", repo_root).strip()
 
 
+def _mtime_iso(path: Path) -> str | None:
+    """Return the file's mtime as a compact ISO date, or ``None`` if missing."""
+    try:
+        import datetime
+        ts = path.stat().st_mtime
+        return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except OSError:
+        return None
+
+
+def _build_injected_blocks_with_contracts(
+    repo_root: Path, *, task_text: str | None = None
+) -> tuple[list[str], list["ContractEntry"]]:
+    """The scored implementation behind ``_build_injected_blocks``.
+
+    Returns both the rendered block list (identical to the old
+    ``_build_injected_blocks`` output) and a :class:`ContractEntry` list —
+    the source manifest for every block considered.  Blocks that are absent
+    this run (empty file, nothing to inject) still appear in the manifest with
+    ``present=False`` so ``brnrd prompts show`` can report the full picture.
+
+    Shared by ``_build_injected_blocks``, ``build_injected_context``, and
+    the scored prompt-builder variants — one computation, three consumers.
+    """
+    from .bootscore import (
+        ContractEntry,
+        OWNER_PRODUCT, OWNER_RESIDENT, OWNER_PROJECT, OWNER_DAEMON_LIVE,
+        AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_PLAN, AUTHORITY_POLICY,
+        AUTHORITY_LEDGER, AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH,
+    )
+
+    blocks: list[str] = []
+    contracts: list[ContractEntry] = []
+
+    # 1. Resident identity core
+    ic_path = _PROMPTS_DIR / "identity-core.md"
+    identity_core = _build_identity_core_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="identity-core",
+        label="Resident identity core",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_IDENTITY,
+        freshness=_mtime_iso(ic_path),
+        location=str(ic_path),
+        present=bool(identity_core),
+    ))
+    if identity_core:
+        blocks.append(identity_core)
+
+    # 2. Dominion digest (living playbook + self-inject)
+    dominion_block = _build_dominion_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="dominion",
+        label="Dominion digest (self-inject)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_MEMORY,
+        freshness=None,
+        location="computed",
+        present=bool(dominion_block),
+    ))
+    if dominion_block:
+        blocks.append(dominion_block)
+
+    # 3. CS5 — active inter-run plan
+    inter_run_plan = _build_inter_run_plan_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="inter-run-plan",
+        label="Active inter-run plan (CS5)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_PLAN,
+        freshness=None,
+        location="computed",
+        present=bool(inter_run_plan),
+    ))
+    if inter_run_plan:
+        blocks.append(inter_run_plan)
+
+    # 4. CS6 — stored runner policy
+    runner_policy = _build_runner_policy_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="runner-policy",
+        label="Stored runner policy (CS6)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_POLICY,
+        freshness=None,
+        location="computed",
+        present=bool(runner_policy),
+    ))
+    if runner_policy:
+        blocks.append(runner_policy)
+
+    # 5. CS7 — decision ledger
+    decision_ledger = _build_decision_ledger_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="decision-ledger",
+        label="Decision ledger (CS7)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_LEDGER,
+        freshness=None,
+        location="computed",
+        present=bool(decision_ledger),
+    ))
+    if decision_ledger:
+        blocks.append(decision_ledger)
+
+    # 6. Pitfalls matching the task
+    pitfalls_block = _build_pitfalls_block(repo_root, task_text) if task_text else ""
+    contracts.append(ContractEntry(
+        block_key="pitfalls",
+        label="Task-matched pitfalls",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_MEMORY,
+        freshness=None,
+        location="computed",
+        present=bool(pitfalls_block),
+    ))
+    if pitfalls_block:
+        blocks.append(pitfalls_block)
+
+    # 7. Knowledge sources
+    knowledge_block = _build_knowledge_sources_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="knowledge-sources",
+        label="Knowledge sources (home+repo+docs)",
+        owner=OWNER_PROJECT,
+        authority=AUTHORITY_KNOWLEDGE,
+        freshness=None,
+        location="computed",
+        present=bool(knowledge_block),
+    ))
+    if knowledge_block:
+        blocks.append(knowledge_block)
+
+    # 8. Recent activity log tail
+    context = _build_context_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="recent-activity",
+        label="Recent activity (kb/log.md tail)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_ACTIVITY,
+        freshness=None,
+        location="computed",
+        present=bool(context),
+    ))
+    if context:
+        blocks.append(context)
+
+    # 9. kb health findings
+    kb_health_block = _build_kb_health_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="kb-health",
+        label="kb health (deterministic preflight)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_HEALTH,
+        freshness=None,
+        location="computed",
+        present=bool(kb_health_block),
+    ))
+    if kb_health_block:
+        blocks.append(kb_health_block)
+
+    return blocks, contracts
+
+
 def _build_injected_blocks(
     repo_root: Path, *, task_text: str | None = None
 ) -> list[str]:
@@ -624,39 +790,11 @@ def _build_injected_blocks(
     blocks (diffense, introspection) sit on top of these; they are added by
     ``_join_prompt_parts`` (for the full runner prompt) and by
     ``build_injected_context`` (for the faithful inject-tool view).
+
+    Delegates to ``_build_injected_blocks_with_contracts`` and discards the
+    contracts list — the scored variant is the single implementation.
     """
-    blocks: list[str] = []
-    identity_core = _build_identity_core_block(repo_root)
-    if identity_core:
-        blocks.append(identity_core)
-    dominion_block = _build_dominion_block(repo_root)
-    if dominion_block:
-        blocks.append(dominion_block)
-    # CS5 — inter-run plan: the resident's own plan survives the wake
-    inter_run_plan = _build_inter_run_plan_block(repo_root)
-    if inter_run_plan:
-        blocks.append(inter_run_plan)
-    # CS6 — stored runner policy: standing preferences the daemon injects
-    runner_policy = _build_runner_policy_block(repo_root)
-    if runner_policy:
-        blocks.append(runner_policy)
-    # CS7 — decision ledger: user-facing through-line of decisions
-    decision_ledger = _build_decision_ledger_block(repo_root)
-    if decision_ledger:
-        blocks.append(decision_ledger)
-    if task_text:
-        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
-        if pitfalls_block:
-            blocks.append(pitfalls_block)
-    knowledge_block = _build_knowledge_sources_block(repo_root)
-    if knowledge_block:
-        blocks.append(knowledge_block)
-    context = _build_context_block(repo_root)
-    if context:
-        blocks.append(context)
-    kb_health_block = _build_kb_health_block(repo_root)
-    if kb_health_block:
-        blocks.append(kb_health_block)
+    blocks, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
     return blocks
 
 
@@ -700,6 +838,8 @@ def _join_prompt_parts(
     task_text: str | None = None,
     diffense: bool = False,
     inject_blocks: bool = True,
+    prepared_injected_blocks: list[str] | None = None,
+    prepared_introspection_block: str | None = None,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer.
 
@@ -714,7 +854,15 @@ def _join_prompt_parts(
     """
     parts = [preamble]
     if inject_blocks:
-        parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
+        # The scored builder supplies this pair from one source read.  The
+        # ordinary path stays lazy, but a replay/inspection run must not
+        # build the prompt and its manifest from two independently-read
+        # views of dominion and knowledge state.
+        parts.extend(
+            prepared_injected_blocks
+            if prepared_injected_blocks is not None
+            else _build_injected_blocks(repo_root, task_text=task_text)
+        )
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
@@ -724,11 +872,384 @@ def _join_prompt_parts(
         # whole shape it has just read (opt-in dev mode). Placed here so it
         # can refer to everything above and sit fresh against the task
         # bundle.
-        introspection_block = _build_introspection_block(repo_root)
+        introspection_block = (
+            prepared_introspection_block
+            if prepared_introspection_block is not None
+            else _build_introspection_block(repo_root)
+        )
         if introspection_block:
             parts.append(introspection_block)
     parts.append(trailer)
     return "\n\n".join(parts)
+
+
+def _collect_preamble_contracts(
+    repo_root: Path,
+    *,
+    is_worker: bool = False,
+    is_daemon: bool = True,
+    has_diffense: bool = False,
+    has_introspection: bool = False,
+) -> list[Any]:
+    """Compute ContractEntry items for the preamble + substrate + config-toggle blocks.
+
+    These are the blocks that live *outside* ``_build_injected_blocks`` — the
+    prompt frame before and after the inject stack.  Returns the list in the
+    order they appear in a rendered prompt.
+    """
+    from .bootscore import (
+        ContractEntry,
+        OWNER_PRODUCT, AUTHORITY_CONTRACT, AUTHORITY_SUBSTRATE, AUTHORITY_CONFIG,
+    )
+
+    entries: list[Any] = []
+
+    # Preamble: run.md / worker.md
+    preamble_name = "worker.md" if is_worker else "run.md"
+    preamble_path = _PROMPTS_DIR / preamble_name
+    # Try repo override path first (mirrors read_prompt logic)
+    try:
+        from . import gitops
+        override = gitops.shared_brr_dir(repo_root) / "prompts" / preamble_name
+        if override.exists():
+            effective_path: Path = override
+        else:
+            effective_path = preamble_path
+    except Exception:
+        effective_path = preamble_path
+    entries.append(ContractEntry(
+        block_key="worker-preamble" if is_worker else "run-preamble",
+        label="Worker preamble (worker.md)" if is_worker else "Operational preamble (run.md)",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_CONTRACT,
+        freshness=_mtime_iso(effective_path),
+        location=str(effective_path),
+        present=effective_path.exists(),
+    ))
+
+    # weave.md — rides every runner path
+    weave_path = _PROMPTS_DIR / "weave.md"
+    try:
+        from . import gitops
+        w_override = gitops.shared_brr_dir(repo_root) / "prompts" / "weave.md"
+        weave_eff: Path = w_override if w_override.exists() else weave_path
+    except Exception:
+        weave_eff = weave_path
+    entries.append(ContractEntry(
+        block_key="weave",
+        label="Working register (weave.md)",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_CONTRACT,
+        freshness=_mtime_iso(weave_eff),
+        location=str(weave_eff),
+        present=weave_eff.exists(),
+    ))
+
+    # daemon-substrate.md — daemon paths only
+    if is_daemon:
+        sub_path = _PROMPTS_DIR / "daemon-substrate.md"
+        try:
+            from . import gitops
+            s_override = gitops.shared_brr_dir(repo_root) / "prompts" / "daemon-substrate.md"
+            sub_eff: Path = s_override if s_override.exists() else sub_path
+        except Exception:
+            sub_eff = sub_path
+        entries.append(ContractEntry(
+            block_key="daemon-substrate",
+            label="Daemon mechanics (daemon-substrate.md)",
+            owner=OWNER_PRODUCT,
+            authority=AUTHORITY_SUBSTRATE,
+            freshness=_mtime_iso(sub_eff),
+            location=str(sub_eff),
+            present=sub_eff.exists(),
+        ))
+
+    # Config-toggle blocks
+    diff_path = _PROMPTS_DIR / "diffense.md"
+    entries.append(ContractEntry(
+        block_key="diffense",
+        label="diffense review-pack prompt",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_CONFIG,
+        freshness=_mtime_iso(diff_path),
+        location=str(diff_path),
+        present=has_diffense and diff_path.exists(),
+    ))
+
+    intr_path = _PROMPTS_DIR / "introspection.md"
+    entries.append(ContractEntry(
+        block_key="introspection",
+        label="Introspection dev-mode invitation",
+        owner=OWNER_PRODUCT,
+        authority=AUTHORITY_CONFIG,
+        freshness=_mtime_iso(intr_path),
+        location=str(intr_path),
+        present=has_introspection and intr_path.exists(),
+    ))
+
+    # Run Context Bundle — daemon-live runtime trailer
+    if is_daemon:
+        from .bootscore import OWNER_DAEMON_LIVE, AUTHORITY_RUNTIME
+        entries.append(ContractEntry(
+            block_key="run-context-bundle",
+            label="Run Context Bundle (runtime facts)",
+            owner=OWNER_DAEMON_LIVE,
+            authority=AUTHORITY_RUNTIME,
+            freshness=None,
+            location="computed",
+            present=is_daemon,
+        ))
+
+    return entries
+
+
+def _collect_hooks_info(repo_root: Path | None = None) -> list[Any]:
+    """Return a :class:`BootHook` list for the abstract phase set.
+
+    ``declared`` is always ``True`` for the three abstract phases — they are
+    part of the daemon's back-channel contract.  ``installed`` reflects
+    whether the runner is wired to call ``brnrd hook``.  ``last_fired``
+    is read from the per-run ``.hook-state.json`` when a hook-state path is
+    discoverable, otherwise ``"unknown"``.
+    """
+    from .bootscore import BootHook
+    from . import hooks as _hooks
+
+    # The abstract phases are declared by the daemon's phase contract.
+    declared_phases = list(_hooks.PHASES)  # ("post-tool", "stop", "session-start")
+
+    # installed: cheaply check the runner env for the hooks env var
+    import os
+    runner_env = os.environ.get("BRR_RUNNER", "")
+    hook_outbox = os.environ.get("BRR_OUTBOX_DIR") or os.environ.get("BRR_PORTAL_STATE")
+    installed = bool(runner_env and hook_outbox)
+
+    # last_fired: look for hook-state.json in the outbox dir
+    last_fired = "unknown"
+    if hook_outbox:
+        try:
+            import json
+            state_path = Path(hook_outbox)
+            if state_path.suffix == ".json":
+                state_path = state_path.parent
+            hook_state_file = state_path / _hooks.HOOK_STATE_NAME
+            if hook_state_file.exists():
+                state = json.loads(hook_state_file.read_text(encoding="utf-8"))
+                if isinstance(state, dict) and state.get("last_fired"):
+                    last_fired = str(state["last_fired"])
+        except Exception:
+            pass
+
+    return [
+        BootHook(
+            name=phase,
+            declared=True,
+            installed=installed,
+            last_fired=last_fired,
+        )
+        for phase in declared_phases
+    ]
+
+
+def build_boot_score(
+    repo_root: Path | None = None,
+    *,
+    is_daemon: bool = True,
+    is_worker: bool = False,
+    runner_medium: str | None = None,
+    runner_core: str | None = None,
+    environment: str | None = None,
+    event_ids: tuple[str, ...] = (),
+    body_provenance: str | None = None,
+    pending_count: int = 0,
+    budget: str | None = None,
+    quota: str | None = None,
+    branch: str | None = None,
+    task_text: str | None = None,
+    has_diffense: bool = False,
+    has_introspection: bool = False,
+    contracts: list[Any] | None = None,
+) -> "BootScore":
+    """Assemble a :class:`BootScore` for inspection without building the full prompt.
+
+    Used by ``brnrd prompts show`` and the replay test harness.  Deterministic
+    and network-free.  When ``repo_root`` is ``None`` the inject-blocks
+    contracts reflect only the bundled product templates (no dominion, no
+    plan, no knowledge sources).
+
+    The returned score carries:
+
+    - ``contracts``: every block considered for the given prompt type,
+      with ``present`` reflecting whether the source exists today.
+    - ``hooks``: the abstract phase set with installed/fired state from
+      the runner env, or ``"unknown"`` when the CLI is called outside a wake.
+    """
+    from .bootscore import (
+        BootScore, BootBody, BootHost, BootAttention, BootPosture,
+        DEPTH_COMPACT, SCHEMA_VERSION,
+    )
+    from . import config as conf
+
+    effective_root = repo_root if repo_root is not None else Path.cwd()
+
+    if contracts is None:
+        # Preamble + substrate + toggle blocks
+        preamble_contracts = _collect_preamble_contracts(
+            effective_root,
+            is_worker=is_worker,
+            is_daemon=is_daemon,
+            has_diffense=has_diffense,
+            has_introspection=has_introspection,
+        )
+
+        # Inject-stack blocks (skipped for workers)
+        if not is_worker:
+            _, inject_contracts = _build_injected_blocks_with_contracts(
+                effective_root, task_text=task_text
+            )
+        else:
+            inject_contracts = []
+
+        # Ordered: preamble blocks first, then inject stack (mirrors prompt
+        # order). The runtime trailer comes after the inject stack.
+        pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
+        runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
+        all_contracts = pre_inject + inject_contracts + runtime_entries
+    else:
+        all_contracts = contracts
+
+    # Runner tier from env or passed value
+    tier: str | None = None
+    import os
+    if os.environ.get("BRR_RUNNER"):
+        tier = "Tier 2 hooks installed"
+
+    # Host kind
+    kind = "daemon" if is_daemon else "ad-hoc"
+    pub_owner = "resident-owned" if not is_worker else "worker"
+
+    # Quota string from the runner_medium hint
+    cfg = conf.load_config(effective_root) if repo_root else {}
+    _ = cfg  # reserved for future profile-based quota lookup
+
+    return BootScore(
+        schema_version=SCHEMA_VERSION,
+        depth=DEPTH_COMPACT,
+        body=BootBody(shell=runner_medium, core=runner_core, tier=tier),
+        host=BootHost(kind=kind, environment=environment, publication_owner=pub_owner),
+        attention=BootAttention(event_ids=event_ids, body_provenance=body_provenance),
+        posture=BootPosture(
+            pending_count=pending_count,
+            budget=budget,
+            quota=quota,
+            branch=branch,
+        ),
+        contracts=all_contracts,
+        hooks=_collect_hooks_info(repo_root),
+    )
+
+
+def build_daemon_prompt_with_score(
+    task: str,
+    event_id: str,
+    response_path: str,
+    repo_root: Path,
+    **kwargs: Any,
+) -> "tuple[str, BootScore]":
+    """Build the daemon prompt and return it together with the BootScore.
+
+    Accepts the same keyword arguments as :func:`build_daemon_prompt`.  The
+    returned ``BootScore`` is the source manifest for the assembled prompt —
+    the inspectable middle between the versioned sources and the rendered text.
+
+    For the prompt text alone use the original :func:`build_daemon_prompt`;
+    this variant is used by the replay harness and any caller that needs the
+    manifest.
+    """
+    from . import config as conf
+
+    runner_medium = kwargs.get("runner_medium")
+    environment = kwargs.get("environment")
+    worker = bool(kwargs.get("worker", False))
+    diffense = bool(kwargs.get("diffense", False))
+    event_body = kwargs.get("event_body", "")
+    pending_events = kwargs.get("pending_events") or []
+    budget_seconds = kwargs.get("budget_seconds")
+    runner_quota = kwargs.get("runner_quota")
+    branch_name = kwargs.get("branch_name")
+
+    pitfall_text = "\n".join(t for t in (task, event_body or "") if t)
+
+    cfg = conf.load_config(repo_root)
+    has_introspection = not worker and bool(
+        cfg.get("introspect.enabled", cfg.get("introspect_enabled", False))
+    )
+    has_diff = diffense
+
+    if worker:
+        injected_blocks: list[str] = []
+        inject_contracts: list[Any] = []
+        introspection_block = ""
+    else:
+        injected_blocks, inject_contracts = _build_injected_blocks_with_contracts(
+            repo_root, task_text=pitfall_text or None
+        )
+        introspection_block = _build_introspection_block(repo_root)
+
+    preamble_contracts = _collect_preamble_contracts(
+        repo_root,
+        is_worker=worker,
+        is_daemon=True,
+        has_diffense=has_diff,
+        has_introspection=bool(introspection_block),
+    )
+    pre_inject = [c for c in preamble_contracts if c.block_key != "run-context-bundle"]
+    runtime_entries = [c for c in preamble_contracts if c.block_key == "run-context-bundle"]
+    contracts = pre_inject + inject_contracts + runtime_entries
+
+    # The prompt and its inspection score now share the same injected blocks
+    # and manifest.  A changing dominion/kb cannot make the CLI explain a
+    # different wake than the one the runner actually received.
+    prompt = build_daemon_prompt(
+        task, event_id, response_path, repo_root, **kwargs,
+        _prepared_injected_blocks=injected_blocks,
+        _prepared_introspection_block=introspection_block,
+    )
+
+    score = build_boot_score(
+        repo_root,
+        is_daemon=True,
+        is_worker=worker,
+        runner_medium=str(runner_medium) if runner_medium else None,
+        environment=str(environment) if environment else None,
+        event_ids=(event_id,),
+        pending_count=len(pending_events),
+        budget=f"{budget_seconds // 60}m" if budget_seconds else None,
+        quota=str(runner_quota) if runner_quota else None,
+        branch=str(branch_name) if branch_name else None,
+        task_text=pitfall_text or None,
+        has_diffense=has_diff,
+        has_introspection=bool(introspection_block),
+        contracts=contracts,
+    )
+
+    return prompt, score
+
+
+def build_run_prompt_with_score(task: str, repo_root: Path) -> "tuple[str, BootScore]":
+    """Build the run prompt and return it together with the BootScore.
+
+    The same as :func:`build_run_prompt` but also produces the inspectable
+    source manifest.
+    """
+    prompt = build_run_prompt(task, repo_root)
+    score = build_boot_score(
+        repo_root,
+        is_daemon=False,
+        is_worker=False,
+        task_text=task,
+    )
+    return prompt, score
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
@@ -833,6 +1354,8 @@ def build_daemon_prompt(
     runner_catalog: list[dict[str, Any]] | None = None,
     diffense: bool = False,
     worker: bool = False,
+    _prepared_injected_blocks: list[str] | None = None,
+    _prepared_introspection_block: str | None = None,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -902,6 +1425,8 @@ def build_daemon_prompt(
     return _join_prompt_parts(
         preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
         inject_blocks=not worker,
+        prepared_injected_blocks=_prepared_injected_blocks,
+        prepared_introspection_block=_prepared_introspection_block,
     )
 
 
