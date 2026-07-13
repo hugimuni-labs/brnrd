@@ -179,9 +179,13 @@
 								>
 							{/if}
 						</p>
-						<p class="truncate text-stone-500">
-							{secondary}{#if runner}<span class="text-stone-600"> · {runner}</span>{/if}
-						</p>
+						<p class="truncate text-stone-500">{secondary}</p>
+						{#if runner}
+							<!-- Runner identity is its own line: appending it after the
+							     task/repo text made the very information #374 added vanish
+							     behind this card's `truncate` on real active runs. -->
+							<p class="font-mono text-[10px] text-stone-400">runner: {runner}</p>
+						{/if}
 						{#if run.card_text && !isOpen}
 							<!-- Progress-card note (`.card`, `run_progress.py`'s
 							     `agent_card_text`) — one truncated line collapsed;
