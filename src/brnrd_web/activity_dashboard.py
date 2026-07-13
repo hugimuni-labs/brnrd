@@ -387,6 +387,14 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                     # like `reset_credits` — an "unimplemented" verdict
                     # doesn't decay the way a percentage does.
                     "spend": shell.get("spend"),
+                    # Trailing-burn rate (Codex, 2026-07-13 — the replacement
+                    # for the 5h window OpenAI stopped publishing on 07-12; see
+                    # `brr/codex_status.py::recent_burn`). Unlike `reset_credits`
+                    # and `spend`, this one *does* decay: a burn rate measured
+                    # hours ago describes an account that may have been idle
+                    # since, so a stale daemon report drops it rather than
+                    # showing a rate as if it were current.
+                    "burn": None if stale else shell.get("burn"),
                     "_reported_at": reported_at,
                 }
     out = list(real.values())

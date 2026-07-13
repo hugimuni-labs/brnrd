@@ -337,3 +337,179 @@ def load_levels(env: dict[str, str] | None = None) -> dict[str, Any] | None:
 def collected_slots(runner_name: str | None) -> Iterable[str]:
     """Which level slots this Shell has a wired collector for (per-slot honesty)."""
     return COLLECTED_SLOTS if supported(runner_name) else frozenset()
+
+
+# --- Trailing burn ----------------------------------------------------------
+#
+# Why this exists: on 2026-07-12 (~15:18→20:52 CEST, live Plus account,
+# codex-cli 0.144.1 unchanged since 07-11) OpenAI stopped publishing the
+# 300-minute window entirely — `secondary: null`, `primary` carrying the weekly
+# window. Verified at the source: `account/rateLimits/read` reports exactly one
+# window today, and every rollout since agrees. The 5h *bar* on the dashboard is
+# therefore unrecoverable — there is no 5h number left to draw.
+#
+# But the question it answered is still live: **am I burning too fast right
+# now?** A weekly window alone can't say — 53% left is calm at a slow drip and a
+# fire alarm at 6 points an hour. brr already tails the rollouts that carry every
+# `used_percent` reading with its own timestamp, so the short-horizon reading is
+# derivable from data on disk: how much of the *reported* window this account
+# actually burned over the trailing few hours, and where that rate lands it.
+#
+# Derived, and labelled as derived. Never a fabricated window.
+
+_BURN_HORIZON_HOURS = 5.0
+# Two samples five minutes apart can "prove" a 200%/day burn. Below this span the
+# rate is noise, and a noisy projection is worse than no projection.
+_BURN_MIN_SPAN_MINUTES = 30.0
+
+
+def _sample_window(rate: Any) -> tuple[float, float, float] | None:
+    """A rate-limit block → ``(used_percent, window_minutes, resets_at)``.
+
+    Reads whichever slot actually carries a window (see the module docstring:
+    the slot is not the identity), preferring the longest window reported — the
+    subscription ceiling that matters is the one you can't wait out.
+    """
+    if not isinstance(rate, dict):
+        return None
+    best: tuple[float, float, float] | None = None
+    for slot in ("primary", "secondary"):
+        window = rate.get(slot)
+        if not isinstance(window, dict):
+            continue
+        used = _num(window.get("used_percent"))
+        minutes = _num(window.get("window_minutes"))
+        resets = _num(window.get("resets_at"))
+        if used is None or minutes is None or resets is None:
+            continue
+        if best is None or minutes > best[1]:
+            best = (used, minutes, resets)
+    return best
+
+
+def _rollout_burn_samples(path: Path) -> list[tuple[float, float, float, float]]:
+    """Every ``(event_epoch, used_percent, window_minutes, resets_at)`` in a
+    rollout, oldest first. Malformed lines are skipped, never raised on."""
+    samples: list[tuple[float, float, float, float]] = []
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if '"rate_limits"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                    continue
+                window = _sample_window(payload.get("rate_limits"))
+                if window is None:
+                    continue
+                stamped = _event_epoch(record.get("timestamp"))
+                if stamped is None:
+                    continue
+                samples.append((stamped, *window))
+    except OSError:
+        return []
+    return samples
+
+
+def _event_epoch(raw: Any) -> float | None:
+    """A rollout record's own ISO-8601 ``timestamp`` → epoch seconds."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.timestamp()
+
+
+def recent_burn(
+    hours: float = _BURN_HORIZON_HOURS,
+    env: dict[str, str] | None = None,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    """How fast the account is spending its quota, over the trailing *hours*.
+
+    Scans the rollouts touched inside the horizon, keeps the samples belonging
+    to the window that is *currently* live (same duration, same ``resets_at`` —
+    a spent reset credit restarts the window and its ``used_percent`` drops back
+    to near zero, which would otherwise read as a negative burn), and measures
+    the climb from the oldest surviving sample to the newest.
+
+    Returns None when the evidence is too thin to mean anything: no rollouts, a
+    single sample, a window that only started minutes ago, or a span below
+    :data:`_BURN_MIN_SPAN_MINUTES`. Projecting from noise is the failure this
+    guards — the point of the reading is to replace a bar that stopped being
+    true, not to replace it with a guess.
+    """
+    root = sessions_root(env)
+    if not root.is_dir():
+        return None
+    stamp = time.time() if now is None else now
+    horizon_start = stamp - hours * 3600.0
+
+    samples: list[tuple[float, float, float, float]] = []
+    try:
+        candidates = list(root.rglob("rollout-*.jsonl"))
+    except OSError:
+        return None
+    for path in candidates:
+        try:
+            # A rollout whose last write predates the horizon can hold no sample
+            # inside it — skip the read entirely (this runs every heartbeat).
+            if path.stat().st_mtime < horizon_start:
+                continue
+        except OSError:
+            continue
+        samples.extend(_rollout_burn_samples(path))
+    if not samples:
+        return None
+
+    samples.sort(key=lambda s: s[0])
+    _, _, live_minutes, live_resets = samples[-1]
+    live = [
+        s
+        for s in samples
+        if s[2] == live_minutes and s[3] == live_resets and s[0] >= horizon_start
+    ]
+    if len(live) < 2:
+        return None
+
+    first, last = live[0], live[-1]
+    span_minutes = (last[0] - first[0]) / 60.0
+    if span_minutes < _BURN_MIN_SPAN_MINUTES:
+        return None
+
+    # `used_percent` can dip inside a live window (OpenAI's own accounting is not
+    # strictly monotonic); clamp at zero rather than reporting a negative burn.
+    burned = max(0.0, last[1] - first[1])
+    remaining = max(0.0, 100.0 - last[1])
+    per_minute = burned / span_minutes
+    projected_remaining = max(0.0, remaining - per_minute * hours * 60.0)
+    exhausts_at: float | None = None
+    if per_minute > 0 and remaining > 0:
+        exhausts_at = last[0] + (remaining / per_minute) * 60.0
+    # A burn that runs out the clock before it runs out the quota is a burn you
+    # can keep up: the window resets first, and saying "exhausts in 40h" about a
+    # window that resets in 30h would be a scare, not a fact.
+    sustainable = exhausts_at is None or exhausts_at >= last[3]
+    return {
+        "window_minutes": live_minutes,
+        "hours": hours,
+        "span_minutes": round(span_minutes, 1),
+        "samples": len(live),
+        "from_remaining_percent": round(max(0.0, 100.0 - first[1]), 1),
+        "to_remaining_percent": round(remaining, 1),
+        "burned_percent": round(burned, 1),
+        "projected_remaining_percent": round(projected_remaining, 1),
+        "exhausts_at": exhausts_at,
+        "sustainable": sustainable,
+        "source": "codex session rollout",
+    }

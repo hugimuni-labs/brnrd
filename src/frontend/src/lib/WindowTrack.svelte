@@ -93,6 +93,64 @@
 				{/if}
 			</div>
 		{/each}
+		{#if shell.burn}
+			{@const burn = shell.burn}
+			{@const burnLevel = quotaLevel(burn.projected_remaining_percent)}
+			{@const burnColor = LEVEL_COLOR[burnLevel]}
+			{@const exhausts = timeUntil(burn.exhausts_at, now)}
+			<!-- Trailing burn — the 5h answer, not the 5h window. OpenAI stopped
+			     publishing the 300-minute window for this account on 2026-07-12
+			     (verified at the source: `account/rateLimits/read` now reports one
+			     window), so the bar that told you "you're going too fast" has no
+			     number left behind it. The *question* survives, and the rollout
+			     samples brr already tails answer it: how much of the window went in
+			     the last few hours, and where that rate lands you.
+
+			     Drawn as a forecast, and legible as one — dashed track, "at this
+			     rate" in the label — because it is a projection, not a reading. The
+			     bar is projected *headroom* `hours` out, so it drains in the same
+			     direction as a real window and can be read next to one without
+			     re-learning the vocabulary. -->
+			<div>
+				<div class="mb-1 flex items-baseline justify-between font-mono text-xs text-stone-400">
+					<span class="tracking-wide uppercase">{Math.round(burn.hours)}h burn</span>
+					<span class="flex items-center gap-1.5">
+						<span
+							class="inline-block h-2 w-2 rounded-full"
+							style={statusDotStyle(burnLevel, burnColor)}
+							aria-hidden="true"
+						></span>
+						<span style={`color: ${burnColor}`}>
+							−{Math.round(burn.burned_percent)} pts in {(burn.span_minutes / 60).toFixed(1)}h
+						</span>
+					</span>
+				</div>
+				<div
+					class="h-2 w-full overflow-hidden border border-dashed border-stone-700/80 bg-stone-900"
+					role="img"
+					aria-label={`at the current burn rate, ${Math.round(burn.projected_remaining_percent)} percent remaining in ${Math.round(burn.hours)} hours`}
+				>
+					<div
+						class="h-full opacity-60 transition-[width] duration-500 ease-out"
+						style={`width: ${burn.projected_remaining_percent}%; ${statusBarStyle(burnLevel, burnColor)}`}
+					></div>
+				</div>
+				<div class="mt-1 flex items-baseline justify-between font-mono text-[11px] text-stone-500">
+					<span>
+						at this rate: {Math.round(burn.projected_remaining_percent)}% left in {Math.round(
+							burn.hours
+						)}h
+					</span>
+					<span>
+						{#if burn.sustainable}
+							window resets first
+						{:else if exhausts}
+							empty in {exhausts}
+						{/if}
+					</span>
+				</div>
+			</div>
+		{/if}
 		{#if !shell.credits && shell.spend?.status === 'unimplemented'}
 			<!-- Explicit "we don't track this" line for a shell with no cost
 			     collector at all (Codex today) — the honesty bar the maintainer
