@@ -28,6 +28,7 @@ from brr.bootscore import (
     BootAttention,
     BootBody,
     BootContinuity,
+    BootHost,
     BootScore,
     format_kernel,
 )
@@ -268,3 +269,43 @@ def test_shipped_only_counts_merges_after_the_last_wake() -> None:
 
     cutoff = forge_pr_cache.parse_iso("2026-07-13T23:00:00Z")
     assert cont_mod._merged_since(prs, cutoff) == ("#386",)
+
+
+# ── The stale image: a boot that knows it may be lying ────────────────────────
+
+
+def test_stale_image_is_announced_in_the_kernel() -> None:
+    """A spawn assembled by a superseded daemon says so, first thing.
+
+    The 2026-07-13 failure: two children rendered the pre-#388 kernel — the
+    worker-queue bug included — *after* the fix was in the tree, because the
+    daemon assembles a spawn's whole prompt in its own process image and the
+    re-exec that would refresh it waits on the resident doing the spawning.
+    Nothing in either child's wake said so, so the floor measurement read as a
+    verdict on the new boot when it was a verdict on the old one.
+    """
+    out = _kernel(host=BootHost(kind="daemon", environment="worktree", image_stale=True))
+    lines = out.splitlines()
+    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+
+    # Directly under `host:` — it is a fact about the host's image, and it is
+    # above `next:`, so it cannot be reached by acting on the list first.
+    stale = lines[host_i + 1]
+    assert stale.startswith("  stale: ⚠"), out
+    assert "superseded" in stale
+    # Names *what* is stale. "The boot is stale" would send a reader to re-read
+    # the prose, which is the one part that is always current.
+    assert ".md is current" in stale
+    assert "code is NOT" in stale
+
+
+def test_healthy_image_costs_the_kernel_nothing() -> None:
+    """Differential, like every other line here: zero bytes on a healthy wake.
+
+    A warning that renders unconditionally is decoration, and a kernel that pays
+    for it every wake has reintroduced exactly the always-true prose the kernel
+    was built to evict.
+    """
+    out = _kernel(host=BootHost(kind="daemon", environment="host"))
+    assert "stale:" not in out
+    assert "⚠" not in out
