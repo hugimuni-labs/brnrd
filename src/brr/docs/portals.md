@@ -50,8 +50,57 @@ other so they don't drift.
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
+| `.task-classification` | slot control | One short slug naming this run's **shape** for the cost ledger (`dashboard-slice`, `kb-brainstorm`, `bugfix`, …). Write it any time before closeout; the `Stop` hook nudges if it is still missing at the boundary, but that is a last catch, not permission to wait. Left unwritten, that ledger row's `task_classification` is **null forever** — and it is the one join key the cost-estimate workstream rolls up on. `spawn:` / `respawn:` frontmatter takes a `task_classification:` key to tag a child at hand-off. A control file, never delivered. |
+| `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
+| `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
-| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
+
+### `notices` — the directives brnrd refused
+
+An outbox file is deleted from the directory **whether it was accepted or
+refused**. So a directive the daemon could not carry out — a `spawn:` it had
+no pool capacity to queue, a reply addressed to an event that is no longer
+pending — is *invisible from inside the run*: the file is gone, exactly as it
+would be on success.
+
+`portal-state.json` → `notices` is where those land, and it is the only place
+they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
+write.** A dropped directive that nobody reads is a request that silently
+never happened.
+
+## The produce manifest — `.relics.jsonl`
+
+One JSON object per line, append-only, via `brr.relics.append(outbox_dir,
+kind, **fields)` or by appending the line directly. It is what the run made,
+in a form something other than prose can read.
+
+**Auto-derived — write nothing for these.** Commits, the pushed branch, a
+self-reported PR, and your **terminal reply** are collected at closeout. The
+reply is archived into the knowledge repo (`replies/<repo>/<run-id>.md`,
+outside the kb page tree) and reported back as a `{"kind": "reply", "url": …}`
+relic, so a run's answer of record is durable and linkable instead of buried
+in a chat scroll. Terminal replies only — interim messages are thinking out
+loud, and are not archived.
+
+**Worth a line of your own:**
+
+```jsonl
+{"kind": "issue",   "number": 317, "action": "closed"}
+{"kind": "kb",      "path": "design-run-relics.md", "url": "<kb base + page, after push>"}
+{"kind": "comment", "url": "…"}
+{"kind": "summary", "text": "…"}
+```
+
+At most one `summary`, and it heads the receipt. The manifest feeds the
+dashboard's collapsed run receipt; the chat card does not render it yet (a
+named gap, not a bug in your run).
+
+Treat produce you can name as **yours to compose with**: a summary may give
+the receipt its spine, and a relevant issue, kb page, or message may be a
+useful glint in the reply. Reinforce the work where that helps the reader.
+Do not turn every receipt into ornament, and do not restate facts the daemon
+already derives for you.
 
 The daemon also injects runner environment variables for the live
 surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
@@ -170,6 +219,19 @@ genuine forks (product/values calls, costly or irreversible spends,
 intent the code can't resolve) — never to look thorough, and never to
 hand back a reversible call that was yours to take. A reviewer should
 reject any habit that makes options the default shape of a reply.
+
+This is structural, not a closing courtesy: **check the literal last line
+before sending.** Two edges, both caught in live runs:
+
+1. **The substance already shipped through outbox interims.** Then the
+   terminal stdout is *either* genuinely empty (`deliver_stream` skips an
+   empty closeout) *or* a real one-line receipt ending in the next-move
+   shape. A bare `done` is neither — it still ships, it lands last, and to
+   the reader it *is* the reply.
+2. **A due self-wake firing inline at a run's tail** (a director tick, say)
+   never replaces the primary task's closeout. The tick's own notify bar
+   governs only the tick's content. The two are **additive** in one reply —
+   primary receipt + next-move line, tick line appended — never a choice.
 
 ## The post-delivery linger — catching the follow-up warm
 
