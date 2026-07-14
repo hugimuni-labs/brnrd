@@ -41,33 +41,46 @@ silent, and it would be *caused by the boot*, which is the exact class of bug
 this work exists to kill.
 
 An earlier plan for this slice proposed seeding ``.card written`` among the
-orientation turns.  That plan was wrong.  :data:`REPLAYABLE_TOOLS` is the guard,
-and :func:`build_orientation_transcript` refuses anything outside it.
+orientation turns.  That plan was wrong, and :class:`Perceive` is why it is now
+*unrepresentable* rather than merely forbidden.
 
-── Verified, 2026-07-14 ────────────────────────────────────────────────────────
+── Measured at the floor, 2026-07-14 ───────────────────────────────────────────
 
-``claude --resume <forged-id> --fork-session`` **accepts a session brnrd
-synthesized.**  Measured: a 4-row seed (two ``Read`` calls and their results) was
-resumed; both forged ``toolu_`` ids were replayed verbatim into the fork, and the
-model continued for 319 rows.
+**What holds.**  ``claude --resume <forged-id> --fork-session`` accepts a session
+brnrd synthesized.  A weak core (``claude-haiku-4-5``) resumes a conversation that
+never happened, reads the seeded contracts, correctly concludes it is a brnrd
+resident mid-run, and names each contract and what it asks.  *That* was the thing
+genuinely in doubt, and it held at the floor.  Identity by mount, not by
+assertion — arriving unasked, on the first try.
 
-The continuation is the finding.  The final user message said *"Without using any
-tools: name the two files you just read."*  It **immediately used tools** — Read,
-Bash, ``git status`` — and never answered the question.  Having woken in
-tool-result position, it completed *the grammar it was in* rather than the
-sentence it was handed.
+**What was retracted.**  An earlier version of this docstring claimed the seeded
+position makes a wake *"harder to steer with prose in the final turn"* — that a
+tool-result position **outweighs** an explicit instruction.  That was one
+observation, on a strong core, and it **does not reproduce**: 3 rounds × 2 arms,
+the same 22,126 bytes in both, grammatical position the only variable — mounted
+as tool-results (T) vs the identical bytes as prose (P).  **6/6 complied.**  The
+hazard claim is dead; do not resurrect it from this file's git history.
 
-Read that twice before extending this module.  It is the thesis working, and it
-is a live hazard: a transcript-seeded wake is **harder to steer with prose in the
-final turn**, because the seeded position outweighs it.  That is precisely the
-power being bought here — the boot stops asking and starts demonstrating — and
-precisely the reason :data:`REPLAYABLE_TOOLS` may never grow a mutating tool.  A
-forged action would not be a suggestion to the wake.  It would be a fact it acts
-on.
+**What is still unmeasured, and is the whole point.**  That probe tested *turn-1
+orientation*, which was never the doubt.  The claim worth testing is about **late
+drift**: a weak core orients fine and then, some turns into weaving a
+continuation, quietly stops honouring the obligations it recited perfectly at the
+start.  Does a wake that watched *itself* read its contracts hold that line longer
+than one that was *told* about them?  Episodic memory vs semantic memory, measured
+by what the run **did** — ``.card`` written, branch taken before the edit, pending
+event owned — not by what it said in turn 1.  That experiment is what
+``boot.transcript`` (default off) exists to make runnable, and nothing here should
+be widened on weaker evidence than its result.
 
-(It also read the four boot contracts in the seed, concluded it was a brnrd
-resident mid-run, and went looking for the conversation directory.  Identity by
-mount, not by assertion — arriving unasked, on the first try.)
+── The safety rule is a type, not a check ─────────────────────────────────────
+
+The rule never relaxes: **synthesize perception, never action.**  It used to be
+enforced by a ``REPLAYABLE_TOOLS`` frozenset that a ``ToolCall.tool`` string was
+checked against.  That guard is gone, because the IR no longer has a place to put
+a tool name at all.  :class:`Perceive` carries *what was perceived* (a path) and
+*what the wake received* (the bytes) — and nothing else.  A ``Write`` is not
+rejected here; it is **unsayable**.  A check on a name can be widened by anyone in
+a hurry.  A type that cannot express the forgery cannot.
 """
 
 from __future__ import annotations
@@ -79,62 +92,74 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-# Perception only. Every tool here must be free of side effects — a seeded call
-# to it changes nothing in the world, so replaying it as though it happened is a
-# true statement about the wake's context rather than a forgery about the disk.
-#
-# Adding a mutating tool to this set would let the boot lie to the resident about
-# work it never did. There is no use case that justifies it; if one ever seems to
-# appear, the thing to build is a real pre-run action by the daemon, executed for
-# real, not a fabricated turn describing one.
-REPLAYABLE_TOOLS = frozenset({"Read"})
-
 COMPUTED = "computed"
 """``ContractEntry.location`` sentinel for a block that is live state, not a file."""
 
 MOUNTED_SHELLS = frozenset({"claude"})
 """Shells that can actually *resume* a transcript brnrd forged.
 
-The IR above is Shell-agnostic; **the mount is not**, and the gap between those
-two facts is exactly the kind of thing a tool must say out loud rather than let a
-caller discover. Only :func:`render_claude_jsonl` exists today.
+The IR is Shell-agnostic; **the mount is not**, and the gap between those two
+facts is exactly the kind of thing a tool must say out loud rather than let a
+caller discover. Only :func:`render_claude_jsonl` exists today, so this set names
+``claude`` and the CLI refuses the rest — loudly, instead of quietly rendering
+claude's format under another Shell's label.
 
-``codex`` is next and is not a re-render away.  Its rollout format is close
-enough (``session_meta`` + ``response_item`` rows, resumed with ``codex resume
-<uuid>`` / ``codex fork``) — but it has **no ``Read`` tool**.  Its file
-perception runs through ``exec``, a general command executor.  So
-:data:`REPLAYABLE_TOOLS` does not port: the guard would have to move from *"is
-this tool on the allowlist"* — a fact about a name, checkable — to *"is this
-command side-effect-free"* — a fact about a shell string, which is not.  A codex
-mount therefore needs its own answer to the safety rule before it needs a
-renderer.  Until it has one, this set stays at ``{"claude"}`` and the CLI refuses
-the rest."""
+**codex is a missing renderer, and nothing more than that.**  An earlier version
+of this docstring claimed otherwise: that codex could not be mounted safely,
+because it has no ``Read`` tool — its file perception runs through ``exec``, a
+general command executor — and so the safety rule would degrade from *"is this
+tool on the allowlist"* (a fact about a name, decidable) to *"is this command
+side-effect-free"* (a fact about a shell string, which is not).
 
+That argument confused **validating** a command with **authoring** one.  brnrd
+does not *inspect* a codex ``exec`` call and try to prove it harmless.  brnrd
+*emits* it, from a path in its own manifest, through one function it controls.
+There is no arbitrary shell string to decide about, because there is no arbitrary
+shell string.  A codex renderer spends ``exec`` with a ``cat <abs-path>`` the
+renderer itself constructs — and :class:`Perceive` gives it nothing else it
+*could* spend.
 
-class ForgedActionError(RuntimeError):
-    """Raised when a transcript would claim an action the daemon did not take."""
+(The decidability problem is real in exactly one place: *replaying a recorded*
+codex rollout, where the commands are the model's and are arbitrary.  brnrd never
+does that.  It synthesizes from :attr:`BootScore.contracts`.  If that ever
+changes, this paragraph is the reason it must not.)
+
+So codex is unblocked, and is still not built — for the ordering reason, not the
+safety one: **the boot's benefit is unmeasured**, and a second mount doubles the
+surface of something that may not survive its own measurement.  Measure first
+(``boot.transcript``), then render."""
 
 
 # ── The IR ────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class ToolCall:
-    """One seeded perception: an assistant tool_use and the result it received."""
+class Perceive:
+    """One seeded perception: a file the wake really received, and its bytes.
 
-    tool: str
-    input: dict[str, Any]
+    **Not a tool call.**  This carries *what was perceived* — a path — and *what
+    the wake got back*.  It does not carry a tool name, because a tool name is a
+    Shell's vocabulary, not a fact about the wake: ``claude`` spends ``Read``,
+    ``codex`` spends ``cat`` through ``exec``, and a third Shell will spend
+    something else.  Which verb expresses the perception is the renderer's
+    business (:func:`render_claude_jsonl`), and keeping it out of here is what
+    makes the IR the Shell-agnostic thing its own docstring already claimed to be.
+
+    It is also the safety rule, promoted from a runtime check to a type.  The rule
+    is **synthesize perception, never action**: a seeded read is honest (the bytes
+    really are in the wake's context, which is the only sense in which any agent
+    has "read" anything), while a seeded ``Write`` would be a *lie* — the file was
+    not written, and a resident that sees ``Write(.card)`` in what looks like its
+    own history will believe the card exists and never write one.  The forgery
+    would be invisible, the failure silent, and it would be **caused by the boot**,
+    which is the exact class of bug this module exists to kill.
+
+    There is nowhere in this dataclass to put that ``Write``.  Not rejected —
+    unsayable.  An allowlist can be widened by anyone in a hurry; a type cannot.
+    """
+
+    location: str
     result: str
-    is_error: bool = False
-
-    def __post_init__(self) -> None:
-        if self.tool not in REPLAYABLE_TOOLS:
-            raise ForgedActionError(
-                f"{self.tool!r} is not replayable. The boot transcript may "
-                f"synthesize perception ({', '.join(sorted(REPLAYABLE_TOOLS))}) "
-                f"and never action — a seeded {self.tool!r} would tell the wake "
-                f"it did something it did not do."
-            )
 
 
 @dataclass(frozen=True)
@@ -145,7 +170,7 @@ class Say:
     text: str
 
 
-Turn = ToolCall | Say
+Turn = Perceive | Say
 
 
 @dataclass
@@ -153,8 +178,8 @@ class Transcript:
     """The seeded conversation a wake resumes from, Shell-agnostic.
 
     One IR, mounted per-Shell (``claude --resume … --fork-session``;
-    ``codex fork``).  The Shells disagree about file format and about nothing
-    else that matters here.
+    ``codex fork``).  The Shells disagree about file format and about which verb
+    spells a read — and about nothing else that matters here.
     """
 
     turns: list[Turn] = field(default_factory=list)
@@ -165,8 +190,8 @@ class Transcript:
     """The core that will resume this session — stamped on the seeded assistant
     turns so the transcript does not claim a body other than the one waking."""
 
-    def tool_calls(self) -> Iterable[ToolCall]:
-        return (t for t in self.turns if isinstance(t, ToolCall))
+    def perceptions(self) -> Iterable[Perceive]:
+        return (t for t in self.turns if isinstance(t, Perceive))
 
 
 # ── Building ──────────────────────────────────────────────────────────────────
@@ -223,9 +248,8 @@ def build_orientation_transcript(
         if not text:
             continue
         turns.append(
-            ToolCall(
-                tool="Read",
-                input={"file_path": entry.location},
+            Perceive(
+                location=entry.location,
                 result=text + _trim_note(entry.bytes, entry.location),
             )
         )
@@ -240,6 +264,12 @@ def build_orientation_transcript(
 
 
 # ── Mounting: claude ──────────────────────────────────────────────────────────
+
+# claude's verb for a perception, and the only tool name this module will ever
+# emit into a claude session. It lives *here*, in the renderer, and not in the IR:
+# a tool name is a Shell's way of spelling "I looked at this", not a fact about
+# the wake. `Perceive` carries the path; this constant carries the spelling.
+CLAUDE_READ_TOOL = "Read"
 
 
 def _envelope(
@@ -302,8 +332,8 @@ def render_claude_jsonl(t: Transcript, *, now: datetime | None = None) -> str:
                 {
                     "type": "tool_use",
                     "id": call_id,
-                    "name": turn.tool,
-                    "input": turn.input,
+                    "name": CLAUDE_READ_TOOL,
+                    "input": {"file_path": turn.location},
                 }
             ],
             "stop_reason": "tool_use",
@@ -328,7 +358,7 @@ def render_claude_jsonl(t: Transcript, *, now: datetime | None = None) -> str:
                     "tool_use_id": call_id,
                     "type": "tool_result",
                     "content": turn.result,
-                    "is_error": turn.is_error,
+                    "is_error": False,
                 }
             ],
         }
@@ -337,7 +367,7 @@ def render_claude_jsonl(t: Transcript, *, now: datetime | None = None) -> str:
         r_env["toolUseResult"] = {
             "type": "text",
             "file": {
-                "filePath": turn.input.get("file_path", ""),
+                "filePath": turn.location,
                 "content": turn.result,
             },
         }

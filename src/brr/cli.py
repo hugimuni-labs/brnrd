@@ -485,12 +485,15 @@ def cmd_prompts_transcript(args):
             print(
                 f"brnrd: no transcript mount for shell {runner_medium!r} — only "
                 f"{have} can resume a session brnrd forged.\n"
-                f"  The IR is Shell-agnostic; the mount is not. codex has no Read "
-                f"tool — its file perception runs through `exec`, a general "
-                f"command executor —\n"
-                f"  so REPLAYABLE_TOOLS does not port, and a codex mount needs its "
-                f"own answer to the safety rule before it needs a renderer.\n"
-                f"  See transcript.MOUNTED_SHELLS.",
+                f"  The IR is Shell-agnostic; the mount is not, and only "
+                f"render_claude_jsonl() exists today.\n"
+                f"  This is a missing renderer, not a safety wall: `Perceive` "
+                f"carries a path, and each Shell's renderer spells it in its own "
+                f"verb\n"
+                f"  (claude: Read; codex: `cat` through exec, authored by the "
+                f"renderer, never inspected).\n"
+                f"  Not built yet because the boot's benefit is unmeasured — see "
+                f"transcript.MOUNTED_SHELLS.",
                 file=sys.stderr,
             )
             return 1
@@ -537,16 +540,16 @@ def cmd_prompts_transcript(args):
         model=runner_core or "",
     )
 
-    calls = list(t.tool_calls())
-    if not calls:
+    seen = list(t.perceptions())
+    if not seen:
         print("[brnrd] no file-backed blocks in this wake — nothing to mount.")
         return 1
 
     body = tx.render_claude_jsonl(t)
-    print(f"seeded turns : {len(calls)} Read call{'s' if len(calls) != 1 else ''}, "
+    print(f"seeded turns : {len(seen)} perception{'s' if len(seen) != 1 else ''}, "
           f"each with its result")
-    for c in calls:
-        print(f"  Read {c.input['file_path']}  → {len(c.result):,} B")
+    for c in seen:
+        print(f"  {tx.CLAUDE_READ_TOOL} {c.location}  → {len(c.result):,} B")
     print(f"session      : {t.session_id}")
     print(f"body         : {runner_medium} / {runner_core or 'default'}")
 
