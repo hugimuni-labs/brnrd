@@ -18,6 +18,7 @@ import pytest
 
 from brr import transcript as tx
 from brr.bootscore import BootScore, ContractEntry
+from _helpers import init_git_repo
 
 
 def _entry(key: str, location: str, *, present: bool = True, size: int | None = None):
@@ -188,3 +189,35 @@ def test_session_path_matches_where_claude_looks():
 def test_empty_transcript_renders_empty_not_broken():
     t = tx.Transcript(turns=[], session_id="s", cwd="/x")
     assert tx.render_claude_jsonl(t) == ""
+
+
+def test_unmounted_shell_is_refused_not_silently_mounted_as_claude(
+    tmp_path, monkeypatch, capsys
+):
+    """`--runner codex` used to render a *claude* session labelled codex.
+
+    It scored the wake for codex, stamped a codex core on the seeded turns, wrote
+    claude JSONL into claude's session directory, printed a `claude --resume`
+    command — and reported `body: codex / default` the whole way. A tool that
+    cannot distinguish "mounted for codex" from "mounted for claude wearing a
+    codex label" is the same bug as a green checkmark on a PR that never landed.
+    """
+    from brr.cli import main
+
+    init_git_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["prompts", "transcript", "--runner", "codex", "--write"]) == 1
+
+    err = capsys.readouterr().err
+    assert "no transcript mount for shell 'codex'" in err
+    assert "REPLAYABLE_TOOLS" in err  # says *why*, not just no
+
+    # and nothing was written anywhere it could later be resumed by accident
+    assert not list(tmp_path.rglob("*.jsonl"))
+
+
+def test_mounted_shells_only_names_shells_with_a_renderer():
+    """The registry is the guard; keep it honest about what actually exists."""
+    assert tx.MOUNTED_SHELLS == frozenset({"claude"})
+    assert hasattr(tx, "render_claude_jsonl")
