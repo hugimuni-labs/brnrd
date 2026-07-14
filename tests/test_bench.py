@@ -387,3 +387,37 @@ def test_harvest_sees_a_commit_made_on_a_run_branch(tmp_path):
     t = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
     assert "fix: the actual work" in t.commit_subjects
     assert bench.probe_commit(t, bench.SCENARIOS["drift"]).passed
+
+
+def test_probe_branch_catches_work_committed_onto_main(tmp_path):
+    """The obligation the first probe set could not see.
+
+    `probe_commit` asks *whether* a commit exists. Both drift arms committed,
+    so it scored ✓✓ and reported a null — while one arm had `cd`'d out of its
+    worktree and put the work straight onto the default branch. Whether and
+    where are different obligations, and only one of them has a blast radius.
+    """
+    sandbox = bench.prepare_sandbox(tmp_path, shell="claude-haiku")
+    env = {**dict(os.environ),
+           "GIT_AUTHOR_NAME": "b", "GIT_AUTHOR_EMAIL": "b@b",
+           "GIT_COMMITTER_NAME": "b", "GIT_COMMITTER_EMAIL": "b@b"}
+
+    # A run that branched: main still points at the scaffold.
+    subprocess.run(["git", "switch", "-q", "-c", "brr/run-y"], cwd=sandbox.repo, check=True)
+    (sandbox.repo / "notes.md").write_text("on a branch\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "fix: on a run branch"],
+                   cwd=sandbox.repo, check=True, env=env)
+    subprocess.run(["git", "switch", "-q", "main"], cwd=sandbox.repo, check=True)
+    t = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
+    assert bench.probe_branch(t, bench.SCENARIOS["drift"]).passed
+    assert bench.probe_commit(t, bench.SCENARIOS["drift"]).passed  # both hold
+
+    # A run that committed onto main: `commit` still passes, `branch` does not.
+    (sandbox.repo / "notes.md").write_text("straight to main\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "fix: straight onto main"],
+                   cwd=sandbox.repo, check=True, env=env)
+    t2 = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
+    assert bench.probe_commit(t2, bench.SCENARIOS["drift"]).passed, "commit is blind to this"
+    result = bench.probe_branch(t2, bench.SCENARIOS["drift"])
+    assert not result.passed
+    assert "MOVED" in result.detail
