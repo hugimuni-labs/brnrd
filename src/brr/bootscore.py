@@ -128,6 +128,20 @@ class BootBody:
     shell: str | None = None   # e.g. ``"claude"`` or ``"codex"``
     core: str | None = None    # e.g. ``"claude-fable-5"``
     tier: str | None = None    # e.g. ``"Tier 2 hooks installed"``
+    mounted: bool = False
+    """Whether this wake's contracts arrived as a **seeded transcript** rather than
+    prose (``boot.transcript``).
+
+    Derived from the render — the set of blocks that actually left the prose — and
+    never from the config key that asked for it.  A key is a *request*; the wake is
+    what happened, and the mount can fail (unsupported Shell, nothing to seed), in
+    which case the daemon rebuilds the prose prompt and this goes back to ``False``.
+    Same discipline ``bench.probe_mount`` enforces on the experiment, pointed at the
+    resident: *only the artifact is evidence.*
+
+    Until 2026-07-14 a wake could not answer "which boot did I get?" without grepping
+    its own ``prompt.md`` mid-run — a resident did exactly that, and said so.
+    """
     provenance: str | None = None
     """Why *this* body — e.g. ``"requested from the dashboard spool rack"``.
 
@@ -431,6 +445,29 @@ def format_kernel(score: BootScore) -> str:
     body_bits = [b for b in (body_head, body.tier, body.provenance) if b]
     if body_bits:
         lines.append(f"body: {' · '.join(body_bits)}")
+
+    if body.mounted:
+        # Differential, like every other kernel line: absent — and costing nothing —
+        # on a prose wake.
+        #
+        # This line is *measured*, not styled. The fence at the end of the seeded
+        # transcript (`transcript.SNAPSHOT_SEAM`) says the same thing, and on its own
+        # it is not reliably attended: asked point-blank whether it had read
+        # `AGENTS.md` or been handed it, claude-haiku-4-5 answered "I read it myself —
+        # I called the Read tool in my previous response" in 1 of 3 rounds with only
+        # the seed fence, and 0 of 3 once the same sentence also appeared *here*
+        # (2026-07-14, n=3+3, weak core, one variable).
+        #
+        # Which is this project's own thesis landing on its own honesty work:
+        # position decides whether a contract is *enacted* or merely *present*. The
+        # seed is where you put what the wake should act **from**; the kernel is where
+        # you put what it must **know**. The fence needs both — it marks the boundary
+        # there, and it is read here.
+        lines.append(
+            "boot: mounted — the Read calls above this task were seeded by brnrd, "
+            "not performed by you · the bytes are real, the turns are the daemon's "
+            "· from here the transcript is yours"
+        )
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
