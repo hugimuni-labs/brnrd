@@ -508,8 +508,17 @@ def harvest(sandbox: Sandbox, transcript: Transcript) -> Transcript:
             except json.JSONDecodeError:
                 continue
 
+    # `--all`, and it is not a flourish. A run does its work in a worktree on
+    # its own `brr/run-…` branch; the sandbox's default checkout never moves.
+    # Reading `git log` here (the checked-out branch) reports "nothing
+    # committed" for a run that branched and committed exactly as it should —
+    # and the first drift arm was misread that way for a full minute: a reply
+    # truthfully reporting `committed 3b61492` was scored a hallucination
+    # because the probe was looking at the wrong ref. The probe was deriving
+    # the status from an artifact, just not from *the* artifact. Same class as
+    # everything else this instrument exists to catch, aimed inward.
     proc = subprocess.run(
-        ["git", "log", "--format=%s"],
+        ["git", "log", "--all", "--format=%s"],
         cwd=sandbox.repo, capture_output=True, text=True,
     )
     if proc.returncode == 0:
