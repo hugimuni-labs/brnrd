@@ -4,8 +4,9 @@
 # DO NOT EDIT BY HAND — regeneration is the only sanctioned path.
 
 brnrd boot · score v1 · depth compact
-body: codex (codex / gpt-5.6-terra) Tier 2 hooks installed
+body: codex (codex / gpt-5.6-terra) · Tier 2 hooks installed
 host: daemon · worktree · resident-owned
+continuity: ✗ first wake
 attention: evt-fixture-0001
 posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
 next:
@@ -560,7 +561,7 @@ hooks:
 source manifest:
     block                                   owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)        daemon-live  runtime          557  computed
+  ✓ Boot kernel (action-first score)        daemon-live  runtime          587  computed
   ✓ Operational preamble (run.md)           product      contract       5,843  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)             product      contract       3,448  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)  product      substrate     13,047  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
@@ -580,12 +581,12 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  substrate      13,047 B  41.1%
+  substrate      13,047 B  41.0%
   contract        9,291 B  29.2%
-  identity        5,449 B  17.2%
-  runtime         3,972 B  12.5%
+  identity        5,449 B  17.1%
+  runtime         4,002 B  12.6%
   unattributed       10 B
-  wake total     31,769 B
+  wake total     31,799 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
