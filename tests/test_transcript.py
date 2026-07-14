@@ -237,6 +237,54 @@ def test_no_snapshot_seam_when_nothing_was_mounted(tmp_path):
     assert "<snapshot restored>" not in tx.render_claude_jsonl(t)
 
 
+def test_the_seam_answers_three_questions_and_the_subject_is_the_resident():
+    """The contract, asserted as a contract — not as a sentence.
+
+    The seam has been cut wrong twice, and both times the *tone* was the visible
+    problem while the **subject** was the real one. Cut 1 explained provenance
+    ("seeded by brnrd, not performed by you") and taught the resident to disown its
+    own orientation. Cut 2 fixed the tone and still denied the deed flatly — which
+    is only correct if "you" means *this run*. It does not. "You" is the resident:
+    the continuous thing holding a dominion, a plan, and 394 log entries, currently
+    issued a body.
+
+    So three questions, and the seam owes a distinct answer to each:
+
+    1. **Was it given?**  No — it is the resident's own. (Own the knowing.)
+    2. **Did you do it this run?**  No — it predates the run, not the resident.
+    3. **Did you make these calls?**  No — and this is the one that stays denied.
+       brnrd synthesizes those rows; no earlier run called them. "I read it before"
+       is honest about the knowing and a *false receipt* about the calls.
+
+    (1) and (2) are what makes the wake feel it is *somewhere* — the footing the
+    mount's measured branch discipline rides on. (3) is what keeps "did I write
+    ``.card``?" an answerable question. Lose either half and the seam is worthless
+    in a different direction, which is exactly how it has failed before.
+    """
+    seam = tx.SNAPSHOT_SEAM
+
+    # It is a restoration, and it says so — the marker a resident can use to answer
+    # "which boot did I get?" without grepping its own prompt.md.
+    assert "<snapshot restored>" in seam
+
+    # 1. Ownership — the memory is the resident's, not a loan from the daemon.
+    assert "yours" in seam and "not given" in seam
+
+    # 2. The subject is the *resident*, and only the run is new.
+    assert "resident" in seam
+    assert "predates this run, not you" in seam
+
+    # 3. The rows above are the spelling of restored memory. They are not receipts,
+    #    and the rows below are.
+    assert "not receipts" in seam
+    assert "receipts" in seam.split("rows below")[1]
+
+    # And the whole thing stays a state readout: no imperative mood, no sermon. The
+    # boot shows what is true; it does not instruct the resident how to feel about it.
+    for scold in ("you must", "remember", "do not forget", "be sure", "always"):
+        assert scold not in seam.lower(), f"the seam is preaching: {scold!r}"
+
+
 def test_turns_chain_by_parent_uuid(tmp_path):
     """A broken chain is a session the Shell will refuse to resume."""
     f1, f2 = tmp_path / "a.md", tmp_path / "b.md"

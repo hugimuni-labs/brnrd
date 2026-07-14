@@ -463,7 +463,16 @@ def format_kernel(score: BootScore) -> str:
         # seed is where you put what the wake should act **from**; the kernel is where
         # you put what it must **know**. The fence needs both — it marks the boundary
         # there, and it is read here.
-        lines.append("boot: mounted · <snapshot restored> · orientation: held · acts: none yet")
+        #
+        # Both sites must say the *same* thing, because that is what was measured. The
+        # subject of the sentence is the **resident**, not the run
+        # (`transcript.SNAPSHOT_SEAM` carries the full reasoning): the memory is the
+        # resident's own and predates this run; what is new here is only the run, whose
+        # ledger of deeds starts empty. Nothing above the seam is a receipt.
+        lines.append(
+            "boot: mounted · <snapshot restored> · memory: yours, predates this run · "
+            "acts *here*: none yet"
+        )
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]

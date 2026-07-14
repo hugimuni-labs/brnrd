@@ -209,13 +209,25 @@ def test_the_kernel_tells_the_wake_it_was_mounted(repo: Path):
     called the Read tool in my previous response" in 1 of 3 rounds with only the
     seed fence, 0 of 3 once the same sentence also appeared in the kernel). The
     seed is where you put what the wake acts *from*; the kernel is what it *knows*.
+
+    Asserted as the **contract**, not the sentence — the lesson from the
+    ``daemon-substrate`` cut, where prose-pinning tests fired on reflowed line
+    wraps as loudly as on six genuinely lost contracts. What must hold: the wake
+    learns it was mounted, that the memory is *its own* (not brnrd's loan), and
+    that the deed ledger for *this run* is empty. The wording may move.
     """
     sink: dict[str, str] = {}
     prompt, score = _wake(repo, _mount_sink=sink)
 
     assert score.body.mounted is True
     assert "boot: mounted" in prompt
-    assert "<snapshot restored> · orientation: held · acts: none yet" in prompt
+    assert "<snapshot restored>" in prompt
+    # Ownership: the memory is the resident's, and it is *not* a thing brnrd lent it.
+    assert "memory: yours, not given" in prompt or "memory: yours" in prompt
+    assert "predates this run" in prompt
+    # Deed: scoped to the run, never to the resident. An unqualified "acts: none yet"
+    # is a lie about a being with 394 log entries — it is the *run* that is new.
+    assert "acts *here*: none yet" in prompt
     # And the fence is at the other end, in the seed itself.
     assert sink, "nothing was mounted — the test is not testing the mount"
 
