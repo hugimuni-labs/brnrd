@@ -24,6 +24,8 @@ import random
 import string
 import json
 import os
+import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -799,14 +801,55 @@ def _build_cmd(
             return _replace_placeholders(custom)
         return _replace_placeholders(shlex.split(str(custom)))
 
+    # The prompt is NOT appended here. It travels on stdin -- see `_prompt_stdin`.
     profile = _selection_profiles(repo_root).get(runner_name)
     if profile:
         cmd = shlex.split(str(profile.get("cmd", runner_name)))
         cmd.extend(extra)
-        cmd.append(prompt)
         return cmd
 
-    return [runner_name, *extra, prompt]
+    return [runner_name, *extra]
+
+
+def _prompt_stdin(cfg: dict[str, Any], prompt: str) -> str | None:
+    """The prompt to pipe, or ``None`` when a pinned ``runner_cmd`` owns its argv.
+
+    **Why the prompt is not an argv token any more.**  It used to be, and on
+    2026-07-14 that killed a run (``run-260714-1442-hgc3``).  The wake had grown to
+    57,644 bytes and sat, whole, as ``argv[14]`` -- boot kernel, dominion playbook,
+    kb slice, conversation.  Somewhere at byte 12,393 of it was the string
+    ``bench run --scenario drift``, quoted as *documentation* inside the resident's
+    own playbook.  The run then went to kill a stuck bench with
+
+        pkill -f "bench run --scenario drift"
+
+    and ``pkill -f`` matches against a process's **entire command line**.  It found
+    that substring inside the runner's own ``/proc/self/cmdline`` and SIGTERM'd the
+    process that issued it.  Exit 143, no output, cause unfindable for a week.
+
+    A prompt in argv is a loaded gun pointed at the process holding it: *any*
+    ``pkill -f`` / ``pgrep -f`` a run performs is matched against a haystack that
+    contains the run's own prose.  It is also a plain confidentiality leak -- the
+    whole dominion and kb are world-readable in ``ps`` output on a shared box.
+
+    stdin costs nothing (unlike spilling to a file, which buys a Read turn every
+    wake and taxes exactly the "perception is free" property the boot exists to
+    protect).  Verified on both live Shells: ``claude --print`` reads a piped prompt,
+    and codex announces ``Reading prompt from stdin...``.
+
+    **The muted-fd invariant is preserved, not broken.**  ``stdin=DEVNULL`` was
+    pinned so codex's stdin path sees an immediate EOF instead of hanging on an
+    open-but-silent fd inherited from the daemon's terminal.  A pipe brr writes the
+    prompt into and then *closes* gives exactly that: the prompt, then EOF.  What was
+    ever forbidden is an fd nobody closes.
+
+    A ``runner_cmd`` override is the one exception: ``{prompt}`` in a pinned command
+    means *"put it here"*, and a pinned command is the user's.  That path keeps argv,
+    and keeps ``_spill_oversized_argv`` behind it.
+    """
+    if cfg.get("runner_cmd"):
+        return None
+    return prompt
 
 
 # A single argv string longer than this trips Linux's ``MAX_ARG_STRLEN`` --
@@ -845,6 +888,53 @@ def _spill_oversized_argv(cmd: list[str], repo_root: Path | None) -> list[str]:
         path = _spill_prompt_to_file(part, repo_root)
         adjusted.append(_prompt_pointer_text(path, byte_len))
     return adjusted
+
+
+def _live_capture_dir(repo_root: Path | None) -> Path:
+    """A directory the child writes its streams into *while it runs*.
+
+    Deliberately resolved **without** shelling out to git. ``gitops.shared_brr_dir``
+    would be the natural call, but it runs ``git rev-parse`` whenever ``.brr`` is not
+    directly present -- and this sits on the hot path of *every* invocation, where a
+    subprocess per run buys nothing. Walk up for an existing ``.brr``; fall back to
+    the temp dir. A capture buffer wants to be cheap and always available, not exact.
+    """
+    root = (repo_root or Path.cwd()).resolve()
+    base: Path | None = None
+    for candidate in (root, *root.parents):
+        if (candidate / ".brr").is_dir():
+            base = candidate / ".brr" / "runner-capture"
+            break
+    if base is None:
+        base = Path(tempfile.gettempdir()) / "brnrd-runner-capture"
+    path = base / f"{int(time.time())}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _read_capture(path: Path) -> str:
+    """Read back a stream file, tolerating a child killed mid-character."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _retire_capture_dir(capture_dir: Path, returncode: int) -> None:
+    """Delete the capture on a clean run; *keep it* when something went wrong.
+
+    A healthy run has already had its stdout handed to the response file and its
+    trace, so the copy is litter. A run that died has exactly one artifact left in
+    the world, and this is it -- so it stays on disk, where the next wake (or a
+    human) can read what the dead runner managed to say before it went.
+    """
+    if returncode == 0:
+        shutil.rmtree(capture_dir, ignore_errors=True)
+        return
+    try:
+        (capture_dir / "returncode.txt").write_text(f"{returncode}\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _spill_prompt_to_file(text: str, repo_root: Path | None) -> Path:
@@ -994,6 +1084,7 @@ def invoke_runner(
         extra_args=invocation.extra_runner_args,
     )
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
+    prompt_stdin = _prompt_stdin(cfg, invocation.prompt)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
@@ -1004,31 +1095,67 @@ def invoke_runner(
     stdout = ""
     stderr = ""
     returncode = 0
+    timed_out = False
+    # Capture to *disk*, not to in-memory pipes. `communicate()` returns only when
+    # the child exits, so a killed runner used to hand back two empty strings --
+    # every kill looked identical (budget SIGKILL, OOM, an agent's own stray
+    # `pkill`) and none of them left a byte to diagnose. Observed 2026-07-07
+    # (run-260707-1154-kem3) and again 2026-07-14 (run-260714-1442-hgc3): exit 143,
+    # zero output, cause unknown for a week. Files are written by the child as it
+    # runs, so whatever it managed to say survives its own death.
+    capture_dir = _live_capture_dir(invocation.repo_root)
+    out_path = capture_dir / "stdout.txt"
+    err_path = capture_dir / "stderr.txt"
     try:
-        with _proc_lock:
-            _active_proc = subprocess.Popen(
-                cmd,
-                cwd=invocation.cwd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=proc_env,
-            )
-        proc = _active_proc
-        stdout, stderr = proc.communicate(timeout=timeout)
-        returncode = proc.returncode
+        with open(out_path, "w", encoding="utf-8") as f_out, \
+                open(err_path, "w", encoding="utf-8") as f_err:
+            with _proc_lock:
+                _active_proc = subprocess.Popen(
+                    cmd,
+                    cwd=invocation.cwd,
+                    stdin=(
+                        subprocess.PIPE if prompt_stdin is not None
+                        else subprocess.DEVNULL
+                    ),
+                    stdout=f_out,
+                    stderr=f_err,
+                    text=True,
+                    env=proc_env,
+                )
+            proc = _active_proc
+            if prompt_stdin is not None and proc.stdin is not None:
+                # Cannot deadlock: stdout/stderr are *files*, not pipes, so the child
+                # is never blocked on a full pipe we are not draining. It reads the
+                # prompt, sees EOF on close, and works.
+                try:
+                    proc.stdin.write(prompt_stdin)
+                except BrokenPipeError:
+                    pass
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except BrokenPipeError:
+                        pass
+            try:
+                returncode = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                returncode = 124
+                timed_out = True
     except FileNotFoundError:
         stderr = f"executable '{cmd[0]}' not found on PATH"
         returncode = 127
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
-        returncode = 124
     finally:
         with _proc_lock:
             _active_proc = None
+
+    if returncode != 127:
+        stdout = _read_capture(out_path)
+        stderr = _read_capture(err_path)
+    if timed_out:
+        stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
+    _retire_capture_dir(capture_dir, returncode)
 
     stdout = _process_runner_stdout(runner_name, stdout, invocation.env)
 
