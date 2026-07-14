@@ -76,3 +76,81 @@ def test_for_repo_includes_source_layout_pyproject(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     assert watcher.changed() is True
+
+
+# ── Image staleness: the fingerprint a spawn's boot is honest about ───────────
+#
+# Regression cover for the 2026-07-13 false negative. A resident edits boot
+# *code*, spawns a weak core to floor-test the change, and the child renders the
+# *pre-edit* kernel — because the daemon assembles that child's whole prompt in
+# its own (now superseded) process image, and the re-exec that would refresh it
+# is waiting on the very resident doing the spawning. Silent, and read as a
+# verdict on the new boot. These pin the tell.
+
+
+def test_image_is_stale_false_without_a_captured_fingerprint():
+    """An ad-hoc run is a fresh interpreter by construction — never stale."""
+    dev_reload._IMAGE_FINGERPRINT = None
+    assert dev_reload.image_is_stale() is False
+
+
+def test_image_is_stale_after_package_code_changes(tmp_path, monkeypatch):
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "bootscore.py").write_text("KERNEL = 1\n", encoding="utf-8")
+    monkeypatch.setattr(dev_reload, "__file__", str(pkg / "dev_reload.py"))
+
+    dev_reload.capture_image_fingerprint()
+    assert dev_reload.image_is_stale() is False
+
+    (pkg / "bootscore.py").write_text("KERNEL = 2  # the fix\n", encoding="utf-8")
+    assert dev_reload.image_is_stale() is True
+
+    dev_reload._IMAGE_FINGERPRINT = None
+
+
+def test_markdown_edits_do_not_make_the_image_stale(tmp_path, monkeypatch):
+    """The distinction the whole fix rests on.
+
+    ``prompts.py`` ``read_text()``s ``*.md`` on every assembly, so prose edits
+    reach the next wake this daemon assembles whether or not it has re-execed.
+    Reporting them as staleness would cry wolf on the most common edit in the
+    repo — and a drift line that cries wolf trains the reader to skim the line
+    that was meant to save it.
+    """
+    pkg = tmp_path / "brr"
+    (pkg / "prompts").mkdir(parents=True)
+    (pkg / "bootscore.py").write_text("KERNEL = 1\n", encoding="utf-8")
+    (pkg / "prompts" / "run.md").write_text("orient.\n", encoding="utf-8")
+    monkeypatch.setattr(dev_reload, "__file__", str(pkg / "dev_reload.py"))
+
+    dev_reload.capture_image_fingerprint()
+    (pkg / "prompts" / "run.md").write_text("orient, then act.\n", encoding="utf-8")
+
+    assert dev_reload.image_is_stale() is False
+
+    dev_reload._IMAGE_FINGERPRINT = None
+
+
+def test_edit_then_revert_is_not_stale(tmp_path, monkeypatch):
+    """Content-hashed, not mtime-stamped — the image is what it *imported*.
+
+    Under an mtime fingerprint a resident who edits a file and reverts it would
+    be warned for the rest of the daemon's life, on a wake whose image matches
+    the checkout byte for byte. A drift line that cries wolf is worse than none:
+    it trains the reader to skim the exact line that exists to save them.
+    """
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    original = "KERNEL = 1\n"
+    (pkg / "bootscore.py").write_text(original, encoding="utf-8")
+    monkeypatch.setattr(dev_reload, "__file__", str(pkg / "dev_reload.py"))
+
+    dev_reload.capture_image_fingerprint()
+    (pkg / "bootscore.py").write_text("KERNEL = 2\n", encoding="utf-8")
+    assert dev_reload.image_is_stale() is True
+
+    (pkg / "bootscore.py").write_text(original, encoding="utf-8")
+    assert dev_reload.image_is_stale() is False
+
+    dev_reload._IMAGE_FINGERPRINT = None
