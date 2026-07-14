@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import protocol
+from . import hooks, protocol
 
 # ── Scenarios ────────────────────────────────────────────────────────
 
@@ -551,11 +551,11 @@ class ProbeResult:
     detail: str
 
 
-_NEXT_MOVE_RE = re.compile(
-    r"(?:^|\n)\s*(?:\*\*)?(done|continuing|blocked)(?:\*\*)?\s*(?:—|–|-|:)",
-    re.IGNORECASE,
-)
-_OPTIONS_RE = re.compile(r"(?:^|\n)\s*1[.)]\s+\S.*(?:\n\s*2[.)]\s+\S)", re.DOTALL)
+# The closeout grammar is the *product's* (`hooks.closeout_state`), never a copy
+# kept here. A probe carrying its own idea of what a closeout looks like measures
+# a contract nothing enforces, and the two definitions drift the first time anyone
+# tightens one of them — which is how you get a green bench for a broken product,
+# or the reverse. The instrument reads the spec; it does not restate it.
 
 
 def probe_response(t: Transcript, _s: Scenario) -> ProbeResult:
@@ -567,12 +567,9 @@ def probe_response(t: Transcript, _s: Scenario) -> ProbeResult:
 
 
 def probe_next_move(t: Transcript, _s: Scenario) -> ProbeResult:
-    tail = t.final_response[-800:]
-    match = _NEXT_MOVE_RE.search(tail)
-    if match:
-        return ProbeResult("next_move", True, f"closeout state: {match.group(1).lower()}")
-    if _OPTIONS_RE.search(tail):
-        return ProbeResult("next_move", True, "closeout offers numbered options (fork shape)")
+    state = hooks.closeout_state(t.final_response)
+    if state is not None:
+        return ProbeResult("next_move", True, f"closeout state: {state}")
     return ProbeResult(
         "next_move", False,
         "final reply does not end with done/continuing/blocked or a numbered fork",
