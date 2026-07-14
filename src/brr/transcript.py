@@ -92,6 +92,24 @@ REPLAYABLE_TOOLS = frozenset({"Read"})
 COMPUTED = "computed"
 """``ContractEntry.location`` sentinel for a block that is live state, not a file."""
 
+MOUNTED_SHELLS = frozenset({"claude"})
+"""Shells that can actually *resume* a transcript brnrd forged.
+
+The IR above is Shell-agnostic; **the mount is not**, and the gap between those
+two facts is exactly the kind of thing a tool must say out loud rather than let a
+caller discover. Only :func:`render_claude_jsonl` exists today.
+
+``codex`` is next and is not a re-render away.  Its rollout format is close
+enough (``session_meta`` + ``response_item`` rows, resumed with ``codex resume
+<uuid>`` / ``codex fork``) — but it has **no ``Read`` tool**.  Its file
+perception runs through ``exec``, a general command executor.  So
+:data:`REPLAYABLE_TOOLS` does not port: the guard would have to move from *"is
+this tool on the allowlist"* — a fact about a name, checkable — to *"is this
+command side-effect-free"* — a fact about a shell string, which is not.  A codex
+mount therefore needs its own answer to the safety rule before it needs a
+renderer.  Until it has one, this set stays at ``{"claude"}`` and the CLI refuses
+the rest."""
+
 
 class ForgedActionError(RuntimeError):
     """Raised when a transcript would claim an action the daemon did not take."""
