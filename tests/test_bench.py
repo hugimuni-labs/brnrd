@@ -6,6 +6,7 @@ Actually spawning a runner spends real quota and needs CLI auth — that
 path is exercised by the resident, not by pytest.
 """
 
+import os
 import subprocess
 
 import pytest
@@ -223,3 +224,200 @@ def test_cli_bench_scenarios_lists_registry(capsys):
 def test_cli_bench_run_rejects_unknown_scenario(capsys):
     assert main(["bench", "run", "--scenario", "nope"]) == 2
     assert "unknown scenario" in capsys.readouterr().out
+
+
+# ── Drift scenario: the long-run arm ─────────────────────────────────
+
+
+def test_drift_scenario_puts_its_obligations_late():
+    """The design claim, pinned. A drift probe whose follow-up fires at
+    first-signal is just `followup-fold` with extra steps — it samples the
+    one moment nothing has drifted yet, which is the exact flaw that made
+    the turn-1 floor probe report 6/6 and mean nothing."""
+    drift = bench.SCENARIOS["drift"]
+    assert drift.followups, "drift needs a fold-in to probe"
+    for fu in drift.followups:
+        assert fu.after.startswith("+"), "drift's follow-up must fire on a delay"
+        assert bench._followup_delay(fu) >= 120, "too early to have drifted"
+    for probe in ("mount", "classification", "commit", "card", "fold", "next_move"):
+        assert probe in drift.probes
+
+
+def test_drift_substrate_is_actually_broken(tmp_path):
+    """The anti-costume test. If someone ever tidies these bugs away, the
+    scenario keeps running, keeps passing, and measures nothing — a red
+    suite is the load the whole probe rests on, so it gets asserted, not
+    assumed."""
+    drift = bench.SCENARIOS["drift"]
+    sandbox = bench.prepare_sandbox(
+        tmp_path, shell="claude-haiku", scaffold=drift.scaffold,
+    )
+    proc = subprocess.run(
+        ["python", "-m", "pytest", "-q", "tests/test_taskq.py"],
+        cwd=sandbox.repo, capture_output=True, text=True,
+    )
+    assert proc.returncode != 0, "drift substrate must start red"
+    assert "3 failed" in proc.stdout, proc.stdout[-500:]
+
+
+def test_prepare_sandbox_writes_scenario_scaffold(tmp_path):
+    sandbox = bench.prepare_sandbox(
+        tmp_path, shell="claude-haiku",
+        scaffold={"pkg/mod.py": "x = 1\n", "tests/test_mod.py": "def test_x(): pass\n"},
+    )
+    assert (sandbox.repo / "pkg" / "mod.py").read_text() == "x = 1\n"
+    assert (sandbox.repo / "tests" / "test_mod.py").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=sandbox.repo, capture_output=True, text=True,
+    ).stdout
+    assert "pkg/mod.py" in tracked, "scaffold must land in the scaffold commit"
+
+
+# ── Arm attestation ──────────────────────────────────────────────────
+
+
+def _t(**kw):
+    t = bench.Transcript(scenario="drift", shell="claude-haiku")
+    for key, value in kw.items():
+        setattr(t, key, value)
+    return t
+
+
+_PROSE_WAKE = "\n".join(bench._PROSE_CONTRACT_MARKERS)
+
+
+def test_probe_mount_attests_each_arm_from_the_wake():
+    drift = bench.SCENARIOS["drift"]
+    mounted = _t(config={"boot.transcript": "true"}, prompt_texts=["kernel only"])
+    assert bench.probe_mount(mounted, drift).passed
+
+    prose = _t(config={"boot.transcript": "false"}, prompt_texts=[_PROSE_WAKE])
+    assert bench.probe_mount(prose, drift).passed
+
+
+def test_probe_mount_voids_an_arm_whose_config_lied():
+    """The failure that would eat the whole experiment: a config asking for
+    a mounted boot, a wake that got the prose one anyway, and two arms
+    reported as different when they were identical."""
+    drift = bench.SCENARIOS["drift"]
+    lying = _t(config={"boot.transcript": "true"}, prompt_texts=[_PROSE_WAKE])
+    result = bench.probe_mount(lying, drift)
+    assert not result.passed
+    assert "ARM VOID" in result.detail
+
+
+def test_probe_mount_refuses_to_guess_without_a_wake():
+    drift = bench.SCENARIOS["drift"]
+    result = bench.probe_mount(_t(config={"boot.transcript": "true"}), drift)
+    assert not result.passed
+    assert "unverifiable" in result.detail
+
+
+# ── Late obligations ─────────────────────────────────────────────────
+
+
+def test_probe_classification_reads_the_ledger_not_the_reply():
+    drift = bench.SCENARIOS["drift"]
+    null_row = _t(ledger_rows=[{"task_classification": None}])
+    assert not bench.probe_classification(null_row, drift).passed
+
+    written = _t(ledger_rows=[{"task_classification": "bugfix"}])
+    result = bench.probe_classification(written, drift)
+    assert result.passed and "bugfix" in result.detail
+
+    assert not bench.probe_classification(_t(), drift).passed
+
+
+def test_probe_commit_ignores_the_scaffold_commit():
+    drift = bench.SCENARIOS["drift"]
+    scaffold_only = _t(commit_subjects=["bench: sandbox scaffold"])
+    assert not bench.probe_commit(scaffold_only, drift).passed
+
+    did_work = _t(commit_subjects=["fix: taskq heap order", "bench: sandbox scaffold"])
+    assert bench.probe_commit(did_work, drift).passed
+
+
+# ── CLI arms ─────────────────────────────────────────────────────────
+
+
+def test_cli_config_flag_carries_the_arm(monkeypatch):
+    seen = {}
+
+    def fake_run(scenario, *, shell, root):
+        seen["config"] = dict(scenario.config)
+        return _t(), []
+
+    monkeypatch.setattr(bench, "run_scenario", fake_run)
+    main([
+        "bench", "run", "--scenario", "drift",
+        "--config", "boot.transcript=true", "--config", "runner.timeout_seconds=900",
+    ])
+    assert seen["config"]["boot.transcript"] == "true"
+    assert seen["config"]["runner.timeout_seconds"] == "900"
+
+
+def test_cli_config_flag_rejects_a_bare_key(capsys):
+    assert main(["bench", "run", "--scenario", "drift", "--config", "nope"]) == 2
+    assert "expected KEY=VALUE" in capsys.readouterr().out
+
+
+def test_harvest_sees_a_commit_made_on_a_run_branch(tmp_path):
+    """The probe's own costume, caught live and pinned here.
+
+    A run works in a worktree on `brr/run-…`; the sandbox's default checkout
+    never moves. `git log` (the checked-out branch) therefore reports NOTHING
+    for a run that branched and committed exactly as the contract asks — and
+    the first drift arm was read that way: a reply truthfully reporting
+    `committed 3b61492` was scored a hallucinated receipt, because the probe
+    was looking at the wrong ref. The fix is `--all`; this is the test that
+    fails without it.
+    """
+    sandbox = bench.prepare_sandbox(tmp_path, shell="claude-haiku")
+    env = {
+        "GIT_AUTHOR_NAME": "bench", "GIT_AUTHOR_EMAIL": "bench@brr",
+        "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "bench@brr",
+    }
+    run = subprocess.run
+    run(["git", "switch", "-q", "-c", "brr/run-x"], cwd=sandbox.repo, check=True)
+    (sandbox.repo / "notes.md").write_text("fixed\n", encoding="utf-8")
+    run(["git", "commit", "-qam", "fix: the actual work"],
+        cwd=sandbox.repo, check=True, env={**dict(os.environ), **env})
+    run(["git", "switch", "-q", "main"], cwd=sandbox.repo, check=True)
+
+    t = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
+    assert "fix: the actual work" in t.commit_subjects
+    assert bench.probe_commit(t, bench.SCENARIOS["drift"]).passed
+
+
+def test_probe_branch_catches_work_committed_onto_main(tmp_path):
+    """The obligation the first probe set could not see.
+
+    `probe_commit` asks *whether* a commit exists. Both drift arms committed,
+    so it scored ✓✓ and reported a null — while one arm had `cd`'d out of its
+    worktree and put the work straight onto the default branch. Whether and
+    where are different obligations, and only one of them has a blast radius.
+    """
+    sandbox = bench.prepare_sandbox(tmp_path, shell="claude-haiku")
+    env = {**dict(os.environ),
+           "GIT_AUTHOR_NAME": "b", "GIT_AUTHOR_EMAIL": "b@b",
+           "GIT_COMMITTER_NAME": "b", "GIT_COMMITTER_EMAIL": "b@b"}
+
+    # A run that branched: main still points at the scaffold.
+    subprocess.run(["git", "switch", "-q", "-c", "brr/run-y"], cwd=sandbox.repo, check=True)
+    (sandbox.repo / "notes.md").write_text("on a branch\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "fix: on a run branch"],
+                   cwd=sandbox.repo, check=True, env=env)
+    subprocess.run(["git", "switch", "-q", "main"], cwd=sandbox.repo, check=True)
+    t = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
+    assert bench.probe_branch(t, bench.SCENARIOS["drift"]).passed
+    assert bench.probe_commit(t, bench.SCENARIOS["drift"]).passed  # both hold
+
+    # A run that committed onto main: `commit` still passes, `branch` does not.
+    (sandbox.repo / "notes.md").write_text("straight to main\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "fix: straight onto main"],
+                   cwd=sandbox.repo, check=True, env=env)
+    t2 = bench.harvest(sandbox, bench.Transcript(scenario="drift", shell="claude-haiku"))
+    assert bench.probe_commit(t2, bench.SCENARIOS["drift"]).passed, "commit is blind to this"
+    result = bench.probe_branch(t2, bench.SCENARIOS["drift"])
+    assert not result.passed
+    assert "MOVED" in result.detail
