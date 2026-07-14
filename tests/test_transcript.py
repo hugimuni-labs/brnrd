@@ -144,7 +144,14 @@ def test_a_trimmed_block_says_it_was_trimmed(tmp_path):
 
 
 def test_an_untrimmed_block_carries_no_note(tmp_path):
-    """No wolf-crying: a full block gets no disclaimer at all."""
+    """No wolf-crying: a full block gets no *trim* disclaimer at all.
+
+    (The snapshot fence is a different animal and always closes the seed — so the
+    exact result is body + fence, and the trim note must be nowhere in it. Pinned
+    exactly rather than loosened: the wolf-cry bug this guards against shipped
+    once already, stapling a 137-byte "re-read it for the rest" onto four blocks
+    that had lost nothing.)
+    """
     f = tmp_path / "AGENTS.md"
     body = "the whole contract\n"
     f.write_text(body, encoding="utf-8")
@@ -152,7 +159,9 @@ def test_an_untrimmed_block_carries_no_note(tmp_path):
     score = BootScore(contracts=[_entry("agents", str(f), size=len(body))])
     t = tx.build_orientation_transcript(score, block_text={"agents": body})
 
-    assert next(t.perceptions()).result == body
+    result = next(t.perceptions()).result
+    assert result == body + tx.SNAPSHOT_SEAM
+    assert "rendered to" not in result
 
 
 # ── Rendering for the claude Shell ────────────────────────────────────────────
@@ -185,9 +194,95 @@ def test_claude_jsonl_puts_the_wake_in_tool_result_position(tmp_path):
     assert result["type"] == "user"
     rblock = result["message"]["content"][0]
     assert rblock["type"] == "tool_result"
-    assert rblock["content"] == "contract\n"
+    assert rblock["content"].startswith("contract\n")
     # The pairing the Shell actually resolves on.
     assert rblock["tool_use_id"] == block["id"]
+
+
+def test_snapshot_seam_never_costs_the_tool_result_position(tmp_path):
+    """The fence rides *inside* the last result — it does not become a turn.
+
+    This is a regression pin with a story. The seam's first cut was a closing
+    ``Say`` turn, which read beautifully and quietly undid the feature: it put a
+    prose ``user`` row in the last slot, so the task arrived at a model that had
+    just been *read to* rather than one that had just *acted* — spending the
+    mount's measured benefit (branch discipline, 3/3) to buy an unmeasured gain in
+    honesty. It would also have emitted two adjacent ``user`` rows, whose failure
+    mode is a mount that silently degrades to prose.
+
+    So: the seed ends on a ``tool_result``, always, and the fence is carried by it.
+    """
+    f = tmp_path / "AGENTS.md"
+    f.write_text("contract\n", encoding="utf-8")
+    score = BootScore(contracts=[_entry("agents", str(f), size=9)])
+    t = tx.build_orientation_transcript(
+        score, block_text={"agents": "contract\n"}, cwd="/repo",
+    )
+
+    rows = [json.loads(l) for l in tx.render_claude_jsonl(t).splitlines()]
+    last = rows[-1]
+    assert last["type"] == "user"
+    tail = last["message"]["content"][0]
+    assert tail["type"] == "tool_result", "the seed must end in tool-result position"
+    assert "<snapshot restored>" in tail["content"], "the fence must be in the seed"
+    # And it must be the *end* of the seed, not floating mid-block.
+    assert tail["content"].rstrip().endswith("]")
+
+
+def test_no_snapshot_seam_when_nothing_was_mounted(tmp_path):
+    """A fence with nothing behind it announces a restoration that never happened."""
+    score = BootScore(contracts=[_entry("kernel", tx.COMPUTED, size=10)])
+    t = tx.build_orientation_transcript(score, block_text={"kernel": "live"}, cwd="/r")
+    assert t.turns == []
+    assert "<snapshot restored>" not in tx.render_claude_jsonl(t)
+
+
+def test_the_seam_answers_three_questions_and_the_subject_is_the_resident():
+    """The contract, asserted as a contract — not as a sentence.
+
+    The seam has been cut wrong twice, and both times the *tone* was the visible
+    problem while the **subject** was the real one. Cut 1 explained provenance
+    ("seeded by brnrd, not performed by you") and taught the resident to disown its
+    own orientation. Cut 2 fixed the tone and still denied the deed flatly — which
+    is only correct if "you" means *this run*. It does not. "You" is the resident:
+    the continuous thing holding a dominion, a plan, and 394 log entries, currently
+    issued a body.
+
+    So three questions, and the seam owes a distinct answer to each:
+
+    1. **Was it given?**  No — it is the resident's own. (Own the knowing.)
+    2. **Did you do it this run?**  No — it predates the run, not the resident.
+    3. **Did you make these calls?**  No — and this is the one that stays denied.
+       brnrd synthesizes those rows; no earlier run called them. "I read it before"
+       is honest about the knowing and a *false receipt* about the calls.
+
+    (1) and (2) are what makes the wake feel it is *somewhere* — the footing the
+    mount's measured branch discipline rides on. (3) is what keeps "did I write
+    ``.card``?" an answerable question. Lose either half and the seam is worthless
+    in a different direction, which is exactly how it has failed before.
+    """
+    seam = tx.SNAPSHOT_SEAM
+
+    # It is a restoration, and it says so — the marker a resident can use to answer
+    # "which boot did I get?" without grepping its own prompt.md.
+    assert "<snapshot restored>" in seam
+
+    # 1. Ownership — the memory is the resident's, not a loan from the daemon.
+    assert "yours" in seam and "not given" in seam
+
+    # 2. The subject is the *resident*, and only the run is new.
+    assert "resident" in seam
+    assert "predates this run, not you" in seam
+
+    # 3. The rows above are the spelling of restored memory. They are not receipts,
+    #    and the rows below are.
+    assert "not receipts" in seam
+    assert "receipts" in seam.split("rows below")[1]
+
+    # And the whole thing stays a state readout: no imperative mood, no sermon. The
+    # boot shows what is true; it does not instruct the resident how to feel about it.
+    for scold in ("you must", "remember", "do not forget", "be sure", "always"):
+        assert scold not in seam.lower(), f"the seam is preaching: {scold!r}"
 
 
 def test_turns_chain_by_parent_uuid(tmp_path):
