@@ -404,9 +404,16 @@ class TestBootScore:
         assert score.body.name == "claude-fable"
         assert score.body.shell == "claude"
         assert score.body.core == "claude-fable-5"
-        assert score.attention.body_provenance == (
-            "requested from the dashboard spool rack"
-        )
+        # Why this body is a fact about the *body*.
+        #
+        # This assertion used to read ``score.attention.body_provenance ==
+        # "requested from the dashboard spool rack"`` — i.e. it *pinned the bug*.
+        # The runner note was landing on the kernel's ``attention:`` line, where
+        # it told the wake that its attention had arrived from the spool rack
+        # when the user had typed it into telegram.  The test was green and the
+        # semantics were wrong, which is the only reason it survived review: a
+        # test can defend a defect as faithfully as it defends a contract.
+        assert score.body.provenance == "requested from the dashboard spool rack"
 
     def test_format_manifest_output(self, empty_repo):
         """format_manifest renders a parseable human-readable text."""
