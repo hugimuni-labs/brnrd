@@ -463,11 +463,7 @@ def format_kernel(score: BootScore) -> str:
         # seed is where you put what the wake should act **from**; the kernel is where
         # you put what it must **know**. The fence needs both — it marks the boundary
         # there, and it is read here.
-        lines.append(
-            "boot: mounted — the Read calls above this task were seeded by brnrd, "
-            "not performed by you · the bytes are real, the turns are the daemon's "
-            "· from here the transcript is yours"
-        )
+        lines.append("boot: mounted · <snapshot restored> · orientation: held · acts: none yet")
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
