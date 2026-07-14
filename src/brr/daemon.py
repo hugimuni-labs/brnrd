@@ -83,6 +83,7 @@ from . import runner_select
 from . import schedule as schedule_mod
 from . import spending_plan
 from . import sync
+from . import transcript
 from . import updates
 from . import worktree
 from .run import Run
@@ -2156,11 +2157,25 @@ def _run_worker(
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
 
-        prompt, boot_score = prompts.build_daemon_prompt_with_score(
-            prompt_instruction,
-            eid,
-            str(env_ctx.response_path_env),
-            run_root,
+        # ── Boot as a transcript (`boot.transcript`, default off) ─────────────
+        # Off: byte-identical to the prose boot every wake has ever had.
+        # On: the file-backed contracts leave the prose and are seeded as `Read`
+        # calls and their results in a session the Shell resumes — the same bytes,
+        # in tool-result position. `kb/design-boot-transcript.md`.
+        #
+        # Default-off is not timidity. It is the only thing that keeps a control
+        # arm alive: the claim that a mounted position makes a wake *act* on its
+        # obligations (rather than recite them) is UNMEASURED, and a flag is what
+        # turns it into an experiment instead of a hunch that shipped.
+        boot_mount = bool(cfg.get("boot.transcript", cfg.get("boot_transcript", False)))
+        mount_shell = str(task.meta.get("runner_shell") or "")
+        mount_sink: dict[str, str] | None = (
+            {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
+        )
+
+        # Built once, so the fail-closed rebuild below cannot drift from the
+        # prompt it is replacing.
+        _prompt_kwargs: dict[str, Any] = dict(
             outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
             run_id=task.id,
             source=task.source or event.get("source"),
@@ -2217,6 +2232,45 @@ def _run_worker(
             worker=bool(task.meta.get("worker")),
             hooks_installed=run_hooks_installed,
         )
+
+        prompt, boot_score = prompts.build_daemon_prompt_with_score(
+            prompt_instruction,
+            eid,
+            str(env_ctx.response_path_env),
+            run_root,
+            _mount_sink=mount_sink,
+            **_prompt_kwargs,
+        )
+
+        if mount_sink:
+            try:
+                session_id = transcript.mount_claude_session(
+                    boot_score,
+                    block_text=mount_sink,
+                    cwd=str(run_root),
+                    git_branch=branch_name or "",
+                    model=str(task.meta.get("runner_core") or ""),
+                )
+                extra_runner_args = [
+                    *transcript.resume_argv(session_id),
+                    *extra_runner_args,
+                ]
+                print(f"[brnrd] boot mounted as transcript: session {session_id}")
+            except Exception as exc:  # noqa: BLE001 — fail closed, never silently
+                # The mounted blocks have already left the prose. If the mount did
+                # not happen, this wake would run with its contracts removed from
+                # the prompt and seeded nowhere — silently, and *caused by the
+                # boot*. Rebuild the prose prompt. A boot that cannot mount must
+                # degrade to the boot that always worked, out loud.
+                print(f"[brnrd] boot transcript mount failed ({exc}) — prose boot")
+                prompt, boot_score = prompts.build_daemon_prompt_with_score(
+                    prompt_instruction,
+                    eid,
+                    str(env_ctx.response_path_env),
+                    run_root,
+                    **_prompt_kwargs,
+                )
+
         if attempt == 1:
             # Persist the assembled prompt so "what did this wake see?" has
             # an honest answer even on successful runs (traces are cleaned up
