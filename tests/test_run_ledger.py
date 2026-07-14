@@ -414,3 +414,70 @@ def test_core_mismatch_matching_rules():
     assert run_ledger.core_mismatch(
         "claude-fable-5", "claude-haiku-4-5+claude-sonnet-5"
     ) is True
+
+
+def test_core_attestation_fable_billing_alias_does_not_alarm(capsys):
+    """Regression: fable runs bill as claude-opus-4-8 in modelUsage.
+
+    Claude Code started reporting fable runs under the billing model id
+    (claude-opus-4-8) rather than the flag name (claude-fable-5) in
+    modelUsage.keys() around 2026-07-13.  build_closed_run_row must look up
+    the catalog's ``bills_as`` list and not fire the mismatch alarm when the
+    observed billing id is a declared alias for the expected model flag.
+    """
+    task = Run(
+        id="run-fable-billed-as-opus",
+        event_id="evt-fable-billed-as-opus",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude-fable",
+            "runner_shell": "claude",
+            "runner_core": "claude-fable-5",
+            "repo_label": "Gurio/brr",
+        },
+    )
+
+    row = run_ledger.build_closed_run_row(
+        task,
+        {},
+        after_levels={"model_ids": ["claude-opus-4-8"]},
+    )
+
+    assert row["core_expected"] == "claude-fable-5"
+    assert row["runner_core"] == "claude-opus-4-8"
+    assert row["core_mismatch"] is False
+    assert capsys.readouterr().err == ""
+
+
+def test_core_attestation_fable_genuinely_shadowed_still_alarms(capsys):
+    """The billing-alias allowance must not suppress a real shadow.
+
+    If fable is pinned but the Shell actually ran an unrelated model
+    (not the fable flag, not its billing alias), the alarm must still fire.
+    This pins the invariant: the fix is a targeted exception for the known
+    alias, not a blanket suppression of fable attestation.
+    """
+    task = run_ledger.Run(
+        id="run-fable-shadowed",
+        event_id="evt-fable-shadowed",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude-fable",
+            "runner_shell": "claude",
+            "runner_core": "claude-fable-5",
+            "repo_label": "Gurio/brr",
+        },
+    )
+
+    row = run_ledger.build_closed_run_row(
+        task,
+        {},
+        after_levels={"model_ids": ["claude-sonnet-4-6"]},
+    )
+
+    assert row["core_expected"] == "claude-fable-5"
+    assert row["runner_core"] == "claude-sonnet-4-6"
+    assert row["core_mismatch"] is True
+    assert "was dispatched with core='claude-fable-5'" in capsys.readouterr().err
