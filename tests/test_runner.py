@@ -621,7 +621,7 @@ def test_build_cmd_for_generated_claude_core_inserts_model(tmp_path, monkeypatch
     cmd = _build_cmd("claude-haiku", "fix it", {}, tmp_path)
 
     assert cmd[:3] == ["claude", "--model", "claude-haiku-4-5-20251001"]
-    assert cmd[-1] == "fix it"
+    assert "fix it" not in cmd
 
 
 def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
@@ -648,7 +648,7 @@ def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     try:
         assert resolve_runner(tmp_path) == "local-agent"
         assert _build_cmd("local-agent", "fix it", {}, tmp_path) == [
-            "local-agent", "run", "--yes", "fix it",
+            "local-agent", "run", "--yes",
         ]
     finally:
         runner_mod._profiles_cache = None
@@ -673,7 +673,6 @@ class TestCommandBuilding:
             "include_collaboration_mode_instructions=false",
             "-c",
             "include_skill_instructions=false",
-            "fix it",
         ]
 
     def test_build_cmd_claude_headless(self):
@@ -692,7 +691,6 @@ class TestCommandBuilding:
             "local",
             "--system-prompt",
             _RUNNER_BASE,
-            "fix it",
         ]
 
     def test_build_cmd_claude_bare_api_only_headless(self):
@@ -706,7 +704,6 @@ class TestCommandBuilding:
             "--bare",
             "--system-prompt",
             _RUNNER_BASE,
-            "fix it",
         ]
 
     def test_build_cmd_generated_claude_bare_api_core_headless(self):
@@ -722,7 +719,6 @@ class TestCommandBuilding:
             "--bare",
             "--system-prompt",
             _RUNNER_BASE,
-            "fix it",
         ]
 
     def test_build_cmd_gemini_headless_uses_yolo(self):
@@ -731,7 +727,6 @@ class TestCommandBuilding:
             "gemini",
             "-p",
             "--yolo",
-            "fix it",
         ]
 
     def test_invoke_runner_unwraps_claude_json_response(self, tmp_path):
@@ -786,29 +781,69 @@ class TestCommandBuilding:
         assert cmd == ["mock", "--flag", "do work"]
 
 
+def _fake_proc(popen_kwargs: dict, *, out: str = "", err: str = "", code: int = 0):
+    """A stand-in child that writes to the stream *files* it was handed.
+
+    ``invoke_runner`` no longer collects output from ``communicate()`` -- it points
+    the child's stdout/stderr at real files and reads them back after ``wait()``,
+    so a runner killed mid-flight still leaves its words on disk (2026-07-14,
+    run-260714-1442-hgc3: exit 143, zero bytes, cause unfindable for a week).
+    A fake child must therefore *write*, exactly as a real one does.
+    """
+    # `monkeypatch.setattr(runner_mod.subprocess, "Popen", ...)` patches the *module*,
+    # so it also catches `subprocess.run()` calls made elsewhere on the way in --
+    # notably `runner_cores.probe_shell_models()`, reached via `_selection_profiles`.
+    # Those hand us `stdout=PIPE` (an int), not a file. Only a real capture file gets
+    # written; everything else is a passer-by and must not crash.
+    for stream, text in (("stdout", out), ("stderr", err)):
+        handle = popen_kwargs.get(stream)
+        if hasattr(handle, "write"):
+            handle.write(text)
+
+    class _FakeProc:
+        returncode = code
+        stdin = None
+
+        def wait(self, timeout=None):
+            return code
+
+        def communicate(self, input=None, timeout=None):  # for `subprocess.run`
+            return ("", "")
+
+        def kill(self):
+            pass
+
+        def poll(self):
+            return code
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    return _FakeProc()
+
+
 class TestOversizedPromptSpill:
     """A single argv string over Linux's 128 KiB MAX_ARG_STRLEN crashes
     ``execve`` with ``OSError: [Errno 7] Argument list too long`` before brr
     ever starts the subprocess -- observed in production 2026-07-07 when a
     director-tick wake's assembled prompt reached 176 KB. ``invoke_runner``
     must spill any oversized argv element to disk and pass a short pointer
-    instead, never touch ``stdin`` (that fd is deliberately muted -- see
-    ``test_invoke_runner_passes_configured_timeout_to_communicate``), and
-    leave small prompts byte-for-byte unchanged on the command line.
+    instead, and leave small prompts byte-for-byte unchanged on the command line.
+
+    The spill stays even though the prompt now travels on ``stdin``: a
+    ``runner_cmd`` override pins ``{prompt}`` into argv verbatim, and that path can
+    still overrun ``MAX_ARG_STRLEN``. Belt and braces, on the one path the user owns.
     """
 
     def test_small_prompt_passed_through_unchanged(self, tmp_path, monkeypatch):
         captured = {}
 
-        class _FakeProc:
-            returncode = 0
-
-            def communicate(self, timeout=None):
-                return ("ok\n", "")
-
         def _fake_popen(cmd, **kwargs):
             captured["cmd"] = cmd
-            return _FakeProc()
+            return _fake_proc(kwargs, out="ok\n")
 
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
         (tmp_path / ".brr").mkdir()
@@ -823,7 +858,8 @@ class TestOversizedPromptSpill:
         result = invoke_runner("mock", invocation)
 
         assert result.ok
-        assert captured["cmd"][-1] == "fix it"
+        # The prompt is not an argv token at all any more — it goes down stdin.
+        assert "fix it" not in captured["cmd"]
         assert not (tmp_path / ".brr" / "prompt-overflow").exists()
 
     def test_oversized_prompt_spilled_to_file_and_pointer_passed(
@@ -831,16 +867,10 @@ class TestOversizedPromptSpill:
     ):
         captured = {}
 
-        class _FakeProc:
-            returncode = 0
-
-            def communicate(self, timeout=None):
-                return ("ok\n", "")
-
         def _fake_popen(cmd, **kwargs):
             captured["cmd"] = cmd
             captured["stdin"] = kwargs.get("stdin")
-            return _FakeProc()
+            return _fake_proc(kwargs, out="ok\n")
 
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
         (tmp_path / ".brr").mkdir()
@@ -853,11 +883,11 @@ class TestOversizedPromptSpill:
             repo_root=tmp_path,
         )
 
-        result = invoke_runner("mock", invocation)
+        # A pinned command owns its own argv: `{prompt}` means "put it *here*", so
+        # this path keeps the spill rather than diverting the prompt to stdin.
+        result = invoke_runner("mock", invocation, {"runner_cmd": ["mock", "{prompt}"]})
 
         assert result.ok
-        # stdin stays muted -- the fix must never rely on piping the prompt.
-        assert captured["stdin"] == subprocess.DEVNULL
         pointer = captured["cmd"][-1]
         assert huge_prompt not in pointer
         assert len(pointer.encode("utf-8")) < 1_000
@@ -902,18 +932,9 @@ class TestInvocationTracing:
     def test_invoke_runner_passes_invocation_environment(self, tmp_path, monkeypatch):
         captured = {}
 
-        class _Proc:
-            returncode = 0
-
-            def communicate(self, timeout=None):
-                return ("ok\n", "")
-
-            def kill(self):  # pragma: no cover - not exercised here
-                pass
-
         def _fake_popen(*_args, **kwargs):
             captured["env"] = kwargs.get("env")
-            return _Proc()
+            return _fake_proc(kwargs, out="ok\n")
 
         monkeypatch.setenv("EXISTING_ENV", "kept")
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
@@ -1037,6 +1058,115 @@ class TestInvocationTracing:
         assert result.missing_artifacts[0].path == missing
 
 
+class TestPromptNeverEntersArgv:
+    """The prompt must not appear in the runner's command line. Ever.
+
+    On 2026-07-14 ``run-260714-1442-hgc3`` killed itself. Its 57,644-byte wake sat
+    whole in ``argv[14]``, and at byte 12,393 of it — quoted as *documentation*
+    inside the resident's own dominion playbook — was the string
+    ``bench run --scenario drift``. The run then tried to kill a stuck bench with
+    ``pkill -f "bench run --scenario drift"``. ``pkill -f`` matches a process's
+    entire command line, so it found that substring in the runner's own
+    ``/proc/self/cmdline`` and SIGTERM'd the process that issued it. Exit 143, no
+    output, undiagnosed for a week.
+
+    A prompt in argv is a loaded gun pointed at the process holding it: any
+    ``pkill -f``/``pgrep -f`` a run performs is matched against a haystack containing
+    the run's own prose. (It is also a plain confidentiality leak — the whole dominion
+    and kb are readable in ``ps`` output.) The prompt goes down stdin instead.
+    """
+
+    HAZARD = 'pkill -f "bench run --scenario drift"'
+
+    def test_prompt_absent_from_argv_on_every_bundled_profile(self, tmp_path):
+        for runner in ("claude", "codex", "gemini", "claude-bare-api-only"):
+            cmd = _build_cmd(runner, self.HAZARD, {}, tmp_path)
+            joined = " ".join(cmd)
+            assert self.HAZARD not in joined, f"{runner} put the prompt in argv"
+            assert "bench run" not in joined, f"{runner} leaked prompt text into argv"
+
+    def test_prompt_is_piped_to_stdin_instead(self, tmp_path):
+        from brr.runner import _prompt_stdin
+
+        assert _prompt_stdin({}, self.HAZARD) == self.HAZARD
+
+    def test_pinned_runner_cmd_still_owns_its_argv(self, tmp_path):
+        """`{prompt}` in a user-pinned command means 'put it here' — honour it."""
+        from brr.runner import _prompt_stdin
+
+        cfg = {"runner_cmd": ["mock", "{prompt}"]}
+        assert _build_cmd("mock", "do work", cfg, tmp_path) == ["mock", "do work"]
+        assert _prompt_stdin(cfg, "do work") is None
+
+
+class TestKilledRunnerStillSpeaks:
+    """A runner killed mid-flight must leave its output behind.
+
+    The other half of hgc3: brr collected stdout from ``communicate()``, which only
+    returns when the child exits cleanly. Every kill — budget SIGKILL, OOM, a stray
+    ``pkill`` — therefore produced two empty strings and looked identical. The cause
+    of hgc3 was unfindable for a week not because it was subtle but because *there
+    was nothing to look at*. Capture goes to files the child writes as it runs.
+    """
+
+    def test_sigtermed_runner_output_survives(self, tmp_path):
+        import signal
+        import threading
+        import time as _time
+
+        (tmp_path / ".brr").mkdir()
+        script = (
+            "import sys, time\n"
+            "print('WORDS BEFORE THE KILL', flush=True)\n"
+            "sys.stderr.write('breadcrumb\\n'); sys.stderr.flush()\n"
+            "time.sleep(30)\n"
+        )
+        invocation = RunnerInvocation(
+            kind="executor", label="killed", prompt="x",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+
+        def _reaper():
+            for _ in range(100):
+                proc = runner_mod._active_proc
+                if proc is not None:
+                    _time.sleep(0.4)
+                    proc.send_signal(signal.SIGTERM)
+                    return
+                _time.sleep(0.05)
+
+        threading.Thread(target=_reaper, daemon=True).start()
+        result = invoke_runner(
+            "mock", invocation, {"runner_cmd": [sys.executable, "-c", script]},
+        )
+
+        assert result.returncode != 0
+        assert "WORDS BEFORE THE KILL" in result.stdout
+        assert "breadcrumb" in result.stderr
+
+    def test_dead_runner_capture_is_kept_on_disk(self, tmp_path):
+        """A failed run leaves its streams behind; a clean one leaves no litter."""
+        (tmp_path / ".brr").mkdir()
+        capture_root = tmp_path / ".brr" / "runner-capture"
+
+        ok = RunnerInvocation(
+            kind="executor", label="ok", prompt="x", cwd=tmp_path, repo_root=tmp_path,
+        )
+        invoke_runner("mock", ok, {"runner_cmd": [sys.executable, "-c", "print('hi')"]})
+        assert not any(capture_root.glob("*")) if capture_root.exists() else True
+
+        bad = RunnerInvocation(
+            kind="executor", label="bad", prompt="x", cwd=tmp_path, repo_root=tmp_path,
+        )
+        invoke_runner(
+            "mock", bad,
+            {"runner_cmd": [sys.executable, "-c", "import sys; sys.exit(9)"]},
+        )
+        kept = list(capture_root.glob("*/returncode.txt"))
+        assert len(kept) == 1
+        assert kept[0].read_text(encoding="utf-8").strip() == "9"
+
+
 class TestExtraRunnerArgs:
     """``RunnerInvocation.extra_runner_args`` injects argv before the prompt
     on the profile path (codex's argv-installed hooks), but never rewrites a
@@ -1049,10 +1179,11 @@ class TestExtraRunnerArgs:
             "codex", "the-prompt", {}, tmp_path,
             extra_args=["-c", "hooks.PostToolUse=[…]"],
         )
-        assert cmd[-1] == "the-prompt"
+        # The prompt is no longer in argv (it is piped), so "before the prompt" now
+        # just means "appended after the base command tokens".
+        assert "the-prompt" not in cmd
         assert "-c" in cmd and "hooks.PostToolUse=[…]" in cmd
-        # extra args sit before the prompt, after the base command tokens.
-        assert cmd.index("hooks.PostToolUse=[…]") < cmd.index("the-prompt")
+        assert cmd.index("hooks.PostToolUse=[…]") > cmd.index("exec")
 
     def test_runner_cmd_override_ignores_extra_args(self, tmp_path):
         from brr.runner import _build_cmd
@@ -1081,27 +1212,25 @@ class TestTimeoutConfig:
         assert runner_timeout({"runner.timeout_seconds": 0}) == DEFAULT_RUNNER_TIMEOUT
         assert runner_timeout({"runner.timeout_seconds": -5}) == DEFAULT_RUNNER_TIMEOUT
 
-    def test_invoke_runner_passes_configured_timeout_to_communicate(
+    def test_invoke_runner_passes_configured_timeout_to_wait(
         self, tmp_path, monkeypatch,
     ):
-        """The configured timeout must flow into ``proc.communicate`` so
-        long-reasoning models can finish; the historical hardcoded 600s
-        was killing live work mid-run."""
+        """The configured timeout must flow into ``proc.wait`` so long-reasoning
+        models can finish; the historical hardcoded 600s was killing live work
+        mid-run."""
         captured: dict[str, object] = {}
-
-        class _FakeProc:
-            returncode = 0
-
-            def communicate(self, timeout=None):
-                captured["timeout"] = timeout
-                return ("ok\n", "")
-
-            def kill(self):  # pragma: no cover - not exercised here
-                pass
 
         def _fake_popen(*_args, **kwargs):
             captured["stdin"] = kwargs.get("stdin")
-            return _FakeProc()
+            proc = _fake_proc(kwargs, out="ok\n")
+            real_wait = proc.wait
+
+            def _wait(timeout=None):
+                captured["timeout"] = timeout
+                return real_wait(timeout)
+
+            proc.wait = _wait
+            return proc
 
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
         invocation = RunnerInvocation(
@@ -1117,10 +1246,13 @@ class TestTimeoutConfig:
 
         assert result.ok
         assert captured["timeout"] == 2400
-        # stdin must be muted so codex's "Reading additional input from
-        # stdin..." path sees an immediate EOF rather than hanging on an
-        # open-but-silent fd inherited from the daemon's terminal.
-        assert captured["stdin"] == subprocess.DEVNULL
+        # The invariant the muted fd was always protecting: stdin must never be an
+        # *open-but-silent* fd inherited from the daemon's terminal, or codex's
+        # "Reading prompt from stdin..." path hangs forever waiting for an EOF that
+        # never comes. A pipe brr writes the prompt into and then *closes* satisfies
+        # it exactly — the child gets the prompt, then EOF. What is forbidden is an
+        # fd nobody ever closes, and PIPE is not that.
+        assert captured["stdin"] == subprocess.PIPE
 
     def test_invoke_runner_timeout_message_uses_configured_value(
         self, tmp_path, monkeypatch,
@@ -1128,22 +1260,23 @@ class TestTimeoutConfig:
         """The appended stderr line must report the actual configured
         ceiling — operators reading the failed packet need to know what
         the budget was, not a stale hardcoded number."""
-        class _Proc:
-            returncode = -9
+        def _fake_popen(*_args, **kwargs):
+            # The child got a word out before the timeout guillotine — and now that
+            # brr captures to disk rather than to a pipe drained at exit, that word
+            # survives the kill instead of vanishing with it.
+            proc = _fake_proc(kwargs, err="partial stderr", code=-9)
+            state = {"raised": False}
 
-            def __init__(self) -> None:
-                self._raised = False
-
-            def communicate(self, timeout=None):
-                if not self._raised:
-                    self._raised = True
+            def _wait(timeout=None):
+                if not state["raised"]:
+                    state["raised"] = True
                     raise subprocess.TimeoutExpired(cmd=["mock"], timeout=timeout)
-                return ("", "partial stderr")
+                return -9
 
-            def kill(self):
-                pass
+            proc.wait = _wait
+            return proc
 
-        monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
         invocation = RunnerInvocation(
             kind="executor",
             label="cfg-timeout-msg",
@@ -1156,6 +1289,9 @@ class TestTimeoutConfig:
         )
         assert result.returncode == 124
         assert "runner timed out after 42s" in result.stderr
+        # The dead runner's last words survive the kill. Before disk capture this
+        # was the empty string, and every timeout looked like every other one.
+        assert "partial stderr" in result.stderr
 
 
 class TestRetryReason:
