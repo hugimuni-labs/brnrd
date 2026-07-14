@@ -128,6 +128,20 @@ class BootBody:
     shell: str | None = None   # e.g. ``"claude"`` or ``"codex"``
     core: str | None = None    # e.g. ``"claude-fable-5"``
     tier: str | None = None    # e.g. ``"Tier 2 hooks installed"``
+    provenance: str | None = None
+    """Why *this* body — e.g. ``"requested from the dashboard spool rack"``.
+
+    A fact about the **body**, not about the attention.  It used to be passed
+    into :attr:`BootAttention.body_provenance` and rendered on the kernel's
+    ``attention:`` line, where it asserted a falsehood in the highest-attention
+    slot of the wake: *"attention: evt-… · requested from the dashboard spool
+    rack"* — when the event had in fact arrived from telegram, and the spool
+    rack had only chosen the Core.  Caught live 2026-07-13 by the first wake to
+    read its own kernel.  Root cause: **"body" is overloaded** — the resident's
+    body (Shell+Core) versus the *event body* (the task text) — and the two
+    meanings sat six lines apart in the same kernel.  The overload is gone; the
+    two facts now live on the two lines they are actually about.
+    """
 
 
 @dataclass(frozen=True)
@@ -141,10 +155,59 @@ class BootHost:
 
 @dataclass(frozen=True)
 class BootAttention:
-    """Current attention — event ids and body provenance."""
+    """Current attention — which events, and which gate is speaking."""
 
     event_ids: tuple[str, ...] = ()
-    body_provenance: str | None = None   # e.g. ``"cloud/telegram"``
+    source_gate: str | None = None
+    """The gate the attention arrived through — ``"telegram"``, ``"github"``,
+    ``"schedule"``.  *Who is talking to me*, which is the one thing the
+    ``attention:`` line exists to say and the one thing it used to omit."""
+
+
+@dataclass(frozen=True)
+class BootContinuity:
+    """What changed since this resident last stood here — **observed, not authored**.
+
+    Slice 3, and the point is a distinction the earlier plan missed.  That plan
+    called for a ``continuity:`` *census* — ``dominion ✓ · 391 entries · plan: 5
+    open``.  Prettier than a paragraph asserting that the resident persists, and
+    guilty of the same grammar: still a thing **told** to the wake.  Assertion in
+    a nicer font changes nothing.
+
+    What actually moves a resident is the ~400-byte post-tool capsule, and it
+    does not move it by being short.  It moves it by being **caused by the
+    resident**: act → the world answers → act.  A boot is the widest instance of
+    that same loop — last wake's action → this wake's perception — and until now
+    that loop was open.  Everything a wake perceived of its own past
+    (``Recent Activity``, the active plan, the decision ledger) was **prose the
+    resident wrote to itself**: a message in a bottle, exactly as good as last
+    wake's discipline, free to drift from the world in silence.  Authored memory
+    never brings bad news about itself.
+
+    So this carries the *world's* readout instead, measured off git, the run
+    directory and the local forge cache — never off the resident's own prose:
+
+    - :attr:`shipped` — PRs that merged since the last wake
+    - :attr:`dominion_commits` — memory the last wake actually committed
+    - :attr:`drift` — where what the resident *said* it did and what the repo
+      *shows* it did have come apart
+
+    :attr:`mount` is three-state and the ``✗`` is the load-bearing part: a mount
+    that cannot fail is not a mount, it is a decoration.  ``"✓"`` (the prior
+    wake's :func:`to_dict` score was found and read), ``"✗ first wake"`` (no
+    prior score — a true and useful fact, not an error), ``"✗ unreachable"``
+    (the memory is *supposed* to be there and is not — act on this before
+    trusting a single injected block).
+
+    Deterministic and network-free, like every other facet of the score.
+    """
+
+    last_run: str | None = None        # prior wake's run id
+    last_age: str | None = None        # ``"2h ago"``
+    mount: str = "✗ first wake"        # ``"✓"`` | ``"✗ first wake"`` | ``"✗ unreachable"``
+    shipped: tuple[str, ...] = ()      # ``("#386", "#387")``
+    dominion_commits: int = 0
+    drift: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,6 +288,7 @@ class BootScore:
 
     body: BootBody = field(default_factory=BootBody)
     host: BootHost = field(default_factory=BootHost)
+    continuity: BootContinuity = field(default_factory=BootContinuity)
     attention: BootAttention = field(default_factory=BootAttention)
     posture: BootPosture = field(default_factory=BootPosture)
     orientation: list[OrientationStep] = field(default_factory=list)
@@ -268,6 +332,7 @@ def to_dict(score: BootScore) -> dict:
         "prompt_bytes": score.prompt_bytes,
         "body": asdict(score.body),
         "host": asdict(score.host),
+        "continuity": asdict(score.continuity),
         "attention": asdict(score.attention),
         "posture": asdict(score.posture),
         "orientation": [asdict(o) for o in score.orientation],
@@ -277,6 +342,34 @@ def to_dict(score: BootScore) -> dict:
 
 
 # ── The kernel: the first block of every daemon wake ───────────────────────────
+
+
+def _format_continuity(c: BootContinuity) -> list[str]:
+    """Render the ``continuity:`` line — the loop closing across wakes.
+
+    One line when the world agrees with itself; a second, indented ``drift:``
+    line only when it does not.  Drift earns its own line precisely because it
+    is the case a resident must not skim past: it is the boot telling the wake
+    that its own prose and its own repository disagree about what it did.
+    """
+    if not c.mount.startswith("✓"):
+        # Not a degraded render — a fact. "First wake here" and "the memory that
+        # should be here is not" are both things a resident must be *told*
+        # plainly, because neither can be inferred from a wake that looks
+        # otherwise ordinary.  Drift still renders: a failed mount is precisely
+        # when uncommitted memory or a rejected push matters most.
+        return [f"continuity: {c.mount}"] + [f"  drift: {d}" for d in c.drift]
+
+    bits = [b for b in (c.last_run, c.last_age) if b]
+    head = "continuity: ✓ " + " ".join(bits) if bits else "continuity: ✓"
+    if c.shipped:
+        head += " · shipped " + " ".join(c.shipped)
+    if c.dominion_commits:
+        head += f" · dominion +{c.dominion_commits}"
+    lines = [head]
+    for d in c.drift:
+        lines.append(f"  drift: {d}")
+    return lines
 
 
 def format_kernel(score: BootScore) -> str:
@@ -309,19 +402,24 @@ def format_kernel(score: BootScore) -> str:
 
     body = score.body
     runner = " / ".join(p for p in (body.shell, body.core) if p)
-    body_bits = [b for b in (body.name, f"({runner})" if runner else "", body.tier) if b]
+    body_head = " ".join(
+        b for b in (body.name, f"({runner})" if runner else "") if b
+    )
+    body_bits = [b for b in (body_head, body.tier, body.provenance) if b]
     if body_bits:
-        lines.append(f"body: {' '.join(body_bits)}")
+        lines.append(f"body: {' · '.join(body_bits)}")
 
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
     lines.append(f"host: {' · '.join(host_bits)}")
 
+    lines.extend(_format_continuity(score.continuity))
+
     att = score.attention
     if att.event_ids:
         att_line = "attention: " + ", ".join(att.event_ids)
-        if att.body_provenance:
-            att_line += f" · {att.body_provenance}"
+        if att.source_gate:
+            att_line += f" · via {att.source_gate}"
         lines.append(att_line)
 
     posture = score.posture
