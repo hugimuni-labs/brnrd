@@ -28,7 +28,8 @@ orient:
   files. Ad-hoc runs and editor sessions: read it first regardless.
 - `kb/index.md` → what's already known. The project taught it once.
   Home-knowledge repos have no `kb/` in the tree: the index arrives in the
-  wake's Knowledge Sources block, the writable copy is `.brnrd-kb/`, and
+  wake's Knowledge Sources block, which also **names the directory you author
+  into** — that path, not the `.brnrd-kb/` clone root, which holds no pages.
   `brnrd kb <query>` reaches the long tail. An empty `kb/` is a shape, not a
   finding: which shape decides what the silence means.
 - `Run Context Bundle` below ⇒ the brnrd daemon is host and the bundle is
@@ -497,7 +498,7 @@ source manifest:
     block                                   owner        authority      bytes  location / freshness
   -------------------------------------------------------------------------------------------------
   ✓ Boot kernel (action-first score)        daemon-live  runtime          587  computed
-  ✓ Operational preamble (run.md)           product      contract       5,822  {PACKAGE_ROOT}/prompts/run.md  [mtime]
+  ✓ Operational preamble (run.md)           product      contract       5,906  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)             product      contract       4,572  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)  product      substrate      7,631  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt             product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
@@ -516,12 +517,12 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       10,394 B  37.8%
-  substrate       7,631 B  27.8%
+  contract       10,478 B  38.0%
+  substrate       7,631 B  27.7%
   identity        5,449 B  19.8%
-  runtime         4,002 B  14.6%
+  runtime         4,002 B  14.5%
   unattributed       10 B
-  wake total     27,486 B
+  wake total     27,570 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
