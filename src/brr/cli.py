@@ -261,6 +261,20 @@ def main(argv: list[str] | None = None) -> None:
              "resolves that Shell's real hook capability")
     p.set_defaults(func=cmd_prompts_show)
 
+    p = prompts_sub.add_parser(
+        "transcript",
+        help="materialize the wake as a resumable session — the boot as "
+             "evidence of having oriented, instead of prose telling you to. "
+             "Prints the exact command to resume it.")
+    p.add_argument(
+        "--runner", default=None,
+        help="runner profile to build for (e.g. claude-haiku) — the floor is "
+             "the instrument for boot work, so name a weak core deliberately")
+    p.add_argument(
+        "--write", action="store_true",
+        help="write the session file where the Shell looks for it")
+    p.set_defaults(func=cmd_prompts_transcript)
+
     bench_p = sub.add_parser(
         "bench",
         help="probe daemon/runner seams with a scripted lesser-light run")
@@ -423,6 +437,110 @@ def cmd_prompts_show(args):
         print(json.dumps(bootscore.to_dict(score), indent=2))
     else:
         print(bootscore.format_manifest(score))
+    return 0
+
+
+def cmd_prompts_transcript(args):
+    """Materialize the wake as a session the Shell can resume.
+
+    The verification surface for Slice 4, and it exists because the resident that
+    built Slice 4 **could not verify it**: a nested ``claude`` is inert inside a
+    ``claude`` session, so the one thing that matters — does the Shell actually
+    resume a session brnrd forged — is not answerable from inside a wake. This
+    prints the artifact and the exact command, so a human shell can answer it.
+    """
+    import subprocess
+    import sys
+
+    from . import prompts, runner, transcript as tx
+
+    repo_root = _maybe_repo_root()
+
+    runner_medium: str | None = None
+    runner_core: str | None = None
+    if getattr(args, "runner", None):
+        name = str(args.runner)
+        catalog = runner.available_runner_catalog(repo_root, selected=name)
+        match = next((r for r in catalog if r.get("name") == name), None)
+        if match is None:
+            known = ", ".join(sorted(str(r.get("name")) for r in catalog)) or "none"
+            print(
+                f"brnrd: unknown runner profile {name!r}. Known profiles: {known}",
+                file=sys.stderr,
+            )
+            return 1
+        runner_medium = match.get("shell") or name
+        runner_core = match.get("model")
+
+    score = prompts.build_boot_score(
+        repo_root,
+        is_daemon=True,
+        is_worker=False,
+        runner_shell=runner_medium,
+        runner_core=runner_core,
+        hooks_installed=prompts.probe_shell_hook_capability(runner_medium),
+        hook_stamps={},
+    )
+
+    # Read each file-backed block from disk. For an untrimmed block that is
+    # exactly what the wake received; a trimmed one gets `_trim_note`. Blocks at
+    # `location == "computed"` are live state and stay prose — they are not on
+    # disk and a Read returning them would be fiction.
+    block_text: dict[str, str] = {}
+    for entry in score.contracts:
+        if not entry.present or entry.location == tx.COMPUTED:
+            continue
+        try:
+            block_text[entry.block_key] = Path(entry.location).read_text(
+                encoding="utf-8"
+            )
+        except OSError:
+            continue
+
+    branch = ""
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        pass
+
+    t = tx.build_orientation_transcript(
+        score,
+        block_text=block_text,
+        cwd=str(repo_root),
+        git_branch=branch,
+        model=runner_core or "",
+    )
+
+    calls = list(t.tool_calls())
+    if not calls:
+        print("[brnrd] no file-backed blocks in this wake — nothing to mount.")
+        return 1
+
+    body = tx.render_claude_jsonl(t)
+    print(f"seeded turns : {len(calls)} Read call{'s' if len(calls) != 1 else ''}, "
+          f"each with its result")
+    for c in calls:
+        print(f"  Read {c.input['file_path']}  → {len(c.result):,} B")
+    print(f"session      : {t.session_id}")
+    print(f"body         : {runner_medium} / {runner_core or 'default'}")
+
+    if not args.write:
+        print("\n(dry run — pass --write to place the session file)")
+        return 0
+
+    path = tx.claude_session_path(t.cwd, t.session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    print(f"written      : {path} ({len(body.encode()):,} B)")
+    print(
+        f"\nresume it (from a plain shell, NOT inside a claude session):\n"
+        f"  claude --resume {t.session_id} --fork-session --print \\\n"
+        f"    'Without using any tools: what did you just read, and what is it "
+        f"asking of you?'"
+    )
     return 0
 
 
