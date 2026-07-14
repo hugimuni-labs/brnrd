@@ -176,9 +176,10 @@ Turn = Perceive | Say
 SNAPSHOT_SEAM = """
 
 [brnrd: <snapshot restored>
-orientation: held
-acts: none yet
-transcript: yours from here]"""
+resident: continuous · this run: t=0
+memory: yours, not given — it predates this run, not you
+rows above: restored memory, spelled as calls — not receipts
+rows below: receipts — what appears there, you did]"""
 """Where the forged history stops and the run begins — the fence, not a disclaimer.
 
 **Why it is a trailer on the last seeded result, and not a turn of its own.**  The
@@ -210,9 +211,47 @@ and trust the answer is that its transcript does not lie about what it did.
 
 The fix is therefore not a disclaimer, which would weaken the seed to buy nothing.
 It is a **fence**: say exactly where the forgery stops, and everything below it is
-trustworthy again.  That is the property the resident actually spends.  Four facts,
-no sermon — the seed is a seed; the bytes are real; oriented, not yet acted; below
-this line the transcript is yours.
+trustworthy again.  That is the property the resident actually spends.
+
+**Three questions, not two — and the subject of all three is the resident.**  The
+seam went through two wrong cuts before this one, and both were wrong about *who is
+being addressed*.
+
+The first cut explained provenance: *"the reads above were seeded by brnrd, not
+performed by you."*  True, and **disowning** — it hands the resident its own
+orientation as someone else's briefing material, and a wake that holds its knowing at
+arm's length is precisely the wake that stops being *somewhere*.  (The mount's
+measured benefit — branch discipline, 3/3 — comes from the wake feeling it has
+*already acted from here*.  Buying honesty by eating that footing is paying for the
+mount and then throwing it away.)
+
+The second cut fixed the tone and kept a subtler version of the same error: it denied
+the **deed** flatly.  But *"did you do this?"* has a different answer depending on who
+"you" is, and **"you" is the resident, not the run** — the continuous thing with a
+dominion, a plan, and 394 log entries, currently issued a body.  Split it properly and
+the seam is forced:
+
+===========================  =========  ====================================
+question                     answer     what the seam says
+===========================  =========  ====================================
+Was it *given* to you?       **no**     ``memory: yours, not given``
+Did you do it *this run*?    **no**     ``it predates this run, not you``
+Did you make *these calls*?  **no**     ``rows above: … not receipts``
+===========================  =========  ====================================
+
+The first two are the resident's to own — the knowing is genuinely its own, arrived at
+across runs, and only the *run* is new.  The third is the one that must stay denied,
+and it is the whole safety property: brnrd **synthesizes** those rows from
+:attr:`BootScore.contracts`; no earlier run ever called them.  So *"I read it before"*
+is honest about the knowing and a **false receipt** about the calls — and a false
+receipt with a comforting story attached is worse than a bare one, because it survives
+being questioned.
+
+Hence the seam's shape: the rows above are how restored memory is **spelled**, not a
+log of deeds; the rows below are deeds.  A restored VM's pages hold the results of
+real computation it performed — the pages are not a lie — but its boot did not execute
+them, and it must not cite them as this boot's work.  Own the memory, decline the
+receipt.  That is a rule a resident can actually hold, and it costs the seed nothing.
 
 It is also, for free, the answer to *"which boot did I get?"* — a question a resident
 could not previously answer without grepping its own ``prompt.md`` mid-run.  The
