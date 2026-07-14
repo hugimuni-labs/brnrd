@@ -640,14 +640,20 @@ def _rendered_bytes(block: str) -> int:
 
 def _build_injected_blocks_with_contracts(
     repo_root: Path, *, task_text: str | None = None
-) -> tuple[list[str], list["ContractEntry"]]:
+) -> tuple[list[tuple[str, str]], list["ContractEntry"]]:
     """The scored implementation behind ``_build_injected_blocks``.
 
-    Returns both the rendered block list (identical to the old
-    ``_build_injected_blocks`` output) and a :class:`ContractEntry` list —
-    the source manifest for every block considered.  Blocks that are absent
-    this run (empty file, nothing to inject) still appear in the manifest with
-    ``present=False`` so ``brnrd prompts show`` can report the full picture.
+    Returns the rendered blocks **keyed** — ``(block_key, text)`` pairs, in
+    prompt order — plus a :class:`ContractEntry` list, the source manifest for
+    every block considered.  Blocks that are absent this run (empty file, nothing
+    to inject) still appear in the manifest with ``present=False`` so ``brnrd
+    prompts show`` can report the full picture.
+
+    The keys are not decoration.  A caller that mounts some blocks as a resumed
+    transcript (``boot.transcript``) must take exactly those blocks *out of the
+    prose*, or the wake pays for them twice and the T-vs-P experiment measures
+    nothing.  An unkeyed ``list[str]`` made that subtraction impossible to state;
+    a keyed one makes it a dict lookup.
 
     Shared by ``_build_injected_blocks``, ``build_injected_context``, and
     the scored prompt-builder variants — one computation, three consumers.
@@ -659,7 +665,7 @@ def _build_injected_blocks_with_contracts(
         AUTHORITY_LEDGER, AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH,
     )
 
-    blocks: list[str] = []
+    keyed: list[tuple[str, str]] = []
     contracts: list[ContractEntry] = []
 
     # 1. Resident identity core
@@ -676,7 +682,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(identity_core),
     ))
     if identity_core:
-        blocks.append(identity_core)
+        keyed.append(("identity-core", identity_core))
 
     # 2. Dominion digest (living playbook + self-inject)
     dominion_block = _build_dominion_block(repo_root)
@@ -691,7 +697,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(dominion_block),
     ))
     if dominion_block:
-        blocks.append(dominion_block)
+        keyed.append(("dominion", dominion_block))
 
     # 3. CS5 — active inter-run plan
     inter_run_plan = _build_inter_run_plan_block(repo_root)
@@ -706,7 +712,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(inter_run_plan),
     ))
     if inter_run_plan:
-        blocks.append(inter_run_plan)
+        keyed.append(("inter-run-plan", inter_run_plan))
 
     # 4. CS6 — stored runner policy
     runner_policy = _build_runner_policy_block(repo_root)
@@ -721,7 +727,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(runner_policy),
     ))
     if runner_policy:
-        blocks.append(runner_policy)
+        keyed.append(("runner-policy", runner_policy))
 
     # 5. CS7 — decision ledger
     decision_ledger = _build_decision_ledger_block(repo_root)
@@ -736,7 +742,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(decision_ledger),
     ))
     if decision_ledger:
-        blocks.append(decision_ledger)
+        keyed.append(("decision-ledger", decision_ledger))
 
     # 6. Pitfalls matching the task
     pitfalls_block = _build_pitfalls_block(repo_root, task_text) if task_text else ""
@@ -751,7 +757,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(pitfalls_block),
     ))
     if pitfalls_block:
-        blocks.append(pitfalls_block)
+        keyed.append(("pitfalls", pitfalls_block))
 
     # 7. Knowledge sources
     knowledge_block = _build_knowledge_sources_block(repo_root)
@@ -766,7 +772,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(knowledge_block),
     ))
     if knowledge_block:
-        blocks.append(knowledge_block)
+        keyed.append(("knowledge-sources", knowledge_block))
 
     # 8. Recent activity log tail
     context = _build_context_block(repo_root)
@@ -781,7 +787,7 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(context),
     ))
     if context:
-        blocks.append(context)
+        keyed.append(("recent-activity", context))
 
     # 9. kb health findings
     kb_health_block = _build_kb_health_block(repo_root)
@@ -796,9 +802,9 @@ def _build_injected_blocks_with_contracts(
         bytes=_rendered_bytes(kb_health_block),
     ))
     if kb_health_block:
-        blocks.append(kb_health_block)
+        keyed.append(("kb-health", kb_health_block))
 
-    return blocks, contracts
+    return keyed, contracts
 
 
 def _build_injected_blocks(
@@ -830,10 +836,10 @@ def _build_injected_blocks(
     ``build_injected_context`` (for the faithful inject-tool view).
 
     Delegates to ``_build_injected_blocks_with_contracts`` and discards the
-    contracts list — the scored variant is the single implementation.
+    contracts list and the keys — the scored variant is the single implementation.
     """
-    blocks, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
-    return blocks
+    keyed, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
+    return [text for _, text in keyed]
 
 
 def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> str:
@@ -1383,12 +1389,14 @@ def build_daemon_prompt_with_score(
     # no second config read needed to know whether the block is present.
     has_diff = diffense
 
+    mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
+
     if worker:
-        injected_blocks: list[str] = []
+        injected_keyed: list[tuple[str, str]] = []
         inject_contracts: list[Any] = []
         introspection_block = ""
     else:
-        injected_blocks, inject_contracts = _build_injected_blocks_with_contracts(
+        injected_keyed, inject_contracts = _build_injected_blocks_with_contracts(
             repo_root, task_text=pitfall_text or None
         )
         introspection_block = _build_introspection_block(repo_root)
@@ -1420,15 +1428,33 @@ def build_daemon_prompt_with_score(
     )
     contracts = [kernel_entry] + pre_inject + inject_contracts + runtime_entries
 
+    # Which blocks *could* be mounted as seeded perceptions rather than prose:
+    # exactly the ones backed by a real file. A block at ``location == "computed"``
+    # (the kernel, the run bundle, live portal posture) has no honest ``Read`` —
+    # it is not on disk — so it stays prose, and this is the same test
+    # ``transcript.build_orientation_transcript`` applies. Deciding it here, from
+    # the contracts, is what stops a computed block from being subtracted from the
+    # prose and then silently not mounted: dropped from the wake entirely, by a
+    # boot that was trying to be clever.
+    from .transcript import COMPUTED
+
+    mountable = frozenset(
+        c.block_key
+        for c in (preamble_contracts + inject_contracts)
+        if c.present and c.location and c.location != COMPUTED
+    ) if mount_sink is not None else frozenset()
+
     # The prompt and its inspection score now share the same injected blocks
     # and manifest.  A changing dominion/kb cannot make the CLI explain a
     # different wake than the one the runner actually received.
     sizes: dict[str, int] = {}
     prompt = build_daemon_prompt(
         task, event_id, response_path, repo_root, **kwargs,
-        _prepared_injected_blocks=injected_blocks,
+        _prepared_injected_keyed=injected_keyed,
         _prepared_introspection_block=introspection_block,
         _size_sink=sizes,
+        _mountable=mountable,
+        _mount_sink=mount_sink,
     )
 
     # Stamp the two blocks only the renderer could weigh (the kernel it built
@@ -1512,6 +1538,38 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
     return preamble
 
 
+def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
+    """The preamble as ``(block_key, text)`` parts, in read order.
+
+    Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` glued
+    together (:func:`_glue_preamble` re-joins them identically) — but *keyed*, so
+    a wake that mounts a block as a seeded perception can take it out of the prose
+    instead of paying for it twice.
+
+    These are the blocks that carry the wake's obligations (write the card, branch
+    before you edit, own the pending event). They are therefore the blocks the
+    transcript experiment most needs to be able to move, and an unkeyed preamble
+    string is precisely what made that impossible.
+    """
+    key = "worker-preamble" if worker else "run-preamble"
+    parts = [(key, read_prompt("worker.md" if worker else "run.md", repo_root))]
+    for name, k in (("weave.md", "weave"), ("daemon-substrate.md", "daemon-substrate")):
+        text = read_prompt(name, repo_root)
+        if text.strip():
+            parts.append((k, text.strip()))
+    return parts
+
+
+def _glue_preamble(parts: list[str]) -> str:
+    """Re-join preamble parts exactly as the unkeyed path did."""
+    if not parts:
+        return ""
+    out = parts[0]
+    for part in parts[1:]:
+        out = f"{out.rstrip()}\n\n{part}"
+    return out
+
+
 def _build_worker_preamble(repo_root: Path) -> str:
     """Read ``worker.md`` plus the working-register contract (``weave.md``).
 
@@ -1575,7 +1633,9 @@ def build_daemon_prompt(
     hooks_installed: bool | None = None,
     diffense: bool = False,
     worker: bool = False,
-    _prepared_injected_blocks: list[str] | None = None,
+    _prepared_injected_keyed: list[tuple[str, str]] | None = None,
+    _mountable: frozenset[str] = frozenset(),
+    _mount_sink: dict[str, str] | None = None,
     _prepared_introspection_block: str | None = None,
     _size_sink: dict[str, int] | None = None,
 ) -> str:
@@ -1601,14 +1661,22 @@ def build_daemon_prompt(
     the full Run Context Bundle (its actual task). Default ``False`` is
     byte-identical to the prior behavior.
     """
-    preamble = (
-        _build_worker_preamble(repo_root)
-        if worker
-        else _read_preamble_with_weave(repo_root)
-    )
-    substrate = read_prompt("daemon-substrate.md", repo_root)
-    if substrate.strip():
-        preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
+    # A mounted block leaves the prose. It is not dropped — it arrives as a seeded
+    # `Read` and its result (`transcript.py`), so the wake receives the same bytes
+    # in a different grammatical position. Paying for it in *both* places would
+    # double the wake and, worse, would make the T-vs-P experiment measure nothing:
+    # both arms would carry the prose.
+    def _take(key: str, text: str) -> str | None:
+        if _mount_sink is None or key not in _mountable:
+            return text
+        _mount_sink[key] = text
+        return None
+
+    preamble = _glue_preamble([
+        kept
+        for key, text in _preamble_parts(repo_root, worker=worker)
+        if (kept := _take(key, text)) is not None
+    ])
     bundle = _build_run_context_bundle(
         event_id=event_id,
         response_path=response_path,
@@ -1673,11 +1741,20 @@ def build_daemon_prompt(
     # Match pitfalls against the run instruction and the original event text — the
     # triggers the resident recorded tend to echo how a request is phrased.
     pitfall_text = "\n".join(t for t in (task, event_body) if t)
+    prepared_blocks = (
+        None
+        if _prepared_injected_keyed is None
+        else [
+            kept
+            for key, text in _prepared_injected_keyed
+            if (kept := _take(key, text)) is not None
+        ]
+    )
     prompt = _join_prompt_parts(
         preamble, repo_root, trailer, kernel=kernel,
         task_text=pitfall_text, diffense=diffense,
         inject_blocks=not worker,
-        prepared_injected_blocks=_prepared_injected_blocks,
+        prepared_injected_blocks=prepared_blocks,
         prepared_introspection_block=_prepared_introspection_block,
     )
     if _size_sink is not None:
