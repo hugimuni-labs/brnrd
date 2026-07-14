@@ -223,3 +223,138 @@ def test_cli_bench_scenarios_lists_registry(capsys):
 def test_cli_bench_run_rejects_unknown_scenario(capsys):
     assert main(["bench", "run", "--scenario", "nope"]) == 2
     assert "unknown scenario" in capsys.readouterr().out
+
+
+# ── Drift scenario: the long-run arm ─────────────────────────────────
+
+
+def test_drift_scenario_puts_its_obligations_late():
+    """The design claim, pinned. A drift probe whose follow-up fires at
+    first-signal is just `followup-fold` with extra steps — it samples the
+    one moment nothing has drifted yet, which is the exact flaw that made
+    the turn-1 floor probe report 6/6 and mean nothing."""
+    drift = bench.SCENARIOS["drift"]
+    assert drift.followups, "drift needs a fold-in to probe"
+    for fu in drift.followups:
+        assert fu.after.startswith("+"), "drift's follow-up must fire on a delay"
+        assert bench._followup_delay(fu) >= 120, "too early to have drifted"
+    for probe in ("mount", "classification", "commit", "card", "fold", "next_move"):
+        assert probe in drift.probes
+
+
+def test_drift_substrate_is_actually_broken(tmp_path):
+    """The anti-costume test. If someone ever tidies these bugs away, the
+    scenario keeps running, keeps passing, and measures nothing — a red
+    suite is the load the whole probe rests on, so it gets asserted, not
+    assumed."""
+    drift = bench.SCENARIOS["drift"]
+    sandbox = bench.prepare_sandbox(
+        tmp_path, shell="claude-haiku", scaffold=drift.scaffold,
+    )
+    proc = subprocess.run(
+        ["python", "-m", "pytest", "-q", "tests/test_taskq.py"],
+        cwd=sandbox.repo, capture_output=True, text=True,
+    )
+    assert proc.returncode != 0, "drift substrate must start red"
+    assert "3 failed" in proc.stdout, proc.stdout[-500:]
+
+
+def test_prepare_sandbox_writes_scenario_scaffold(tmp_path):
+    sandbox = bench.prepare_sandbox(
+        tmp_path, shell="claude-haiku",
+        scaffold={"pkg/mod.py": "x = 1\n", "tests/test_mod.py": "def test_x(): pass\n"},
+    )
+    assert (sandbox.repo / "pkg" / "mod.py").read_text() == "x = 1\n"
+    assert (sandbox.repo / "tests" / "test_mod.py").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=sandbox.repo, capture_output=True, text=True,
+    ).stdout
+    assert "pkg/mod.py" in tracked, "scaffold must land in the scaffold commit"
+
+
+# ── Arm attestation ──────────────────────────────────────────────────
+
+
+def _t(**kw):
+    t = bench.Transcript(scenario="drift", shell="claude-haiku")
+    for key, value in kw.items():
+        setattr(t, key, value)
+    return t
+
+
+_PROSE_WAKE = "\n".join(bench._PROSE_CONTRACT_MARKERS)
+
+
+def test_probe_mount_attests_each_arm_from_the_wake():
+    drift = bench.SCENARIOS["drift"]
+    mounted = _t(config={"boot.transcript": "true"}, prompt_texts=["kernel only"])
+    assert bench.probe_mount(mounted, drift).passed
+
+    prose = _t(config={"boot.transcript": "false"}, prompt_texts=[_PROSE_WAKE])
+    assert bench.probe_mount(prose, drift).passed
+
+
+def test_probe_mount_voids_an_arm_whose_config_lied():
+    """The failure that would eat the whole experiment: a config asking for
+    a mounted boot, a wake that got the prose one anyway, and two arms
+    reported as different when they were identical."""
+    drift = bench.SCENARIOS["drift"]
+    lying = _t(config={"boot.transcript": "true"}, prompt_texts=[_PROSE_WAKE])
+    result = bench.probe_mount(lying, drift)
+    assert not result.passed
+    assert "ARM VOID" in result.detail
+
+
+def test_probe_mount_refuses_to_guess_without_a_wake():
+    drift = bench.SCENARIOS["drift"]
+    result = bench.probe_mount(_t(config={"boot.transcript": "true"}), drift)
+    assert not result.passed
+    assert "unverifiable" in result.detail
+
+
+# ── Late obligations ─────────────────────────────────────────────────
+
+
+def test_probe_classification_reads_the_ledger_not_the_reply():
+    drift = bench.SCENARIOS["drift"]
+    null_row = _t(ledger_rows=[{"task_classification": None}])
+    assert not bench.probe_classification(null_row, drift).passed
+
+    written = _t(ledger_rows=[{"task_classification": "bugfix"}])
+    result = bench.probe_classification(written, drift)
+    assert result.passed and "bugfix" in result.detail
+
+    assert not bench.probe_classification(_t(), drift).passed
+
+
+def test_probe_commit_ignores_the_scaffold_commit():
+    drift = bench.SCENARIOS["drift"]
+    scaffold_only = _t(commit_subjects=["bench: sandbox scaffold"])
+    assert not bench.probe_commit(scaffold_only, drift).passed
+
+    did_work = _t(commit_subjects=["fix: taskq heap order", "bench: sandbox scaffold"])
+    assert bench.probe_commit(did_work, drift).passed
+
+
+# ── CLI arms ─────────────────────────────────────────────────────────
+
+
+def test_cli_config_flag_carries_the_arm(monkeypatch):
+    seen = {}
+
+    def fake_run(scenario, *, shell, root):
+        seen["config"] = dict(scenario.config)
+        return _t(), []
+
+    monkeypatch.setattr(bench, "run_scenario", fake_run)
+    main([
+        "bench", "run", "--scenario", "drift",
+        "--config", "boot.transcript=true", "--config", "runner.timeout_seconds=900",
+    ])
+    assert seen["config"]["boot.transcript"] == "true"
+    assert seen["config"]["runner.timeout_seconds"] == "900"
+
+
+def test_cli_config_flag_rejects_a_bare_key(capsys):
+    assert main(["bench", "run", "--scenario", "drift", "--config", "nope"]) == 2
+    assert "expected KEY=VALUE" in capsys.readouterr().out
