@@ -43,6 +43,31 @@ this work exists to kill.
 An earlier plan for this slice proposed seeding ``.card written`` among the
 orientation turns.  That plan was wrong.  :data:`REPLAYABLE_TOOLS` is the guard,
 and :func:`build_orientation_transcript` refuses anything outside it.
+
+── Verified, 2026-07-14 ────────────────────────────────────────────────────────
+
+``claude --resume <forged-id> --fork-session`` **accepts a session brnrd
+synthesized.**  Measured: a 4-row seed (two ``Read`` calls and their results) was
+resumed; both forged ``toolu_`` ids were replayed verbatim into the fork, and the
+model continued for 319 rows.
+
+The continuation is the finding.  The final user message said *"Without using any
+tools: name the two files you just read."*  It **immediately used tools** — Read,
+Bash, ``git status`` — and never answered the question.  Having woken in
+tool-result position, it completed *the grammar it was in* rather than the
+sentence it was handed.
+
+Read that twice before extending this module.  It is the thesis working, and it
+is a live hazard: a transcript-seeded wake is **harder to steer with prose in the
+final turn**, because the seeded position outweighs it.  That is precisely the
+power being bought here — the boot stops asking and starts demonstrating — and
+precisely the reason :data:`REPLAYABLE_TOOLS` may never grow a mutating tool.  A
+forged action would not be a suggestion to the wake.  It would be a fact it acts
+on.
+
+(It also read the four boot contracts in the seed, concluded it was a brnrd
+resident mid-run, and went looking for the conversation directory.  Identity by
+mount, not by assertion — arriving unasked, on the first try.)
 """
 
 from __future__ import annotations
