@@ -215,7 +215,7 @@ def test_the_kernel_tells_the_wake_it_was_mounted(repo: Path):
 
     assert score.body.mounted is True
     assert "boot: mounted" in prompt
-    assert "seeded by brnrd, not performed by you" in prompt
+    assert "<snapshot restored> · orientation: held · acts: none yet" in prompt
     # And the fence is at the other end, in the seed itself.
     assert sink, "nothing was mounted — the test is not testing the mount"
 

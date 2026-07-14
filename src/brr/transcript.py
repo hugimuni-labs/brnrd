@@ -175,10 +175,10 @@ Turn = Perceive | Say
 
 SNAPSHOT_SEAM = """
 
-[brnrd: <snapshot restored> — end of seeded orientation. The reads in this session
-were brnrd's, not yours: the bytes are real, the turns are the daemon's. You have
-oriented; you have not yet acted. From here the transcript is yours, and what it
-says you did, you did.]"""
+[brnrd: <snapshot restored>
+orientation: held
+acts: none yet
+transcript: yours from here]"""
 """Where the forged history stops and the run begins — the fence, not a disclaimer.
 
 **Why it is a trailer on the last seeded result, and not a turn of its own.**  The
