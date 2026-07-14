@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import account, config as conf, forge_state
+from . import account, config as conf, dev_reload, forge_state
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -1305,7 +1305,16 @@ def build_boot_score(
             # one field until 2026-07-13; see BootBody.provenance.
             provenance=body_provenance,
         ),
-        host=BootHost(kind=kind, environment=environment, publication_owner=pub_owner),
+        host=BootHost(
+            kind=kind,
+            environment=environment,
+            publication_owner=pub_owner,
+            # Asked here rather than threaded down from the loop: staleness is a
+            # property of *the process doing the assembling*, and this is where
+            # the assembling happens.  Inert outside a live daemon (no captured
+            # fingerprint ⇒ False), so ad-hoc runs and tests never see it.
+            image_stale=dev_reload.image_is_stale(),
+        ),
         continuity=continuity if continuity is not None else BootContinuity(),
         attention=BootAttention(event_ids=event_ids, source_gate=source_gate),
         posture=BootPosture(
