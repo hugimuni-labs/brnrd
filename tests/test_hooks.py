@@ -634,3 +634,111 @@ def test_hook_capability_precheck(tmp_path, monkeypatch):
     # brnrd not invocable → degrade.
     monkeypatch.setattr(hooks.shutil, "which", lambda _name: None)
     assert hooks.hook_capability("claude", tmp_path) is False
+
+
+# ── The closeout guard (`hooks.next_move`) ───────────────────────────────
+#
+# The contract `next_move` failed 0/6 across *both* arms of the drift bench —
+# prose and mounted alike. Position could not fix it, because position was never
+# the problem: the contract is read at wake and spent 60 turns later, at the one
+# moment the model is busy ending. This is the escalation ladder's last rung —
+# a contract prose cannot keep becomes code that cannot fail silently.
+
+
+def _armed(tmp_path, flavour="claude"):
+    env = _env(tmp_path, flavour)
+    env["BRR_NEXT_MOVE_GUARD"] = "1"
+    return env
+
+
+def _stdin(reply=None, **extra):
+    payload = dict(extra)
+    if reply is not None:
+        payload["last_assistant_message"] = reply
+    return json.dumps(payload)
+
+
+def test_closeout_grammar_is_the_products_and_the_bench_reads_it():
+    """One grammar, one place. A probe with its own copy measures a contract
+    nothing enforces — and the two drift the first time anyone tightens one."""
+    from brr import bench
+
+    assert bench.hooks.closeout_state is hooks.closeout_state
+
+
+def test_guard_blocks_a_reply_that_ends_on_nothing(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    out, code = hooks.run_hook(
+        hooks.PHASE_STOP,
+        _stdin("I refactored the module and the tests pass."),
+        _armed(tmp_path),
+    )
+    assert code == 0
+    assert out["decision"] == "block"
+    assert "ends on nothing" in out["reason"]
+
+
+def test_guard_passes_every_closeout_the_contract_names(tmp_path):
+    for reply in (
+        "...\n\n**done** — committed abc1234 on brr/x",
+        "...\n\ncontinuing — arms still running",
+        "...\n\nblocked — needs the API token",
+        "Which way?\n\n1. cut it\n2. keep the flag\n\nI'd take (1).",
+    ):
+        _portal(tmp_path, token="t1", pending=0)
+        (tmp_path / hooks.HOOK_STATE_NAME).unlink(missing_ok=True)
+        out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(reply), _armed(tmp_path))
+        assert out.get("decision") != "block", reply
+
+
+def test_guard_is_silent_without_the_artifact(tmp_path):
+    """No `last_assistant_message` (codex today) → no assertion.
+
+    The doctrine: a guard may only assert something the run can be proven wrong
+    about. A guard that nags on a proxy it could not read is the exact bug class
+    this repo spent the week killing — a status derived from an artifact, but not
+    from *the* artifact.
+    """
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _armed(tmp_path))
+    assert out.get("decision") != "block"
+
+
+def test_guard_is_off_unless_armed(tmp_path):
+    """Default off — the control arm the bench measures against."""
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("ends on nothing"), _env(tmp_path))
+    assert out.get("decision") != "block"
+
+
+def test_guard_never_loops(tmp_path):
+    """#282 is the standing scar: a hook that re-fires into a run with nothing
+    left to do burns the budget. Block once, then let the run end."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _armed(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("no closeout"), env)
+    assert first["decision"] == "block"
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("still no closeout"), env)
+    assert second.get("decision") != "block"
+
+
+def test_guard_respects_the_shells_own_loop_breaker(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(
+        hooks.PHASE_STOP,
+        _stdin("no closeout", stop_hook_active=True),
+        _armed(tmp_path),
+    )
+    assert out.get("decision") != "block"
+
+
+def test_a_waiting_user_outranks_the_shape_of_the_reply(tmp_path):
+    """Pending events block first. A user's actual message beats the formatting
+    of a reply that is about to be rewritten anyway."""
+    _portal(tmp_path, token="t1", pending=1, events=[
+        {"id": "evt-9", "source": "telegram", "body": "one more thing"},
+    ])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("no closeout"), _armed(tmp_path))
+    assert out["decision"] == "block"
+    assert "one more thing" in out["reason"]
+    assert "ends on nothing" not in out["reason"]

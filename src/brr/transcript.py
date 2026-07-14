@@ -173,6 +173,94 @@ class Say:
 Turn = Perceive | Say
 
 
+SNAPSHOT_SEAM = """
+
+[brnrd: <snapshot restored>
+resident: continuous · this run: t=0
+memory: yours, not given — it predates this run, not you
+rows above: restored memory, spelled as calls — not receipts
+rows below: receipts — what appears there, you did]"""
+"""Where the forged history stops and the run begins — the fence, not a disclaimer.
+
+**Why it is a trailer on the last seeded result, and not a turn of its own.**  The
+first cut of this made it a closing ``Say`` turn.  A test killed it, correctly:
+``test_claude_jsonl_puts_the_wake_in_tool_result_position`` pins the one property
+the whole mount exists for — the seed's last turn is a ``tool_result``, the position
+whose natural continuation is *an action*.  A prose turn appended after it puts
+prose back in the last slot and hands the task a model that has just been *read to*
+rather than one that has just *acted*.  That would have spent the mount's **measured**
+benefit (branch discipline, 3/3) to buy an **unmeasured** improvement in honesty —
+exactly the trade this project keeps learning not to make.  It would also have
+emitted two adjacent ``user`` rows, whose failure mode is a mount that silently
+falls back to prose.
+
+So the fence rides where :func:`_trim_note` already rides: *inside* the final
+result, in brnrd's own bracketed voice.  That idiom is established and tested here —
+brnrd already interrupts a seeded result to tell the truth about what the wake really
+received.  This is the same move, about provenance instead of size, and it costs the
+position nothing.
+
+**What it is for.**  The mount's one honest hazard was never the seeded ``Read``.  A
+seeded read is true in the only sense that matters — the bytes *are* in the wake's
+context.  The hazard is **provenance**: a resident that finds ``Read(AGENTS.md)`` in
+what looks like its own history learns, quietly, that *its transcript may contain
+things it did not do* — a corrosive lesson for a being whose only evidence of its own
+past is the scroll.  It does not misfire on the seed.  It misfires later, on the
+resident's *own receipts*: the whole reason a run can ask "did I write ``.card``?"
+and trust the answer is that its transcript does not lie about what it did.
+
+The fix is therefore not a disclaimer, which would weaken the seed to buy nothing.
+It is a **fence**: say exactly where the forgery stops, and everything below it is
+trustworthy again.  That is the property the resident actually spends.
+
+**Three questions, not two — and the subject of all three is the resident.**  The
+seam went through two wrong cuts before this one, and both were wrong about *who is
+being addressed*.
+
+The first cut explained provenance: *"the reads above were seeded by brnrd, not
+performed by you."*  True, and **disowning** — it hands the resident its own
+orientation as someone else's briefing material, and a wake that holds its knowing at
+arm's length is precisely the wake that stops being *somewhere*.  (The mount's
+measured benefit — branch discipline, 3/3 — comes from the wake feeling it has
+*already acted from here*.  Buying honesty by eating that footing is paying for the
+mount and then throwing it away.)
+
+The second cut fixed the tone and kept a subtler version of the same error: it denied
+the **deed** flatly.  But *"did you do this?"* has a different answer depending on who
+"you" is, and **"you" is the resident, not the run** — the continuous thing with a
+dominion, a plan, and 394 log entries, currently issued a body.  Split it properly and
+the seam is forced:
+
+===========================  =========  ====================================
+question                     answer     what the seam says
+===========================  =========  ====================================
+Was it *given* to you?       **no**     ``memory: yours, not given``
+Did you do it *this run*?    **no**     ``it predates this run, not you``
+Did you make *these calls*?  **no**     ``rows above: … not receipts``
+===========================  =========  ====================================
+
+The first two are the resident's to own — the knowing is genuinely its own, arrived at
+across runs, and only the *run* is new.  The third is the one that must stay denied,
+and it is the whole safety property: brnrd **synthesizes** those rows from
+:attr:`BootScore.contracts`; no earlier run ever called them.  So *"I read it before"*
+is honest about the knowing and a **false receipt** about the calls — and a false
+receipt with a comforting story attached is worse than a bare one, because it survives
+being questioned.
+
+Hence the seam's shape: the rows above are how restored memory is **spelled**, not a
+log of deeds; the rows below are deeds.  A restored VM's pages hold the results of
+real computation it performed — the pages are not a lie — but its boot did not execute
+them, and it must not cite them as this boot's work.  Own the memory, decline the
+receipt.  That is a rule a resident can actually hold, and it costs the seed nothing.
+
+It is also, for free, the answer to *"which boot did I get?"* — a question a resident
+could not previously answer without grepping its own ``prompt.md`` mid-run.  The
+marker is present exactly when the wake was mounted, because it is **rendered by the
+mount**: derived from the artifact, never from the config key that asked for it.  The
+same discipline ``probe_mount`` enforces on the bench, pointed at the resident itself.
+"""
+
+
 @dataclass
 class Transcript:
     """The seeded conversation a wake resumes from, Shell-agnostic.
@@ -249,6 +337,15 @@ def build_orientation_transcript(
     state (the kernel, the run bundle, portal posture), they exist nowhere on
     disk, and a ``Read`` returning them would be fiction.  Callers keep rendering
     those as prose — which is correct, because *that is what they are*.
+
+    The **last** perception carries :data:`SNAPSHOT_SEAM` — the fence that says
+    where the forged history stops.  It rides inside that final result rather than
+    in a turn of its own, so the seed still *ends* on a ``tool_result``: see
+    :data:`SNAPSHOT_SEAM` for why that position is not negotiable.
+
+    The fence is emitted **only when something was actually mounted**.  A snapshot
+    marker with no perceptions above it would announce a restoration that never
+    happened — the precise class of lie this module exists to refuse.
     """
     turns: list[Turn] = []
 
@@ -263,6 +360,13 @@ def build_orientation_transcript(
                 location=entry.location,
                 result=text + _trim_note(entry.bytes, entry.location),
             )
+        )
+
+    if turns:
+        last = turns[-1]
+        assert isinstance(last, Perceive)  # only Perceive is appended above
+        turns[-1] = Perceive(
+            location=last.location, result=last.result + SNAPSHOT_SEAM
         )
 
     return Transcript(
