@@ -2157,17 +2157,35 @@ def _run_worker(
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
 
-        # ── Boot as a transcript (`boot.transcript`, default off) ─────────────
-        # Off: byte-identical to the prose boot every wake has ever had.
+        # ── Boot as a transcript (`boot.transcript`, default ON) ──────────────
         # On: the file-backed contracts leave the prose and are seeded as `Read`
         # calls and their results in a session the Shell resumes — the same bytes,
-        # in tool-result position. `kb/design-boot-transcript.md`.
+        # in tool-result position, fenced by `transcript.SNAPSHOT_SEAM`.
+        # Off: byte-identical to the prose boot every wake had before 2026-07-14.
+        # `kb/design-boot-transcript.md`.
         #
-        # Default-off is not timidity. It is the only thing that keeps a control
-        # arm alive: the claim that a mounted position makes a wake *act* on its
-        # obligations (rather than recite them) is UNMEASURED, and a flag is what
-        # turns it into an experiment instead of a hunch that shipped.
-        boot_mount = bool(cfg.get("boot.transcript", cfg.get("boot_transcript", False)))
+        # The default flipped because the experiment ran (3 rounds × 2 arms,
+        # `bench --scenario drift`, arms attested from the `prompt.md` each core
+        # actually woke into). What it found is *not* what the flag was built to
+        # look for, and the distinction is the whole reason this is now on:
+        #
+        #   obligation RECALL    — dead even. .card ✓✓✓ / classification ✓✓✓ /
+        #                          commit ✓✓✓ in BOTH arms. The drift hypothesis
+        #                          as originally stated is NOT supported.
+        #   obligation ENACTMENT — separates 3/3. The prose arm `cd`'d out of the
+        #                          worktree it woke in and committed onto `main`,
+        #                          every round. The mounted arm stayed, every round.
+        #                          Both bundles named the identical `Execution root:`.
+        #
+        # Both cores were *told*; only one of them *was somewhere*. A prose contract
+        # describes a place. A mounted one is a wake that already acted from it. The
+        # failure it prevents — a run committing to the default branch of a shared
+        # checkout — is unrecoverable in a way its cost is not.
+        #
+        # The flag survives, and it is not vestigial: it is the control arm. Every
+        # future claim about the boot is measured against `boot.transcript=false`,
+        # which is also why the prose path must keep working, byte for byte.
+        boot_mount = bool(cfg.get("boot.transcript", True))
         mount_shell = str(task.meta.get("runner_shell") or "")
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
