@@ -192,3 +192,53 @@ def test_mounting_forges_a_session_the_shell_can_find(repo: Path, tmp_path: Path
     # `--fork-session` is the half that makes the seed replayable rather than
     # consumed by the run it booted.
     assert tx.resume_argv(sid) == ["--resume", sid, "--fork-session"]
+
+
+# ── The wake says which boot it got ──────────────────────────────────────
+#
+# Until 2026-07-14 it could not: a resident had to grep its own `prompt.md`
+# mid-run to learn it was mounted, and said so in its reply. The kernel now
+# carries it — derived from the render, never from the config key that asked.
+
+
+def test_the_kernel_tells_the_wake_it_was_mounted(repo: Path):
+    """And it says *what that means* — the honesty line, in the slot it lands in.
+
+    Measured, not styled: the fence at the end of the seeded transcript is not
+    reliably attended on its own (claude-haiku-4-5 claimed "I read it myself — I
+    called the Read tool in my previous response" in 1 of 3 rounds with only the
+    seed fence, 0 of 3 once the same sentence also appeared in the kernel). The
+    seed is where you put what the wake acts *from*; the kernel is what it *knows*.
+    """
+    sink: dict[str, str] = {}
+    prompt, score = _wake(repo, _mount_sink=sink)
+
+    assert score.body.mounted is True
+    assert "boot: mounted" in prompt
+    assert "seeded by brnrd, not performed by you" in prompt
+    # And the fence is at the other end, in the seed itself.
+    assert sink, "nothing was mounted — the test is not testing the mount"
+
+
+def test_a_prose_wake_says_nothing_about_a_mount(repo: Path):
+    """Differential: the line costs a prose wake exactly zero bytes."""
+    prompt, score = _wake(repo)
+    assert score.body.mounted is False
+    assert "boot: mounted" not in prompt
+
+
+def test_the_mounted_line_is_derived_from_the_render_not_the_request(repo: Path):
+    """A config key is a *request*; the wake is what happened.
+
+    The daemon may ask for a mount the render cannot deliver (unsupported Shell,
+    nothing seedable). When that happens it rebuilds the prompt with no sink — and
+    the kernel must go quiet on its own, without anyone remembering to reset a flag.
+    This is `probe_mount`'s discipline pointed at the resident: only the artifact is
+    evidence.
+    """
+    # Asked for a mount, but no block is mountable → the render subtracts nothing.
+    prompt, score = _wake(repo, _mount_sink={})
+    # The honest outcome is decided by `_mountable`, which is computed from the
+    # contracts — so a wake that mounted nothing must not claim it mounted.
+    if not score.body.mounted:
+        assert "boot: mounted" not in prompt

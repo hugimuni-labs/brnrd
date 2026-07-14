@@ -144,7 +144,14 @@ def test_a_trimmed_block_says_it_was_trimmed(tmp_path):
 
 
 def test_an_untrimmed_block_carries_no_note(tmp_path):
-    """No wolf-crying: a full block gets no disclaimer at all."""
+    """No wolf-crying: a full block gets no *trim* disclaimer at all.
+
+    (The snapshot fence is a different animal and always closes the seed — so the
+    exact result is body + fence, and the trim note must be nowhere in it. Pinned
+    exactly rather than loosened: the wolf-cry bug this guards against shipped
+    once already, stapling a 137-byte "re-read it for the rest" onto four blocks
+    that had lost nothing.)
+    """
     f = tmp_path / "AGENTS.md"
     body = "the whole contract\n"
     f.write_text(body, encoding="utf-8")
@@ -152,7 +159,9 @@ def test_an_untrimmed_block_carries_no_note(tmp_path):
     score = BootScore(contracts=[_entry("agents", str(f), size=len(body))])
     t = tx.build_orientation_transcript(score, block_text={"agents": body})
 
-    assert next(t.perceptions()).result == body
+    result = next(t.perceptions()).result
+    assert result == body + tx.SNAPSHOT_SEAM
+    assert "rendered to" not in result
 
 
 # ── Rendering for the claude Shell ────────────────────────────────────────────
@@ -185,9 +194,47 @@ def test_claude_jsonl_puts_the_wake_in_tool_result_position(tmp_path):
     assert result["type"] == "user"
     rblock = result["message"]["content"][0]
     assert rblock["type"] == "tool_result"
-    assert rblock["content"] == "contract\n"
+    assert rblock["content"].startswith("contract\n")
     # The pairing the Shell actually resolves on.
     assert rblock["tool_use_id"] == block["id"]
+
+
+def test_snapshot_seam_never_costs_the_tool_result_position(tmp_path):
+    """The fence rides *inside* the last result — it does not become a turn.
+
+    This is a regression pin with a story. The seam's first cut was a closing
+    ``Say`` turn, which read beautifully and quietly undid the feature: it put a
+    prose ``user`` row in the last slot, so the task arrived at a model that had
+    just been *read to* rather than one that had just *acted* — spending the
+    mount's measured benefit (branch discipline, 3/3) to buy an unmeasured gain in
+    honesty. It would also have emitted two adjacent ``user`` rows, whose failure
+    mode is a mount that silently degrades to prose.
+
+    So: the seed ends on a ``tool_result``, always, and the fence is carried by it.
+    """
+    f = tmp_path / "AGENTS.md"
+    f.write_text("contract\n", encoding="utf-8")
+    score = BootScore(contracts=[_entry("agents", str(f), size=9)])
+    t = tx.build_orientation_transcript(
+        score, block_text={"agents": "contract\n"}, cwd="/repo",
+    )
+
+    rows = [json.loads(l) for l in tx.render_claude_jsonl(t).splitlines()]
+    last = rows[-1]
+    assert last["type"] == "user"
+    tail = last["message"]["content"][0]
+    assert tail["type"] == "tool_result", "the seed must end in tool-result position"
+    assert "<snapshot restored>" in tail["content"], "the fence must be in the seed"
+    # And it must be the *end* of the seed, not floating mid-block.
+    assert tail["content"].rstrip().endswith("]")
+
+
+def test_no_snapshot_seam_when_nothing_was_mounted(tmp_path):
+    """A fence with nothing behind it announces a restoration that never happened."""
+    score = BootScore(contracts=[_entry("kernel", tx.COMPUTED, size=10)])
+    t = tx.build_orientation_transcript(score, block_text={"kernel": "live"}, cwd="/r")
+    assert t.turns == []
+    assert "<snapshot restored>" not in tx.render_claude_jsonl(t)
 
 
 def test_turns_chain_by_parent_uuid(tmp_path):
