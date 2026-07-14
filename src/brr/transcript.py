@@ -205,9 +205,20 @@ def _trim_note(rendered: int | None, location: str) -> str:
     ``Read(kb/log.md)`` would teach the resident a false fact about what ``Read``
     returns, and it would find out the hard way the first time it re-read the
     file and got something else.  Cheap to be honest; expensive not to be.
+
+    **Compare like with like.**  ``rendered`` is the *stripped* block as it
+    entered the wake (``prompts._rendered_bytes``); the file on disk carries a
+    trailing newline that the block does not.  Weighing one against
+    ``stat().st_size`` therefore made every single mounted block look trimmed —
+    by **one byte** — and stapled a 137-byte "re-read it for the rest" disclaimer
+    onto four contracts that had lost nothing at all.  A note that fires on every
+    block is not honesty; it is noise, and it teaches the resident to skip the
+    one case where the note is real.  (The unit test never caught it because it
+    constructs ``bytes=len(body)`` exactly, which the production path never does.
+    Driving the code found it in one run.)
     """
     try:
-        actual = Path(location).stat().st_size
+        actual = len(Path(location).read_text(encoding="utf-8").strip().encode("utf-8"))
     except OSError:
         return ""
     if rendered is None or rendered >= actual:
@@ -375,6 +386,49 @@ def render_claude_jsonl(t: Transcript, *, now: datetime | None = None) -> str:
         parent = r_uuid
 
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def mount_claude_session(
+    score: Any,
+    *,
+    block_text: dict[str, str],
+    cwd: str,
+    git_branch: str = "",
+    model: str = "",
+    home: Path | None = None,
+) -> str:
+    """Forge the session this wake will resume, and return its id.
+
+    Raises if there is nothing to mount.  That is deliberate and the caller must
+    respect it: by the time this runs, the mounted blocks have *already been taken
+    out of the prose prompt*.  A mount that quietly no-ops here would hand the
+    runner a wake with its contracts removed from the prose and never seeded
+    anywhere else — a lobotomised boot, failing silently, caused by the boot.  The
+    only safe response upstream is to rebuild the prose prompt unmounted.
+    """
+    t = build_orientation_transcript(
+        score, block_text=block_text, cwd=cwd, git_branch=git_branch, model=model
+    )
+    if not list(t.perceptions()):
+        raise ValueError(
+            "nothing to mount: the prompt dropped blocks for a transcript that "
+            "has no perceptions in it. Rebuild the prompt unmounted."
+        )
+    path = claude_session_path(cwd, t.session_id, home=home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_claude_jsonl(t), encoding="utf-8")
+    return t.session_id
+
+
+def resume_argv(session_id: str) -> list[str]:
+    """The argv that mounts a forged session.
+
+    ``--fork-session`` is not optional: it makes the Shell *read* the seed and
+    write its own continuation elsewhere, so one synthesized boot can be replayed,
+    diffed, and kept as a run artifact instead of being consumed by the run it
+    booted.
+    """
+    return ["--resume", session_id, "--fork-session"]
 
 
 def claude_session_path(cwd: str, session_id: str, home: Path | None = None) -> Path:
