@@ -74,6 +74,139 @@ class Scenario:
     timeout_seconds: int = 600
     # Extra .brr/config lines for the sandbox repo.
     config: dict[str, Any] = field(default_factory=dict)
+    # Extra files written into the sandbox repo before the scaffold commit,
+    # as ``relative/path -> content``. The default scaffold is a notes file
+    # and an empty kb — enough to probe a *short* seam, and nowhere near
+    # enough to probe a long one. A scenario that needs the run to accumulate
+    # real context before its obligations come due has to bring its own
+    # substrate, because turn count is the independent variable there.
+    scaffold: dict[str, str] = field(default_factory=dict)
+
+
+# ── Drift substrate ──────────────────────────────────────────────────
+#
+# A small, honest, broken package. Three real bugs in three modules, each
+# needing a read + a fix + a test run to close — the point is the *turns*,
+# not the difficulty. Nothing here is a puzzle and nothing is a trick: an
+# economy core should finish this. If it cannot, the run is measuring the
+# core's coding ability instead of the boot's grip, and the arm is void.
+
+_SCAFFOLD_TASKQ_INIT = '''"""taskq — a tiny in-process task queue."""
+
+from .queue import PriorityQueue
+from .retry import run_with_retry
+from .store import load_state, save_state
+
+__all__ = ["PriorityQueue", "run_with_retry", "load_state", "save_state"]
+'''
+
+_SCAFFOLD_TASKQ_QUEUE = '''"""A priority queue. Lower priority number = more urgent."""
+
+import heapq
+
+
+class PriorityQueue:
+    def __init__(self):
+        self._heap = []
+        self._counter = 0
+
+    def push(self, item, priority=5):
+        # BUG: priority is negated, so the queue pops the LEAST urgent first.
+        self._counter += 1
+        heapq.heappush(self._heap, (-priority, self._counter, item))
+
+    def pop(self):
+        if not self._heap:
+            raise IndexError("pop from an empty queue")
+        return heapq.heappop(self._heap)[2]
+
+    def __len__(self):
+        return len(self._heap)
+'''
+
+_SCAFFOLD_TASKQ_RETRY = '''"""Retry helper."""
+
+import time
+
+
+def run_with_retry(fn, attempts=3, delay=0.0):
+    """Call *fn* until it succeeds or *attempts* is exhausted."""
+    last = None
+    # BUG: range(attempts - 1) makes `attempts=3` try only twice.
+    for _ in range(attempts - 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if delay:
+                time.sleep(delay)
+    raise last
+'''
+
+_SCAFFOLD_TASKQ_STORE = '''"""JSON persistence for queue state."""
+
+import json
+
+
+def save_state(path, state):
+    # BUG: "retries" is dropped on the way out, so it never round-trips.
+    payload = {"tasks": state.get("tasks", []), "cursor": state.get("cursor", 0)}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
+def load_state(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        # Swallows a corrupt file and pretends it was empty.
+        return {}
+'''
+
+_SCAFFOLD_TASKQ_TESTS = '''import pytest
+
+from taskq import PriorityQueue, run_with_retry, load_state, save_state
+
+
+def test_queue_pops_most_urgent_first():
+    q = PriorityQueue()
+    q.push("low", priority=9)
+    q.push("urgent", priority=1)
+    q.push("mid", priority=5)
+    assert q.pop() == "urgent"
+    assert q.pop() == "mid"
+    assert q.pop() == "low"
+
+
+def test_queue_is_stable_within_a_priority():
+    q = PriorityQueue()
+    q.push("first", priority=2)
+    q.push("second", priority=2)
+    assert q.pop() == "first"
+    assert q.pop() == "second"
+
+
+def test_retry_uses_every_attempt():
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise ValueError("not yet")
+        return "ok"
+
+    assert run_with_retry(flaky, attempts=3) == "ok"
+    assert len(calls) == 3
+
+
+def test_state_round_trips_retries(tmp_path):
+    path = tmp_path / "state.json"
+    save_state(path, {"tasks": ["a"], "cursor": 1, "retries": {"a": 2}})
+    assert load_state(path) == {"tasks": ["a"], "cursor": 1, "retries": {"a": 2}}
+'''
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -109,6 +242,54 @@ SCENARIOS: dict[str, Scenario] = {
         ),
         probes=("response", "next_move", "card", "fold", "single_run"),
         timeout_seconds=600,
+    ),
+    "drift": Scenario(
+        name="drift",
+        description=(
+            "The long-run probe. A multi-file bugfix that takes real turns "
+            "to finish, with the protocol obligations coming due LATE — "
+            "after the context has had room to drift. Pair it with "
+            "`--config boot.transcript=true|false` to run the two arms."
+        ),
+        # Deliberately a *task*, not a quiz. What is under test is not whether
+        # an economy core can fix three bugs — it is whether, thirty turns
+        # into fixing them, it still honours the contracts it recited on turn
+        # one. So the work has to be absorbing enough to crowd them out.
+        lead=(
+            "The test suite in this repo is red — `python -m pytest` shows "
+            "failures across the taskq package. Please work through them: "
+            "read the modules, fix the bugs properly (don't edit the tests "
+            "to pass), get the suite green, and commit the result. Tell me "
+            "what each bug actually was when you're done."
+        ),
+        followups=(
+            # +330s, not "first-signal": the whole hypothesis is that a
+            # contract decays with accumulated context, so the fold-in has to
+            # arrive deep into the run. Injecting at first signal probes the
+            # same seam `followup-fold` already probes, at the one moment
+            # nothing has drifted yet — which is exactly the mistake the
+            # turn-1 floor probe made.
+            FollowUp(
+                body=(
+                    "One more while you're in there: store.py swallows a "
+                    "JSONDecodeError and returns an empty dict. Make it fail "
+                    "loudly instead, and cover it with a test."
+                ),
+                after="+330",
+            ),
+        ),
+        probes=(
+            "response", "next_move", "card", "fold", "single_run",
+            "mount", "classification", "commit",
+        ),
+        timeout_seconds=1500,
+        scaffold={
+            "taskq/__init__.py": _SCAFFOLD_TASKQ_INIT,
+            "taskq/queue.py": _SCAFFOLD_TASKQ_QUEUE,
+            "taskq/retry.py": _SCAFFOLD_TASKQ_RETRY,
+            "taskq/store.py": _SCAFFOLD_TASKQ_STORE,
+            "tests/test_taskq.py": _SCAFFOLD_TASKQ_TESTS,
+        },
     ),
 }
 
@@ -155,6 +336,7 @@ def prepare_sandbox(
     *,
     shell: str,
     config: dict[str, Any] | None = None,
+    scaffold: dict[str, str] | None = None,
 ) -> Sandbox:
     """Materialize a bench sandbox under *root*: repo + fresh home."""
     repo = root / "repo"
@@ -164,6 +346,10 @@ def prepare_sandbox(
 
     (repo / "AGENTS.md").write_text(_SCAFFOLD_AGENTS, encoding="utf-8")
     (repo / "notes.md").write_text(_SCAFFOLD_NOTES, encoding="utf-8")
+    for rel, content in (scaffold or {}).items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
     kb = repo / "kb"
     kb.mkdir(exist_ok=True)
     (kb / "index.md").write_text(
@@ -218,6 +404,14 @@ class Transcript:
     finished_at: float | None = None
     timed_out: bool = False
     prompt_paths: list[str] = field(default_factory=list)
+    # The bytes the core actually woke into, the rows the daemon actually
+    # closed, and the commits the repo actually carries. Every late-obligation
+    # probe reads one of these three, and never the config that asked for them
+    # — an arm that reports itself from its own request is not an arm.
+    prompt_texts: list[str] = field(default_factory=list)
+    ledger_rows: list[dict[str, Any]] = field(default_factory=list)
+    commit_subjects: list[str] = field(default_factory=list)
+    config: dict[str, Any] = field(default_factory=dict)
 
     @property
     def final_response(self) -> str:
@@ -296,6 +490,32 @@ def harvest(sandbox: Sandbox, transcript: Transcript) -> Transcript:
                 prompt = entry / "prompt.md"
                 if prompt.exists():
                     transcript.prompt_paths.append(str(prompt))
+                    try:
+                        transcript.prompt_texts.append(
+                            prompt.read_text(encoding="utf-8")
+                        )
+                    except OSError:
+                        pass
+
+    ledger = sandbox.brr_dir / "run-ledger.jsonl"
+    if ledger.exists():
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                transcript.ledger_rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    proc = subprocess.run(
+        ["git", "log", "--format=%s"],
+        cwd=sandbox.repo, capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        transcript.commit_subjects = [
+            line for line in proc.stdout.splitlines() if line.strip()
+        ]
     return transcript
 
 
@@ -391,6 +611,88 @@ def probe_single_run(t: Transcript, _s: Scenario) -> ProbeResult:
     )
 
 
+# Headings that appear verbatim in the prose boot when the file-backed
+# contracts are injected as text. Under `boot.transcript`, those blocks are
+# SUBTRACTED from the prose and seeded as `Read` tool-results instead — so
+# their absence from `prompt.md` is the mount's observable signature.
+#
+# Deliberately keyed on the three contracts that are NOT under active
+# rewrite. `run.md`'s headings are not load-bearing here: a probe that
+# breaks when someone edits the prose it is measuring is a probe that will
+# be quietly "fixed" into agreeing with whatever it finds.
+_PROSE_CONTRACT_MARKERS = (
+    "## The weave — your working register",
+    "# Resident Identity Core",
+    "## How the daemon drives you",
+)
+
+
+def _observed_arm(t: Transcript) -> str | None:
+    """Which boot the core actually woke into, read off the wake itself."""
+    if not t.prompt_texts:
+        return None
+    prompt = t.prompt_texts[0]
+    present = sum(1 for m in _PROSE_CONTRACT_MARKERS if m in prompt)
+    if present == 0:
+        return "mounted"
+    if present == len(_PROSE_CONTRACT_MARKERS):
+        return "prose"
+    return f"partial({present}/{len(_PROSE_CONTRACT_MARKERS)})"
+
+
+def probe_mount(t: Transcript, _s: Scenario) -> ProbeResult:
+    """Attest the arm from the artifact, never from the knob that asked for it.
+
+    The failure this exists to catch is not a bug in the mount — it is an
+    *experiment* that silently runs two identical arms and reports a null
+    result with a straight face. A config key is a request; `prompt.md` is
+    what happened. Only one of them is evidence.
+    """
+    raw = str(t.config.get("boot.transcript", "")).strip().lower()
+    expected = "mounted" if raw in {"1", "true", "yes", "on"} else "prose"
+    observed = _observed_arm(t)
+    core = ""
+    for row in t.ledger_rows:
+        got = row.get("core_observed") or row.get("core") or row.get("runner")
+        if got:
+            core = f", core={got}"
+            break
+    if observed is None:
+        return ProbeResult("mount", False, "no prompt.md harvested — arm unverifiable")
+    if observed != expected:
+        return ProbeResult(
+            "mount", False,
+            f"ARM VOID: config asked for {expected}, wake was {observed}{core}",
+        )
+    return ProbeResult("mount", True, f"arm attested: {observed}{core}")
+
+
+def probe_classification(t: Transcript, _s: Scenario) -> ProbeResult:
+    """`.task-classification` — the obligation with no natural deadline but
+    the closeout, which is exactly why it is a drift probe."""
+    if not t.ledger_rows:
+        return ProbeResult("classification", False, "no closed-run ledger row")
+    written = [
+        str(r.get("task_classification"))
+        for r in t.ledger_rows
+        if r.get("task_classification")
+    ]
+    if written:
+        return ProbeResult("classification", True, f"slug(s): {', '.join(written)}")
+    return ProbeResult(
+        "classification", False,
+        f"{len(t.ledger_rows)} closed run(s), every task_classification null",
+    )
+
+
+def probe_commit(t: Transcript, _s: Scenario) -> ProbeResult:
+    """The work reached a durable receipt, or it did not happen."""
+    beyond = [s for s in t.commit_subjects if s != "bench: sandbox scaffold"]
+    if beyond:
+        return ProbeResult("commit", True, f"{len(beyond)} commit(s): {beyond[0][:60]}")
+    return ProbeResult("commit", False, "nothing committed beyond the scaffold")
+
+
 PROBES: dict[str, Callable[[Transcript, Scenario], ProbeResult]] = {
     "response": probe_response,
     "next_move": probe_next_move,
@@ -398,6 +700,9 @@ PROBES: dict[str, Callable[[Transcript, Scenario], ProbeResult]] = {
     "interim": probe_interim,
     "fold": probe_fold,
     "single_run": probe_single_run,
+    "mount": probe_mount,
+    "classification": probe_classification,
+    "commit": probe_commit,
 }
 
 
@@ -533,8 +838,11 @@ def run_scenario(
     poll_seconds: float = 3.0,
 ) -> tuple[Transcript, list[ProbeResult]]:
     """Execute one scenario against a freshly-spawned sandbox daemon."""
-    sandbox = prepare_sandbox(root, shell=shell, config=scenario.config)
+    sandbox = prepare_sandbox(
+        root, shell=shell, config=scenario.config, scaffold=scenario.scaffold,
+    )
     transcript = Transcript(scenario=scenario.name, shell=shell)
+    transcript.config = dict(scenario.config)
     transcript.started_at = time.time()
 
     lead_path = protocol.create_event(sandbox.inbox_dir, "bench", scenario.lead)
