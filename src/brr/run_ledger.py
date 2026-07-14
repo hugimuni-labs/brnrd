@@ -19,6 +19,7 @@ from . import claude_usage
 from . import codex_status
 from . import gitops
 from . import relics
+from . import runner_cores
 from .run import Run
 
 LEDGER_NAME = "run-ledger.jsonl"
@@ -164,7 +165,8 @@ def build_closed_run_row(
     resolved_core = claude_status.resolved_model_id(after_levels)
     if resolved_core:
         task.meta["runner_core"] = resolved_core
-    mismatch = core_mismatch(expected_core, resolved_core)
+    billing_aliases = _billing_aliases_for(expected_core, runner_name)
+    mismatch = core_mismatch(expected_core, resolved_core, billing_aliases or None)
     if mismatch:
         print(
             f"[brnrd:run-ledger] WARNING: run {task.id} was dispatched with "
@@ -235,7 +237,42 @@ def build_closed_run_row(
     return {field: row.get(field) for field in _ROW_FIELDS}
 
 
-def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
+def _billing_aliases_for(
+    expected_core: str | None, runner_name: str | None
+) -> frozenset[str]:
+    """Billing model ids that are legitimate aliases for *expected_core*.
+
+    Some catalog profiles (e.g. ``claude-fable``) pass a capability-overlay
+    model flag to the Shell, but Claude Code reports the run in ``modelUsage``
+    under the underlying *billing* model id (e.g. ``claude-opus-4-8``).
+    ``core_mismatch`` would otherwise fire a false alarm on every such run.
+
+    The catalog entry declares the known mapping via a ``bills_as`` list.
+    This helper looks it up so ``core_mismatch`` can accept those ids as
+    legitimate observations rather than mismatches.  The lookup tries the
+    profile name first (exact), then falls back to scanning by model id.
+    """
+    cores = runner_cores.all_cores()
+    entry: dict | None = None
+    if runner_name:
+        entry = cores.get(runner_name)
+    if entry is None and expected_core:
+        ec_lower = expected_core.strip().lower()
+        for e in cores.values():
+            if (e.get("model") or "").strip().lower() == ec_lower:
+                entry = e
+                break
+    if not entry:
+        return frozenset()
+    bills_as = entry.get("bills_as") or []
+    return frozenset(b.strip().lower() for b in bills_as if b.strip())
+
+
+def core_mismatch(
+    expected: str | None,
+    observed: str | None,
+    allowed_ids: frozenset[str] | None = None,
+) -> bool | None:
     """Did the Shell actually run the core the config pinned?
 
     Returns ``None`` (unverifiable) when there is nothing to compare:
@@ -248,6 +285,12 @@ def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
     when *none* of its ids match. Matching is prefix-tolerant in both
     directions so a date-suffixed concrete id (``claude-haiku-4-5-20251001``)
     matches its shorter catalog pin and vice versa.
+
+    *allowed_ids* extends the accept-set for profiles whose catalog entry
+    declares a ``bills_as`` list — model flags that bill under a different
+    id than the flag name (e.g. ``claude-fable-5`` bills as
+    ``claude-opus-4-8``).  Pass the result of ``_billing_aliases_for`` here;
+    omit or pass ``None`` when no catalog lookup was performed.
     """
     expected = (expected or "").strip().lower()
     observed = (observed or "").strip().lower()
@@ -255,7 +298,11 @@ def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
         return None
     for oid in observed.split("+"):
         oid = oid.strip()
-        if oid and (oid == expected or oid.startswith(expected) or expected.startswith(oid)):
+        if not oid:
+            continue
+        if oid == expected or oid.startswith(expected) or expected.startswith(oid):
+            return False
+        if allowed_ids and oid in allowed_ids:
             return False
     return True
 
