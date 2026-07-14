@@ -10,11 +10,10 @@ The most important test in this file is the one that says the boot may not lie.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-
-import pytest
 
 from brr import transcript as tx
 from brr.bootscore import BootScore, ContractEntry
@@ -37,29 +36,57 @@ def _entry(key: str, location: str, *, present: bool = True, size: int | None = 
 # ── The safety rule ───────────────────────────────────────────────────────────
 
 
-def test_the_boot_may_not_synthesize_an_action():
-    """Perception may be seeded. Action may never be.
+def test_the_boot_cannot_even_say_an_action():
+    """Perception may be seeded. Action may never be — and now cannot be *said*.
 
-    A seeded ``Read`` is honest — the bytes really are in the wake's context, and
-    that is the only sense in which any agent has read anything. A seeded
-    ``Write`` is a forgery: the file was not written, and a resident that finds
-    ``Write(.card)`` in what looks like its own history will believe the card
-    exists and never write one. Silent, and *caused by the boot* — the exact bug
-    class this whole line of work exists to kill.
+    A seeded read is honest: the bytes really are in the wake's context, which is
+    the only sense in which any agent has read anything. A seeded ``Write`` is a
+    forgery — the file was not written, and a resident that finds ``Write(.card)``
+    in what looks like its own history will believe the card exists and never
+    write one. Silent, and *caused by the boot*: the exact bug class this whole
+    line of work exists to kill.
 
-    An earlier plan for this slice proposed seeding ``.card written`` among the
-    orientation turns. This test is why that plan is not in the code.
+    This used to be a ``REPLAYABLE_TOOLS`` frozenset that a ``ToolCall.tool``
+    string was checked against. That guard is gone, and the rule is *stronger* for
+    it: :class:`Perceive` has nowhere to put a tool name, so the forgery is not
+    rejected — it is **unrepresentable**. An allowlist can be widened by anyone in
+    a hurry. A type cannot.
+
+    So this test guards the *shape*: add a ``tool`` field back and it fires.
     """
-    for forged in ("Write", "Edit", "Bash", "TodoWrite"):
-        with pytest.raises(tx.ForgedActionError, match="never action"):
-            tx.ToolCall(tool=forged, input={}, result="done")
+    assert [f.name for f in dataclasses.fields(tx.Perceive)] == ["location", "result"]
 
-    tx.ToolCall(tool="Read", input={"file_path": "/AGENTS.md"}, result="…")
+    # The old escape hatches are gone, not merely unused.
+    assert not hasattr(tx, "ToolCall")
+    assert not hasattr(tx, "REPLAYABLE_TOOLS")
+    assert not hasattr(tx, "ForgedActionError")
 
 
-def test_replayable_tools_are_side_effect_free():
-    """Whatever is in the set must be a tool that changes nothing by running."""
-    assert tx.REPLAYABLE_TOOLS == {"Read"}
+def test_the_renderer_spends_only_a_read(tmp_path):
+    """The rule moved to the type; this is the one place it still needs watching.
+
+    ``Perceive`` cannot *name* a tool — but a renderer, which must name one to
+    speak its Shell's dialect, could name the wrong one. So: whatever a renderer
+    emits into a session file, every ``tool_use`` in it is a read and nothing else.
+
+    This is the assertion that ports. A future ``render_codex_jsonl`` spends
+    ``exec`` with a ``cat`` the renderer itself authored — and the codex version of
+    this test asserts exactly that command shape, for exactly this reason.
+    """
+    f = tmp_path / "AGENTS.md"
+    f.write_text("contract\n", encoding="utf-8")
+    score = BootScore(contracts=[_entry("agents", str(f), size=9)])
+    t = tx.build_orientation_transcript(score, block_text={"agents": "contract\n"})
+
+    rows = [json.loads(l) for l in tx.render_claude_jsonl(t).splitlines()]
+    spent = [
+        c["name"]
+        for r in rows
+        if r["type"] == "assistant"
+        for c in r["message"]["content"]
+        if c.get("type") == "tool_use"
+    ]
+    assert spent == [tx.CLAUDE_READ_TOOL] == ["Read"]
 
 
 # ── Mounting the IR ───────────────────────────────────────────────────────────
@@ -85,16 +112,16 @@ def test_computed_blocks_stay_prose(tmp_path):
         score, block_text={"agents": "the contract\n", "kernel": "…", "run-bundle": "…"}
     )
 
-    calls = list(t.tool_calls())
+    calls = list(t.perceptions())
     assert len(calls) == 1
-    assert calls[0].input["file_path"] == str(f)
+    assert calls[0].location == str(f)
 
 
 def test_absent_blocks_are_not_mounted(tmp_path):
     f = tmp_path / "gone.md"
     score = BootScore(contracts=[_entry("gone", str(f), present=False)])
     t = tx.build_orientation_transcript(score, block_text={"gone": "x"})
-    assert list(t.tool_calls()) == []
+    assert list(t.perceptions()) == []
 
 
 def test_a_trimmed_block_says_it_was_trimmed(tmp_path):
@@ -110,7 +137,7 @@ def test_a_trimmed_block_says_it_was_trimmed(tmp_path):
     score = BootScore(contracts=[_entry("log", str(f), size=100)])
     t = tx.build_orientation_transcript(score, block_text={"log": "recent tail"})
 
-    result = next(t.tool_calls()).result
+    result = next(t.perceptions()).result
     assert result.startswith("recent tail")
     assert "rendered to 100 bytes" in result
     assert "5,000 bytes" in result
@@ -125,7 +152,7 @@ def test_an_untrimmed_block_carries_no_note(tmp_path):
     score = BootScore(contracts=[_entry("agents", str(f), size=len(body))])
     t = tx.build_orientation_transcript(score, block_text={"agents": body})
 
-    assert next(t.tool_calls()).result == body
+    assert next(t.perceptions()).result == body
 
 
 # ── Rendering for the claude Shell ────────────────────────────────────────────
@@ -211,7 +238,7 @@ def test_unmounted_shell_is_refused_not_silently_mounted_as_claude(
 
     err = capsys.readouterr().err
     assert "no transcript mount for shell 'codex'" in err
-    assert "REPLAYABLE_TOOLS" in err  # says *why*, not just no
+    assert "missing renderer, not a safety wall" in err  # says *why*, not just no
 
     # and nothing was written anywhere it could later be resumed by accident
     assert not list(tmp_path.rglob("*.jsonl"))
