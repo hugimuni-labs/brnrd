@@ -295,6 +295,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="sandbox root directory (default: ~/.cache/brr/bench/<stamp>)")
     p.add_argument("--timeout", type=int, default=None,
                    help="override the scenario timeout in seconds")
+    p.add_argument("--config", action="append", default=[], metavar="KEY=VALUE",
+                   help="extra .brr/config line for the sandbox (repeatable) — "
+                        "this is how an A/B arm is expressed, e.g. "
+                        "--config boot.transcript=true")
     p.set_defaults(func=cmd_bench_run)
 
     args = parser.parse_args(argv)
@@ -887,6 +891,17 @@ def cmd_bench_run(args):
         return 2
     if args.timeout:
         scenario = dataclasses.replace(scenario, timeout_seconds=args.timeout)
+    if args.config:
+        overrides: dict[str, str] = {}
+        for item in args.config:
+            key, sep, value = item.partition("=")
+            if not sep:
+                print(f"[brnrd] bad --config {item!r} — expected KEY=VALUE")
+                return 2
+            overrides[key.strip()] = value.strip()
+        scenario = dataclasses.replace(
+            scenario, config={**scenario.config, **overrides},
+        )
     root = (
         Path(args.root).expanduser().resolve()
         if args.root
