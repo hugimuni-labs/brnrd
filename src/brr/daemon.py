@@ -5528,6 +5528,11 @@ def start(
     if existing_pid and not reload_mod.is_reexec_for_current_process(existing_pid):
         raise SystemExit("[brnrd] daemon already running")
     reload_mod.clear_reexec_marker()
+    # Stamp what this process image was actually built from, before anything can
+    # edit the checkout under us.  Runs again in the fresh process after every
+    # re-exec, so the fingerprint always describes the code *currently
+    # executing* — which is the only thing a spawn's boot can honestly claim.
+    reload_mod.capture_image_fingerprint()
     if not (repo_root / "AGENTS.md").exists():
         raise SystemExit("[brnrd] run `brnrd init` first")
 
@@ -5723,17 +5728,54 @@ def start(
             # already one deliberate, already-complete dispatch decision
             # the parent made; nothing to debounce it against.
             #
-            # Deliberately NOT gated on ``reload_requested`` (kb/plan-
-            # spawn-gap-closure.md "Gap 2", resolved 2026-07-08). A spawn
-            # is a separate subprocess (a `claude`/`codex` CLI child); it
-            # does its own work by reading the checkout fresh off disk,
+            # Deliberately NOT gated on ``reload_requested`` (resolved
+            # 2026-07-08) — and the reason matters, because the *original*
+            # reason was falsified on 2026-07-13 and nearly took the
+            # decision down with it.
+            #
+            # What that reason said: a spawn is a separate subprocess that
+            # "does its own work by reading the checkout fresh off disk,
             # never by calling back into this process's in-memory daemon
-            # module. So the staleness risk re-exec-gating exists to guard
-            # against never reaches the child's own work at all — only the
-            # few lines of daemon orchestration code that submit/reap/
-            # notify it (the subprocess call below, and
-            # ``_notify_spawn_parent`` / ``_notify_spawn_parent_of_crash``
-            # on reap) could run stale. The vision this closes against
+            # module", so staleness could only touch "the few lines of
+            # daemon orchestration code that submit/reap/notify it".
+            #
+            # **That is not true, and #386 is what made it untrue.** The
+            # spawn is ``pool.submit(_run_worker_and_finalize, ...)`` — a
+            # thread in *this* process — and it assembles the child's
+            # entire boot prompt in *this* image. Prompt prose survives
+            # that (``prompts.py`` ``read_text()``s ``*.md`` fresh on every
+            # assembly, so an edit lands in the very next wake). Prompt
+            # *code* does not: #386 moved the boot's opening from data into
+            # code, and a running daemon renders the kernel and the
+            # orientation list from the Python it imported at start. Blast
+            # radius is not "a few lines of orchestration" — it is the
+            # child's whole wake. Measured: on 2026-07-13 two spawned
+            # children rendered the pre-#388 kernel, complete with the
+            # worker-queue bug #388 had already fixed in the tree.
+            #
+            # And yet the decision stands, because **gating here is
+            # incoherent**, not merely costly. Re-exec fires only on
+            # ``reload_requested and current is None``: it waits for the
+            # resident thread to finish. But the resident is the thing
+            # doing the editing *and* the thing doing the spawning. A
+            # reload triggered by the resident's own edit can never land
+            # while that resident is still running — so gating spawn on it
+            # would not delay spawn-after-your-own-edit, it would make it
+            # impossible, permanently, by construction. The 2026-07-08 call
+            # was more right than its stated reason, which is precisely why
+            # nobody re-examined it when the reason died.
+            #
+            # So: dispatch, and **say so**. ``BootHost.image_stale`` puts a
+            # ``stale: ⚠`` line in the child's kernel whenever this image
+            # has been superseded by the checkout (``dev_reload``, ``.py``
+            # only — ``.md`` is read fresh and is never stale). It does not
+            # fix the staleness; it converts a silent false negative into a
+            # loud one, which is the whole difference between a measurement
+            # that is wrong and a measurement that is wrong and *believed*.
+            # The structural fix — runs as subprocesses, so re-exec is free
+            # and never waits on a thread — is a separate, larger slice.
+            #
+            # The vision this closes against
             # (2026-07-08, same-thread): "the daemon should do [the]
             # little possible work there, we just need to make sure the
             # runs don't step on each other's toes" — and toe-stepping is
@@ -5743,11 +5785,9 @@ def start(
             # shut for an unrelated package edit crippled the primitive
             # for close to "most substantive resident turns" on this
             # repo's own dev-reload daemon (design-director-loop.md
-            # "Finding 2/3") for a staleness risk that's narrow (only the
-            # rare edit that changes spawn-dispatch logic itself) and
-            # already bounded by the standing review-before-close contract
-            # and the crash-notify path (PR #266) — a bad dispatch
-            # surfaces at review, it doesn't silently corrupt anything.
+            # "Finding 2/3") — and that cost is real whatever the
+            # staleness risk turns out to be, which is why the fix is to
+            # *report* the risk rather than to re-close the slot.
             # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
             # below blocks on any in-flight spawn future exactly as it does
             # on ``current``, so a reload never kills a spawn mid-flight,

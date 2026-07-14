@@ -152,6 +152,29 @@ class BootHost:
     environment: str | None = None     # ``"worktree"`` | ``"host"`` | etc.
     publication_owner: str | None = None  # ``"resident-owned"`` | etc.
 
+    image_stale: bool = False
+    """This boot was rendered by a daemon whose code the checkout has superseded.
+
+    Only reachable on a **spawn**: resident dispatch is gated on
+    ``not reload_requested``, so a resident always wakes in a current image.  A
+    spawn is deliberately *not* gated (``daemon.py``, "Deliberately NOT gated"),
+    because gating it would deadlock — the re-exec waits for the resident thread
+    to finish, so a reload triggered by the resident's own edit can never land
+    while that resident is still running to spawn anything.
+
+    The consequence is narrow and vicious: a resident that edits boot **code**
+    and then spawns a weak core to measure the change gets a child rendered by
+    the *pre-edit* kernel, and reads the result as a verdict on the new one.
+    That is a false negative with no tell — which is exactly how #388's
+    worker-queue bug shipped to two children *after* it had been fixed in the
+    tree.
+
+    So the boot says so, in the kernel, where it cannot be skimmed.  It does not
+    fix the staleness; it makes the staleness **loud**, which is the difference
+    between a measurement that is wrong and a measurement that is wrong *and
+    believed*.
+    """
+
 
 @dataclass(frozen=True)
 class BootAttention:
@@ -412,6 +435,14 @@ def format_kernel(score: BootScore) -> str:
     host = score.host
     host_bits = [host.kind] + [b for b in (host.environment, host.publication_owner) if b]
     lines.append(f"host: {' · '.join(host_bits)}")
+    if host.image_stale:
+        # Differential, like everything else in the kernel: costs nothing on a
+        # healthy wake, and on an unhealthy one it is the first thing read.
+        lines.append(
+            "  stale: ⚠ boot rendered by a daemon image the checkout has "
+            "superseded · prompt .md is current, kernel/orientation code is "
+            "NOT · a boot-code change cannot be measured from this wake"
+        )
 
     lines.extend(_format_continuity(score.continuity))
 
