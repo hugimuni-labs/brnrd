@@ -1226,6 +1226,7 @@ def build_boot_score(
     contracts: list[Any] | None = None,
     hooks_installed: bool | None = None,
     hook_stamps: dict[str, str] | None = None,
+    mounted: bool = False,
 ) -> "BootScore":
     """Assemble a :class:`BootScore` for inspection without building the full prompt.
 
@@ -1307,6 +1308,7 @@ def build_boot_score(
             shell=runner_shell,
             core=runner_core,
             tier=tier,
+            mounted=mounted,
             # Why this body — *not* where the attention came from. These were
             # one field until 2026-07-13; see BootBody.provenance.
             provenance=body_provenance,
@@ -1486,6 +1488,12 @@ def build_daemon_prompt_with_score(
         has_introspection=bool(introspection_block),
         contracts=contracts,
         hooks_installed=hooks_installed,
+        # Same derivation the kernel used, from the same `mountable` set — so the
+        # block the wake *reads* and the score the daemon *persists* cannot disagree
+        # about which boot it got. (They already did, for one commit: the kernel said
+        # "mounted", the score said `false`. An inspection that describes a wake
+        # nobody had is the failure this module's docstring already names.)
+        mounted=bool(mountable),
     )
     score.prompt_bytes = sizes.get("_prompt")
 
@@ -1736,6 +1744,13 @@ def build_daemon_prompt(
         has_event_body=bool((event_body or task or "").strip()),
         contracts=[],
         hooks_installed=hooks_installed,
+        # Derived from the *render*: `_mountable` is exactly the set of blocks
+        # about to be subtracted from this prose and seeded as perceptions. Not
+        # `cfg["boot.transcript"]` — a config key is a request, and the request can
+        # be refused (Shell has no renderer, nothing to seed). When the mount fails,
+        # the daemon rebuilds this whole prompt with no sink, `_mountable` is empty,
+        # and the kernel silently tells the truth again.
+        mounted=bool(_mountable),
     ))
 
     # Match pitfalls against the run instruction and the original event text — the

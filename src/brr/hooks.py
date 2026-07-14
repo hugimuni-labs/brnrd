@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -66,6 +67,14 @@ class HookContext:
         self.run_id = env.get("BRR_RUN_ID") or None
         self.event_id = env.get("BRR_EVENT_ID") or None
         self.flavour = (env.get("BRR_RUNNER") or "").strip().lower() or None
+        # The closeout guard, armed by the daemon (`hooks.next_move`). Off unless
+        # the daemon says otherwise: the guard is an *unmeasured* intervention, and
+        # the flag is what keeps a control arm alive for the bench to measure it
+        # against — the same discipline that made `boot.transcript` an experiment
+        # instead of a hunch that shipped.
+        self.next_move_guard = (
+            env.get("BRR_NEXT_MOVE_GUARD") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         outbox = env.get("BRR_OUTBOX_DIR")
@@ -350,6 +359,92 @@ def _format_resources(resources: dict[str, Any]) -> str | None:
     return facets.render_line(resources)
 
 
+# ── The closeout grammar (`next_move`) ───────────────────────────────────
+#
+# The product owns this definition and the bench imports it. That direction is
+# not incidental: a probe that carries its *own* idea of what a closeout looks
+# like measures something the product does not enforce, and the two drift on the
+# first day someone tightens one of them. `bench.probe_next_move` reads
+# `closeout_state`; so does the guard. One grammar, one place, or the experiment
+# is measuring a different contract than the one that ships.
+
+_NEXT_MOVE_RE = re.compile(
+    r"(?:^|\n)\s*(?:\*\*)?(done|continuing|blocked)(?:\*\*)?\s*(?:—|–|-|:)",
+    re.IGNORECASE,
+)
+_OPTIONS_RE = re.compile(r"(?:^|\n)\s*1[.)]\s+\S.*(?:\n\s*2[.)]\s+\S)", re.DOTALL)
+
+CLOSEOUT_TAIL = 800
+"""How much of the reply's end counts as "the closeout". The contract says the
+reply *ends* with the next move; a `done —` in paragraph two is not a closeout."""
+
+
+def closeout_state(reply: str) -> str | None:
+    """The next-move state a reply ends on — ``done`` / ``continuing`` /
+    ``blocked`` / ``fork`` — or ``None`` if it ends on none of them.
+
+    Reads **the reply**, which is the artifact the contract is about. Not the
+    outbox, not the card, not a self-report: the bytes the user will actually
+    read. (Claude's ``Stop`` payload hands this over as ``last_assistant_message``
+    — see :func:`_armed_next_move_block`.)
+    """
+    tail = reply[-CLOSEOUT_TAIL:]
+    match = _NEXT_MOVE_RE.search(tail)
+    if match:
+        return match.group(1).lower()
+    if _OPTIONS_RE.search(tail):
+        return "fork"
+    return None
+
+
+def _armed_next_move_block(
+    ctx: "HookContext", payload: dict[str, Any], state: dict[str, Any]
+) -> str | None:
+    """The closeout guard: block a reply that ends on nothing, once.
+
+    **Why this is a hook and not a sentence in the prompt.** The closeout contract
+    is stated plainly in ``daemon-substrate.md`` and a weak core ignored it in
+    *every arm of every round* of the drift bench — mounted and prose alike, 0/6.
+    Position could not fix it, because position was never the problem: the contract
+    is read at wake and spent 60 turns later, at the one moment the model is busy
+    ending. The playbook's own escalation ladder has a rung for exactly this — a
+    contract prose cannot keep goes to *code that cannot fail silently* — and this
+    is that rung.
+
+    **It obeys the guard doctrine: assert only what the run can be proven wrong
+    about, from the artifact.** ``last_assistant_message`` *is* the reply. If the
+    Shell does not hand one over (codex today), the guard does not fire — an
+    unarmed guard is honest; a guard that nags on a proxy it could not read is the
+    bug class this repo has spent the week killing.
+
+    Fires at most once per run: a second block on a reply the resident has already
+    been asked to fix would be a loop, and #282 is the standing scar for hooks that
+    re-fire into a run with nothing left to do.
+    """
+    if not ctx.next_move_guard:
+        return None
+    if state.get("next_move_blocked"):
+        return None
+    # The Shell's own loop-breaker. If a stop hook already blocked this turn,
+    # never stack another.
+    if payload.get("stop_hook_active"):
+        return None
+    reply = payload.get("last_assistant_message")
+    if not isinstance(reply, str) or not reply.strip():
+        return None  # no artifact → no assertion.
+    if closeout_state(reply) is not None:
+        return None
+
+    state["next_move_blocked"] = True
+    return (
+        "Your reply ends on nothing. An addressed reply ends with where the loop "
+        "stands — `done — <receipt>`, `continuing — <what's next>`, `blocked — "
+        "<what's needed>`, or a genuine fork (2-4 numbered options + your "
+        "recommendation, last). Add that closing line and end; do not restate the "
+        "reply."
+    )
+
+
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
 
 
@@ -465,6 +560,16 @@ def compute_neutral(
                     "ending, or say why they should wait."
                 )
             state["stop_blocked_token"] = stop_token
+
+        # The closeout guard, second in line and deliberately so: a user's waiting
+        # message outranks the shape of a reply that is about to be rewritten
+        # anyway. Only when nothing is pending does "how does this reply end"
+        # become the last question of the run.
+        if not block:
+            reason = _armed_next_move_block(ctx, payload, state)
+            if reason is not None:
+                block = True
+                block_reason = reason
 
     _write_hook_state(ctx, state)
     return {"inject": inject, "block": block, "block_reason": block_reason}
@@ -702,8 +807,12 @@ def run_hook(
 ) -> tuple[dict[str, Any], int]:
     """Execute one hook phase end to end.
 
-    *stdin_text* is the runner's native hook payload (passed through but not
-    required — brr reads run context from the env handles, not the payload).
+    *stdin_text* is the runner's native hook payload. Run *context* still comes
+    from the env handles — but the payload is no longer inert: claude's ``Stop``
+    event carries ``last_assistant_message``, the reply itself, which is the one
+    artifact the closeout guard is allowed to judge (:func:`_armed_next_move_block`).
+    It went unread until 2026-07-14; the guard that needed it was being written
+    while the Shell was already handing it over.
     Returns ``(native_json, exit_code)``. Unknown phases are a no-op success
     so a runner mapping an extra native hook onto brr never hard-fails.
     """

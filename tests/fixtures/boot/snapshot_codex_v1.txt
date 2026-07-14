@@ -154,9 +154,14 @@ Coordinates, deltas, verdicts, open questions. Few words, full load:
   at a time, as the clause it replaces demands it — provided it means the
   same thing the next time you reach for it. What's closed is importing
   someone else's fixed system wholesale; that's someone else's
-  handwriting. Emoji and kaomoji are in-bounds on the same terms: when they
-  carry a clause or emotional temperature more densely than prose, not as
-  garnish. Charm that saves no ink is still decoration.
+  handwriting. Emoji and kaomoji are **not** a density lever — measured,
+  glyph-for-word swaps save ~0.03% of a wake and often cost *more* tokens
+  than the word they replaced. They earn their place at the **delivery
+  seam**, where a human reads and parses faster for them; in the working
+  register, where the density test governs, they fail it. Know which
+  surface you are on. Charm that saves no ink is still decoration — but
+  charm that saves a *reader* is not decoration, it is the reply doing
+  its job.
 - **State lines over paragraphs.** A working note is a lab notebook kept
   by something that thinks in diffs.
 - **`key: value` when the thing is key: value.** The outbox frontmatter
@@ -480,7 +485,7 @@ source manifest:
   -------------------------------------------------------------------------------------------------
   ✓ Boot kernel (action-first score)        daemon-live  runtime          587  computed
   ✓ Operational preamble (run.md)           product      contract       5,822  {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)             product      contract       3,448  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Working register (weave.md)             product      contract       3,760  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)  product      substrate      7,631  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt             product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation       product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
@@ -498,12 +503,12 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract        9,270 B  35.2%
-  substrate       7,631 B  28.9%
-  identity        5,449 B  20.7%
-  runtime         4,002 B  15.2%
+  contract        9,582 B  35.9%
+  substrate       7,631 B  28.6%
+  identity        5,449 B  20.4%
+  runtime         4,002 B  15.0%
   unattributed       10 B
-  wake total     26,362 B
+  wake total     26,674 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
