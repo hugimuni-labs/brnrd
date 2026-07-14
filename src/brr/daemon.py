@@ -2042,6 +2042,18 @@ def _run_worker(
                 (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
             ),
         }
+        # The closeout guard (`hooks.next_move`, default off). Armed per-run via env
+        # so the hook subprocess needs no config of its own. Default-off is the
+        # control arm, not timidity: `next_move` failed 0/6 across *both* arms of the
+        # drift bench, which makes it the cleanest baseline on the board — any
+        # non-zero in the armed arm is signal. Measure, then default it on.
+        #
+        # Not armed for workers: `worker.md` grants no chat seam, so a worker owes no
+        # closeout, and a guard demanding one would block a run for failing to keep a
+        # contract it was never given.
+        if cfg.get("hooks.next_move", False) and not task.meta.get("worker"):
+            env["BRR_NEXT_MOVE_GUARD"] = "1"
+
         if env_ctx.outbox_env:
             env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
             env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
