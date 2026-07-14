@@ -307,10 +307,30 @@ def render_injection(repo_root: Path, cfg: dict | None = None) -> str:
 
     if not blocks:
         return ""
+
+    # Name the *writable* directory, not just the readable slice. Without this the
+    # wake can read every kb page it owns and still not know where to author one:
+    # `run.md` used to point at `.brnrd-kb/`, which is the checkout clone — the one
+    # directory `active_kb_dir()` exists to exclude (see its docstring). A resident
+    # following the prompt literally lands in the wrong place and has to go *search
+    # the filesystem for its own knowledge base*. That is a polling tax on a fact
+    # the daemon already holds, so the wake carries it.
+    where = ""
+    kb_dir = active_kb_dir(repo_root, cfg)
+    if kb_dir is not None:
+        try:
+            rel = kb_dir.relative_to(repo_root)
+            shown = f"`{rel}/`"
+        except ValueError:
+            shown = f"`{kb_dir}/`"
+        where = f" Authored pages are written to {shown} — that path, not the clone root.\n"
+
     return (
         "## Knowledge Sources\n\n"
         "Home knowledge, repo KB, and repo docs in source order. This is the "
-        "wake-time slice; use `brnrd kb <query>` for the long tail.\n\n"
+        "wake-time slice; use `brnrd kb <query>` for the long tail.\n"
+        + where
+        + "\n"
         + "\n\n".join(blocks)
     )
 
