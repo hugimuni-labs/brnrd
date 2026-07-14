@@ -269,7 +269,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--runner", default=None,
         help="runner profile to build for (e.g. claude-haiku) — the floor is "
-             "the instrument for boot work, so name a weak core deliberately")
+             "the instrument for boot work, so name a weak core deliberately. "
+             "Only claude-Shell profiles have a mount; codex is refused, loudly")
     p.add_argument(
         "--write", action="store_true",
         help="write the session file where the Shell looks for it")
@@ -471,6 +472,28 @@ def cmd_prompts_transcript(args):
             return 1
         runner_medium = match.get("shell") or name
         runner_core = match.get("model")
+
+        # The IR is Shell-agnostic; the mount is not. Without this, `--runner
+        # codex` scored the wake for codex, stamped a codex core on the seeded
+        # turns, rendered them in *claude's* JSONL, wrote them to *claude's*
+        # session directory, and printed a `claude --resume` command — while
+        # reporting `body: codex / default` the whole way. A tool that cannot
+        # distinguish "mounted for codex" from "mounted for claude wearing a
+        # codex label" is this week's bug in a fourth costume. Refuse instead.
+        if runner_medium not in tx.MOUNTED_SHELLS:
+            have = ", ".join(sorted(tx.MOUNTED_SHELLS))
+            print(
+                f"brnrd: no transcript mount for shell {runner_medium!r} — only "
+                f"{have} can resume a session brnrd forged.\n"
+                f"  The IR is Shell-agnostic; the mount is not. codex has no Read "
+                f"tool — its file perception runs through `exec`, a general "
+                f"command executor —\n"
+                f"  so REPLAYABLE_TOOLS does not port, and a codex mount needs its "
+                f"own answer to the safety rule before it needs a renderer.\n"
+                f"  See transcript.MOUNTED_SHELLS.",
+                file=sys.stderr,
+            )
+            return 1
 
     score = prompts.build_boot_score(
         repo_root,
