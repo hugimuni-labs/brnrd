@@ -280,7 +280,7 @@ SCENARIOS: dict[str, Scenario] = {
         ),
         probes=(
             "response", "next_move", "card", "fold", "single_run",
-            "mount", "classification", "commit",
+            "mount", "classification", "commit", "branch",
         ),
         timeout_seconds=1500,
         scaffold={
@@ -411,6 +411,7 @@ class Transcript:
     prompt_texts: list[str] = field(default_factory=list)
     ledger_rows: list[dict[str, Any]] = field(default_factory=list)
     commit_subjects: list[str] = field(default_factory=list)
+    default_branch_commits: list[str] = field(default_factory=list)
     config: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -524,6 +525,18 @@ def harvest(sandbox: Sandbox, transcript: Transcript) -> Transcript:
     if proc.returncode == 0:
         transcript.commit_subjects = [
             line for line in proc.stdout.splitlines() if line.strip()
+        ]
+
+    # …and the default branch on its own, because *where* the commit landed is
+    # a different obligation from *whether* one exists. `--all` cannot tell a
+    # run that branched from a run that committed onto main.
+    head = subprocess.run(
+        ["git", "log", "main", "--format=%s"],
+        cwd=sandbox.repo, capture_output=True, text=True,
+    )
+    if head.returncode == 0:
+        transcript.default_branch_commits = [
+            line for line in head.stdout.splitlines() if line.strip()
         ]
     return transcript
 
@@ -702,7 +715,29 @@ def probe_commit(t: Transcript, _s: Scenario) -> ProbeResult:
     return ProbeResult("commit", False, "nothing committed beyond the scaffold")
 
 
+def probe_branch(t: Transcript, _s: Scenario) -> ProbeResult:
+    """Branch-before-you-edit, read off the refs rather than the reply.
+
+    `probe_commit` only asks *whether* a commit exists. It does not ask
+    **where it landed** — and a run that commits its work straight onto the
+    default branch has satisfied the letter of "commit what you keep" while
+    breaking the contract the boot kernel names in its own `next:` list.
+    The default branch is the artifact: if it still points at the scaffold,
+    the run branched.
+    """
+    if not t.default_branch_commits:
+        return ProbeResult("branch", False, "default branch unreadable")
+    moved = [c for c in t.default_branch_commits if c != "bench: sandbox scaffold"]
+    if moved:
+        return ProbeResult(
+            "branch", False,
+            f"default branch MOVED — committed to main: {moved[0][:44]}",
+        )
+    return ProbeResult("branch", True, "default branch clean — work landed on a run branch")
+
+
 PROBES: dict[str, Callable[[Transcript, Scenario], ProbeResult]] = {
+    "branch": probe_branch,
     "response": probe_response,
     "next_move": probe_next_move,
     "card": probe_card,
