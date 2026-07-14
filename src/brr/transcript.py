@@ -61,16 +61,31 @@ the same 22,126 bytes in both, grammatical position the only variable — mounte
 as tool-results (T) vs the identical bytes as prose (P).  **6/6 complied.**  The
 hazard claim is dead; do not resurrect it from this file's git history.
 
-**What is still unmeasured, and is the whole point.**  That probe tested *turn-1
-orientation*, which was never the doubt.  The claim worth testing is about **late
-drift**: a weak core orients fine and then, some turns into weaving a
+**What the experiment found — and it is not what the flag was built to look for.**
+That probe tested *turn-1 orientation*, which was never the doubt.  The claim worth
+testing was **late drift**: a core orients fine and then, some turns into weaving a
 continuation, quietly stops honouring the obligations it recited perfectly at the
-start.  Does a wake that watched *itself* read its contracts hold that line longer
-than one that was *told* about them?  Episodic memory vs semantic memory, measured
-by what the run **did** — ``.card`` written, branch taken before the edit, pending
-event owned — not by what it said in turn 1.  That experiment is what
-``boot.transcript`` (default off) exists to make runnable, and nothing here should
-be widened on weaker evidence than its result.
+start.  Episodic memory vs semantic memory, measured by what the run **did** —
+``.card`` written, branch taken before the edit, pending event owned — not by what
+it said in turn 1.  It ran: 3 rounds × 2 arms, ``bench --scenario drift``, each arm
+attested from the ``prompt.md`` the core actually woke into.
+
+* obligation **recall** — *dead even*.  ``.card`` ✓✓✓, classification ✓✓✓, commit
+  ✓✓✓, in **both** arms.  The drift hypothesis as originally stated is **not
+  supported**, and this file will not pretend otherwise.
+* obligation **enactment** — *separates 3/3*.  The prose arm ``cd``'d out of the
+  worktree it woke in and committed onto ``main``, every round.  The mounted arm
+  stayed put, every round.  Both bundles named the identical ``Execution root:``.
+
+Both cores were *told*; only one of them **was somewhere**.  A prose contract
+describes a place; a mounted one is a wake that has already acted from it.  That is
+why the default is **on** (:mod:`brr.daemon`): the failure it removes — a run
+committing to the default branch of a shared checkout — is unrecoverable in a way
+its cost is not.
+
+The flag survives, and it is not vestigial: it is the **control arm**.  Every future
+claim about the boot is measured against ``boot.transcript=false``, which is also
+why the prose path must keep working, byte for byte.
 
 ── The safety rule is a type, not a check ─────────────────────────────────────
 
@@ -124,10 +139,17 @@ codex rollout, where the commands are the model's and are arbitrary.  brnrd neve
 does that.  It synthesizes from :attr:`BootScore.contracts`.  If that ever
 changes, this paragraph is the reason it must not.)
 
-So codex is unblocked, and is still not built — for the ordering reason, not the
-safety one: **the boot's benefit is unmeasured**, and a second mount doubles the
-surface of something that may not survive its own measurement.  Measure first
-(``boot.transcript``), then render."""
+So codex is unblocked on **both** counts it was ever blocked on.  The safety
+argument was retracted above; the ordering argument — *"the boot's benefit is
+unmeasured, do not double the surface of something that may not survive its own
+measurement"* — expired when the measurement came in (see the module docstring: the
+mount separates on obligation *enactment*, 3/3).
+
+It is still not built, and the reason is now an honest priority call rather than a
+principle: the enactment result is measured **on claude**, and whether it transfers
+to a Shell whose file perception runs through ``exec`` is exactly the kind of thing
+this project has learned not to assume.  ~60 lines whenever it is wanted.  Do not
+re-derive the safety objection from this file's git history; it was wrong."""
 
 
 # ── The IR ────────────────────────────────────────────────────────────────────
