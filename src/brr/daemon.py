@@ -2131,6 +2131,14 @@ def _run_worker(
                     f"[brnrd] worker {eid}: installed "
                     f"{declared_hooks_flavour} hook config at {hook_config_path}"
                 )
+        if hooks_installed:
+            # Native boundaries are synchronous with portal acceptance. The
+            # hook writes a token to `.flush`; `_invoke_with_heartbeat` drains
+            # and acknowledges that exact token before the hook returns. This
+            # makes Stop, not runner-return housekeeping, the final delivery
+            # boundary. Tier-0/1 profiles leave this unset and keep the polled
+            # compatibility path.
+            env["BRR_FLUSH_SYNC"] = "1"
         return _RunnerRuntime(meta, quota, env, extra_args, hooks_installed)
 
     runtime = _runner_runtime(runner_name)
@@ -2483,14 +2491,23 @@ def _run_worker(
             keepalive_path=keepalive_path,
         )
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
-        # Final drain after the runner returns: catch interim responses
-        # written between the last heartbeat and exit, before finalize.
-        _drain_outbox(
-            emit, task, responses_dir, eid, outbox_dir, inbox_dir,
-            repo_root=repo_root,
-            account_context=account_context,
-            stats=output_stats,
-        )
+        # Tier-2 Stop is a synchronous portal boundary: the runner cannot
+        # return until the matching flush token has been accepted. A normal
+        # hooked run therefore has no special "post-return drain" lifecycle.
+        # Keep one recovery check for Tier-0/1 runners and a broken/old hook:
+        # correctness degrades to the old path instead of losing a message.
+        if not run_hooks_installed or _outbox_message_files(outbox_dir):
+            if run_hooks_installed:
+                print(
+                    f"[brnrd] worker {eid}: recovering outbox files left "
+                    "after synchronous Stop"
+                )
+            _drain_outbox(
+                emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                repo_root=repo_root,
+                account_context=account_context,
+                stats=output_stats,
+            )
         _drain_agent_card(emit, task, eid, card_path, card_state)
         _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
         _write_live_inbox(outbox_dir, inbox_dir, eid)
@@ -2930,17 +2947,31 @@ def _invoke_with_heartbeat(
         worker.join(timeout=poll)
         if not worker.is_alive():
             break
-        # Event-driven flush: the runner boundary mechanism touched the
-        # signal file; consume it and drain now instead of at the next tick.
+        # Event-driven flush: the runner boundary wrote a request token. Drain
+        # first, then acknowledge that exact token. A Tier-2 Stop hook waits on
+        # the ack, so deleting the signal *before* the callback (the old shape)
+        # would falsely claim acceptance while delivery was still racing.
         if flush_path is not None and flush_path.exists():
             try:
-                flush_path.unlink()
+                token = flush_path.read_text(encoding="utf-8").strip()
             except OSError:
-                pass
+                token = ""
+            flushed = False
             if on_flush is not None:
                 try:
                     on_flush()
+                    flushed = True
                 except Exception:
+                    pass
+            if flushed and token:
+                ack_path = flush_path.parent / hooks_mod.FLUSH_ACK_NAME
+                try:
+                    _write_text_atomic(ack_path, token + "\n")
+                    # Do not erase a newer request that arrived while the
+                    # callback ran (unlikely, but the file is cross-process).
+                    if flush_path.read_text(encoding="utf-8").strip() == token:
+                        flush_path.unlink()
+                except OSError:
                     pass
         if time.monotonic() - last_heartbeat < interval:
             continue
@@ -3930,8 +3961,9 @@ def _drain_outbox(
     Returns the count promoted — a promoting drain is also a liveness
     check-in. Errors are swallowed: a drain bug must never break a run.
 
-    Called from the heartbeat tick (so it drains while the runner is
-    alive) and once more right after the runner returns.
+    Called by runner boundary flushes and the heartbeat fallback while the
+    runner is alive. Tier-0/1 runs and a broken Tier-2 handshake get one
+    post-return recovery check; post-return is not the normal lifecycle seam.
     """
     if not outbox_dir or not outbox_dir.exists():
         return 0
@@ -4155,6 +4187,15 @@ def _deliver_out_of_bound(
     )
     new_eid = new_path.stem
     protocol.write_response(responses_dir, new_eid, body)
+    if gate == "forge" and outbox_dir is not None:
+        # Acceptance receipt, not a claim that the asynchronous forge gate has
+        # already created the PR. The synchronous Stop flush makes this marker
+        # visible to the closeout guard before it decides whether handoff intent
+        # is missing.
+        _write_text_atomic(
+            outbox_dir / hooks_mod.FORGE_HANDOFF_NAME,
+            f"event: {new_eid}\nhead: {target_meta.get('head', '')}\n",
+        )
     print(f"[brnrd] outbox: queued out-of-bound message to gate {gate!r} ({new_eid})")
     if emit.conversation_key:
         conversations.append_artifact(
@@ -4180,8 +4221,8 @@ def _drain_agent_card(
 
     The resident owns its progress card's body via a single control file
     (``outbox/<eid>/.card``) — a dotfile, so it never enters the outbox
-    drain as a deliverable message. On each heartbeat tick (and once more
-    after the runner returns) the daemon reads the file; when its content
+    drain as a deliverable message. On each heartbeat/boundary tick (plus a
+    post-return recovery check) the daemon reads the file; when its content
     has changed since the last emit, a ``card_composed`` packet is sent so
     the gate re-renders the live card with the agent's text. Removing or
     emptying the file emits one final empty packet so the narration
@@ -4260,7 +4301,7 @@ def _emit_mirror_cards(
     State rides in ``card_state["mirrors"]`` for the life of the attempt.
     Packets fire on first sight, on narration change, and once on
     resolution: an event leaving the pending set mid-run was folded in
-    ("answered"); one still pending at the post-return drain stays
+    ("answered"); one still pending at the final boundary/recovery drain stays
     "queued" for the next thought (*final*). Errors are swallowed — a
     mirror must never break a run.
     """

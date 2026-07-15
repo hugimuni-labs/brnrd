@@ -20,7 +20,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from brr import daemon
+from brr import daemon, hooks
 from brr import runner as runner_mod
 from brr.runner import RunnerInvocation, RunnerResult
 
@@ -67,6 +67,7 @@ def test_invoke_with_heartbeat_drains_on_flush_signal(tmp_path):
     assert result.returncode == 0
     assert len(flushes) >= 1  # the signal was noticed and drained
     assert not flush_path.exists()  # and consumed
+    assert (tmp_path / hooks.FLUSH_ACK_NAME).read_text().strip() == "now"
     assert heartbeats == []  # the 10s heartbeat never fired in this window
 
 
