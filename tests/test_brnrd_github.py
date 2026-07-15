@@ -22,8 +22,7 @@ from _helpers import brnrd_account_headers  # noqa: E402
 _SECRET = "github-webhook-secret"
 
 
-@pytest.fixture()
-def env(monkeypatch):
+def _build_env(monkeypatch, **extra_settings):
     posts: list[dict] = []
 
     def fake_post(token, api_base_url, api_version, repo, issue_number, body, *,
@@ -49,9 +48,21 @@ def env(monkeypatch):
         github_webhook_secret=_SECRET,
         github_bot_login="brr-bot",
         github_bot_token="ghs_test",
+        **extra_settings,
     )
     app = create_app(settings)
     return app, TestClient(app), posts
+
+
+@pytest.fixture()
+def env(monkeypatch):
+    return _build_env(monkeypatch)
+
+
+@pytest.fixture()
+def env_allowlist(monkeypatch):
+    # "alice" is the default commenter login in _payload() below.
+    return _build_env(monkeypatch, github_authz_allowlist=("alice",))
 
 
 def _account(client):
@@ -81,7 +92,8 @@ def _daemon_headers(client, acc, repo_id):
 
 
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
-             installation_id=42, number=17, comment_id=100, is_pr=False):
+             installation_id=42, number=17, comment_id=100, is_pr=False,
+             action="created", association="COLLABORATOR", author="alice"):
     issue = {"number": number, "title": "Work item"}
     if is_pr:
         issue["pull_request"] = {
@@ -89,7 +101,7 @@ def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
         }
     kind = "pull" if is_pr else "issues"
     return {
-        "action": "created",
+        "action": action,
         "installation": {"id": installation_id},
         "repository": {"full_name": repo},
         "issue": issue,
@@ -100,7 +112,8 @@ def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
                 f"https://github.com/{repo}/{kind}/{number}"
                 f"#issuecomment-{comment_id}"
             ),
-            "user": {"login": "alice"},
+            "user": {"login": author},
+            "author_association": association,
         },
     }
 
@@ -223,6 +236,68 @@ def test_github_webhook_ignores_unaddressed_comments(env):
     _repo(client, acc)
 
     r = _github_post(client, _payload(body="plain repo chatter"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == []
+
+
+# ── authorization gate (#408) ───────────────────────────────────────
+#
+# Default-closed: an autonomous run may only be enqueued for a comment
+# whose author_association is OWNER/MEMBER/COLLABORATOR, or whose login
+# is on the configured allowlist. Everything else is rejected — 200 to
+# ack the webhook, no enqueue, no reply to the commenter.
+
+
+def test_github_webhook_rejects_unauthorized_association(env):
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(client, _payload(association="NONE"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == [], "no reply to the commenter on an authz rejection"
+
+
+def test_github_webhook_allows_collaborator_association(env):
+    app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(client, _payload(association="COLLABORATOR"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
+        assert event.repo_id == rid
+
+
+def test_github_webhook_allows_allowlisted_login_despite_none_association(env_allowlist):
+    app, client, posts = env_allowlist
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(client, _payload(association="NONE"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
+        assert event.repo_id == rid
+
+
+def test_github_webhook_ignores_edited_comment_action(env):
+    """Hard cutover: editing a comment must never (re)trigger a run —
+    only the original 'created' action does."""
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(client, _payload(action="edited"))
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
