@@ -25,7 +25,7 @@ AGENTS.md as the base for everything else.
 
 Three stages, and how to read this file in each:
 
-- **Ad-hoc agent session** (Cursor, Codex CLI, Claude Code, plain
+- **Ad-hoc agent session** (a coding-agent CLI, editor agent, or plain
   editor with no brnrd in the loop). No Run Context Bundle. No
   `.brr/conversations/`. No preflight runs on this session. Read the
   universal sections (Stewardship, Workflow → Orientation + Run types
@@ -278,7 +278,7 @@ author, stop and surface the conflict instead.
 
 Everything in this subsection applies only when you're being launched
 by `brnrd up` / the daemon worker — the Run Context Bundle's `### Mode`
-section confirms the stage. In an ad-hoc session (Cursor, Codex CLI,
+section confirms the stage. In an ad-hoc coding-agent or editor session
 Claude Code without brnrd orchestrating), skip the subsection — the
 machinery it describes isn't in play.
 
@@ -330,7 +330,7 @@ task explicitly requires.
 
 **The kb** is a persistent, LLM-maintained knowledge base. It compounds
 across sessions. Maintenance is everyone's job — brnrd's daemon, ad-hoc
-Cursor sessions, direct Claude Code or Codex invocations, anyone editing
+editor sessions, direct coding-agent CLI invocations, anyone editing
 the repo. Everything below (state-first writing, memory layers, graph
 topology, lifecycle markers, log format, health checks) is maintenance
 discipline that applies the same way regardless of where the pages
