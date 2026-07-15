@@ -2176,7 +2176,7 @@ def _run_worker(
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
 
-        # ── Boot as a transcript (`boot.transcript`, default ON) ──────────────
+        # ── Boot mount (`boot.mount`, default ON) ────────────────────────
         # On: the file-backed contracts leave the prose and are seeded as `Read`
         # calls and their results in a session the Shell resumes — the same bytes,
         # in tool-result position, fenced by `transcript.SNAPSHOT_SEAM`.
@@ -2202,9 +2202,9 @@ def _run_worker(
         # checkout — is unrecoverable in a way its cost is not.
         #
         # The flag survives, and it is not vestigial: it is the control arm. Every
-        # future claim about the boot is measured against `boot.transcript=false`,
+        # future claim about the boot is measured against `boot.mount=false`,
         # which is also why the prose path must keep working, byte for byte.
-        boot_mount = bool(cfg.get("boot.transcript", True))
+        boot_mount = bool(cfg.get("boot.mount", True))
         mount_shell = str(task.meta.get("runner_shell") or "")
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None

@@ -1,4 +1,4 @@
-"""Wiring the transcript into a real wake (`boot.transcript`, default off).
+"""Wiring the transcript into a real wake (`boot.mount`, default off).
 
 The mount is not "add `--resume` to argv". The mount is a *subtraction*: the
 file-backed contracts leave the prose and arrive as seeded ``Read`` results

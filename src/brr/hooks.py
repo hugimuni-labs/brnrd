@@ -96,7 +96,7 @@ class HookContext:
         # The closeout guard, armed by the daemon (`hooks.next_move`). Off unless
         # the daemon says otherwise: the guard is an *unmeasured* intervention, and
         # the flag is what keeps a control arm alive for the bench to measure it
-        # against — the same discipline that made `boot.transcript` an experiment
+        # against — the same discipline that made `boot.mount` an experiment
         # instead of a hunch that shipped.
         self.next_move_guard = (
             env.get("BRR_NEXT_MOVE_GUARD") or ""
