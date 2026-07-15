@@ -124,6 +124,13 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
+# How far back the exact-duplicate scan looks. A genuine re-delivery (one
+# external message fanned to two configured channels) is near-simultaneous;
+# anything older sharing an origin key is a coincidental id collision, not a
+# duplicate, and squashing the new message loses it. Six hours is generous
+# for the real case and still excludes the day/month-old collisions that
+# caused silent message loss (2026-07-15). Override: `dispatch.dedup_window_seconds`.
+_DEDUP_WINDOW_SECONDS_DEFAULT = 6 * 3600.0
 # Cadence for the run-time heartbeat packet. 10s keeps the chat card
 # visibly alive and is well below Telegram's edit rate ceiling
 # (~30/sec/chat). The Claude usage PTY scrape (which can block ~18s)
@@ -1671,10 +1678,14 @@ def _run_worker(
     is_respawn_origin = bool(
         event.get("respawned_from_event") or event.get("respawned_by_run")
     )
+    dedup_window = cfg.get(
+        "dispatch.dedup_window_seconds", _DEDUP_WINDOW_SECONDS_DEFAULT
+    )
     duplicate_event = (
         None if is_respawn_origin else
         conversations.find_event_by_origin_message(
             brr_dir, origin_message_key, exclude_event_id=eid,
+            max_age_seconds=dedup_window,
         )
     )
     emit = _WorkerEmit(brr_dir, conv_key, eid)
