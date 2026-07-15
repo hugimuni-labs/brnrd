@@ -464,6 +464,58 @@ def test_build_communication_snapshot_boosts_unanswered_turns(tmp_path):
     ]
 
 
+def test_snapshot_collapses_exact_schedule_repeats_but_keeps_current_and_history(
+    tmp_path,
+):
+    key = "schedule:director-tick"
+    for i in range(5):
+        conversations.append_event(
+            tmp_path,
+            key,
+            {
+                "id": f"evt-tick-{i}",
+                "source": "schedule",
+                "schedule_id": "director-tick",
+                "body": "run the director tick",
+            },
+        )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {
+            "id": "evt-tick-edited",
+            "source": "schedule",
+            "schedule_id": "director-tick",
+            "body": "run the director tick with the edited contract",
+        },
+    )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-human", "source": "telegram", "body": "run the director tick"},
+    )
+
+    records = conversations.read_records(tmp_path, key)
+    selected = conversations._select_snapshot_turns(records, limit=4)
+    bodies = [record["body"] for record in selected]
+
+    assert bodies.count("run the director tick") == 2
+    assert bodies[-3:] == [
+        "run the director tick",
+        "run the director tick with the edited contract",
+        "run the director tick",
+    ]
+    assert selected[0]["schedule_repeat_summary"] is True
+    assert selected[0]["schedule_repeat_count"] == 4
+    assert selected[1]["event_id"] == "evt-tick-4"
+    assert selected[-1]["event_id"] == "evt-human"
+
+    schedule_record = next(
+        record for record in records if record.get("event_id") == "evt-tick-0"
+    )
+    assert schedule_record["schedule_id"] == "director-tick"
+
+
 def test_build_communication_snapshot_unanswered_flood_does_not_blank_recency(
     tmp_path,
 ):
