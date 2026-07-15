@@ -285,12 +285,33 @@ def auth(brr_dir: Path) -> None:
 
 
 def bind(brr_dir: Path) -> None:
-    """Optionally restrict Telegram to a single chat/topic."""
+    """Optionally restrict Telegram to a single chat/topic.
+
+    Also records the authorizing principal (#409): every inbound message
+    is checked against ``state["paired_user_id"]`` (this prompt) or
+    ``state["allowlist"]`` (edited directly in ``.brr/gates/telegram.json``,
+    a JSON list of Telegram user ids) before it becomes an event — a
+    default-closed gate independent of the optional chat/topic
+    restriction below.
+    """
     state = _load_state(brr_dir)
     if "token" not in state:
         print("[brnrd] Run `brnrd auth telegram` first.")
         return
     print("[brnrd] Telegram works with just `brnrd auth telegram`.")
+    user_id_raw = input(
+        "Your Telegram user ID, to authorize as the paired principal "
+        "(required — see e.g. @userinfobot; messages from anyone else "
+        "are rejected): "
+    ).strip()
+    if not user_id_raw:
+        print("[brnrd] A user ID is required so brr knows who to trust.")
+        return
+    try:
+        state["paired_user_id"] = int(user_id_raw)
+    except ValueError:
+        print("[brnrd] User ID must be a number.")
+        return
     chat_id = input(
         "Optional chat ID to restrict to (leave empty to accept all): "
     ).strip()
@@ -388,6 +409,32 @@ def _delivery_loop_once(
     )
 
 
+def _authorized_sender(state: dict, user_id: int | None) -> bool:
+    """#409 — default-closed: the verified sender must be the bound
+    principal (``state['paired_user_id']``, set by ``bind``) or listed in
+    ``state['allowlist']`` (a JSON array of Telegram user ids, edited
+    directly in ``.brr/gates/telegram.json`` — no CLI setter yet). No
+    sender id at all (``sender_chat`` / a missing ``from``) is never
+    authorized, regardless of either list.
+    """
+    if user_id is None:
+        return False
+    paired = state.get("paired_user_id")
+    if paired is not None:
+        try:
+            if int(paired) == int(user_id):
+                return True
+        except (TypeError, ValueError):
+            pass
+    for allowed in state.get("allowlist") or []:
+        try:
+            if int(allowed) == int(user_id):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = state["token"]
@@ -406,6 +453,21 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         msg = update.get("message", {})
         chat_id = msg.get("chat", {}).get("id")
         if chat_id is None:
+            continue
+        # #409 — a group->supergroup migration service message carries no
+        # text/sender and must never be treated as a trigger; but the
+        # bound chat id (if any) should follow the migration rather than
+        # going silently stale. Two shapes arrive, one per chat:
+        # ``migrate_to_chat_id`` on the old chat, ``migrate_from_chat_id``
+        # on the new one.
+        migrate_to = msg.get("migrate_to_chat_id")
+        migrate_from = msg.get("migrate_from_chat_id")
+        if migrate_to is not None or migrate_from is not None:
+            old_id = chat_id if migrate_to is not None else migrate_from
+            new_id = migrate_to if migrate_to is not None else chat_id
+            if configured_chat_id is not None and configured_chat_id == old_id:
+                state["chat_id"] = new_id
+                configured_chat_id = new_id
             continue
         if configured_chat_id is not None and chat_id != configured_chat_id:
             continue
@@ -438,6 +500,16 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         sender = msg.get("from") or {}
         user = sender.get("first_name", "?")
         user_id = sender.get("id")
+        # #409 — an anonymous group admin or a channel post carries
+        # ``sender_chat`` instead of a personal identity; even if Telegram
+        # also populated ``from`` with a generic service account, treat it
+        # as unattributable (default-closed) rather than authorizing off
+        # a shared/spoofable id. The sender is always this verified
+        # ``from.id`` — never text parsed from the message, and never a
+        # forwarded message's origin (``forward_from``/``forward_origin``),
+        # which is deliberately never read for identity.
+        if msg.get("sender_chat") is not None:
+            user_id = None
         username = sender.get("username") or ""
         message_id = msg.get("message_id")
         # Telegram's own send-time (`date`, Unix epoch seconds) — captured
@@ -449,6 +521,13 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # pitfall "Telegram event-id timestamps are ingestion time, not send
         # time" only shallowly verified this, didn't yet capture the fix).
         sent_at = msg.get("date")
+
+        if not _authorized_sender(state, user_id):
+            # #409 — default-closed gate audit trail. No reply is sent:
+            # telling an unauthorized sender why would let them probe for
+            # a valid principal.
+            print(f"[brnrd] telegram authz denied: chat={chat_id} user={user_id}")
+            continue
 
         attachment_files: list[Path] = []
         image_tmpdir: tempfile.TemporaryDirectory | None = None
