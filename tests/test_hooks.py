@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from brr import hooks
 
@@ -819,3 +820,123 @@ def test_a_waiting_user_outranks_the_shape_of_the_reply(tmp_path):
     assert out["decision"] == "block"
     assert "one more thing" in out["reason"]
     assert "ends on nothing" not in out["reason"]
+
+
+# ── The SCM closeout obligation (host work-loss block) ────────────────────
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True,
+                   capture_output=True, text=True)
+
+
+def _seeded_repo(tmp_path):
+    """A git repo on `main` with one seed commit. Returns (repo_dir)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "seed")
+    return repo
+
+
+def _armed_scm(tmp_path, repo, obligations="scm", seed="main"):
+    """Arm the SCM obligation with card+classification already satisfied, so a
+    block can only come from the SCM clause. Outbox lives in `tmp_path`."""
+    (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
+    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
+    env = _armed_obl(tmp_path, obligations=obligations)
+    env["BRR_REPO_DIR"] = str(repo)
+    env["BRR_SEED_REF"] = seed
+    return env
+
+
+def test_scm_blocks_on_uncommitted_changes(tmp_path):
+    """A host checkout with modified files at Stop loses work — block."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "wip.txt").write_text("half-done\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "uncommitted" in out["reason"]
+
+
+def test_scm_blocks_on_unpushed_commits_with_receipt(tmp_path):
+    """Committed on a branch but never pushed → block, with the diffstat
+    receipt the maintainer asked for (`N commit(s) +x/−y on <branch>`)."""
+    repo = _seeded_repo(tmp_path)
+    _git(repo, "switch", "-qc", "brr/work")
+    (repo / "feature.py").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feature")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out["decision"] == "block"
+    reason = out["reason"]
+    assert "not pushed" in reason
+    assert "1 commit(s) +3/" in reason  # diffstat receipt
+    assert "brr/work" in reason
+
+
+def test_scm_receipt_includes_pr_number_when_present(tmp_path):
+    """When a `.pr` handle exists, the receipt names it — produce, not scold."""
+    repo = _seeded_repo(tmp_path)
+    _git(repo, "switch", "-qc", "brr/work")
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feature")
+    (repo / "leftover.txt").write_text("dirty\n", encoding="utf-8")  # force a gap
+    (tmp_path / ".pr").write_text("#42\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "PR #42" in out["reason"]
+
+
+def test_scm_silent_when_committed_and_pushed(tmp_path):
+    """Nothing modified, nothing ahead of the seed → no work at risk, silent."""
+    repo = _seeded_repo(tmp_path)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_scm_does_not_block_missing_pr_when_pushed(tmp_path):
+    """Committed AND pushed (upstream at HEAD) but no `.pr` → NOT a block.
+
+    The legit PR handoff (`gate: forge`) is a post-Stop action, so a missing
+    PR on an already-pushed branch is not assertable work-loss. Deliberately
+    out of the hard block.
+    """
+    repo = _seeded_repo(tmp_path)
+    bare = tmp_path / "remote.git"
+    _git(repo, "init", "-q", "--bare", str(bare))
+    _git(repo, "switch", "-qc", "brr/work")
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feature")
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "-u", "origin", "brr/work")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_scm_silent_when_repo_dir_unset(tmp_path):
+    """`scm` armed but no BRR_REPO_DIR (a worktree run) → unassertable, silent —
+    the daemon only wires the repo dir for the host environment."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "wip.txt").write_text("half\n", encoding="utf-8")
+    env = _armed_scm(tmp_path, repo)
+    del env["BRR_REPO_DIR"]
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
