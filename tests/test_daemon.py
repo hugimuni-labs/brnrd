@@ -86,7 +86,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     event = make_event(tmp_path, eid="evt-1")
     worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -149,7 +149,8 @@ def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatc
 
     def fake_resolve(_root, overrides=None):
         seen_overrides.append(overrides)
-        return overrides["runner"] if overrides and overrides.get("runner") else "codex"
+        name = overrides["runner"] if overrides and overrides.get("runner") else "codex"
+        return daemon.runner.runner_profile(name, _root)
 
     prompt_kwargs: dict = {}
 
@@ -157,7 +158,7 @@ def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatc
         prompt_kwargs.update(kw)
         return f"PROMPT {eid}"
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
     monkeypatch.setattr(
         daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
     )
@@ -207,9 +208,9 @@ def test_run_worker_event_pin_outranks_wake_request(tmp_path, monkeypatch):
 
     def fake_resolve(_root, overrides=None):
         seen_overrides.append(overrides)
-        return "claude-opus"
+        return daemon.runner.runner_profile("claude-opus", _root)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
@@ -253,9 +254,9 @@ def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch
 
     def fake_resolve(_root, overrides=None):
         seen_overrides.append(overrides)
-        return "codex"
+        return daemon.runner.runner_profile("codex", _root)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
     monkeypatch.setattr(
         daemon.runner, "profile_metadata", lambda name, root=None: None,
     )
@@ -286,7 +287,7 @@ def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch
 def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-ledger")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -421,7 +422,7 @@ def test_run_worker_finalize_reads_task_classification_control(tmp_path, monkeyp
     """
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-classified")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt", lambda *args, **kwargs: "PROMPT",
@@ -498,7 +499,11 @@ def test_run_worker_does_not_infer_native_hooks_from_runner_name(
     event = make_event(tmp_path, eid="evt-no-hooks")
     _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "claude")
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner_select.implicit_runner("claude"),
+    )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.runner,
@@ -541,7 +546,13 @@ def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
     event = make_event(tmp_path, eid="evt-declared-hooks")
     _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "custom")
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner_select.runner_from_profile(
+            "custom", {"shell": "custom", "hooks": "claude"},
+        ),
+    )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.runner,
@@ -593,7 +604,7 @@ def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
     event = make_event(tmp_path, eid="evt-quota")
     _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.runner_quota,
@@ -659,7 +670,7 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
         def finalize(self, *_args, **_kwargs):  # pragma: no cover - never reached
             return None
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: ExplodingEnv())
 
@@ -681,7 +692,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
         tmp_path, eid="evt-p1", summary="Add labels to live runs",
     )
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
@@ -720,7 +731,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
 def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-3")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -779,7 +790,7 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-outbox-only")
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -1006,7 +1017,7 @@ def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     )
 
     worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -2094,7 +2105,7 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-run-fail")
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -2136,7 +2147,7 @@ def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-empty-final")
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -2222,7 +2233,7 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
     event = make_event(tmp_path, eid="evt-sync-order")
     _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -2281,7 +2292,7 @@ def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
     event = make_event(tmp_path, eid="evt-sync-fail")
     _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts,
@@ -3254,7 +3265,7 @@ def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     event = make_event(tmp_path, eid="evt-prompt")
     worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
 
     captured_prompts: list[str] = []
@@ -3755,7 +3766,7 @@ def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatc
         "_path": lead_path,
     }
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     captured: dict[str, object] = {}
 
@@ -3798,7 +3809,7 @@ def test_run_worker_threads_level_quota_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-level-quota")
     _stub_env_isolated(monkeypatch, tmp_path)
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "claude")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("claude", _root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.runner_quota,

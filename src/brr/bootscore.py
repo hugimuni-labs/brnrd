@@ -114,14 +114,12 @@ class ContractEntry:
 
 @dataclass(frozen=True)
 class BootBody:
-    """The Shell + Core + hook-capability tier for this wake.
+    """The requested Shell + Core + hook-capability tier for this wake.
 
-    These are the *resolved* runner facts, not the display label the prompt
-    prints.  The daemon knows them before it builds a line of prompt — it
-    writes them into ``run.md`` in the same second — so a ``None`` here means
-    the score was built without a body (a fixture, a replay, an ad-hoc CLI
-    render), never "this wake has no Core".  A score that cannot name the body
-    it is scoring is not an inspection.
+    These are selection facts, not runtime attestation. The daemon knows what
+    it requested before prompt assembly; the Shell's result later proves what
+    actually ran. A ``None`` here means the score was built without a body (a
+    fixture, replay, or ad-hoc CLI render), never "this wake has no Core".
     """
 
     name: str | None = None    # runner profile, e.g. ``"claude-fable"``
@@ -444,7 +442,9 @@ def format_kernel(score: BootScore) -> str:
     )
     body_bits = [b for b in (body_head, body.tier, body.provenance) if b]
     if body_bits:
-        lines.append(f"body: {' · '.join(body_bits)}")
+        # A boot score exists before the Shell has produced attestation. This
+        # line therefore names the requested body, never claims observation.
+        lines.append(f"body requested: {' · '.join(body_bits)}")
 
     if body.mounted:
         # Differential, like every other kernel line: absent — and costing nothing —
