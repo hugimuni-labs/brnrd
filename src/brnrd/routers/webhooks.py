@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +21,13 @@ from ..platforms import github as gh
 from ..platforms import telegram as tg
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
+logger = logging.getLogger(__name__)
+
+# #408 — associations that count as "trusted" for the default-closed
+# authorization gate. Everything else (NONE, CONTRIBUTOR,
+# FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, ...) is denied unless
+# the login is separately allowlisted.
+_AUTHORIZED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
@@ -162,8 +170,24 @@ def _maybe_pr_branch(settings, repo: str, pr_number: int | None) -> str | None:
         return None
 
 
+def _github_authorized(settings, association: str, login: str) -> tuple[bool, str]:
+    """Default-closed authorization gate (#408) for the managed webhook.
+
+    The HMAC signature already proves the payload came from GitHub; this
+    decides whether *this particular commenter* may enqueue an
+    autonomous run. Allowed iff the comment's ``author_association`` is
+    OWNER/MEMBER/COLLABORATOR, or the login is on the configured
+    allowlist. Everything else is denied — no warn-but-allow grace.
+    """
+    if association in _AUTHORIZED_ASSOCIATIONS:
+        return True, f"association={association}"
+    if login and login.casefold() in settings.github_authz_allowlist:
+        return True, "allowlisted"
+    return False, f"unauthorized: association={association or 'NONE'}"
+
+
 def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any]) -> None:
-    if payload.get("action") not in {"created", "edited"}:
+    if payload.get("action") != "created":
         return
     repo_name = ((payload.get("repository") or {}).get("full_name") or "").strip()
     issue = payload.get("issue") or {}
@@ -177,6 +201,14 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
     trigger_kind, trigger_text = trigger
     author = str(((comment.get("user") or {}).get("login") or "")).strip()
     if gh_parse._skip_mention_comment_author(author, trigger_text, settings.github_bot_login):
+        return
+    association = str(comment.get("author_association") or "").strip().upper()
+    authorized, reason = _github_authorized(settings, association, author)
+    if not authorized:
+        logger.warning(
+            "github authz reject repo=%s author=%s trigger=%s reason=%s",
+            repo_name, author, trigger_kind, reason,
+        )
         return
     is_pr = bool(issue.get("pull_request")) or "/pull/" in str(comment.get("html_url") or "")
     reply_to: dict[str, Any] = {"platform": "github", "repo": repo_name, "issue_number": issue_number, "comment_id": comment_id, "kind": "pr-comment" if is_pr else "issue-comment", "author": author, "html_url": str(comment.get("html_url") or ""), "trigger": trigger_kind, "mention": trigger_text}
