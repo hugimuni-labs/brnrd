@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 
 from brr import hooks
 
@@ -67,6 +69,32 @@ def test_post_tool_touches_flush_and_injects_on_change(tmp_path):
     assert ctx["hookEventName"] == "PostToolBatch"
     assert "pending" in ctx["additionalContext"]
     assert "evt-2" in ctx["additionalContext"]
+
+
+def test_stop_waits_for_flush_ack_then_reads_fresh_portal(tmp_path):
+    """Stop decision is downstream of promotion, not racing runner exit."""
+    _portal(tmp_path, token="before", pending=1, events=[
+        {"id": "evt-2", "source": "telegram", "body": "already answered"},
+    ])
+    env = _env(tmp_path)
+    env["BRR_FLUSH_SYNC"] = "1"
+
+    def broker():
+        flush = tmp_path / hooks.FLUSH_SIGNAL_NAME
+        deadline = time.monotonic() + 2
+        while not flush.exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        token = flush.read_text(encoding="utf-8").strip()
+        _portal(tmp_path, token="after", pending=0)
+        (tmp_path / hooks.FLUSH_ACK_NAME).write_text(token, encoding="utf-8")
+
+    thread = threading.Thread(target=broker)
+    thread.start()
+    out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    thread.join(timeout=2)
+    assert code == 0
+    assert out.get("decision") != "block"
+    assert "0 pending event(s)" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_post_tool_no_reinject_when_token_unchanged(tmp_path):
@@ -908,13 +936,8 @@ def test_scm_silent_when_committed_and_pushed(tmp_path):
     assert out.get("decision") != "block"
 
 
-def test_scm_does_not_block_missing_pr_when_pushed(tmp_path):
-    """Committed AND pushed (upstream at HEAD) but no `.pr` → NOT a block.
-
-    The legit PR handoff (`gate: forge`) is a post-Stop action, so a missing
-    PR on an already-pushed branch is not assertable work-loss. Deliberately
-    out of the hard block.
-    """
+def test_scm_blocks_missing_forge_handoff_when_pushed(tmp_path):
+    """Pushed commits with neither PR nor broker receipt are provably unhanded."""
     repo = _seeded_repo(tmp_path)
     bare = tmp_path / "remote.git"
     _git(repo, "init", "-q", "--bare", str(bare))
@@ -924,6 +947,27 @@ def test_scm_does_not_block_missing_pr_when_pushed(tmp_path):
     _git(repo, "commit", "-qm", "feature")
     _git(repo, "remote", "add", "origin", str(bare))
     _git(repo, "push", "-q", "-u", "origin", "brr/work")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_scm(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "no PR or accepted `gate: forge` handoff" in out["reason"]
+
+
+def test_scm_accepts_durable_forge_handoff_before_pr_exists(tmp_path):
+    """The broker receipt proves a final gate handoff without claiming PR creation."""
+    repo = _seeded_repo(tmp_path)
+    bare = tmp_path / "remote.git"
+    _git(repo, "init", "-q", "--bare", str(bare))
+    _git(repo, "switch", "-qc", "brr/work")
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feature")
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "-u", "origin", "brr/work")
+    (tmp_path / hooks.FORGE_HANDOFF_NAME).write_text(
+        "event: evt-forge\nhead: brr/work\n", encoding="utf-8",
+    )
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
                             _armed_scm(tmp_path, repo))
