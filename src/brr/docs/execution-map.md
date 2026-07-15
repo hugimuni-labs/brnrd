@@ -99,9 +99,10 @@ post-response housekeeping.
 
 The agent may *also* stream replies mid-thought (the multi-response
 protocol; see [`internals.md`](internals.md) → Multi-response).
-It drops markdown files in its per-event outbox (`.brr/outbox/<event-id>/`);
-the daemon drains them on every heartbeat and once after the runner
-returns, promoting each to a per-event partials queue
+It drops markdown files in its per-event outbox (`.brr/outbox/<event-id>/`).
+Tier-2 runner boundaries synchronously request and await promotion; heartbeat
+polling plus a post-return recovery check preserve Tier-0/1 correctness. Each
+message is promoted to a per-event partials queue
 (`.brr/responses/<event-id>.partials/`). Gates stream queued partials —
 for `processing` or `done` events — ahead of the terminal reply. An
 outbox file whose frontmatter names another pending event

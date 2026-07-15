@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import types
 
-from brr import conversations, daemon, protocol, run_context, run_progress, updates
+from brr import conversations, daemon, hooks, protocol, run_context, run_progress, updates
 from brr.envs import RunContext
 from brr.run import Run
 
@@ -173,6 +173,9 @@ class TestDrainOutbox:
         assert ev["head"] == "brr/feat-x"
         assert protocol.read_response(responses, ev["id"]).strip() == "projected body"
         assert protocol.list_done(inbox, "forge") == []
+        receipt = (outbox / hooks.FORGE_HANDOFF_NAME).read_text(encoding="utf-8")
+        assert ev["id"] in receipt
+        assert "brr/feat-x" in receipt
 
     def test_gate_addressed_unknown_gate_dropped(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
