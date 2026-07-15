@@ -646,21 +646,24 @@ def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
 
 def _record_task_runner(
     task: Run,
-    runner_name: str,
-    runner_meta: dict[str, object] | None,
+    selected: "runner_select.RunnerProfile",
 ) -> None:
     """Persist the currently selected Runner/Core on the run manifest."""
-    task.meta["runner_name"] = runner_name
-    for key in ("runner_shell", "runner_core", "runner_class"):
+    task.meta["runner_name"] = selected.name
+    for key in (
+        "runner_shell", "runner_core", "runner_class",
+        "core_requested", "core_observed",
+    ):
         task.meta.pop(key, None)
-    if not runner_meta:
-        return
-    if runner_meta.get("shell"):
-        task.meta["runner_shell"] = runner_meta["shell"]
-    if runner_meta.get("model"):
-        task.meta["runner_core"] = runner_meta["model"]
-    if runner_meta.get("class"):
-        task.meta["runner_class"] = runner_meta["class"]
+    task.meta["runner_shell"] = selected.shell
+    if selected.model:
+        # ``runner_core`` remains the compatibility field consumed by existing
+        # run-state readers. The explicit field is the truthful one: before
+        # attestation this is a request, not an observation.
+        task.meta["runner_core"] = selected.model
+        task.meta["core_requested"] = selected.model
+    if selected.cost_class:
+        task.meta["runner_class"] = selected.cost_class
 
 
 def _quality_escalation_meta(
@@ -1640,17 +1643,11 @@ def _run_worker(
                 f"profile '{requested_profile}'; dropping it"
             )
         wake_request_mod.consume(brr_dir, wake_req["request_id"])
-    runner_name = (
-        runner.resolve_runner(repo_root, runner_overrides)
-        if runner_overrides else runner.resolve_runner(repo_root)
+    runner_choice = runner.resolve_runner_profile(
+        repo_root, runner_overrides or None,
     )
-    # Look up the profile dict so portal-state can expose the selected
-    # Shell/Core's metadata (model, class, provider, hooks) in the
-    # resources.runner governance block. The profile cache is already
-    # warm from resolve_runner, so this is a dict lookup, not I/O.
-    runner_meta: dict[str, object] | None = runner.profile_metadata(
-        runner_name, repo_root
-    )
+    runner_name = runner_choice.name
+    runner_meta: dict[str, object] = runner_choice.portal_metadata()
     quality_escalation = _quality_escalation_meta(repo_root, runner_name)
     failure_defer_seconds = float(
         cfg.get(
@@ -1757,7 +1754,7 @@ def _run_worker(
     # placeholder branch without paying a git probe on every dashboard tick.
     task.meta["seed_ref"] = branch_plan.seed_ref
     task.meta["has_new_commit"] = False
-    _record_task_runner(task, runner_name, runner_meta)
+    _record_task_runner(task, runner_choice)
     _persist_run_state_doc(
         account_context, task, repo_label=repo_label, stage="created", cfg=cfg,
     )
@@ -2034,14 +2031,15 @@ def _run_worker(
     card_state: dict[str, object] = {}
     run_started_monotonic = time.monotonic()
 
-    def _runner_runtime(name: str) -> _RunnerRuntime:
-        meta = runner.profile_metadata(name, repo_root)
+    def _runner_runtime(selected: "runner_select.RunnerProfile") -> _RunnerRuntime:
+        meta = selected.portal_metadata()
+        name = selected.name
         quota = runner_quota.describe_runner_quota(name, cfg, brr_dir)
         # Native hook config is opt-in through a profile's explicit ``hooks:``
         # field — brr never infers hooks from the runner name. A profile with no
         # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
         # inbound injection).
-        declared_hooks_flavour = runner.profile_hooks_flavour(name, repo_root)
+        declared_hooks_flavour = selected.hooks
         hooks_flavour = declared_hooks_flavour or name
         env = {
             "BRR_RUN_ID": task.id,
@@ -2141,14 +2139,14 @@ def _run_worker(
             env["BRR_FLUSH_SYNC"] = "1"
         return _RunnerRuntime(meta, quota, env, extra_args, hooks_installed)
 
-    runtime = _runner_runtime(runner_name)
+    runtime = _runner_runtime(runner_choice)
     runner_meta = runtime.meta
     quota_summary = runtime.quota
     runner_env = runtime.env
     extra_runner_args = runtime.extra_args
     run_hooks_installed = runtime.hooks_installed
     runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
-    _record_task_runner(task, runner_name, runner_meta)
+    _record_task_runner(task, runner_choice)
     run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
     task.save(runs_dir)
     _write_live_portal_state(
@@ -2480,6 +2478,8 @@ def _run_worker(
                 timeout_seconds=hard_cap_seconds,
                 env=runner_env,
                 extra_runner_args=extra_runner_args,
+                expected_core=runner_choice.model,
+                selected_runner=runner_choice,
             ),
             cfg=cfg,
             trace=True,
@@ -2490,6 +2490,13 @@ def _run_worker(
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
         )
+        if result.observed_core:
+            task.meta["core_observed"] = result.observed_core
+            runner_meta = {
+                **runner_meta,
+                "model_observed": result.observed_core,
+                "core_mismatch": result.core_mismatch,
+            }
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Tier-2 Stop is a synchronous portal boundary: the runner cannot
         # return until the matching flush token has been accepted. A normal
@@ -2555,10 +2562,14 @@ def _run_worker(
                 "exit_code": result.returncode,
                 "error": detail,
                 "timed_out": timed_out,
-                "failure_kind": runner_failures.classify_failure(
-                    timed_out=timed_out,
-                    exit_code=result.returncode,
-                    detail=detail,
+                "failure_kind": (
+                    runner_failures.CORE_MISMATCH
+                    if result.core_mismatch else
+                    runner_failures.classify_failure(
+                        timed_out=timed_out,
+                        exit_code=result.returncode,
+                        detail=detail,
+                    )
                 ),
             }
         else:
@@ -2647,17 +2658,19 @@ def _run_worker(
         retry_reason = result.retry_reason()
         will_retry = bool(retry_reason and clean_retries_used < max_retries)
         fallback_runner_name: str | None = None
+        fallback_choice: runner_select.RunnerProfile | None = None
         failure_kind = (
             str(last_failure.get("failure_kind") or "")
             if last_failure and not retry_reason else ""
         )
         if failure_kind:
-            fallback_runner_name = runner.fallback_runner(
+            fallback_choice = runner.fallback_runner_profile(
                 repo_root,
-                runner_name,
+                runner_choice,
                 failure_kind,
                 tried=attempted_runners,
             )
+            fallback_runner_name = fallback_choice.name if fallback_choice else None
         attempt_payload: dict[str, object] = {
             "run_id": task.id,
             "event_id": eid,
@@ -2722,11 +2735,13 @@ def _run_worker(
             continue
         if fallback_runner_name:
             previous_runner = runner_name
-            runner_name = fallback_runner_name
+            assert fallback_choice is not None
+            runner_choice = fallback_choice
+            runner_name = runner_choice.name
             # A wake-request note would now be a lie: the requested body
             # failed and this is the fallback, not the tapped profile.
             runner_wake_note = None
-            runtime = _runner_runtime(runner_name)
+            runtime = _runner_runtime(runner_choice)
             runner_meta = runtime.meta
             quota_summary = runtime.quota
             runner_env = runtime.env
@@ -2736,7 +2751,7 @@ def _run_worker(
                 repo_root, selected=runner_name,
             )
             quality_escalation = _quality_escalation_meta(repo_root, runner_name)
-            _record_task_runner(task, runner_name, runner_meta)
+            _record_task_runner(task, runner_choice)
             run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
             task.save(runs_dir)
             reason = f"fallback after {failure_kind}"
