@@ -1194,7 +1194,7 @@ class TestDaemonModeGuardrails:
     """Pin the run.md changes that route daemon runners through the
     Run Context Bundle's Mode block and treat the run context file as
     recovery detail rather than routine reading.  See
-    `kb/research-cursor-orientation-ergonomics-2026-05-16.md` and
+    the earlier editor-orientation research and
     `kb/plan-agent-orientation-layering.md`."""
 
     def test_run_prompt_names_mode_block_and_recovery_role(self):
