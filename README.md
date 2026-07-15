@@ -27,7 +27,7 @@ Send the task from your phone. Watch the plan and progress card change while it
 works. Correct course without interrupting the run. Get a branch, a PR, or an
 answer back in the same thread.
 
-brnrd is **not another coding model.** It runs the CLI agents you already chose —
+brnrd is **not another coding agent.** It runs the CLI agents you already chose —
 locally, under your rules — and turns them into a repo-knowing coworker you can
 reach when you are away from the terminal.
 
