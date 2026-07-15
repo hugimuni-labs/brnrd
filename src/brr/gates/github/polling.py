@@ -21,6 +21,7 @@ refresh the PR head before the worker runs.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -36,17 +37,78 @@ from .paths import (
     repo_pulls_comments,
 )
 
+logger = logging.getLogger(__name__)
+
+# Permission levels that count as "trusted collaborator" for the
+# authorization gate (#408). ``read`` and ``none`` do not qualify.
+_AUTHORIZED_PERMISSIONS = frozenset({"admin", "write", "maintain"})
+
+
+def _is_authorized(
+    token: str,
+    repo: str,
+    author: str,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
+) -> tuple[bool, str]:
+    """Default-closed authorization predicate (#408).
+
+    Allowed iff the author is a repo collaborator/member/owner (checked
+    via the collaborator-permission API — ``admin``/``write``/``maintain``
+    count, ``read``/``none`` don't) or is explicitly on the gate-state
+    allowlist. Everything else is denied. The permission lookup is
+    cached per ``(repo, author)`` for the caller's poll cycle so a
+    chatty author doesn't cost a network call per comment.
+    """
+    if not author:
+        return False, "unauthorized: no author"
+    if author.casefold() in allowlist:
+        return True, "allowlisted"
+    if not repo:
+        return False, "unauthorized: no repo"
+    cache_key = (repo, author)
+    if cache_key in permission_cache:
+        permission = permission_cache[cache_key]
+    else:
+        permission = client.get_collaborator_permission(repo, author, token)
+        permission_cache[cache_key] = permission
+    if permission in _AUTHORIZED_PERMISSIONS:
+        return True, f"permission={permission}"
+    return False, f"unauthorized: permission={permission or 'none'}"
+
 
 def _create_github_event(
-    token: str, inbox_dir: Path, body: str, **meta: Any,
-) -> Path:
+    token: str,
+    inbox_dir: Path,
+    body: str,
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
+    **meta: Any,
+) -> Path | None:
     """``protocol.create_event`` plus best-effort inline-image ingestion.
 
     Every GitHub event-creation call site below funnels through here so a
     screenshot dragged into an issue, PR, or comment resolves to a local
     file the resident can ``Read`` directly, the same way a Telegram
     photo does — see ``gates/github/attachments.py``.
+
+    This is also the single choke point for the authorization gate
+    (#408): every trigger creates events here, so gating here covers
+    all of them at once. Unauthorized activity is rejected outright —
+    no event, no reply — with a structured audit line at WARNING.
+    Returns ``None`` (instead of the created event path) when rejected.
     """
+    repo = str(meta.get("github_repo") or "")
+    author = str(meta.get("github_author") or "")
+    trigger = str(meta.get("github_trigger") or "")
+    authorized, reason = _is_authorized(token, repo, author, allowlist, permission_cache)
+    if not authorized:
+        logger.warning(
+            "github authz reject repo=%s author=%s trigger=%s reason=%s",
+            repo, author, trigger, reason,
+        )
+        return None
     urls = attachments.extract_image_urls(body)
     if not urls:
         return protocol.create_event(inbox_dir, source="github", body=body, **meta)
@@ -85,6 +147,8 @@ def _poll_opened_items(
     inbox_dir: Path,
     trigger: str,
     bot_login: str = "",
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> str:
     items = client._api_get(
         token,
@@ -145,6 +209,8 @@ def _poll_opened_items(
             inbox_dir,
             parse._format_event_body(title, body_text),
             title=title,
+            allowlist=allowlist,
+            permission_cache=permission_cache,
             **meta,
         )
         seen.add(number)
@@ -162,6 +228,9 @@ def _poll_label_trigger(
     cursor: dict,
     inbox_dir: Path,
     bot_login: str = "",
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     since = cursor.get("issues_since") or cache._initial_since()
     seen = set(cursor.get("seen_issue_numbers") or [])
@@ -220,6 +289,8 @@ def _poll_label_trigger(
             github_trigger="label",
             github_label=label,
             title=title,
+            allowlist=allowlist,
+            permission_cache=permission_cache,
         )
         seen.add(number)
         ts = issue.get("updated_at") or issue.get("created_at")
@@ -239,6 +310,9 @@ def _poll_opened_trigger(
     cursor: dict,
     inbox_dir: Path,
     bot_login: str = "",
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     since = cursor.get("opened_since") or cache._initial_since()
     seen = set(cursor.get("seen_opened_issue_numbers") or [])
@@ -246,6 +320,7 @@ def _poll_opened_trigger(
     latest_seen = _poll_opened_items(
         token, repo, since=since, seen=seen, etags=etags,
         inbox_dir=inbox_dir, trigger="opened", bot_login=bot_login,
+        allowlist=allowlist, permission_cache=permission_cache,
     )
     cursor["opened_since"] = latest_seen
     cursor["seen_opened_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
@@ -261,6 +336,9 @@ def _poll_mention_trigger(
     token_login: str,
     cursor: dict,
     inbox_dir: Path,
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     since = cursor.get("comments_since") or cache._initial_since()
     seen = set(cursor.get("seen_comment_ids") or [])
@@ -320,7 +398,10 @@ def _poll_mention_trigger(
                 pr_branch_cache[issue_number] = branch
                 meta["branch_target"] = branch
 
-        _create_github_event(token, inbox_dir, parse._format_event_body("", body), **meta)
+        _create_github_event(
+            token, inbox_dir, parse._format_event_body("", body),
+            allowlist=allowlist, permission_cache=permission_cache, **meta,
+        )
         seen.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
         if isinstance(ts, str) and ts > latest_seen:
@@ -331,6 +412,7 @@ def _poll_mention_trigger(
 
     _poll_mention_review_comments(
         token, repo, mention, token_login, cursor, inbox_dir, pr_branch_cache,
+        allowlist=allowlist, permission_cache=permission_cache,
     )
 
 
@@ -342,6 +424,9 @@ def _poll_mention_review_comments(
     cursor: dict,
     inbox_dir: Path,
     pr_branch_cache: dict[int, str],
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     """Poll inline PR review comments (diff line threads) for *mention*."""
     since = cursor.get("review_comments_since") or cache._initial_since()
@@ -406,7 +491,7 @@ def _poll_mention_review_comments(
 
         _create_github_event(
             token, inbox_dir, parse._format_review_comment_body(path, line, body),
-            **meta,
+            allowlist=allowlist, permission_cache=permission_cache, **meta,
         )
         seen.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
@@ -426,6 +511,7 @@ def _poll_mention_review_comments(
     _poll_mention_review_summaries(
         token, repo, mention, token_login, cursor, inbox_dir,
         comments, pr_branch_cache,
+        allowlist=allowlist, permission_cache=permission_cache,
     )
 
 
@@ -438,6 +524,9 @@ def _poll_mention_review_summaries(
     inbox_dir: Path,
     line_comments: list,
     pr_branch_cache: dict[int, str],
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     """Fetch parent reviews of seen line comments; emit pr-review events.
 
@@ -463,6 +552,7 @@ def _poll_mention_review_summaries(
         _emit_review_event_if_mentioned(
             token, repo, pr_number, review_id, mention, token_login,
             inbox_dir, pr_branch_cache, trigger="mention",
+            allowlist=allowlist, permission_cache=permission_cache,
         )
         seen.add(review_id)
 
@@ -480,6 +570,8 @@ def _emit_review_event_if_mentioned(
     pr_branch_cache: dict[int, str],
     *,
     trigger: str,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     """Fetch one PR review; emit a pr-review event when its summary mentions us.
 
@@ -519,7 +611,10 @@ def _emit_review_event_if_mentioned(
         pr_branch_cache[pr_number] = branch
         meta["branch_target"] = branch
 
-    _create_github_event(token, inbox_dir, parse._format_event_body("", body), **meta)
+    _create_github_event(
+        token, inbox_dir, parse._format_event_body("", body),
+        allowlist=allowlist, permission_cache=permission_cache, **meta,
+    )
 
 
 # ── any trigger ───────────────────────────────────────────────────
@@ -531,6 +626,9 @@ def _poll_any_activity(
     bot_login: str,
     cursor: dict,
     inbox_dir: Path,
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     """Poll all issues, PRs, and comments without filtering.
 
@@ -546,6 +644,7 @@ def _poll_any_activity(
     latest_seen = _poll_opened_items(
         token, repo, since=since, seen=seen, etags=etags,
         inbox_dir=inbox_dir, trigger="any",
+        allowlist=allowlist, permission_cache=permission_cache,
     )
 
     cursor["any_issues_since"] = latest_seen
@@ -602,7 +701,8 @@ def _poll_any_activity(
                 pr_branch_cache[issue_number] = branch
                 meta_c["branch_target"] = branch
         _create_github_event(
-            token, inbox_dir, parse._format_event_body("", body_text), **meta_c,
+            token, inbox_dir, parse._format_event_body("", body_text),
+            allowlist=allowlist, permission_cache=permission_cache, **meta_c,
         )
         seen_c.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
@@ -614,6 +714,7 @@ def _poll_any_activity(
 
     _poll_any_review_comments(
         token, repo, bot_login, cursor, inbox_dir, pr_branch_cache,
+        allowlist=allowlist, permission_cache=permission_cache,
     )
 
 
@@ -624,6 +725,9 @@ def _poll_any_review_comments(
     cursor: dict,
     inbox_dir: Path,
     pr_branch_cache: dict[int, str],
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
 ) -> None:
     since = cursor.get("any_review_comments_since") or cache._initial_since()
     seen = set(cursor.get("any_seen_review_comment_ids") or [])
@@ -684,7 +788,7 @@ def _poll_any_review_comments(
 
         _create_github_event(
             token, inbox_dir, parse._format_review_comment_body(path, line, body_text),
-            **meta,
+            allowlist=allowlist, permission_cache=permission_cache, **meta,
         )
         seen.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
