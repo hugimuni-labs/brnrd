@@ -39,7 +39,7 @@ reach when you are away from the terminal.
 | 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
 | 🔀 | **The model is a medium** | Pin Claude, Codex, or Gemini. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
-| 🏠 | **Local means local** | Checkout, shell, runner process, and normal execution stay on your machine. Managed gates relay messages and status — never your repo. |
+| 🏠 | **Local means local** | Checkout, shell, runner process, and execution stay on your machine. Managed gates relay messages and status; your source never leaves home. |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
 
@@ -150,36 +150,40 @@ isolate — none of them is a cage for a hostile agent (see [Trust & privacy](#-
 
 | Mode | What it isolates | Reach for it when |
 |---|---|---|
-| `host` | Nothing beyond your own shell — the same trust boundary as running the CLI yourself. | you trust the agent and want zero friction. This is the dogfooded default. |
-| `worktree` | A separate git worktree and branch; shares the filesystem and credentials. | you want runs kept off your working tree without container overhead. |
-| `docker` | Dependencies and network, over a bind-mounted repo. **Not** credential or containment isolation. | you want a clean toolchain or network control — framed as defense-in-depth, not a sandbox. |
+| `host` | Nothing beyond your own shell. Edits hit your working tree immediately. | you trust the agent and want zero friction — the dogfooded default. |
+| `worktree` | A separate worktree and branch, so your working tree stays clean. Shares your `.git`, credentials, network, and filesystem — **not a security boundary.** | you want runs off your working tree without container overhead. |
+| `docker` | Dependencies and network, and it narrows the agent's host-filesystem view to the repo plus mounted credential dirs. **Not** a credential or containment boundary: the repo is mounted read-write, your model/GitHub/SSH credentials cross in, and the network is on by default. | you want a clean toolchain or network control (`docker.network=none`) — defense-in-depth over a trusted agent, not a sandbox. |
 
-Semantics in depth: [Environments](src/brr/docs/envs.md) · scope work tracked in [#80](https://github.com/Gurio/brr/issues/80).
+Full isolation matrix: [SECURITY.md](SECURITY.md) · semantics: [Environments](src/brr/docs/envs.md) · scope tracked in [#80](https://github.com/Gurio/brr/issues/80).
 
 ## ✦ Trust & privacy
 
 No "military-grade" paragraph. brnrd runs coding agents that execute commands and
-edit files with the authority you grant them — so the honest posture is what
-matters:
+edit files with the authority you grant them — the runners are launched with their
+approval prompts bypassed, on purpose. So the honest posture *is* the product:
 
-- **`host` mode has the same trust boundary as launching the CLI yourself.** Docker
-  adds dependency and network isolation; it is *not* a containment boundary once you
-  mount credentials and a writable repo into it.
-- **Normal execution and repo contents stay local.** Remote messages travel through
-  the transport you choose; in managed mode they also transit brnrd.dev on the way to
-  your daemon. Use a self-hosted gate when that route is not appropriate.
+- **The agent has your authority.** `host` mode is the same trust boundary as
+  launching the CLI yourself. Any text brnrd ingests — an issue body, a PR comment, a
+  chat message — becomes instruction the agent may act on. Treat every gate you open
+  as a door into your shell.
+- **Gates authorize the channel, not the person.** A connected GitHub repo runs on
+  the *mention*, not the commenter ([#408](https://github.com/Gurio/brr/issues/408));
+  a bound chat runs on the *room*, not the sender
+  ([#409](https://github.com/Gurio/brr/issues/409)). Both are explicit release
+  blockers. Until they land: keep to private repos, and the managed one-to-one
+  Telegram path is the dogfooded, safe route — do not connect a public-repo gate or
+  trust a group chat.
+- **Local stays local — with one honest caveat.** Your checkout, `.git`, and run
+  execution never leave the machine. Remote messages travel through the transport you
+  choose (and, in managed mode, transit brnrd.dev on the way to your daemon). If you
+  run `brnrd connect`, the dashboard also mirrors *derived* knowledge — plans, the
+  decision ledger, run summaries, PR titles — to brnrd.dev; your source code does not.
 - **Never paste credentials into a task.** Configure them through the runner or gate.
 
-Two ingress gaps found in the release review are explicit blockers: GitHub triggers
-authorize the *mention syntax*, not the commenter
-([#408](https://github.com/Gurio/brr/issues/408)), and paired Telegram groups
-authorize the *chat*, not the sender
-([#409](https://github.com/Gurio/brr/issues/409)). Until they land, do not connect a
-public-repo GitHub gate or trust a paired group chat — the managed one-to-one
-Telegram path is the dogfooded route. The full security and privacy review is
-tracked under [#23](https://github.com/Gurio/brr/issues/23); the execution and
-environment contracts are inspectable in
-[the execution map](src/brr/docs/execution-map.md) and
+The full threat model, the per-gate authorization table, and the honest environment
+isolation matrix live in **[SECURITY.md](SECURITY.md)**. The review is tracked under
+[#23](https://github.com/Gurio/brr/issues/23); execution and environment contracts
+are inspectable in [the execution map](src/brr/docs/execution-map.md) and
 [environment guide](src/brr/docs/envs.md).
 
 ## ✦ Docs
