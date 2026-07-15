@@ -288,10 +288,10 @@ _PROSE_WAKE = "\n".join(bench._PROSE_CONTRACT_MARKERS)
 
 def test_probe_mount_attests_each_arm_from_the_wake():
     drift = bench.SCENARIOS["drift"]
-    mounted = _t(config={"boot.transcript": "true"}, prompt_texts=["kernel only"])
+    mounted = _t(config={"boot.mount": "true"}, prompt_texts=["kernel only"])
     assert bench.probe_mount(mounted, drift).passed
 
-    prose = _t(config={"boot.transcript": "false"}, prompt_texts=[_PROSE_WAKE])
+    prose = _t(config={"boot.mount": "false"}, prompt_texts=[_PROSE_WAKE])
     assert bench.probe_mount(prose, drift).passed
 
 
@@ -300,7 +300,7 @@ def test_probe_mount_voids_an_arm_whose_config_lied():
     a mounted boot, a wake that got the prose one anyway, and two arms
     reported as different when they were identical."""
     drift = bench.SCENARIOS["drift"]
-    lying = _t(config={"boot.transcript": "true"}, prompt_texts=[_PROSE_WAKE])
+    lying = _t(config={"boot.mount": "true"}, prompt_texts=[_PROSE_WAKE])
     result = bench.probe_mount(lying, drift)
     assert not result.passed
     assert "ARM VOID" in result.detail
@@ -308,7 +308,7 @@ def test_probe_mount_voids_an_arm_whose_config_lied():
 
 def test_probe_mount_refuses_to_guess_without_a_wake():
     drift = bench.SCENARIOS["drift"]
-    result = bench.probe_mount(_t(config={"boot.transcript": "true"}), drift)
+    result = bench.probe_mount(_t(config={"boot.mount": "true"}), drift)
     assert not result.passed
     assert "unverifiable" in result.detail
 
@@ -350,9 +350,9 @@ def test_cli_config_flag_carries_the_arm(monkeypatch):
     monkeypatch.setattr(bench, "run_scenario", fake_run)
     main([
         "bench", "run", "--scenario", "drift",
-        "--config", "boot.transcript=true", "--config", "runner.timeout_seconds=900",
+        "--config", "boot.mount=true", "--config", "runner.timeout_seconds=900",
     ])
-    assert seen["config"]["boot.transcript"] == "true"
+    assert seen["config"]["boot.mount"] == "true"
     assert seen["config"]["runner.timeout_seconds"] == "900"
 
 

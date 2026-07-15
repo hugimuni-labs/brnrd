@@ -130,7 +130,7 @@ class BootBody:
     tier: str | None = None    # e.g. ``"Tier 2 hooks installed"``
     mounted: bool = False
     """Whether this wake's contracts arrived as a **seeded transcript** rather than
-    prose (``boot.transcript``).
+    prose (``boot.mount``).
 
     Derived from the render — the set of blocks that actually left the prose — and
     never from the config key that asked for it.  A key is a *request*; the wake is
