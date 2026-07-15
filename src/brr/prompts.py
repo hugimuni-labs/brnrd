@@ -994,6 +994,19 @@ def _collect_preamble_contracts(
         authority=AUTHORITY_CONTRACT,
     ))
 
+    # register.md — a *worked example* of the register (weave.md is the rules;
+    # this is a being mid-wake, written in them). Resident path only: a bounded
+    # worker gets the register contract but not the personality exemplar, which
+    # is orientation for a light that has to sustain a whole run, not labour.
+    # Rides right after weave.md so a mounted wake reads the rule then the hand.
+    if not is_worker:
+        entries.append(_file_entry(
+            "register.md",
+            block_key="register",
+            label="Working register, worked example (register.md)",
+            authority=AUTHORITY_CONTRACT,
+        ))
+
     # daemon-substrate.md — daemon paths only
     if is_daemon:
         entries.append(_file_entry(
@@ -1543,6 +1556,9 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
     weave = read_prompt("weave.md", repo_root)
     if weave.strip():
         preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
+    register = read_prompt("register.md", repo_root)
+    if register.strip():
+        preamble = f"{preamble.rstrip()}\n\n{register.strip()}"
     return preamble
 
 
@@ -1561,7 +1577,15 @@ def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
     """
     key = "worker-preamble" if worker else "run-preamble"
     parts = [(key, read_prompt("worker.md" if worker else "run.md", repo_root))]
-    for name, k in (("weave.md", "weave"), ("daemon-substrate.md", "daemon-substrate")):
+    # Order mirrors read/authority: how you write (weave), you having written
+    # (register — resident only), then who drives (daemon-substrate). Kept in
+    # lockstep with :func:`_collect_preamble_contracts`, which registers the same
+    # blocks in the same order for the manifest and the mount.
+    riders = [("weave.md", "weave")]
+    if not worker:
+        riders.append(("register.md", "register"))
+    riders.append(("daemon-substrate.md", "daemon-substrate"))
+    for name, k in riders:
         text = read_prompt(name, repo_root)
         if text.strip():
             parts.append((k, text.strip()))
