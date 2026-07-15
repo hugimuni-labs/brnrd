@@ -2053,6 +2053,13 @@ def _run_worker(
         # contract it was never given.
         if cfg.get("hooks.next_move", False) and not task.meta.get("worker"):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
+            # Same arming, same control-arm discipline: the guard also escalates
+            # the two clean artifact obligations (card, task-classification)
+            # from format_delta's soft `inject` mention to a hard block. Both
+            # are pure fresh-file existence checks. The contested commit/SCM
+            # obligation is deliberately NOT armed here — it is surfaced softly
+            # by format_delta and awaits a product call before it blocks.
+            env["BRR_CLOSEOUT_OBLIGATIONS"] = "card,classification"
 
         if env_ctx.outbox_env:
             env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
