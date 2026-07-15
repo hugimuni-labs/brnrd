@@ -175,6 +175,106 @@ def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
     return totals
 
 
+# --- Substitution-reason capture (2026-07-16) --------------------------------
+# When a pinned run comes back served by a different Core, *which* model ran is
+# already attested (``modelUsage`` keys -> ``core_mismatch``). *Why* it switched
+# is not: the ``--output-format json`` envelope is mined for ``modelUsage`` and
+# then dropped, so any fallback/refusal signal it may carry is discarded before
+# anything reads it. These helpers preserve the suspect fields so the first real
+# substituted run reveals whether a reason is even reachable from the
+# subscription CLI (server-side fallback documents ``stop_reason: "refusal"``, a
+# ``fallback`` content block, and ``usage.iterations`` ``fallback_message``
+# entries — none of which we have ever captured, only because we never kept the
+# envelope). Defensive on purpose: the exact shape the CLI emits is unknown, so
+# we always record the envelope's top-level key names as schema forensics.
+_REASON_ENVELOPE_KEYS = ("stop_reason", "stop_details", "subtype", "is_error")
+# Terminal reasons that describe a *normal* completion, not a substitution.
+# A successful server-side fallback answers with ``end_turn``; only a
+# non-benign ``stop_reason`` (e.g. ``refusal``) is worth surfacing as a reason.
+_BENIGN_STOP_REASONS = frozenset(
+    {"end_turn", "max_tokens", "stop_sequence", "tool_use"}
+)
+
+
+def fallback_signals(payload: Any) -> dict[str, Any] | None:
+    """Capture substitution/fallback signals from a Claude result envelope.
+
+    Returns ``None`` only when *payload* is not a dict; otherwise always
+    returns at least ``envelope_keys`` so a substituted run shows exactly what
+    the CLI does and does not carry. Known-suspect scalar fields, any
+    ``fallback`` content blocks, and per-attempt ``usage.iterations`` models are
+    added when present.
+    """
+    if not isinstance(payload, dict):
+        return None
+    signals: dict[str, Any] = {
+        "envelope_keys": sorted(k for k in payload if isinstance(k, str)),
+    }
+    for key in _REASON_ENVELOPE_KEYS:
+        value = payload.get(key)
+        if value is not None:
+            signals[key] = value
+    content = payload.get("content")
+    if isinstance(content, list):
+        blocks = [
+            block
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "fallback"
+        ]
+        if blocks:
+            signals["fallback_blocks"] = blocks
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        iterations = usage.get("iterations")
+        if isinstance(iterations, list) and iterations:
+            signals["iterations"] = [
+                {
+                    "type": item.get("type") if isinstance(item, dict) else None,
+                    "model": item.get("model") if isinstance(item, dict) else None,
+                }
+                for item in iterations
+            ]
+    return signals
+
+
+def substitution_reason(levels: dict[str, Any] | None) -> str | None:
+    """Compact, ledger-ready summary of *why* a Core substitution happened.
+
+    Reads the ``fallback_signals`` a levels snapshot captured and renders a
+    short string, or ``None`` when no substitution signal is present. This is
+    the reason that rides next to ``core_mismatch`` in the run ledger. The bare
+    ``envelope_keys`` forensics alone are not a reason and never render here.
+    """
+    if not isinstance(levels, dict):
+        return None
+    signals = levels.get("fallback_signals")
+    if not isinstance(signals, dict):
+        return None
+    parts: list[str] = []
+    stop_reason = signals.get("stop_reason")
+    if stop_reason and str(stop_reason) not in _BENIGN_STOP_REASONS:
+        parts.append(f"stop_reason={stop_reason}")
+    details = signals.get("stop_details")
+    if isinstance(details, dict) and details.get("category"):
+        parts.append(f"category={details['category']}")
+    blocks = signals.get("fallback_blocks")
+    if isinstance(blocks, list) and blocks:
+        last = blocks[-1]
+        target = last.get("to") if isinstance(last, dict) else None
+        served = target.get("model") if isinstance(target, dict) else None
+        parts.append(f"fallback->{served}" if served else "fallback_block")
+    iterations = signals.get("iterations")
+    if isinstance(iterations, list):
+        served = [
+            str(item.get("model"))
+            for item in iterations
+            if isinstance(item, dict) and item.get("type") == "fallback_message"
+        ]
+        if served:
+            parts.append("fallback_message:" + ",".join(served))
+    return ";".join(parts) if parts else None
+
+
 def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize Claude ``--output-format json`` into a levels snapshot."""
     payload = payload if isinstance(payload, dict) else {}
@@ -205,6 +305,10 @@ def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
     model_ids = _model_usage_ids(payload.get("modelUsage"))
     if model_ids:
         levels["model_ids"] = model_ids
+
+    signals = fallback_signals(payload)
+    if signals:
+        levels["fallback_signals"] = signals
 
     return levels
 
