@@ -19,6 +19,7 @@ from . import claude_usage
 from . import codex_status
 from . import gitops
 from . import relics
+from . import runner_select
 from .run import Run
 
 LEDGER_NAME = "run-ledger.jsonl"
@@ -160,9 +161,16 @@ def build_closed_run_row(
     # and the observation disagree — the reliable "did this run respect the
     # pinned core" signal, so a shadowed/misrouted config can never again go
     # silent for days.
-    expected_core = _str_or_none(task.meta.get("runner_core"))
-    resolved_core = claude_status.resolved_model_id(after_levels)
+    expected_core = (
+        _str_or_none(task.meta.get("core_requested"))
+        or _str_or_none(task.meta.get("runner_core"))
+    )
+    resolved_core = (
+        _str_or_none(task.meta.get("core_observed"))
+        or claude_status.resolved_model_id(after_levels)
+    )
     if resolved_core:
+        task.meta["core_observed"] = resolved_core
         task.meta["runner_core"] = resolved_core
     mismatch = core_mismatch(expected_core, resolved_core)
     if mismatch:
@@ -249,15 +257,7 @@ def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
     directions so a date-suffixed concrete id (``claude-haiku-4-5-20251001``)
     matches its shorter catalog pin and vice versa.
     """
-    expected = (expected or "").strip().lower()
-    observed = (observed or "").strip().lower()
-    if not expected or expected == "default" or not observed:
-        return None
-    for oid in observed.split("+"):
-        oid = oid.strip()
-        if oid and (oid == expected or oid.startswith(expected) or expected.startswith(oid)):
-            return False
-    return True
+    return runner_select.core_mismatch(expected, observed)
 
 
 def ledger_path(repo_root: Path) -> Path:

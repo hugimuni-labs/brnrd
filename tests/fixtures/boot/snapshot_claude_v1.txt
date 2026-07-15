@@ -4,7 +4,7 @@
 # DO NOT EDIT BY HAND — regeneration is the only sanctioned path.
 
 brnrd boot · score v1 · depth compact
-body: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
+body requested: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
 host: daemon · worktree · resident-owned
 continuity: ✗ first wake
 attention: evt-fixture-0001
@@ -487,7 +487,7 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Stage: brnrd daemon run
 - Source: spawn
 - Environment: worktree
-- Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core this thought runs in. A failure here (quota exhausted, provider error) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
+- Requested Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
 - Quota: session 72% left (resets 10:30pm); week 57% left
 - Delivery: situational outputs captured by brr (see Delivery contract below)
 - Budget: ~120m of wall-clock runtime before brr kills this thought to reclaim the single-flight slot. Bound uncertain long-running commands yourself (own timeout, or background + poll); extend the deadline if you genuinely need longer (see Delivery contract).
@@ -546,7 +546,7 @@ hooks:
 source manifest:
     block                                           owner        authority      bytes  location / freshness
   ---------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                daemon-live  runtime          662  computed
+  ✓ Boot kernel (action-first score)                daemon-live  runtime          672  computed
   ✓ Operational preamble (run.md)                   product      contract       5,906  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,572  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,732  {PACKAGE_ROOT}/prompts/register.md  [mtime]
@@ -562,17 +562,17 @@ source manifest:
   · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,285  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,365  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,210 B  43.7%
+  contract       13,210 B  43.5%
   substrate       7,631 B  25.2%
   identity        5,449 B  18.0%
-  runtime         3,947 B  13.0%
+  runtime         4,037 B  13.3%
   unattributed       12 B
-  wake total     30,249 B
+  wake total     30,339 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

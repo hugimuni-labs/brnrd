@@ -21,9 +21,9 @@ from _helpers import (
 
 
 def _patch_runner(monkeypatch):
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda root, _overrides=None: daemon.runner.runner_profile("codex", root))
     monkeypatch.setattr(
-        daemon.runner, "fallback_runner",
+        daemon.runner, "fallback_runner_profile",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
@@ -309,9 +309,10 @@ def test_operational_failure_falls_back_to_next_runner(tmp_path, monkeypatch):
                         telegram_chat_id=42)
     _patch_runner(monkeypatch)
     monkeypatch.setattr(
-        daemon.runner, "fallback_runner",
+        daemon.runner, "fallback_runner_profile",
         lambda _repo, _current, kind, *, tried=(): (
-            "claude" if kind == "quota_exhausted" else None
+            daemon.runner.runner_profile("claude", _repo)
+            if kind == "quota_exhausted" else None
         ),
     )
 

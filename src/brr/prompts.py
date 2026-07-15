@@ -1965,10 +1965,11 @@ def _build_run_context_bundle(
         sections.append(environment_line)
     if runner_medium:
         sections.append(
-            f"- Runner: {runner_medium} — the Shell+Core this thought runs "
-            "in. A failure here (quota exhausted, provider error) ⇒ the user "
-            "pays a manual reroute, so chunk work and commit early when the "
-            "budget is tight."
+            f"- Requested Runner: {runner_medium} — the Shell+Core selected "
+            "for this thought; the actual Core is attested from the Shell "
+            "result. A failure here (quota exhausted, provider error, "
+            "substitution) ⇒ the user pays a manual reroute, so chunk work "
+            "and commit early when the budget is tight."
         )
         if runner_quota:
             sections.append(f"- Quota: {runner_quota}")
