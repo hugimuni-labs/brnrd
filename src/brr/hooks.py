@@ -36,6 +36,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -110,6 +111,15 @@ class HookContext:
             for part in raw_obligations.split(",")
             if part.strip()
         )
+        # Repo checkout + seed ref, for the `scm` closeout obligation to read
+        # git *fresh at Stop* rather than trust the heartbeat snapshot (which
+        # can predate a commit made in the run's final action). Armed by the
+        # daemon only for the `host` environment — the one that does NOT
+        # publish the end branch, so uncommitted / unpushed work is genuinely
+        # lost. In a worktree the daemon publishes, and this stays unset.
+        repo = env.get("BRR_REPO_DIR")
+        self.repo_dir = Path(repo) if repo else None
+        self.seed_ref = (env.get("BRR_SEED_REF") or "").strip() or None
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         outbox = env.get("BRR_OUTBOX_DIR")
@@ -449,6 +459,127 @@ def _closeout_artifact_written(ctx: "HookContext", filename: str) -> bool:
         return False
 
 
+def _git_out(repo: Path, args: list[str], timeout: int = 10) -> str | None:
+    """Read-only ``git`` call in *repo*; ``None`` on any failure.
+
+    Best-effort like every other closeout reader: a missing repo, an unknown
+    ref, or a timeout degrades to "unassertable", never a crash or a false
+    block.
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo, capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _scm_pr_number(outbox_dir: Path | None) -> str | None:
+    """The PR number from the ``.pr`` control file, or ``None`` — same
+    tolerant parse as ``relics._read_pr_control`` / ``daemon._read_pr_control``,
+    re-implemented locally to keep ``hooks`` import-cycle-free."""
+    if outbox_dir is None:
+        return None
+    try:
+        text = (outbox_dir / ".pr").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    match = re.search(r"(\d+)\s*$", text)
+    return match.group(1) if match else None
+
+
+def _scm_closeout_clause(ctx: "HookContext") -> str | None:
+    """The `scm` closeout obligation: a work-loss block, read fresh at Stop.
+
+    Armed only on the ``host`` environment (the daemon sets ``BRR_REPO_DIR``),
+    where nothing publishes the end branch for the resident. Blocks on the two
+    states that are both *artifact-provable at Stop* and *lose work if the run
+    ends now*:
+
+    - **uncommitted** modified files — a host checkout publishes nothing you
+      don't commit; and
+    - **unpushed** commits — committed but stranded on the machine, since host
+      finalization is a no-op.
+
+    The clause carries the full receipt the maintainer asked for — ``N
+    commit(s) +x/−y on <branch>``, plus ``PR #n`` when a ``.pr`` handle exists
+    — so the block hands back produce, not a scold.
+
+    **Deliberately NOT blocked: "committed + pushed but no PR".** The legitimate
+    PR handoff on a host run is a ``gate: forge`` outbox file the daemon drains
+    into a PR *after the runner returns* — a post-Stop action with no artifact
+    the Stop hook can read without false-blocking every correct handoff. So a
+    missing PR on an already-pushed branch is not work-loss (the branch is on
+    the remote, linkable) and stays out of the hard block by design. (The
+    reasoning, and the durable-marker path that would make it assertable, live
+    in ``kb/design-closeout-guard.md``.)
+    """
+    repo = ctx.repo_dir
+    if repo is None or not repo.exists():
+        return None
+    status = _git_out(repo, ["status", "--porcelain"])
+    if status is None:
+        # Not a git repo / unreadable → the obligation is unassertable. Silent,
+        # never a nag on a proxy — the guard doctrine this whole module keeps.
+        return None
+    modified = sum(1 for line in status.splitlines() if line.strip())
+
+    branch = (_git_out(repo, ["rev-parse", "--abbrev-ref", "HEAD"]) or "").strip() or "-"
+
+    # Commits on this branch beyond the seed ref, and their diffstat — the
+    # receipt body. merge-base handles a seed that has since moved on.
+    seed = ctx.seed_ref or "HEAD"
+    base = seed
+    merge_base = _git_out(repo, ["merge-base", seed, "HEAD"])
+    if merge_base and merge_base.strip():
+        base = merge_base.strip()
+    commits = 0
+    count = _git_out(repo, ["rev-list", "--count", f"{base}..HEAD"])
+    if count and count.strip().isdigit():
+        commits = int(count.strip())
+    insertions = deletions = 0
+    if commits:
+        numstat = _git_out(repo, ["diff", "--numstat", f"{base}..HEAD"])
+        if numstat:
+            for row in numstat.splitlines():
+                parts = row.split("\t")
+                if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                    insertions += int(parts[0])
+                    deletions += int(parts[1])
+
+    # Unpushed: commits ahead of the branch's upstream. No upstream on a
+    # freshly-branched host run ⇒ every commit-beyond-seed is unpushed.
+    unpushed = commits
+    ahead = _git_out(repo, ["rev-list", "--count", "@{upstream}..HEAD"])
+    if ahead is not None and ahead.strip().isdigit():
+        unpushed = int(ahead.strip())
+
+    if modified == 0 and unpushed == 0:
+        return None  # committed and pushed — nothing lost, stay silent
+
+    pr = _scm_pr_number(ctx.outbox_dir)
+    receipt = ""
+    if commits:
+        receipt = f"{commits} commit(s) +{insertions}/−{deletions} on {branch}"
+        if pr:
+            receipt += f", PR #{pr}"
+    gaps: list[str] = []
+    if unpushed:
+        gaps.append(f"{unpushed} not pushed")
+    if modified:
+        gaps.append(f"{modified} file(s) uncommitted")
+    detail = "; ".join(p for p in (receipt, ", ".join(gaps)) if p)
+    return (
+        f"the work isn't landed — {detail}. A host checkout publishes nothing "
+        "on its own; commit, push, and hand off the branch (`gate: forge`) "
+        "before ending"
+    )
+
+
 def _render_closeout_capsule(unmet: list[str]) -> str:
     """One differential capsule naming every unmet obligation — the closeout
     twin of the SessionStart capsule, listing what is still open rather than
@@ -514,6 +645,14 @@ def _armed_closeout_block(
             filename, clause = _CLOSEOUT_ARTIFACTS[name]
             if not _closeout_artifact_written(ctx, filename):
                 unmet.append(clause)
+
+    # SCM is not a file-existence check but a fresh-git computation, so it
+    # lives outside the artifact loop. Last in the capsule: the reply-shape and
+    # the control files come first, the land-the-work imperative closes it.
+    if "scm" in ctx.closeout_obligations:
+        scm_clause = _scm_closeout_clause(ctx)
+        if scm_clause:
+            unmet.append(scm_clause)
 
     if not unmet:
         return None
