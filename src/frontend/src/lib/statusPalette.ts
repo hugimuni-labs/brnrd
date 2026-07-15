@@ -61,15 +61,36 @@ export function statusDotStyle(level: StatusLevel, color: string): string {
 	return `background-color: ${color}; box-shadow: 0 0 4px 1px ${color}90;`;
 }
 
+/** Blend a hex color toward white by `ratio` (0 = unchanged, 1 = pure
+ * white). Used so the bar's outer glow can read brighter/whiter than the
+ * fill itself (maintainer ask, 2026-07-15: "the glow looks right now, could
+ * you please make it brighter/whiter?") without touching the fill color —
+ * the fill still carries the level's own hue (amber/frost/ash), so low
+ * quota still reads as concerning; only the halo around it whitens. */
+function glowTint(hex: string, ratio: number): string {
+	const n = parseInt(hex.slice(1), 16);
+	const r = (n >> 16) & 0xff;
+	const g = (n >> 8) & 0xff;
+	const b = n & 0xff;
+	const mix = (c: number) => Math.round(c + (255 - c) * ratio);
+	return `#${[mix(r), mix(g), mix(b)].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** Style for the draining quota/credits track's fill. `critical` reads as a
  * dark void body with a bright rim right at the fill's leading edge — the
  * same disk-in-negative grammar as the dot, stretched along a bar instead of
- * a circle — rather than a flat critical-colored block. */
+ * a circle — rather than a flat critical-colored block.
+ *
+ * The outer-glow halo uses `glowTint`, not the raw level color: whitening
+ * just the glow (not the fill, not the empty track) reads as "brighter" per
+ * the maintainer's ask while keeping the dark-empty-track / colored-fill
+ * semantics — and the critical void's ash rim — intact. */
 export function statusBarStyle(level: StatusLevel, color: string): string {
+	const glow = glowTint(color, 0.55);
 	if (level === 'critical') {
-		return `background: linear-gradient(to right, #0c0906 0%, #0c0906 82%, ${color} 100%); box-shadow: 0 0 8px 0 ${color}b0, inset 0 0 3px 0 rgba(0, 0, 0, 0.6);`;
+		return `background: linear-gradient(to right, #0c0906 0%, #0c0906 82%, ${color} 100%); box-shadow: 0 0 11px 1px ${glow}cc, inset 0 0 3px 0 rgba(0, 0, 0, 0.6);`;
 	}
-	return `background-color: ${color}; box-shadow: 0 0 6px 0 ${color}b0, inset 0 0 3px 0 rgba(255, 255, 255, 0.25);`;
+	return `background-color: ${color}; box-shadow: 0 0 9px 1px ${glow}cc, inset 0 0 3px 0 rgba(255, 255, 255, 0.25);`;
 }
 
 export const STATUS_GOOD = '#e8b34a';
