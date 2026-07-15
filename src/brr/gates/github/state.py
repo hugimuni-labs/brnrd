@@ -3,6 +3,10 @@
 State lives at ``.brr/gates/github.json``. The token resolver picks
 the first available of: stored token (operator paste), ``gh auth
 token`` shell-out, ``GITHUB_TOKEN`` / ``GH_TOKEN`` env.
+
+The top-level ``allowlist`` key (list of logins) feeds the
+authorization gate (#408): logins on it bypass the collaborator-
+permission check with no network call. See ``polling._is_authorized``.
 """
 
 from __future__ import annotations
@@ -71,6 +75,21 @@ def resolve_token(state: dict) -> str | None:
     if isinstance(stored, str) and stored.strip():
         return stored.strip()
     return _gh_cli_token() or _env_token()
+
+
+def allowlist(state: dict) -> frozenset[str]:
+    """Case-insensitive login allowlist for the authorization gate (#408).
+
+    Read from state key ``allowlist`` (list of logins), normalized to
+    lowercase. Logins here are treated as authorized without a
+    collaborator-permission API call.
+    """
+    raw = state.get("allowlist")
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(
+        str(login).strip().casefold() for login in raw if str(login).strip()
+    )
 
 
 def _validate_token(token: str) -> str:
