@@ -719,7 +719,11 @@ class DockerEnv(WorktreeEnv):
             containers.append(container_name)
         ctx.env_state["docker_container"] = container_name
 
-        inner_cmd = runner._build_cmd(runner_name, invocation.prompt, cfg)
+        inner_cmd = runner._build_cmd(
+            invocation.selected_runner or runner_name,
+            invocation.prompt,
+            cfg,
+        )
         command = [
             "docker", "run",
             "--name", container_name,
@@ -813,11 +817,24 @@ class DockerEnv(WorktreeEnv):
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
-        stdout = runner._process_runner_stdout(
+        stdout, observed_core = runner._process_runner_stdout(
             runner_name, stdout, invocation.env
         )
+        from .. import runner_select
+        mismatch = runner_select.core_mismatch(
+            invocation.expected_core, observed_core,
+        )
+        if mismatch:
+            attestation_error = (
+                "Core attestation failed: requested "
+                f"{invocation.expected_core!r}, Shell observed {observed_core!r}"
+            )
+            stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + attestation_error
 
-        if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+        if (
+            invocation.response_path and returncode == 0 and mismatch is not True
+            and stdout and stdout.strip()
+        ):
             runner._write_response_file(invocation.response_path, stdout)
 
         result = runner.RunnerResult(
@@ -829,6 +846,8 @@ class DockerEnv(WorktreeEnv):
             returncode=returncode,
             trace_dir=None,
             artifacts=[],
+            observed_core=observed_core,
+            core_mismatch=mismatch,
         )
         if trace:
             result.trace_dir = runner._write_trace(result)
