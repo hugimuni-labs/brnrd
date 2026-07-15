@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--config", action="append", default=[], metavar="KEY=VALUE",
                    help="extra .brr/config line for the sandbox (repeatable) — "
                         "this is how an A/B arm is expressed, e.g. "
-                        "--config boot.transcript=true")
+                        "--config boot.mount=true")
     p.set_defaults(func=cmd_bench_run)
 
     args = parser.parse_args(argv)

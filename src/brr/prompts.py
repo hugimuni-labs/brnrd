@@ -707,7 +707,7 @@ def _build_injected_blocks_with_contracts(
     prompts show`` can report the full picture.
 
     The keys are not decoration.  A caller that mounts some blocks as a resumed
-    transcript (``boot.transcript``) must take exactly those blocks *out of the
+    transcript (``boot.mount``) must take exactly those blocks *out of the
     prose*, or the wake pays for them twice and the T-vs-P experiment measures
     nothing.  An unkeyed ``list[str]`` made that subtraction impossible to state;
     a keyed one makes it a dict lookup.
@@ -1827,7 +1827,7 @@ def build_daemon_prompt(
         hooks_installed=hooks_installed,
         # Derived from the *render*: `_mountable` is exactly the set of blocks
         # about to be subtracted from this prose and seeded as perceptions. Not
-        # `cfg["boot.transcript"]` — a config key is a request, and the request can
+        # `cfg["boot.mount"]` — a config key is a request, and the request can
         # be refused (Shell has no renderer, nothing to seed). When the mount fails,
         # the daemon rebuilds this whole prompt with no sink, `_mountable` is empty,
         # and the kernel silently tells the truth again.
