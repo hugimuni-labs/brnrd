@@ -276,9 +276,9 @@ protocol contract lives in `kb/design-multi-response.md`; the liveness
 contract in `kb/review-daemon-coherence-2026-06.md` §2.
 
 The resident may also **compose what its live progress card says** by
-writing a `.card` control dotfile in the same outbox directory. The
-daemon drains it on each heartbeat (and once more after the runner
-returns), emits a `card_composed` packet only when the content has
+writing a `.card` control dotfile in the same outbox directory. Tier-2
+boundaries synchronously request promotion; heartbeat and post-return recovery
+cover Tier-0/1. A `card_composed` packet emits only when the content has
 changed, and the renderer surfaces the text as a `note: …` tail line
 under the live phase. Rewrite the file to update; empty or delete it
 to withdraw. The daemon stays the renderer (header, sync line,
