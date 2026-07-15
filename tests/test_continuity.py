@@ -51,7 +51,9 @@ def test_body_provenance_renders_on_the_body_line() -> None:
             provenance="requested from the dashboard spool rack",
         ),
     )
-    body_line = next(ln for ln in out.splitlines() if ln.startswith("body:"))
+    body_line = next(
+        ln for ln in out.splitlines() if ln.startswith("body requested:")
+    )
     assert "requested from the dashboard spool rack" in body_line
 
 
