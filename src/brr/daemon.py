@@ -2056,10 +2056,22 @@ def _run_worker(
             # Same arming, same control-arm discipline: the guard also escalates
             # the two clean artifact obligations (card, task-classification)
             # from format_delta's soft `inject` mention to a hard block. Both
-            # are pure fresh-file existence checks. The contested commit/SCM
-            # obligation is deliberately NOT armed here — it is surfaced softly
-            # by format_delta and awaits a product call before it blocks.
-            env["BRR_CLOSEOUT_OBLIGATIONS"] = "card,classification"
+            # are pure fresh-file existence checks.
+            obligations = ["card", "classification"]
+            # The SCM obligation, now armed (product call made 2026-07-15). It
+            # is NOT a file check but a fresh-git read at Stop, so the hook needs
+            # the checkout + seed ref. Armed only for `host`: that is the one
+            # environment where finalization does not publish the end branch, so
+            # uncommitted / unpushed work is genuinely lost. In a worktree the
+            # daemon publishes, so the same block would nag about work that will
+            # leave the machine on its own. (Missing-PR is deliberately NOT part
+            # of this block — see `hooks._scm_closeout_clause`.)
+            if task.env == "host":
+                obligations.append("scm")
+                env["BRR_REPO_DIR"] = str(run_root)
+                if env_ctx.branch_plan is not None:
+                    env["BRR_SEED_REF"] = env_ctx.branch_plan.seed_ref
+            env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
         if env_ctx.outbox_env:
             env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
@@ -2176,7 +2188,7 @@ def _run_worker(
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
 
-        # ── Boot as a transcript (`boot.transcript`, default ON) ──────────────
+        # ── Boot mount (`boot.mount`, default ON) ────────────────────────
         # On: the file-backed contracts leave the prose and are seeded as `Read`
         # calls and their results in a session the Shell resumes — the same bytes,
         # in tool-result position, fenced by `transcript.SNAPSHOT_SEAM`.
@@ -2202,9 +2214,9 @@ def _run_worker(
         # checkout — is unrecoverable in a way its cost is not.
         #
         # The flag survives, and it is not vestigial: it is the control arm. Every
-        # future claim about the boot is measured against `boot.transcript=false`,
+        # future claim about the boot is measured against `boot.mount=false`,
         # which is also why the prose path must keep working, byte for byte.
-        boot_mount = bool(cfg.get("boot.transcript", True))
+        boot_mount = bool(cfg.get("boot.mount", True))
         mount_shell = str(task.meta.get("runner_shell") or "")
         mount_sink: dict[str, str] | None = (
             {} if boot_mount and mount_shell in transcript.MOUNTED_SHELLS else None
