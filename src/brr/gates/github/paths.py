@@ -68,3 +68,12 @@ def pull_comment_replies(repo: str, pr_number: int, comment_id: int) -> str:
     """``POST /repos/{repo}/pulls/{pr}/comments/{cid}/replies`` — reply
     to an inline review comment in-thread."""
     return f"/repos/{repo}/pulls/{pr_number}/comments/{comment_id}/replies"
+
+
+def collaborator_permission(repo: str, username: str) -> str:
+    """``GET /repos/{repo}/collaborators/{username}/permission`` — the
+    permission level (``admin``/``write``/``maintain``/``read``/``none``)
+    *username* holds on the repo. Used by the authorization gate (#408)
+    to decide whether a non-member's GitHub activity may enqueue an
+    autonomous run."""
+    return f"/repos/{repo}/collaborators/{username}/permission"
