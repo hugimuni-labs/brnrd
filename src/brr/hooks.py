@@ -56,6 +56,32 @@ FLUSH_SIGNAL_NAME = ".flush"
 # a loop). Daemon-independent; the hook owns this file.
 HOOK_STATE_NAME = ".hook-state.json"
 
+# Closeout artifact obligations the armed guard can escalate from the soft
+# `inject` mention (see `format_delta`, which already surfaces a missing
+# `.task-classification` / stale card / unpushed SCM as additionalContext)
+# to a hard `block`. Each maps to a control file the resident owes by
+# closeout. The check reads the *file*, fresh, at Stop — never the
+# heartbeat portal snapshot, which can predate a control file written in the
+# run's final action. That is the same "assert only from THE artifact"
+# doctrine the next-move guard keeps, and why escalation lives here rather
+# than promoting the portal-derived `inject` lines in place.
+CARD_NAME = ".card"
+TASK_CLASSIFICATION_NAME = ".task-classification"
+_CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
+_CLOSEOUT_ARTIFACTS = {
+    "card": (
+        CARD_NAME,
+        "no `.card` was written — put one line on the progress surface the "
+        "user watches between replies",
+    ),
+    "classification": (
+        TASK_CLASSIFICATION_NAME,
+        "no `.task-classification` was written — add the one-slug run shape "
+        "(its run_ledger row joins the cost rollup on that field and stays "
+        "null without it)",
+    ),
+}
+
 
 # ── Context resolution ──────────────────────────────────────────────────
 
@@ -75,6 +101,15 @@ class HookContext:
         self.next_move_guard = (
             env.get("BRR_NEXT_MOVE_GUARD") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        # The artifact obligations the closeout guard escalates to a block,
+        # armed per-run by the daemon (`BRR_CLOSEOUT_OBLIGATIONS=card,...`).
+        # Empty unless armed — same control-arm discipline as next_move_guard.
+        raw_obligations = (env.get("BRR_CLOSEOUT_OBLIGATIONS") or "").strip()
+        self.closeout_obligations = frozenset(
+            part.strip().lower()
+            for part in raw_obligations.split(",")
+            if part.strip()
+        )
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         outbox = env.get("BRR_OUTBOX_DIR")
@@ -397,52 +432,94 @@ def closeout_state(reply: str) -> str | None:
     return None
 
 
-def _armed_next_move_block(
+def _closeout_artifact_written(ctx: "HookContext", filename: str) -> bool:
+    """True if control file *filename* exists with non-whitespace content.
+
+    Read fresh from disk at Stop, not from the heartbeat portal snapshot — a
+    file written in the run's final action must count. When the run has no
+    outbox dir to check (ad-hoc / editor sessions), the obligation is
+    unassertable, so it reads as satisfied: silent without the artifact, never
+    a nag on a proxy.
+    """
+    if ctx.outbox_dir is None:
+        return True
+    try:
+        return (ctx.outbox_dir / filename).read_text(encoding="utf-8").strip() != ""
+    except OSError:
+        return False
+
+
+def _render_closeout_capsule(unmet: list[str]) -> str:
+    """One differential capsule naming every unmet obligation — the closeout
+    twin of the SessionStart capsule, listing what is still open rather than
+    restating what is always true."""
+    if len(unmet) == 1:
+        return f"Before this run ends: {unmet[0]}. Then stop — don't restate the reply."
+    body = "\n".join(f"- {u}" for u in unmet)
+    return (
+        "Before this run ends, the closeout is unfinished:\n"
+        f"{body}\n"
+        "Address each, then stop — don't restate the reply."
+    )
+
+
+def _armed_closeout_block(
     ctx: "HookContext", payload: dict[str, Any], state: dict[str, Any]
 ) -> str | None:
-    """The closeout guard: block a reply that ends on nothing, once.
+    """The closeout guard: block once when Stop is reached with a named
+    obligation still unmet, listing every unmet one in a single capsule.
 
-    **Why this is a hook and not a sentence in the prompt.** The closeout contract
-    is stated plainly in ``daemon-substrate.md`` and a weak core ignored it in
-    *every arm of every round* of the drift bench — mounted and prose alike, 0/6.
-    Position could not fix it, because position was never the problem: the contract
-    is read at wake and spent 60 turns later, at the one moment the model is busy
-    ending. The playbook's own escalation ladder has a rung for exactly this — a
-    contract prose cannot keep goes to *code that cannot fail silently* — and this
-    is that rung.
+    **Why this is a hook and not a sentence in the prompt.** The closeout
+    contract is stated plainly in ``daemon-substrate.md`` and a weak core
+    ignored it in *every arm of every round* of the drift bench — mounted and
+    prose alike, 0/6. Position could not fix it, because position was never the
+    problem: the contract is read at wake and spent 60 turns later, at the one
+    moment the model is busy ending. This is the playbook's escalation rung — a
+    contract prose cannot keep goes to *code that cannot fail silently* — and it
+    is the point-of-use answer to "make the final obligation dead simple": the
+    weak core no longer carries N obligations across 60 turns, it answers one
+    imperative delivered the instant a miss is checkable.
 
-    **It obeys the guard doctrine: assert only what the run can be proven wrong
-    about, from the artifact.** ``last_assistant_message`` *is* the reply. If the
-    Shell does not hand one over (codex today), the guard does not fire — an
-    unarmed guard is honest; a guard that nags on a proxy it could not read is the
-    bug class this repo has spent the week killing.
+    **Every obligation obeys the guard doctrine: assert only what an artifact
+    proves.** next-move reads the reply (``last_assistant_message``); the file
+    obligations read their control file fresh. An obligation whose artifact
+    cannot be read is silent — never a nag on a proxy, the bug class this repo
+    spent the week killing.
 
-    Fires at most once per run: a second block on a reply the resident has already
-    been asked to fix would be a loop, and #282 is the standing scar for hooks that
-    re-fire into a run with nothing left to do.
+    Fires at most once per run (``closeout_blocked``): a second block on a run
+    already asked to fix its closeout is the #282 loop. So the unmet set is
+    gathered into one message, not chained across Stop fires.
     """
-    if not ctx.next_move_guard:
-        return None
-    if state.get("next_move_blocked"):
+    if state.get("closeout_blocked"):
         return None
     # The Shell's own loop-breaker. If a stop hook already blocked this turn,
     # never stack another.
     if payload.get("stop_hook_active"):
         return None
-    reply = payload.get("last_assistant_message")
-    if not isinstance(reply, str) or not reply.strip():
-        return None  # no artifact → no assertion.
-    if closeout_state(reply) is not None:
+
+    unmet: list[str] = []
+
+    if ctx.next_move_guard:
+        reply = payload.get("last_assistant_message")
+        # Assertable only when the Shell handed the reply over (codex: none).
+        if isinstance(reply, str) and reply.strip() and closeout_state(reply) is None:
+            unmet.append(
+                "your reply ends on nothing — close with where the loop stands "
+                "(`done — <receipt>`, `continuing — <next>`, `blocked — "
+                "<needed>`, or a 2-4 option fork + your recommendation, last)"
+            )
+
+    for name in _CLOSEOUT_ARTIFACT_ORDER:
+        if name in ctx.closeout_obligations:
+            filename, clause = _CLOSEOUT_ARTIFACTS[name]
+            if not _closeout_artifact_written(ctx, filename):
+                unmet.append(clause)
+
+    if not unmet:
         return None
 
-    state["next_move_blocked"] = True
-    return (
-        "Your reply ends on nothing. An addressed reply ends with where the loop "
-        "stands — `done — <receipt>`, `continuing — <what's next>`, `blocked — "
-        "<what's needed>`, or a genuine fork (2-4 numbered options + your "
-        "recommendation, last). Add that closing line and end; do not restate the "
-        "reply."
-    )
+    state["closeout_blocked"] = True
+    return _render_closeout_capsule(unmet)
 
 
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
@@ -566,7 +643,7 @@ def compute_neutral(
         # anyway. Only when nothing is pending does "how does this reply end"
         # become the last question of the run.
         if not block:
-            reason = _armed_next_move_block(ctx, payload, state)
+            reason = _armed_closeout_block(ctx, payload, state)
             if reason is not None:
                 block = True
                 block_reason = reason
