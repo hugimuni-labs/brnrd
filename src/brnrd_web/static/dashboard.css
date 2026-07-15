@@ -622,6 +622,7 @@ code {
   height: 100%;
   border-radius: inherit;
   background: #8effbf;
+  filter: drop-shadow(0 0 5px rgba(142, 255, 191, 0.6));
 }
 
 .stat-table > div {
