@@ -180,6 +180,13 @@ class ChannelRoute(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # #409 — the Telegram user id who paired this chat/topic via `/start`.
+    # The sole authorization principal for enqueueing a run from this route
+    # (see routers/webhooks.py `_authorized`); nullable only because rows
+    # created before the security fix landed predate the column — a route
+    # with no principal authorizes nobody (default-closed), so those chats
+    # must be re-paired.
+    paired_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class GitHubInstallation(Base):
