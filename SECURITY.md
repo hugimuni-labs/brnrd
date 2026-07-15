@@ -1,14 +1,15 @@
-# Security & privacy
+# Trust & execution model
 
-brnrd runs coding agents that execute commands and edit files on your machine.
-This document states the trust model plainly — what brnrd protects, what it does
-**not**, and how to harden it — so a security-minded reader can decide with the
-real facts instead of a "military-grade" slogan.
+brnrd runs coding agents that execute commands and edit files on your machine —
+with your authority, against your real repository. This document describes that
+architecture: what each gate does, what each execution environment actually
+isolates, where data crosses the network, and which controls are enforced today
+versus still tracked as work.
 
-It reflects the code as it ships today (alpha). Where the honest posture is not yet
+It reflects the code as it ships (alpha). Where the design's intent is not yet
 matched by an enforced control, the gap is named and linked to a tracking issue.
 
-## Threat model in one paragraph
+## The model in one paragraph
 
 brnrd runs coding agents that execute commands with **your** authority against your
 **real** repository, using your real credentials and network. The runners are
@@ -137,8 +138,8 @@ backend relays, it does not run your agent.
 | Gate tokens stored in cleartext | Medium | filed in this review |
 | Managed dashboard mirrors derived repo knowledge (document/opt-in) | Medium | filed in this review |
 
-## Reporting a vulnerability
+## Found a gap?
 
-Please report security issues privately rather than opening a public issue. Until a
-dedicated disclosure address is published, contact the maintainer directly through
-the repository owner's profile. Responsible disclosure is appreciated and credited.
+If you spot a hole in any of the above, raise it privately rather than in a public
+issue. Until a dedicated address is published, reach the maintainer through the
+repository owner's profile.
