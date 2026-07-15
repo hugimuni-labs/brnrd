@@ -41,6 +41,7 @@ _ROW_FIELDS = (
     "runner_core",
     "core_expected",
     "core_mismatch",
+    "substitution_reason",
     "repo_label",
     "source_system",
     "external_refs",
@@ -222,6 +223,10 @@ def build_closed_run_row(
         "runner_core": _str_or_none(task.meta.get("runner_core")),
         "core_expected": expected_core,
         "core_mismatch": mismatch,
+        # *Why* a substitution happened, when the envelope carried a signal
+        # (fallback/refusal/iterations). ``None`` when clean or unobservable —
+        # the reason rides next to the ``core_mismatch`` alarm bit (#substitution).
+        "substitution_reason": claude_status.substitution_reason(after_levels),
         "repo_label": _str_or_none(task.meta.get("repo_label")),
         "source_system": _source_system(task),
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
@@ -427,6 +432,7 @@ def _merge_levels(
             "plan_type",
             "tokens",
             "model_ids",
+            "fallback_signals",
             "session_used_percentage",
             "week_used_percentage",
         ):
