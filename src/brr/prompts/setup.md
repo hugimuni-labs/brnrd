@@ -11,14 +11,14 @@ as follows:
    project-specific sections (**Project**, **Build and run**, **Code
    guidelines**, **Constraints**) based on this repo's actual contents —
    read the build config, tests, dependencies, README, and any existing
-   agent config files (`CLAUDE.md`, `.cursorrules`, etc.). Drop the bit
+   agent-specific config files. Drop the bit
    about `src/brr/AGENTS.md` being the template — that is brnrd-specific.
 
 2. If `AGENTS.md` already exists, merge in the universal sections from the
    model (replace stale ones, add missing ones), preserving the repo's own
    Project, Build and run, Code guidelines, and Constraints sections.
 
-3. If a `CLAUDE.md`, `.cursorrules`, or similar file exists, read it for
+3. If an agent-specific configuration file exists, read it for
    project-specific context and incorporate relevant parts into the
    appropriate AGENTS.md sections.
 
