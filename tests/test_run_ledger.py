@@ -14,6 +14,7 @@ _ROW_FIELDS = {
     "runner_core",
     "core_expected",
     "core_mismatch",
+    "substitution_reason",
     "repo_label",
     "source_system",
     "external_refs",
@@ -433,3 +434,52 @@ def test_core_mismatch_fable_billed_as_opus_alarms():
     ) is True
     # A genuinely served fable run still verifies clean.
     assert run_ledger.core_mismatch("claude-fable-5", "claude-fable-5") is False
+
+
+def test_merge_levels_preserves_fallback_signals():
+    # Regression: ``fallback_signals`` must be on the merge allowlist, or the
+    # substitution reason is dropped before the ledger ever reads it.
+    merged = run_ledger._merge_levels(
+        {"source": "usage"},
+        {"source": "claude result JSON", "fallback_signals": {"stop_reason": "refusal"}},
+    )
+    assert merged["fallback_signals"] == {"stop_reason": "refusal"}
+
+
+def test_row_surfaces_substitution_reason(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    after = {
+        "quota": {"secondary_used_percent": 23.0, "primary_used_percent": 48.0},
+        "model_ids": ["claude-opus-4-8"],
+        "fallback_signals": {
+            "fallback_blocks": [
+                {"type": "fallback", "to": {"model": "claude-opus-4-8"}}
+            ],
+        },
+    }
+    before = {"quota": {"secondary_used_percent": 20.0, "primary_used_percent": 40.0}}
+    calls = iter([before, after])
+    monkeypatch.setattr(
+        run_ledger, "load_quota_levels", lambda *a, **k: next(calls)
+    )
+
+    task = Run(
+        id="run-sub",
+        event_id="evt-run-sub",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude",
+            "runner_shell": "claude",
+            "core_requested": "claude-fable-5",
+            "repo_label": "Gurio/brr",
+        },
+    )
+    run_ledger.mark_run_started(task, "claude", None, None)
+    task.meta["started_at"] = "2026-07-16T10:00:00Z"
+    task.meta["ended_at"] = "2026-07-16T10:00:05Z"
+
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["substitution_reason"] == "fallback->claude-opus-4-8"
+    assert row["core_mismatch"] is True
