@@ -197,7 +197,7 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert [ev["body"] for ev in pending] == ["first", "second"]
     assert [ev["source"] for ev in pending] == ["cloud", "cloud"]
     assert {ev["cloud_event_id"] for ev in pending} == {e1, e2}
-    # Cursor advanced and persisted.
+    # The pagination cursor advanced and persisted.
     assert cloud._load_state(brr_dir)["since"] == 2
 
     # Simulate the runner finishing both tasks.
