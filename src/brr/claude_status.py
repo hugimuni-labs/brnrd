@@ -299,12 +299,25 @@ def capture_stdout(stdout: str, env: dict[str, str] | None = None) -> str:
     Non-JSON stdout is passed through unchanged so custom Claude commands that do
     not opt into ``--output-format json`` keep working.
     """
+    reply, _ = capture_stdout_with_model(stdout, env)
+    return reply
+
+
+def capture_stdout_with_model(
+    stdout: str, env: dict[str, str] | None = None,
+) -> tuple[str, str | None]:
+    """Capture Claude's result envelope and return reply + observed Core.
+
+    The model id is returned on the same boundary that unwraps stdout, so the
+    caller can enforce a pin before accepting or writing the reply. The levels
+    snapshot remains the durable telemetry projection of the same envelope.
+    """
     try:
         payload = json.loads(stdout) if stdout.strip() else {}
     except json.JSONDecodeError:
-        return stdout
+        return stdout, None
     if not isinstance(payload, dict):
-        return stdout
+        return stdout, None
     levels = parse_result(payload)
     write_snapshot(_outbox_dir(env or os.environ), levels)
-    return result_text(payload, stdout)
+    return result_text(payload, stdout), resolved_model_id(levels)

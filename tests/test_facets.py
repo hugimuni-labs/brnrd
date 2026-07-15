@@ -167,6 +167,9 @@ def test_build_runner_block_known_with_runner_name():
     assert runner["status"] == "known"
     assert runner["name"] == "claude"
     assert runner["model"] == "claude-sonnet-4-6"
+    assert runner["model_requested"] == "claude-sonnet-4-6"
+    assert runner["model_observed"] is None
+    assert runner["attestation"] == "pending"
     assert runner["class"] == "balanced"
     assert runner["provider"] == "anthropic"
     assert runner["hooks"] == "claude"
@@ -175,6 +178,19 @@ def test_build_runner_block_known_with_runner_name():
     assert runner["capability_source"] == "benchmark-cache"
     assert runner["capability_freshness"] == "2026-06-29"
     assert runner["summary"] == "claude"
+
+
+def test_runner_block_exposes_observed_core_mismatch():
+    runner = facets.build(
+        runner_name="claude-fable",
+        runner_meta={"model": "claude-fable-5"},
+        levels={"model_ids": ["claude-opus-4-8"]},
+    )["runner"]
+
+    assert runner["model_requested"] == "claude-fable-5"
+    assert runner["model_observed"] == "claude-opus-4-8"
+    assert runner["attestation"] == "mismatch"
+    assert runner["core_mismatch"] is True
 
 
 def test_build_runner_block_can_expose_quality_escalation_target():
