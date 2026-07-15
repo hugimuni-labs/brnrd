@@ -75,9 +75,17 @@
 				</div>
 				<!-- The track drains, it doesn't fill (maintainer correction,
 				     2026-07-05): the colored bar is *remaining*, and it recedes
-				     toward empty as the window is consumed, not the reverse. -->
+				     toward empty as the window is consumed, not the reverse.
+				     No `overflow-hidden`: `statusBarStyle` puts the fill's glow in
+				     an *outer* box-shadow (the whole point of the critical void-
+				     body + rim + halo — see statusPalette.ts), and clipping the
+				     track swallows exactly that halo, leaving a near-black fill
+				     invisible on the near-black track. The glow lights only the
+				     filled block; the empty track stays dark. The fill can't
+				     exceed the track (width is a %, no rounded corners to clip),
+				     so nothing but the intended glow escapes. -->
 				<div
-					class="h-2 w-full overflow-hidden border border-stone-800/80 bg-stone-900"
+					class="h-2 w-full border border-stone-800/80 bg-stone-900"
 					role="img"
 					aria-label={`${window.label}: ${window.percent ?? 'unknown'} percent remaining`}
 				>
@@ -225,8 +233,10 @@
 					</span>
 				</div>
 				{#if creditsPct !== null}
+					<!-- No overflow-hidden — same reason as the window track above:
+					     let the fill's outer-glow halo show instead of clipping it. -->
 					<div
-						class="h-2 w-full overflow-hidden border border-stone-800/80 bg-stone-900"
+						class="h-2 w-full border border-stone-800/80 bg-stone-900"
 						role="img"
 						aria-label={`credits: ${creditsPct} percent remaining`}
 					>
