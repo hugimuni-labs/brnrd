@@ -696,7 +696,7 @@ def test_label_trigger_creates_event_for_new_labelled_issue(tmp_path, monkeypatc
     assert ev["github_label"] == "brr"
     assert "fix the auth tests" in ev["body"]
 
-    # Cursor advanced; second poll on the same issue does not re-create.
+    # The pagination cursor advanced; a second poll does not re-create.
     loop._loop_once(brr_dir, inbox, responses)
     assert len(protocol.list_pending(inbox)) == 1
 
@@ -759,7 +759,7 @@ def test_label_trigger_skips_issue_authored_by_token_owner(tmp_path, monkeypatch
     loop._loop_once(brr_dir, inbox, responses)
     assert protocol.list_pending(inbox) == []
 
-    # Cursor still advanced — a re-poll does not resurrect the skipped issue.
+    # The pagination cursor still advanced — a re-poll does not resurrect it.
     state_dict = state._load_state(brr_dir)
     assert 126 in (state_dict.get("cursor", {}).get("seen_issue_numbers") or [])
 
