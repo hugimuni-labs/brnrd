@@ -56,26 +56,38 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
 
     cursor = state_dict.setdefault("cursor", {})
 
+    # Authorization gate (#408): the allowlist is read fresh each poll
+    # cycle (an operator edit takes effect on the next loop iteration);
+    # the permission cache is scoped to just this cycle so a chatty
+    # author costs at most one collaborator-permission lookup per repo
+    # per poll, not one per event.
+    allowlist = state.allowlist(state_dict)
+    permission_cache: dict[tuple[str, str], str | None] = {}
+
     if triggers:
         if triggers.get("any"):
             polling._poll_any_activity(
                 token, repo, state_dict.get("bot_login", ""), cursor, inbox_dir,
+                allowlist=allowlist, permission_cache=permission_cache,
             )
         else:
             bot_login = state_dict.get("bot_login", "")
             if triggers.get("opened"):
                 polling._poll_opened_trigger(
                     token, repo, cursor, inbox_dir, bot_login=bot_login,
+                    allowlist=allowlist, permission_cache=permission_cache,
                 )
             if "label" in triggers:
                 polling._poll_label_trigger(
                     token, repo, triggers["label"], cursor, inbox_dir,
                     bot_login=bot_login,
+                    allowlist=allowlist, permission_cache=permission_cache,
                 )
             if "mention" in triggers:
                 polling._poll_mention_trigger(
                     token, repo, triggers["mention"], bot_login,
                     cursor, inbox_dir,
+                    allowlist=allowlist, permission_cache=permission_cache,
                 )
 
     state_dict["cursor"] = cursor
