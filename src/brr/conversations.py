@@ -848,7 +848,9 @@ def _collapse_schedule_repeats(
         newest = indices[-1]
         older_count = len(indices) - 1
         first_ts = _ts_key(dialogue[oldest])
-        last_ts = _ts_key(dialogue[newest])
+        # The marker describes only the discarded firings; the newest firing
+        # remains as the full turn immediately after it.
+        last_ts = _ts_key(dialogue[indices[-2]])
         span = f", {first_ts} → {last_ts}" if first_ts and last_ts else ""
         summary = _summary_for_body(
             f"({older_count} earlier identical firings of schedule:{schedule_id}"
