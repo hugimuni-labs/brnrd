@@ -35,6 +35,19 @@ def _env_first(*names: str, default: str = "") -> str:
     return default
 
 
+def _env_int_tuple(name: str) -> tuple[int, ...]:
+    raw = os.environ.get(name, "")
+    out: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return tuple(out)
+
 def _env_csv_lower(name: str) -> tuple[str, ...]:
     return tuple(p.strip().lower() for p in os.environ.get(name, "").split(",") if p.strip())
 
@@ -53,6 +66,10 @@ class Settings:
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
     telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")
     telegram_auto_webhook: bool = _env_bool("BRNRD_TELEGRAM_AUTO_WEBHOOK", True)
+    # #409 — default-closed Telegram authorization: the pairing sender
+    # (ChannelRoute.paired_user_id) is always trusted; this allowlist adds
+    # extra trusted user ids (e.g. teammates) on top of that principal.
+    telegram_authz_allowlist: tuple[int, ...] = _env_int_tuple("BRNRD_TELEGRAM_AUTHZ_ALLOWLIST")
 
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 

@@ -17,7 +17,10 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    telegram._save_state(brr_dir, {"token": "secret"})
+    # #409: both senders (41, 42) must be authorized or the default-closed
+    # gate drops their messages before this test's real assertions (chat
+    # acceptance, chat-id recording) ever run.
+    telegram._save_state(brr_dir, {"token": "secret", "allowlist": [41, 42]})
 
     def fake_api_call(token, method, params=None, *, poll=False):
         assert token == "secret"
@@ -84,7 +87,9 @@ def test_loop_tracks_last_chat_id_without_restricting_future_chats(
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    telegram._save_state(brr_dir, {"token": "secret"})
+    # #409: both senders (41, 42) must be authorized for this test's own
+    # assertions (last-chat-id tracking) to be reachable.
+    telegram._save_state(brr_dir, {"token": "secret", "allowlist": [41, 42]})
 
     def fake_api_call(token, method, params=None, *, poll=False):
         return {
@@ -125,7 +130,9 @@ def test_loop_downloads_photo_and_records_attachment(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    telegram._save_state(brr_dir, {"token": "secret"})
+    # #409: sender 41 must be authorized (paired principal) for this
+    # test's attachment-download assertions to be reachable.
+    telegram._save_state(brr_dir, {"token": "secret", "paired_user_id": 41})
 
     def fake_api_call(token, method, params=None, *, poll=False):
         if method == "getUpdates":
@@ -181,7 +188,9 @@ def test_loop_accepts_photo_with_no_caption(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    telegram._save_state(brr_dir, {"token": "secret"})
+    # #409: sender 41 must be authorized for this test's no-caption
+    # handling to be reachable.
+    telegram._save_state(brr_dir, {"token": "secret", "paired_user_id": 41})
 
     def fake_api_call(token, method, params=None, *, poll=False):
         if method == "getUpdates":
@@ -244,6 +253,194 @@ def test_loop_skips_message_with_no_text_and_no_image(tmp_path, monkeypatch):
     telegram._loop_once(brr_dir, inbox_dir, responses_dir)
 
     assert protocol.list_pending(inbox_dir) == []
+
+
+# ── #409 default-closed authorization gate ──────────────────────────
+
+
+def _authz_message(user_id, *, chat_id=111, text="do the thing", sender_chat=None):
+    msg = {
+        "message_id": 501,
+        "chat": {"id": chat_id},
+        "text": text,
+    }
+    if user_id is not None:
+        msg["from"] = {"id": user_id, "first_name": "Someone"}
+    if sender_chat is not None:
+        msg["sender_chat"] = {"id": sender_chat, "type": "channel"}
+    return {"update_id": 1, "message": msg}
+
+
+def test_loop_rejects_non_principal_non_allowlisted_sender(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "paired_user_id": 41})
+
+    monkeypatch.setattr(
+        telegram, "_api_call",
+        lambda token, method, params=None, *, poll=False: {
+            "result": [_authz_message(999)],
+        },
+    )
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert protocol.list_pending(inbox_dir) == []
+
+
+def test_loop_accepts_paired_principal(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "paired_user_id": 41})
+
+    monkeypatch.setattr(
+        telegram, "_api_call",
+        lambda token, method, params=None, *, poll=False: {
+            "result": [_authz_message(41)],
+        },
+    )
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = protocol.list_pending(inbox_dir)
+    assert [e["body"] for e in events] == ["do the thing"]
+    assert events[0]["telegram_user_id"] == 41
+
+
+def test_loop_accepts_allowlisted_sender(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(
+        brr_dir,
+        {"token": "secret", "chat_id": 111, "paired_user_id": 41, "allowlist": [77]},
+    )
+
+    monkeypatch.setattr(
+        telegram, "_api_call",
+        lambda token, method, params=None, *, poll=False: {
+            "result": [_authz_message(77)],
+        },
+    )
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = protocol.list_pending(inbox_dir)
+    assert [e["body"] for e in events] == ["do the thing"]
+    assert events[0]["telegram_user_id"] == 77
+
+
+def test_loop_rejects_sender_chat_with_no_from_id(tmp_path, monkeypatch):
+    # Anonymous group admin / channel post: no personal `from` identity —
+    # default-closed rejects it even though the chat itself is bound.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "paired_user_id": 41})
+
+    monkeypatch.setattr(
+        telegram, "_api_call",
+        lambda token, method, params=None, *, poll=False: {
+            "result": [_authz_message(None, sender_chat=111)],
+        },
+    )
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert protocol.list_pending(inbox_dir) == []
+
+
+def test_loop_rejects_sender_chat_even_when_from_also_present(tmp_path, monkeypatch):
+    # Telegram's GroupAnonymousBot populates both `from` (a generic
+    # service account) and `sender_chat`; `sender_chat` alone must force
+    # unattributable, regardless of what id `from` carries.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "allowlist": [1087968824]})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        return {
+            "result": [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 501,
+                        "chat": {"id": 111},
+                        "from": {"id": 1087968824, "first_name": "Group", "is_bot": True},
+                        "sender_chat": {"id": 111, "type": "supergroup"},
+                        "text": "do the thing",
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert protocol.list_pending(inbox_dir) == []
+
+
+def test_loop_keys_forwarded_message_on_forwarder_not_origin(tmp_path, monkeypatch):
+    # A forwarded message carries the forwarder's own `from.id` plus
+    # `forward_origin`/`forward_from` describing who originally sent it.
+    # The forwarder is the sender for authorization purposes — the
+    # forward origin must never be read as an identity.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "paired_user_id": 41})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        return {
+            "result": [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 501,
+                        "chat": {"id": 111},
+                        "from": {"id": 41, "first_name": "Ada"},
+                        "forward_origin": {
+                            "type": "user",
+                            "sender_user": {"id": 999, "first_name": "Not Ada"},
+                        },
+                        "text": "forwarded task",
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = protocol.list_pending(inbox_dir)
+    assert [e["body"] for e in events] == ["forwarded task"]
+    assert events[0]["telegram_user_id"] == 41
+
+
+def test_loop_follows_chat_migration_without_enqueue(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "chat_id": 111, "paired_user_id": 41})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        return {
+            "result": [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 501,
+                        "chat": {"id": 111},
+                        "migrate_to_chat_id": -100999,
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert protocol.list_pending(inbox_dir) == []
+    assert telegram._load_state(brr_dir)["chat_id"] == -100999
 
 
 def test_download_telegram_file_returns_false_on_missing_file_path(monkeypatch):
