@@ -10,14 +10,13 @@ them, and brr renders the one neutral result into that runner's native fields.
 
 Two directions across the single endpoint:
 
-- **Outbound flush** (runner → daemon): ``post-tool`` / ``stop`` drop a
-  ``.flush`` signal in the run outbox so the daemon drains the
-  outbox / ``.card`` *immediately* instead of waiting for the next
-  heartbeat tick. The hook **never drains itself** — ``daemon._drain_outbox``
-  is in-process-coupled (worker emit + conversation indexing) and guarded
-  by a ``threading.Lock``, so a separate ``brnrd hook`` process draining in
-  parallel would double-deliver. The hook only signals; the daemon stays
-  the sole drainer.
+- **Outbound flush** (runner → portal broker): ``post-tool`` / ``stop`` drop a
+  token in ``.flush`` and, on daemon-managed Tier-2 runs, wait for the broker's
+  matching ``.flush.ack``. The daemon remains the sole process that promotes
+  files (worker emit + conversation indexing are in-process-coupled), but the
+  *runner boundary* now owns when the promotion must be complete. In
+  particular, Stop cannot race a final ``gate: forge`` handoff against runner
+  exit. Tier-0/1 runners retain the heartbeat/post-return recovery path.
 - **Inbound injection** (daemon → runner): the hook reads the
   daemon-written ``portal-state.json`` and, when its ``change_token`` moved
   since the last injection, returns a compact delta for the runner to weave
@@ -52,6 +51,8 @@ PHASES = (PHASE_POST_TOOL, PHASE_STOP, PHASE_SESSION_START)
 # drain now. Lives beside the outbox; the daemon's drain skips dotfiles, so
 # it is never delivered. Matches the ``.keepalive`` / ``.card`` idiom.
 FLUSH_SIGNAL_NAME = ".flush"
+FLUSH_ACK_NAME = ".flush.ack"
+_FLUSH_ACK_TIMEOUT_SECONDS = 5.0
 # Per-run hook memory: the last change_token injected, and whether a
 # premature stop was already blocked once (so the nudge fires once, not in
 # a loop). Daemon-independent; the hook owns this file.
@@ -68,6 +69,7 @@ HOOK_STATE_NAME = ".hook-state.json"
 # than promoting the portal-derived `inject` lines in place.
 CARD_NAME = ".card"
 TASK_CLASSIFICATION_NAME = ".task-classification"
+FORGE_HANDOFF_NAME = ".forge-handoff"
 _CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
 _CLOSEOUT_ARTIFACTS = {
     "card": (
@@ -120,6 +122,9 @@ class HookContext:
         repo = env.get("BRR_REPO_DIR")
         self.repo_dir = Path(repo) if repo else None
         self.seed_ref = (env.get("BRR_SEED_REF") or "").strip() or None
+        self.flush_sync = (
+            env.get("BRR_FLUSH_SYNC") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
         outbox = env.get("BRR_OUTBOX_DIR")
@@ -189,14 +194,32 @@ def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
 
 
 def _touch_flush(ctx: HookContext) -> None:
-    """Signal the daemon to drain the outbox now (best-effort)."""
+    """Request a portal flush and, when armed, wait for its acceptance.
+
+    The token/ack handshake makes the lifecycle boundary the authority: a Stop
+    hook returns only after every complete outbox message visible at that
+    boundary has been promoted. Ad-hoc hooks and older daemons do not set
+    ``BRR_FLUSH_SYNC`` and keep the old fire-and-forget behaviour.
+    """
     if ctx.flush_path is None:
         return
+    token = str(time.time_ns())
+    ack_path = ctx.flush_path.parent / FLUSH_ACK_NAME
     try:
         ctx.flush_path.parent.mkdir(parents=True, exist_ok=True)
-        ctx.flush_path.write_text(str(time.time()), encoding="utf-8")
+        ctx.flush_path.write_text(token, encoding="utf-8")
     except OSError:
-        pass
+        return
+    if not ctx.flush_sync:
+        return
+    deadline = time.monotonic() + _FLUSH_ACK_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            if ack_path.read_text(encoding="utf-8").strip() == token:
+                return
+        except OSError:
+            pass
+        time.sleep(0.01)
 
 
 # ── Injection rendering (portal-state → compact delta) ───────────────────
@@ -492,31 +515,46 @@ def _scm_pr_number(outbox_dir: Path | None) -> str | None:
     return match.group(1) if match else None
 
 
+def _scm_forge_handoff_written(outbox_dir: Path | None) -> bool:
+    """True when the portal broker durably accepted ``gate: forge``.
+
+    The marker is written synchronously during the Stop flush handshake. It
+    proves intent was handed to the gate abstraction without pretending the
+    asynchronous forge call has already created a PR.
+    """
+    if outbox_dir is None:
+        return False
+    try:
+        return (
+            outbox_dir / FORGE_HANDOFF_NAME
+        ).read_text(encoding="utf-8").strip() != ""
+    except OSError:
+        return False
+
+
 def _scm_closeout_clause(ctx: "HookContext") -> str | None:
     """The `scm` closeout obligation: a work-loss block, read fresh at Stop.
 
     Armed only on the ``host`` environment (the daemon sets ``BRR_REPO_DIR``),
-    where nothing publishes the end branch for the resident. Blocks on the two
-    states that are both *artifact-provable at Stop* and *lose work if the run
-    ends now*:
+    where nothing publishes the end branch for the resident. Blocks on three
+    states that are artifact-provable at Stop:
 
     - **uncommitted** modified files — a host checkout publishes nothing you
       don't commit; and
     - **unpushed** commits — committed but stranded on the machine, since host
-      finalization is a no-op.
+      finalization is a no-op; and
+    - **missing forge handoff** for commits beyond the seed — neither a real
+      ``.pr`` nor the broker's durable ``.forge-handoff`` acceptance receipt.
 
     The clause carries the full receipt the maintainer asked for — ``N
     commit(s) +x/−y on <branch>``, plus ``PR #n`` when a ``.pr`` handle exists
     — so the block hands back produce, not a scold.
 
-    **Deliberately NOT blocked: "committed + pushed but no PR".** The legitimate
-    PR handoff on a host run is a ``gate: forge`` outbox file the daemon drains
-    into a PR *after the runner returns* — a post-Stop action with no artifact
-    the Stop hook can read without false-blocking every correct handoff. So a
-    missing PR on an already-pushed branch is not work-loss (the branch is on
-    the remote, linkable) and stays out of the hard block by design. (The
-    reasoning, and the durable-marker path that would make it assertable, live
-    in ``kb/design-closeout-guard.md``.)
+    The third condition became sound when the runner boundary started waiting
+    for portal acceptance: a final ``gate: forge`` file is promoted before the
+    Stop hook continues, and promotion writes ``.forge-handoff``. Absence now
+    means absence of both actual PR and accepted intent, not merely "the daemon
+    has not reached its post-return drain yet."
     """
     repo = ctx.repo_dir
     if repo is None or not repo.exists():
@@ -558,10 +596,12 @@ def _scm_closeout_clause(ctx: "HookContext") -> str | None:
     if ahead is not None and ahead.strip().isdigit():
         unpushed = int(ahead.strip())
 
-    if modified == 0 and unpushed == 0:
-        return None  # committed and pushed — nothing lost, stay silent
-
     pr = _scm_pr_number(ctx.outbox_dir)
+    forge_handoff = _scm_forge_handoff_written(ctx.outbox_dir)
+    missing_handoff = commits > 0 and not pr and not forge_handoff
+    if modified == 0 and unpushed == 0 and not missing_handoff:
+        return None
+
     receipt = ""
     if commits:
         receipt = f"{commits} commit(s) +{insertions}/−{deletions} on {branch}"
@@ -572,6 +612,8 @@ def _scm_closeout_clause(ctx: "HookContext") -> str | None:
         gaps.append(f"{unpushed} not pushed")
     if modified:
         gaps.append(f"{modified} file(s) uncommitted")
+    if missing_handoff:
+        gaps.append("no PR or accepted `gate: forge` handoff")
     detail = "; ".join(p for p in (receipt, ", ".join(gaps)) if p)
     return (
         f"the work isn't landed — {detail}. A host checkout publishes nothing "
@@ -704,15 +746,17 @@ def compute_neutral(
       once when foldable input is still pending).
     - ``session-start`` — seed the run with the full portal capsule.
     """
+    # Flush before reading the portal. On a managed Tier-2 run this is a
+    # handshake, so the snapshot below includes the delivery acceptance and a
+    # Stop decision observes durable forge intent written at the same boundary.
+    if phase in (PHASE_POST_TOOL, PHASE_STOP):
+        _touch_flush(ctx)
     portal = _read_json(ctx.portal_state_path)
     state = _read_hook_state(ctx)
     _record_fired(state, phase)
     inject: str | None = None
     block = False
     block_reason: str | None = None
-
-    if phase in (PHASE_POST_TOOL, PHASE_STOP):
-        _touch_flush(ctx)
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(portal, seed=True)
