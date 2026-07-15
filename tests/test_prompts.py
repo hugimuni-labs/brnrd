@@ -335,7 +335,7 @@ class TestPromptBuilding:
             run_id="task-9",
             runner_medium="codex",
         )
-        assert "- Runner: codex" in prompt
+        assert "- Requested Runner: codex" in prompt
 
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -351,7 +351,7 @@ class TestPromptBuilding:
             runner_medium="codex",
             runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
         )
-        assert "- Runner: codex" in prompt
+        assert "- Requested Runner: codex" in prompt
         assert "- Quota: weekly 0% - resets 2026-06-17T01:29Z" in prompt
 
     def test_daemon_prompt_surfaces_repo_label(self, tmp_path):
