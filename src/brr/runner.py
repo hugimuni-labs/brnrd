@@ -181,6 +181,13 @@ class RunnerInvocation:
     # ignored on the ``runner_cmd`` override path (a pinned command is honoured
     # verbatim).
     extra_runner_args: list[str] = field(default_factory=list)
+    # The Core selected by policy. ``None``/``default`` means unpinned and
+    # therefore cannot be attested. A concrete id must match the Shell result.
+    expected_core: str | None = None
+    # The immutable selection result. Daemon dispatch carries this through to
+    # command construction instead of throwing it away and reloading a dict by
+    # profile-name string in another module.
+    selected_runner: "RunnerProfile | None" = None
 
     @property
     def trace_root(self) -> Path:
@@ -201,10 +208,12 @@ class RunnerResult:
     returncode: int
     trace_dir: Path | None
     artifacts: list[RunnerArtifactRecord]
+    observed_core: str | None = None
+    core_mismatch: bool | None = None
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0
+        return self.returncode == 0 and self.core_mismatch is not True
 
     @property
     def output(self) -> str:
@@ -271,6 +280,12 @@ class RunnerResult:
         return f"…[truncated]{tail}" if len(detail) > limit else tail
 
     def raise_for_error(self) -> None:
+        if self.core_mismatch:
+            raise RuntimeError(
+                "Core attestation failed: requested "
+                f"{self.invocation.expected_core!r}, Shell observed "
+                f"{self.observed_core!r}"
+            )
         if self.ok:
             return
         detail = self.stderr.strip() or self.stdout.strip()
@@ -364,6 +379,16 @@ def profile_metadata(
     """Return metadata for a declared or generated runner profile."""
     profile = _selection_profiles(repo_root).get(name)
     return dict(profile) if profile is not None else None
+
+
+def runner_profile(name: str, repo_root: Path | None = None) -> "RunnerProfile":
+    """Return the typed Runner value used by selection and invocation."""
+    from . import runner_select
+
+    profile = _selection_profiles(repo_root).get(name)
+    if profile is None:
+        return runner_select.implicit_runner(name)
+    return runner_select.runner_from_profile(name, profile)
 
 
 def _profile_binary(name: str, profiles: dict[str, dict[str, Any]]) -> str:
@@ -626,6 +651,24 @@ def fallback_runner(
     return candidate.name if candidate is not None else None
 
 
+def fallback_runner_profile(
+    repo_root: Path,
+    current: "RunnerProfile",
+    failure_kind: str | None,
+    *,
+    tried: list[str] | tuple[str, ...] = (),
+) -> "RunnerProfile | None":
+    """Typed fallback for the daemon's dispatch path."""
+    from . import runner_select
+
+    return runner_select.automatic_fallback_runner(
+        available_selection_runners(repo_root),
+        current=current.name,
+        failure_kind=failure_kind,
+        tried=tried,
+    )
+
+
 def quality_escalation_runner(
     repo_root: Path,
     current: str,
@@ -645,8 +688,10 @@ def quality_escalation_runner(
     return candidate.name if candidate is not None else None
 
 
-def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
-    """Determine which runner to use for this repo.
+def resolve_runner_profile(
+    repo_root: Path, overrides: dict[str, Any] | None = None,
+) -> "RunnerProfile":
+    """Resolve one typed Shell+Core Runner for this repo.
 
     Resolution order (highest precedence first):
 
@@ -702,9 +747,9 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
             if core_pin and shell_pin:
                 composed = _compose_shell_core(shell_pin, core_pin, profiles)
                 if composed is not None:
-                    return composed
+                    return runner_profile(composed, repo_root)
                 _warn_if_shell_shadows_core(shell_pin, core_pin, profiles)
-            return explicit_pin
+            return runner_profile(explicit_pin, repo_root)
         raise RuntimeError(
             f"Runner '{explicit_pin}' not found on PATH. "
             "Check shell= (or runner=) in .brr/config."
@@ -763,7 +808,7 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
 
     chosen = runner_select.select_runner(candidates, policy=policy)
     if chosen:
-        return chosen.profile
+        return chosen
 
     raise RuntimeError(
         "No AI runner found. Install claude, codex, or gemini, "
@@ -771,8 +816,13 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
     )
 
 
+def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
+    """Compatibility projection of :func:`resolve_runner_profile` to its name."""
+    return resolve_runner_profile(repo_root, overrides).name
+
+
 def _build_cmd(
-    runner_name: str,
+    runner_name: "str | RunnerProfile",
     prompt: str,
     cfg: dict[str, Any],
     repo_root: Path | None = None,
@@ -802,13 +852,19 @@ def _build_cmd(
         return _replace_placeholders(shlex.split(str(custom)))
 
     # The prompt is NOT appended here. It travels on stdin -- see `_prompt_stdin`.
-    profile = _selection_profiles(repo_root).get(runner_name)
-    if profile:
-        cmd = shlex.split(str(profile.get("cmd", runner_name)))
+    from . import runner_select
+
+    if isinstance(runner_name, runner_select.RunnerProfile):
+        profile_cmd = runner_name.cmd or runner_name.name
+    else:
+        profile = _selection_profiles(repo_root).get(runner_name)
+        profile_cmd = str(profile.get("cmd", runner_name)) if profile else runner_name
+    if profile_cmd:
+        cmd = shlex.split(profile_cmd)
         cmd.extend(extra)
         return cmd
 
-    return [runner_name, *extra]
+    return [str(runner_name), *extra]
 
 
 def _prompt_stdin(cfg: dict[str, Any], prompt: str) -> str | None:
@@ -977,7 +1033,7 @@ def _process_runner_stdout(
     runner_name: str,
     stdout: str,
     env: dict[str, str] | None = None,
-) -> str:
+) -> tuple[str, str | None]:
     """Normalize runner-specific stdout before response capture.
 
     Most runners already print the final reply as plain text. Claude's daemon
@@ -988,8 +1044,8 @@ def _process_runner_stdout(
     from . import claude_status
 
     if claude_status.supported(runner_name):
-        return claude_status.capture_stdout(stdout, env)
-    return stdout
+        return claude_status.capture_stdout_with_model(stdout, env)
+    return stdout, None
 
 
 def _copy_artifact_to_trace(
@@ -1060,7 +1116,7 @@ def _write_trace(result: RunnerResult) -> Path | None:
 
 
 def invoke_runner(
-    runner_name: str,
+    runner_name: "str | RunnerProfile",
     invocation: RunnerInvocation,
     cfg: dict[str, Any] | None = None,
     *,
@@ -1076,8 +1132,14 @@ def invoke_runner(
     global _active_proc
     cfg = cfg or {}
 
+    from . import runner_select
+
+    selected = invocation.selected_runner or runner_name
+    selected_name = selected.name if isinstance(
+        selected, runner_select.RunnerProfile
+    ) else selected
     cmd = _build_cmd(
-        runner_name,
+        selected,
         invocation.prompt,
         cfg,
         invocation.repo_root,
@@ -1157,20 +1219,38 @@ def invoke_runner(
         stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
     _retire_capture_dir(capture_dir, returncode)
 
-    stdout = _process_runner_stdout(runner_name, stdout, invocation.env)
+    stdout, observed_core = _process_runner_stdout(
+        selected_name, stdout, invocation.env,
+    )
+    from . import runner_select
 
-    if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+    mismatch = runner_select.core_mismatch(
+        invocation.expected_core, observed_core,
+    )
+    if mismatch:
+        attestation_error = (
+            "Core attestation failed: requested "
+            f"{invocation.expected_core!r}, Shell observed {observed_core!r}"
+        )
+        stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + attestation_error
+
+    if (
+        invocation.response_path and returncode == 0 and mismatch is not True
+        and stdout and stdout.strip()
+    ):
         _write_response_file(invocation.response_path, stdout)
 
     result = RunnerResult(
         invocation=invocation,
-        runner_name=runner_name,
+        runner_name=selected_name,
         command=cmd,
         stdout=stdout,
         stderr=stderr,
         returncode=returncode,
         trace_dir=None,
         artifacts=[],
+        observed_core=observed_core,
+        core_mismatch=mismatch,
     )
     if trace:
         result.trace_dir = _write_trace(result)

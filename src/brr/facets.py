@@ -144,6 +144,7 @@ def _runner_block(
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
     runner_catalog: "list[dict[str, object]] | None" = None,
+    levels: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the ``resources.runner`` governance block.
 
@@ -170,11 +171,32 @@ def _runner_block(
         if catalog:
             block["catalog"] = catalog
         return block
+    from . import runner_select
+
     meta = runner_meta or {}
+    requested = str(meta.get("model") or "").strip() or None
+    observed = str(meta.get("model_observed") or "").strip() or None
+    if not observed and isinstance(levels, dict):
+        ids = levels.get("model_ids")
+        if isinstance(ids, list):
+            observed = "+".join(
+                str(item).strip() for item in ids if str(item).strip()
+            ) or None
+    mismatch = runner_select.core_mismatch(requested, observed)
+    attestation = (
+        "mismatch" if mismatch is True else
+        "matched" if mismatch is False else
+        "pending" if requested and requested != "default" else
+        "unverifiable"
+    )
     block: dict[str, object] = {
         "status": KNOWN,
         "name": runner_name,
-        "model": str(meta.get("model") or "").strip() or None,
+        "model": requested,
+        "model_requested": requested,
+        "model_observed": observed,
+        "core_mismatch": mismatch,
+        "attestation": attestation,
         "class": str(meta.get("class") or "").strip() or None,
         "provider": str(meta.get("provider") or "").strip() or None,
         "hooks": str(meta.get("hooks") or "").strip() or None,
@@ -342,6 +364,7 @@ def build(
             quality_escalation,
             relay_consent,
             runner_catalog,
+            levels,
         ),
         "quota": quota_facet,
         "spend": spend_facet,

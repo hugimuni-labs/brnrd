@@ -11,6 +11,7 @@ AUTH_ERROR = "auth_error"
 PROVIDER_ERROR = "provider_error"
 RUNNER_ERROR = "runner_error"
 NO_OUTPUT = "no_output"
+CORE_MISMATCH = "core_mismatch"
 
 
 _QUOTA_PATTERNS = (
@@ -82,6 +83,7 @@ def reason_prefix(kind: str) -> str:
         PROVIDER_ERROR: "runner provider failed",
         RUNNER_ERROR: "runner failed",
         NO_OUTPUT: "runner produced no reply",
+        CORE_MISMATCH: "runner Core attestation failed",
     }.get(kind, "runner failed")
 
 
