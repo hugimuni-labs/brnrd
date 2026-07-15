@@ -732,6 +732,83 @@ def test_guard_respects_the_shells_own_loop_breaker(tmp_path):
     assert out.get("decision") != "block"
 
 
+# ── Escalated artifact obligations (card / task-classification) ───────────
+
+_GOOD_REPLY = "wired it up.\n\n**done** — committed abc1234 on brr/x"
+
+
+def _armed_obl(tmp_path, obligations="card,classification", flavour="claude"):
+    env = _armed(tmp_path, flavour)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = obligations
+    return env
+
+
+def test_guard_blocks_when_card_missing(tmp_path):
+    """A closeout with a clean reply but no `.card` still blocks — the card is
+    the surface the user watched the whole run."""
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
+    assert out["decision"] == "block"
+    assert ".card" in out["reason"]
+
+
+def test_guard_blocks_when_classification_missing(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
+    assert out["decision"] == "block"
+    assert ".task-classification" in out["reason"]
+
+
+def test_guard_blank_artifact_counts_as_unwritten(tmp_path):
+    """An empty / whitespace-only control file is not a written obligation."""
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.CARD_NAME).write_text("   \n", encoding="utf-8")
+    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("x", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
+    assert out["decision"] == "block"
+    assert ".card" in out["reason"]
+
+
+def test_guard_capsule_lists_every_unmet_at_once(tmp_path):
+    """Reply ends on nothing AND both artifacts missing → one capsule naming
+    all three, not three chained Stop blocks (#282 loop safety)."""
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("just prose"), _armed_obl(tmp_path))
+    assert out["decision"] == "block"
+    reason = out["reason"]
+    assert "ends on nothing" in reason
+    assert ".card" in reason
+    assert ".task-classification" in reason
+
+
+def test_guard_passes_when_every_obligation_met(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
+    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
+    assert out.get("decision") != "block"
+
+
+def test_artifact_obligations_are_off_unless_armed(tmp_path):
+    """Files missing, but only next_move armed (no BRR_CLOSEOUT_OBLIGATIONS) →
+    the artifact checks stay silent, the control arm the bench measures."""
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed(tmp_path))
+    assert out.get("decision") != "block"
+
+
+def test_artifact_block_never_loops(tmp_path):
+    """Fires once, then lets the run end — even if the file is never written."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _armed_obl(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert first["decision"] == "block"
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert second.get("decision") != "block"
+
+
 def test_a_waiting_user_outranks_the_shape_of_the_reply(tmp_path):
     """Pending events block first. A user's actual message beats the formatting
     of a reply that is about to be rewritten anyway."""
