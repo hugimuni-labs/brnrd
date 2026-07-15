@@ -249,7 +249,7 @@ SCENARIOS: dict[str, Scenario] = {
             "The long-run probe. A multi-file bugfix that takes real turns "
             "to finish, with the protocol obligations coming due LATE — "
             "after the context has had room to drift. Pair it with "
-            "`--config boot.transcript=true|false` to run the two arms."
+            "`--config boot.mount=true|false` to run the two arms."
         ),
         # Deliberately a *task*, not a quiz. What is under test is not whether
         # an economy core can fix three bugs — it is whether, thirty turns
@@ -631,7 +631,7 @@ def probe_single_run(t: Transcript, _s: Scenario) -> ProbeResult:
 
 
 # Headings that appear verbatim in the prose boot when the file-backed
-# contracts are injected as text. Under `boot.transcript`, those blocks are
+# contracts are injected as text. Under `boot.mount`, those blocks are
 # SUBTRACTED from the prose and seeded as `Read` tool-results instead — so
 # their absence from `prompt.md` is the mount's observable signature.
 #
@@ -667,7 +667,7 @@ def probe_mount(t: Transcript, _s: Scenario) -> ProbeResult:
     result with a straight face. A config key is a request; `prompt.md` is
     what happened. Only one of them is evidence.
     """
-    raw = str(t.config.get("boot.transcript", "")).strip().lower()
+    raw = str(t.config.get("boot.mount", "")).strip().lower()
     expected = "mounted" if raw in {"1", "true", "yes", "on"} else "prose"
     observed = _observed_arm(t)
     core = ""
