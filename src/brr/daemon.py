@@ -2056,10 +2056,22 @@ def _run_worker(
             # Same arming, same control-arm discipline: the guard also escalates
             # the two clean artifact obligations (card, task-classification)
             # from format_delta's soft `inject` mention to a hard block. Both
-            # are pure fresh-file existence checks. The contested commit/SCM
-            # obligation is deliberately NOT armed here — it is surfaced softly
-            # by format_delta and awaits a product call before it blocks.
-            env["BRR_CLOSEOUT_OBLIGATIONS"] = "card,classification"
+            # are pure fresh-file existence checks.
+            obligations = ["card", "classification"]
+            # The SCM obligation, now armed (product call made 2026-07-15). It
+            # is NOT a file check but a fresh-git read at Stop, so the hook needs
+            # the checkout + seed ref. Armed only for `host`: that is the one
+            # environment where finalization does not publish the end branch, so
+            # uncommitted / unpushed work is genuinely lost. In a worktree the
+            # daemon publishes, so the same block would nag about work that will
+            # leave the machine on its own. (Missing-PR is deliberately NOT part
+            # of this block — see `hooks._scm_closeout_clause`.)
+            if task.env == "host":
+                obligations.append("scm")
+                env["BRR_REPO_DIR"] = str(run_root)
+                if env_ctx.branch_plan is not None:
+                    env["BRR_SEED_REF"] = env_ctx.branch_plan.seed_ref
+            env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
         if env_ctx.outbox_env:
             env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
