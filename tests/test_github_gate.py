@@ -18,6 +18,7 @@ runtime (Python looks up module globals at call time):
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,19 @@ from brr.gates.github import (
     wizard,
 )
 from brr.run import Run
+
+
+@pytest.fixture(autouse=True)
+def _default_collaborator_permission(monkeypatch):
+    """Authorization gate (#408): default every commenter/author to a repo
+    collaborator so pre-existing gate tests (written before the gate
+    existed) don't each need to stub the collaborator-permission lookup.
+    Tests that exercise the gate itself override this per-test.
+    """
+    monkeypatch.setattr(
+        client, "get_collaborator_permission",
+        lambda repo, username, token: "write",
+    )
 
 
 # ── parse_origin_url ─────────────────────────────────────────────────
@@ -2256,3 +2270,162 @@ def test_deliver_responses_opens_pull_request_by_default(tmp_path, monkeypatch):
 
     assert len(calls) == 1
     assert protocol.list_done(inbox, "github") == []
+
+
+# ── authorization gate (#408) ───────────────────────────────────────
+#
+# Default-closed: an autonomous run may only be enqueued for a repo
+# collaborator/member/owner (checked via the collaborator-permission
+# API) or a login explicitly on the gate-state allowlist. Everything
+# else is rejected with an audit log line — no warn-but-allow grace.
+
+
+def test_mention_trigger_rejects_non_collaborator_commenter(tmp_path, monkeypatch, caplog):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+    # Not a collaborator (404 → None) and not allowlisted.
+    monkeypatch.setattr(
+        client, "get_collaborator_permission",
+        lambda repo, username, token: None,
+    )
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "id": 500,
+            "body": "@brr-bot do something",
+            "user": {"login": "rando"},
+            "issue_url": "https://api.github.com/repos/owner/name/issues/5",
+            "html_url": "https://github.com/owner/name/issues/5#issuecomment-500",
+            "updated_at": "2026-06-01T00:00:00Z",
+        },
+    ] if path == "/repos/owner/name/issues/comments" else [])
+
+    with caplog.at_level(logging.WARNING):
+        loop._loop_once(brr_dir, inbox, responses)
+
+    assert protocol.list_pending(inbox) == []
+    assert any(
+        "rando" in record.message and "unauthorized" in record.message
+        for record in caplog.records
+    )
+
+
+def test_mention_trigger_allows_collaborator_commenter(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+    monkeypatch.setattr(
+        client, "get_collaborator_permission",
+        lambda repo, username, token: "write",
+    )
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "id": 501,
+            "body": "@brr-bot do something",
+            "user": {"login": "trusted-dev"},
+            "issue_url": "https://api.github.com/repos/owner/name/issues/6",
+            "html_url": "https://github.com/owner/name/issues/6#issuecomment-501",
+            "updated_at": "2026-06-01T00:00:00Z",
+        },
+    ] if path == "/repos/owner/name/issues/comments" else [])
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert events[0]["github_author"] == "trusted-dev"
+
+
+def test_mention_trigger_allows_allowlisted_non_collaborator(tmp_path, monkeypatch):
+    """A login on the gate-state allowlist bypasses the permission check
+    entirely — no network call needed."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+        "allowlist": ["Trusted-Outsider"],
+    })
+    permission_calls: list[tuple[str, str]] = []
+
+    def fake_permission(repo, username, token):
+        permission_calls.append((repo, username))
+        return None
+
+    monkeypatch.setattr(client, "get_collaborator_permission", fake_permission)
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "id": 502,
+            "body": "@brr-bot do something",
+            "user": {"login": "trusted-outsider"},
+            "issue_url": "https://api.github.com/repos/owner/name/issues/7",
+            "html_url": "https://github.com/owner/name/issues/7#issuecomment-502",
+            "updated_at": "2026-06-01T00:00:00Z",
+        },
+    ] if path == "/repos/owner/name/issues/comments" else [])
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert permission_calls == [], (
+        "an allowlist hit must short-circuit before any permission API call"
+    )
+
+
+def test_mention_trigger_editing_seen_comment_does_not_double_fire(tmp_path, monkeypatch):
+    """Editing an already-processed comment must not create a second run:
+    the ``seen_comment_ids`` dedup guards this independent of the authz
+    gate, since the edited comment keeps its original id and resurfaces
+    in the next since-filtered poll window via its bumped updated_at."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+    monkeypatch.setattr(
+        client, "get_collaborator_permission",
+        lambda repo, username, token: "write",
+    )
+
+    comment = {
+        "id": 503,
+        "body": "@brr-bot do something",
+        "user": {"login": "trusted-dev"},
+        "issue_url": "https://api.github.com/repos/owner/name/issues/8",
+        "html_url": "https://github.com/owner/name/issues/8#issuecomment-503",
+        "updated_at": "2026-06-01T00:00:00Z",
+    }
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        comment,
+    ] if path == "/repos/owner/name/issues/comments" else [])
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert len(protocol.list_pending(inbox)) == 1
+
+    # Simulate an edit: same id, later updated_at, still surfaces in the
+    # since-filtered poll window on the next loop pass.
+    comment["updated_at"] = "2026-06-01T00:05:00Z"
+    comment["body"] = "@brr-bot do something else now"
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert len(protocol.list_pending(inbox)) == 1
