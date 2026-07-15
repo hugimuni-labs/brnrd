@@ -103,11 +103,6 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "class": "strong",
         "cost_rank": 55,
         "freshness_date": "2026-07-11",
-        # Fable is a capability overlay; Claude Code reports it in modelUsage
-        # under the underlying billing model id, not the "claude-fable-5" flag.
-        # core_mismatch uses this to avoid a false-positive alarm when the
-        # billing alias appears instead of the model flag name.
-        "bills_as": ["claude-opus-4-8"],
     },
     # ── Codex (OpenAI) ──────────────────────────────────────────────────
     # codex exec -m <model> selects the Core. The GPT-5.6 family maps onto
