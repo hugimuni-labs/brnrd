@@ -590,18 +590,43 @@ def find_event_by_origin_message(
     origin_message_key: str | None,
     *,
     exclude_event_id: str = "",
+    max_age_seconds: float | None = None,
+    now_epoch: float | None = None,
 ) -> dict[str, Any] | None:
-    """Return a prior event record for the same source message, if any."""
+    """Return a prior event record for the same source message, if any.
+
+    The dedup this feeds catches a *genuine re-delivery* — the same external
+    message landing on two configured channels — which is near-simultaneous by
+    construction (one webhook, fanned out). So the scan is windowed:
+    ``max_age_seconds`` (``None`` = unbounded, the old behaviour) drops a prior
+    record whose ``ts`` is older than the window before it can match.
+
+    Without the window, an origin key that *coincidentally* repeats — a stale
+    message whose id collides with a new one — false-matches across arbitrary
+    history and silently drops the new message as a duplicate. A real
+    re-delivery never arrives a day (let alone a month) after the original;
+    a collision is the only thing that does.
+    """
     if not origin_message_key:
         return None
+    cutoff: float | None = None
+    if max_age_seconds is not None:
+        base = now_epoch if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+        cutoff = base - max_age_seconds
     for key in list_conversations(brr_dir):
         for record in read_records(brr_dir, key):
             if record.get("kind") != "event":
                 continue
             if record.get("event_id") == exclude_event_id:
                 continue
-            if record.get("origin_message_key") == origin_message_key:
-                return _tag_record(record, key)
+            if record.get("origin_message_key") != origin_message_key:
+                continue
+            if cutoff is not None and _ts_epoch(record) < cutoff:
+                # Too old to be a re-delivery — a coincidental key collision,
+                # not the same message arriving twice. Keep scanning: a genuine
+                # recent re-delivery may still be ahead.
+                continue
+            return _tag_record(record, key)
     return None
 
 
