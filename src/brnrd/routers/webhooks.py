@@ -192,7 +192,32 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
     inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
 
 
+def _audit_reject(parsed: tg.ParsedMessage, *, reason: str) -> None:
+    # #409 — default-closed gate audit trail. Deliberately server-side
+    # only (no chat reply): telling an unauthorized sender *why* they
+    # were rejected would let them probe for a valid principal.
+    print(f"[brnrd] telegram authz denied: chat={parsed.chat_id} user={parsed.user_id} reason={reason}")
+
+
+def _authorized(settings, parsed: tg.ParsedMessage, route: ChannelRoute) -> bool:
+    """#409 — default-closed: enqueue iff the verified sender is the
+    chat's paired principal or sits in the configured allowlist. The
+    sender is always ``parsed.user_id`` (the update's verified
+    ``from.id``), never text parsed from the message body."""
+    if parsed.user_id is None:
+        return False
+    if route.paired_user_id is not None and parsed.user_id == route.paired_user_id:
+        return True
+    return parsed.user_id in settings.telegram_authz_allowlist
+
+
 def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) -> None:
+    if parsed.user_id is None:
+        # Anonymous admin / channel-post sender_chat — no personal
+        # identity to bind as the route's principal (#409, default-closed).
+        _audit_reject(parsed, reason="start_no_sender_id")
+        _reply(settings, parsed, "Pairing requires an identifiable Telegram account (not an anonymous admin or channel post).")
+        return
     pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one_or_none()
     expires = pc.expires_at if pc else None
     if expires is not None and expires.tzinfo is None:
@@ -206,15 +231,29 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
         _reply(settings, parsed, "This chat/topic is already paired to another account.")
         return
     if existing is None:
-        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id)
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id, paired_user_id=parsed.user_id)
         db.add(existing)
     else:
         existing.account_id = pc.account_id
         existing.repo_id = pc.repo_id
+        existing.paired_user_id = parsed.user_id
     pc.consumed = True
     repo = db.get(Repo, pc.repo_id)
     db.commit()
     _reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
+
+
+def _apply_chat_migration(db: Session, migration: tuple[str, str]) -> None:
+    """#409 — a group->supergroup migration changes the chat's numeric id;
+    follow it on any paired route so the chat doesn't silently fall out of
+    its pairing (and, worse, so a *new* chat that later reuses the old id
+    doesn't inherit someone else's route)."""
+    old_id, new_id = migration
+    routes = db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == old_id)).scalars().all()
+    for route in routes:
+        route.channel_id = new_id
+    if routes:
+        db.commit()
 
 
 def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: str, args: str, route: ChannelRoute | None) -> bool:
@@ -246,8 +285,21 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
     settings = request.app.state.settings
     if not settings.telegram_webhook_secret or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.telegram_webhook_secret):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
+    # #409 — a group->supergroup migration service message carries no
+    # text, so `parse_update` would already drop it silently; check for it
+    # first so the route's chat id still follows the migration instead of
+    # just going quiet. Never a trigger either way.
+    migration = tg.parse_migration(payload)
+    if migration is not None:
+        with request.app.state.SessionLocal() as db:
+            _apply_chat_migration(db, migration)
+        return {"ok": True}
     parsed = tg.parse_update(payload)
     if parsed is None:
+        return {"ok": True}
+    if parsed.is_edit:
+        # #409 — an edit never (re)triggers pairing, a command, or a run.
+        _audit_reject(parsed, reason="edited_message")
         return {"ok": True}
     with request.app.state.SessionLocal() as db:
         code = tg.pair_code_from_text(parsed.text)
@@ -266,6 +318,12 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         repo = db.get(Repo, route.repo_id)
         if repo is None:
             _reply(settings, parsed, "This chat's active repo no longer exists. Use /repo owner/name to select another one.")
+            return {"ok": True}
+        # #409 — default-closed authorization gate: the sender must be the
+        # chat's paired principal or explicitly allowlisted. This is the
+        # last check before enqueueing an autonomous run.
+        if not _authorized(settings, parsed, route):
+            _audit_reject(parsed, reason="not_authorized")
             return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=parsed.text)
     return {"ok": True}
