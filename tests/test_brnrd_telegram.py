@@ -185,6 +185,160 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
     }
 
 
+# ── #409 default-closed authorization gate ───────────────────────────
+
+
+def test_non_principal_group_member_is_not_enqueued(env):
+    # Ada (user_id=42, the default sender) pairs the chat by running
+    # /start; a different member of the same group chat is neither the
+    # paired principal nor allowlisted, so their message must not enqueue.
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", user_id=999, username="mallory", name="Mallory"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    # No reply either — the audit trail for a denied sender is
+    # server-side only, so an unauthorized prober learns nothing.
+    assert sends == []
+
+
+def test_paired_principal_is_enqueued(env):
+    # The sender who consumed the pair code is the route's principal —
+    # their own later messages must still enqueue (test_bound_chat_message
+    # _enqueues_with_reply_to already covers this end-to-end; this pins
+    # the authorization predicate itself in isolation).
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", message_id=88),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.repo_id == rid
+        assert event.body == "do the thing"
+
+
+def test_allowlisted_sender_is_enqueued(monkeypatch):
+    monkeypatch.setattr("brnrd.platforms.telegram.send_message", lambda *a, **k: None)
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+        telegram_authz_allowlist=(777,),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "do the thing", user_id=777, username="carol", name="Carol"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.repo_id == rid
+        assert event.body == "do the thing"
+
+
+def test_edited_message_does_not_enqueue(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()
+
+    original = _message(555, "do the thing", message_id=88)
+    edited_payload = {
+        "update_id": original["update_id"],
+        "edited_message": original["message"],
+    }
+    r = client.post("/v1/webhooks/telegram", json=edited_payload, headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert sends == []
+
+
+def test_migration_updates_route_chat_id_without_enqueue(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    sends.clear()
+
+    migrate_payload = {
+        "update_id": 909,
+        "message": {
+            "message_id": 900,
+            "chat": {"id": 555},
+            "date": int(time.time()),
+            "migrate_to_chat_id": -100555,
+        },
+    }
+    r = client.post("/v1/webhooks/telegram", json=migrate_payload, headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        route = db.execute(
+            select(ChannelRoute).where(ChannelRoute.channel_id == "-100555")
+        ).scalar_one()
+        assert route.repo_id == rid
+        assert db.execute(select(Event)).scalars().all() == []
+    assert sends == []  # never a trigger, no reply either
+
+
+def test_forwarded_message_keys_on_forwarder_not_origin(env):
+    # A forward carries the forwarder's own `from.id` (42, the paired
+    # principal) plus `forward_origin` describing who originally sent it
+    # (999, a stranger). Authorization must key on the forwarder.
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    payload = _message(555, "forwarded task", message_id=88)
+    payload["message"]["forward_origin"] = {
+        "type": "user",
+        "sender_user": {"id": 999, "first_name": "Not Ada"},
+    }
+    r = client.post("/v1/webhooks/telegram", json=payload, headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.repo_id == rid
+        assert event.body == "forwarded task"
+
+
 def test_unbound_chat_gets_setup_error(env):
     app, client, sends = env
     r = client.post(

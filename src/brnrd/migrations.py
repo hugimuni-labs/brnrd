@@ -29,6 +29,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_repos(conn)
         if _table_exists(conn, "daemons"):
             _migrate_daemons(conn)
+        if _table_exists(conn, "channel_routes"):
+            _migrate_channel_routes(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -134,6 +136,13 @@ def _migrate_daemons(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_default VARCHAR(64)"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_updated_at TIMESTAMP"))
+
+
+def _migrate_channel_routes(conn: Connection) -> None:
+    # #409 — authorization principal for the default-closed Telegram gate;
+    # existing rows land NULL (no principal), which is deliberately
+    # unauthorized until the chat is re-paired via /start.
+    conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_id INTEGER"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
