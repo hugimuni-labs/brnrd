@@ -806,6 +806,72 @@ def _parse_record_ts(value: Any) -> datetime | None:
     return parsed
 
 
+def _schedule_repeat_key(record: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the source/body identity used to collapse schedule repeats."""
+    if record.get("kind") != "event" or record.get("source") != "schedule":
+        return None
+    schedule_id = str(record.get("schedule_id") or "").strip()
+    if not schedule_id:
+        # Older records did not persist schedule_id. The default thread key
+        # still gives those records a safe per-entry identity.
+        conversation_key = str(record.get("conversation_key") or "")
+        if conversation_key.startswith("schedule:"):
+            schedule_id = conversation_key.removeprefix("schedule:").strip()
+    body = record.get("body")
+    if not schedule_id or not isinstance(body, str):
+        return None
+    return schedule_id, body
+
+
+def _collapse_schedule_repeats(
+    dialogue: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse exact repeated firings while retaining the newest body.
+
+    Schedule events are self-originated and can recur indefinitely without
+    receiving a reply artifact. Keep one bounded marker for older exact
+    copies, but leave the newest full event and all non-identical or
+    non-schedule dialogue untouched.
+    """
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, record in enumerate(dialogue):
+        key = _schedule_repeat_key(record)
+        if key is not None:
+            groups.setdefault(key, []).append(index)
+
+    replacements: dict[int, dict[str, Any]] = {}
+    discarded: set[int] = set()
+    for (schedule_id, _body), indices in groups.items():
+        if len(indices) < 2:
+            continue
+        oldest = indices[0]
+        newest = indices[-1]
+        older_count = len(indices) - 1
+        first_ts = _ts_key(dialogue[oldest])
+        # The marker describes only the discarded firings; the newest firing
+        # remains as the full turn immediately after it.
+        last_ts = _ts_key(dialogue[indices[-2]])
+        span = f", {first_ts} → {last_ts}" if first_ts and last_ts else ""
+        summary = _summary_for_body(
+            f"({older_count} earlier identical firings of schedule:{schedule_id}"
+            f"{span})"
+        )
+        marker = dict(dialogue[oldest])
+        marker.pop("event_id", None)
+        marker["body"] = summary
+        marker["summary"] = summary
+        marker["schedule_repeat_summary"] = True
+        marker["schedule_repeat_count"] = older_count
+        replacements[oldest] = marker
+        discarded.update(indices[1:-1])
+
+    return [
+        replacements.get(index, record)
+        for index, record in enumerate(dialogue)
+        if index not in discarded
+    ]
+
+
 def _select_snapshot_turns(
     records: list[dict[str, Any]],
     *,
@@ -827,8 +893,11 @@ def _select_snapshot_turns(
     order so the prompt still reads like a chat.
     """
     dialogue = [r for r in records if _is_dialogue_record(r)]
+    if limit <= 0:
+        return dialogue
+    dialogue = _collapse_schedule_repeats(dialogue)
     total = len(dialogue)
-    if limit <= 0 or total <= limit:
+    if total <= limit:
         return dialogue
 
     answered_event_ids = {
@@ -1076,6 +1145,9 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
     origin_message_key = origin_message_key_for_event(event)
     if origin_message_key:
         record["origin_message_key"] = origin_message_key
+    schedule_id = str(event.get("schedule_id") or "").strip()
+    if schedule_id:
+        record["schedule_id"] = schedule_id
     append_record(brr_dir, key, record, event_id=eid)
 
 
