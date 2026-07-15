@@ -34,11 +34,25 @@ class ParsedMessage:
     user: str
     user_id: int | None
     username: str
+    # #409 — True for an ``edited_message`` update. An edit never triggers
+    # anything (pairing, commands, or an enqueue) — see webhooks.telegram_webhook.
+    is_edit: bool = False
 
 
 def parse_update(payload: dict) -> ParsedMessage | None:
     """Normalize a Telegram update into a message, or None if it isn't
-    a text message we can act on."""
+    a text message we can act on.
+
+    The sender is always the verified update's ``from.id`` — never text
+    parsed out of the message body, and never a forwarded message's
+    origin (``forward_from`` / ``forward_origin``), which this
+    deliberately ignores. A ``sender_chat`` on the message (an anonymous
+    group admin, or a channel post) has no personal ``from`` identity
+    that a human account owns, so the sender is forced to ``None`` even
+    if Telegram also populated ``from`` with a generic service account —
+    default-closed treats it as unattributable (#409).
+    """
+    is_edit = payload.get("message") is None and isinstance(payload.get("edited_message"), dict)
     msg = payload.get("message") or payload.get("edited_message")
     if not isinstance(msg, dict):
         return None
@@ -53,6 +67,9 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     except (TypeError, ValueError, OSError):
         message_date = None
     sender = msg.get("from") or {}
+    user_id = sender.get("id")
+    if msg.get("sender_chat") is not None:
+        user_id = None
     return ParsedMessage(
         chat_id=str(chat_id),
         text=text,
@@ -60,9 +77,38 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         message_id=msg.get("message_id"),
         topic_id=msg.get("message_thread_id"),
         user=sender.get("first_name", "?"),
-        user_id=sender.get("id"),
+        user_id=user_id,
         username=sender.get("username") or "",
+        is_edit=is_edit,
     )
+
+
+def parse_migration(payload: dict) -> tuple[str, str] | None:
+    """Return ``(old_chat_id, new_chat_id)`` for a group->supergroup
+    migration service message, or None.
+
+    Telegram sends this as a plain ``message`` (never ``edited_message``)
+    carrying no text — ``parse_update`` would return None for it, which
+    is correct for "never a trigger" but loses the chat-id change unless
+    something else looks for it first. Two shapes arrive, one per chat:
+    ``migrate_to_chat_id`` posted to the *old* chat id, and
+    ``migrate_from_chat_id`` posted to the *new* one; either is enough to
+    resolve the pair (#409).
+    """
+    msg = payload.get("message")
+    if not isinstance(msg, dict):
+        return None
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    if chat_id is None:
+        return None
+    to_id = msg.get("migrate_to_chat_id")
+    if to_id is not None:
+        return str(chat_id), str(to_id)
+    from_id = msg.get("migrate_from_chat_id")
+    if from_id is not None:
+        return str(from_id), str(chat_id)
+    return None
 
 
 def pair_code_from_text(text: str) -> str | None:
