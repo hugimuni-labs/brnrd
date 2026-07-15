@@ -48,6 +48,9 @@ def _env_int_tuple(name: str) -> tuple[int, ...]:
             continue
     return tuple(out)
 
+def _env_csv_lower(name: str) -> tuple[str, ...]:
+    return tuple(p.strip().lower() for p in os.environ.get(name, "").split(",") if p.strip())
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -95,6 +98,10 @@ class Settings:
     github_bot_collaborator_permission: str = os.environ.get("BRNRD_GITHUB_BOT_COLLABORATOR_PERMISSION", "triage")
     github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
+    # #408 — default-closed authorization gate: logins here bypass the
+    # author_association check (OWNER/MEMBER/COLLABORATOR) for the
+    # managed GitHub webhook. Comma-split, lowercased.
+    github_authz_allowlist: tuple[str, ...] = _env_csv_lower("BRNRD_GITHUB_AUTHZ_ALLOWLIST")
 
     # Billing (#53, kb design-billing.md §"Launch defaults + tunable knobs").
     # Test mode until #52 (Stripe France KYB) flips the keys to live.

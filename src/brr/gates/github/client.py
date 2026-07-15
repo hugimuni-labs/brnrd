@@ -13,6 +13,7 @@ from typing import Any
 
 import requests
 
+from . import paths
 from .constants import _API_ROOT, _API_VERSION, _HTTP_TIMEOUT, _USER_AGENT
 
 # One Session for the gate's single loop thread: keep-alive reuses the
@@ -189,3 +190,22 @@ def _api_post(token: str, path: str, body: dict[str, Any]) -> Any:
 def _api_patch(token: str, path: str, body: dict[str, Any]) -> Any:
     payload, _ = _request(token, "PATCH", path, body=body)
     return payload
+
+
+def get_collaborator_permission(repo: str, username: str, token: str) -> str | None:
+    """Return *username*'s permission level on *repo*, or ``None``.
+
+    One of ``admin``/``write``/``maintain``/``read``/``none`` on success.
+    ``None`` covers both "not a collaborator" (404) and any other
+    transport/API failure — the authorization gate (#408) treats both
+    the same way: deny unless the author is separately allowlisted.
+    Never raises.
+    """
+    try:
+        payload = _api_get(token, paths.collaborator_permission(repo, username))
+    except GitHubAPIError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    permission = payload.get("permission")
+    return str(permission) if isinstance(permission, str) and permission else None
