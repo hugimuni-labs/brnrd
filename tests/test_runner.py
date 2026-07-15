@@ -7,6 +7,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from brr import runner as runner_mod
 from brr.runner import (
     DEFAULT_RUNNER_TIMEOUT,
@@ -18,6 +20,7 @@ from brr.runner import (
     detect_runner,
     invoke_runner,
     resolve_runner,
+    resolve_runner_profile,
     runner_timeout,
 )
 
@@ -155,6 +158,10 @@ def test_resolve_runner_shell_plus_core_compose(tmp_path, monkeypatch, capsys):
         lambda name: "/usr/bin/claude" if name == "claude" else None,
     )
     assert resolve_runner(tmp_path) == "claude-fable"
+    selected = resolve_runner_profile(tmp_path)
+    assert selected.name == "claude-fable"
+    assert selected.shell == "claude"
+    assert selected.model == "claude-fable-5"
     assert capsys.readouterr().err == ""
 
 
@@ -774,6 +781,37 @@ class TestCommandBuilding:
             (outbox / ".claude-result-levels.json").read_text(encoding="utf-8")
         )
         assert snap["spend"]["summary"] == "$0.0100 this session (estimated)"
+
+    def test_pinned_core_substitution_fails_before_response_capture(self, tmp_path):
+        response_path = tmp_path / "response.md"
+        payload = {
+            "type": "result",
+            "result": "confident but wrong body\n",
+            "modelUsage": {"claude-opus-4-8": {"outputTokens": 4}},
+        }
+        cfg = {
+            "runner_cmd": [
+                sys.executable, "-c",
+                "import json, sys; sys.stdout.write(json.dumps(json.loads(sys.argv[1])))",
+                json.dumps(payload),
+            ],
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="substitution", prompt="ignored",
+            cwd=tmp_path, repo_root=tmp_path,
+            response_path=str(response_path),
+            env={"BRR_OUTBOX_DIR": str(tmp_path / "outbox")},
+            expected_core="claude-fable-5",
+        )
+
+        result = invoke_runner("claude-fable", invocation, cfg=cfg)
+
+        assert result.ok is False
+        assert result.core_mismatch is True
+        assert result.observed_core == "claude-opus-4-8"
+        assert not response_path.exists()
+        with pytest.raises(RuntimeError, match="Core attestation failed"):
+            result.raise_for_error()
 
     def test_build_cmd_runner_cmd_override_substitutes_prompt_only(self):
         cfg = {"runner_cmd": ["mock", "--flag", "{prompt}"]}
