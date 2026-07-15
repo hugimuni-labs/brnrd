@@ -1,205 +1,193 @@
 # brnrd
 
-![brnrd](https://github.com/Gurio/brr/raw/main/media/brnrd-logo.png)
+<p align="center">
+  <img src="media/brnrd-boot.gif" width="720" alt="brnrd boot sequence: underscore, b_d, br_rd, brnrd">
+</p>
 
-Structured AI agent playbook with persistent knowledge base and remote execution.
+<p align="center">
+  <strong>Local agents go brr. From anywhere.</strong><br>
+  Claude Code, Codex, and Gemini CLI on your machine; Telegram, Slack, GitHub, and the web in your pocket.
+</p>
 
-brnrd produces `AGENTS.md` — a playbook that encodes your project's conventions,
-workflow, and guardrails.  Any AI tool that reads it (Claude Code, Cursor, Codex,
-Gemini) gets the same behavior.  brnrd adds a remote execution layer: a daemon that
-accepts tasks from Telegram, Slack, GitHub (issue labels and PR / issue
-mentions), or anything that writes a file.
+Your coding agent already lives where the work is: your repo, shell, credentials,
+odd test setup, and all the context nobody put in the ticket. brnrd gives it a
+doorbell, a memory, and a live line back to you.
 
-**Two layers of value:**
+Send the task from your phone. Watch the plan and progress card change while it
+works. Correct course without interrupting the run. Get a branch, a PR, or an
+answer back in the same thread.
 
-1. **Playbook only** — `AGENTS.md` + `kb/` work with any AI tool, no brnrd needed.
-   Copy the conventions, use them everywhere.
-2. **Full tool** — the brnrd daemon handles remote execution, gate I/O, knowledge
-   persistence, and git push.
+brnrd is not another coding model. It runs the CLI agents you already chose —
+locally, under your rules — and turns them into a repo-knowing coworker you can
+reach when you are away from the terminal.
 
-Execution stays local. The optional managed service relays remote events and
-hosts the dashboard without moving agent work off your machine.
+## The loop
 
-## Install
+```text
+you · Telegram / Slack / GitHub / dashboard
+                         │
+                         ▼
+                  a small gate
+                         │
+                         ▼
+        brnrd daemon · your machine · your repo
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+     Claude Code        Codex       Gemini CLI
+          │              │              │
+          └──────────────┼──────────────┘
+                         ▼
+             progress · replies · git
+```
+
+The daemon does the boring, load-bearing work around the model: it assembles the
+current repo context, selects an execution environment, keeps conversation
+continuity, exposes live control surfaces, preserves the work in git, and routes
+the result back through the gate.
+
+## Why it feels different
+
+### It stays in the room
+
+Each repo gets a resident with working memory, project knowledge, recent history,
+and a playbook. A new run is another thought from the same coworker, not an
+amnesiac subprocess wearing yesterday's name tag.
+
+### The conversation stays live
+
+Most agent automation makes you choose between waiting silently and barging into
+the process. brnrd keeps an append-only reply channel and a live progress card
+beside the run. Follow-ups arrive at runner boundaries, so you can add a fact or
+change direction without killing the thought in flight.
+
+### The model is a medium, not an identity
+
+Pin Claude, Codex, or Gemini; choose a stronger core for a hard pass; delegate a
+bounded job to a cheaper one; see quota posture before it becomes a surprise.
+The resident keeps the thread while the runner changes underneath it.
+
+### Local means local
+
+The checkout, shell, runner process, and normal execution stay on your machine.
+Use `host`, isolated `worktree`, or Docker execution per project. Managed gates
+relay remote messages and status; they do not move your repo into a hosted IDE.
+
+### The seams are files
+
+Gates and live controls use a small file protocol. Telegram, Slack, GitHub, and
+the managed cloud gate ship today; another transport does not require teaching
+the daemon a new religion. The same seam carries progress notes, cross-thread
+replies, runner handoffs, and PR publication.
+
+## Try it
+
+The shortest path from an npm-shaped world:
 
 ```bash
-pip install brnrd
+npx brnrd init -i
 ```
 
-Coming from the AI-coding-tool world, where everything ships through npm:
+`npx brnrd` is a bootstrapper for the Python package, not a JavaScript port. It
+keeps its own environment and leaves your system Python alone.
+
+Or install the command directly:
 
 ```bash
-npx brnrd init
+uv tool install brnrd        # recommended when uv is already present
+# or: pipx install brnrd
 ```
 
-`npx brnrd` is a bootstrapping installer, not a port — first run creates a
-durable virtualenv, installs brnrd from PyPI into it, and hands over. If Python
-is absent, it downloads a checksum-verified uv binary and lets uv provision a
-managed CPython. Everything it installs stays under `~/.local/share/brnrd` (or
-`$BRNRD_HOME`); it does not modify your system Python or PATH.
+Then choose your door.
 
-Or, with `uv` already installed:
+Managed gates, one account across repos:
 
 ```bash
-uvx brnrd            # zero-install run, straight from PyPI
+brnrd connect                # pair this machine with brnrd.dev
+brnrd add .                  # add the current repo
+brnrd daemon install         # keep the local daemon alive with systemd/launchd
 ```
 
-`uvx` uses a throwaway environment — good for a first look, wrong for
-`brnrd daemon install`, which needs a real install to point a long-lived
-service at. `npx brnrd` and `pip install` both give you one.
-
-Or run from a local checkout while developing or customizing brnrd itself:
+Or bring your own gate and keep the whole route self-hosted:
 
 ```bash
-git clone https://github.com/Gurio/brr
-/path/to/brr/brnrd init
+brnrd setup telegram         # auth + bind the current repo
+brnrd daemon install
 ```
 
-For an editable install:
+Now send a message from the other side:
 
-```bash
-pip install -e /path/to/brr
+```text
+review PR #84 for the auth regression; show me the risky bit before changing it
 ```
 
-Forks work with normal Python packaging too:
+The first useful demo belongs here. It is being recorded against the real
+product, not mocked into a terminal — follow [#28](https://github.com/Gurio/brr/issues/28).
 
-```bash
-pip install git+https://github.com/Gurio/brr.git
-```
+## What arrives in a wake
 
-## Quick start
+The resident does not begin with “please inspect the repo.” brnrd mounts a compact
+orientation layer before the task:
 
-```bash
-brnrd init                          # detect runner, create AGENTS.md + kb/
-brnrd run "fix the failing tests"   # run a task through the configured environment
+- the repo contract and current run facts;
+- the resident's own working memory;
+- recent project activity and relevant known pitfalls;
+- live queue, quota, delivery, and branch posture;
+- the original request and the conversation that led to it.
 
-brnrd bind . telegram               # configure a repo-local remote input
-brnrd up                            # start the daemon in the foreground
-brnrd daemon install                # install the native user service
-```
+The rest stays pull-based. Project knowledge can live in a private account home,
+a repo-owned knowledge base, or ordinary docs; the injected slice points the
+resident at the longer tail when it needs it.
 
-From Telegram (or Slack, or a task file):
+That split is the trick: enough continuity to wake up somewhere, not so much
+prompt that the agent spends the morning rereading its diary.
 
-```
-> fix the failing tests in auth/
-> research caching strategies for the API layer
-> review the latest PR for security issues
-```
+## Trust, without the “military-grade” paragraph
 
-## What brnrd creates
+brnrd runs coding agents. They can execute commands and edit files with the
+authority you give them. `host` mode has the same trust boundary as launching the
+CLI yourself; Docker adds dependency and network isolation, but it is not a
+containment boundary for a hostile agent when you mount credentials and a writable
+repo into it.
 
-`brnrd init` sets up:
+Remote messages necessarily travel through the transport you choose. In managed
+mode they also transit brnrd.dev before reaching your daemon; normal code execution
+and repo contents stay local. Use self-hosted gates when that route is not
+appropriate. Never paste credentials into a task — configure them through the
+runner or gate instead.
 
-- **`AGENTS.md`** — playbook with workflow, kb conventions, commit protocol,
-  artifact rules, guardrails, self-review instructions.
-- **`kb/`** — persistent knowledge base committed to the repo.  Compounds
-  across sessions.
-- **`.brr/`** — runtime directory (gitignored): inbox, responses, config,
-  gate state.
+The release-readiness security and privacy review is tracked under
+[#23](https://github.com/Gurio/brr/issues/23). Two ingress gaps found in that
+review are explicit release blockers: GitHub trigger-author authorization
+([#408](https://github.com/Gurio/brr/issues/408)) and per-sender authorization
+for Telegram groups ([#409](https://github.com/Gurio/brr/issues/409)). Until
+they land, do not connect a public-repo GitHub gate or trust a paired group chat;
+the managed one-to-one Telegram path is the dogfooded route. The execution and
+environment contracts are inspectable in
+[the execution map](src/brr/docs/execution-map.md) and
+[environment guide](src/brr/docs/envs.md).
 
-One name, one tool: **brnrd**. You'll also see `brr` inside the machinery —
-the `.brr/` state directory, the `brr/…` branch prefix, the `brr` Python
-package. That's the embedded runtime substrate, kept stable because real
-state lives there; it isn't a second product and you never have to install,
-run, or think about it.
+## Current posture
 
-## Architecture
+brnrd is alpha software, already used to build itself. The resident loop, local
+daemon, managed Telegram path, live dashboard, runner switching, worktree/Docker
+execution, and git handoff are real. The public docs, multi-project proving,
+managed billing/failover, and some operational polish are still release work.
 
-```
-AGENTS.md + kb/         universal: works with any AI tool
-  │
-  ├── Claude Code reads it
-  ├── Cursor reads it
-  ├── Codex reads it
-  │
-  └── brnrd adds remote execution:
+If you want a quiet appliance, wait. If you want a local agent coworker with a
+remote door and you are willing to report the sharp edges, welcome in.
 
-  ┌─────────┐    .brr/inbox/    ┌────────┐    runner    ┌──────────┐
-  │  Gates  │───────────────────│ Daemon │──────────────│  Runner  │
-  │ tg/slack│    .brr/responses │        │  subprocess  │ (AI CLI) │
-  │ gh/any  │◄──────────────────│        │◄─────────────│          │
-  └─────────┘                   └────────┘   git push   └──────────┘
-```
+Useful internals:
 
-Gates are transport adapters — they create event files and deliver responses.
-The daemon scans the inbox and runs workers.  The runner is whatever AI CLI
-you have installed.
+- [Portals](src/brr/docs/portals.md) — live interaction and handoff surfaces
+- [Conversations](src/brr/docs/conversations.md) — how continuity is recovered
+- [Environments](src/brr/docs/envs.md) — host, worktree, and Docker semantics
+- [Account daemon](src/brr/docs/account-daemon.md) — multi-repo/account topology
+- `brnrd docs` — the docs that ship inside the tool
 
-Telegram works with just a bot token.  Once the daemon is running, send the
-bot a message; brnrd records the chat ID from each message and replies there.
+## Build it
 
-## CLI
-
-| Command                | What it does                          |
-|------------------------|---------------------------------------|
-| `brnrd init [url]`       | Create AGENTS.md + kb/, detect runner |
-| `brnrd run "<task>"`     | Run a task via the configured runner  |
-| `brnrd bind <repo> <gate>` | Bind a repo-local gate               |
-| `brnrd connect [url]`    | Connect this daemon to brnrd service  |
-| `brnrd add <repo>`       | Add a repo to the connected account home |
-| `brnrd home link`        | Back up the agent's memory + knowledge base to private GitHub repos (one question, idempotent) |
-| `brnrd kb "<query>"`     | Search home/repo knowledge            |
-| `brnrd up`               | Start the daemon (foreground)         |
-| `brnrd down`             | Stop the foreground daemon            |
-| `brnrd daemon up`        | Start the installed daemon service, or foreground daemon if no service is installed |
-| `brnrd daemon down`      | Stop the installed daemon service, or foreground daemon if no service is installed |
-| `brnrd daemon status`    | Show service and foreground daemon status |
-| `brnrd daemon install`   | Install the native user service (systemd or LaunchAgent) |
-| `brnrd daemon uninstall` | Remove the native user service |
-| `brnrd daemon logs`      | Tail native service logs |
-
-Gates: `telegram`, `slack`, `github`.
-
-On macOS, the first daemon run that opens network sockets can trigger
-the system "accept incoming network connections" prompt. Allow it if
-you want gates and managed brnrd traffic to reach the local daemon.
-
-## Extending
-
-**Gates** follow a file protocol: write to `.brr/inbox/`, read from
-`.brr/responses/`.  Any language works.  See `src/brr/gates/README.md`
-for the spec and a bash example.
-
-**Runners** are CLI commands on PATH: any process that can operate files
-from a prompt, print the final reply to stdout, and stream progress to
-stderr. Built-in profiles cover `claude`, `codex`, and `gemini`; manage
-project-specific profiles in `.brr/runners.md`. Pin what runs with `shell=`
-(which CLI) and `core=` (which model) in `.brr/config`, or use `runner_cmd`
-for one custom command. Left unset, brnrd picks cost-aware from the profiles
-available on PATH. (`runner=<profile>` is the older pin; still honoured.)
-
-**Environments** are daemon backends.  Configure the user-facing policy
-with `environment=<auto|host|worktree|docker>` in `.brr/config`.
-`environment=auto` prefers configured Docker isolation, then falls back
-to worktree behavior.  The concrete built-ins today are `host`,
-`worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
-or service-specific plugins fit behind the same internal protocol.
-
-Daemon git operations are publish-plan driven. Each task starts on a
-fresh `brr/<run-id>` branch from a resolved seed ref. When the event
-names a target branch (`branch_target`, `target_branch`, `base_branch`,
-or legacy `branch`), brnrd seeds from `<remote>/<target>` and publishes
-under that name after the run. Without a structured target the task
-branch is preserved as-is and published for human routing when a remote
-is configured.
-
-Docker mode wires credentials automatically: brnrd forwards
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
-`GOOGLE_API_KEY` from the daemon's environment, and bind-mounts your
-host's `~/.claude/`, `~/.codex/`, `~/.gemini/` (when present) into the
-container so subscription auth works without extra config. See
-`src/brr/docs/envs.md` for the full breakdown — image expectations, the
-bundled runner image, and the durability contract.
-
-Branching is mostly task-internal.  brnrd uses branches/worktrees to stage
-reviewable code changes or continue an explicitly named branch, but users
-usually only choose the environment policy.
-
-**Deep customization** should use a local checkout, editable install, or
-fork.  `.brr/config` is for lightweight runtime choices like runner and
-environment policy.
-
-## Development
+Python 3.10+ and git are required. For a local checkout:
 
 ```bash
 git clone https://github.com/Gurio/brr
@@ -208,23 +196,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
-For remote-assisted brnrd development, run the daemon from the editable
-install with developer reload enabled:
-
-```bash
-brnrd up --dev-reload
-```
-
-The daemon re-execs itself between tasks when brnrd package files change.
+The repo dogfoods brnrd. Run `brnrd up --dev-reload` while changing the daemon so
+the next task picks up the new code without a process ritual.
 
 ## License
 
-**What you run on your own machine is MIT.** The local daemon core
-(`src/brr/`) is MIT licensed — fork it, vendor it, embed it, no strings. The
-managed backend and dashboard (`src/brnrd/`, `src/brnrd_web/`) are AGPLv3: the
-surface a competitor would rehost is the surface that carries copyleft.
-
-The boundary was drawn before adoption, on purpose, so the terms never have to
-change after it. See
-[`LICENSE-OVERVIEW.md`](https://github.com/Gurio/brr/blob/main/LICENSE-OVERVIEW.md)
-for the reasoning and the packaging details.
+The local runtime in `src/brr/` is MIT. The managed backend and dashboard in
+`src/brnrd/` and `src/brnrd_web/` are AGPLv3. You can run the complete stack
+yourself; the split protects the hosted surface without closing the part that
+lives on your machine. See [LICENSE-OVERVIEW.md](LICENSE-OVERVIEW.md).

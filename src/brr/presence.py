@@ -4,7 +4,7 @@ A lightweight, gitignored registry under ``.brr/presence/`` so overlapping
 thoughts can see who else is active and rarely collide on the same work —
 the collision-avoidance half of the Society-of-Mind concurrency model
 (``kb/design-agent-dominion.md`` §4). The daemon is single-flight, but the
-system is *already* multi-thought because ad-hoc sessions (Cursor, Codex,
+system is *already* multi-thought because ad-hoc editor and CLI sessions,
 a hand-run agent) work alongside the daemon, so knowing who's present is
 useful even with one daemon worker.
 
