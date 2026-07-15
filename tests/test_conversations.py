@@ -138,6 +138,61 @@ def test_origin_message_key_matches_native_and_cloud_telegram():
     )
 
 
+# ── find_event_by_origin_message: the windowed exact-duplicate scan ──────
+
+
+def _append_tg_event(tmp_path, eid, message_id):
+    event = {
+        "id": eid,
+        "source": "telegram",
+        "body": f"msg {message_id}",
+        "telegram_chat_id": 10,
+        "telegram_message_id": message_id,
+    }
+    key = conversations.conversation_key_for_event(event)
+    conversations.append_event(tmp_path, key, event)
+    return conversations.origin_message_key_for_event(event)
+
+
+def _record_epoch(tmp_path, origin_key):
+    for key in conversations.list_conversations(tmp_path):
+        for rec in conversations.read_records(tmp_path, key):
+            if rec.get("origin_message_key") == origin_key:
+                return conversations._ts_epoch(rec)
+    raise AssertionError("no record for origin key")
+
+
+def test_find_event_by_origin_message_unbounded_still_matches(tmp_path):
+    """max_age_seconds=None preserves the old behaviour: any prior match."""
+    origin = _append_tg_event(tmp_path, "evt-old", 99)
+    hit = conversations.find_event_by_origin_message(tmp_path, origin)
+    assert hit is not None
+    assert hit["event_id"] == "evt-old"
+
+
+def test_find_event_by_origin_message_windows_out_a_stale_collision(tmp_path):
+    """A prior record older than the window is a coincidental id collision,
+    not a re-delivery — it must not match and squash the new message."""
+    origin = _append_tg_event(tmp_path, "evt-monthold", 99)
+    rec_epoch = _record_epoch(tmp_path, origin)
+    # "Now" is two hours after the prior record; window is one hour.
+    hit = conversations.find_event_by_origin_message(
+        tmp_path, origin, max_age_seconds=3600, now_epoch=rec_epoch + 7200,
+    )
+    assert hit is None
+
+
+def test_find_event_by_origin_message_matches_a_recent_redelivery(tmp_path):
+    """A genuine re-delivery arrives within the window and still dedups."""
+    origin = _append_tg_event(tmp_path, "evt-first", 99)
+    rec_epoch = _record_epoch(tmp_path, origin)
+    hit = conversations.find_event_by_origin_message(
+        tmp_path, origin, max_age_seconds=3600, now_epoch=rec_epoch + 30,
+    )
+    assert hit is not None
+    assert hit["event_id"] == "evt-first"
+
+
 def test_conversation_key_explicit_wins():
     event = {
         "source": "telegram",
