@@ -84,7 +84,7 @@ committing to the default branch of a shared checkout — is unrecoverable in a 
 its cost is not.
 
 The flag survives, and it is not vestigial: it is the **control arm**.  Every future
-claim about the boot is measured against ``boot.transcript=false``, which is also
+claim about the boot is measured against ``boot.mount=false``, which is also
 why the prose path must keep working, byte for byte.
 
 ── The safety rule is a type, not a check ─────────────────────────────────────
