@@ -542,20 +542,77 @@ def _build_kb_health_block(repo_root: Path) -> str:
         return ""
     kb_dir = knowledge.active_kb_dir(repo_root, cfg)
     findings = kb_preflight.scan(repo_root, kb_dir)
-    if not findings:
+
+    # Two kinds, handled differently (2026-07-15). *Integrity* findings are
+    # specific inconsistencies with a specific fix — fold them in. *Size*
+    # findings are not: a byte count cannot tell a load-bearing page from
+    # bloat, and a per-page nag every wake trained the wrong reflex (compress
+    # the longest page — often the one whose length is the point). The
+    # reasonable idea underneath — own the kb, don't let it silt into a
+    # long-tail cemetery — survives as one derived *ownership* signal that a
+    # maintenance round is due, not a list of pages to trim.
+    integrity = [f for f in findings if f.type not in _KB_SIZE_FINDINGS]
+    size_pressure = [f for f in findings if f.type in _KB_SIZE_FINDINGS]
+    stats = kb_health.compute_graph_stats(repo_root, kb_dir)
+    ownership = _kb_ownership_signal(size_pressure, stats)
+
+    if not integrity and not ownership:
         return ""
-    findings_block = kb_preflight.format_findings(findings)
-    stats_block = kb_health.format_graph_stats(
-        kb_health.compute_graph_stats(repo_root, kb_dir),
-    )
-    body = "\n\n".join(b for b in (findings_block, stats_block) if b)
+
+    sections: list[str] = []
+    if integrity:
+        sections.append(
+            "**Integrity** — specific inconsistencies with a specific fix; "
+            "fold these into your work where they touch it:\n\n"
+            + kb_preflight.format_findings(integrity)
+        )
+    if ownership:
+        sections.append(ownership)
+
     return (
         "## kb health (deterministic preflight)\n\n"
-        "The shared `kb/` has the consistency findings below. Fold fixes "
-        "into your work where they fit — `kb/` is shared and governed by "
-        "`AGENTS.md`; the graph stays clean when each waking leaves it no "
-        "worse than it found it.\n\n"
-        f"{body}"
+        "The shared `kb/` is yours to keep coherent (governed by `AGENTS.md`); "
+        "leave it no worse than you found it.\n\n"
+        + "\n\n".join(sections)
+    )
+
+
+# Size findings are a maintenance *signal*, not per-page work — see
+# :func:`_build_kb_health_block` and :func:`_kb_ownership_signal`.
+_KB_SIZE_FINDINGS = frozenset({"oversized-page", "recent-log-budget-exceeded"})
+
+
+def _kb_ownership_signal(size_findings: list, stats) -> str:
+    """One derived line when the graph is asking for a maintenance round.
+
+    Replaces the per-page size nag (2026-07-15). Fires on accumulated size
+    pressure or orphaned pages and says *own a round* — promote / breadcrumb /
+    cut / relink — rather than *trim page X*, which is the judgment a byte count
+    cannot make and the resident can.
+
+    A follow-up worth its own change: gate this on *staleness* (wakes since the
+    last ownership round) rather than absolute size, so a kb that is legitimately
+    large-and-tended stops signalling. That needs a piece of state this does not
+    yet carry; until then the signal is at least a single line, not one per page.
+    """
+    pressure = len(size_findings)
+    orphans = len(getattr(stats, "peer_orphans", []) or [])
+    if not pressure and not orphans:
+        return ""
+    bits = []
+    if pressure:
+        bits.append(f"{pressure} page(s)/log over a size threshold")
+    if orphans:
+        bits.append(f"{orphans} indexed page(s) no peer links to")
+    return (
+        "**Ownership signal** — " + "; ".join(bits) + ". Not a list of pages to "
+        "trim: a byte count cannot tell a load-bearing page from bloat — you can. "
+        f"The graph is {stats.total_pages} pages, log {stats.log_bytes:,} B over "
+        f"{stats.log_entry_count} entries. Read this as the kb asking for a "
+        "maintenance *round* — promote what's load-bearing, breadcrumb what's "
+        "spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "dedicated pass, not a per-wake reflex to shorten the longest file. Full "
+        "graph shape on demand: `brnrd kb`."
     )
 
 
