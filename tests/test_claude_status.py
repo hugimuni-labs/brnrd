@@ -144,3 +144,90 @@ def test_facets_claude_collector_marks_quota_absent_not_known():
     assert res["spend"]["status"] == "known"
     assert res["context_window"]["status"] == "known"
     assert res["quota"]["status"] == "absent"
+
+
+# --- substitution-reason capture (2026-07-16) --------------------------------
+
+# The documented server-side fallback envelope: Fable declined, Opus served.
+# Shape from platform.claude.com refusals-and-fallback cookbook.
+_FALLBACK_RESULT = {
+    "type": "result",
+    "model": "claude-opus-4-8",
+    "content": [
+        {
+            "type": "fallback",
+            "from": {"model": "claude-fable-5"},
+            "to": {"model": "claude-opus-4-8"},
+        },
+        {"type": "text", "text": "Hi! How can I help?"},
+    ],
+    "stop_reason": "end_turn",
+    "stop_details": None,
+    "usage": {
+        "input_tokens": 412,
+        "output_tokens": 264,
+        "iterations": [
+            {"type": "message", "model": "claude-fable-5", "output_tokens": 0},
+            {"type": "fallback_message", "model": "claude-opus-4-8", "output_tokens": 264},
+        ],
+    },
+}
+
+# An all-models-declined refusal: no fallback served, category named.
+_REFUSAL_RESULT = {
+    "type": "result",
+    "model": "claude-fable-5",
+    "content": [],
+    "stop_reason": "refusal",
+    "stop_details": {"type": "refusal", "category": "cyber", "explanation": "x"},
+    "usage": {"input_tokens": 412, "output_tokens": 0},
+}
+
+
+def test_fallback_signals_none_for_non_dict():
+    assert claude_status.fallback_signals("not a dict") is None
+    assert claude_status.fallback_signals(None) is None
+
+
+def test_fallback_signals_always_records_envelope_keys():
+    # Even a clean success run yields forensics (the schema the CLI emits),
+    # so a substituted run's snapshot shows exactly what is and isn't present.
+    signals = claude_status.fallback_signals(_RESULT)
+    assert signals is not None
+    assert "modelUsage" in signals["envelope_keys"]
+    assert signals["subtype"] == "success"
+
+
+def test_fallback_signals_captures_fallback_block_and_iterations():
+    signals = claude_status.fallback_signals(_FALLBACK_RESULT)
+    assert signals["fallback_blocks"][0]["to"]["model"] == "claude-opus-4-8"
+    types = [i["type"] for i in signals["iterations"]]
+    assert "fallback_message" in types
+
+
+def test_substitution_reason_none_on_clean_success():
+    # end_turn is a benign terminal reason, not a substitution.
+    levels = claude_status.parse_result(_RESULT)
+    assert claude_status.substitution_reason(levels) is None
+
+
+def test_substitution_reason_names_served_fallback_model():
+    levels = claude_status.parse_result(_FALLBACK_RESULT)
+    reason = claude_status.substitution_reason(levels)
+    assert reason is not None
+    assert "fallback->claude-opus-4-8" in reason
+    assert "fallback_message:claude-opus-4-8" in reason
+    # end_turn must not leak in as a "reason".
+    assert "end_turn" not in reason
+
+
+def test_substitution_reason_names_refusal_category():
+    levels = claude_status.parse_result(_REFUSAL_RESULT)
+    reason = claude_status.substitution_reason(levels)
+    assert "stop_reason=refusal" in reason
+    assert "category=cyber" in reason
+
+
+def test_substitution_reason_none_without_signals():
+    assert claude_status.substitution_reason({}) is None
+    assert claude_status.substitution_reason(None) is None
