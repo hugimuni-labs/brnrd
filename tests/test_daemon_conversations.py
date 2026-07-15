@@ -23,7 +23,7 @@ def _stub_env(monkeypatch):
 
 def _patch_runner_minimal(monkeypatch, captured_prompts=None):
     captured_prompts = captured_prompts if captured_prompts is not None else []
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda root, _overrides=None: daemon.runner.runner_profile("codex", root))
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
 
     def _build_daemon(task, eid, rp, _root, **kw):

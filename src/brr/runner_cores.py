@@ -227,6 +227,7 @@ def available_cores(
         profile = runner_select.RunnerProfile(
             name=name,
             profile=shell,  # invoke the base Shell; Core is in cmd/model
+            shell=shell,
             model=_str(entry.get("model")),
             provider=_str(entry.get("provider")),
             owner="user",
@@ -257,6 +258,7 @@ def cores_for_shell(shell_name: str) -> list[runner_select.RunnerProfile]:
             runner_select.RunnerProfile(
                 name=name,
                 profile=declared_shell,
+                shell=declared_shell,
                 model=_str(entry.get("model")),
                 provider=_str(entry.get("provider")),
                 owner="user",

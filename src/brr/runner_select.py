@@ -58,6 +58,23 @@ AUTO_FALLBACK_FAILURES = frozenset(
 )
 
 
+def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
+    """Return whether a pinned Core and the Shell's attestation disagree."""
+    expected_id = (expected or "").strip().lower()
+    observed_ids = (observed or "").strip().lower()
+    if not expected_id or expected_id == "default" or not observed_ids:
+        return None
+    for observed_id in observed_ids.split("+"):
+        observed_id = observed_id.strip()
+        if observed_id and (
+            observed_id == expected_id
+            or observed_id.startswith(expected_id)
+            or expected_id.startswith(observed_id)
+        ):
+            return False
+    return True
+
+
 def _as_int(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -96,6 +113,7 @@ class RunnerProfile:
 
     name: str
     profile: str
+    shell: str
     model: str | None = None
     provider: str | None = None
     owner: str = "user"
@@ -109,6 +127,9 @@ class RunnerProfile:
     capability_score: float | None = None
     capability_source: str | None = None
     capability_freshness: str | None = None
+    auth_variant: str | None = None
+    auth_env: str | None = None
+    generated_core: bool = False
 
     @property
     def is_relay(self) -> bool:
@@ -133,6 +154,31 @@ class RunnerProfile:
         suffix = f" ({', '.join(tags)})" if tags else ""
         return " · ".join(bits) + suffix
 
+    def portal_metadata(self) -> dict[str, object]:
+        """Serialize this Runner at the portal/run-manifest boundary.
+
+        Selection and invocation keep this typed value. Dictionaries are only
+        produced where the daemon must write JSON-compatible state.
+        """
+        values: dict[str, object | None] = {
+            "name": self.name,
+            "shell": self.shell,
+            "model": self.model,
+            "provider": self.provider,
+            "owner": self.owner,
+            "class": self.cost_class,
+            "cost_rank": self.cost_rank,
+            "quota_source": self.quota_source,
+            "hooks": self.hooks,
+            "auth_variant": self.auth_variant,
+            "auth_env": self.auth_env,
+            "capability_score": self.capability_score,
+            "capability_source": self.capability_source,
+            "capability_freshness": self.capability_freshness,
+            "generated_core": self.generated_core,
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
 
 def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProfile:
     """Build a :class:`RunnerProfile` from a parsed ``runners.md`` profile entry.
@@ -145,6 +191,11 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
     return RunnerProfile(
         name=name,
         profile=_as_str(profile.get("profile")) or name,
+        shell=(
+            _as_str(profile.get("shell"))
+            or _as_str(profile.get("binary"))
+            or name
+        ),
         model=_as_str(profile.get("model")),
         provider=_as_str(profile.get("provider")),
         owner=owner,
@@ -158,6 +209,9 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
         capability_score=_as_float(profile.get("capability_score")),
         capability_source=_as_str(profile.get("capability_source")),
         capability_freshness=_as_str(profile.get("capability_freshness")),
+        auth_variant=_as_str(profile.get("auth_variant")),
+        auth_env=_as_str(profile.get("auth_env")),
+        generated_core=bool(profile.get("generated_core")),
     )
 
 
@@ -169,7 +223,9 @@ def implicit_runner(runner_name: str) -> RunnerProfile:
     unknown cost. The selector then has nothing to optimise and falls back to
     "use this one", which is the current behaviour, made explicit.
     """
-    return RunnerProfile(name=runner_name, profile=runner_name)
+    return RunnerProfile(
+        name=runner_name, profile=runner_name, shell=runner_name,
+    )
 
 
 def load_runners(repo_root: Path | None = None) -> dict[str, RunnerProfile]:
