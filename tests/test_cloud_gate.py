@@ -134,12 +134,13 @@ def test_connect_persists_token(tmp_path, monkeypatch):
                     "deep_link": "https://t.me/brnrd_bot?start=TG-TEST",
                 },
             },
+            {},  # /v1/daemons/register
         ]
     )
     seen = []
 
     def fake_request(base_url, method, path, **kwargs):
-        seen.append((method, path))
+        seen.append((method, path, kwargs))
         return next(scripted)
 
     monkeypatch.setattr(cloud, "_request", fake_request)
@@ -159,13 +160,66 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     # Persisted to .brr/gates/cloud.json and reports configured.
     assert cloud._load_state(brr_dir)["token"] == "bd_tok"
     assert cloud.is_configured(brr_dir)
-    assert ("POST", "/v1/accounts/pair") in seen
+    assert ("POST", "/v1/accounts/pair") in [call[:2] for call in seen]
+    register = seen[-1]
+    assert register[:2] == ("POST", "/v1/daemons/register")
+    assert register[2]["token"] == "bd_tok"
+    assert register[2]["json"]["daemon_name"] == "laptop"
     assert output == [
         "[brnrd] Approve this daemon at: u",
         "[brnrd] Connected to brnrd repo proj_x.",
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
         "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
+
+
+def test_connect_registers_token_for_dashboard_publishes(tmp_path, monkeypatch):
+    """The completed pairing handshake must create the Daemon row too.
+
+    Pairing and Telegram only need the minted token, so they can look healthy
+    while every dashboard mirror returns "no daemon registered for this
+    token".  Drive the real API boundary and pin the first quota publish that
+    exposed that split in production.
+    """
+    brr_dir = tmp_path / ".brr"
+    client, _ = _make_brnrd()
+    account_headers, repo_id = _account_and_project(client)
+    routed = _route_to(client)
+    pair: dict[str, str] = {}
+    approved = False
+
+    def approve_then_route(base_url, method, path, **kwargs):
+        nonlocal approved
+        if method == "GET" and path.startswith("/v1/accounts/pair/") and not approved:
+            approved = True
+            response = client.post(
+                f"/v1/accounts/pair/{pair['pair_code']}/approve",
+                json={"repo_id": repo_id},
+                headers=account_headers,
+            )
+            assert response.status_code == 200
+        result = routed(base_url, method, path, **kwargs)
+        if method == "POST" and path == "/v1/accounts/pair":
+            pair.update(result)
+        return result
+
+    monkeypatch.setattr(cloud, "_request", approve_then_route)
+    state = cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd",
+        daemon_name="already-running",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _message: None,
+    )
+
+    publish = client.put(
+        "/v1/daemons/quota",
+        json={"shells": [], "gates": []},
+        headers={"Authorization": f"Bearer {state['token']}"},
+    )
+    assert publish.status_code == 200
+    assert publish.json()["shells"] == []
 
 
 def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
