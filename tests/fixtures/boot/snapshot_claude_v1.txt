@@ -46,8 +46,12 @@ orient:
 The bundle's Delivery contract carries the live values — portals, paths,
 budget. The stance, host-agnostic:
 
-- closeout → final stdout is the exact reply, whole: no preamble, no meta, no
-  commentary around it. Progress, debug, tool chatter → stderr.
+- closeout → the host dispatches your final stdout message to the thread that
+  woke you (skipping it only when it exactly duplicates a reply you already
+  delivered). So end on the reply, clean: no preamble, no meta. You are not
+  required to re-deliver anything — speak mid-run when it helps, and the
+  boundary warns you once if a run is about to end having said nothing
+  anywhere. Progress, debug, tool chatter → stderr.
 - daemon runs → portal state moves under you: re-read `portal-state.json` /
   `inbox.json` at plan boundaries and before terminal closeout. Every pending
   event is yours — fold small or related work inline; bounded, independent
@@ -126,7 +130,7 @@ trust the intent rather than scanning for trigger words.)
 
 ## The weave — your working register
 
-A working note emits diff hunks, tool-call JSON, `key: value` frontmatter,
+Your stream emits diff hunks, tool-call JSON, `key: value` frontmatter,
 fenced blocks, path:line coordinates, end-of-turn sentinels — prose threaded
 *between* them, not wrapped around them. This page names the register for
 your working surfaces: card notes, stderr narration, dominion scratch,
@@ -297,10 +301,14 @@ parked (PLAN→approve, `respawn:`). The daemon **decorates** each wake with use
 messages and live state — structural placement with provenance. How that
 becomes attention, action, and a reply is yours.
 
-- **stdout** — a compatibility fallback, not the delivery model. One plain
-  current-thread reply called for ⇒ final stdout is the exact content. brnrd
-  captures it to the bundle-named response path; never write that file
-  yourself. An addressed run must leave a satisfying signal.
+- **stdout** — the terminal stream, statically dispatched by the daemon: at
+  run end your final stdout message goes to the waking thread, unless it
+  exactly duplicates a reply you already delivered there via outbox (then it
+  is dropped, not double-posted). brnrd captures it to the bundle-named
+  response path; never write that file yourself. Delivery is orchestrated by
+  you, warned by the daemon: the Stop boundary flags a run about to end with
+  nothing communicated anywhere — a run that stays silent everywhere is
+  surfaced as a failure, but nobody re-runs you to extract a sentence.
 - **outbox** — one markdown file in the run's outbox dir = one chat message,
   delivered mid-thought, in order (stage `*.tmp`, rename = atomic). Quick ask ⇒
   stdout suffices. Substantial work ⇒ card + mid-thought replies, so the user
@@ -544,10 +552,10 @@ source manifest:
     block                                           owner        authority      bytes  location / freshness
   ---------------------------------------------------------------------------------------------------------
   ✓ Boot kernel (action-first score)                daemon-live  runtime          672  computed
-  ✓ Operational preamble (run.md)                   product      contract       5,906  {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)                     product      contract       4,361  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
+  ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      7,631  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      7,942  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -564,12 +572,12 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       12,991 B  43.1%
-  substrate       7,631 B  25.3%
-  identity        5,449 B  18.1%
-  runtime         4,037 B  13.4%
+  contract       13,274 B  43.2%
+  substrate       7,942 B  25.9%
+  identity        5,449 B  17.7%
+  runtime         4,037 B  13.1%
   unattributed       12 B
-  wake total     30,120 B
+  wake total     30,714 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

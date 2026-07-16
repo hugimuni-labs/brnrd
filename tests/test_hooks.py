@@ -437,21 +437,25 @@ def test_post_tool_can_inject_resource_only_update(tmp_path):
 
 
 def test_stop_flags_no_outbound_messages(tmp_path):
-    # Affirmative-empty: a closeout with nothing sent surfaces the absence.
+    # Affirmative-empty: a closeout with nothing sent anywhere surfaces the
+    # absence — as a warn that names the daemon's static dispatch of the
+    # final message, never as an order to re-deliver through the outbox.
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "current event has no reply yet" in ctx
+    assert "nothing communicated on any thread yet" in ctx
+    assert "dispatches your final message" in ctx
 
 
 def test_stop_reply_guard_silent_on_an_unaddressed_run(tmp_path):
-    # A scheduled wake has no current event, so "the current event has no
-    # reply" is not a warning there — it is a false statement. The guard must
-    # only assert a fact the run can be proven wrong about.
+    # A scheduled wake has no current event, so a waking-thread delivery
+    # warning is not merely noisy there — it is a false statement. The guard
+    # must only assert a fact the run can be proven wrong about.
     _portal(tmp_path, token="t1", pending=0, current_event=None)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "current event has no reply yet" not in ctx
+    assert "nothing communicated on any thread" not in ctx
+    assert "waking thread itself has no reply" not in ctx
 
 
 def test_stop_silent_on_outbound_when_something_sent(tmp_path):
@@ -462,11 +466,16 @@ def test_stop_silent_on_outbound_when_something_sent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "current event has no reply yet" not in ctx
+    assert "nothing communicated on any thread" not in ctx
+    assert "waking thread itself has no reply" not in ctx
     assert "delivery so far" in ctx
 
 
-def test_stop_keeps_current_reply_guard_after_other_delivery(tmp_path):
+def test_stop_informs_when_only_other_threads_answered(tmp_path):
+    # Something was communicated, but not on the waking thread: the boundary
+    # informs (the daemon will dispatch the final message there) rather than
+    # compelling an outbox re-delivery — the double-post trap the old
+    # "confirm this run answered the event it owes" imperative set.
     _portal(
         tmp_path, token="t1", pending=0,
         outbound={"replies_current": 0, "replies_other": 0,
@@ -475,7 +484,8 @@ def test_stop_keeps_current_reply_guard_after_other_delivery(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "delivery so far" in ctx
-    assert "current event has no reply yet" in ctx
+    assert "waking thread itself has no reply yet" in ctx
+    assert "nothing communicated on any thread" not in ctx
 
 
 def test_long_running_surfaced_when_over_soft_budget(tmp_path):

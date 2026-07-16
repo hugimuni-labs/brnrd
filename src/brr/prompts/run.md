@@ -29,8 +29,12 @@ orient:
 The bundle's Delivery contract carries the live values — portals, paths,
 budget. The stance, host-agnostic:
 
-- closeout → final stdout is the exact reply, whole: no preamble, no meta, no
-  commentary around it. Progress, debug, tool chatter → stderr.
+- closeout → the host dispatches your final stdout message to the thread that
+  woke you (skipping it only when it exactly duplicates a reply you already
+  delivered). So end on the reply, clean: no preamble, no meta. You are not
+  required to re-deliver anything — speak mid-run when it helps, and the
+  boundary warns you once if a run is about to end having said nothing
+  anywhere. Progress, debug, tool chatter → stderr.
 - daemon runs → portal state moves under you: re-read `portal-state.json` /
   `inbox.json` at plan boundaries and before terminal closeout. Every pending
   event is yours — fold small or related work inline; bounded, independent
