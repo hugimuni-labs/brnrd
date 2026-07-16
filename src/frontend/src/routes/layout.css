@@ -230,3 +230,38 @@ body::before {
 		transform: translateX(340%);
 	}
 }
+
+/* Page-load chorus (2026-07-16 steer: the whole instrument should assemble
+   once, visibly, over the first few seconds — headers and main frames too).
+   Each major section carries `.ignite` with a staggered `--ignite-delay`;
+   the keyframe is a three-frame stepped flicker (the glitch grammar applied
+   to chrome: discrete disagreeing states, then settle), not a smooth fade.
+   State birth only — nothing re-ignites after load (§3b canon). */
+@keyframes frame-ignite {
+	0% {
+		opacity: 0;
+	}
+	34% {
+		opacity: 0.45;
+		filter: brightness(1.6);
+	}
+	67% {
+		opacity: 0.85;
+		filter: brightness(0.75);
+	}
+	100% {
+		opacity: 1;
+		filter: brightness(1);
+	}
+}
+
+.ignite {
+	animation: frame-ignite 700ms steps(3, jump-none) both;
+	animation-delay: var(--ignite-delay, 0ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ignite {
+		animation: none;
+	}
+}
