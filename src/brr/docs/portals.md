@@ -76,19 +76,24 @@ kind, **fields)` or by appending the line directly. It is what the run made,
 in a form something other than prose can read.
 
 **Auto-derived — write nothing for these.** Commits, the pushed branch, a
-self-reported PR, and your **terminal reply** are collected at closeout. The
+self-reported PR, **kb pages committed by the knowledge capture**, and your
+**terminal reply** are collected at closeout. The
 reply is archived into the knowledge repo (`replies/<repo>/<run-id>.md`,
 outside the kb page tree) and reported back as a `{"kind": "reply", "url": …}`
 relic, so a run's answer of record is durable and linkable instead of buried
 in a chat scroll. Terminal replies only — interim messages are thinking out
 loud, and are not archived.
 
+The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `issue`,
+`comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable
+through their first descriptive field, but use a built-in kind when it fits.
+
 **Worth a line of your own:**
 
 ```jsonl
 {"kind": "issue",   "number": 317, "action": "closed"}
-{"kind": "kb",      "path": "design-run-relics.md", "url": "<kb base + page, after push>"}
 {"kind": "comment", "url": "…"}
+{"kind": "message", "channel": "telegram", "note": "design fork answered"}
 {"kind": "summary", "text": "…"}
 ```
 
