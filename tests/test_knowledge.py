@@ -389,9 +389,13 @@ def test_capture_pushes_a_checkout_write_all_the_way_to_the_forge(tmp_path):
     page = repo / ".brnrd-kb" / "repos" / "Gurio__brr" / "design-new.md"
     page.write_text("a durable thought\n", encoding="utf-8")
 
-    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+    captured_pages: list[str] = []
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, captured_pages=captured_pages,
+    ) is True
 
     assert _forge_has(forge, "repos/Gurio__brr/design-new.md")
+    assert captured_pages == ["design-new.md"]
     # updateInstead: the account's *working tree* took the push, so the next
     # wake's injected kb sees the page too — not just its git objects.
     account_copy = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "design-new.md"
@@ -406,9 +410,29 @@ def test_capture_commits_direct_writes_into_the_account_tree(tmp_path):
     stray = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "log.md"
     stray.write_text("an entry nobody committed\n", encoding="utf-8")
 
-    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+    captured_pages: list[str] = []
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, captured_pages=captured_pages,
+    ) is True
 
     assert _forge_has(forge, "repos/Gurio__brr/log.md")
+    assert captured_pages == ["log.md"]
+
+
+def test_capture_page_manifest_excludes_reply_archives(tmp_path):
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge.archive_reply(
+        repo, run_id="run-reply", body="durable answer", cfg=cfg,
+    )
+    page = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "decision.md"
+    page.write_text("a decision\n", encoding="utf-8")
+    captured_pages: list[str] = []
+
+    knowledge.capture(
+        repo, "kb: capture", cfg=cfg, captured_pages=captured_pages,
+    )
+
+    assert captured_pages == ["decision.md"]
 
 
 def test_capture_reconciles_a_stray_account_write_against_a_checkout_write(tmp_path):

@@ -202,8 +202,9 @@ def build_closed_run_row(
     tokens = token_fields(after_levels)
     started_at = _str_or_none(task.meta.get("started_at"))
     # Run relics (#200/#317, kb/design-run-relics.md): commits/branch/PR are
-    # auto-derived from git + the ``.pr`` control file, issues/kb/summary
-    # come from whatever the resident self-reported to ``.relics.jsonl``.
+    # auto-derived from git + the ``.pr`` control file, captured kb pages and
+    # the terminal reply are appended during knowledge closeout, and only
+    # issue/comment/message/summary context depends on resident reporting.
     # Falls back to the pre-existing (always-empty in practice, since
     # nothing ever wrote it) ``task.meta["external_refs"]`` path so a task
     # that somehow pre-populated it directly doesn't regress.
@@ -380,7 +381,7 @@ def task_classification(task: Run) -> str | None:
     ):
         value = _str_or_none(task.meta.get(key))
         if value:
-            return value
+            return value.lower().replace("_", "-")
     return None
 
 
@@ -401,7 +402,8 @@ def read_task_classification_control(outbox_dir: Path | None) -> str | None:
     except OSError:
         return None
     text = raw[:_TASK_CLASSIFICATION_MAX_BYTES].decode("utf-8", errors="replace")
-    return _str_or_none(text.splitlines()[0]) if text.splitlines() else None
+    value = _str_or_none(text.splitlines()[0]) if text.splitlines() else None
+    return value.lower().replace("_", "-") if value else None
 
 
 def usd_credits_equivalent(levels: Mapping[str, Any] | None) -> float | None:
