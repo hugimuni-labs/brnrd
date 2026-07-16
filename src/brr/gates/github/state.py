@@ -20,6 +20,7 @@ from pathlib import Path
 from . import client
 from .client import GitHubAPIError
 from .paths import user as _user_path
+from .. import runtime
 
 
 def _state_path(brr_dir: Path) -> Path:
@@ -34,9 +35,7 @@ def _load_state(brr_dir: Path) -> dict:
 
 
 def _save_state(brr_dir: Path, state: dict) -> None:
-    path = _state_path(brr_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    runtime.save_state(brr_dir, "github", state)
 
 
 def _gh_cli_token() -> str | None:
