@@ -1,4 +1,4 @@
-import type { RunLedgerRow } from './runLedger';
+import type { RelicRecord, RunLedgerRow } from './runLedger';
 
 export const PRODUCE_GAUGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const PRODUCE_GAUGE_LEDGER_LIMIT = 100;
@@ -21,6 +21,12 @@ export interface ProduceGaugeSummary {
 	replies: number;
 }
 
+export interface ProduceGaugeLink {
+	kind: 'pr' | 'commit' | 'kb' | 'reply';
+	label: string;
+	url: string;
+}
+
 function finite(value: unknown): number | null {
 	return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -32,6 +38,30 @@ function sumPresent(rows: RunLedgerRow[], field: keyof RunLedgerRow): number | n
 	return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
 }
 
+function recentGaugeRows(rows: RunLedgerRow[], nowMs: number): RunLedgerRow[] {
+	const cutoff = nowMs - PRODUCE_GAUGE_WINDOW_MS;
+	return rows.filter((row) => {
+		if (!row.ended_at) return false;
+		const ended = Date.parse(row.ended_at);
+		return Number.isFinite(ended) && ended >= cutoff && ended <= nowMs;
+	});
+}
+
+function produceLinkLabel(relic: RelicRecord): string {
+	switch (relic.kind) {
+		case 'pr':
+			return `PR #${relic.number ?? '?'}`;
+		case 'commit':
+			return `${String(relic.sha ?? '').slice(0, 7)} ${relic.subject ?? ''}`.trim() || 'commit';
+		case 'kb':
+			return String(relic.path ?? 'kb page');
+		case 'reply':
+			return String(relic.excerpt ?? 'reply');
+		default:
+			return relic.kind;
+	}
+}
+
 /** Roll up the spend and produce proved by rows closed during the trailing
  * 24 hours. Invalid timestamps and absent metrics disappear instead of
  * becoming fabricated zeroes. */
@@ -39,12 +69,7 @@ export function rollupProduceGauge(
 	rows: RunLedgerRow[],
 	nowMs: number = Date.now()
 ): ProduceGaugeSummary {
-	const cutoff = nowMs - PRODUCE_GAUGE_WINDOW_MS;
-	const recent = rows.filter((row) => {
-		if (!row.ended_at) return false;
-		const ended = Date.parse(row.ended_at);
-		return Number.isFinite(ended) && ended >= cutoff && ended <= nowMs;
-	});
+	const recent = recentGaugeRows(rows, nowMs);
 
 	const quota = new Map<string, number>();
 	for (const row of recent) {
@@ -93,6 +118,41 @@ export function rollupProduceGauge(
 		kbPages,
 		replies
 	};
+}
+
+/** URL-bearing produce behind the aggregate gauge. Relics without a URL
+ * still contribute to the honest counts above; they simply cannot become
+ * navigable links. Summary prose and non-counted relic kinds stay out. */
+export function produceGaugeLinks(
+	rows: RunLedgerRow[],
+	nowMs: number = Date.now()
+): ProduceGaugeLink[] {
+	const seen = new Set<string>();
+	const links: ProduceGaugeLink[] = [];
+	for (const row of recentGaugeRows(rows, nowMs)) {
+		for (const relic of Array.isArray(row.external_refs) ? row.external_refs : []) {
+			if (relic === null || typeof relic !== 'object') continue;
+			const rawKind = String(relic.kind ?? '').toLowerCase();
+			const kind = rawKind === 'kb_page' ? 'kb' : rawKind;
+			if (!['pr', 'commit', 'kb', 'reply'].includes(kind)) continue;
+			const url = String(relic.url ?? '').trim();
+			if (!url || seen.has(url)) continue;
+			try {
+				const parsed = new URL(url);
+				if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
+			} catch {
+				continue;
+			}
+			seen.add(url);
+			const normalized: RelicRecord = kind === rawKind ? relic : { ...relic, kind };
+			links.push({
+				kind: kind as ProduceGaugeLink['kind'],
+				label: produceLinkLabel(normalized),
+				url
+			});
+		}
+	}
+	return links;
 }
 
 export function gaugeDuration(seconds: number): string {
