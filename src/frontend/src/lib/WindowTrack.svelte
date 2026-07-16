@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { quotaLevel, timeUntil, type QuotaShell } from './quota';
 	import {
-		STATUS_GOOD,
-		STATUS_WARN,
-		STATUS_CRITICAL,
+		STATUS_BURNING,
+		STATUS_COOLING,
+		STATUS_SPENT,
 		STATUS_UNKNOWN,
 		statusDotStyle,
 		statusBarStyle
@@ -17,27 +17,27 @@
 	let { shell, now }: Props = $props();
 
 	// Palette lives in `statusPalette.ts` (single source, shared with
-	// LiveRuns/PRReviewQueue). ample = hearth-lit amber (full warmth); low =
+	// LiveRuns/PRReviewQueue). burning = hearth-lit amber (full warmth); cooling =
 	// frost creeping in (cooling, leaving the firelight) — a dimmer/
 	// desaturated blue than the `sky-300` "stale report" badge below, so the
 	// two don't collide as one hue meaning two things in the same card;
-	// critical = void ash — the fire spent, not the fire gone red-hot (fixed
+	// spent = void ash — the fire spent, not the fire gone red-hot (fixed
 	// 2026-07-08 evening: the prior "dying ember" hex was still a genuinely
 	// red hue under a warmer name, live-caught as "the 0% line is still
 	// red"). Three real peer registers now — amber/frost/void — not
 	// amber-primary with two narrow accents (still always icon+label, never
 	// color alone).
 	const LEVEL_COLOR: Record<string, string> = {
-		ample: STATUS_GOOD,
-		low: STATUS_WARN,
-		critical: STATUS_CRITICAL,
+		burning: STATUS_BURNING,
+		cooling: STATUS_COOLING,
+		spent: STATUS_SPENT,
 		unknown: STATUS_UNKNOWN
 	};
 
 	const LEVEL_TEXT: Record<string, string> = {
-		ample: 'ample',
-		low: 'low',
-		critical: 'critical',
+		burning: 'burning',
+		cooling: 'cooling',
+		spent: 'spent',
 		unknown: 'unknown'
 	};
 </script>
@@ -192,8 +192,8 @@
 			     was never there look identical when both render as nothing, and
 			     only one of them is something the operator can turn back on. -->
 			<div class="font-mono text-[11px] text-stone-500">
-				usage credits <span class="text-stone-400">off</span> — no metered spillover past the
-				subscription windows
+				usage credits <span class="text-stone-400">off</span> — no metered spillover past the subscription
+				windows
 			</div>
 		{/if}
 		{#if shell.credits && shell.credits.enabled !== false && (shell.credits.summary || (shell.credits.remaining_percentage !== null && shell.credits.remaining_percentage !== undefined) || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}

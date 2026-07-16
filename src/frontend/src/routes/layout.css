@@ -106,6 +106,31 @@ body::before {
 		bottom left,
 		bottom right,
 		bottom right;
+	animation: panel-phosphor-idle 7.2s linear 700ms infinite;
+}
+
+/* Settled chrome breathes below notification threshold. The duplicated
+   73%/74% values make one tiny skipped frame; content never glitches. */
+@keyframes panel-phosphor-idle {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	38% {
+		opacity: 0.986;
+	}
+	73% {
+		opacity: 0.997;
+	}
+	74% {
+		opacity: 0.985;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.panel {
+		animation: none;
+	}
 }
 
 /* Sub-panels (a row inside a panel — a run card, a receipt row): sharp
@@ -174,13 +199,13 @@ body::before {
 	0% {
 		text-shadow:
 			2px 0 #6fd3ff,
-			-2px 0 #ff6a6a;
+			-2px 0 #e8b34a;
 		transform: translateX(0);
 	}
 	50% {
 		text-shadow:
 			-2px 0 #6fd3ff,
-			2px 0 #ff6a6a;
+			2px 0 #e8b34a;
 		transform: translateX(1px);
 	}
 	100% {

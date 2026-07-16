@@ -2,7 +2,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { glitchReveal } from './transitions';
+	import { glitchReveal, typeReveal } from './transitions';
 	import {
 		durationLabel,
 		endedLabel,
@@ -85,8 +85,9 @@
 							<p class="truncate font-mono text-stone-500">
 								{runner}
 								{#if row.core_mismatch === false}
-									<span class="text-emerald-400" title="observed model matches the configured core pin"
-										>✓</span
+									<span
+										class="text-emerald-400"
+										title="observed model matches the configured core pin">✓</span
 									>
 								{:else if row.core_mismatch}
 									<span
@@ -168,7 +169,9 @@
 								out:fade={{ duration: 100 }}
 							>
 								{#if summary}
-									<p class="text-stone-300 italic">{relicLabel(summary)}</p>
+									<p class="text-stone-300 italic" use:typeReveal={{ text: relicLabel(summary) }}>
+										{relicLabel(summary)}
+									</p>
 								{/if}
 								<!-- #329: relic *families* — a PR absorbs its branch and
 								     commits (one piece of produce, one head line, members
@@ -177,17 +180,25 @@
 									{#each groupRelicFamilies(entry.relics) as fam, i (i)}
 										<li class="min-w-0">
 											<div class="flex min-w-0 items-center gap-1.5">
-												<span class="shrink-0" title={fam.head.kind}>{relicIcon(fam.head.kind)}</span>
+												<span class="shrink-0" title={fam.head.kind}
+													>{relicIcon(fam.head.kind)}</span
+												>
 												{#if fam.head.url}
 													<a
 														href={String(fam.head.url)}
 														target="_blank"
 														rel="external noreferrer"
 														class="truncate text-sky-300 underline decoration-sky-800 hover:text-sky-200"
-														>{relicLabel(fam.head)}</a
+														><span use:typeReveal={{ text: relicLabel(fam.head) }}
+															>{relicLabel(fam.head)}</span
+														></a
 													>
 												{:else}
-													<span class="truncate text-stone-300">{relicLabel(fam.head)}</span>
+													<span
+														class="truncate text-stone-300"
+														use:typeReveal={{ text: relicLabel(fam.head) }}
+														>{relicLabel(fam.head)}</span
+													>
 												{/if}
 												{#if familySuffix(fam)}
 													<span class="shrink-0 text-stone-500">{familySuffix(fam)}</span>
@@ -200,8 +211,10 @@
 											</div>
 											{#each fam.members.filter((m) => m.kind === 'commit') as m, j (j)}
 												<p class="ml-5 truncate text-[11px] text-stone-500">
-													{relicLabel(m)}{#if m._from_run_id && m._from_run_id !== fam.head._from_run_id}
-														<span class="text-[10px] text-stone-600"> ↳ via {m._from_run_id}</span
+													<span use:typeReveal={{ text: relicLabel(m) }}>{relicLabel(m)}</span
+													>{#if m._from_run_id && m._from_run_id !== fam.head._from_run_id}
+														<span class="text-[10px] text-stone-600">
+															↳ via {m._from_run_id}</span
 														>{/if}
 												</p>
 											{/each}
