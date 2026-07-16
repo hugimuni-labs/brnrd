@@ -5,6 +5,7 @@
 	import Limits from '$lib/Limits.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
+	import ProduceGauge from '$lib/ProduceGauge.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import SpoolRack from '$lib/SpoolRack.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
@@ -27,7 +28,12 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
-	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		RunLedgerAuthError,
+		fetchRunLedger,
+		type RunLedgerRow
+	} from '$lib/runLedger';
+	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import DecisionsSpace from '$lib/DecisionsSpace.svelte';
 	import WorkflowPanel from '$lib/WorkflowPanel.svelte';
 	import { PlansAuthError, fetchPlans, type PlansResponse } from '$lib/plans';
@@ -221,7 +227,7 @@
 			}
 		}
 		try {
-			const receipts = await fetchRunLedger();
+			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT);
 			runLedgerRows = receipts.rows;
 			runLedgerStale = receipts.stale;
 			runLedgerError = null;
@@ -461,7 +467,22 @@
 		{/if}
 	</div>
 
-	<p class="eyebrow mt-8">§4 · run receipts</p>
+	<p class="eyebrow mt-8">§4 · produce gauge</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">last 24h</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		What the last day of autonomous work spent, and what that work left behind.
+	</p>
+	<div class="mt-3">
+		{#if runLedgerError}
+			<p class="text-sm text-red-400">{runLedgerError}</p>
+		{:else if runLedgerRows === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<ProduceGauge rows={runLedgerRows} stale={runLedgerStale} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§4a · run receipts</p>
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">run receipts</h2>
 	<div class="mt-3">
 		{#if runLedgerError}
@@ -469,7 +490,7 @@
 		{:else if runLedgerRows === null}
 			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
-			<RunLedgerReceipt rows={runLedgerRows} stale={runLedgerStale} />
+			<RunLedgerReceipt rows={runLedgerRows.slice(0, 10)} stale={runLedgerStale} />
 		{/if}
 	</div>
 </div>
