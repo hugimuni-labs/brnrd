@@ -218,7 +218,7 @@ def test_bind_accepts_repo_and_gate(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr("brr.cli._load_gate", lambda name: Gate)
 
-    assert main(["bind", str(repo), "telegram"]) is None
+    assert main(["gate", "bind", str(repo), "telegram"]) is None
 
     out = capsys.readouterr().out
     assert calls == [repo / ".brr"]
@@ -244,7 +244,7 @@ def test_add_registers_repo_in_connected_account_home(monkeypatch, tmp_path, cap
     )
     monkeypatch.chdir(current)
 
-    assert main(["add", str(target)]) is None
+    assert main(["account", "add", str(target)]) is None
 
     out = capsys.readouterr().out
     assert "added target" in out
@@ -575,7 +575,7 @@ def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
 
     monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
 
-    main(["bind", str(repo), "telegram"])
+    main(["gate", "bind", str(repo), "telegram"])
 
     assert calls == [repo / ".brr"]
 
@@ -591,7 +591,7 @@ def test_setup_dispatches_to_gate_setup(monkeypatch, tmp_path):
     monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
     monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
 
-    main(["setup", "telegram"])
+    main(["gate", "setup", "telegram"])
 
     assert calls == [tmp_path / ".brr"]
 
@@ -611,7 +611,7 @@ def test_setup_falls_back_to_auth_then_bind(monkeypatch, tmp_path):
     monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
     monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
 
-    main(["setup", "telegram"])
+    main(["gate", "setup", "telegram"])
 
     assert calls == [
         ("auth", tmp_path / ".brr"),
@@ -714,3 +714,280 @@ def test_runners_list_marks_current_runner(monkeypatch, capsys, tmp_path):
     # The ★ marker should appear next to the currently selected runner
     assert "★" in out
     assert "claude" in out
+
+
+# ── the CLI surface itself (#49) ──────────────────────────────────────────────
+#
+# The verb list is a contract: `brnrd --help` is the front door, and every doc,
+# prompt, and muscle-memory habit spells against it. Before #49 the tree had
+# drifted for months without a single test noticing. These pin the surface so
+# the next drift is a test failure, not a discovery.
+
+
+def _subparsers_action():
+    import argparse
+
+    from brr.cli import build_parser
+
+    for action in build_parser()._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    raise AssertionError("brnrd has no subparsers")
+
+
+def test_public_commands_are_exactly_what_help_lists():
+    from brr.cli import PUBLIC_COMMANDS
+
+    listed = [c.dest for c in _subparsers_action()._choices_actions]
+    assert sorted(listed) == sorted(PUBLIC_COMMANDS)
+
+
+def test_all_commands_are_exactly_what_parses():
+    from brr.cli import ALL_COMMANDS
+
+    assert sorted(_subparsers_action().choices) == sorted(ALL_COMMANDS)
+
+
+def test_help_stays_small_enough_to_read():
+    # The whole point of the noun consolidation: a front door a human can scan.
+    # Not a golden count — a ceiling. Adding a top-level verb should require
+    # arguing that it earns one of these slots.
+    from brr.cli import PUBLIC_COMMANDS
+
+    assert len(PUBLIC_COMMANDS) <= 18
+
+
+def test_hidden_commands_parse_but_are_not_listed():
+    from brr.cli import HIDDEN_COMMANDS
+
+    action = _subparsers_action()
+    listed = {c.dest for c in action._choices_actions}
+    for name in HIDDEN_COMMANDS:
+        assert name in action.choices, f"{name} must still parse"
+        assert name not in listed, f"{name} must not spend a --help line"
+
+
+def test_help_does_not_leak_the_suppress_sentinel(capsys):
+    # `help=argparse.SUPPRESS` on add_parser does not hide a subparser — it
+    # renders a literal "==SUPPRESS==" line. Omitting the kwarg is the lever.
+    # This pins the symptom so nobody "fixes" the hiding back into a leak.
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert "SUPPRESS" not in out
+
+
+@pytest.mark.parametrize(
+    "argv,pointer",
+    [
+        (["auth", "telegram"], "brnrd gate auth"),
+        (["bind", ".", "telegram"], "brnrd gate bind"),
+        (["setup", "telegram"], "brnrd gate setup"),
+        (["add", "."], "brnrd account add"),
+        (["connect"], "brnrd account connect"),
+    ],
+)
+def test_retired_spellings_fail_with_a_pointer(argv, pointer, capsys):
+    # Pre-release: the old spellings do not survive as silent aliases. They
+    # fail — but they fail *pointing*, not with argparse's bare "invalid
+    # choice", which would leave the reader to guess where the verb went.
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    assert pointer in capsys.readouterr().err
+
+
+def test_retired_spellings_do_not_run_their_old_command(monkeypatch):
+    # The pointer must fire *before* any gate work: a retired spelling that
+    # still authed would be an alias wearing an error message.
+    calls = []
+    monkeypatch.setattr("brr.cli._load_gate", lambda name: calls.append(name))
+    for argv in (["auth", "telegram"], ["setup", "telegram"], ["bind", ".", "telegram"]):
+        with pytest.raises(SystemExit):
+            main(argv)
+    assert calls == []
+
+
+def test_up_and_daemon_up_are_the_same_implementation():
+    # The #49 drift in one assertion: `up` used to be a second implementation
+    # that skipped the installed service.
+    from brr.cli import cmd_daemon_up
+
+    action = _subparsers_action()
+    top_up = action.choices["up"].get_default("func")
+    daemon_up = _subcommand_default(action.choices["daemon"], "up", "func")
+    assert top_up is daemon_up is cmd_daemon_up
+
+
+def test_down_and_daemon_down_are_the_same_implementation():
+    from brr.cli import cmd_daemon_down
+
+    action = _subparsers_action()
+    top_down = action.choices["down"].get_default("func")
+    daemon_down = _subcommand_default(action.choices["daemon"], "down", "func")
+    assert top_down is daemon_down is cmd_daemon_down
+
+
+def test_top_level_up_accepts_the_same_flags_as_daemon_up():
+    # A thin alias that dropped --foreground would be a different verb.
+    action = _subparsers_action()
+    top = {o for a in action.choices["up"]._actions for o in a.option_strings}
+    nested_parser = _subcommand_parser(action.choices["daemon"], "up")
+    nested = {o for a in nested_parser._actions for o in a.option_strings}
+    assert top == nested
+
+
+def _subcommand_parser(parser, name):
+    import argparse
+
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction) and name in action.choices:
+            return action.choices[name]
+    raise AssertionError(f"no subcommand {name}")
+
+
+def _subcommand_default(parser, name, key):
+    return _subcommand_parser(parser, name).get_default(key)
+
+
+# ── brnrd gate list / account status / completions (#49, new surfaces) ────────
+
+
+def test_gate_list_reads_each_gates_own_is_configured(monkeypatch, tmp_path, capsys):
+    seen = []
+
+    def fake_load(name):
+        seen.append(name)
+        mod = types.SimpleNamespace(is_configured=lambda brr_dir: name == "telegram")
+        return mod
+
+    monkeypatch.setattr("brr.cli._load_gate", fake_load)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: tmp_path / ".brr")
+
+    assert main(["gate", "list"]) == 0
+
+    from brr.cli import GATES
+
+    assert seen == list(GATES)
+    out = capsys.readouterr().out
+    assert "✓ telegram   configured" in out
+    assert "· slack      not configured" in out
+
+
+def test_gate_list_json_shape(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        "brr.cli._load_gate",
+        lambda name: types.SimpleNamespace(is_configured=lambda d: False),
+    )
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: tmp_path / ".brr")
+
+    assert main(["gate", "list", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    from brr.cli import GATES
+
+    assert [g["name"] for g in payload["gates"]] == list(GATES)
+    assert all(g["configured"] is False for g in payload["gates"])
+
+
+def test_gate_list_outside_a_repo_reports_unknown_not_false(monkeypatch, capsys):
+    # Honesty: with no .brr to read, "not configured" would be a claim we
+    # cannot support. The catalogue still prints; each gate reports unknown.
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
+
+    assert main(["gate", "list", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["brr_dir"] is None
+    assert all(g["configured"] is None for g in payload["gates"])
+
+
+def test_gate_list_survives_a_broken_gate(monkeypatch, tmp_path, capsys):
+    def boom(name):
+        if name == "slack":
+            raise RuntimeError("gate state is corrupt")
+        return types.SimpleNamespace(is_configured=lambda d: True)
+
+    monkeypatch.setattr("brr.cli._load_gate", boom)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: tmp_path / ".brr")
+
+    assert main(["gate", "list", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    states = {g["name"]: g["configured"] for g in payload["gates"]}
+    assert states["slack"] is None  # unknown, not a crash
+    assert states["telegram"] is True
+
+
+def test_account_status_does_not_create_the_home_it_reports(monkeypatch, tmp_path):
+    # A status command that materializes a home is lying about what it found.
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    seen = {}
+
+    real = __import__("brr.account", fromlist=["resolve_context"]).resolve_context
+
+    def spy(repo_root, cfg=None, *, create=True):
+        seen["create"] = create
+        return real(repo_root, cfg, create=create)
+
+    monkeypatch.setattr("brr.account.resolve_context", spy)
+
+    assert main(["account", "status"]) == 0
+    assert seen["create"] is False
+
+
+def test_account_status_json_reports_the_resolved_home(monkeypatch, tmp_path, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    assert main(["account", "status", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["kind"] in {"project", "account"}
+    assert payload["dominion_repo"]
+    assert any(r["default"] for r in payload["repos"])
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+def test_completions_emit_every_public_verb(shell, capsys):
+    from brr.cli import PUBLIC_COMMANDS
+
+    assert main(["completions", shell]) == 0
+    out = capsys.readouterr().out
+    for verb in PUBLIC_COMMANDS:
+        assert verb in out, f"{shell} completions omit {verb}"
+
+
+def test_completions_track_the_parser_not_a_hand_list(capsys):
+    # The generator walks the live tree, so a new subcommand shows up in
+    # completions without anyone remembering to update a table.
+    assert main(["completions", "bash"]) == 0
+    out = capsys.readouterr().out
+    assert "add connect status" in out  # brnrd account
+    assert "auth bind list setup" in out  # brnrd gate
+
+
+def test_completions_omit_retired_and_hidden_spellings(capsys):
+    # Scoped to the *top-level* completion context on purpose: `add`, `connect`,
+    # `auth`, `bind`, `setup` are retired as top-level verbs but are the real
+    # spellings one level down (`brnrd account add`), so a bare substring check
+    # would fail on the very nesting this slice introduced.
+    from brr.cli import HIDDEN_COMMANDS, RETIRED_COMMANDS
+
+    assert main(["completions", "fish"]) == 0
+    top_level = {
+        line.split('-a "')[1].rstrip('"')
+        for line in capsys.readouterr().out.splitlines()
+        if "__fish_use_subcommand" in line
+    }
+    assert top_level.isdisjoint(RETIRED_COMMANDS)
+    assert top_level.isdisjoint(HIDDEN_COMMANDS)
+
+
+def test_completions_rejects_an_unknown_shell():
+    with pytest.raises(SystemExit) as exc:
+        main(["completions", "nushell"])
+    assert exc.value.code == 2
