@@ -89,8 +89,8 @@ Then pick your door.
 <td>
 
 ```bash
-brnrd connect          # pair this machine with brnrd.dev
-brnrd add .            # add the current repo
+brnrd account connect  # pair this machine with brnrd.dev
+brnrd account add .    # add the current repo
 brnrd daemon install   # keep the daemon alive (systemd/launchd)
 ```
 
@@ -98,7 +98,7 @@ brnrd daemon install   # keep the daemon alive (systemd/launchd)
 <td>
 
 ```bash
-brnrd setup telegram   # auth + bind the current repo
+brnrd gate setup telegram   # auth + bind the current repo
 brnrd daemon install
 ```
 
@@ -176,7 +176,7 @@ approval prompts bypassed, on purpose. So the honest posture *is* the product:
 - **Local stays local — with one honest caveat.** Your checkout, `.git`, and run
   execution never leave the machine. Remote messages travel through the transport you
   choose (and, in managed mode, transit brnrd.dev on the way to your daemon). If you
-  run `brnrd connect`, the dashboard also mirrors *derived* knowledge — plans, the
+  run `brnrd account connect`, the dashboard also mirrors *derived* knowledge — plans, the
   decision ledger, run summaries, PR titles — to brnrd.dev; your source code does not.
 - **Never paste credentials into a task.** Configure them through the runner or gate.
 
