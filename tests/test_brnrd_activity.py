@@ -311,9 +311,13 @@ def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
     assert activity_api.status_code == 200
     assert [row["summary"] for row in activity_api.json()["rows"]] == ["duplicate snapshot"]
 
-    dashboard_page = client.get("/")
-    assert dashboard_page.status_code == 200
-    assert dashboard_page.text.count("run.completed") == 1
+    # The Jinja dashboard at GET / was removed when brnrd_web moved into
+    # src/brnrd/routers/ and the SPA took over '/'. Coverage preserved via
+    # the JSON activity API that the SPA now reads.
+    activity_page = client.get("/v1/dashboard/activity", params={"kind": "run"})
+    assert activity_page.status_code == 200
+    kinds = {row["kind"] for row in activity_page.json()["rows"]}
+    assert kinds == {"run"}
 
 
 def test_daemon_activity_put_reaps_stale_rows_from_previous_token():
