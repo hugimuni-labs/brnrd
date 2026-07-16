@@ -181,7 +181,9 @@ def test_web_static_assets_are_served(client):
     r = client.get("/static/brnrd_web/app.css")
     assert r.status_code == 200
     assert "text/css" in r.headers["content-type"]
-    assert ".auth-shell" in r.text
+    assert ".state-shell" in r.text
+    assert ".panel::after" in r.text
+    assert ".auth-shell" not in r.text
 
 
 def test_github_login_redirect_uses_state_and_pkce(client):
@@ -354,6 +356,8 @@ def test_connect_page_lists_repos(client, monkeypatch):
     pair = client.post("/v1/accounts/pair").json()
     r = client.get(f"/connect/{pair['pair_code']}")
     assert r.status_code == 200
+    assert "flow-lockup" in r.text
+    assert "pairing handshake" in r.text
     assert "laptop" in r.text
     assert pair["pair_code"] in r.text
 

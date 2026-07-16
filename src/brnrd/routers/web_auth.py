@@ -106,6 +106,12 @@ def _message_response(
     action_html = ""
     if action_url and action_label:
         action_html = f'<a class="button button-secondary" href="{_esc(action_url)}">{_esc(action_label)}</a>'
+    flow_lockup = (
+        '<header class="flow-lockup" aria-label="brnrd">'
+        '<a class="flow-wordmark" href="/">brnrd</a>'
+        '<span class="flow-context">local daemon / cloud account</span>'
+        "</header>"
+    )
     body = (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -117,6 +123,7 @@ def _message_response(
         "  </head>\n"
         '  <body class="app-page">\n'
         '    <main class="state-shell" aria-labelledby="state-title">\n'
+        f"      {flow_lockup}\n"
         f'      <section class="panel state-panel state-{_esc(severity)}">\n'
         f"        {eyebrow_html}\n"
         f'        <h1 id="state-title">{_esc(heading)}</h1>\n'
