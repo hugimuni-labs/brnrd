@@ -479,10 +479,15 @@ def capture(
     cfg: dict | None = None,
     brr_dir: Path | None = None,
     lock_timeout: float = 30.0,
+    captured_pages: list[str] | None = None,
 ) -> bool:
     """Commit and push the knowledge chain. Best-effort; never raises.
 
-    Returns True when something was committed or pushed. Symmetric with
+    Returns True when something was committed or pushed. When
+    ``captured_pages`` is supplied, it is extended with the repo-scoped
+    markdown pages this capture found dirty (relative to the kb root); this
+    lets closeout derive kb relics from the same evidence it commits instead
+    of relying on resident bookkeeping. Symmetric with
     :func:`brr.dominion.commit`: a clean chain is a no-op, a *rejected*
     push to the forge sets a ``needs_sync`` marker (the remote diverged —
     reconciling is the resident's judgement, not something to paper over),
@@ -508,6 +513,15 @@ def capture(
             if not held:
                 return False
             _allow_push_to_checkout(home_knowledge)
+
+            if captured_pages is not None:
+                seen = set(captured_pages)
+                for page in _pending_capture_pages(
+                    repo_root, cfg, ctx, home_knowledge, checkout if has_checkout else None,
+                ):
+                    if page not in seen:
+                        captured_pages.append(page)
+                        seen.add(page)
 
             # 1. The repo-local checkout, if a resident wrote through it.
             if has_checkout and gitops.worktree_dirty(checkout):
@@ -562,6 +576,73 @@ def capture(
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
         return moved
     return moved
+
+
+def _pending_capture_pages(
+    repo_root: Path,
+    cfg: dict,
+    ctx: account.AccountContext,
+    home_knowledge: Path,
+    checkout: Path | None,
+) -> list[str]:
+    """Repo-scoped markdown pages the next knowledge capture will commit."""
+
+    split = (
+        ctx.kind == "account"
+        and account.knowledge_split_mode(cfg) == "per-repo"
+    )
+    label = account.repo_label(repo_root, cfg)
+    home_scope = (
+        account.repo_knowledge_path(ctx, label) if split else home_knowledge
+    )
+    scopes = [(home_knowledge, home_scope)]
+    if checkout is not None:
+        checkout_scope = (
+            checkout / "repos" / account.slug_repo_label(label)
+            if split else checkout
+        )
+        scopes.append((checkout, checkout_scope))
+
+    pages: set[str] = set()
+    for git_root, scope in scopes:
+        pages.update(_changed_markdown_paths(git_root, scope))
+    return sorted(pages)
+
+
+def _changed_markdown_paths(git_root: Path, scope: Path) -> set[str]:
+    """Changed, non-deleted markdown paths relative to one kb scope."""
+
+    try:
+        scope_rel = scope.resolve().relative_to(git_root.resolve())
+    except (OSError, ValueError):
+        return set()
+    pathspec = scope_rel.as_posix() or "."
+    commands = (
+        ["git", "diff", "--name-only", "--diff-filter=ACMRTUXB", "-z", "HEAD", "--", pathspec],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", pathspec],
+    )
+    changed: set[str] = set()
+    for command in commands:
+        result = subprocess.run(
+            command, cwd=git_root, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            continue
+        for raw in result.stdout.split("\0"):
+            if not raw:
+                continue
+            path = git_root / raw
+            try:
+                rel = path.resolve().relative_to(scope.resolve())
+            except (OSError, ValueError):
+                continue
+            if (
+                path.is_file()
+                and path.suffix.lower() == ".md"
+                and (not rel.parts or rel.parts[0] != REPLIES_DIRNAME)
+            ):
+                changed.add(rel.as_posix())
+    return changed
 
 
 def archive_reply(
