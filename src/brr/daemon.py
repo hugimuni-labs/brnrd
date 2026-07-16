@@ -2180,10 +2180,10 @@ def _run_worker(
         attempt += 1
         if runner_name not in attempted_runners:
             attempted_runners.append(runner_name)
-        if prompt_mode == "stdout_retry":
+        if prompt_mode == "artifact_retry":
             prompt_instruction = (
-                "Previous attempt printed no final reply on stdout. "
-                "Print your full response as the final stdout message.\n\n"
+                "Previous attempt exited cleanly but did not produce the "
+                "required output file(s). Produce them this time.\n\n"
                 f"Original run instruction: {task.body}"
             )
         elif prompt_mode == "fallback" and fallback_notice:
@@ -2607,7 +2607,24 @@ def _run_worker(
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
-                _record_response_artifact(emit, task, resp_path)
+                if _terminal_stream_duplicates_delivered(task, resp_path):
+                    # Static dispatch call: the terminal stream is an exact
+                    # duplicate of a reply this run already delivered to the
+                    # waking thread mid-run (outbox partial). Shipping it
+                    # again double-posts on the one surface the user watches;
+                    # the content is already in the conversation log, so the
+                    # file is dropped, not archived.
+                    try:
+                        resp_path.unlink()
+                    except OSError:
+                        pass
+                    task.meta["terminal_stream_suppressed"] = True
+                    print(
+                        f"[brnrd] worker {eid}: terminal stream suppressed "
+                        "(duplicate of a delivered reply)"
+                    )
+                else:
+                    _record_response_artifact(emit, task, resp_path)
             # Snapshot before marking the event deliverable. Gate delivery
             # owns the response file and deletes it after a successful send;
             # closeout (reply archive + relic collection) runs concurrently
@@ -2723,7 +2740,7 @@ def _run_worker(
         emit("attempt_failed", **attempt_payload)
         if will_retry:
             clean_retries_used += 1
-            prompt_mode = "stdout_retry"
+            prompt_mode = "artifact_retry"
             print(f"[brnrd] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
@@ -4100,6 +4117,17 @@ def _drain_outbox(
         if stats is not None:
             key = "other" if cross else "current"
             stats[key] = stats.get(key, 0) + 1
+        if not cross:
+            # Remember what was already delivered to the waking thread so the
+            # terminal-stream dispatch can skip an exact duplicate — the
+            # "deliver via outbox *and* restate on stdout" double-post the old
+            # required-terminal-reply contract used to push residents into.
+            # In-process only (a dynamic attribute, never serialized).
+            digests = getattr(task, "_delivered_current_digests", None)
+            if digests is None:
+                digests = set()
+                task._delivered_current_digests = digests  # type: ignore[attr-defined]
+            digests.add(hashlib.sha256(body.encode("utf-8")).hexdigest())
         if cross and target_event is not None:
             _set_event_status_if_present(target_event, "done")
         artifact_key = emit.conversation_key
@@ -4980,6 +5008,32 @@ def _response_has_body(path: Path) -> bool:
         ).strip())
     except OSError:
         return False
+
+
+def _terminal_stream_duplicates_delivered(task: Run, resp_path: Path) -> bool:
+    """True when the captured terminal stream is byte-identical (modulo
+    surrounding whitespace) to a reply this run already delivered to the
+    waking thread via the outbox.
+
+    The static-dispatch dedupe: with terminal delivery no longer *required*,
+    a resident that already answered the thread mid-run may still end on the
+    same text (the old contract trained exactly that). Exact match only — a
+    terminal stream that says anything new still ships. Digests live on a
+    dynamic run attribute (``_delivered_current_digests``), populated by
+    ``_drain_outbox``; never serialized.
+    """
+    digests = getattr(task, "_delivered_current_digests", None)
+    if not digests:
+        return False
+    try:
+        body = protocol.frontmatter_body(
+            resp_path.read_text(encoding="utf-8"),
+        ).strip()
+    except OSError:
+        return False
+    if not body:
+        return False
+    return hashlib.sha256(body.encode("utf-8")).hexdigest() in digests
 
 
 def _result_satisfied_delivery(
