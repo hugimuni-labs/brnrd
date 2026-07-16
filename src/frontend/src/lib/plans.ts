@@ -21,6 +21,10 @@ export interface PlansResponse {
 	plans: RepoPlanIn[];
 	cross_repo_plan_md: string;
 	decisions_md: string;
+	/** CS8 — the user↔resident workflow-preferences doc (account-dominion
+	 * workflow.md): pace, autonomy scope, gating, cadence. Optional so older
+	 * servers that don't mirror it yet still parse. */
+	workflow_md?: string;
 	reported_at: string | null;
 }
 
