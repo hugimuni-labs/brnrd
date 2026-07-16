@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import WindowTrack from '$lib/WindowTrack.svelte';
+	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
@@ -28,11 +29,7 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
-	import {
-		RunLedgerAuthError,
-		fetchRunLedger,
-		type RunLedgerRow
-	} from '$lib/runLedger';
+	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import DecisionsSpace from '$lib/DecisionsSpace.svelte';
 	import WorkflowPanel from '$lib/WorkflowPanel.svelte';
@@ -307,6 +304,11 @@
 	<p class="mt-2 text-sm text-stone-400">
 		Live per-shell quota windows, updated as your daemons report in.
 	</p>
+
+	<p class="eyebrow mt-6">§0 · loom band</p>
+	<div class="mt-2">
+		<LoomBand ledgerRows={runLedgerRows} {liveRuns} {scheduledWakes} {now} />
+	</div>
 
 	<p class="eyebrow mt-6">§1 · window track</p>
 	<div class="mt-2 space-y-3">

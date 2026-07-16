@@ -115,6 +115,7 @@
 				{@const color = markerColor(wake)}
 				<div
 					class="subpanel p-2.5 text-xs"
+					data-loom-wake={wake.id}
 					in:fly={{ y: -8, duration: 220 }}
 					out:fade={{ duration: 150 }}
 					animate:flip={{ duration: 220 }}
