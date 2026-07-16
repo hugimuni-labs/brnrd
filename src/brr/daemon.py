@@ -3358,9 +3358,6 @@ def _scm_facet(
     }
 
 
-_PR_CONTROL_RE = re.compile(r"(\d+)\s*$")
-
-
 def _read_pr_control(pr_path: Path) -> str | None:
     """Best-effort PR number from the ``.pr`` control file, or ``None``.
 
@@ -3375,8 +3372,7 @@ def _read_pr_control(pr_path: Path) -> str | None:
         return None
     if not text:
         return None
-    match = _PR_CONTROL_RE.search(text)
-    return match.group(1) if match else None
+    return forges.parse_pull_request_number(text)
 
 
 def _change_token(payload: dict[str, object]) -> str:
@@ -4739,15 +4735,35 @@ def _capture_knowledge(
         else:
             task.meta["reply_archive"] = "skipped"
 
+    captured_pages: list[str] = []
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
+        captured_pages=captured_pages,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
+    reported_kb_paths = {
+        str(record.get("path") or "").removeprefix("kb/")
+        for record in relics.read_reported(outbox_dir)
+        if record.get("kind") == "kb"
+    }
+    for page in captured_pages:
+        if page in reported_kb_paths:
+            continue
+        url = knowledge.kb_page_url(repo_root, page, cfg)
+        relics.append(
+            outbox_dir, "kb", path=page, **({"url": url} if url else {}),
+        )
     if reply_rel:
         url = knowledge.knowledge_file_url(repo_root, reply_rel, cfg)
+        reply_body = protocol.frontmatter_body(body or "")
+        excerpt = next(
+            (line.strip() for line in reply_body.splitlines() if line.strip()), "",
+        )[:120]
         relics.append(
-            outbox_dir, "reply", path=reply_rel, **({"url": url} if url else {}),
+            outbox_dir, "reply", path=reply_rel,
+            **({"excerpt": excerpt} if excerpt else {}),
+            **({"url": url} if url else {}),
         )
 
 
