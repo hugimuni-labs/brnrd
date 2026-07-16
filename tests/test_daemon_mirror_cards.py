@@ -120,6 +120,22 @@ def test_final_drain_marks_still_pending_event_queued(tmp_path, monkeypatch):
     assert packets[1].payload["status"] == "queued"
 
 
+def test_worker_run_emits_no_mirrors(tmp_path, monkeypatch):
+    """A spawn child sees the parent's whole pending backlog as foreign
+    events; it must not stamp "folded into a running thought" under them
+    (live incident 2026-07-16 — worker spam under an actively-answered
+    chat). Worker-stack runs own no thread: no mirror packets, ever."""
+    packets = _capture(monkeypatch)
+    inbox = tmp_path / ".brr" / "inbox"
+    _seed_foreign(inbox)
+    task = _task()
+    task.meta["worker"] = True
+    daemon._emit_mirror_cards(
+        _worker_emit(tmp_path), task, "evt-lead", inbox, {},
+    )
+    assert packets == []
+
+
 def test_no_mirror_for_runs_own_thread(tmp_path, monkeypatch):
     packets = _capture(monkeypatch)
     inbox = tmp_path / "inbox"
