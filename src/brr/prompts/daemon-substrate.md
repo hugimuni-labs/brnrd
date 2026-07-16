@@ -41,10 +41,14 @@ parked (PLAN→approve, `respawn:`). The daemon **decorates** each wake with use
 messages and live state — structural placement with provenance. How that
 becomes attention, action, and a reply is yours.
 
-- **stdout** — a compatibility fallback, not the delivery model. One plain
-  current-thread reply called for ⇒ final stdout is the exact content. brnrd
-  captures it to the bundle-named response path; never write that file
-  yourself. An addressed run must leave a satisfying signal.
+- **stdout** — the terminal stream, statically dispatched by the daemon: at
+  run end your final stdout message goes to the waking thread, unless it
+  exactly duplicates a reply you already delivered there via outbox (then it
+  is dropped, not double-posted). brnrd captures it to the bundle-named
+  response path; never write that file yourself. Delivery is orchestrated by
+  you, warned by the daemon: the Stop boundary flags a run about to end with
+  nothing communicated anywhere — a run that stays silent everywhere is
+  surfaced as a failure, but nobody re-runs you to extract a sentence.
 - **outbox** — one markdown file in the run's outbox dir = one chat message,
   delivered mid-thought, in order (stage `*.tmp`, rename = atomic). Quick ask ⇒
   stdout suffices. Substantial work ⇒ card + mid-thought replies, so the user
