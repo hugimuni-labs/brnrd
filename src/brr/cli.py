@@ -1248,7 +1248,10 @@ def cmd_add(args):
     cfg = conf.load_config(account_repo_root)
     ctx = account.resolve_context(account_repo_root, cfg)
     if ctx.kind != "account":
-        raise SystemExit("brnrd add requires a connected account home; run `brnrd connect` first")
+        raise SystemExit(
+            "brnrd account add requires a connected account home; "
+            "run `brnrd account connect` first"
+        )
     repo_root = _repo_root_from_arg(args.repo)
     target_cfg = conf.load_config(repo_root)
     label = account.repo_label(repo_root, target_cfg)
