@@ -603,10 +603,12 @@ def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
         repo_plan = account_mod.active_plan_path(ctx, label)
         cross_plan = account_mod.cross_repo_plans_path(ctx) / "active.md"
         ledger = account_mod.decisions_ledger_path(ctx)
+        workflow = account_mod.workflow_doc_path(ctx)
         return {
             "repo_plan_md": repo_plan.read_text() if repo_plan.exists() else "",
             "cross_repo_plan_md": cross_plan.read_text() if cross_plan.exists() else "",
             "decision_ledger_md": ledger.read_text() if ledger.exists() else "",
+            "workflow_md": workflow.read_text() if workflow.exists() else "",
         }
     except Exception as e:
         print(f"[brnrd:cloud] plans snapshot skipped: {e}")
