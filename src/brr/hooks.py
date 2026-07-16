@@ -327,21 +327,35 @@ def format_delta(
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
-    # Affirmative-empty: an *addressed* run that reaches closeout without
-    # answering its own event is suspicious, not silent — surface the absence
-    # at the boundary, before the slot is gone.
+    # Affirmative-empty: an *addressed* run reaching closeout with nothing
+    # communicated anywhere is suspicious, not silent — surface the absence at
+    # the boundary, before the slot is gone. A warn, not a requirement: the
+    # daemon dispatches the run's terminal stream to the waking thread on its
+    # own (2026-07-16 ceremony cut), so the resident is never asked to
+    # re-deliver through the outbox what its final message already carries —
+    # that ask is what produced double-posts.
     #
-    # Gated on ``inbound.current_event`` because the warning names a fact:
-    # "the current event has no reply". A scheduled wake has no current event
-    # to reply to, so on those runs the sentence is not merely noisy — it is
-    # false. A guard may only assert something the run can be proven wrong
-    # about; the moment it nags about a chore that does not apply, it teaches
-    # the reader to skip the channel, and it is gone the one night it is right.
-    if stop and not replied_current and inbound.get("current_event"):
-        lines.append(
-            "- delivery: current event has no reply yet — confirm this run "
-            "answered the event it owes before ending."
-        )
+    # Gated on ``inbound.current_event`` because the warning names a fact
+    # about the waking thread. A scheduled wake has no current event to reply
+    # to, so on those runs the sentence is not merely noisy — it is false. A
+    # guard may only assert something the run can be proven wrong about; the
+    # moment it nags about a chore that does not apply, it teaches the reader
+    # to skip the channel, and it is gone the one night it is right.
+    if stop and inbound.get("current_event"):
+        if not any_delivery:
+            lines.append(
+                "- delivery: nothing communicated on any thread yet — the "
+                "daemon dispatches your final message to the waking thread "
+                "when this run ends, so end on the reply itself (no outbox "
+                "re-delivery needed). A run that ends silent everywhere is "
+                "surfaced as a failure."
+            )
+        elif not replied_current:
+            lines.append(
+                "- delivery: the waking thread itself has no reply yet — "
+                "your final message will be dispatched there by the daemon; "
+                "end on the reply, not on scratch."
+            )
     # SCM posture is a boundary signal (seed / stop only): the commit/push
     # reminder a wake about to end needs. Rendered only when there is
     # something to act on — unpushed commits or modified files — so a clean
