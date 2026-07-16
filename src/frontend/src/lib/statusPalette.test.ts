@@ -61,6 +61,6 @@ test('type reveal uses the approved frontier and logarithmic timing', () => {
 	assert.ok(Math.abs(typeRevealProgress(0.3) - 0.6) < 0.02);
 	assert.equal(typeRevealProgress(0), 0);
 	assert.equal(typeRevealProgress(1), 1);
-	assert.equal(typeRevealDuration(0), 250);
-	assert.equal(typeRevealDuration(500), 600);
+	assert.equal(typeRevealDuration(0), 500);
+	assert.equal(typeRevealDuration(500), 1200);
 });

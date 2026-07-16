@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { glitchReveal } from './transitions';
+
 	import { STATUS_COOLING } from './statusPalette';
 	import {
 		daysSince,
@@ -98,7 +98,7 @@
 							{#if isOpen && move.detail}
 								<p
 									class="mt-1 ml-5 whitespace-pre-wrap text-stone-400"
-									in:glitchReveal={{ duration: 340, steps: 7 }}
+									in:fade={{ duration: 140 }}
 									out:fade={{ duration: 100 }}
 								>
 									{move.detail}
@@ -122,7 +122,7 @@
 				{#if isOpen}
 					<p
 						class="mt-1 whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400"
-						in:glitchReveal={{ duration: 340, steps: 7 }}
+						in:fade={{ duration: 140 }}
 						out:fade={{ duration: 100 }}
 					>
 						{section.body}
@@ -179,7 +179,7 @@
 						{#if isOpen}
 							<p
 								class="mt-1 whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400"
-								in:glitchReveal={{ duration: 340, steps: 7 }}
+								in:fade={{ duration: 140 }}
 								out:fade={{ duration: 100 }}
 							>
 								{d.body}
