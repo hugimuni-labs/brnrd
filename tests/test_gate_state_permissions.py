@@ -52,3 +52,25 @@ def test_github_state_repairs_existing_permissive_mode(tmp_path):
     assert _mode(path) == 0o600
     assert github_state._load_state(brr_dir) == {"token": "new"}
     assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
+
+
+def test_loading_shared_state_repairs_upgrade_mode(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    path = runtime.state_path(brr_dir, "cloud")
+    path.parent.mkdir(parents=True)
+    path.write_text('{"token": "existing"}\n', encoding="utf-8")
+    path.chmod(0o664)
+
+    assert runtime.load_state(brr_dir, "cloud") == {"token": "existing"}
+    assert _mode(path) == 0o600
+
+
+def test_loading_github_state_repairs_upgrade_mode(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    path = github_state._state_path(brr_dir)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"token": "existing"}\n', encoding="utf-8")
+    path.chmod(0o664)
+
+    assert github_state._load_state(brr_dir) == {"token": "existing"}
+    assert _mode(path) == 0o600
