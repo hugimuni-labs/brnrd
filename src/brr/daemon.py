@@ -1242,7 +1242,7 @@ def _queue_config_change_proposal(
     elif minted and minted.get("error"):
         # Cloud-connected, but the mint call itself failed (server
         # allowlist mismatch, deploy-window 5xx, timeout ...). Surface the
-        # detail — telling a connected account to run `brnrd connect`
+        # detail — telling a connected account to run `brnrd account connect`
         # buries the actionable part (observed live 2026-07-11: a 422 from
         # an out-of-lockstep server allowlist read as "not connected").
         message = (
@@ -1257,7 +1257,7 @@ def _queue_config_change_proposal(
             f"Config-change proposal `{proposal_id}` parked locally (`{key}` "
             f"`{current_value}` → `{requested_value}`), but this repo isn't "
             "cloud-connected, so there's no approve link to send. Run "
-            "`brnrd connect` first, or apply the change by hand in "
+            "`brnrd account connect` first, or apply the change by hand in "
             "`.brr/config`."
         )
     ppath = protocol.write_partial(responses_dir, event_id, message)

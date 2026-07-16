@@ -296,9 +296,9 @@ def bind(brr_dir: Path) -> None:
     """
     state = _load_state(brr_dir)
     if "token" not in state:
-        print("[brnrd] Run `brnrd auth telegram` first.")
+        print("[brnrd] Run `brnrd gate auth telegram` first.")
         return
-    print("[brnrd] Telegram works with just `brnrd auth telegram`.")
+    print("[brnrd] Telegram works with just `brnrd gate auth telegram`.")
     user_id_raw = input(
         "Your Telegram user ID, to authorize as the paired principal "
         "(required — see e.g. @userinfobot; messages from anyone else "
