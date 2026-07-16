@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { quotaLevel } from './quota';
 	import {
-		STATUS_GOOD,
-		STATUS_WARN,
-		STATUS_CRITICAL,
+		STATUS_BURNING,
+		STATUS_COOLING,
+		STATUS_SPENT,
 		STATUS_UNKNOWN,
 		statusDotStyle,
 		statusBarStyle
@@ -28,22 +28,26 @@
 	let { activeSpawns, maxSpawns }: Props = $props();
 
 	const LEVEL_COLOR: Record<string, string> = {
-		ample: STATUS_GOOD,
-		low: STATUS_WARN,
-		critical: STATUS_CRITICAL,
+		burning: STATUS_BURNING,
+		cooling: STATUS_COOLING,
+		spent: STATUS_SPENT,
 		unknown: STATUS_UNKNOWN
 	};
 
 	// The track drains toward the limit, same convention WindowTrack's own
 	// comment states: this bar's fill is *headroom* (slots still free), not
-	// slots in use, so "ample" reads as green-equivalent (plenty of room)
-	// and "critical" reads as the pool actually at/near capacity — the same
-	// direction a quota window drains as it's spent.
+	// slots in use. It stays neutral chrome while this is merely a configured
+	// ceiling; at 80% utilization it becomes live contention and adopts the
+	// same cooling/spent signal vocabulary as a draining quota window.
 	let headroomPct = $derived(
 		maxSpawns && maxSpawns > 0 ? Math.max(0, ((maxSpawns - activeSpawns) / maxSpawns) * 100) : null
 	);
 	let level = $derived(quotaLevel(headroomPct));
-	let color = $derived(LEVEL_COLOR[level]);
+	let utilization = $derived(
+		maxSpawns && maxSpawns > 0 ? Math.max(0, activeSpawns / maxSpawns) : null
+	);
+	let contention = $derived(utilization !== null && utilization >= 0.8);
+	let color = $derived(contention ? LEVEL_COLOR[level] : STATUS_UNKNOWN);
 </script>
 
 <div class="panel p-4">
@@ -56,7 +60,7 @@
 			<span class="flex items-center gap-1.5">
 				<span
 					class="inline-block h-2 w-2 rounded-full"
-					style={statusDotStyle(level, color)}
+					style={contention ? statusDotStyle(level, color) : `background-color: ${color}`}
 					aria-hidden="true"
 				></span>
 				<span style={`color: ${color}`}>
@@ -71,7 +75,7 @@
 		>
 			<div
 				class="h-full transition-[width] duration-500 ease-out"
-				style={`width: ${headroomPct ?? 0}%; ${statusBarStyle(level, color)}`}
+				style={`width: ${headroomPct ?? 0}%; ${contention ? statusBarStyle(level, color) : `background-color: ${color}`}`}
 			></div>
 		</div>
 		<div class="mt-1 text-right font-mono text-[11px] text-stone-500">
