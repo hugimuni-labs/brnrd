@@ -1209,6 +1209,69 @@ class TestKilledRunnerStillSpeaks:
         assert kept[0].read_text(encoding="utf-8").strip() == "9"
 
 
+class TestFailureDetailRedaction:
+    def test_codex_prompt_echo_is_removed_but_trace_keeps_raw_stderr(
+        self, tmp_path, monkeypatch,
+    ):
+        from brr import runner_select
+
+        prompt = "private event body\nprivate hook context"
+        raw_stderr = f"{prompt}\nReading prompt from stdin...\nturn interrupted\n"
+
+        def _fake_popen(_cmd, **kwargs):
+            return _fake_proc(kwargs, err=raw_stderr, code=1)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        (tmp_path / ".brr").mkdir()
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-interrupted", prompt=prompt,
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+
+        codex = runner_select.RunnerProfile(
+            name="codex", profile="codex", shell="codex",
+        )
+        result = invoke_runner(
+            codex, invocation, cfg={"runner_cmd": ["mock"]}, trace=True,
+        )
+
+        assert prompt not in result.stderr
+        assert "turn interrupted" in result.error_detail()
+        assert result.trace_dir is not None
+        assert (result.trace_dir / "stderr.txt").read_text(
+            encoding="utf-8",
+        ) == raw_stderr
+
+    def test_error_detail_tails_nonempty_lines_and_scrubs_prompt_lines(self, tmp_path):
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="redact", prompt="private line",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+        result = RunnerResult(
+            invocation=invocation, runner_name="mock", command=["mock"],
+            stdout="", stderr="private line\n" + "\n".join(
+                f"error {index}" for index in range(10)
+            ), returncode=1, trace_dir=None, artifacts=[],
+        )
+
+        assert result.error_detail() == "\n".join(
+            f"error {index}" for index in range(2, 10)
+        )
+
+    def test_interrupted_failure_kind_has_safe_prefix(self):
+        from brr import runner_failures
+
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="turn interrupted",
+        ) == runner_failures.INTERRUPTED
+        assert runner_failures.reason_prefix(runner_failures.INTERRUPTED) == (
+            "runner was interrupted (external kill or shell interrupt)"
+        )
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="session limit reached",
+        ) == runner_failures.QUOTA_EXHAUSTED
+
+
 class TestExtraRunnerArgs:
     """``RunnerInvocation.extra_runner_args`` injects argv before the prompt
     on the profile path (codex's argv-installed hooks), but never rewrites a

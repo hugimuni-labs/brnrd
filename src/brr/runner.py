@@ -210,6 +210,10 @@ class RunnerResult:
     artifacts: list[RunnerArtifactRecord]
     observed_core: str | None = None
     core_mismatch: bool | None = None
+    # Child stderr before any display-safe redaction. Trace files are local
+    # diagnostics, so they retain this exact capture while ``stderr`` is safe
+    # to put in daemon packets and terminal replies.
+    trace_stderr: str | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
@@ -286,9 +290,18 @@ class RunnerResult:
         """
         if self.ok and self.validation_ok:
             return None
-        detail = (self.stderr or self.stdout or "").strip()
-        if not detail:
+        source = self.stderr or self.stdout or ""
+        prompt_lines = {
+            line.strip() for line in self.invocation.prompt.splitlines()
+            if line.strip()
+        }
+        lines = [
+            line.strip() for line in source.splitlines()
+            if line.strip() and line.strip() not in prompt_lines
+        ]
+        if not lines:
             return None
+        detail = "\n".join(lines[-8:])
         if len(detail) <= limit:
             return detail
         tail = detail[-limit:]
@@ -991,6 +1004,30 @@ def _read_capture(path: Path) -> str:
         return ""
 
 
+def _strip_prompt_echo(stderr: str, prompt: str) -> str:
+    """Remove one exact prompt echo from a runner's display-safe stderr.
+
+    Codex can print its complete stdin prompt to stderr before it starts work.
+    That stream later feeds daemon failure packets and may be quoted to chat;
+    retaining the raw capture there would reflect private prompt material back
+    to the operator. The trace keeps the raw stream for local diagnosis.
+    """
+    if not stderr or not prompt:
+        return stderr
+    return stderr.replace(prompt, "", 1)
+
+
+def _uses_codex_shell(
+    selected: object, selected_name: str, repo_root: Path | None,
+) -> bool:
+    """Whether an invocation uses Codex's prompt-echoing shell."""
+    shell = getattr(selected, "shell", None)
+    if shell is None:
+        profile = _selection_profiles(repo_root).get(selected_name, {})
+        shell = profile.get("shell") or profile.get("binary") or selected_name
+    return str(shell).strip().lower() == "codex"
+
+
 def _retire_capture_dir(capture_dir: Path, returncode: int) -> None:
     """Delete the capture on a clean run; *keep it* when something went wrong.
 
@@ -1087,7 +1124,10 @@ def _write_trace(result: RunnerResult) -> Path | None:
 
     (trace_dir / "prompt.md").write_text(result.invocation.prompt, encoding="utf-8")
     (trace_dir / "stdout.txt").write_text(result.stdout, encoding="utf-8")
-    (trace_dir / "stderr.txt").write_text(result.stderr, encoding="utf-8")
+    (trace_dir / "stderr.txt").write_text(
+        result.trace_stderr if result.trace_stderr is not None else result.stderr,
+        encoding="utf-8",
+    )
 
     records = []
     copied_artifacts = []
@@ -1230,8 +1270,11 @@ def invoke_runner(
     if returncode != 127:
         stdout = _read_capture(out_path)
         stderr = _read_capture(err_path)
+    trace_stderr = stderr
     if timed_out:
         stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
+    if _uses_codex_shell(selected, selected_name, invocation.repo_root):
+        stderr = _strip_prompt_echo(stderr, invocation.prompt)
     _retire_capture_dir(capture_dir, returncode)
 
     stdout, observed_core = _process_runner_stdout(
@@ -1266,6 +1309,7 @@ def invoke_runner(
         artifacts=[],
         observed_core=observed_core,
         core_mismatch=mismatch,
+        trace_stderr=trace_stderr,
     )
     if trace:
         result.trace_dir = _write_trace(result)
