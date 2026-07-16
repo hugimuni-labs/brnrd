@@ -932,3 +932,65 @@ def test_write_prompt_file_creates_file_in_run_dir(tmp_path):
     assert path == brr_dir / "runs" / "task-xyz" / "prompt.md"
     assert path.exists()
     assert path.read_text(encoding="utf-8") == prompt_text
+
+
+class TestTerminalStreamDedupe:
+    """The static-dispatch dedupe (ceremony cut 2026-07-16): a terminal
+    stream that exactly duplicates a reply already delivered to the waking
+    thread via the outbox is dropped, never double-posted. Anything new
+    still ships."""
+
+    def _drain_current(self, tmp_path, monkeypatch, body):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        outbox = brr_dir / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        (outbox / "001.md").write_text(body)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
+        return task, responses
+
+    def test_exact_duplicate_is_detected(self, tmp_path, monkeypatch):
+        task, responses = self._drain_current(
+            tmp_path, monkeypatch, "the whole reply\nsecond line\n")
+        resp = responses / "evt-1.md"
+        # Terminal stream = same content, differing only in surrounding
+        # whitespace (the strip the outbox drain already applies).
+        resp.write_text("the whole reply\nsecond line\n\n")
+        assert daemon._terminal_stream_duplicates_delivered(task, resp)
+
+    def test_new_terminal_content_still_ships(self, tmp_path, monkeypatch):
+        task, responses = self._drain_current(
+            tmp_path, monkeypatch, "interim: on it\n")
+        resp = responses / "evt-1.md"
+        resp.write_text("done — the real answer, different text\n")
+        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
+
+    def test_no_delivered_partials_never_suppresses(self, tmp_path):
+        task = types.SimpleNamespace(id="task-1", meta={})
+        resp = tmp_path / "evt-1.md"
+        resp.write_text("a reply\n")
+        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
+
+    def test_cross_event_reply_does_not_arm_dedupe(self, tmp_path, monkeypatch):
+        # A reply folded into a *different* event must not suppress this
+        # thread's terminal stream, even with identical text.
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        outbox = brr_dir / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        (inbox / "evt-2.md").write_text("---\nid: evt-2\nstatus: pending\n---\nq\n")
+        (outbox / "001.md").write_text("---\nevent: evt-2\n---\nsame text\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1", meta={})
+        daemon._drain_outbox(emit, task, responses, "evt-1", outbox, inbox)
+        resp = responses / "evt-1.md"
+        resp.write_text("same text\n")
+        assert not daemon._terminal_stream_duplicates_delivered(task, resp)
