@@ -1557,3 +1557,46 @@ class TestDecisionLedgerInjection:
 
         assert "Decision ledger" in prompt
         assert "CS4 accepted 2026-06-29" in prompt
+
+
+# ── CS8 — workflow preferences injection ─────────────────────────────
+
+
+class TestWorkflowInjection:
+    """CS8: the account-wide workflow.md — the user↔resident pace-and-flow
+    contract — is injected when present; when absent, a one-line slot
+    pointer replaces it (same stance as the thread-of-record pointer)."""
+
+    def test_slot_pointer_when_no_file(self, tmp_path):
+        _seed_account_home(tmp_path)
+        from brr.prompts import _build_workflow_block
+
+        result = _build_workflow_block(tmp_path)
+
+        assert "Workflow preferences" in result
+        assert "No workflow doc yet" in result
+        # Machine-independent on purpose: the absent case lands in the
+        # deterministic boot snapshot, so no absolute path here.
+        assert "`workflow.md`" in result
+        assert str(tmp_path) not in result
+
+    def test_injects_doc_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        (home / "workflow.md").write_text(
+            "# Workflow\n\n## Autonomy\nSelf-woken wakes work the agenda.",
+            encoding="utf-8",
+        )
+        from brr.prompts import _build_workflow_block
+
+        result = _build_workflow_block(tmp_path)
+
+        assert "Workflow preferences" in result
+        assert "Self-woken wakes work the agenda" in result
+        assert "No workflow doc yet" not in result
+
+    def test_silent_when_file_empty(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        (home / "workflow.md").write_text("", encoding="utf-8")
+        from brr.prompts import _build_workflow_block
+
+        assert _build_workflow_block(tmp_path) == ""

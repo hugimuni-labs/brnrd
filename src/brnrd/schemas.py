@@ -195,6 +195,9 @@ class PlansReport(BaseModel):
     repo_plan_md: str = ""
     cross_repo_plan_md: str = ""
     decision_ledger_md: str = ""
+    # CS8 — account-wide workflow preferences doc (workflow.md at the
+    # account-dominion root): the user↔resident pace-and-flow contract.
+    workflow_md: str = ""
 
 
 class PlansOut(PlansReport):
