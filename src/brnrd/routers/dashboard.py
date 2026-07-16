@@ -527,6 +527,8 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
 
 
 _RUN_LEDGER_STALE_SECONDS = 300
+# Match the daemon's published envelope; the produce gauge asks for all of it.
+_RUN_LEDGER_API_LIMIT = 100
 
 
 def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, Any]:
@@ -845,7 +847,7 @@ def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = De
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account.id)
-    capped = max(1, min(limit, 50))
+    capped = max(1, min(limit, _RUN_LEDGER_API_LIMIT))
     view = _run_ledger_views(db, repos, capped)
     return JSONResponse(
         {

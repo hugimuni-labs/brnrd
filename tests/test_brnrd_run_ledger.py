@@ -225,3 +225,36 @@ def test_dashboard_run_ledger_api_returns_rows():
     assert body["rows"][0]["run_id"] == "run-1"
     assert body["rows"][0]["usd_subscription_attributed"] == 0.25
     assert body["stale"] is False
+
+
+def test_dashboard_run_ledger_api_caps_a_busy_window_at_one_hundred_rows():
+    client = _client()
+    _account_headers, _daemon_headers, pid = _repo_and_daemon(client)
+    _login(client)
+    rows = [
+        {
+            **_ROW,
+            "run_id": f"run-{i:03d}",
+            "ended_at": (datetime.now(timezone.utc) - timedelta(seconds=i)).isoformat(),
+        }
+        for i in range(105)
+    ]
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-ledger-cap",
+                repo_id=pid,
+                token_id="tok-ledger-cap",
+                daemon_name="laptop",
+                run_ledger_json=json.dumps(rows),
+                run_ledger_updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+    response = client.get("/v1/dashboard/run-ledger?limit=500")
+
+    assert response.status_code == 200
+    assert len(response.json()["rows"]) == 100
+    assert response.json()["rows"][0]["run_id"] == "run-000"
