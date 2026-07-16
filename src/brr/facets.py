@@ -171,7 +171,7 @@ def _runner_block(
         if catalog:
             block["catalog"] = catalog
         return block
-    from . import runner_select
+    from . import claude_status, runner_select
 
     meta = runner_meta or {}
     requested = str(meta.get("model") or "").strip() or None
@@ -197,6 +197,11 @@ def _runner_block(
         "model_observed": observed,
         "core_mismatch": mismatch,
         "attestation": attestation,
+        # *Why* the Core changed under us, when the session transcript recorded
+        # a refusal/fallback. ``None`` on every clean run. Without this the
+        # portal could say "mismatch" but never say what caused it, which is
+        # the state that cost three days of guesswork (2026-07-13..16).
+        "substitution_reason": claude_status.substitution_reason(levels),
         "class": str(meta.get("class") or "").strip() or None,
         "provider": str(meta.get("provider") or "").strip() or None,
         "hooks": str(meta.get("hooks") or "").strip() or None,

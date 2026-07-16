@@ -1,6 +1,6 @@
-Mounted from an earlier wake — a core sample, not this run's receipt. The
-working register (`weave.md` has the rules) as one being actually spent it.
-Own the hand; the deed was another wake's.
+A worked example from an earlier wake — not this run's receipt. The working
+register (`weave.md` has the rules) as one run actually spent it. Own the
+hand; the deed was another wake's.
 
 ---
 

@@ -231,3 +231,147 @@ def test_substitution_reason_names_refusal_category():
 def test_substitution_reason_none_without_signals():
     assert claude_status.substitution_reason({}) is None
     assert claude_status.substitution_reason(None) is None
+
+
+# --- Session-transcript refusal capture (2026-07-16) -------------------------
+# History, so the intent survives a reread: for three days every fable-pinned
+# wake was silently served Opus. The reason existed the whole time, but the
+# capture mined the result envelope, which was measured to carry *none* of it —
+# a genuinely refused run answers ``terminal_reason: "completed"``,
+# ``stop_reason: "end_turn"``, ``is_error: false``, no ``content``, no
+# ``stop_details``, ``usage.iterations: []``. The reason lives only in Claude
+# Code's session transcript, keyed by the envelope's ``session_id``.
+
+_REFUSAL_ROW = {
+    "type": "system",
+    "subtype": "model_refusal_fallback",
+    "direction": "retry",
+    "trigger": "refusal",
+    "apiRefusalCategory": "reasoning_extraction",
+    "originalModel": "claude-fable-5",
+    "fallbackModel": "claude-opus-4-8",
+    "content": "Fable 5's safeguards flagged this message. Switched to Opus 4.8.",
+}
+
+
+def _transcript(root, session_id, rows):
+    project = root / "-home-user-repo"
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / f"{session_id}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
+def test_session_refusal_reads_the_reason_the_envelope_never_carries(tmp_path):
+    _transcript(tmp_path, "sess-1", [{"type": "user"}, _REFUSAL_ROW])
+    reason = claude_status.session_refusal("sess-1", projects_root=tmp_path)
+    assert reason == {
+        "count": 1,
+        "category": "reasoning_extraction",
+        "trigger": "refusal",
+        "direction": "retry",
+        "from": "claude-fable-5",
+        "to": "claude-opus-4-8",
+        "message": "Fable 5's safeguards flagged this message. Switched to Opus 4.8.",
+    }
+
+
+def test_session_refusal_is_none_for_a_clean_run(tmp_path):
+    # The overwhelmingly common case: a transcript exists and never refused.
+    _transcript(tmp_path, "sess-clean", [{"type": "user"}, {"type": "assistant"}])
+    assert claude_status.session_refusal("sess-clean", projects_root=tmp_path) is None
+
+
+def test_session_refusal_survives_missing_ids_and_junk_lines(tmp_path):
+    _transcript(tmp_path, "sess-2", [_REFUSAL_ROW])
+    for bad in (None, "", "no-such-session"):
+        assert claude_status.session_refusal(bad, projects_root=tmp_path) is None
+    # A truncated/corrupt line must not take the reason down with it.
+    project = tmp_path / "-home-user-repo"
+    (project / "sess-3.jsonl").write_text(
+        '{"type": "system", "subtype": "model_refusal_fallback"  <-- truncated\n'
+        + json.dumps(_REFUSAL_ROW)
+        + "\n",
+        encoding="utf-8",
+    )
+    reason = claude_status.session_refusal("sess-3", projects_root=tmp_path)
+    assert reason is not None and reason["category"] == "reasoning_extraction"
+
+
+def test_session_refusal_keeps_the_last_of_repeated_refusals(tmp_path):
+    second = dict(_REFUSAL_ROW, apiRefusalCategory="cyber")
+    _transcript(tmp_path, "sess-4", [_REFUSAL_ROW, second])
+    reason = claude_status.session_refusal("sess-4", projects_root=tmp_path)
+    assert reason["count"] == 2
+    assert reason["category"] == "cyber"
+
+
+def test_session_transcript_found_by_uuid_not_by_cwd_slug(tmp_path):
+    # The lookup must not depend on how Claude Code encodes a cwd into a
+    # directory name (``/`` and ``.`` both fold to ``-``); the session id is
+    # unique, so any project directory is fair game.
+    (tmp_path / "-some-utterly-unrelated--brr-worktrees-run-x").mkdir(parents=True)
+    path = (
+        tmp_path / "-some-utterly-unrelated--brr-worktrees-run-x" / "sess-5.jsonl"
+    )
+    path.write_text(json.dumps(_REFUSAL_ROW) + "\n", encoding="utf-8")
+    assert claude_status.session_transcript_path("sess-5", projects_root=tmp_path) == path
+
+
+def test_parse_result_merges_the_transcript_refusal_into_signals(tmp_path):
+    _transcript(tmp_path, "sess-6", [_REFUSAL_ROW])
+    payload = dict(_RESULT, session_id="sess-6")
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    assert levels["fallback_signals"]["refusal"]["category"] == "reasoning_extraction"
+
+
+def test_substitution_reason_renders_the_transcript_refusal(tmp_path):
+    _transcript(tmp_path, "sess-7", [_REFUSAL_ROW])
+    # A real substituted envelope: success-shaped, benign stop_reason, nothing
+    # of the reason in it. The reason must still render.
+    payload = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "stop_reason": "end_turn",
+        "terminal_reason": "completed",
+        "usage": {"iterations": []},
+        "session_id": "sess-7",
+    }
+    levels = claude_status.parse_result(payload, projects_root=tmp_path)
+    assert claude_status.substitution_reason(levels) == (
+        "refusal=reasoning_extraction;fallback=claude-fable-5->claude-opus-4-8"
+    )
+
+
+def test_substitution_reason_stays_none_when_the_run_was_clean(tmp_path):
+    _transcript(tmp_path, "sess-8", [{"type": "assistant"}])
+    levels = claude_status.parse_result(
+        dict(_RESULT, session_id="sess-8"), projects_root=tmp_path
+    )
+    assert claude_status.substitution_reason(levels) is None
+
+
+def test_runner_facet_exposes_the_substitution_reason():
+    # The portal could say "mismatch" but never say why; that gap is what cost
+    # three days of guesswork.
+    levels = {
+        "model_ids": ["claude-opus-4-8"],
+        "fallback_signals": {
+            "refusal": {
+                "category": "reasoning_extraction",
+                "from": "claude-fable-5",
+                "to": "claude-opus-4-8",
+                "count": 1,
+            }
+        },
+    }
+    block = facets.build(
+        runner_name="claude-fable",
+        runner_meta={"model": "claude-fable-5"},
+        levels=levels,
+    )["runner"]
+    assert block["attestation"] == "mismatch"
+    assert block["substitution_reason"] == (
+        "refusal=reasoning_extraction;fallback=claude-fable-5->claude-opus-4-8"
+    )
