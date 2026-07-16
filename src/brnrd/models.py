@@ -27,6 +27,9 @@ class Account(Base):
     # kb/plan-brnrd-dashboard-mvp.md "Gap: Current Planned State view".
     cross_repo_plan_md: Mapped[str] = mapped_column(Text, default="")
     decision_ledger_md: Mapped[str] = mapped_column(Text, default="")
+    # CS8 — workflow preferences (account-dominion workflow.md), the
+    # user↔resident pace-and-flow contract, rendered on the dashboard.
+    workflow_md: Mapped[str] = mapped_column(Text, default="")
     plans_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Billing (#53, kb design-billing.md). ``tier`` flips only from Stripe
     # webhook state transitions; the Stripe subscription is source of truth.
