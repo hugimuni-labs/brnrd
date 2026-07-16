@@ -9,6 +9,24 @@ export const LOOM_MIN_FUTURE_HORIZON_MS = 6 * 60 * 60 * 1000;
 export const LOOM_CENTER_ZONE_PX = 120;
 export const LOOM_DUE_SOON_MS = 15 * 60 * 1000;
 
+/**
+ * Scrollback stops for the past half-axis ("can't scroll back",
+ * 2026-07-16). Discrete windows, not continuous zoom: each step is a
+ * legible unit a reader can name, and the log curve re-fits the new span.
+ */
+export const LOOM_PAST_WINDOWS_MS = [
+	6 * 60 * 60 * 1000,
+	12 * 60 * 60 * 1000,
+	24 * 60 * 60 * 1000,
+	3 * 24 * 60 * 60 * 1000,
+	7 * 24 * 60 * 60 * 1000
+] as const;
+
+export function loomPastWindowLabel(windowMs: number): string {
+	const hours = Math.round(windowMs / 3_600_000);
+	return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
 	return Math.max(minimum, Math.min(maximum, value));
 }
@@ -18,10 +36,10 @@ function logFraction(valueMs: number, limitMs: number): number {
 	return Math.log1p(value / LOOM_LOG_UNIT_MS) / Math.log1p(limitMs / LOOM_LOG_UNIT_MS);
 }
 
-/** Position inside the past half: 0 = 24h edge, 1 = NOW boundary. */
-export function loomPastPosition(ageMs: number): number {
+/** Position inside the past half: 0 = window edge, 1 = NOW boundary. */
+export function loomPastPosition(ageMs: number, windowMs: number = LOOM_PAST_WINDOW_MS): number {
 	if (!Number.isFinite(ageMs)) return 0;
-	return 1 - logFraction(ageMs, LOOM_PAST_WINDOW_MS);
+	return 1 - logFraction(ageMs, windowMs);
 }
 
 /** Position inside the future half: 0 = NOW boundary, 1 = horizon edge. */
