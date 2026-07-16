@@ -2,6 +2,7 @@
 	import { fade } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { glitchReveal } from './transitions';
+	import { STATUS_COOLING } from './statusPalette';
 	import {
 		daysSince,
 		parseDecisions,
@@ -36,9 +37,7 @@
 	let repoPlans = $derived(
 		data.plans.map((p) => ({ label: p.repo_label, parsed: parsePlan(p.plan_md) }))
 	);
-	let crossRepo = $derived(
-		data.cross_repo_plan_md ? parsePlan(data.cross_repo_plan_md) : null
-	);
+	let crossRepo = $derived(data.cross_repo_plan_md ? parsePlan(data.cross_repo_plan_md) : null);
 	let decisions = $derived(parseDecisions(data.decisions_md).reverse());
 	let visibleDecisions = $derived(showAllDecisions ? decisions : decisions.slice(0, 6));
 
@@ -57,7 +56,8 @@
 					updated {parsed.updatedDate}
 					{#if stale !== null && stale >= STALE_DAYS}
 						<span
-							class="ml-1 rounded bg-red-950/70 px-1 text-red-300"
+							class="ml-1 rounded border px-1"
+							style={`border-color: ${STATUS_COOLING}55; background-color: ${STATUS_COOLING}16; color: ${STATUS_COOLING}`}
 							title="the plan's own Updated: line is {stale} days old">stale {stale}d</span
 						>
 					{/if}
@@ -71,7 +71,9 @@
 			{#if section.moves.length > 0}
 				<!-- The ranked-move list: the actual scheduling mechanism,
 				     rendered as first-class items rather than buried prose. -->
-				<p class="mt-2 border-t border-stone-800/70 pt-2 text-[10px] tracking-wide text-stone-500 uppercase">
+				<p
+					class="mt-2 border-t border-stone-800/70 pt-2 text-[10px] tracking-wide text-stone-500 uppercase"
+				>
 					{section.title}
 				</p>
 				<ol class="mt-1 space-y-1">
@@ -133,7 +135,8 @@
 
 <div class="panel space-y-2 p-4">
 	<div class="mb-1 flex items-center justify-between text-sm">
-		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">decisions space</span>
+		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">decisions space</span
+		>
 		{#if data.reported_at}
 			<span class="font-mono text-[10px] text-stone-600"
 				>mirrored {new Date(data.reported_at).toLocaleString()}</span
@@ -170,7 +173,8 @@
 						>
 							<span class="shrink-0 font-mono text-stone-600">{d.date ?? '—'}</span>
 							<span class="min-w-0 flex-1 truncate text-stone-200">{d.title}</span>
-							<span class="shrink-0 font-mono text-[10px] text-stone-600">{isOpen ? '▲' : '▼'}</span>
+							<span class="shrink-0 font-mono text-[10px] text-stone-600">{isOpen ? '▲' : '▼'}</span
+							>
 						</button>
 						{#if isOpen}
 							<p
