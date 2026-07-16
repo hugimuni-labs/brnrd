@@ -1,6 +1,6 @@
 import { deepEqual, equal } from 'node:assert/strict';
 import { test } from 'node:test';
-import { rollupProduceGauge } from './produceGauge.ts';
+import { produceGaugeLinks, rollupProduceGauge } from './produceGauge.ts';
 import type { RunLedgerRow } from './runLedger';
 
 const NOW = Date.parse('2026-07-16T18:00:00Z');
@@ -96,4 +96,36 @@ test('empty window omits nullable spend instead of inventing zeroes', () => {
 		kbPages: 0,
 		replies: 0
 	});
+});
+
+test('linked produce stays inside the window, counted vocabulary, and safe URL schemes', () => {
+	const links = produceGaugeLinks(
+		[
+			row({
+				external_refs: [
+					{ kind: 'pr', number: 12, url: 'https://example.test/pull/12' },
+					{ kind: 'commit', sha: 'abcdef0123', subject: 'ship it', url: null },
+					{ kind: 'kb_page', path: 'subject-a.md', url: 'https://example.test/subject-a' },
+					{ kind: 'reply', excerpt: 'done — receipt', url: 'https://example.test/reply/1' },
+					{ kind: 'summary', text: 'not produce', url: 'https://example.test/summary' },
+					{ kind: 'file', path: 'proof.png', url: 'https://example.test/proof' },
+					{ kind: 'pr', number: 99, url: 'javascript:alert(1)' }
+				]
+			}),
+			row({
+				external_refs: [{ kind: 'pr', number: 12, url: 'https://example.test/pull/12' }]
+			}),
+			row({
+				ended_at: '2026-07-15T17:59:59Z',
+				external_refs: [{ kind: 'pr', number: 11, url: 'https://example.test/pull/11' }]
+			})
+		],
+		NOW
+	);
+
+	deepEqual(links, [
+		{ kind: 'pr', label: 'PR #12', url: 'https://example.test/pull/12' },
+		{ kind: 'kb', label: 'subject-a.md', url: 'https://example.test/subject-a' },
+		{ kind: 'reply', label: 'done — receipt', url: 'https://example.test/reply/1' }
+	]);
 });
