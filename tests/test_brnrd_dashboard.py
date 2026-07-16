@@ -90,16 +90,22 @@ def _add_installation_repo(
 
 
 def test_dashboard_shows_enabled_repo():
+    """The /v1/dashboard/repos JSON endpoint exposes the connected repo with
+    its daemon status — this is the data surface the SvelteKit dashboard
+    renders at '/'; the old Jinja GET / route was removed when brnrd_web
+    was merged into src/brnrd/routers/ and the SPA took over '/'."""
     client = _client()
     token = _login(client, login="Gurio")
     _create_repo(client, token)
 
-    r = client.get("/")
+    r = client.get("/v1/dashboard/repos")
 
     assert r.status_code == 200
-    assert "Gurio/brr" in r.text
-    assert "Waiting for local daemon" in r.text
-    assert "/activity" in r.text
+    body = r.json()
+    repo_names = [row["repo_full_name"] for row in body["connected_repos"]]
+    assert "Gurio/brr" in repo_names
+    daemon_labels = [row["daemon_label"] for row in body["connected_repos"]]
+    assert "Waiting for local daemon" in daemon_labels
 
 
 def test_repos_page_redirects_to_dashboard():
@@ -265,7 +271,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
     from datetime import datetime, timedelta, timezone
 
     from brnrd.models import Daemon
-    from brnrd_web.activity_dashboard import _quota_views
+    from brnrd.routers.dashboard import _quota_views
 
     client = _client()
     token = _login(client)
@@ -317,7 +323,7 @@ def test_dashboard_carries_the_burn_rate_and_drops_it_when_the_report_goes_stale
     from datetime import datetime, timedelta, timezone
 
     from brnrd.models import Daemon
-    from brnrd_web.activity_dashboard import _quota_views
+    from brnrd.routers.dashboard import _quota_views
 
     client = _client()
     token = _login(client)
@@ -398,7 +404,7 @@ def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
     from datetime import datetime, timedelta, timezone
 
     from brnrd.models import Daemon
-    from brnrd_web.activity_dashboard import _quota_views
+    from brnrd.routers.dashboard import _quota_views
 
     client = _client()
     token = _login(client)
@@ -516,7 +522,7 @@ def test_dashboard_live_runs_api_dedupes_across_repo_registrations():
     from datetime import datetime, timedelta, timezone
 
     from brnrd.models import Daemon
-    from brnrd_web.activity_dashboard import _live_runs_views
+    from brnrd.routers.dashboard import _live_runs_views
 
     client = _client()
     token = _login(client)
@@ -662,7 +668,7 @@ def test_dashboard_pr_review_queue_dedupes_across_repo_registrations():
     from datetime import datetime, timedelta, timezone
 
     from brnrd.models import Daemon
-    from brnrd_web.activity_dashboard import _pr_review_queue_views
+    from brnrd.routers.dashboard import _pr_review_queue_views
 
     client = _client()
     token = _login(client)

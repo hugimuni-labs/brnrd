@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from starlette.staticfiles import StaticFiles
 
 from .config import Settings, get_settings
 from .db import Base, make_engine, make_session_factory
@@ -12,6 +14,11 @@ from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
 from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, webhooks
+from .routers import dashboard as dashboard_router
+from .routers import repo_actions as repo_actions_router
+from .routers import web_auth as web_auth_router
+
+_STATIC_DIR = Path(__file__).with_name("static")
 
 
 def _maybe_register_telegram_webhook(settings: Settings) -> None:
@@ -76,11 +83,18 @@ def create_app(
     if settings.enable_dev_endpoints:
         app.include_router(dev.router)
 
-    # The dashboard (src/brnrd_web) is part of the brr[backend] extra.
-    from brnrd_web import mount_static, router as web_router
-
-    mount_static(app)
-    app.include_router(web_router)
+    # Dashboard routers (migrated from src/brnrd_web into src/brnrd/routers/).
+    # Static assets (app.css, dashboard.css) are served from src/brnrd/static/
+    # under the same URL prefix (/static/brnrd_web/) so deployed CDN cache keys
+    # and existing client references remain byte-compatible.
+    app.mount(
+        "/static/brnrd_web",
+        StaticFiles(directory=_STATIC_DIR),
+        name="brnrd_static",
+    )
+    app.include_router(dashboard_router.router)
+    app.include_router(repo_actions_router.router)
+    app.include_router(web_auth_router.router)
 
     @app.get("/healthz")
     def healthz() -> dict:
