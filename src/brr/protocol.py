@@ -64,7 +64,7 @@ def frontmatter_body(text: str) -> str:
 # Routing selectors that may lead an outbox message's frontmatter. Used
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
-_OUTBOX_ROUTING_KEYS = ("event", "gate", "respawn", "runner_policy")
+_OUTBOX_ROUTING_KEYS = ("event", "gate", "respawn", "spawn", "runner_policy")
 
 
 def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
@@ -91,7 +91,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     To avoid mistaking a plain message for routing, the lenient path
     engages **only** when the first non-empty line is a recognised
     routing selector (``event:`` / ``gate:`` / ``respawn:`` /
-    ``runner_policy:``) *and* a closing ``---``
+    ``spawn:`` / ``runner_policy:``) *and* a closing ``---``
     line follows in the contiguous leading key-block. A normal message
     that merely contains ``---`` dividers (a PLAN, say) is never touched.
     Misparses degrade safely: the drain drops an unknown ``event:`` target

@@ -4345,6 +4345,12 @@ def _emit_mirror_cards(
     mirror must never break a run.
     """
     try:
+        if bool(task.meta.get("worker")):
+            # A worker-stack run owns no thread and folds nothing (live
+            # incident 2026-07-16: two spawn children stamped "folded into a
+            # running thought" under the whole backlog of a chat that their
+            # parent was actively answering). Workers stay silent here.
+            return
         run_conv = task.conversation_key or ""
         mirrors = card_state.setdefault("mirrors", {})
         if not isinstance(mirrors, dict):  # pragma: no cover - state abuse
@@ -5300,6 +5306,8 @@ def _failure_reason(
             )
         )
         prefix = runner_failures.reason_prefix(kind)
+        if kind == runner_failures.INTERRUPTED:
+            return f"{prefix} after {attempts} attempt(s)"
         if detail:
             return f"{prefix} after {attempts} attempt(s): {detail}"
         if exit_code is not None:

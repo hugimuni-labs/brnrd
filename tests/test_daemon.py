@@ -2172,6 +2172,42 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
     assert task.terminal_reply == response
 
 
+def test_interrupted_terminal_failure_omits_stderr_detail(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-interrupted")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="", stderr="turn interrupted\nprivate runner detail",
+            returncode=1, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    response = protocol.read_response(
+        tmp_path / ".brr" / "responses", "evt-interrupted",
+    )
+    assert response is not None
+    assert "runner was interrupted (external kill or shell interrupt)" in response
+    assert "private runner detail" not in response
+    assert task.terminal_reply == response
+
+
 def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
     tmp_path, monkeypatch,
 ):
