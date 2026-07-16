@@ -19,6 +19,8 @@ export interface GlitchRevealParams {
 	/** How many discrete frames the reveal snaps through. More steps reads
 	 * smoother (closer to a tween); fewer reads choppier/more stop-motion. */
 	steps?: number;
+	/** Small phase offset for sibling elements entering as a chorus. */
+	delay?: number;
 }
 
 // Deterministic per-frame glitch states (v2, 2026-07-09). The first cut
@@ -50,11 +52,13 @@ const GLITCH_FRAMES: ReadonlyArray<
  * the collapse (`out:`) since a stop-motion *disappearance* reads as
  * flicker rather than a clean withdrawal. */
 export function glitchReveal(_node: Element, params: GlitchRevealParams = {}) {
-	const duration = params.duration ?? 320;
+	const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	const duration = reduced ? 0 : (params.duration ?? 320);
 	// `steps` now selects how many of the glitch states get visited (the
 	// final settled frame is always included), so fewer steps = choppier.
 	const steps = Math.max(2, Math.min(params.steps ?? GLITCH_FRAMES.length, GLITCH_FRAMES.length));
 	return {
+		delay: reduced ? 0 : (params.delay ?? 0),
 		duration,
 		css: (t: number) => {
 			// Snap continuous t onto the frame sequence — no interpolation
