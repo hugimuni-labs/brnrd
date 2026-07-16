@@ -1,7 +1,7 @@
 """#328 tap-to-request — server-side lifecycle of a spool-rack tap.
 
 One shared module so the two surfaces stay in lockstep: the dashboard
-(``brnrd_web/activity_dashboard.py``: mint / cancel / render the chip) and
+(``brnrd/routers/dashboard.py``: mint / cancel / render the chip) and
 the daemon mirror (``routers/daemons.py::put_runners``: piggyback the
 pending request on the catalog publish response, retire consumed ones).
 

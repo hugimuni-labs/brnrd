@@ -159,7 +159,7 @@ def test_dashboard_run_ledger_api_requires_login():
 
 
 def test_dashboard_run_ledger_dedupes_limits_newest_first():
-    from brnrd_web.activity_dashboard import _run_ledger_views
+    from brnrd.routers.dashboard import _run_ledger_views
 
     client = _client()
     _account_headers, _daemon_headers, pid_a = _repo_and_daemon(client)

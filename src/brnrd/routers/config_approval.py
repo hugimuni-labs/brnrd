@@ -2,7 +2,7 @@
 
 Mirrors ``pairing.py``'s ``PairRequest`` shape: a daemon mints a request,
 the account owner approves or rejects it from a browser (session-cookie
-gated, see ``brnrd_web/routes.py::config_approve_page``/``config_approve_submit``),
+gated, see ``brnrd/routers/web_auth.py::config_approve_page``/``config_approve_submit``),
 and the outcome rides back to the daemon over the *existing*
 ``GET /v1/daemons/inbox`` long-poll — the same channel any other
 cloud-origin chat message already uses (``src/brr/gates/cloud.py::_loop_once``)
