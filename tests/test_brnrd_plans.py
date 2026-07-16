@@ -76,6 +76,7 @@ def test_daemon_plans_snapshot_replaces_repo_and_account_fields():
             "repo_plan_md": "# active plan\n\nship the CPS view",
             "cross_repo_plan_md": "# cross-repo\n\ncoordinate release",
             "decision_ledger_md": "## decisions\n\n- shipped X",
+            "workflow_md": "## Autonomy\nself-woken -> agenda",
         },
         headers=daemon_headers,
     )
@@ -84,6 +85,7 @@ def test_daemon_plans_snapshot_replaces_repo_and_account_fields():
     assert body["repo_plan_md"] == "# active plan\n\nship the CPS view"
     assert body["cross_repo_plan_md"] == "# cross-repo\n\ncoordinate release"
     assert body["decision_ledger_md"] == "## decisions\n\n- shipped X"
+    assert body["workflow_md"] == "## Autonomy\nself-woken -> agenda"
     assert body["plans_updated_at"] is not None
 
     # Republishing overwrites rather than accumulating (last-write-wins).
@@ -124,6 +126,7 @@ def test_dashboard_plans_api_returns_mirrored_decisions_space():
             "repo_plan_md": "# Active plan\n\nUpdated: 2026-07-09\n\n## Ranked moves\n1. **Merge PR** now.\n2. **Fix bug** later.",
             "cross_repo_plan_md": "",
             "decision_ledger_md": "## Chose X (2026-07-08)\nBecause Y.",
+            "workflow_md": "## Gating\nvisibility over approval",
         },
         headers=daemon_headers,
     )
@@ -143,6 +146,7 @@ def test_dashboard_plans_api_returns_mirrored_decisions_space():
     assert body["plans"][0]["updated_at"] is not None
     assert body["decisions_md"] == "## Chose X (2026-07-08)\nBecause Y."
     assert body["cross_repo_plan_md"] == ""
+    assert body["workflow_md"] == "## Gating\nvisibility over approval"
     assert body["reported_at"] is not None
 
 

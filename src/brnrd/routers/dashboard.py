@@ -901,6 +901,7 @@ def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSON
             "plans": plans,
             "cross_repo_plan_md": (account.cross_repo_plan_md or "").strip(),
             "decisions_md": (account.decision_ledger_md or "").strip(),
+            "workflow_md": (account.workflow_md or "").strip(),
             "reported_at": account.plans_updated_at.isoformat() if account.plans_updated_at else None,
         }
     )
