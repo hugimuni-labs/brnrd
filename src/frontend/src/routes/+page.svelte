@@ -16,6 +16,12 @@
 		type RunnersResponse
 	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
+	import ScheduleLane from '$lib/ScheduleLane.svelte';
+	import {
+		ScheduledWakesAuthError,
+		fetchScheduledWakes,
+		type ScheduledWake
+	} from '$lib/scheduledWakes';
 	import {
 		PRReviewQueueAuthError,
 		fetchPRReviewQueue,
@@ -129,6 +135,11 @@
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
+	// Loom slice 4 (kb/design-continuous-presence.md §3.2.1): queued intent —
+	// the scheduled/queued wakes lane. Same activity feed the /activity page
+	// filters, narrowed to kind=scheduled; no new backend data.
+	let scheduledWakes = $state<ScheduledWake[] | null>(null);
+	let scheduledWakesError = $state<string | null>(null);
 	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
 	// §"Loom envelope") — piggybacked on the same live-runs fetch, not a
 	// separate poll; `activeSpawns` is just a derived count over the same
@@ -188,6 +199,15 @@
 			// state (same session cookie) — only surface a *different* failure.
 			if (!(e instanceof LiveRunsAuthError)) {
 				liveRunsError = e instanceof Error ? e.message : 'live-runs fetch failed';
+			}
+		}
+		try {
+			const scheduled = await fetchScheduledWakes();
+			scheduledWakes = scheduled.rows;
+			scheduledWakesError = null;
+		} catch (e) {
+			if (!(e instanceof ScheduledWakesAuthError)) {
+				scheduledWakesError = e instanceof Error ? e.message : 'scheduled-wakes fetch failed';
 			}
 		}
 		try {
@@ -373,6 +393,22 @@
 			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§2a · scheduled wakes</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">scheduled wakes</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		Queued intent — what will happen without anyone asking: self-scheduled thoughts, director ticks,
+		standing upkeep. Live runs is <em>now</em>; this is <em>next</em>.
+	</p>
+	<div class="mt-3">
+		{#if scheduledWakesError}
+			<p class="text-sm text-red-400">{scheduledWakesError}</p>
+		{:else if scheduledWakes === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<ScheduleLane wakes={scheduledWakes} {now} />
 		{/if}
 	</div>
 
