@@ -143,6 +143,10 @@ export interface RunLedgerRow {
 	// true means the pin was not respected, null means unverifiable.
 	core_expected: string | null;
 	core_mismatch: boolean | null;
+	// *Why* the pin was not respected, read from the Shell's own session
+	// transcript — the result envelope declares success and carries no reason.
+	// Null on clean runs and whenever the Shell records no refusal.
+	substitution_reason: string | null;
 	repo_label: string | null;
 	source_system: string | null;
 	external_refs: RelicRecord[] | null;
