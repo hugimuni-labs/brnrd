@@ -2,7 +2,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { glitchReveal, typeReveal } from './transitions';
+	import { typeReveal } from './transitions';
 	import { ageSince, type LiveRun } from './liveRuns';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 
@@ -215,7 +215,7 @@
 						     receipts' produce expand. -->
 						<div
 							class="mt-2 space-y-1.5 overflow-hidden border-t border-stone-800/70 pt-2"
-							in:glitchReveal={{ duration: 340, steps: 7 }}
+							in:fade={{ duration: 140 }}
 							out:fade={{ duration: 100 }}
 						>
 							{#if run.label}
