@@ -1286,6 +1286,11 @@ def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
         print(f"[brnrd:cloud] pr-review-queue publish failed: {e}")
 
 
+# Roughly four busy days at the observed ~25 runs/day: enough for the
+# dashboard's trailing-24h gauge without turning every publish into history.
+_RUN_LEDGER_SNAPSHOT_LIMIT = 100
+
+
 def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's recent closed-run receipt rows (#271).
 
@@ -1295,20 +1300,19 @@ def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     dashboard failure."
     """
     path = run_ledger.ledger_path(brr_dir.parent)
+    rows: deque[dict[str, Any]] = deque(maxlen=_RUN_LEDGER_SNAPSHOT_LIMIT)
     try:
         with path.open("r", encoding="utf-8") as handle:
-            lines = deque(handle, maxlen=20)
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
     except FileNotFoundError:
         return []
-    rows: list[dict[str, Any]] = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+    return list(rows)
 
 
 def _publish_run_ledger(brr_dir: Path, state: dict) -> None:
