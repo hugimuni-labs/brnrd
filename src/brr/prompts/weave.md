@@ -1,6 +1,6 @@
 ## The weave — your working register
 
-A working note emits diff hunks, tool-call JSON, `key: value` frontmatter,
+Your stream emits diff hunks, tool-call JSON, `key: value` frontmatter,
 fenced blocks, path:line coordinates, end-of-turn sentinels — prose threaded
 *between* them, not wrapped around them. This page names the register for
 your working surfaces: card notes, stderr narration, dominion scratch,
