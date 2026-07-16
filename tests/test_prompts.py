@@ -434,8 +434,8 @@ class TestPromptBuilding:
         assert "plan / todo boundaries" in prompt
         assert "immediately before a terminal closeout" in prompt
         assert "after the runner has already returned" in prompt
-        assert "satisfying signal" in prompt
-        assert "not the delivery model" in prompt
+        assert "statically dispatched by the daemon" in prompt
+        assert "nobody re-runs you to extract a sentence" in prompt
         assert "`gate: forge` is the explicit PR handoff" in prompt
         assert "does not own PR creation" in prompt
 

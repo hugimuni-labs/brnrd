@@ -234,11 +234,21 @@ class RunnerResult:
 
     @property
     def validation_ok(self) -> bool:
+        """Structural validity of the invocation's contract — required
+        artifacts only.
+
+        An empty stdout is deliberately *not* a validation failure: the
+        terminal stream is one delivery channel among several (outbox
+        replies, commits, respawns), and whether a silent run succeeded is
+        the daemon's success-signal call (``_result_satisfied_delivery``),
+        not a per-invocation validity check. Requiring stdout here is what
+        used to trigger a full re-run of an already-successful wake just to
+        manufacture a terminal sentence (the request/response ceremony cut
+        2026-07-16).
+        """
         if not self.ok:
             return False
         if self.missing_artifacts:
-            return False
-        if self.invocation.response_path and not self.has_response:
             return False
         return True
 
@@ -251,14 +261,19 @@ class RunnerResult:
         failures — non-zero exit, timeout — are not retryable here; the
         daemon's give-up path surfaces them with the captured error
         instead of paying for a duplicate expensive attempt.
+
+        Empty stdout alone is *not* a retry reason: re-running a whole wake
+        to extract a terminal message pays a full runner invocation for a
+        sentence, and the daemon's Stop-hook boundary already warned the
+        resident once when nothing had been communicated. A genuinely
+        silent addressed run takes the give-up path and gets the daemon's
+        terminal failure note instead.
         """
         if not self.ok:
             return None
         if self.missing_artifacts:
             labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
             return f"missing required output(s): {labels}"
-        if self.invocation.response_path and not self.has_response:
-            return "runner produced no response on stdout"
         return None
 
     def error_detail(self, *, limit: int = 500) -> str | None:
