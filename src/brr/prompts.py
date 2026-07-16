@@ -421,6 +421,70 @@ def _build_inter_run_plan_block(repo_root: Path) -> str:
     )
 
 
+def _build_workflow_block(repo_root: Path) -> str:
+    """Render the account-wide workflow preferences doc (CS8).
+
+    ``workflow.md`` at the account-dominion root is the declared pace and
+    flow of the collaboration — delivery ceremony, autonomy scope (whose
+    agenda a wake follows), merge/gating policy, progress-visibility
+    cadence. Co-owned: the user edits it directly (it is mirrored to the
+    dashboard beside the plans), the resident updates it when the two of
+    them agree the flow should change. Injected every wake so the
+    preferences govern rather than rot.
+
+    When the file is absent, a one-line orientation names the slot — the
+    same stance as the thread-of-record pointer: brr points, the resident
+    (or user) authors.
+    """
+    from . import account as acc
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    try:
+        ctx = acc.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return ""
+    if not ctx.enabled:
+        return ""
+
+    path = acc.workflow_doc_path(ctx)
+    header = (
+        "## Workflow preferences\n\n"
+        "How the user and you have agreed work should flow — autonomy, "
+        "delivery, gating, cadence. Co-owned and standing: follow it, and "
+        f"when the flow should change, change the file (`{path}`) so the "
+        "agreement is visible on both sides (it renders on the dashboard). "
+        "It complements the playbook (your private craft) — this is the "
+        "*shared* contract about pace and flow.\n\n"
+    )
+    if not path.is_file():
+        # No absolute path here: this branch lands in the deterministic boot
+        # snapshot, which must stay machine-independent. The present-case
+        # header (below) names the full path, like the plan block does.
+        return (
+            "## Workflow preferences\n\n"
+            "No workflow doc yet — author `workflow.md` at the account-"
+            "dominion root to make the collaboration's pace and flow "
+            "explicit and editable: autonomy scope (user-woken → their "
+            "request; self-woken → your agenda), delivery ceremony, "
+            "merge/gating policy, progress cadence. Until it exists, "
+            "default to asking on genuine forks and keeping progress "
+            "visible."
+        )
+    content = path.read_text(encoding="utf-8").strip()
+    if not content:
+        return ""
+    budget = int(
+        cfg.get(
+            "dominion.workflow_inject_budget_bytes",
+            cfg.get("dominion_workflow_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES),
+        )
+    )
+    return header + _tail_trim_entries(content, budget, "`workflow.md`")
+
+
 def _build_runner_policy_block(repo_root: Path) -> str:
     """Render stored runner policy preferences when present in the account dominion.
 
@@ -785,6 +849,21 @@ def _build_injected_blocks_with_contracts(
     ))
     if runner_policy:
         keyed.append(("runner-policy", runner_policy))
+
+    # 4b. CS8 — workflow preferences (shared pace-and-flow contract)
+    workflow_block = _build_workflow_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="workflow",
+        label="Workflow preferences (CS8)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_POLICY,
+        freshness=None,
+        location="computed",
+        present=bool(workflow_block),
+        bytes=_rendered_bytes(workflow_block),
+    ))
+    if workflow_block:
+        keyed.append(("workflow", workflow_block))
 
     # 5. CS7 — decision ledger
     decision_ledger = _build_decision_ledger_block(repo_root)
