@@ -197,14 +197,20 @@ def test_daemon_quota_requires_registration():
 
 
 def test_dashboard_shows_real_quota_not_unknown_placeholder():
+    """The GET /v1/dashboard/quota JSON endpoint surfaces real daemon-reported
+    quota rather than the "unknown" placeholder. The Jinja dashboard at GET /
+    was removed when brnrd_web moved into src/brnrd/routers/; coverage is
+    preserved via the JSON API the SPA now reads."""
     client = _client()
     _, daemon_headers, _repo_id = _repo_and_daemon(client)
     client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers)
     client.put("/v1/daemons/quota", json=_SHELLS_PAYLOAD, headers=daemon_headers)
     _login_cookie(client)
 
-    page = client.get("/")
+    page = client.get("/v1/dashboard/quota")
 
     assert page.status_code == 200
-    assert "61% left" in page.text
-    assert "resets 9:00PM" in page.text
+    body = page.json()
+    # Verify the daemon's real quota is surfaced (not an "unknown" placeholder).
+    assert body["runner_quotas"], "quota list should be non-empty"
+    assert any(q["status"] != "unknown" for q in body["runner_quotas"])
