@@ -82,7 +82,7 @@ def _login_web(
         seen["code_verifier"] = code_verifier
         return identity
 
-    monkeypatch.setattr("brnrd_web.routes.oauth.resolve_identity", fake_resolve)
+    monkeypatch.setattr("brnrd.routers.web_auth.oauth.resolve_identity", fake_resolve)
     start = _oauth_start(client, next=next)
     location = urlparse(start.headers["location"])
     query = parse_qs(location.query)
@@ -129,7 +129,7 @@ def _message_page(client, monkeypatch):
     """A guaranteed non-dashboard Jinja render (message.html via the
     oauth-unready path) — the probe the retired /login page used to be for
     the two regression tests below."""
-    monkeypatch.setattr("brnrd_web.routes._github_oauth_ready", lambda _request: False)
+    monkeypatch.setattr("brnrd.routers.web_auth._github_oauth_ready", lambda _request: False)
     r = client.get("/auth/github/start")
     assert r.status_code == 503
     return r
@@ -316,7 +316,7 @@ def test_github_login_is_not_the_identity_key(client):
 
 def test_github_callback_rejects_state_mismatch(client, monkeypatch):
     monkeypatch.setattr(
-        "brnrd_web.routes.oauth.resolve_identity",
+        "brnrd.routers.web_auth.oauth.resolve_identity",
         lambda *a, **k: GitHubIdentity(github_id=_GITHUB_ID, login=_LOGIN),
     )
     _oauth_start(client)
@@ -330,7 +330,7 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     def fail(*_args, **_kwargs):
         raise OAuthError("provider down")
 
-    monkeypatch.setattr("brnrd_web.routes.oauth.resolve_identity", fail)
+    monkeypatch.setattr("brnrd.routers.web_auth.oauth.resolve_identity", fail)
     start = _oauth_start(client)
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
     r = client.get(
