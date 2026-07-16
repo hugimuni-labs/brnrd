@@ -1012,7 +1012,7 @@ class TestInvocationTracing:
         assert result.validation_ok
         assert not list(repo_root.glob("**/responses/*.md"))
 
-    def test_invoke_runner_reports_empty_stdout_as_missing_response(self, tmp_path):
+    def test_invoke_runner_accepts_empty_stdout_without_response(self, tmp_path):
         repo_root = tmp_path
         (repo_root / ".brr").mkdir()
         response_path = repo_root / ".brr" / "responses" / "evt-2.md"
@@ -1032,9 +1032,13 @@ class TestInvocationTracing:
 
         result = invoke_runner("mock-runner", invocation, cfg=cfg)
 
+        # Ceremony cut 2026-07-16: empty stdout is no longer a validation
+        # failure or a retry reason — the daemon's success signal
+        # (outbox replies / commits / respawns) decides whether a silent
+        # run succeeded; nobody re-runs a wake to extract a sentence.
         assert result.ok
-        assert not result.validation_ok
-        assert result.retry_reason() == "runner produced no response on stdout"
+        assert result.validation_ok
+        assert result.retry_reason() is None
         assert not response_path.exists()
 
     def test_invoke_runner_persists_trace(self, tmp_path):
@@ -1365,15 +1369,19 @@ class TestRetryReason:
         assert result.retry_reason() is None
         assert result.error_detail() == "some failure tail"
 
-    def test_retry_reason_still_set_on_clean_empty_stdout(self, tmp_path):
-        """A clean exit with no stdout is the original retry-worthy
-        case — the runner ran fine but forgot to print the final reply."""
+    def test_no_retry_on_clean_empty_stdout(self, tmp_path):
+        """A clean exit with no stdout is NOT retried (ceremony cut
+        2026-07-16): the terminal stream is one delivery channel among
+        several, and re-running a whole wake to manufacture a terminal
+        sentence pays a full invocation for it. The daemon's give-up path
+        surfaces a genuinely silent addressed run as a failure instead."""
         result = self._result(
             returncode=0,
             stdout="",
             response_path=str(tmp_path / "r.md"),
         )
-        assert result.retry_reason() == "runner produced no response on stdout"
+        assert result.retry_reason() is None
+        assert result.validation_ok
 
 
 class TestKillActive:
