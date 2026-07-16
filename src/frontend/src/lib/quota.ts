@@ -112,16 +112,16 @@ export async function fetchQuota(fetchImpl: typeof fetch = fetch): Promise<Quota
 	return (await res.json()) as QuotaResponse;
 }
 
-export type QuotaLevel = 'ample' | 'low' | 'critical' | 'unknown';
+export type QuotaLevel = 'burning' | 'cooling' | 'spent' | 'unknown';
 
 /** Draining-bar color threshold — matches the maintainer's own correction
  * (ledger 2026-07-05): "the track runs out, it doesn't fill up, and changes
  * color by remaining level." Percent here is *remaining*, not used. */
 export function quotaLevel(percent: number | null | undefined): QuotaLevel {
 	if (percent === null || percent === undefined) return 'unknown';
-	if (percent <= 15) return 'critical';
-	if (percent <= 40) return 'low';
-	return 'ample';
+	if (percent <= 15) return 'spent';
+	if (percent <= 40) return 'cooling';
+	return 'burning';
 }
 
 /** Renders a countdown ("2h 14m", "38m", "<1m") from an epoch, ticking off
