@@ -23,6 +23,7 @@
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import DecisionsSpace from '$lib/DecisionsSpace.svelte';
+	import WorkflowPanel from '$lib/WorkflowPanel.svelte';
 	import { PlansAuthError, fetchPlans, type PlansResponse } from '$lib/plans';
 	import {
 		ConfigRequestsAuthError,
@@ -416,6 +417,11 @@
 			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<DecisionsSpace data={plansData} {now} />
+			{#if plansData.workflow_md}
+				<div class="mt-3">
+					<WorkflowPanel md={plansData.workflow_md} />
+				</div>
+			{/if}
 		{/if}
 	</div>
 

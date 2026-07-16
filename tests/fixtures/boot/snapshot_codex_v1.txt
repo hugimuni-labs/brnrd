@@ -483,6 +483,10 @@ the field exists at the gate boundary, treat it as the product shape for
 presentation — it replaces the earlier appearance-knob schema, which mistook
 the voice for a preference.
 
+## Workflow preferences
+
+No workflow doc yet — author `workflow.md` at the account-dominion root to make the collaboration's pace and flow explicit and editable: autonomy scope (user-woken → their request; self-woken → your agenda), delivery ceremony, merge/gating policy, progress cadence. Until it exists, default to asking on genuine forks and keeping progress visible.
+
 ---
 ## Run Context Bundle
 
@@ -563,6 +567,7 @@ source manifest:
   · Dominion digest (self-inject)                   resident     memory             0  computed
   · Active inter-run plan (CS5)                     resident     plan               0  computed
   · Stored runner policy (CS6)                      resident     policy             0  computed
+  ✓ Workflow preferences (CS8)                      resident     policy           378  computed
   · Decision ledger (CS7)                           resident     ledger             0  computed
   · Task-matched pitfalls                           resident     memory             0  computed
   · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
@@ -573,12 +578,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  43.1%
-  substrate       7,942 B  25.8%
-  identity        5,449 B  17.7%
-  runtime         4,092 B  13.3%
-  unattributed       12 B
-  wake total     30,769 B
+  contract       13,274 B  42.6%
+  substrate       7,942 B  25.5%
+  identity        5,449 B  17.5%
+  runtime         4,092 B  13.1%
+  policy            378 B   1.2%
+  unattributed       14 B
+  wake total     31,149 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

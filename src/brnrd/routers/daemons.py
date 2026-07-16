@@ -181,12 +181,14 @@ def put_plans(payload: schemas.PlansReport, principal: Principal = Depends(requi
     if account is not None:
         account.cross_repo_plan_md = payload.cross_repo_plan_md
         account.decision_ledger_md = payload.decision_ledger_md
+        account.workflow_md = payload.workflow_md
         account.plans_updated_at = now
     db.commit()
     return schemas.PlansOut(
         repo_plan_md=repo.plan_md if repo is not None else "",
         cross_repo_plan_md=account.cross_repo_plan_md if account is not None else "",
         decision_ledger_md=account.decision_ledger_md if account is not None else "",
+        workflow_md=account.workflow_md if account is not None else "",
         plans_updated_at=now,
     )
 
