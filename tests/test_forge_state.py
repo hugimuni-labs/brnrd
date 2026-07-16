@@ -59,6 +59,40 @@ def test_thread_url_gitlab_template():
 
 
 @pytest.mark.parametrize(
+    "remote, expected",
+    [
+        ("git@github.com:Gurio/brr.git", "https://github.com/Gurio/brr/pull/4"),
+        ("git@gitlab.com:Gurio/brr.git", "https://gitlab.com/Gurio/brr/-/merge_requests/4"),
+    ],
+)
+def test_pull_request_url_uses_forge_native_path(remote, expected):
+    assert forges.pull_request_url(remote, "Gurio/brr", 4) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "274",
+        "#274",
+        "https://github.com/Gurio/brr/pull/274",
+        "https://gitlab.com/Gurio/brr/-/merge_requests/274",
+        "https://bitbucket.org/Gurio/brr/pull-requests/274",
+        "https://codeberg.org/Gurio/brr/pulls/274",
+    ],
+)
+def test_parse_pull_request_number_accepts_explicit_native_forms(value):
+    assert forges.parse_pull_request_number(value) == "274"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["ea35206", "prefix 274", "not-a-url/pull/274", "https://x/pulls/274"],
+)
+def test_parse_pull_request_number_rejects_ambiguous_values(value):
+    assert forges.parse_pull_request_number(value) is None
+
+
+@pytest.mark.parametrize(
     "remote, repo, number",
     [
         ("git@github.com:Gurio/brr.git", "Gurio/brr", "nope"),  # bad number

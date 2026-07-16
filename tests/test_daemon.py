@@ -370,6 +370,7 @@ def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
 
     # No response file exists: this is the state after a fast gate has sent
     # the terminal response and cleaned its queue entry.
+    terminal_reply = "---\ngate: forge\n---\n\n" + "x" * 130 + "\nsecond line"
     daemon._capture_knowledge(
         tmp_path,
         {},
@@ -377,11 +378,12 @@ def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
         event={"id": task.event_id, "source": "telegram"},
         responses_dir=responses,
         outbox_dir=outbox,
-        terminal_reply="stable terminal reply",
+        terminal_reply=terminal_reply,
     )
 
-    assert seen["body"] == "stable terminal reply"
+    assert seen["body"] == terminal_reply
     assert daemon.relics.read_reported(outbox) == [{
+        "excerpt": "x" * 120,
         "kind": "reply",
         "path": "replies/Gurio__brr/run-reply-race.md",
         "url": "https://example.test/reply",
@@ -409,6 +411,30 @@ def test_capture_knowledge_records_failed_reply_archive(tmp_path, monkeypatch):
     )
 
     assert task.meta["reply_archive"] == "failed"
+
+
+def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypatch):
+    task = Run(id="run-kb-relic", event_id="evt-kb-relic", body="answer")
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+    daemon.relics.append(outbox, "kb_page", path="kb/already.md")
+
+    def fake_capture(*_args, captured_pages, **_kwargs):
+        captured_pages.extend(["already.md", "new.md"])
+        return True
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "kb_page_url",
+        lambda _root, page, _cfg: f"https://example.test/{page}",
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == [
+        {"kind": "kb", "path": "kb/already.md"},
+        {"kind": "kb", "path": "new.md", "url": "https://example.test/new.md"},
+    ]
 
 
 def test_run_worker_finalize_reads_task_classification_control(tmp_path, monkeypatch):
@@ -3479,10 +3505,22 @@ def test_read_pr_control_accepts_bare_number_hash_and_url(tmp_path):
     """The `.pr` control file (2026-07-07 fix for 'remote_scm=absent even
     after the resident created a PR itself mid-run'): the resident can write
     whatever `gh pr create` handed it, not a specific format."""
-    for text in ("274", "#274", "https://github.com/Gurio/brr/pull/274\n"):
+    for text in (
+        "274", "#274", "https://github.com/Gurio/brr/pull/274\n",
+        "https://gitlab.com/Gurio/brr/-/merge_requests/274",
+    ):
         pr_path = tmp_path / ".pr"
         pr_path.write_text(text, encoding="utf-8")
         assert daemon._read_pr_control(pr_path) == "274"
+
+
+@pytest.mark.parametrize(
+    "text", ["ea35206", "prefix 274", "not-a-url/pull/274", "https://x/pulls/274"],
+)
+def test_read_pr_control_rejects_sha_and_malformed_content(tmp_path, text):
+    pr_path = tmp_path / ".pr"
+    pr_path.write_text(text, encoding="utf-8")
+    assert daemon._read_pr_control(pr_path) is None
 
 
 def test_read_pr_control_missing_or_empty_file_is_none(tmp_path):
