@@ -2,7 +2,8 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { untilText, type ScheduledWake } from './scheduledWakes';
-	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
+	import { typeReveal } from './transitions';
+	import { STATUS_UNKNOWN, THERMAL_STOPS, statusDotStyle, type GlowUrgency } from './statusPalette';
 
 	interface Props {
 		wakes: ScheduledWake[];
@@ -55,7 +56,15 @@
 		if (!wake.scheduled_for) return STATUS_UNKNOWN;
 		const dt = Date.parse(wake.scheduled_for) - now;
 		if (Number.isNaN(dt)) return STATUS_UNKNOWN;
-		return dt <= DUE_SOON_MS ? STATUS_GOOD : STATUS_WARN;
+		if (dt <= 0) return THERMAL_STOPS.ash;
+		return dt <= DUE_SOON_MS ? THERMAL_STOPS.amber : THERMAL_STOPS.frost;
+	}
+
+	function markerUrgency(wake: ScheduledWake): GlowUrgency {
+		if (!wake.scheduled_for) return 'calm';
+		const dt = Date.parse(wake.scheduled_for) - now;
+		if (Number.isNaN(dt) || dt > DUE_SOON_MS) return 'calm';
+		return dt <= 0 ? 'alarm' : 'attention';
 	}
 
 	function horizonLabel(ms: number): string {
@@ -87,7 +96,7 @@
 						{@const color = markerColor(wake)}
 						<span
 							class="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
-							style={`left: ${(pos * 100).toFixed(2)}%; ${statusDotStyle(wake.status === 'recurring' ? 'ample' : 'low', color)}`}
+							style={`left: ${(pos * 100).toFixed(2)}%; ${statusDotStyle('burning', color, markerUrgency(wake))}`}
 							title={wake.summary}
 						></span>
 					{/if}
@@ -114,7 +123,7 @@
 						<span class="flex min-w-0 items-center gap-1.5">
 							<span
 								class="inline-block h-2 w-2 shrink-0 rounded-full"
-								style={statusDotStyle(wake.status === 'recurring' ? 'ample' : 'low', color)}
+								style={statusDotStyle('burning', color, markerUrgency(wake))}
 								aria-hidden="true"
 							></span>
 							<span
@@ -135,7 +144,13 @@
 							{wake.repo_label ?? ''}
 						</span>
 					</div>
-					<p class="mt-1.5 truncate text-stone-300" title={wake.summary}>{wake.summary}</p>
+					<p
+						class="mt-1.5 truncate text-stone-300"
+						title={wake.summary}
+						use:typeReveal={{ text: wake.summary }}
+					>
+						{wake.summary}
+					</p>
 					{#if wake.conversation_key}
 						<p class="truncate font-mono text-[10px] text-stone-600">
 							→ {wake.conversation_key}

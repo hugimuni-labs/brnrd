@@ -1,5 +1,8 @@
 // Custom Svelte transitions for this dashboard's "assembled, not tweened"
-// motion language (kb/design-run-relics.md §"Expansion animation").
+// motion language (kb/design-run-relics.md §"Expansion animation"). Block
+// assembly stays a Svelte transition (`glitchReveal`). Streaming text uses
+// an action (`typeReveal`) because a transition CSS function cannot create
+// and drive per-character DOM without reflow.
 //
 // The maintainer's own framing, verbatim: the receipt expansion "should be
 // like a stop-motion, glitchy, assembly of the block shape animation, quite
@@ -67,6 +70,140 @@ export function glitchReveal(_node: Element, params: GlitchRevealParams = {}) {
 				`transform: translateX(${tx}px);` +
 				`filter: brightness(${br});`
 			);
+		}
+	};
+}
+
+export interface TypeRevealParams {
+	/** Explicit text keeps action-owned spans synchronized with Svelte data. */
+	text?: string;
+	duration?: number;
+	/** Primarily for deterministic composition; siblings otherwise self-stagger. */
+	delay?: number;
+}
+
+export const TYPE_REVEAL_GLYPHS = ['░', '▒', '·', '—', '/', '∆'] as const;
+
+export function typeRevealDuration(length: number): number {
+	return Math.max(250, Math.min(600, 180 + Math.max(0, length) * 8));
+}
+
+/** Log curve calibrated so about 60% is visible at 30% elapsed. */
+export function typeRevealProgress(elapsedRatio: number): number {
+	const t = Math.max(0, Math.min(1, elapsedRatio));
+	return Math.log1p(12 * t) / Math.log(13);
+}
+
+interface RevealCell {
+	target: HTMLSpanElement;
+	scramble: HTMLSpanElement;
+}
+
+function buildRevealCells(node: HTMLElement, text: string): RevealCell[] {
+	node.textContent = '';
+	node.setAttribute('aria-label', text);
+	const cells: RevealCell[] = [];
+	const tokens = text.split(/(\s+)/u);
+
+	for (const token of tokens) {
+		if (!token) continue;
+		if (/^\s+$/u.test(token)) {
+			for (const character of token) {
+				if (character === '\n') node.append(node.ownerDocument.createElement('br'));
+				else node.append(node.ownerDocument.createTextNode(character));
+			}
+			continue;
+		}
+
+		const word = node.ownerDocument.createElement('span');
+		word.style.whiteSpace = 'nowrap';
+		word.setAttribute('aria-hidden', 'true');
+		for (const character of Array.from(token)) {
+			const cell = node.ownerDocument.createElement('span');
+			const target = node.ownerDocument.createElement('span');
+			const scramble = node.ownerDocument.createElement('span');
+			cell.dataset.typeRevealCell = '';
+			cell.style.display = 'inline-block';
+			cell.style.position = 'relative';
+			scramble.style.position = 'absolute';
+			scramble.style.inset = '0 auto auto 0';
+			scramble.style.pointerEvents = 'none';
+			target.textContent = character;
+			scramble.textContent = character;
+			cell.append(target, scramble);
+			word.append(cell);
+			cells.push({ target, scramble });
+		}
+		node.append(word);
+	}
+
+	return cells;
+}
+
+/**
+ * Per-character streaming reveal with a fixed-width scramble frontier.
+ * The true text occupies every character cell from frame zero; opacity,
+ * never DOM width, changes during the animation. Mounting an expanded block
+ * creates a new action instance, so expansion naturally replays the reveal.
+ */
+export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
+	let frame = 0;
+	let timer = 0;
+	let currentText = '';
+
+	function settle(text: string) {
+		node.textContent = text;
+		node.removeAttribute('aria-label');
+	}
+
+	function start(next: TypeRevealParams) {
+		cancelAnimationFrame(frame);
+		clearTimeout(timer);
+		const text = next.text ?? node.textContent ?? '';
+		if (text === currentText && node.querySelector('[data-type-reveal-cell]')) return;
+		currentText = text;
+
+		if (!text || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			settle(text);
+			return;
+		}
+
+		const cells = buildRevealCells(node, text);
+		const duration = next.duration ?? typeRevealDuration(cells.length);
+		const delay = next.delay ?? Math.floor(Math.random() * 72);
+		const startedAt = performance.now() + delay;
+
+		const draw = (now: number) => {
+			const elapsed = Math.max(0, now - startedAt);
+			const ratio = Math.min(1, elapsed / duration);
+			const visible = Math.floor(typeRevealProgress(ratio) * cells.length);
+			const scrambleFrame = Math.floor(elapsed / 42);
+
+			cells.forEach((cell, index) => {
+				const revealed = index < visible || ratio === 1;
+				const frontier = !revealed && index < visible + 3;
+				cell.target.style.opacity = revealed ? '1' : '0';
+				cell.scramble.style.opacity = frontier ? '0.72' : '0';
+				if (frontier) {
+					cell.scramble.textContent =
+						TYPE_REVEAL_GLYPHS[(index + scrambleFrame) % TYPE_REVEAL_GLYPHS.length];
+				}
+			});
+
+			if (ratio < 1) frame = requestAnimationFrame(draw);
+		};
+
+		timer = window.setTimeout(() => {
+			frame = requestAnimationFrame(draw);
+		}, delay);
+	}
+
+	start(params);
+	return {
+		update: start,
+		destroy() {
+			cancelAnimationFrame(frame);
+			clearTimeout(timer);
 		}
 	};
 }
