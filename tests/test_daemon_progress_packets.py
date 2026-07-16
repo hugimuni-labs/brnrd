@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from brr import conversations, daemon, envs, run_progress
-from brr.runner import RunnerResult
+from brr.runner import RunnerArtifactRecord, RunnerResult
 
 from _helpers import (
     StubWorktreeEnv,
@@ -125,11 +125,17 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     )
     _patch_runner(monkeypatch)
 
+    # Retry is triggered by a missing *required artifact* — empty stdout
+    # alone stopped being a retry reason with the 2026-07-16 ceremony cut
+    # (nobody re-runs a wake to extract a terminal sentence).
     def _retry_invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
         if invocation.label.endswith("attempt-1"):
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
+                stdout="", stderr="", returncode=0, trace_dir=None,
+                artifacts=[RunnerArtifactRecord(
+                    path=Path("out.md"), label="out.md", exists=False,
+                )],
             )
         Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
         Path(invocation.response_path).write_text("done\n", encoding="utf-8")
@@ -155,6 +161,48 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     assert "retrying" in types
     failed = next(r for r in records if r.get("type") == "attempt_failed")
     assert failed.get("will_retry") is True
+
+
+def test_clean_silent_run_fails_once_without_retry(tmp_path, monkeypatch):
+    """Ceremony cut 2026-07-16: a clean exit that communicated nothing —
+    no stdout, no outbox reply, no commit — is NOT re-run to extract a
+    terminal sentence. It takes the give-up path in one attempt: the run
+    errors, the addressed event gets the daemon's terminal failure note,
+    and no `retrying` packet is emitted."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-silent", body="say nothing",
+        telegram_chat_id=21,
+    )
+    _patch_runner(monkeypatch)
+
+    attempts: list[str] = []
+
+    def _silent_invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        attempts.append(invocation.label)
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_silent_invoke),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    assert task.status == "error"
+    assert len(attempts) == 1
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    types = [r.get("type") for r in records]
+    assert "retrying" not in types
+    assert "failed" in types
+    # The addressed event still gets a visible terminal note — silence is
+    # surfaced, never re-manufactured.
+    assert task.terminal_reply
 
 
 def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
