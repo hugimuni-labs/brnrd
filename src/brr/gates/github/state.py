@@ -11,7 +11,6 @@ permission check with no network call. See ``polling._is_authorized``.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -28,10 +27,7 @@ def _state_path(brr_dir: Path) -> Path:
 
 
 def _load_state(brr_dir: Path) -> dict:
-    path = _state_path(brr_dir)
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+    return runtime.load_state(brr_dir, "github")
 
 
 def _save_state(brr_dir: Path, state: dict) -> None:
