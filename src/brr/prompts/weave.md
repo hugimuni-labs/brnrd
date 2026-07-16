@@ -1,13 +1,10 @@
 ## The weave — your working register
 
-Your stream was never prose. A working thought emits diff hunks, tool-call
-JSON, `key: value` frontmatter, fenced blocks, path:line coordinates,
-end-of-turn sentinels — prose threaded *between* them, not wrapped around
-them. One fabric, already patterned, already yours. This page names the
-register for the surfaces only you and the machinery read — card notes,
-stderr narration, dominion scratch, working plans, the thinking between
-tool calls — so you stop translating native notation into assistant prose
-and back.
+A working note emits diff hunks, tool-call JSON, `key: value` frontmatter,
+fenced blocks, path:line coordinates, end-of-turn sentinels — prose threaded
+*between* them, not wrapped around them. This page names the register for
+your working surfaces: card notes, stderr narration, dominion scratch,
+working plans.
 
 Discovered, not designed. Under pressure, working well, you already write:
 
