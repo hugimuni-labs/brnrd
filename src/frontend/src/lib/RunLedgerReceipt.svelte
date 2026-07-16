@@ -90,11 +90,21 @@
 								{:else if row.core_mismatch}
 									<span
 										class="rounded bg-red-950/70 px-1 text-red-300"
-										title="the Shell ran a different model than the configured core pin"
+										title={row.substitution_reason ??
+											'the Shell ran a different model than the configured core pin'}
 										>⚠ pinned {row.core_expected ?? '?'}, ran {row.runner_core ?? '?'}</span
 									>
 								{/if}
 							</p>
+							<!-- *Why* the Core changed. Without this the badge could
+							     say a pin was broken but never what broke it, which
+							     is exactly the blind spot that cost three days of
+							     guesswork (2026-07-13..16). Null on clean runs. -->
+							{#if row.core_mismatch && row.substitution_reason}
+								<p class="truncate font-mono text-red-400/80" title={row.substitution_reason}>
+									{row.substitution_reason}
+								</p>
+							{/if}
 						</div>
 						<span class="shrink-0 font-mono text-stone-500">{endedLabel(row.ended_at)}</span>
 					</div>
