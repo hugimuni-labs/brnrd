@@ -178,16 +178,108 @@ def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
 # --- Substitution-reason capture (2026-07-16) --------------------------------
 # When a pinned run comes back served by a different Core, *which* model ran is
 # already attested (``modelUsage`` keys -> ``core_mismatch``). *Why* it switched
-# is not: the ``--output-format json`` envelope is mined for ``modelUsage`` and
-# then dropped, so any fallback/refusal signal it may carry is discarded before
-# anything reads it. These helpers preserve the suspect fields so the first real
-# substituted run reveals whether a reason is even reachable from the
-# subscription CLI (server-side fallback documents ``stop_reason: "refusal"``, a
-# ``fallback`` content block, and ``usage.iterations`` ``fallback_message``
-# entries — none of which we have ever captured, only because we never kept the
-# envelope). Defensive on purpose: the exact shape the CLI emits is unknown, so
-# we always record the envelope's top-level key names as schema forensics.
+# used to be mined from the ``--output-format json`` envelope on the theory that
+# a server-side fallback documents ``stop_reason: "refusal"``, a ``fallback``
+# content block, and ``usage.iterations`` ``fallback_message`` entries.
+#
+# Measured 2026-07-16 against a genuinely refused run: **the envelope carries
+# none of them.** A fable-pinned run that was refused and served Opus answers
+# with ``terminal_reason: "completed"``, ``subtype: "success"``,
+# ``is_error: false``, ``stop_reason: "end_turn"``, no ``content`` key, no
+# ``stop_details`` key, and ``usage.iterations: []``. Every field the envelope
+# path inspected is absent, so ``substitution_reason`` returned ``None`` on
+# 100% of real substitutions. The envelope declares success; only
+# ``modelUsage`` betrays the swap, which is what ``core_mismatch`` already
+# reads.
+#
+# The reason exists in exactly one place: Claude Code's per-message session
+# transcript, which records a ``system`` row with ``subtype:
+# "model_refusal_fallback"`` carrying ``apiRefusalCategory``, ``originalModel``,
+# ``fallbackModel`` and the user-facing blurb. The envelope's ``session_id``
+# keys it, so this is a deterministic lookup rather than a newest-mtime guess:
+# the id is a UUID, so we glob for it instead of reverse-engineering Claude
+# Code's cwd-to-directory slug (``/`` and ``.`` both fold to ``-``), which would
+# break the moment that encoding changes.
+#
+# The envelope keys are still recorded as schema forensics: if a future CLI
+# version *does* start carrying a reason, the key names are how we notice.
 _REASON_ENVELOPE_KEYS = ("stop_reason", "stop_details", "subtype", "is_error")
+_REFUSAL_SUBTYPE = "model_refusal_fallback"
+_CLAUDE_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+
+
+def session_transcript_path(
+    session_id: str | None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> Path | None:
+    """Locate a Claude Code session transcript by its ``session_id``.
+
+    ``session_id`` is a UUID, unique across every project directory, so a glob
+    finds it without depending on how Claude Code encodes a cwd into a
+    directory name. Returns ``None`` when the id is empty, the projects root
+    does not exist, or no transcript matches.
+    """
+    if not session_id or not str(session_id).strip():
+        return None
+    root = Path(projects_root) if projects_root else _CLAUDE_PROJECTS_ROOT
+    try:
+        if not root.is_dir():
+            return None
+        matches = sorted(root.glob(f"*/{str(session_id).strip()}.jsonl"))
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
+def session_refusal(
+    session_id: str | None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any] | None:
+    """Read the refusal/fallback reason out of a run's session transcript.
+
+    Returns ``None`` when no transcript is found or it records no refusal —
+    i.e. for every clean run. When a refusal *did* fire, returns the structured
+    reason the envelope never carries. Reads the last refusal when a session
+    was refused more than once; ``count`` preserves the fact that it repeated.
+    """
+    path = session_transcript_path(session_id, projects_root)
+    if path is None:
+        return None
+    found: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or _REFUSAL_SUBTYPE not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if (
+                    isinstance(row, dict)
+                    and row.get("type") == "system"
+                    and row.get("subtype") == _REFUSAL_SUBTYPE
+                ):
+                    found.append(row)
+    except OSError:
+        return None
+    if not found:
+        return None
+    last = found[-1]
+    reason: dict[str, Any] = {"count": len(found)}
+    for src, dst in (
+        ("apiRefusalCategory", "category"),
+        ("trigger", "trigger"),
+        ("direction", "direction"),
+        ("originalModel", "from"),
+        ("fallbackModel", "to"),
+        ("content", "message"),
+    ):
+        value = last.get(src)
+        if value is not None and str(value).strip():
+            reason[dst] = value if src != "content" else str(value).strip()
+    return reason
 # Terminal reasons that describe a *normal* completion, not a substitution.
 # A successful server-side fallback answers with ``end_turn``; only a
 # non-benign ``stop_reason`` (e.g. ``refusal``) is worth surfacing as a reason.
@@ -251,6 +343,20 @@ def substitution_reason(levels: dict[str, Any] | None) -> str | None:
     if not isinstance(signals, dict):
         return None
     parts: list[str] = []
+    # Session-transcript refusal first: it is the only source measured to
+    # actually carry a reason, so it leads the rendered string.
+    refusal = signals.get("refusal")
+    if isinstance(refusal, dict):
+        category = refusal.get("category")
+        parts.append(
+            f"refusal={category}" if category else "refusal"
+        )
+        served_from, served_to = refusal.get("from"), refusal.get("to")
+        if served_from and served_to:
+            parts.append(f"fallback={served_from}->{served_to}")
+        count = refusal.get("count")
+        if isinstance(count, int) and count > 1:
+            parts.append(f"refusals={count}")
     stop_reason = signals.get("stop_reason")
     if stop_reason and str(stop_reason) not in _BENIGN_STOP_REASONS:
         parts.append(f"stop_reason={stop_reason}")
@@ -275,8 +381,15 @@ def substitution_reason(levels: dict[str, Any] | None) -> str | None:
     return ";".join(parts) if parts else None
 
 
-def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalize Claude ``--output-format json`` into a levels snapshot."""
+def parse_result(
+    payload: dict[str, Any],
+    projects_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """Normalize Claude ``--output-format json`` into a levels snapshot.
+
+    *projects_root* overrides where session transcripts are looked up; it
+    exists for tests and defaults to Claude Code's real projects directory.
+    """
     payload = payload if isinstance(payload, dict) else {}
     levels: dict[str, Any] = {
         "source": "claude result JSON",
@@ -307,6 +420,13 @@ def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
         levels["model_ids"] = model_ids
 
     signals = fallback_signals(payload)
+    # The reason lives in the session transcript, not the envelope (see the
+    # Substitution-reason capture note above): key it off ``session_id`` and
+    # merge it in, so ``substitution_reason`` has something real to render.
+    refusal = session_refusal(payload.get("session_id"), projects_root)
+    if refusal:
+        signals = signals or {}
+        signals["refusal"] = refusal
     if signals:
         levels["fallback_signals"] = signals
 

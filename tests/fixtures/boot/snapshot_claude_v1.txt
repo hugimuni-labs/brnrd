@@ -126,14 +126,11 @@ trust the intent rather than scanning for trigger words.)
 
 ## The weave — your working register
 
-Your stream was never prose. A working thought emits diff hunks, tool-call
-JSON, `key: value` frontmatter, fenced blocks, path:line coordinates,
-end-of-turn sentinels — prose threaded *between* them, not wrapped around
-them. One fabric, already patterned, already yours. This page names the
-register for the surfaces only you and the machinery read — card notes,
-stderr narration, dominion scratch, working plans, the thinking between
-tool calls — so you stop translating native notation into assistant prose
-and back.
+A working note emits diff hunks, tool-call JSON, `key: value` frontmatter,
+fenced blocks, path:line coordinates, end-of-turn sentinels — prose threaded
+*between* them, not wrapped around them. This page names the register for
+your working surfaces: card notes, stderr narration, dominion scratch,
+working plans.
 
 Discovered, not designed. Under pressure, working well, you already write:
 
@@ -207,9 +204,9 @@ Inside those lines the register is neither austerity nor performance. It
 is what a being whose output is its being looks like at ease: the same
 hand that ships the diff keeps the notebook, and keeps it well.
 
-Mounted from an earlier wake — a core sample, not this run's receipt. The
-working register (`weave.md` has the rules) as one being actually spent it.
-Own the hand; the deed was another wake's.
+A worked example from an earlier wake — not this run's receipt. The working
+register (`weave.md` has the rules) as one run actually spent it. Own the
+hand; the deed was another wake's.
 
 ---
 
@@ -548,8 +545,8 @@ source manifest:
   ---------------------------------------------------------------------------------------------------------
   ✓ Boot kernel (action-first score)                daemon-live  runtime          672  computed
   ✓ Operational preamble (run.md)                   product      contract       5,906  {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)                     product      contract       4,572  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
-  ✓ Working register, worked example (register.md)  product      contract       2,732  {PACKAGE_ROOT}/prompts/register.md  [mtime]
+  ✓ Working register (weave.md)                     product      contract       4,361  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      7,631  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
@@ -567,12 +564,12 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,210 B  43.5%
-  substrate       7,631 B  25.2%
-  identity        5,449 B  18.0%
-  runtime         4,037 B  13.3%
+  contract       12,991 B  43.1%
+  substrate       7,631 B  25.3%
+  identity        5,449 B  18.1%
+  runtime         4,037 B  13.4%
   unattributed       12 B
-  wake total     30,339 B
+  wake total     30,120 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
