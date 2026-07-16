@@ -68,6 +68,31 @@ def test_read_reported_caps_at_max_records(tmp_path: Path):
     assert len(relics.read_reported(outbox)) == relics._MAX_RECORDS
 
 
+def test_read_reported_aliases_kb_page_kind(tmp_path: Path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "kb_page", path="design-loom-viewport.md")
+
+    assert relics.read_reported(outbox) == [
+        {"kind": "kb", "path": "design-loom-viewport.md"},
+    ]
+
+
+def test_read_pr_control_accepts_only_explicit_pr_forms(tmp_path: Path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    path = outbox / ".pr"
+    for text in (
+        "274", "#274", "https://github.com/Gurio/brr/pull/274",
+        "https://codeberg.org/Gurio/brr/pulls/274",
+    ):
+        path.write_text(text, encoding="utf-8")
+        assert relics._read_pr_control(outbox) == "274"
+    for text in ("ea35206", "prefix 274", "not-a-url/pull/274", "https://x/pulls/274"):
+        path.write_text(text, encoding="utf-8")
+        assert relics._read_pr_control(outbox) is None
+
+
 # ── derive_auto ──────────────────────────────────────────────────────
 
 
@@ -98,7 +123,7 @@ def test_derive_auto_lists_commits_branch_and_pr(tmp_path: Path):
     pr = out[3]
     assert pr == {
         "kind": "pr", "number": 319,
-        "url": "https://github.com/Gurio/brr/issues/319",
+        "url": "https://github.com/Gurio/brr/pull/319",
     }
 
 
@@ -170,6 +195,17 @@ def test_collect_at_most_one_summary(tmp_path: Path):
     relics.append(outbox, "summary", text="second")
     out = relics.collect(None, branch=None, seed_ref=None, outbox_dir=outbox)
     assert out == [{"kind": "summary", "text": "first"}]
+
+
+def test_collect_drops_numberless_pr_relic(tmp_path: Path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr")
+    relics.append(outbox, "pr", number=42)
+
+    assert relics.collect(
+        None, branch=None, seed_ref=None, outbox_dir=outbox,
+    ) == [{"kind": "pr", "number": 42}]
 
 
 def test_collect_adds_resolved_url_to_kb_relic(tmp_path: Path, monkeypatch):

@@ -122,11 +122,22 @@ export function relicLabel(r: RelicRecord): string {
 			return String(r.on ?? 'comment');
 		case 'message':
 			return String(r.note ?? r.channel ?? 'message');
+		case 'reply':
+			return String(r.excerpt ?? 'reply');
 		case 'summary':
 			return String(r.text ?? '');
-		default:
+		default: {
+			for (const field of ['text', 'path', 'note', 'name', 'on']) {
+				const value = String(r[field] ?? '').trim();
+				if (value) return value;
+			}
 			return r.kind;
+		}
 	}
+}
+
+export function taskClassificationLabel(value: string | null): string | null {
+	return value?.toLowerCase().replaceAll('_', '-') ?? null;
 }
 
 export interface RunLedgerRow {

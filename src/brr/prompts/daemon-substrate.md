@@ -89,9 +89,11 @@ becomes attention, action, and a reply is yours.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
-  - `.relics.jsonl` — the produce manifest. Commits, branch, PR and your
-    terminal reply auto-derive; add the issue you closed, the kb page you
-    wrote, ≤1 `summary`.
+  - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
+    pages, and your terminal reply auto-derive; add `issue` / `comment` /
+    `message` / `file` and ≤1 `summary` when they matter. Example:
+    `{"kind":"issue","number":317,"action":"closed"}`. Full grammar:
+    `brnrd docs portals`.
 - **remote reader** — the user reads replies in a chat client (Telegram /
   Slack); link a kb page with the kb URL the portal provides; when none is
   available, use its basename only (`subject-envs.md`). For other files use

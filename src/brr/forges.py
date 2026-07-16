@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 
 # Known forge kinds. ``unknown`` is the explicit "we don't have a
@@ -102,18 +103,28 @@ _COMMIT_TEMPLATES: dict[str, str] = {
 }
 
 
-# Issue / PR thread templates. The ``issues`` path is the durable common
-# denominator: GitHub redirects ``/issues/N`` to ``/pull/N`` when N is a
-# pull request, so a single template covers both without us knowing the
-# kind. GitLab keeps issues and merge requests on separate paths and does
-# not redirect, so its template targets ``/-/issues/`` only — the forge
-# gate that produces these keys today is GitHub.
+# Issue-thread templates. Pull and merge requests use their own native
+# templates below; conflating the two worked on GitHub through a redirect but
+# produced dead links on the other supported forges.
 _ISSUE_TEMPLATES: dict[str, str] = {
     _KIND_GITHUB:    "https://{host}/{owner}/{repo}/issues/{number}",
     _KIND_GITLAB:    "https://{host}/{owner}/{repo}/-/issues/{number}",
     _KIND_BITBUCKET: "https://{host}/{owner}/{repo}/issues/{number}",
     _KIND_GITEA:     "https://{host}/{owner}/{repo}/issues/{number}",
 }
+
+_PULL_REQUEST_TEMPLATES: dict[str, str] = {
+    _KIND_GITHUB:    "https://{host}/{owner}/{repo}/pull/{number}",
+    _KIND_GITLAB:    "https://{host}/{owner}/{repo}/-/merge_requests/{number}",
+    _KIND_BITBUCKET: "https://{host}/{owner}/{repo}/pull-requests/{number}",
+    _KIND_GITEA:     "https://{host}/{owner}/{repo}/pulls/{number}",
+}
+
+_PULL_REQUEST_NUMBER_RE = re.compile(r"(?:#)?([1-9]\d*)")
+_PULL_REQUEST_PATH_RE = re.compile(
+    r"^/(?:[^/]+/){2,}(?:pull|pulls|pull-requests|-/merge_requests)/"
+    r"([1-9]\d*)(?:/|$)"
+)
 
 
 # Remote-URL parsers. Order matters: SSH form before HTTPS form
@@ -357,6 +368,60 @@ def thread_url(
     if template is None:
         return None
     return template.format(host=match.host, owner=owner, repo=repo, number=num)
+
+
+def pull_request_url(
+    remote_url: str,
+    repo_path: str,
+    number: int | str,
+    *,
+    override_kind: str | None = None,
+    override_url_base: str | None = None,
+) -> str | None:
+    """Return the forge-native pull/merge-request URL for *number*."""
+    try:
+        num = int(str(number).strip())
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    path = (repo_path or "").strip().strip("/")
+    if "/" not in path:
+        return None
+    owner, _, repo = path.rpartition("/")
+    if not owner or not repo:
+        return None
+    match = detect_forge(
+        remote_url,
+        override_kind=override_kind,
+        override_url_base=override_url_base,
+    )
+    if match is None:
+        return None
+    template = _PULL_REQUEST_TEMPLATES.get(match.kind)
+    if template is None:
+        return None
+    return template.format(host=match.host, owner=owner, repo=repo, number=num)
+
+
+def parse_pull_request_number(value: str) -> str | None:
+    """Read a PR/MR number from a control-file value, or return ``None``.
+
+    The control accepts an explicit number (``274`` / ``#274``) or a full
+    HTTP(S) URL in any forge-native shape emitted by
+    :func:`pull_request_url`. Requiring the whole scalar or a URL with at
+    least ``owner/repo`` path segments keeps commit shas such as ``ea35206``
+    and arbitrary trailing digits from masquerading as PRs.
+    """
+    text = (value or "").strip()
+    match = _PULL_REQUEST_NUMBER_RE.fullmatch(text)
+    if match:
+        return match.group(1)
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    match = _PULL_REQUEST_PATH_RE.fullmatch(parsed.path)
+    return match.group(1) if match else None
 
 
 # ── Internals ────────────────────────────────────────────────────────

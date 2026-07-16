@@ -349,9 +349,11 @@ becomes attention, action, and a reply is yours.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
-  - `.relics.jsonl` — the produce manifest. Commits, branch, PR and your
-    terminal reply auto-derive; add the issue you closed, the kb page you
-    wrote, ≤1 `summary`.
+  - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
+    pages, and your terminal reply auto-derive; add `issue` / `comment` /
+    `message` / `file` and ≤1 `summary` when they matter. Example:
+    `{"kind":"issue","number":317,"action":"closed"}`. Full grammar:
+    `brnrd docs portals`.
 - **remote reader** — the user reads replies in a chat client (Telegram /
   Slack); link a kb page with the kb URL the portal provides; when none is
   available, use its basename only (`subject-envs.md`). For other files use
@@ -560,7 +562,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      7,942  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      8,083  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -578,13 +580,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  42.6%
-  substrate       7,942 B  25.5%
-  identity        5,449 B  17.5%
+  contract       13,274 B  42.4%
+  substrate       8,083 B  25.8%
+  identity        5,449 B  17.4%
   runtime         4,092 B  13.1%
   policy            378 B   1.2%
   unattributed       14 B
-  wake total     31,149 B
+  wake total     31,290 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

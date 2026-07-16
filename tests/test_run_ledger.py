@@ -252,6 +252,17 @@ def test_read_task_classification_control_reads_first_line(tmp_path):
     )
 
 
+def test_task_classification_normalizes_case_and_underscores(tmp_path):
+    task = _task("run-classification")
+    task.meta["task_classification"] = "Director_Tick"
+    assert run_ledger.task_classification(task) == "director-tick"
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".task-classification").write_text("Director_Tick\n", encoding="utf-8")
+    assert run_ledger.read_task_classification_control(outbox) == "director-tick"
+
+
 def test_read_task_classification_control_missing_file_and_dir(tmp_path):
     assert run_ledger.read_task_classification_control(tmp_path / "no-outbox") is None
     assert run_ledger.read_task_classification_control(None) is None
