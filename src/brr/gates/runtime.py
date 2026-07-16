@@ -9,7 +9,9 @@ interim, terminal, and out-of-bound sends follow the same queue semantics.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,7 @@ _BACKOFF_MAX = 120
 _PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 GATE_HEALTH_DEGRADED_AFTER_S = 300
 _BUILTIN_GATES = ("telegram", "slack", "github", "cloud")
+_PRIVATE_STATE_MODE = 0o600
 
 
 # ── Gate state file (.brr/gates/<gate>.json) ─────────────────────────
@@ -33,14 +36,42 @@ def state_path(brr_dir: Path, gate: str) -> Path:
 def load_state(brr_dir: Path, gate: str) -> dict:
     path = state_path(brr_dir, gate)
     if path.exists():
+        if os.name == "posix":
+            path.chmod(_PRIVATE_STATE_MODE)
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
 def save_state(brr_dir: Path, gate: str, state: dict) -> None:
+    """Atomically save secret-bearing gate state with private POSIX mode.
+
+    Gate state may contain access tokens.  The temporary file is created
+    private before it is replaced into place, so both new files and rewrites
+    repair permissive existing modes without exposing a partially-written
+    secret.  Windows ACLs provide the platform's access control; POSIX mode
+    bits are enforced here only where they are meaningful.
+    """
     path = state_path(brr_dir, gate)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        if os.name == "posix":
+            os.fchmod(fd, _PRIVATE_STATE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = -1
+            stream.write(json.dumps(state, indent=2) + "\n")
+        os.replace(tmp_name, path)
+    finally:
+        if fd != -1:
+            os.close(fd)
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
 # ── Per-gate health (.brr/gates/<gate>.health.json) ────────────────
