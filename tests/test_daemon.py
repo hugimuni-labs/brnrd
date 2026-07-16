@@ -728,7 +728,10 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
     assert presence.list_active(brr_dir) == []
 
 
-def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
+def test_run_worker_does_not_retry_on_empty_stdout(tmp_path, monkeypatch):
+    """Ceremony cut 2026-07-16: empty stdout alone no longer triggers a
+    full re-run — a clean silent run with no other success signal takes
+    the give-up path in one attempt and surfaces a terminal failure note."""
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-3")
     monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
@@ -780,8 +783,10 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
 
     task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 1)
 
-    assert task.status == "done"
-    assert attempts == ["evt-3-attempt-1", "evt-3-attempt-2"]
+    assert task.status == "error"
+    assert attempts == ["evt-3-attempt-1"]
+    # The addressed event still gets a visible terminal note.
+    assert task.terminal_reply
 
 
 def test_run_worker_accepts_current_outbox_reply_without_stdout(
