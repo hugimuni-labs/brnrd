@@ -2,9 +2,9 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { glitchReveal } from './transitions';
+	import { glitchReveal, typeReveal } from './transitions';
 	import { ageSince, type LiveRun } from './liveRuns';
-	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
+	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 
 	interface Props {
 		runs: LiveRun[];
@@ -155,12 +155,13 @@
 							<span class="flex min-w-0 items-center gap-1.5">
 								<span
 									class="inline-block h-2 w-2 shrink-0 rounded-full"
-									style={`background-color: ${color}`}
+									style={statusDotStyle(lvl === 'stalling' ? 'cooling' : 'burning', color)}
 									aria-hidden="true"
 								></span>
 								<span
 									class="truncate font-mono font-medium tracking-wide uppercase"
 									style={`color: ${color}`}
+									use:typeReveal={{ text: label(run, lvl) }}
 								>
 									{label(run, lvl)}
 								</span>
@@ -171,7 +172,9 @@
 							</span>
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
-							<span class="truncate font-medium text-amber-100">{primary}</span>
+							<span class="truncate font-medium text-amber-100" use:typeReveal={{ text: primary }}
+								>{primary}</span
+							>
 							{#if run.is_subspawn}
 								<span
 									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
@@ -179,18 +182,27 @@
 								>
 							{/if}
 						</p>
-						<p class="truncate text-stone-500">{secondary}</p>
+						<p class="truncate text-stone-500" use:typeReveal={{ text: secondary }}>{secondary}</p>
 						{#if runner}
 							<!-- Runner identity is its own line: appending it after the
 							     task/repo text made the very information #374 added vanish
 							     behind this card's `truncate` on real active runs. -->
-							<p class="font-mono text-[10px] text-stone-400">runner: {runner}</p>
+							<p
+								class="font-mono text-[10px] text-stone-400"
+								use:typeReveal={{ text: `runner: ${runner}` }}
+							>
+								runner: {runner}
+							</p>
 						{/if}
 						{#if run.card_text && !isOpen}
 							<!-- Progress-card note (`.card`, `run_progress.py`'s
 							     `agent_card_text`) — one truncated line collapsed;
 							     the expanded view below renders it whole. -->
-							<p class="mt-0.5 truncate text-stone-400 italic" title={run.card_text}>
+							<p
+								class="mt-0.5 truncate text-stone-400 italic"
+								title={run.card_text}
+								use:typeReveal={{ text: run.card_text }}
+							>
 								{run.card_text}
 							</p>
 						{/if}
@@ -206,10 +218,15 @@
 							out:fade={{ duration: 100 }}
 						>
 							{#if run.label}
-								<p class="whitespace-pre-wrap text-stone-300">{run.label}</p>
+								<p class="whitespace-pre-wrap text-stone-300" use:typeReveal={{ text: run.label }}>
+									{run.label}
+								</p>
 							{/if}
 							{#if run.card_text}
-								<p class="whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400 italic">
+								<p
+									class="whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400 italic"
+									use:typeReveal={{ text: run.card_text }}
+								>
 									{run.card_text}
 								</p>
 								{#if run.card_updated_at}
