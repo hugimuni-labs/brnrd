@@ -221,6 +221,12 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         "since": state.get("since", 0),
     })
     _save_state(brr_dir, state)
+    # Pairing mints a daemon token, but the publish endpoints bind that token
+    # to a concrete Daemon row created by /register.  Do this in the process
+    # that owns the handshake instead of waiting for `brnrd up` to restart:
+    # an already-running gate registered its previous token and otherwise
+    # keeps publishing the new identity into 404s indefinitely.
+    _register(brr_dir, state)
     out(f"[brnrd] Connected to brnrd repo {status['repo_id']}.")
     pair = status.get("telegram_pair") or {}
     if isinstance(pair, dict):
