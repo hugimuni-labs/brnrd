@@ -75,6 +75,18 @@ class TestParseOutboxMessage:
         }
         assert body == "carry this forward\n"
 
+    def test_lenient_spawn_selector(self):
+        meta, body = protocol.parse_outbox_message(
+            "spawn: true\nshell: codex\n---\nbounded child\n")
+        assert meta == {"spawn": True, "shell": "codex"}
+        assert body == "bounded child\n"
+
+    def test_canonical_fenced_spawn_selector(self):
+        meta, body = protocol.parse_outbox_message(
+            "---\nspawn: true\nshell: codex\n---\nbounded child\n")
+        assert meta == {"spawn": True, "shell": "codex"}
+        assert body == "bounded child\n"
+
     def test_lenient_runner_policy_selector(self):
         meta, body = protocol.parse_outbox_message(
             "runner_policy: propose\nscope: account\n---\nPrefer economy runners.\n")

@@ -12,6 +12,7 @@ PROVIDER_ERROR = "provider_error"
 RUNNER_ERROR = "runner_error"
 NO_OUTPUT = "no_output"
 CORE_MISMATCH = "core_mismatch"
+INTERRUPTED = "interrupted"
 
 
 _QUOTA_PATTERNS = (
@@ -63,6 +64,8 @@ def classify_failure(
         return TIMED_OUT
     text = str(detail or "").strip().lower()
     if text:
+        if "turn interrupted" in text:
+            return INTERRUPTED
         if _matches_any(text, _QUOTA_PATTERNS):
             return QUOTA_EXHAUSTED
         if _matches_any(text, _AUTH_PATTERNS):
@@ -84,6 +87,7 @@ def reason_prefix(kind: str) -> str:
         RUNNER_ERROR: "runner failed",
         NO_OUTPUT: "runner produced no reply",
         CORE_MISMATCH: "runner Core attestation failed",
+        INTERRUPTED: "runner was interrupted (external kill or shell interrupt)",
     }.get(kind, "runner failed")
 
 
