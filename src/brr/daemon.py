@@ -5300,6 +5300,8 @@ def _failure_reason(
             )
         )
         prefix = runner_failures.reason_prefix(kind)
+        if kind == runner_failures.INTERRUPTED:
+            return f"{prefix} after {attempts} attempt(s)"
         if detail:
             return f"{prefix} after {attempts} attempt(s): {detail}"
         if exit_code is not None:
