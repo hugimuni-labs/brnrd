@@ -89,7 +89,10 @@ export interface TypeRevealParams {
 export const TYPE_REVEAL_GLYPHS = ['░', '▒', '·', '—', '/', '∆'] as const;
 
 export function typeRevealDuration(length: number): number {
-	return Math.max(250, Math.min(600, 180 + Math.max(0, length) * 8));
+	// 2× the original pacing (2026-07-16 steer: "make the text streaming
+	// twice slower, and everywhere") — the reveal was slick but over before
+	// the eye landed on it, especially outside the expand buttons.
+	return Math.max(500, Math.min(1200, 360 + Math.max(0, length) * 16));
 }
 
 /** Log curve calibrated so about 60% is visible at 30% elapsed. */
