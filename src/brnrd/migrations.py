@@ -91,6 +91,8 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cross_repo_plan_md TEXT DEFAULT ''"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS decision_ledger_md TEXT DEFAULT ''"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plans_updated_at TIMESTAMP"))
+    # CS8 — workflow preferences mirror (account-dominion workflow.md).
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS workflow_md TEXT DEFAULT ''"))
 
     # Billing (#53) — tier + Stripe customer link; new billing tables come
     # from create_all.
