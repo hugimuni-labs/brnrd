@@ -12,6 +12,7 @@
 		relicCounts,
 		relicIcon,
 		relicLabel,
+		taskClassificationLabel,
 		signedPercentLabel,
 		tokenLabel,
 		type RunLedgerRow,
@@ -61,7 +62,7 @@
 			{#each grouped as entry (receiptKey(entry.row))}
 				{@const row = entry.row}
 				{@const key = receiptKey(row)}
-				{@const label = row.task_classification || row.repo_label || '—'}
+				{@const label = taskClassificationLabel(row.task_classification) || row.repo_label || '—'}
 				{@const runner = [row.runner_shell, row.runner_core].filter(Boolean).join(' · ') || '—'}
 				{@const counts = relicCounts(entry.relics)}
 				{@const summary = entry.relics.find((r) => r.kind === 'summary')}

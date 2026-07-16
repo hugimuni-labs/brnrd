@@ -15,11 +15,15 @@ Two collection paths, deliberately different in cost to the resident:
   daemon.py already reads for ``remote_scm``. Zero new bookkeeping — a
   resident does nothing and still gets a real commit/PR manifest.
 - **Self-reported** (:func:`read_reported`, the ``.relics.jsonl`` control
-  file): issues touched, kb pages edited, ad-hoc comments/messages, and an
+  file): issues touched, ad-hoc comments/messages, and an
   optional one-line summary. Nothing auto-tracks "which issue did this run
   comment on" today (#317 named this explicitly as the one genuinely new
   piece of bookkeeping) — a resident appends one JSON line per relic,
   same weight as writing ``.task-classification`` or ``.pr``.
+
+Kb pages committed by the daemon's knowledge capture are auto-reported at
+closeout alongside commits, branch, PR, and the archived terminal reply.
+The full resident-facing grammar lives in ``brnrd docs portals``.
 
 Append format — one JSON object per line, at least a ``"kind"`` key:
 
@@ -36,7 +40,6 @@ module sits alongside.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -53,8 +56,6 @@ CONTROL_NAME = ".relics.jsonl"
 # downstream (ledger row, dashboard payload, chat card).
 _MAX_RECORDS = 300
 _MAX_LINE_BYTES = 4096
-
-_PR_NUMBER_RE = re.compile(r"(\d+)\s*$")
 
 # Rendering icon per kind — mirrored in ``runLedger.ts``'s ``RELIC_ICONS``
 # on the frontend. Keep the two in sync; nothing enforces it mechanically
@@ -125,6 +126,8 @@ def read_reported(outbox_dir: Path | None) -> list[dict[str, Any]]:
         except ValueError:
             continue
         if isinstance(record, dict) and record.get("kind"):
+            if record["kind"] == "kb_page":
+                record["kind"] = "kb"
             out.append(record)
         if len(out) >= _MAX_RECORDS:
             break
@@ -132,11 +135,9 @@ def read_reported(outbox_dir: Path | None) -> list[dict[str, Any]]:
 
 
 def _read_pr_control(outbox_dir: Path | None) -> str | None:
-    """Same tolerant parse as ``daemon.py::_read_pr_control`` — a bare
-    number, ``#``-prefixed, or a full PR URL. Re-implemented locally
-    rather than imported to keep this module import-cycle-free of
-    ``daemon.py``, matching how the ``.task-classification`` reader
-    already lives directly in ``run_ledger.py`` rather than shared.
+    """Read the shared explicit PR/MR control forms without importing the
+    daemon (which would create a cycle). The parser lives in ``forges`` so
+    ledger relics and the live ``remote_scm`` facet cannot disagree.
     """
     if outbox_dir is None:
         return None
@@ -146,8 +147,7 @@ def _read_pr_control(outbox_dir: Path | None) -> str | None:
         return None
     if not text:
         return None
-    match = _PR_NUMBER_RE.search(text)
-    return match.group(1) if match else None
+    return forges.parse_pull_request_number(text)
 
 
 def _commits_since_seed(
@@ -242,7 +242,7 @@ def derive_auto(
         parsed = forges.parse_remote(remote_url)
         if parsed is not None:
             _, owner, repo = parsed
-            url = forges.thread_url(
+            url = forges.pull_request_url(
                 remote_url, f"{owner}/{repo}", pr_number,
                 override_kind=override_kind, override_url_base=override_base,
             )
@@ -263,7 +263,10 @@ def collect(
     the resident wrote one) leads the list so a collapsed receipt's
     expansion reads top-down like a note, not an unordered bag of links.
     """
-    reported = read_reported(outbox_dir)
+    reported = [
+        record for record in read_reported(outbox_dir)
+        if record.get("kind") != "pr" or record.get("number")
+    ]
     summary = [r for r in reported if r.get("kind") == "summary"][:1]
     rest_reported = [r for r in reported if r.get("kind") != "summary"]
     if repo_root is not None:
