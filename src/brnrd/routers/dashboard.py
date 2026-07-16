@@ -1,4 +1,9 @@
-"""Dashboard activity aggregation for the brnrd web control deck."""
+"""Dashboard activity aggregation for the brnrd web control deck.
+
+Migrated from ``src/brnrd_web/activity_dashboard.py`` when ``brnrd_web``
+was folded into ``src/brnrd/routers/``. Route paths and JSON response
+shapes are byte-compatible with the previous module.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,7 +21,7 @@ from brnrd.activity_records import dedupe_activity_records, fresh_activity_recor
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
-from .routes import (
+from ._session import (
     _account_id,
     _age_label,
     _dt,
@@ -26,7 +31,6 @@ from .routes import (
     _installations,
     _installed_repos,
     _notice_text,
-    _render,
     _repo_views,
     _repos,
     _time_label,
@@ -273,10 +277,7 @@ _QUOTA_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#237)
 
 
 def _parse_scrape_updated_at(value: Any) -> datetime | None:
-    """Parse a collector's own ``updated_at`` (``claude_usage``/``codex_status``
-    shape: ``%Y-%m-%dT%H:%M:%SZ``), or ``None`` for anything else — never
-    raises, since this is best-effort staleness math, not a validated field.
-    """
+    """Parse a collector's own ``updated_at`` timestamp, or ``None``."""
     if not isinstance(value, str) or not value:
         return None
     try:
@@ -307,35 +308,7 @@ def _stale_quota_windows(windows: Any) -> list[dict[str, Any]]:
 
 
 def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Real per-shell quota windows from the daemons' own reports (#237).
-
-    Reads the last ``PUT /v1/daemons/quota`` snapshot per connected daemon
-    (`src/brr/gates/cloud.py::_quota_snapshot` is the writer). A daemon that
-    hasn't reported inside ``_QUOTA_STALE_SECONDS`` still shows its last
-    numbers, but flagged ``stale`` rather than silently going quiet — the
-    honest fallback the ticket asked for. A shell with active runs
-    (``runner_stats``) but no quota report at all (older daemon build, or
-    cold cache) still renders as an explicit ``unknown`` placeholder card,
-    not omitted — "quota provider pending" beats a missing panel.
-
-    Staleness is measured against the *scrape's own* ``updated_at`` when the
-    shell payload carries one, not the daemon's publish timestamp. Claude's
-    quota shell is a cached interactive ``/usage`` PTY scrape that only
-    refreshes while a Claude run is actively heartbeating — with no run
-    active, the daemon still PUTs this endpoint every poll tick with numbers
-    that haven't actually changed in hours, so gating staleness on
-    ``quota_updated_at`` alone never fires (that timestamp is always fresh)
-    and the dashboard shows old numbers as if they were live — the reported
-    "lying Claude usage panel" bug (2026-07-07). Falls back to the daemon's
-    publish time only for shells that carry no per-scrape timestamp at all
-    (older daemon builds). Codex was assumed exempt here ("no comparable
-    idle-gap") until a live 2026-07-09 screenshot showed the identical
-    lying-panel symptom on its 5h window — codex_status.py's collector
-    re-reads the same rollout file on every poll tick whether or not a run
-    is active, and used to stamp ``updated_at`` with wall-clock now on every
-    read; fixed at the source (``codex_status.py::parse_token_count`` now
-    uses the rollout event's own timestamp) rather than special-cased here.
-    """
+    """Real per-shell quota windows from the daemons' own reports (#237)."""
     repo_ids = {repo.id for repo in repos}
     real: dict[str, dict[str, Any]] = {}
     if repo_ids:
@@ -370,30 +343,8 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                         if stale else shell.get("windows") or []
                     ),
                     "credits": shell.get("credits"),
-                    # Unredeemed free rate-limit resets (Codex, #315). Survives
-                    # staleness on purpose: `_stale_quota_windows` nulls the
-                    # percentages because an old percentage is a lie, but a
-                    # granted reset credit does not decay — and an operator
-                    # staring at a stale-and-empty quota panel is exactly who
-                    # needs to know four resets are sitting there.
                     "reset_credits": shell.get("reset_credits"),
-                    # Spend posture (2026-07-13): `None`/absent when the
-                    # daemon build predates this field; a shell with no cost
-                    # collector at all (Codex today) reports an explicit
-                    # `{"status": "unimplemented", "reason": ...}` rather
-                    # than silently omitting the field, so the dashboard can
-                    # tell "we don't track this yet" apart from "we tracked
-                    # it and there's nothing to show." Survives staleness
-                    # like `reset_credits` — an "unimplemented" verdict
-                    # doesn't decay the way a percentage does.
                     "spend": shell.get("spend"),
-                    # Trailing-burn rate (Codex, 2026-07-13 — the replacement
-                    # for the 5h window OpenAI stopped publishing on 07-12; see
-                    # `brr/codex_status.py::recent_burn`). Unlike `reset_credits`
-                    # and `spend`, this one *does* decay: a burn rate measured
-                    # hours ago describes an account that may have been idle
-                    # since, so a stale daemon report drops it rather than
-                    # showing a rate as if it were current.
                     "burn": None if stale else shell.get("burn"),
                     "_reported_at": reported_at,
                 }
@@ -417,21 +368,11 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     return sorted(out, key=lambda row: row["shell"])[:6]
 
 
-# The catalog itself changes rarely (a shell install/upgrade, a config
-# repin) but it rides the same ~3s publish tick as quota, so a report this
-# old means the daemon is gone, not the rack unchanged.
 _RUNNERS_STALE_SECONDS = 600
 
 
 def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
-    """Account-scoped runner catalog: the spool rack (#328).
-
-    Reads the last ``PUT /v1/daemons/runners`` snapshot per connected daemon
-    (`src/brr/gates/cloud.py::_runners_snapshot` is the writer). Freshest
-    report wins per profile name — same merge rule `_quota_views` applies
-    per shell — and the freshest daemon's own ``default`` pin is the one
-    shown, since the pin is daemon-local config.
-    """
+    """Account-scoped runner catalog: the spool rack (#328)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
         return {"profiles": [], "default": None, "stale": False, "reported_at": None}
@@ -484,21 +425,11 @@ def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
-_LIVE_RUNS_STALE_SECONDS = 300  # matches presence.py's own DEFAULT_STALE_AFTER_S
+_LIVE_RUNS_STALE_SECONDS = 300
 
 
 def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
-    """Account-scoped live/coexisting-runs view (#258).
-
-    Reads the last ``PUT /v1/daemons/live-runs`` snapshot per connected
-    daemon (`src/brr/gates/cloud.py::_live_runs_snapshot` is the writer,
-    sourced from the local presence registry). Several ``Daemon`` rows can
-    belong to the same physical daemon process (one row per repo it's
-    registered under, `Daemon.repo_id`) and would each report the same
-    underlying presence entries — deduped by ``id`` here, freshest report
-    wins, the same "one daemon, several repo registrations" shape
-    `_quota_views` above already merges by shell name.
-    """
+    """Account-scoped live/coexisting-runs view (#258)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
         return {"runs": [], "stale": False, "generated_at": None, "spawn_max_concurrent": None}
@@ -513,10 +444,6 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             continue
         if newest_reported_at is None or reported_at > newest_reported_at:
             newest_reported_at = reported_at
-            # Same "freshest report wins" rule the entries dict below
-            # applies per-run-id — one daemon process may register under
-            # several repos, each a separate row; the most recently
-            # reported row's own config value is the one that's live.
             spawn_max_concurrent = daemon.spawn_max_concurrent
         try:
             entries = json.loads(daemon.live_runs_json or "[]")
@@ -549,17 +476,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
-_PR_REVIEW_QUEUE_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#259)
+_PR_REVIEW_QUEUE_STALE_SECONDS = 300
 
 
 def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
-    """Account-scoped open-PR review queue (#259).
-
-    Reads the last ``PUT /v1/daemons/pr-review-queue`` snapshot per connected
-    daemon (`src/brr/gates/cloud.py::_pr_review_snapshot` is the writer).
-    Several ``Daemon`` rows can report the same underlying account queue; dedupe
-    by ``repo_label`` + PR number and keep the freshest daemon report.
-    """
+    """Account-scoped open-PR review queue (#259)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
         return {"prs": [], "stale": False, "generated_at": None}
@@ -605,18 +526,11 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
-_RUN_LEDGER_STALE_SECONDS = 300  # daemon publishes on the same fast dashboard loop (#271)
+_RUN_LEDGER_STALE_SECONDS = 300
 
 
 def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, Any]:
-    """Account-scoped closed-run receipt feed (#271).
-
-    Reads the last ``PUT /v1/daemons/run-ledger`` snapshot per connected
-    daemon (`src/brr/gates/cloud.py::_run_ledger_snapshot` is the writer).
-    Several ``Daemon`` rows can report the same physical ledger; dedupe by
-    ``run_id`` and keep the freshest daemon report. This is a receipt feed,
-    so newest ``ended_at`` sorts first.
-    """
+    """Account-scoped closed-run receipt feed (#271)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
         return {"rows": [], "stale": False, "generated_at": None}
@@ -661,20 +575,7 @@ def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, A
 
 
 def _config_change_requests_view(db: Session, repos: list[Repo], settings: Any) -> dict[str, Any]:
-    """Account-scoped pending config-change requests (loom-envelope Phase 2,
-    kb/design-multi-workstream-concurrency.md "Named forks - round 2").
-
-    Unlike the daemon-published snapshots above (live-runs, PR queue, run
-    ledger), ``ConfigChangeRequest`` rows are written directly by the
-    daemon's own ``POST /v1/daemons/config-requests`` call
-    (``src/brnrd/routers/config_approval.py``) — there is no publish/mirror
-    step and no staleness concept, this queries the table directly. Phase 2
-    shipped the device-flow (mint, approve page, outcome-over-inbox) with
-    no dashboard surface for a pending request at all; this is that surface
-    — read-only, linking to the existing session-gated ``/config-approve/{id}``
-    page for the actual decision rather than re-implementing the decide
-    action in the SPA.
-    """
+    """Account-scoped pending config-change requests (loom-envelope Phase 2)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
         return {"requests": [], "generated_at": None}
@@ -704,51 +605,6 @@ def _config_change_requests_view(db: Session, repos: list[Repo], settings: Any) 
     return {
         "requests": out,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
-    settings = request.app.state.settings
-    repos = _repos(db, account.id)
-    repo_views = _repo_views(db, repos)
-    installations = _installations(db, account.id)
-    installed = _installed_repos(db, account.id)
-    connected = {r.repo_full_name.casefold() for r in repos}
-    activity_views = _activity_views(db, repos)
-    active_views = [row for row in activity_views if row["bucket"] in {"running", "pending", "parked", "failed"}][:6]
-    scheduled_views = sorted(
-        [row for row in activity_views if row["bucket"] == "scheduled"],
-        key=lambda row: row["record"].scheduled_for or row["record"].defer_until or row["record"].updated_at or row["record"].reported_at,
-    )[:5]
-    recent_activity_views = activity_views[:8]
-    runner_stats = _runner_stats(activity_views)
-    outbound_events = _outbound_event_views(db, repos)
-    return {
-        "body_class": "dashboard-page",
-        "title": "brnrd dashboard",
-        "logged_in": True,
-        "account": account,
-        "repos": repos,
-        "repo_views": repo_views,
-        "installations": installations,
-        "installed_repos": installed,
-        "connected_repo_names": connected,
-        "connected_count": len(repos),
-        "install_url": settings.github_install_url,
-        "github_app_slug": settings.github_app_slug,
-        "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
-        "github_bot_user_login": settings.github_bot_user_login.strip().lstrip("@"),
-        "github_sync_configured": _github_sync_configured(request),
-        "notice": _notice_text(notice),
-        "setup_installation_id": installation_id or "",
-        "activity_views": activity_views,
-        "active_activity_views": active_views,
-        "scheduled_activity_views": scheduled_views,
-        "recent_activity_views": recent_activity_views,
-        "runner_stats": runner_stats,
-        "runner_quotas": _quota_views(db, repos, runner_stats),
-        "outbound_event_views": outbound_events,
-        "dashboard_stats": _activity_stats(repo_views, activity_views, outbound_events, installed),
     }
 
 
@@ -821,11 +677,7 @@ def dashboard_repos_api(
     notice: str | None = None,
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Account-scoped repo-management JSON twin for the SvelteKit `/repos`
-    route (#327 Jinja-removal). Same session-cookie auth as the other
-    dashboard JSON endpoints; unauthenticated fetches get a JSON 401, not a
-    login redirect.
-    """
+    """Account-scoped repo-management JSON twin for the SvelteKit `/repos` route (#327)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -868,12 +720,7 @@ def dashboard_repos_api(
 
 @router.get("/v1/dashboard/quota")
 def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """JSON twin of ``runner_quotas`` for the SvelteKit frontend (slice 2:
-    window-track view, `src/frontend`). Same session cookie as the Jinja
-    dashboard — no separate auth layer, per `src/frontend/README.md`'s
-    "fetch the same JSON endpoints client-side" plan. Returns 401 rather
-    than a login redirect: this is fetched by JS, not navigated to.
-    """
+    """JSON twin of ``runner_quotas`` for the SvelteKit frontend."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -893,12 +740,7 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
 
 @router.get("/v1/dashboard/runners")
 def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """JSON twin for the spool-rack panel (#328): every Shell+Core profile
-    the account's daemons can actually wake — locally discovered, cheapest
-    first — plus the current default pin. Read-only by design: the change
-    path is conversational (config-change request → approve page), not a
-    selector on this payload.
-    """
+    """JSON twin for the spool-rack panel (#328)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -921,17 +763,7 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
 async def dashboard_runners_wake_request(
     request: Request, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Tap a spool-rack row (#328): park a one-shot "next wake on this
-    profile" request. No approve step — the tapper *is* the account owner,
-    and a confirm modal on your own tap is ceremony. The request stays
-    cancelable until a wake actually consumes it (chip → DELETE below);
-    the daemon learns of it within one catalog-publish tick via the
-    ``PUT /v1/daemons/runners`` response piggyback.
-
-    Deliberately not a durable default change: that keeps its conversational
-    config-change path. This is "hand the next thought this body", nothing
-    more — the rack stays a being-view, not a control panel.
-    """
+    """Park a one-shot wake request for the next thought (#328)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -950,10 +782,7 @@ async def dashboard_runners_wake_request(
 def dashboard_runners_wake_request_cancel(
     request_id: str, request: Request, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Cancel a pending wake request (chip tap). If a wake already consumed
-    it, the row comes back ``consumed`` rather than a 409 — the ~seconds
-    race between cancel and dispatch is inherent, and "it already fired"
-    is an answer, not an error."""
+    """Cancel a pending wake request."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -965,10 +794,7 @@ def dashboard_runners_wake_request_cancel(
 
 @router.get("/v1/dashboard/live-runs")
 def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped live/coexisting-runs view (#258) for the SvelteKit
-    frontend. Same session-cookie auth as ``dashboard_quota_api`` — 401,
-    not a login redirect, since this is fetched by JS.
-    """
+    """Account-scoped live/coexisting-runs view (#258)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -990,9 +816,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
 
 @router.get("/v1/dashboard/pr-review-queue")
 def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped open-PR review queue (#259) for the SvelteKit frontend.
-    Same session-cookie auth as the other dashboard JSON endpoints.
-    """
+    """Account-scoped open-PR review queue (#259)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -1013,7 +837,7 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
 
 @router.get("/v1/dashboard/run-ledger")
 def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped closed-run receipt feed (#271) for the SvelteKit frontend."""
+    """Account-scoped closed-run receipt feed (#271)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -1035,12 +859,7 @@ def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = De
 
 @router.get("/v1/dashboard/config-requests")
 def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped pending config-change requests (loom-envelope Phase 2)
-    for the SvelteKit frontend. Same session-cookie auth as the other
-    dashboard JSON endpoints. Read-only: the actual approve/reject action
-    stays on the existing ``/config-approve/{id}`` page (``approve_url``
-    below), not duplicated here.
-    """
+    """Account-scoped pending config-change requests (loom-envelope Phase 2)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -1059,18 +878,7 @@ def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db
 
 @router.get("/v1/dashboard/plans")
 def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped decisions space (#324 Phase 0) for the SvelteKit frontend.
-
-    The CPS files (CS5 ``plans/<repo>/active.md``, cross-repo plan, CS7
-    ``ledger/decisions.md``) were already mirrored via ``PUT
-    /v1/daemons/plans`` and rendered raw on the Jinja ``/plans`` page — but
-    that page lost its discoverability when the SvelteKit build took over
-    "/", leaving the resident's entire scheduling mechanism (the ranked-move
-    list) invisible from the surface the user actually watches. Read-only,
-    same session-cookie auth as the other dashboard JSON endpoints;
-    structure (section parsing, staleness) is the frontend's job — no
-    storage-schema decision here, per the Phase 0 boundary.
-    """
+    """Account-scoped decisions space (#324 Phase 0) for the SvelteKit frontend."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -1099,12 +907,6 @@ def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSON
 
 
 def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
-    """JSON projection of one `_activity_views` row for the SvelteKit
-    frontend: raw ISO timestamps plus the server-derived `bucket` (the
-    status-set folding at the top of this module is backend knowledge the
-    client shouldn't re-own); presentation labels are the client's job,
-    same division as the other dashboard JSON twins.
-    """
     record: ActivityRecord = view["record"]
     return {
         "id": record.record_id,
@@ -1138,15 +940,7 @@ def dashboard_activity_api(
     limit: int = 100,
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Account-scoped activity feed (#327 Jinja-removal, /activity half) for
-    the SvelteKit frontend. Same session-cookie auth + filter params as the
-    Jinja page this supersedes, with one deliberate difference: the response
-    is bounded (``limit``, capped) — the legacy page rendered every record
-    unbounded, which is exactly the 282-row pileup that made it unreadable.
-    ``total`` carries the pre-limit count so the client can say "N of M".
-    ``kinds``/``statuses``/``repos`` feed the filter UI from the repo-scoped
-    (but kind/status-unfiltered) view, mirroring the Jinja page's behavior.
-    """
+    """Account-scoped activity feed (#327 Jinja-removal, /activity half)."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
@@ -1173,58 +967,17 @@ def dashboard_activity_api(
 
 @router.get("/plans")
 def plans_redirect() -> RedirectResponse:
-    """First real Jinja template cut (kb plan-jinja-removal.md Phase 2,
-    plans half): the raw-``<pre>`` CPS page is fully superseded by the
-    dashboard's decisions-space panel (#324 Phase 0), which renders the
-    same ``PUT /v1/daemons/plans`` mirror structured. The URL stays alive
-    — old-page nav links and bookmarks land on the panel, not a 404.
-    """
+    """308: plans page superseded by the dashboard's decisions-space panel (#324 Phase 0)."""
     return RedirectResponse(url="/", status_code=308)
-
-
-@router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, installation_id: str | None = None, notice: str | None = None, db: Session = Depends(get_db)):
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return _render(
-            request,
-            "dashboard.html",
-            {
-                "body_class": "dashboard-page",
-                "title": "brnrd dashboard",
-                "logged_in": False,
-                "signin_url": "/login?next=/",
-                "install_url": request.app.state.settings.github_install_url,
-                "github_app_slug": request.app.state.settings.github_app_slug,
-                "github_bot_login": request.app.state.settings.github_bot_login.strip().lstrip("@"),
-            },
-        )
-    account = db.get(Account, account_id)
-    if account is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
-    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
-    return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
 
 
 @router.get("/repos")
 def repos_redirect() -> RedirectResponse:
-    """#327 Jinja cut: the repo-management page now lives in the SvelteKit
-    `/repos` route and reads `GET /v1/dashboard/repos`. In production the
-    static SPA owns the path; this backend shim only catches bare-uvicorn
-    deployments and old passthru configs.
-    """
+    """308: repo-management page now lives in the SvelteKit `/repos` route (#327)."""
     return RedirectResponse(url="/", status_code=308)
 
 
 @router.get("/activity")
 def activity_redirect() -> RedirectResponse:
-    """Second Jinja template cut (#327, same shape as ``plans_redirect``
-    above): the unbounded legacy activity feed is superseded by the
-    SvelteKit ``/activity`` route (``src/frontend/src/routes/activity``),
-    which reads ``dashboard_activity_api`` bounded. In production the
-    static build serves ``/activity`` directly (Upsun passthru no longer
-    lists it); this backend route is only reachable from a bare-uvicorn
-    deployment, where old nav links and bookmarks land on the dashboard
-    instead of a 404.
-    """
+    """308: unbounded legacy activity feed superseded by the SvelteKit ``/activity`` route (#327)."""
     return RedirectResponse(url="/", status_code=308)
