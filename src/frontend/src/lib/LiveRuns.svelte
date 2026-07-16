@@ -140,6 +140,7 @@
 				{@const runner = runnerLabel(run)}
 				<div
 					class="subpanel p-2.5 text-xs"
+					data-loom-run={run.run_id || run.id}
 					in:fly={{ y: -8, duration: 220 }}
 					out:fade={{ duration: 150 }}
 					animate:flip={{ duration: 220 }}
