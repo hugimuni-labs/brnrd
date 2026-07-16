@@ -573,6 +573,24 @@ def decisions_ledger_path(ctx: AccountContext) -> Path:
     return ctx.dominion_repo / LEDGER_PATH / "decisions.md"
 
 
+# ── CS8 — workflow preferences helper ────────────────────────────────
+
+
+def workflow_doc_path(ctx: AccountContext) -> Path:
+    """Return the account-wide workflow preferences doc.
+
+    Co-owned by the user and the resident — the declared pace and flow of
+    the collaboration: delivery ceremony level, autonomy scope (whose
+    agenda a wake follows), merge/gating policy, progress-visibility
+    cadence. Either side edits the file directly; the daemon injects it
+    every wake (perception=injection) and mirrors it to the dashboard
+    beside the plans, so the preferences are always visible and editable
+    rather than folklore. Absent file = the defaults described in the
+    injected orientation.
+    """
+    return ctx.dominion_repo / "workflow.md"
+
+
 def run_state_blob_url(
     ctx: AccountContext,
     run_state_path: Path,
