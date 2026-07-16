@@ -36,6 +36,8 @@ def state_path(brr_dir: Path, gate: str) -> Path:
 def load_state(brr_dir: Path, gate: str) -> dict:
     path = state_path(brr_dir, gate)
     if path.exists():
+        if os.name == "posix":
+            path.chmod(_PRIVATE_STATE_MODE)
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
