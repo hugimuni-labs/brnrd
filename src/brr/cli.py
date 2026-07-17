@@ -1,12 +1,60 @@
-"""brnrd CLI — thin dispatch layer over the library modules."""
+"""brnrd CLI — thin dispatch layer over the library modules.
+
+The surface is **nouns first**: a handful of blessed shortcuts for the verbs
+every doc already uses (``init``, ``run``, ``review``, ``up``, ``down``), then
+one noun per subsystem (``daemon``, ``gate``, ``account``, …). Machine-facing
+endpoints (``hook``, ``statusline``) and developer probes (``prompts``,
+``worktree-hygiene``) still parse but are hidden from ``--help``: they are
+called by the runner's lifecycle or by a resident that was told the spelling,
+never discovered by a user reading the verb list. ``ALL_COMMANDS`` /
+``PUBLIC_COMMANDS`` pin both sets so drift becomes a test failure.
+"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
+#: Every gate brnrd knows how to auth/bind/configure. Single source of truth
+#: for ``_load_gate``, ``brnrd gate list``, and the gate argument help.
+GATES = ("telegram", "slack", "github", "cloud")
 
-def main(argv: list[str] | None = None) -> None:
+#: Top-level spellings retired by the noun consolidation (#49). Pre-release,
+#: these do not survive as silent aliases — each fails with a one-line pointer
+#: at the noun that absorbed it. Kept as parsers (not deleted outright) so the
+#: error is a *pointer* rather than argparse's bare "invalid choice".
+RETIRED_COMMANDS = {
+    "auth": "brnrd gate auth <gate>",
+    "bind": "brnrd gate bind <repo> <gate>",
+    "setup": "brnrd gate setup <gate>",
+    "add": "brnrd account add <repo>",
+    "connect": "brnrd account connect [url]",
+}
+
+#: Verbs listed by ``brnrd --help`` — the user-facing surface.
+PUBLIC_COMMANDS = (
+    "init", "run", "review", "up", "down",
+    "daemon", "gate", "account", "home",
+    "kb", "docs", "portal", "runners", "bench", "agent", "ergonomics",
+    "completions",
+)
+
+#: Verbs that parse but are hidden from ``--help``.
+HIDDEN_COMMANDS = ("prompts", "hook", "statusline", "worktree-hygiene")
+
+#: Everything ``brnrd <verb>`` accepts, retired pointers included.
+ALL_COMMANDS = tuple(
+    sorted(PUBLIC_COMMANDS + HIDDEN_COMMANDS + tuple(RETIRED_COMMANDS))
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the full argparse tree.
+
+    Split out of ``main`` so the CLI surface is inspectable without running a
+    command — the completions generator walks this tree, and the surface test
+    pins it.
+    """
     from . import __version__
     parser = argparse.ArgumentParser(
         prog="brnrd",
@@ -14,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--version", action="version", version=f"brnrd {__version__}")
 
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
     p = sub.add_parser("init", help="set up a repo for brnrd")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
@@ -26,10 +74,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
 
-    p = sub.add_parser(
-        "worktree-hygiene",
-        help="dry-run report for local worktree/branch hygiene",
-    )
+    # Omitting `help=` is what hides a subparser: argparse only adds it to the
+    # help listing when the kwarg is present (`help=argparse.SUPPRESS` renders a
+    # literal "==SUPPRESS==" line instead). Developer probe, not an operator verb.
+    p = sub.add_parser("worktree-hygiene")
     p.set_defaults(func=cmd_worktree_hygiene)
 
     p = sub.add_parser("review", help="work with diffense review packs")
@@ -52,20 +100,38 @@ def main(argv: list[str] | None = None) -> None:
                    help="emit machine-readable JSON instead of text")
     p.set_defaults(func=cmd_review)
 
-    p = sub.add_parser("auth", help="authenticate a gate")
-    p.add_argument("gate", help="gate name (telegram, slack, git)")
+    gate_help = f"gate name ({', '.join(GATES)})"
+
+    gate_p = sub.add_parser("gate", help="configure the gates brnrd speaks through")
+    gate_sub = gate_p.add_subparsers(dest="gate_command", required=True)
+
+    p = gate_sub.add_parser("setup", help="configure a gate in one step (auth + bind)")
+    p.add_argument("gate", help=gate_help)
+    p.set_defaults(func=cmd_setup)
+
+    p = gate_sub.add_parser("auth", help="authenticate a gate")
+    p.add_argument("gate", help=gate_help)
     p.set_defaults(func=cmd_auth)
 
-    p = sub.add_parser("bind", help="bind a repo-local gate to this repo")
+    p = gate_sub.add_parser("bind", help="bind a repo-local gate to this repo")
     p.add_argument("repo", help="repo path to bind")
-    p.add_argument("gate", help="gate name (telegram, slack, git)")
+    p.add_argument("gate", help=gate_help)
     p.set_defaults(func=cmd_bind)
 
-    p = sub.add_parser("add", help="add a repo to the connected account home")
+    p = gate_sub.add_parser("list", help="show which gates are configured here")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_gate_list)
+
+    account_p = sub.add_parser(
+        "account", help="the connected account home and the repos under it")
+    account_sub = account_p.add_subparsers(dest="account_command", required=True)
+
+    p = account_sub.add_parser("add", help="add a repo to the connected account home")
     p.add_argument("repo", help="repo path to add")
     p.set_defaults(func=cmd_add)
 
-    p = sub.add_parser("connect", help="link this daemon to brnrd")
+    p = account_sub.add_parser("connect", help="link this daemon to brnrd")
     p.add_argument("url", nargs="?", default=None,
                    help="brnrd base URL (default: $BRNRD_URL or https://brnrd.dev)")
     p.add_argument("--url", dest="url_option", default=None,
@@ -74,9 +140,11 @@ def main(argv: list[str] | None = None) -> None:
                    help="name to register this daemon under (default: hostname)")
     p.set_defaults(func=cmd_brnrd_connect)
 
-    p = sub.add_parser("setup", help="configure a gate in one step")
-    p.add_argument("gate", help="gate name (telegram, slack, git)")
-    p.set_defaults(func=cmd_setup)
+    p = account_sub.add_parser(
+        "status", help="show the resolved home, its kind, and the repos under it")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_account_status)
 
     home_p = sub.add_parser("home", help="manage the resolved brnrd home")
     home_sub = home_p.add_subparsers(dest="home_command", required=True)
@@ -94,26 +162,34 @@ def main(argv: list[str] | None = None) -> None:
                    help="repo name for the knowledge backup (default: brnrd-knowledge)")
     p.set_defaults(func=cmd_home_link)
 
-    p = sub.add_parser("up", help="start the daemon")
-    p.add_argument("--dev-reload", action="store_true", default=None,
-                   help="developer: re-exec daemon when brnrd package files change")
-    p.set_defaults(func=cmd_up)
+    # `up` / `down` are blessed shortcuts — the muscle-memory verbs every doc
+    # uses — but they are *thin aliases*, not a second implementation. Before
+    # #49 the top-level pair called `daemon.start`/`stop` directly and silently
+    # skipped the installed service, so `brnrd up` and `brnrd daemon up` did
+    # different things under the same name. Both spellings now build the same
+    # parser and land on the same function.
+    def _add_up(target, name: str = "up"):
+        q = target.add_parser(name, help="start the daemon")
+        q.add_argument("--foreground", action="store_true",
+                       help="run the foreground daemon instead of the installed service")
+        q.add_argument("--dev-reload", action="store_true", default=None,
+                       help="developer: re-exec daemon when brnrd package files change")
+        q.set_defaults(func=cmd_daemon_up)
+        return q
 
-    p = sub.add_parser("down", help="stop the daemon")
-    p.set_defaults(func=cmd_down)
+    def _add_down(target, name: str = "down"):
+        q = target.add_parser(name, help="stop the daemon")
+        q.set_defaults(func=cmd_daemon_down)
+        return q
+
+    _add_up(sub)
+    _add_down(sub)
 
     daemon_p = sub.add_parser("daemon", help="daemon lifecycle")
     daemon_sub = daemon_p.add_subparsers(dest="daemon_command", required=True)
 
-    p = daemon_sub.add_parser("up", help="start the daemon")
-    p.add_argument("--foreground", action="store_true",
-                   help="run the foreground daemon instead of the installed service")
-    p.add_argument("--dev-reload", action="store_true", default=None,
-                   help="developer: re-exec daemon when brnrd package files change")
-    p.set_defaults(func=cmd_daemon_up)
-
-    p = daemon_sub.add_parser("down", help="stop the daemon")
-    p.set_defaults(func=cmd_daemon_down)
+    _add_up(daemon_sub)
+    _add_down(daemon_sub)
 
     p = daemon_sub.add_parser("status", help="show daemon status")
     p.set_defaults(func=cmd_daemon_status)
@@ -201,17 +277,14 @@ def main(argv: list[str] | None = None) -> None:
                    help="read this portal-state.json path for live status")
     p.set_defaults(func=cmd_portal_facets)
 
-    p = sub.add_parser(
-        "hook",
-        help="runner hooks back channel endpoint (Tier 2; called by the "
-             "runner's native lifecycle hooks, not by hand)")
+    # Machine-facing endpoints: called by the runner's native lifecycle hooks
+    # and by Claude's TUI footer, never typed. They stay parseable and keep
+    # their docstrings; they just don't spend a line of the operator's --help.
+    p = sub.add_parser("hook")
     p.add_argument("phase", help="abstract phase: post-tool | stop | session-start")
     p.set_defaults(func=cmd_hook)
 
-    p = sub.add_parser(
-        "statusline",
-        help="Claude statusLine helper for interactive sessions; reads session "
-             "JSON on stdin when wired into Claude's TUI footer")
+    p = sub.add_parser("statusline")
     p.set_defaults(func=cmd_statusline)
 
     agent_p = sub.add_parser(
@@ -242,9 +315,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="include bundled Cores whose Shell is not on PATH")
     p.set_defaults(func=cmd_runners_list)
 
-    prompts_p = sub.add_parser(
-        "prompts",
-        help="inspect the prompt assembly: source manifest, boot score")
+    # Resident-facing introspection: the boot text tells a wake the spelling
+    # (`brnrd prompts show`), so it needs no discovery slot in the operator's
+    # verb list. Hidden, not retired — the surface is load-bearing.
+    prompts_p = sub.add_parser("prompts")
     prompts_sub = prompts_p.add_subparsers(dest="prompts_command", required=True)
 
     p = prompts_sub.add_parser(
@@ -301,7 +375,38 @@ def main(argv: list[str] | None = None) -> None:
                         "--config boot.mount=true")
     p.set_defaults(func=cmd_bench_run)
 
-    args = parser.parse_args(argv)
+    p = sub.add_parser(
+        "completions",
+        help="print a shell completion script (bash, zsh, fish)")
+    p.add_argument("shell", choices=("bash", "zsh", "fish"),
+                   help="shell to generate completions for")
+    p.set_defaults(func=cmd_completions)
+
+    # Retired top-level spellings — parsed only to fail with a pointer.
+    for retired, replacement in RETIRED_COMMANDS.items():
+        p = sub.add_parser(retired, add_help=False)
+        p.add_argument("rest", nargs=argparse.REMAINDER)
+        p.set_defaults(func=_retired_command(retired, replacement))
+
+    return parser
+
+
+def _retired_command(name: str, replacement: str):
+    def _fail(args):
+        del args
+        import sys
+
+        print(
+            f"brnrd: `{name}` moved — use `{replacement}`",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    return _fail
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 
@@ -1143,7 +1248,10 @@ def cmd_add(args):
     cfg = conf.load_config(account_repo_root)
     ctx = account.resolve_context(account_repo_root, cfg)
     if ctx.kind != "account":
-        raise SystemExit("brnrd add requires a connected account home; run `brnrd connect` first")
+        raise SystemExit(
+            "brnrd account add requires a connected account home; "
+            "run `brnrd account connect` first"
+        )
     repo_root = _repo_root_from_arg(args.repo)
     target_cfg = conf.load_config(repo_root)
     label = account.repo_label(repo_root, target_cfg)
@@ -1203,13 +1311,194 @@ def cmd_setup(args):
     gate_mod.bind(brr_dir)
 
 
+def cmd_gate_list(args):
+    """``brnrd gate list [--json]`` — which gates are configured in this repo.
+
+    Every gate module owns an ``is_configured`` predicate; this reads them
+    rather than second-guessing each gate's on-disk state layout. Outside a
+    repo there is no ``.brr`` to inspect, so the catalogue still prints and
+    every gate reports unknown — the honest answer, not a false "no".
+    """
+    import json as _json
+
+    brr_dir = _maybe_brr_dir()
+    rows = []
+    for name in GATES:
+        configured: bool | None = None
+        if brr_dir is not None:
+            try:
+                configured = bool(_load_gate(name).is_configured(brr_dir))
+            except Exception:  # noqa: BLE001 — a broken gate is "unknown", not a crash
+                configured = None
+        rows.append({"name": name, "configured": configured})
+
+    if getattr(args, "json", False):
+        print(_json.dumps(
+            {"brr_dir": str(brr_dir) if brr_dir else None, "gates": rows},
+            indent=2, sort_keys=True,
+        ))
+        return 0
+
+    if brr_dir is None:
+        print("[brnrd gate list] not inside a brnrd repo — showing the catalogue only")
+    for row in rows:
+        mark = {True: "✓", False: "·", None: "?"}[row["configured"]]
+        state = {True: "configured", False: "not configured", None: "unknown"}[
+            row["configured"]
+        ]
+        print(f"  {mark} {row['name']:<10} {state}")
+    if brr_dir is not None:
+        print("\nconfigure one with `brnrd gate setup <gate>`")
+    return 0
+
+
+def cmd_account_status(args):
+    """``brnrd account status [--json]`` — the resolved home and its repos.
+
+    Read-only by construction: ``resolve_context(create=False)`` inspects
+    without materializing a home on disk. A status command that created the
+    thing it reports would be lying about the state it found.
+    """
+    import json as _json
+
+    from . import account
+    from . import config as conf
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+    repos = sorted(ctx.repos.values(), key=lambda r: r.label)
+
+    if getattr(args, "json", False):
+        print(_json.dumps({
+            "kind": ctx.kind,
+            "account_id": ctx.account_id or None,
+            "home_id": ctx.home_id or None,
+            "dominion_repo": str(ctx.dominion_repo),
+            "enabled": ctx.enabled,
+            "default_repo": ctx.default_repo.label,
+            "repos": [
+                {"label": r.label, "root": str(r.root), "default":
+                 r.label == ctx.default_repo.label}
+                for r in repos
+            ],
+        }, indent=2, sort_keys=True))
+        return 0
+
+    print(f"[brnrd account status] home kind: {ctx.kind}")
+    if ctx.account_id:
+        print(f"  account id   : {ctx.account_id}")
+    print(f"  home         : {ctx.dominion_repo}")
+    print(f"  enabled      : {'yes' if ctx.enabled else 'no'}")
+    print(f"  repos        : {len(repos)}")
+    for r in repos:
+        star = "★" if r.label == ctx.default_repo.label else " "
+        print(f"    {star} {r.label:<24} {r.root}")
+    if ctx.kind != "account":
+        print("\n  this is a project home — `brnrd account connect` links it to brnrd.")
+    return 0
+
+
+_COMPLETION_PREAMBLE = (
+    "# brnrd shell completions — generated by `brnrd completions {shell}`.\n"
+    "# Regenerate after upgrading brnrd; the verb list is baked in.\n"
+)
+
+
+def _subcommand_names(parser: argparse.ArgumentParser) -> list[str]:
+    """Subcommand names directly under *parser* (empty for a leaf verb)."""
+    names: list[str] = []
+    for action in parser._actions:  # noqa: SLF001 — argparse exposes no public walk
+        if isinstance(action, argparse._SubParsersAction):  # noqa: SLF001
+            names.extend(action.choices)
+    return names
+
+
+def _completion_tree() -> dict[str, list[str]]:
+    """Map each public verb to its subcommands, walked off the live parser.
+
+    Walked, not hand-listed: a hand-maintained completion table would be a
+    second source of truth for the surface this slice spent its whole diff
+    unifying, and it would drift the first time someone adds a subcommand.
+    Hidden and retired verbs are skipped — completing a spelling that answers
+    with "use the other one" is worse than not completing it.
+    """
+    parser = build_parser()
+    tree: dict[str, list[str]] = {}
+    for action in parser._actions:  # noqa: SLF001
+        if not isinstance(action, argparse._SubParsersAction):  # noqa: SLF001
+            continue
+        for name, subparser in action.choices.items():
+            if name in PUBLIC_COMMANDS:
+                tree[name] = sorted(_subcommand_names(subparser))
+    return tree
+
+
+def cmd_completions(args):
+    shell = args.shell
+    tree = _completion_tree()
+    verbs = " ".join(sorted(tree))
+    out = [_COMPLETION_PREAMBLE.format(shell=shell)]
+
+    if shell == "bash":
+        out.append("_brnrd_completions() {\n"
+                   '  local cur prev\n'
+                   '  cur="${COMP_WORDS[COMP_CWORD]}"\n'
+                   '  prev="${COMP_WORDS[COMP_CWORD-1]}"\n'
+                   f'  if [ "$COMP_CWORD" -eq 1 ]; then\n'
+                   f'    COMPREPLY=( $(compgen -W "{verbs}" -- "$cur") )\n'
+                   "    return\n"
+                   "  fi\n"
+                   "  case \"${COMP_WORDS[1]}\" in\n")
+        for verb, subs in sorted(tree.items()):
+            if subs:
+                out.append(f'    {verb}) COMPREPLY=( $(compgen -W '
+                           f'"{" ".join(subs)}" -- "$cur") ) ;;\n')
+        out.append("  esac\n"
+                   "}\n"
+                   "complete -F _brnrd_completions brnrd\n")
+    elif shell == "zsh":
+        out.append("#compdef brnrd\n_brnrd() {\n"
+                   "  local -a verbs\n"
+                   f'  verbs=({verbs})\n'
+                   "  if (( CURRENT == 2 )); then\n"
+                   '    _describe "brnrd command" verbs\n'
+                   "    return\n"
+                   "  fi\n"
+                   '  case "${words[2]}" in\n')
+        for verb, subs in sorted(tree.items()):
+            if subs:
+                out.append(f'    {verb}) _values "{verb} subcommand" '
+                           f'{" ".join(subs)} ;;\n')
+        out.append("  esac\n"
+                   "}\n"
+                   "compdef _brnrd brnrd\n")
+    else:  # fish
+        for verb in sorted(tree):
+            out.append(f'complete -c brnrd -n "__fish_use_subcommand" '
+                       f'-a "{verb}"\n')
+        for verb, subs in sorted(tree.items()):
+            for s in subs:
+                out.append(f'complete -c brnrd -n "__fish_seen_subcommand_from '
+                           f'{verb}" -a "{s}"\n')
+
+    print("".join(out), end="")
+    return 0
+
+
 def cmd_up(args):
+    """Start the foreground daemon directly, bypassing any installed service.
+
+    Not bound to a parser: this is the ``--foreground`` half of
+    ``cmd_daemon_up``, which both ``brnrd up`` and ``brnrd daemon up`` reach.
+    """
     from . import daemon as daemon_mod
     root = _repo_root()
     daemon_mod.start(root, dev_reload=args.dev_reload)
 
 
 def cmd_down(args):
+    """Stop a directly-started daemon. The fallback half of ``cmd_daemon_down``."""
     from . import daemon as daemon_mod
     brr = _brr_dir()
     if daemon_mod.stop(brr):
@@ -1219,6 +1508,12 @@ def cmd_down(args):
 
 
 def cmd_daemon_up(args):
+    """The one implementation behind both ``brnrd up`` and ``brnrd daemon up``.
+
+    Prefers the installed user service; falls back to a direct foreground start
+    when no service is installed (``start_service`` returns ``None``), or when
+    ``--foreground`` asks for one explicitly.
+    """
     if not args.foreground:
         from . import daemon_install
         code = daemon_install.start_service()
@@ -1407,4 +1702,4 @@ def _load_gate(name: str):
     if name == "slack":
         from .gates import slack
         return slack
-    raise SystemExit(f"unknown gate: {name}")
+    raise SystemExit(f"unknown gate: {name} (known: {', '.join(GATES)})")
