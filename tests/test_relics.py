@@ -166,6 +166,55 @@ def test_derive_auto_no_remote_still_lists_commits_without_urls(tmp_path: Path):
     ]
 
 
+# ── live_summary / collect / counts_by_kind ──────────────────────────
+
+
+def test_live_summary_compiles_auto_and_reported_produce(tmp_path: Path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+    subprocess.run(["git", "checkout", "-b", "brr/work"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="add b")
+    commit_files(repo, {"c.txt": "3"}, message="add c")
+    latest = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("451\n", encoding="utf-8")
+    relics.append(outbox, "issue", number=317, action="closed")
+    relics.append(outbox, "kb", path="design-run-relics.md")
+    relics.append(outbox, "summary", text="not a counted relic")
+
+    assert relics.live_summary(
+        repo, branch="brr/work", seed_ref="main", outbox_dir=outbox,
+    ) == {
+        "known": True,
+        "counts": {
+            "commit": 2, "branch": 1, "pr": 1, "issue": 1, "kb": 1,
+        },
+        "latest_commit": latest,
+        "branch": "brr/work",
+        "pr": 451,
+    }
+
+
+def test_live_summary_never_raises(tmp_path: Path, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(relics, "derive_auto", broken)
+    assert relics.live_summary(
+        tmp_path, branch="brr/work", seed_ref="main", outbox_dir=None,
+    ) == {"known": False}
+
+
 # ── collect / counts_by_kind ─────────────────────────────────────────
 
 
