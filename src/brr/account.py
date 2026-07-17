@@ -48,6 +48,10 @@ LEDGER_PATH = "ledger"
 
 KNOWLEDGE_PATH = "knowledge"
 
+# Archived run replies inside home knowledge (see ``knowledge.py``); slug-keyed
+# like every other repo scope, so ``relabel_repo`` has to move it too.
+REPLIES_PATH = "replies"
+
 GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
@@ -647,3 +651,148 @@ def run_state_blob_url(
         )
     except Exception:
         return None
+
+
+# ── Repo relabel — following a repo that changed address ──────────────
+#
+# Every resident-memory scope is keyed by ``slug_repo_label(repo_label)``, and
+# ``repo_label`` derives from the origin remote. So the day a repo moves
+# (``Gurio/brr`` → ``hugimuni-labs/brnrd``), every scope below silently
+# re-keys and the resident wakes into an empty home on a mature project. The
+# knowledge, the dominion, the plans, the policy and the run history are all
+# still on disk — under a slug nothing looks up any more.
+#
+# ``relabel_repo`` is the migration: move each scope, rewrite the registry
+# entry, and leave the history where the next wake reads it.
+
+
+@dataclass(frozen=True)
+class RelabelMove:
+    """One scope directory to be carried from the old slug to the new one."""
+
+    scope: str
+    src: Path
+    dst: Path
+    home: str  # "dominion" | "knowledge" — which git repo owns this path
+
+
+class RelabelError(RuntimeError):
+    """A relabel that must not proceed (collision, bad label, wrong home)."""
+
+
+def relabel_scopes(ctx: HomeContext, label: str) -> list[tuple[str, Path, str]]:
+    """Every slug-keyed scope directory for *label*, as (scope, path, home).
+
+    The single source of truth for "what is keyed by the repo slug". A new
+    slug-keyed scope added elsewhere in the codebase and not added here is a
+    scope that silently fails to migrate — keep this list honest.
+    """
+
+    slug = slug_repo_label(label)
+    home_root = context_home_root(ctx)
+    knowledge_root = knowledge_path(ctx)
+    return [
+        ("dominion", ctx.dominion_repo / REPOS_PATH / slug, "dominion"),
+        ("plans", ctx.dominion_repo / PLANS_PATH / slug, "dominion"),
+        ("runner-policy", ctx.dominion_repo / RUNNER_POLICY_PATH / slug, "dominion"),
+        ("run-state", home_root / RUN_STATE_PATH / slug, "dominion"),
+        ("knowledge", knowledge_root / REPOS_PATH / slug, "knowledge"),
+        ("replies", knowledge_root / REPLIES_PATH / slug, "knowledge"),
+    ]
+
+
+def plan_relabel(ctx: HomeContext, old_label: str, new_label: str) -> list[RelabelMove]:
+    """Return the moves a relabel would perform. Raises on refusal.
+
+    Pure: touches nothing. ``brnrd account relabel --dry-run`` prints exactly
+    this, so an operator can see the blast radius before consenting to it.
+    """
+
+    old_label = (old_label or "").strip()
+    new_label = (new_label or "").strip()
+    if not old_label or not new_label:
+        raise RelabelError("both the old and the new repo label are required")
+    if old_label == new_label:
+        raise RelabelError(f"{old_label!r} is already the label; nothing to do")
+
+    old_slug = slug_repo_label(old_label)
+    new_slug = slug_repo_label(new_label)
+    if old_slug == new_slug:
+        raise RelabelError(
+            f"{old_label!r} and {new_label!r} both slug to {old_slug!r} — the "
+            "on-disk layout is identical, so only the registry entry needs "
+            "rewriting (rerun without --move, or edit account/repos.json)"
+        )
+
+    old_scopes = relabel_scopes(ctx, old_label)
+    new_scopes = {scope: path for scope, path, _ in relabel_scopes(ctx, new_label)}
+
+    moves: list[RelabelMove] = []
+    for scope, src, home in old_scopes:
+        if not src.exists():
+            continue
+        dst = new_scopes[scope]
+        if dst.exists() and any(dst.iterdir()):
+            raise RelabelError(
+                f"{scope}: {dst} already exists and is not empty — refusing to "
+                "merge two histories. Move or remove it first."
+            )
+        moves.append(RelabelMove(scope=scope, src=src, dst=dst, home=home))
+    return moves
+
+
+def relabel_repo(
+    ctx: HomeContext,
+    old_label: str,
+    new_label: str,
+    *,
+    dry_run: bool = False,
+) -> list[RelabelMove]:
+    """Carry every memory scope for *old_label* over to *new_label*.
+
+    Moves the scope directories, rewrites the registry entry (including
+    ``default_repo`` when it pointed at the old label), and returns the moves
+    performed. Committing the two homes is the caller's job — see
+    ``cli.cmd_account_relabel``.
+    """
+
+    moves = plan_relabel(ctx, old_label, new_label)
+    if dry_run:
+        return moves
+
+    for move in moves:
+        move.dst.parent.mkdir(parents=True, exist_ok=True)
+        if move.dst.exists():  # exists but empty, per plan_relabel's guard
+            move.dst.rmdir()
+        os.replace(move.src, move.dst)
+        # A now-childless parent (repos/, plans/, …) is noise, not history.
+        try:
+            move.src.parent.rmdir()
+        except OSError:
+            pass
+
+    _relabel_registry(ctx, old_label, new_label)
+    return moves
+
+
+def _relabel_registry(ctx: HomeContext, old_label: str, new_label: str) -> None:
+    """Rekey the registry entry for *old_label* to *new_label*, in place."""
+
+    registry = context_home_root(ctx) / REGISTRY_PATH
+    repos, default_repo = _load_registry(registry)
+    entry = repos.pop(old_label, None)
+    if entry is None and new_label not in repos:
+        # Nothing registered under either label: the caller relabelled a repo
+        # the registry never knew. The scope moves above still stand.
+        return
+    if entry is not None:
+        repos[new_label] = AccountRepo(label=new_label, root=entry.root)
+    default = new_label if default_repo == old_label else (default_repo or new_label)
+    _write_registry(
+        registry,
+        repos,
+        default,
+        account_id=ctx.account_id,
+        home_kind=ctx.kind,
+        home_id=ctx.home_id,
+    )
