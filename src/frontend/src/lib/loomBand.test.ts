@@ -3,22 +3,35 @@ import test from 'node:test';
 
 import {
 	LOOM_MIN_FUTURE_HORIZON_MS,
-	LOOM_PAST_WINDOW_MS,
+	loomBarFraction,
 	loomFutureHorizon,
-	loomFuturePosition,
 	loomFutureStop,
-	loomPastPosition,
-	loomPastStop
+	loomPastStop,
+	loomPastWindowLabel
 } from './loomBand.ts';
 
 const NOW = Date.parse('2026-07-16T18:00:00Z');
 
-test('past mapping pins NOW and 24h while compressing age logarithmically', () => {
-	assert.equal(loomPastPosition(0), 1);
-	assert.equal(loomPastPosition(LOOM_PAST_WINDOW_MS), 0);
-	assert.equal(loomPastPosition(LOOM_PAST_WINDOW_MS * 2), 0);
-	assert.ok(loomPastPosition(60 * 60 * 1000) > loomPastPosition(6 * 60 * 60 * 1000));
-	assert.ok(loomPastPosition(60 * 60 * 1000) < 0.5, 'the log curve gives recent age room');
+test('bar fraction floors at a visible sliver and caps at the full track', () => {
+	assert.equal(loomBarFraction(0, 100), 0.06);
+	assert.equal(loomBarFraction(-5, 100), 0.06);
+	assert.equal(loomBarFraction(50, 0), 0.06);
+	assert.equal(loomBarFraction(100, 100), 1);
+	assert.equal(loomBarFraction(200, 100), 1, 'over-max clamps rather than overflows');
+});
+
+test('bar fraction spreads a long tail instead of flattening it', () => {
+	// sqrt scaling: a run at 1/4 of max still gets half the track — one
+	// marathon run must not shrink every other bar into a sliver.
+	const quarter = loomBarFraction(25, 100);
+	assert.ok(quarter > 0.5 && quarter < 0.6, `sqrt spread, got ${quarter}`);
+	assert.ok(loomBarFraction(25, 100) > 25 / 100 + 0.06);
+});
+
+test('past window labels are legible units', () => {
+	assert.equal(loomPastWindowLabel(6 * 60 * 60 * 1000), '6h');
+	assert.equal(loomPastWindowLabel(24 * 60 * 60 * 1000), '24h');
+	assert.equal(loomPastWindowLabel(7 * 24 * 60 * 60 * 1000), '7d');
 });
 
 test('future horizon holds six hours and extends to the furthest real wake', () => {
@@ -31,16 +44,6 @@ test('future horizon holds six hours and extends to the furthest real wake', () 
 		loomFutureHorizon(['2026-07-17T06:00:00Z', '2026-07-16T20:00:00Z'], NOW),
 		12 * 60 * 60 * 1000
 	);
-});
-
-test('future mapping pins overdue at NOW and the furthest wake at the edge', () => {
-	const horizon = 12 * 60 * 60 * 1000;
-	assert.equal(loomFuturePosition(-1, horizon), 0);
-	assert.equal(loomFuturePosition(0, horizon), 0);
-	assert.equal(loomFuturePosition(horizon, horizon), 1);
-	assert.equal(loomFuturePosition(horizon * 2, horizon), 1);
-	assert.ok(loomFuturePosition(60 * 60 * 1000, horizon) > 0);
-	assert.ok(loomFuturePosition(60 * 60 * 1000, horizon) < 1);
 });
 
 test('thermal positions step rather than interpolate', () => {
