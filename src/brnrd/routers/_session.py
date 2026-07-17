@@ -176,7 +176,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_last_seen_at": _dt(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
                 "gates": gate_health,
-                "setup_command": f"cd {repo.repo_name}\nbrnrd connect https://brnrd.dev\nbrnrd up",
+                "setup_command": f"cd {repo.repo_name}\nbrnrd account connect https://brnrd.dev\nbrnrd up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
         )
