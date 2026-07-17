@@ -292,3 +292,149 @@ def test_decisions_ledger_path(tmp_path):
     assert account.decisions_ledger_path(ctx) == (
         tmp_path / "home" / "ledger" / "decisions.md"
     )
+
+
+# ── Repo relabel ─────────────────────────────────────────────────────
+
+
+def _relabel_home(tmp_path, label="Gurio/brr"):
+    """An account home with every slug-keyed scope populated for *label*."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(
+        repo,
+        {
+            "repo.label": label,
+            "home.kind": "account",
+            "home.path": str(home),
+            "account.id": "acct-1",
+        },
+    )
+    for scope, path, _home in account.relabel_scopes(ctx, label):
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "witness.md").write_text(scope, encoding="utf-8")
+    return ctx, repo
+
+
+def test_relabel_scopes_covers_every_slug_keyed_path(tmp_path):
+    """The scope list is the contract: a slug-keyed dir missing from it is a
+    scope that silently fails to migrate. Pin the set so adding one elsewhere
+    without adding it here trips a test rather than eating a resident's memory.
+    """
+    ctx, _repo = _relabel_home(tmp_path)
+    scopes = {scope for scope, _path, _home in account.relabel_scopes(ctx, "Gurio/brr")}
+    assert scopes == {
+        "dominion", "plans", "runner-policy", "run-state", "knowledge", "replies",
+    }
+
+
+def test_relabel_moves_every_scope_and_rekeys_the_registry(tmp_path):
+    ctx, _repo = _relabel_home(tmp_path)
+
+    moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
+
+    assert len(moves) == 6
+    for scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
+        assert not path.exists(), f"{scope} left behind at the old slug"
+    for scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
+        assert (path / "witness.md").read_text(encoding="utf-8") == scope
+
+    registry = json.loads(
+        (account.context_home_root(ctx) / account.REGISTRY_PATH).read_text()
+    )
+    labels = [entry["label"] for entry in registry["repos"]]
+    assert labels == ["hugimuni-labs/brnrd"]
+    assert registry["default_repo"] == "hugimuni-labs/brnrd"
+
+
+def test_relabel_dry_run_touches_nothing(tmp_path):
+    ctx, _repo = _relabel_home(tmp_path)
+
+    moves = account.relabel_repo(
+        ctx, "Gurio/brr", "hugimuni-labs/brnrd", dry_run=True
+    )
+
+    assert len(moves) == 6
+    for _scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
+        assert path.exists(), "dry run moved something"
+    for _scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
+        assert not path.exists()
+
+
+def test_relabel_preserves_a_non_default_repos_registry_entry(tmp_path):
+    """Relabelling repo B must not steal the default from repo A."""
+    ctx, _repo = _relabel_home(tmp_path, label="Gurio/brr")
+    registry_path = account.context_home_root(ctx) / account.REGISTRY_PATH
+    account._write_registry(
+        registry_path,
+        {
+            "Gurio/brr": account.AccountRepo(label="Gurio/brr", root=tmp_path / "repo"),
+            "other/keeper": account.AccountRepo(
+                label="other/keeper", root=tmp_path / "keeper"
+            ),
+        },
+        "other/keeper",
+        account_id="acct-1",
+        home_kind="account",
+        home_id="acct-1",
+    )
+
+    account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
+
+    registry = json.loads(registry_path.read_text())
+    labels = sorted(entry["label"] for entry in registry["repos"])
+    assert labels == ["hugimuni-labs/brnrd", "other/keeper"]
+    assert registry["default_repo"] == "other/keeper"
+
+
+def test_relabel_refuses_to_merge_into_a_populated_destination(tmp_path):
+    """Two histories under one slug is data loss wearing a migration's coat."""
+    ctx, _repo = _relabel_home(tmp_path)
+    occupied = account.repo_knowledge_path(ctx, "hugimuni-labs/brnrd")
+    occupied.mkdir(parents=True, exist_ok=True)
+    (occupied / "someone-elses.md").write_text("prior", encoding="utf-8")
+
+    try:
+        account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
+    except account.RelabelError as exc:
+        assert "not empty" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected RelabelError")
+
+    # And it refused *before* moving anything — no half-migration.
+    for _scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
+        assert path.exists()
+
+
+def test_relabel_rejects_a_no_op_and_a_slug_collision(tmp_path):
+    ctx, _repo = _relabel_home(tmp_path)
+
+    for old, new, expected in (
+        ("Gurio/brr", "Gurio/brr", "already the label"),
+        ("", "x/y", "required"),
+        # "Gurio/brr" and "Gurio__brr" both slug to "Gurio__brr" — distinct
+        # labels, one directory. Moving would mean moving onto itself.
+        ("Gurio/brr", "Gurio__brr", "slug to"),
+    ):
+        try:
+            account.plan_relabel(ctx, old, new)
+        except account.RelabelError as exc:
+            assert expected in str(exc), f"{old!r}->{new!r}: {exc}"
+        else:  # pragma: no cover
+            raise AssertionError(f"expected RelabelError for {old!r} -> {new!r}")
+
+
+def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
+    """A home that never grew a runner policy still relabels cleanly."""
+    ctx, _repo = _relabel_home(tmp_path)
+    import shutil
+
+    shutil.rmtree(account.runner_policy_path(ctx, "Gurio/brr").parent)
+
+    moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
+
+    assert {move.scope for move in moves} == {
+        "dominion", "plans", "run-state", "knowledge", "replies",
+    }

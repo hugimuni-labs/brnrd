@@ -141,6 +141,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brnrd_connect)
 
     p = account_sub.add_parser(
+        "relabel",
+        help="follow a repo that changed address, carrying its memory with it")
+    p.add_argument("old_label", metavar="<old>", help="current label, e.g. Gurio/brr")
+    p.add_argument("new_label", metavar="<new>",
+                   help="new label, e.g. hugimuni-labs/brnrd")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the moves without performing them")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the confirmation prompt (required when not on a TTY)")
+    p.set_defaults(func=cmd_account_relabel)
+
+    p = account_sub.add_parser(
         "status", help="show the resolved home, its kind, and the repos under it")
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
@@ -1349,6 +1361,93 @@ def cmd_gate_list(args):
         print(f"  {mark} {row['name']:<10} {state}")
     if brr_dir is not None:
         print("\nconfigure one with `brnrd gate setup <gate>`")
+    return 0
+
+
+def cmd_account_relabel(args):
+    """``brnrd account relabel <old> <new>`` — move a repo's memory to a new address.
+
+    A repo's resident memory — knowledge, dominion, plans, runner policy, run
+    history, archived replies — is keyed by a slug derived from the origin
+    remote. Move the repo (``Gurio/brr`` → ``hugimuni-labs/brnrd``) and every
+    one of those scopes silently re-keys: nothing errors, nothing warns, and
+    the next wake starts from zero on a mature project. This carries them over.
+
+    Order doesn't matter: run it before or after ``git remote set-url``. The
+    labels are explicit precisely so the command never has to guess from a
+    remote that may already have moved.
+    """
+    import sys
+
+    from . import account
+    from . import config as conf
+    from . import gitops
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    ctx = account.resolve_context(repo_root, cfg, create=False)
+
+    if ctx.kind != "account":
+        print(f"[brnrd account relabel] home kind is {ctx.kind!r}, not 'account'.")
+        print("  A project home is keyed by repo slug *and* path hash, so a")
+        print("  relabel alone would not find it. Connect an account first")
+        print("  (`brnrd account connect`), or move the home directory by hand.")
+        return 2
+
+    try:
+        moves = account.plan_relabel(ctx, args.old_label, args.new_label)
+    except account.RelabelError as exc:
+        print(f"[brnrd account relabel] {exc}")
+        return 2
+
+    if not moves:
+        print(f"[brnrd account relabel] no memory found under {args.old_label!r}.")
+        print("  Nothing to move. (Already relabelled? Check `brnrd account status`.)")
+        return 0
+
+    print(f"[brnrd account relabel] {args.old_label} → {args.new_label}")
+    for move in moves:
+        print(f"  {move.scope:<14} {move.src}")
+        print(f"  {'':<14}   → {move.dst}")
+    print(f"  registry       account/repos.json: rekey entry"
+          + (" + default_repo" if ctx.default_repo.label == args.old_label else ""))
+
+    if args.dry_run:
+        print("\n  --dry-run: nothing moved.")
+        return 0
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("\n[brnrd account relabel] refusing to move without --yes "
+                  "on a non-TTY.")
+            return 2
+        answer = input("\nMove these? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("  aborted; nothing moved.")
+            return 1
+
+    account.relabel_repo(ctx, args.old_label, args.new_label)
+
+    # Commit both homes. The knowledge dir is a nested repo the dominion
+    # gitignores, so it needs its own commit — a relabel that lands in only
+    # one of them is exactly the half-migration this command exists to avoid.
+    message = f"relabel: {args.old_label} -> {args.new_label}"
+    home_root = account.context_home_root(ctx)
+    knowledge_root = account.knowledge_path(ctx)
+    for label, path in (("home", home_root), ("knowledge", knowledge_root)):
+        if not (path / ".git").exists():
+            continue
+        if not gitops.worktree_dirty(path):
+            continue
+        if gitops.commit_all(path, message):
+            print(f"  committed {label}: {path}")
+        else:
+            print(f"  ⚠ could not commit {label} ({path}) — commit it by hand.")
+
+    print(f"\n  done. {len(moves)} scope(s) moved; the next wake reads them "
+          f"under {args.new_label}.")
+    print("  Remaining: point the repo's origin remote at the new address if "
+          "you haven't yet.")
     return 0
 
 

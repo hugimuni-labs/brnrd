@@ -966,7 +966,7 @@ def test_completions_track_the_parser_not_a_hand_list(capsys):
     # completions without anyone remembering to update a table.
     assert main(["completions", "bash"]) == 0
     out = capsys.readouterr().out
-    assert "add connect status" in out  # brnrd account
+    assert "add connect relabel status" in out  # brnrd account
     assert "auth bind list setup" in out  # brnrd gate
 
 
