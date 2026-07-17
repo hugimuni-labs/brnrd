@@ -11,7 +11,9 @@ from typing import Iterable
 from . import account, config as conf, forges, gitops
 
 CHECKOUT_DIRNAME = ".brnrd-kb"
-REPLIES_DIRNAME = "replies"
+# One source of truth: ``account.relabel_scopes`` has to know every slug-keyed
+# directory, and a second spelling of this name is how one gets left behind.
+REPLIES_DIRNAME = account.REPLIES_PATH
 SYNC_MARKER_FILE = "knowledge.needs-sync"
 CAPTURE_LOCK_FILE = "knowledge.capture.lock"
 _MAX_SOURCE_BYTES = 2048
