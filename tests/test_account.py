@@ -438,3 +438,78 @@ def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
     assert {move.scope for move in moves} == {
         "dominion", "plans", "run-state", "knowledge", "replies",
     }
+
+
+# ── Detecting a repo that moved without a relabel ─────────────────────
+
+
+def test_detect_relabelled_repo_fires_when_memory_is_stranded(tmp_path):
+    """The move happened, the migration didn't: memory sits under the old label."""
+    ctx, repo = _relabel_home(tmp_path, label="Gurio/brr")
+
+    # The remote now derives a new label; the registry still knows the old one.
+    # NB: resolve_context auto-registers the current repo, so after a real move
+    # *both* labels point at this root — that is the state to detect, not an
+    # obstacle to it.
+    assert account.detect_relabelled_repo(ctx, repo, "hugimuni-labs/brnrd") == "Gurio/brr"
+
+
+def test_detect_relabelled_repo_silent_once_the_relabel_has_run(tmp_path):
+    ctx, repo = _relabel_home(tmp_path, label="Gurio/brr")
+
+    account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
+
+    assert account.detect_relabelled_repo(ctx, repo, "hugimuni-labs/brnrd") is None
+
+
+def test_detect_relabelled_repo_silent_on_a_healthy_repo(tmp_path):
+    ctx, repo = _relabel_home(tmp_path, label="Gurio/brr")
+
+    assert account.detect_relabelled_repo(ctx, repo, "Gurio/brr") is None
+
+
+def test_detect_relabelled_repo_ignores_a_sibling_repo_under_the_same_home(tmp_path):
+    """An account home hosts many repos, each with its own memory. Another
+    label having memory is the normal case — only the *same tree* under another
+    label means a move. Without the root check this would false-positive on
+    every multi-repo home, which is the shape that makes a warning ignorable."""
+    ctx, repo = _relabel_home(tmp_path, label="Gurio/brr")
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    repos = dict(ctx.repos)
+    repos["other/project"] = account.AccountRepo(label="other/project", root=sibling)
+    ctx = account.HomeContext(
+        account_id=ctx.account_id,
+        dominion_repo=ctx.dominion_repo,
+        dispatch_inbox=ctx.dispatch_inbox,
+        responses_dir=ctx.responses_dir,
+        run_state_dir=ctx.run_state_dir,
+        repos=repos,
+        default_repo=ctx.default_repo,
+        kind=ctx.kind,
+        home_id=ctx.home_id,
+        home_root=ctx.home_root,
+    )
+    for _scope, path, _home in account.relabel_scopes(ctx, "other/project"):
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "witness.md").write_text("x", encoding="utf-8")
+
+    # The sibling has memory of its own, at a different root. That must not
+    # make the (healthy) main repo look like it moved.
+    assert account.detect_relabelled_repo(ctx, repo, "Gurio/brr") is None
+    # Nor may it strand a genuinely fresh repo at a third root.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert account.detect_relabelled_repo(ctx, fresh, "other/fresh") is None
+
+
+def test_detect_relabelled_repo_silent_when_the_old_label_holds_nothing(tmp_path):
+    """A stale registry entry over an empty home is bookkeeping, not a loss."""
+    ctx, repo = _relabel_home(tmp_path, label="Gurio/brr")
+    import shutil
+
+    for _scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
+        if path.is_dir():
+            shutil.rmtree(path)
+
+    assert account.detect_relabelled_repo(ctx, repo, "hugimuni-labs/brnrd") is None

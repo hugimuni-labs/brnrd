@@ -566,6 +566,7 @@ source manifest:
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
+  · Stranded-memory warning (repo moved)            daemon-live  health             0  computed
   · Dominion digest (self-inject)                   resident     memory             0  computed
   · Active inter-run plan (CS5)                     resident     plan               0  computed
   · Stored runner policy (CS6)                      resident     policy             0  computed
