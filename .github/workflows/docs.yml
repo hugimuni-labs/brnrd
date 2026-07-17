@@ -13,12 +13,14 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# Only the deploy job may publish; a PR build has no business holding a
+# pages-write token.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  # Deploys to one Pages site must serialize, but PR builds are independent —
+  # sharing one group would let a docs PR queue in front of a main deploy.
+  group: pages-${{ github.event_name == 'push' && 'deploy' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   build:
@@ -45,6 +47,9 @@ jobs:
 
   deploy:
     if: github.event_name == 'push'
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
