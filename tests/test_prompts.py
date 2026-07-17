@@ -3,10 +3,9 @@
 from brr import dominion
 from brr.prompts import (
     _build_context_block,
-    _build_decision_ledger_block,
     _build_identity_core_block,
-    _build_inter_run_plan_block,
     _build_runner_policy_block,
+    _build_work_surface_block,
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
@@ -1300,101 +1299,42 @@ def _seed_account_home(tmp_path):
     return home
 
 
-class TestInterRunPlanInjection:
-    """CS5: active inter-run plan from the account dominion is injected when
-    present; silent when absent so it never becomes a constant per-wake tax."""
-
-    def test_absent_when_no_plan_file(self, tmp_path):
+class TestWorkSurfaceInjection:
+    def test_points_to_one_surface_when_empty(self, tmp_path):
         _seed_account_home(tmp_path)
-        assert _build_inter_run_plan_block(tmp_path) == ""
+        result = _build_work_surface_block(tmp_path)
+        assert "Work surface" in result
+        assert "surface/index.md" in result
 
-    def test_injects_repo_plan_when_present(self, tmp_path):
+    def test_discovers_every_markdown_file_with_index_first(self, tmp_path):
         home = _seed_account_home(tmp_path)
-        plan_dir = home / "plans" / "local__default"
-        plan_dir.mkdir(parents=True)
-        (plan_dir / "active.md").write_text(
-            "# Implement CS5\n\nNext: wire injection.", encoding="utf-8"
+        surface = home / "surface"
+        (surface / "plans" / "local__default").mkdir(parents=True)
+        (surface / "index.md").write_text("# Start here", encoding="utf-8")
+        (surface / "workflow.md").write_text("# Workflow", encoding="utf-8")
+        (surface / "plans" / "local__default" / "active.md").write_text(
+            "# Plan\n\nship it", encoding="utf-8"
         )
 
-        result = _build_inter_run_plan_block(tmp_path)
+        result = _build_work_surface_block(tmp_path)
 
-        assert "Active inter-run plan" in result
-        assert "Implement CS5" in result
-        assert "wire injection" in result
+        assert result.index("### index.md") < result.index("### plans/local__default/active.md")
+        assert "### workflow.md" in result
+        assert "ship it" in result
 
-    def test_injects_cross_repo_plan_when_present(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        cross_dir = home / "plans" / "_cross-repo"
-        cross_dir.mkdir(parents=True)
-        (cross_dir / "active.md").write_text(
-            "Cross-repo migration plan.", encoding="utf-8"
-        )
-
-        result = _build_inter_run_plan_block(tmp_path)
-
-        assert "Active inter-run plan" in result
-        assert "Cross-repo migration plan" in result
-
-    def test_includes_both_repo_and_cross_repo_plans(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        repo_dir = home / "plans" / "local__default"
-        repo_dir.mkdir(parents=True)
-        (repo_dir / "active.md").write_text("Repo plan.", encoding="utf-8")
-        cross_dir = home / "plans" / "_cross-repo"
-        cross_dir.mkdir(parents=True)
-        (cross_dir / "active.md").write_text("Cross plan.", encoding="utf-8")
-
-        result = _build_inter_run_plan_block(tmp_path)
-
-        assert "Repo plan" in result
-        assert "Cross plan" in result
-
-    def test_absent_when_plan_file_is_empty(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        plan_dir = home / "plans" / "local__default"
-        plan_dir.mkdir(parents=True)
-        (plan_dir / "active.md").write_text("", encoding="utf-8")
-
-        assert _build_inter_run_plan_block(tmp_path) == ""
-
-    def test_oversized_plan_is_tail_trimmed(self, tmp_path):
-        """An active.md left to accrete stays bounded, keeping the newest
-        entries — the CS5 twin of the CS7 regression below. No cap here
-        until 2026-07-09 meant a plan that grew via "append instead of
-        collapse" (a pattern already caught once live, 2026-07-07) would
-        ride into every wake in full, unbounded."""
-        home = _seed_account_home(tmp_path)
-        (tmp_path / ".brr" / "config").open("a", encoding="utf-8").write(
-            "dominion.plan_inject_budget_bytes=200\n"
-        )
-        plan_dir = home / "plans" / "local__default"
-        plan_dir.mkdir(parents=True)
-        entries = "\n\n".join(
-            f"## Move {i} (2026-07-{i:02d})\n" + ("detail " * 20)
-            for i in range(1, 10)
-        )
-        (plan_dir / "active.md").write_text(f"# Plan\n\n{entries}", encoding="utf-8")
-
-        result = _build_inter_run_plan_block(tmp_path)
-
-        assert "Move 9" in result
-        assert "Move 1 (" not in result
-        assert "entries cut to fit the wake budget" in result
-
-    def test_plan_block_rides_in_daemon_prompt(self, tmp_path):
-        """CS5 plan appears in the assembled daemon prompt."""
+    def test_surface_block_rides_in_daemon_prompt(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.", encoding="utf-8")
         home = _seed_account_home(tmp_path)
-        plan_dir = home / "plans" / "local__default"
-        plan_dir.mkdir(parents=True)
-        (plan_dir / "active.md").write_text("Plan: fix the bug.", encoding="utf-8")
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "index.md").write_text("One orientation root.", encoding="utf-8")
 
         prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
 
-        assert "Active inter-run plan" in prompt
-        assert "Plan: fix the bug" in prompt
+        assert "Work surface" in prompt
+        assert "One orientation root" in prompt
 
 
 # ── CS6 — runner policy injection ─────────────────────────────────────
@@ -1472,131 +1412,3 @@ class TestRunnerPolicyInjection:
 
         assert "Stored runner policy" in prompt
         assert "Use haiku" in prompt
-
-
-# ── CS7 — decision ledger injection ───────────────────────────────────
-
-
-class TestDecisionLedgerInjection:
-    """CS7: resident-maintained decision ledger from the account dominion
-    is injected when present; silent when absent — never forced, always fresh."""
-
-    def test_absent_when_no_ledger_file(self, tmp_path):
-        _seed_account_home(tmp_path)
-        assert _build_decision_ledger_block(tmp_path) == ""
-
-    def test_injects_ledger_when_present(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        ledger_dir = home / "ledger"
-        ledger_dir.mkdir(parents=True)
-        (ledger_dir / "decisions.md").write_text(
-            "## 2026-06-30 — account-centered daemon accepted\n\n"
-            "One daemon per account, repo-scoped runs.",
-            encoding="utf-8",
-        )
-
-        result = _build_decision_ledger_block(tmp_path)
-
-        assert "Decision ledger" in result
-        assert "account-centered daemon accepted" in result
-        assert "repo-scoped runs" in result
-
-    def test_absent_when_ledger_file_is_empty(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        ledger_dir = home / "ledger"
-        ledger_dir.mkdir(parents=True)
-        (ledger_dir / "decisions.md").write_text("", encoding="utf-8")
-
-        assert _build_decision_ledger_block(tmp_path) == ""
-
-    def test_oversized_ledger_is_tail_trimmed(self, tmp_path):
-        """Live case, 2026-07-09: ledger/decisions.md grew unbounded to
-        68KB/1110 lines over five days (its own file header says "kept
-        short and current... don't let this become a duplicate log", but
-        nothing enforced that) and became the single largest block in the
-        wake bundle — bigger than the capped self-inject digest several
-        times over. A budget cap, tail-trimmed at an entry boundary so the
-        newest decision never silently drops, closes the gap in code
-        rather than leaving it to a convention that already didn't hold."""
-        home = _seed_account_home(tmp_path)
-        (tmp_path / ".brr" / "config").open("a", encoding="utf-8").write(
-            "dominion.ledger_inject_budget_bytes=200\n"
-        )
-        ledger_dir = home / "ledger"
-        ledger_dir.mkdir(parents=True)
-        entries = "\n\n".join(
-            f"## Decision {i} (2026-07-{i:02d})\n" + ("rationale " * 20)
-            for i in range(1, 10)
-        )
-        (ledger_dir / "decisions.md").write_text(
-            f"# Decision ledger\n\n{entries}", encoding="utf-8"
-        )
-
-        result = _build_decision_ledger_block(tmp_path)
-
-        assert "Decision 9" in result
-        assert "Decision 1 (" not in result
-        assert "entries cut to fit the wake budget" in result
-        assert len(result.encode("utf-8")) < len(
-            (f"# Decision ledger\n\n{entries}").encode("utf-8")
-        )
-
-    def test_ledger_block_rides_in_daemon_prompt(self, tmp_path):
-        """CS7 decision ledger appears in the assembled daemon prompt."""
-        prompts = tmp_path / ".brr" / "prompts"
-        prompts.mkdir(parents=True)
-        (prompts / "run.md").write_text("You are an agent.", encoding="utf-8")
-        home = _seed_account_home(tmp_path)
-        ledger_dir = home / "ledger"
-        ledger_dir.mkdir(parents=True)
-        (ledger_dir / "decisions.md").write_text(
-            "CS4 accepted 2026-06-29.", encoding="utf-8"
-        )
-
-        prompt = build_daemon_prompt("next step", "evt-1", "/tmp/r.md", tmp_path)
-
-        assert "Decision ledger" in prompt
-        assert "CS4 accepted 2026-06-29" in prompt
-
-
-# ── CS8 — workflow preferences injection ─────────────────────────────
-
-
-class TestWorkflowInjection:
-    """CS8: the account-wide workflow.md — the user↔resident pace-and-flow
-    contract — is injected when present; when absent, a one-line slot
-    pointer replaces it (same stance as the thread-of-record pointer)."""
-
-    def test_slot_pointer_when_no_file(self, tmp_path):
-        _seed_account_home(tmp_path)
-        from brr.prompts import _build_workflow_block
-
-        result = _build_workflow_block(tmp_path)
-
-        assert "Workflow preferences" in result
-        assert "No workflow doc yet" in result
-        # Machine-independent on purpose: the absent case lands in the
-        # deterministic boot snapshot, so no absolute path here.
-        assert "`workflow.md`" in result
-        assert str(tmp_path) not in result
-
-    def test_injects_doc_when_present(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        (home / "workflow.md").write_text(
-            "# Workflow\n\n## Autonomy\nSelf-woken wakes work the agenda.",
-            encoding="utf-8",
-        )
-        from brr.prompts import _build_workflow_block
-
-        result = _build_workflow_block(tmp_path)
-
-        assert "Workflow preferences" in result
-        assert "Self-woken wakes work the agenda" in result
-        assert "No workflow doc yet" not in result
-
-    def test_silent_when_file_empty(self, tmp_path):
-        home = _seed_account_home(tmp_path)
-        (home / "workflow.md").write_text("", encoding="utf-8")
-        from brr.prompts import _build_workflow_block
-
-        assert _build_workflow_block(tmp_path) == ""

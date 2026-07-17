@@ -22,15 +22,10 @@ class Account(Base):
     hosted_terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     hosted_terms_version: Mapped[str] = mapped_column(String(32), default="")
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
-    # Current Planned State (CPS) — account-level slices of the account
-    # dominion's CS5/CS7 files (cross-repo plan + decision ledger); see
-    # kb/plan-brnrd-dashboard-mvp.md "Gap: Current Planned State view".
-    cross_repo_plan_md: Mapped[str] = mapped_column(Text, default="")
-    decision_ledger_md: Mapped[str] = mapped_column(Text, default="")
-    # CS8 — workflow preferences (account-dominion workflow.md), the
-    # user↔resident pace-and-flow contract, rendered on the dashboard.
-    workflow_md: Mapped[str] = mapped_column(Text, default="")
-    plans_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The discovered user/resident-authored work surface. The JSON is a read
+    # replica of home/surface, not a second authoring store.
+    surface_json: Mapped[str] = mapped_column(Text, default="[]")
+    surface_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Billing (#53, kb design-billing.md). ``tier`` flips only from Stripe
     # webhook state transitions; the Stripe subscription is source of truth.
     TIER_FREE = "free"
@@ -53,10 +48,6 @@ class Repo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     account: Mapped["Account"] = relationship(back_populates="repos")
-    # CPS — this repo's inter-run plan (CS5 `plans/<repo-slug>/active.md`),
-    # mirrored from the account dominion via `PUT /v1/daemons/plans`.
-    plan_md: Mapped[str] = mapped_column(Text, default="")
-    plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Token(Base):

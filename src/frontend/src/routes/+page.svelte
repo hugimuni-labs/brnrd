@@ -31,9 +31,8 @@
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
-	import DecisionsSpace from '$lib/DecisionsSpace.svelte';
-	import WorkflowPanel from '$lib/WorkflowPanel.svelte';
-	import { PlansAuthError, fetchPlans, type PlansResponse } from '$lib/plans';
+	import WorkSurface from '$lib/WorkSurface.svelte';
+	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
 	import {
 		ConfigRequestsAuthError,
@@ -162,8 +161,8 @@
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
 
-	let plansData = $state<PlansResponse | null>(null);
-	let plansError = $state<string | null>(null);
+	let surfaceData = $state<SurfaceResponse | null>(null);
+	let surfaceError = $state<string | null>(null);
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
 	// band is the page's temporal spine and the only renderer of past/now/
@@ -277,12 +276,12 @@
 			}
 		}
 		try {
-			const plans = await fetchPlans();
-			plansData = plans;
-			plansError = null;
+			const surface = await fetchSurface();
+			surfaceData = surface;
+			surfaceError = null;
 		} catch (e) {
-			if (!(e instanceof PlansAuthError)) {
-				plansError = e instanceof Error ? e.message : 'plans fetch failed';
+			if (!(e instanceof SurfaceAuthError)) {
+				surfaceError = e instanceof Error ? e.message : 'surface fetch failed';
 			}
 		}
 	}
@@ -543,29 +542,23 @@
 	</section>
 
 	<section class="ignite" style="--ignite-delay: 2700ms">
-		<p class="eyebrow mt-8">§3a · decisions space</p>
+		<p class="eyebrow mt-8">§3a · work surface</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'decisions space', delay: 2850 }}
+			use:typeReveal={{ text: 'work surface', delay: 2850 }}
 		>
-			decisions space
+			work surface
 		</h2>
 		<p class="mt-1 text-sm text-stone-400">
-			The resident's own plan — ranked next moves, per repo, plus the decision ledger it keeps as it
-			works. This is what drives scheduling today; read it like a co-pilot's flight plan.
+			The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
 		</p>
 		<div class="mt-3">
-			{#if plansError}
-				<p class="text-sm text-red-400">{plansError}</p>
-			{:else if plansData === null}
+			{#if surfaceError}
+				<p class="text-sm text-red-400">{surfaceError}</p>
+			{:else if surfaceData === null}
 				<p class="text-sm text-stone-500">Loading…</p>
 			{:else}
-				<DecisionsSpace data={plansData} {now} />
-				{#if plansData.workflow_md}
-					<div class="mt-3">
-						<WorkflowPanel md={plansData.workflow_md} />
-					</div>
-				{/if}
+				<WorkSurface data={surfaceData} />
 			{/if}
 		</div>
 	</section>
