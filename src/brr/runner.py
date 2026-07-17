@@ -369,7 +369,9 @@ def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
     return _profiles_cache
 
 
-def _selection_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
+def _selection_profiles(
+    repo_root: Path | None = None, *, probe: bool = True,
+) -> dict[str, dict[str, Any]]:
     """Declared profiles plus generated bundled Core profiles.
 
     ``_load_profiles()`` is the active ``runners.md`` source. This view keeps
@@ -377,11 +379,17 @@ def _selection_profiles(repo_root: Path | None = None) -> dict[str, dict[str, An
     bundled Core registry for any Shell declared in that source. The resolver and
     command builder use this view so ``core=haiku`` can select ``claude-haiku``
     even when ``runners.md`` only declares the base ``claude`` Shell.
+
+    ``probe=False`` skips CLI-help model discovery (``probe_shell_models``),
+    which shells out to every declared Shell binary on a cold cache. Callers
+    *inside the invoke path* must pass it: selection has already happened by
+    then, and a subprocess born mid-invocation to enumerate models is a cost
+    (and, under test fakes, a crash) nobody there asked for.
     """
     declared = dict(_load_profiles(repo_root))
     from . import runner_cores
 
-    generated = runner_cores.generated_profile_entries(declared)
+    generated = runner_cores.generated_profile_entries(declared, probe=probe)
     merged: dict[str, dict[str, Any]] = {
         name: dict(profile) for name, profile in generated.items()
     }
@@ -885,7 +893,7 @@ def _build_cmd(
     if isinstance(runner_name, runner_select.RunnerProfile):
         profile_cmd = runner_name.cmd or runner_name.name
     else:
-        profile = _selection_profiles(repo_root).get(runner_name)
+        profile = _selection_profiles(repo_root, probe=False).get(runner_name)
         profile_cmd = str(profile.get("cmd", runner_name)) if profile else runner_name
     if profile_cmd:
         cmd = shlex.split(profile_cmd)
@@ -1017,14 +1025,23 @@ def _strip_prompt_echo(stderr: str, prompt: str) -> str:
     return stderr.replace(prompt, "", 1)
 
 
-def _uses_codex_shell(
-    selected: object, selected_name: str, repo_root: Path | None,
-) -> bool:
-    """Whether an invocation uses Codex's prompt-echoing shell."""
+def _uses_codex_shell(selected: object, selected_name: str, cmd: list[str]) -> bool:
+    """Whether an invocation uses Codex's prompt-echoing shell.
+
+    Resolution must stay IO-free: this runs inside every invocation, after
+    the runner has already exited, purely to decide a display scrub. The
+    original resolved a bare name through ``_selection_profiles``, whose
+    generated view probes Shell binaries via ``subprocess.run`` on a cold
+    cache — a second child process born mid-invocation (and a crash under
+    test fakes). Even ``_load_profiles`` shells out to git to locate the
+    shared ``.brr``. The selected profile's own ``shell`` field and the argv
+    actually executed answer the same question for free.
+    """
     shell = getattr(selected, "shell", None)
-    if shell is None:
-        profile = _selection_profiles(repo_root).get(selected_name, {})
-        shell = profile.get("shell") or profile.get("binary") or selected_name
+    if shell is None and cmd:
+        shell = Path(cmd[0]).name
+    if not shell:
+        shell = selected_name
     return str(shell).strip().lower() == "codex"
 
 
@@ -1273,7 +1290,7 @@ def invoke_runner(
     trace_stderr = stderr
     if timed_out:
         stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
-    if _uses_codex_shell(selected, selected_name, invocation.repo_root):
+    if _uses_codex_shell(selected, selected_name, cmd):
         stderr = _strip_prompt_echo(stderr, invocation.prompt)
     _retire_capture_dir(capture_dir, returncode)
 
