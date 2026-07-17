@@ -100,6 +100,82 @@ def test_resolve_context_migrates_legacy_authored_roots_into_surface(tmp_path):
     assert not (home / "workflow.md").exists()
 
 
+def test_migration_deletes_legacy_directory_skeletons(tmp_path):
+    """A pre-surface daemon re-creates plans/ as empty dirs — not history.
+
+    Regression for the 2026-07-18 `brnrd up` brick: the wake migrated the
+    live home while the old daemon still ran; the old ``resolve_context``
+    mkdir'd ``plans/`` again, and the migration then refused to boot over a
+    file-less husk.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    (home / "surface" / "plans" / "Gurio__brr").mkdir(parents=True)
+    (home / "surface" / "plans" / "Gurio__brr" / "active.md").write_text("plan", encoding="utf-8")
+    (home / "plans" / "Gurio__brr").mkdir(parents=True)  # husk, no files
+    (home / "ledger").mkdir()  # husk, no files
+
+    account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    assert not (home / "plans").exists()
+    assert not (home / "ledger").exists()
+    assert (home / "surface" / "plans" / "Gurio__brr" / "active.md").read_text() == "plan"
+
+
+def test_migration_collision_with_content_warns_but_boots(tmp_path, capsys):
+    """Real content on both sides must never brick the daemon boot."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    (home / "surface" / "plans" / "Gurio__brr").mkdir(parents=True)
+    (home / "surface" / "plans" / "Gurio__brr" / "active.md").write_text("new", encoding="utf-8")
+    (home / "plans" / "Gurio__brr").mkdir(parents=True)
+    (home / "plans" / "Gurio__brr" / "active.md").write_text("old", encoding="utf-8")
+
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    assert ctx.enabled
+    assert (home / "plans" / "Gurio__brr" / "active.md").read_text() == "old"
+    assert (home / "surface" / "plans" / "Gurio__brr" / "active.md").read_text() == "new"
+    assert "work-surface migration" in capsys.readouterr().out
+
+
+def test_migration_removes_identical_legacy_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    (home / "surface").mkdir(parents=True)
+    (home / "surface" / "workflow.md").write_text("same", encoding="utf-8")
+    (home / "workflow.md").write_text("same", encoding="utf-8")
+
+    account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    assert not (home / "workflow.md").exists()
+    assert (home / "surface" / "workflow.md").read_text() == "same"
+
+
+def test_work_surface_files_ignores_symlinked_directories(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("leak", encoding="utf-8")
+
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+    surface = account.work_surface_path(ctx)
+    (surface / "evil").symlink_to(outside, target_is_directory=True)
+
+    names = [p.name for p in account.work_surface_files(ctx)]
+    assert "secret.md" not in names
+    assert "index.md" in names
+
+
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))

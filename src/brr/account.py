@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -499,26 +500,55 @@ def work_surface_files(ctx: AccountContext) -> list[Path]:
     root = work_surface_path(ctx)
     if not root.is_dir():
         return []
-    files = [
-        path
-        for path in root.rglob("*.md")
-        if path.is_file()
-        and not path.is_symlink()
-        and not any(part.startswith(".") for part in path.relative_to(root).parts)
-    ]
+    # os.walk with followlinks=False (the default) so a symlinked *directory*
+    # cannot smuggle an outside tree into the mirror; file symlinks and hidden
+    # paths are excluded below for the same reason.
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for name in filenames:
+            if name.startswith(".") or not name.endswith(".md"):
+                continue
+            path = Path(dirpath) / name
+            if path.is_file() and not path.is_symlink():
+                files.append(path)
     return sorted(files, key=lambda path: (path.name != "index.md", path.relative_to(root).as_posix()))
 
 
+def _contains_no_files(root: Path) -> bool:
+    """True when *root* is a directory skeleton — no regular files anywhere."""
+
+    return not any(p.is_file() for p in root.rglob("*"))
+
+
 def _move_surface_entry(src: Path, dst: Path) -> None:
-    """Move one legacy authored root without ever merging two histories."""
+    """Move one legacy authored root without ever merging two histories.
+
+    Tolerant by design: a pre-surface daemon that is still running (or ran
+    until the restart that triggers this migration) re-creates the legacy
+    roots as empty directory skeletons — ``resolve_context`` used to mkdir
+    ``plans/`` on every boot. A skeleton is not authored history; delete it.
+    A genuine collision (real content on both sides) must never brick
+    ``brnrd up``: warn, leave both in place, and let the boot continue —
+    the surface side wins for discovery, the legacy side stays for the
+    operator to reconcile by hand.
+    """
 
     if not src.exists():
         return
+    if src.is_dir() and _contains_no_files(src):
+        shutil.rmtree(src)
+        return
     if dst.exists():
-        raise RuntimeError(
-            f"work-surface migration collision: both {src} and {dst} exist; "
-            "refusing to choose which authored history wins"
+        if src.is_file() and dst.is_file() and src.read_bytes() == dst.read_bytes():
+            src.unlink()
+            return
+        print(
+            f"[brnrd] work-surface migration: both {src} and {dst} exist with "
+            "content; leaving the legacy copy in place (surface wins for "
+            "discovery) — reconcile and delete the legacy path by hand"
         )
+        return
     dst.parent.mkdir(parents=True, exist_ok=True)
     os.replace(src, dst)
 
