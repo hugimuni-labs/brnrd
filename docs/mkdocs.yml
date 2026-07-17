@@ -1,8 +1,8 @@
 site_name: brnrd docs
-site_url: https://gurio.github.io/brr-docs/
-repo_url: https://github.com/Gurio/brr-docs
-repo_name: Gurio/brr-docs
-edit_uri: edit/main/docs/
+site_url: https://gurio.github.io/brr/
+repo_url: https://github.com/Gurio/brr
+repo_name: Gurio/brr
+edit_uri: edit/main/docs/docs/
 site_description: >-
   brnrd — local coding agents, reachable from anywhere, with continuity
   across runs.
