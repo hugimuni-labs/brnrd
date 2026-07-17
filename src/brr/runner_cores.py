@@ -275,6 +275,8 @@ def cores_for_shell(shell_name: str) -> list[runner_select.RunnerProfile]:
 
 def generated_profile_entries(
     declared_profiles: dict[str, dict[str, Any]] | None = None,
+    *,
+    probe: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Invokable profile entries generated from the bundled Core registry.
 
@@ -299,7 +301,8 @@ def generated_profile_entries(
     """
     declared = declared_profiles or {}
     registry = dict(_BUNDLED_CORES)
-    registry.update(_probed_core_entries(_declared_shells(declared), registry))
+    if probe:
+        registry.update(_probed_core_entries(_declared_shells(declared), registry))
     out: dict[str, dict[str, Any]] = {}
     for core_name, entry in registry.items():
         shell = _str(entry.get("shell"))
