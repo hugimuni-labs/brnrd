@@ -448,7 +448,10 @@ def _build_work_surface_block(repo_root: Path) -> str:
         block = f"### {relative}\n\n{rendered}"
         size = len(block.encode("utf-8"))
         if size > remaining:
-            break
+            # Heading overhead can push a budget-trimmed page just past the
+            # remainder. Skip *this* page, not every page after it — the next
+            # (smaller) file may still fit.
+            continue
         blocks.append(block)
         remaining -= size
 
