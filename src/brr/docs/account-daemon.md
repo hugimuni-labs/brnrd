@@ -63,10 +63,15 @@ Current durable paths under a home:
 - `dispatch/inbox/` and `dispatch/responses/` — account-dispatch queues;
 - `repos/<repo>/dominion/` — resident-owned repo memory;
 - `run-state/<repo>/<run>.md` — durable run-state documents;
-- `plans/<repo>/active.md` — inter-run plans;
+- `surface/` — the single discovered user/resident-authored orientation root;
+  its seed links `plans/<repo>/active.md`, `workflow.md`, and
+  `ledger/decisions.md`, while arbitrary Markdown pages join by existing;
 - `runner-policy/...` — stored runner preferences and proposals;
-- `ledger/decisions.md` — resident-maintained decision through-line;
 - `knowledge/` — home knowledge used before repo `kb/` and repo docs.
+
+The wake and dashboard discover Markdown below `surface/`; adding a shared
+page does not add a prompt block, API field, or dashboard mount. Daemon-attested
+state such as `run-state/` remains outside this authored layer.
 
 Remote durability is explicit. brnrd does not create a GitHub repo, gist, or
 forge object by default; point the home git repo at a remote only when you want

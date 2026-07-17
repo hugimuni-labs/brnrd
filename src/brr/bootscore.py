@@ -55,8 +55,7 @@ AUTHORITY_IDENTITY = "identity"    # product-owned resident identity
 AUTHORITY_SUBSTRATE = "substrate"  # product-owned daemon mechanics (daemon-substrate.md)
 AUTHORITY_POLICY = "policy"        # operator-approved runner policy
 AUTHORITY_MEMORY = "memory"        # resident working memory (dominion, pitfalls)
-AUTHORITY_PLAN = "plan"            # resident active inter-run plan (CS5)
-AUTHORITY_LEDGER = "ledger"        # resident decision ledger (CS7)
+AUTHORITY_SURFACE = "surface"      # shared user/resident-authored work surface
 AUTHORITY_KNOWLEDGE = "knowledge"  # project + home knowledge sources
 AUTHORITY_ACTIVITY = "activity"    # daemon-live recent activity log tail
 AUTHORITY_HEALTH = "health"        # daemon-live kb health scan
@@ -214,8 +213,8 @@ class BootContinuity:
     resident**: act → the world answers → act.  A boot is the widest instance of
     that same loop — last wake's action → this wake's perception — and until now
     that loop was open.  Everything a wake perceived of its own past
-    (``Recent Activity``, the active plan, the decision ledger) was **prose the
-    resident wrote to itself**: a message in a bottle, exactly as good as last
+    (``Recent Activity`` and the authored work surface) was **prose the
+    resident/user wrote**: a message in a bottle, exactly as good as last
     wake's discipline, free to drift from the world in silence.  Authored memory
     never brings bad news about itself.
 
