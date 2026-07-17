@@ -79,6 +79,27 @@ def test_gitignore_backfills_missing_rules_on_a_pre_existing_home(tmp_path):
     assert lines.count("/knowledge/") == 1
 
 
+def test_resolve_context_migrates_legacy_authored_roots_into_surface(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    (home / "plans" / "Gurio__brr").mkdir(parents=True)
+    (home / "plans" / "Gurio__brr" / "active.md").write_text("plan", encoding="utf-8")
+    (home / "ledger").mkdir()
+    (home / "ledger" / "decisions.md").write_text("decision", encoding="utf-8")
+    (home / "workflow.md").write_text("workflow", encoding="utf-8")
+
+    account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    assert (home / "surface" / "plans" / "Gurio__brr" / "active.md").read_text() == "plan"
+    assert (home / "surface" / "ledger" / "decisions.md").read_text() == "decision"
+    assert (home / "surface" / "workflow.md").read_text() == "workflow"
+    assert not (home / "plans").exists()
+    assert not (home / "ledger").exists()
+    assert not (home / "workflow.md").exists()
+
+
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
@@ -173,9 +194,7 @@ def test_run_state_blob_url_projects_to_forge_remote(tmp_path):
 # ── CS5 — inter-run plan home ─────────────────────────────────────────
 
 
-def test_resolve_context_creates_plans_directory(tmp_path):
-    """CS5: resolve_context creates the plans/ directory alongside the other
-    account-store directories so the resident can immediately write a plan."""
+def test_resolve_context_creates_and_seeds_work_surface(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     write_repo_scaffold(repo)
@@ -183,7 +202,10 @@ def test_resolve_context_creates_plans_directory(tmp_path):
 
     account.resolve_context(repo, {"home.path": str(home)})
 
-    assert (home / "plans").is_dir()
+    assert (home / "surface").is_dir()
+    index = (home / "surface" / "index.md").read_text(encoding="utf-8")
+    assert "# Work surface" in index
+    assert "plans/repo/active.md" in index
 
 
 def test_active_plan_path_is_repo_tagged(tmp_path):
@@ -199,7 +221,7 @@ def test_active_plan_path_is_repo_tagged(tmp_path):
     )
 
     assert account.active_plan_path(ctx, "Gurio/brr") == (
-        tmp_path / "home" / "plans" / "Gurio__brr" / "active.md"
+        tmp_path / "home" / "surface" / "plans" / "Gurio__brr" / "active.md"
     )
 
 
@@ -216,7 +238,7 @@ def test_cross_repo_plans_path(tmp_path):
     )
 
     assert account.cross_repo_plans_path(ctx) == (
-        tmp_path / "home" / "plans" / "_cross-repo"
+        tmp_path / "home" / "surface" / "plans" / "_cross-repo"
     )
 
 
@@ -290,7 +312,7 @@ def test_decisions_ledger_path(tmp_path):
     )
 
     assert account.decisions_ledger_path(ctx) == (
-        tmp_path / "home" / "ledger" / "decisions.md"
+        tmp_path / "home" / "surface" / "ledger" / "decisions.md"
     )
 
 
@@ -326,7 +348,7 @@ def test_relabel_scopes_covers_every_slug_keyed_path(tmp_path):
     ctx, _repo = _relabel_home(tmp_path)
     scopes = {scope for scope, _path, _home in account.relabel_scopes(ctx, "Gurio/brr")}
     assert scopes == {
-        "dominion", "plans", "runner-policy", "run-state", "knowledge", "replies",
+        "dominion", "surface-plans", "runner-policy", "run-state", "knowledge", "replies",
     }
 
 
@@ -347,6 +369,9 @@ def test_relabel_moves_every_scope_and_rekeys_the_registry(tmp_path):
     labels = [entry["label"] for entry in registry["repos"]]
     assert labels == ["hugimuni-labs/brnrd"]
     assert registry["default_repo"] == "hugimuni-labs/brnrd"
+    index = (account.work_surface_path(ctx) / "index.md").read_text(encoding="utf-8")
+    assert "plans/hugimuni-labs__brnrd/active.md" in index
+    assert "plans/Gurio__brr/active.md" not in index
 
 
 def test_relabel_dry_run_touches_nothing(tmp_path):
@@ -436,7 +461,7 @@ def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
     moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
 
     assert {move.scope for move in moves} == {
-        "dominion", "plans", "run-state", "knowledge", "replies",
+        "dominion", "surface-plans", "run-state", "knowledge", "replies",
     }
 
 

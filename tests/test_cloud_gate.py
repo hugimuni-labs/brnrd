@@ -354,8 +354,10 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
     assert rows[f"respawn:{respawn.stem}"]["defer_until"].startswith("2999-01-01T01:00:00")
 
 
-def test_loop_publishes_plans_snapshot(tmp_path, monkeypatch):
-    """CS5/CS7 files in the account dominion mirror to the hosted CPS view."""
+def test_loop_publishes_discovered_surface_snapshot(tmp_path, monkeypatch):
+    """Every authored surface page mirrors without a code-level mount."""
+    import json
+
     from brr import account
     from brnrd.models import Account as AccountModel, Repo as RepoModel
 
@@ -381,25 +383,19 @@ def test_loop_publishes_plans_snapshot(tmp_path, monkeypatch):
     # so this resolves the same "connected" account home the daemon uses.
     repo_root = brr_dir.parent
     ctx = account.resolve_context(repo_root, create=True)
-    label = account.repo_label(repo_root)
-    plan_path = account.active_plan_path(ctx, label)
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text("ship the CPS view", encoding="utf-8")
-    cross_path = account.cross_repo_plans_path(ctx) / "active.md"
-    cross_path.parent.mkdir(parents=True, exist_ok=True)
-    cross_path.write_text("coordinate release", encoding="utf-8")
-    ledger_path = account.decisions_ledger_path(ctx)
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    ledger_path.write_text("adopted the ToS posture", encoding="utf-8")
+    page = account.work_surface_path(ctx) / "something-new.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    (page.parent / "index.md").write_text("# Work surface", encoding="utf-8")
+    page.write_text("discovered without a new mount", encoding="utf-8")
 
     cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         repo_row = db.get(RepoModel, pid)
-        assert repo_row.plan_md == "ship the CPS view"
         account_row = db.get(AccountModel, repo_row.account_id)
-        assert account_row.cross_repo_plan_md == "coordinate release"
-        assert account_row.decision_ledger_md == "adopted the ToS posture"
+        files = json.loads(account_row.surface_json)
+        assert {item["path"] for item in files} == {"index.md", "something-new.md"}
+        assert next(item for item in files if item["path"] == "something-new.md")["markdown"] == "discovered without a new mount"
 
 
 def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):

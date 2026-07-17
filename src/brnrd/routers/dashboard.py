@@ -878,33 +878,26 @@ def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db
     )
 
 
-@router.get("/v1/dashboard/plans")
-def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """Account-scoped decisions space (#324 Phase 0) for the SvelteKit frontend."""
+@router.get("/v1/dashboard/surface")
+def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped discovered work surface for the SvelteKit frontend."""
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     account = db.get(Account, account_id)
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
-    repos = _repos(db, account.id)
-    plans = [
-        {
-            "repo_label": repo.repo_full_name,
-            "plan_md": repo.plan_md or "",
-            "updated_at": repo.plan_updated_at.isoformat() if repo.plan_updated_at else None,
-        }
-        for repo in repos
-        if (repo.plan_md or "").strip()
-    ]
+    try:
+        files = json.loads(account.surface_json or "[]")
+    except ValueError:
+        files = []
+    if not isinstance(files, list):
+        files = []
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "plans": plans,
-            "cross_repo_plan_md": (account.cross_repo_plan_md or "").strip(),
-            "decisions_md": (account.decision_ledger_md or "").strip(),
-            "workflow_md": (account.workflow_md or "").strip(),
-            "reported_at": account.plans_updated_at.isoformat() if account.plans_updated_at else None,
+            "files": files,
+            "reported_at": account.surface_updated_at.isoformat() if account.surface_updated_at else None,
         }
     )
 
@@ -966,12 +959,6 @@ def dashboard_activity_api(
             "repos": [{"id": repo.id, "label": repo.repo_full_name} for repo in repos],
         }
     )
-
-
-@router.get("/plans")
-def plans_redirect() -> RedirectResponse:
-    """308: plans page superseded by the dashboard's decisions-space panel (#324 Phase 0)."""
-    return RedirectResponse(url="/", status_code=308)
 
 
 @router.get("/repos")

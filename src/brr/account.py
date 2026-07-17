@@ -29,7 +29,14 @@ RUN_STATE_PATH = "run-state"
 REPOS_PATH = "repos"
 REPO_DOMINION_DIRNAME = "dominion"
 
-# CS5 — inter-run plan home
+# Shared user/resident-authored orientation.  Everything below this root is
+# discovered by the wake and dashboard; adding a page does not require a code
+# change.  The daemon-owned frame (run-state/, dispatch/, account/) stays
+# outside this directory on purpose.
+SURFACE_PATH = "surface"
+
+# Names retained *inside* the discovered surface so the useful plan/ledger
+# conventions survive without remaining separate orientation roots.
 PLANS_PATH = "plans"
 CROSS_REPO_SLUG = "_cross-repo"
 
@@ -376,8 +383,10 @@ def resolve_context(
             home_kind=kind,
             home_id=home_id,
         )
-        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH, PLANS_PATH):
+        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH, SURFACE_PATH):
             (home_root / rel).mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_work_surface(home_root)
+        _seed_work_surface(home_root, current_label)
 
     return HomeContext(
         account_id=account_id,
@@ -473,7 +482,88 @@ def repo_dominion_path(ctx: AccountContext, repo_label: str) -> Path:
     return ctx.dominion_repo / REPOS_PATH / slug_repo_label(repo_label) / REPO_DOMINION_DIRNAME
 
 
-# ── CS5 — inter-run plan helpers ─────────────────────────────────────
+def work_surface_path(ctx: AccountContext) -> Path:
+    """Return the single discovered user/resident-authored work surface."""
+
+    return context_home_root(ctx) / SURFACE_PATH
+
+
+def work_surface_files(ctx: AccountContext) -> list[Path]:
+    """Return authored Markdown files in stable orientation order.
+
+    ``index.md`` leads when present; every other path sorts by its
+    home-relative name. Symlinks and hidden paths are excluded so a page cannot
+    turn the local-home mirror into an arbitrary filesystem reader.
+    """
+
+    root = work_surface_path(ctx)
+    if not root.is_dir():
+        return []
+    files = [
+        path
+        for path in root.rglob("*.md")
+        if path.is_file()
+        and not path.is_symlink()
+        and not any(part.startswith(".") for part in path.relative_to(root).parts)
+    ]
+    return sorted(files, key=lambda path: (path.name != "index.md", path.relative_to(root).as_posix()))
+
+
+def _move_surface_entry(src: Path, dst: Path) -> None:
+    """Move one legacy authored root without ever merging two histories."""
+
+    if not src.exists():
+        return
+    if dst.exists():
+        raise RuntimeError(
+            f"work-surface migration collision: both {src} and {dst} exist; "
+            "refusing to choose which authored history wins"
+        )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(src, dst)
+
+
+def _migrate_legacy_work_surface(home_root: Path) -> None:
+    """Fold the three pre-surface authored roots into ``surface/`` once."""
+
+    surface = home_root / SURFACE_PATH
+    surface.mkdir(parents=True, exist_ok=True)
+    _move_surface_entry(home_root / "workflow.md", surface / "workflow.md")
+    _move_surface_entry(home_root / PLANS_PATH, surface / PLANS_PATH)
+    _move_surface_entry(home_root / LEDGER_PATH, surface / LEDGER_PATH)
+
+
+def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
+    """Create the light orientation seed once; subsequent authors own it."""
+
+    surface = home_root / SURFACE_PATH
+    index = surface / "index.md"
+    if index.exists():
+        return
+    slug = slug_repo_label(repo_label_value)
+    index.write_text(
+        "# Work surface\n\n"
+        "The shared orientation for user and resident. The wake and dashboard "
+        "discover Markdown here because it exists; code chooses typography, "
+        "not which authored pages matter.\n\n"
+        "## Standing pages\n\n"
+        "- [Current plan](plans/" + slug + "/active.md) — ranked moves and "
+        "cross-run position for this repo.\n"
+        "- [Workflow](workflow.md) — the agreement about autonomy, delivery, "
+        "gating, and cadence.\n"
+        "- [Decision ledger](ledger/decisions.md) — the shared decision "
+        "through-line.\n\n"
+        "## Shape\n\n"
+        "Keep this layer free-form and link pages that belong together: those "
+        "links become the later loom graph's edges. Daemon-attested files such "
+        "as `run-state/` are the frame around this authored body, not pages to "
+        "move in here. Add a page when it earns a shared purpose; do not turn "
+        "the surface into a form.\n",
+        encoding="utf-8",
+    )
+
+
+# ── Inter-run plan helpers inside the discovered surface ─────────────
 
 
 def repo_plans_path(ctx: AccountContext, repo_label: str) -> Path:
@@ -482,7 +572,7 @@ def repo_plans_path(ctx: AccountContext, repo_label: str) -> Path:
     The active inter-run plan lives at ``repo_plans_path(...) / "active.md"``.
     Past plans can be archived under ``repo_plans_path(...) / "archive/"``.
     """
-    return ctx.dominion_repo / PLANS_PATH / slug_repo_label(repo_label)
+    return work_surface_path(ctx) / PLANS_PATH / slug_repo_label(repo_label)
 
 
 def active_plan_path(ctx: AccountContext, repo_label: str) -> Path:
@@ -501,7 +591,7 @@ def cross_repo_plans_path(ctx: AccountContext) -> Path:
     Cross-repo plans (spanning two or more managed repos) live here;
     they cannot belong to any one repo's namespace.
     """
-    return ctx.dominion_repo / PLANS_PATH / CROSS_REPO_SLUG
+    return work_surface_path(ctx) / PLANS_PATH / CROSS_REPO_SLUG
 
 
 # ── CS6 — runner policy helpers ───────────────────────────────────────
@@ -563,7 +653,7 @@ def config_change_proposals_path(ctx: AccountContext) -> Path:
     return ctx.dominion_repo / CONFIG_CHANGE_PATH / CONFIG_CHANGE_PROPOSALS_SLUG
 
 
-# ── CS7 — decision ledger helper ──────────────────────────────────────
+# ── Decision/workflow conventions inside the discovered surface ──────
 
 
 def decisions_ledger_path(ctx: AccountContext) -> Path:
@@ -574,10 +664,7 @@ def decisions_ledger_path(ctx: AccountContext) -> Path:
     that complements ``kb/log.md`` (which is more technical). When the
     account dominion has a remote, this file is web-visible there.
     """
-    return ctx.dominion_repo / LEDGER_PATH / "decisions.md"
-
-
-# ── CS8 — workflow preferences helper ────────────────────────────────
+    return work_surface_path(ctx) / LEDGER_PATH / "decisions.md"
 
 
 def workflow_doc_path(ctx: AccountContext) -> Path:
@@ -592,7 +679,7 @@ def workflow_doc_path(ctx: AccountContext) -> Path:
     rather than folklore. Absent file = the defaults described in the
     injected orientation.
     """
-    return ctx.dominion_repo / "workflow.md"
+    return work_surface_path(ctx) / "workflow.md"
 
 
 def run_state_blob_url(
@@ -693,7 +780,7 @@ def relabel_scopes(ctx: HomeContext, label: str) -> list[tuple[str, Path, str]]:
     knowledge_root = knowledge_path(ctx)
     return [
         ("dominion", ctx.dominion_repo / REPOS_PATH / slug, "dominion"),
-        ("plans", ctx.dominion_repo / PLANS_PATH / slug, "dominion"),
+        ("surface-plans", work_surface_path(ctx) / PLANS_PATH / slug, "dominion"),
         ("runner-policy", ctx.dominion_repo / RUNNER_POLICY_PATH / slug, "dominion"),
         ("run-state", home_root / RUN_STATE_PATH / slug, "dominion"),
         ("knowledge", knowledge_root / REPOS_PATH / slug, "knowledge"),
@@ -765,14 +852,34 @@ def relabel_repo(
         if move.dst.exists():  # exists but empty, per plan_relabel's guard
             move.dst.rmdir()
         os.replace(move.src, move.dst)
-        # A now-childless parent (repos/, plans/, …) is noise, not history.
+        # A now-childless parent (repos/, surface/plans/, …) is noise, not history.
         try:
             move.src.parent.rmdir()
         except OSError:
             pass
 
+    _rewrite_surface_index_repo_slug(ctx, old_label, new_label)
     _relabel_registry(ctx, old_label, new_label)
     return moves
+
+
+def _rewrite_surface_index_repo_slug(
+    ctx: HomeContext, old_label: str, new_label: str
+) -> None:
+    """Keep the seed's current-plan edge live across a repo relabel."""
+
+    index = work_surface_path(ctx) / "index.md"
+    if not index.is_file():
+        return
+    old = f"plans/{slug_repo_label(old_label)}/"
+    new = f"plans/{slug_repo_label(new_label)}/"
+    content = index.read_text(encoding="utf-8")
+    rewritten = content.replace(old, new)
+    if rewritten == content:
+        return
+    tmp = index.with_suffix(".md.tmp")
+    tmp.write_text(rewritten, encoding="utf-8")
+    tmp.replace(index)
 
 
 def _relabel_registry(ctx: HomeContext, old_label: str, new_label: str) -> None:

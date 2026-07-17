@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, select
@@ -162,35 +163,29 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
     return schemas.ActivityList(activity=[_activity_out(row) for row in rows])
 
 
-@router.put("/plans", response_model=schemas.PlansOut)
-def put_plans(payload: schemas.PlansReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    """Replace this daemon's CPS snapshot: repo plan + account plan/ledger.
+@router.put("/surface", response_model=schemas.SurfaceOut)
+def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace the account's discovered authored work-surface mirror."""
 
-    Mirrors the account dominion's CS5/CS7 files (plans/<repo>/active.md,
-    plans/_cross-repo/active.md, ledger/decisions.md) so the dashboard can
-    render Current Planned State without the browser touching the local
-    dominion repo directly. See kb/plan-brnrd-dashboard-mvp.md "Gap:
-    Current Planned State view".
-    """
+    seen: set[str] = set()
+    files: list[dict[str, str]] = []
+    for item in payload.files:
+        path = PurePosixPath(item.path)
+        if path.is_absolute() or ".." in path.parts or any(part.startswith(".") for part in path.parts):
+            raise HTTPException(status_code=422, detail=f"invalid surface path: {item.path}")
+        normalized = path.as_posix()
+        if normalized in seen:
+            raise HTTPException(status_code=422, detail=f"duplicate surface path: {normalized}")
+        seen.add(normalized)
+        files.append({"path": normalized, "markdown": item.markdown})
+
     now = datetime.now(timezone.utc)
-    repo = db.get(Repo, principal.repo_id) if principal.repo_id else None
-    if repo is not None:
-        repo.plan_md = payload.repo_plan_md
-        repo.plan_updated_at = now
     account = db.get(Account, principal.account_id)
     if account is not None:
-        account.cross_repo_plan_md = payload.cross_repo_plan_md
-        account.decision_ledger_md = payload.decision_ledger_md
-        account.workflow_md = payload.workflow_md
-        account.plans_updated_at = now
+        account.surface_json = json.dumps(files, separators=(",", ":"))
+        account.surface_updated_at = now
     db.commit()
-    return schemas.PlansOut(
-        repo_plan_md=repo.plan_md if repo is not None else "",
-        cross_repo_plan_md=account.cross_repo_plan_md if account is not None else "",
-        decision_ledger_md=account.decision_ledger_md if account is not None else "",
-        workflow_md=account.workflow_md if account is not None else "",
-        plans_updated_at=now,
-    )
+    return schemas.SurfaceOut(files=payload.files, surface_updated_at=now)
 
 
 @router.put("/quota", response_model=schemas.QuotaOut)
