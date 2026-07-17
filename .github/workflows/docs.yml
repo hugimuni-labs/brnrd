@@ -36,9 +36,10 @@ jobs:
         run: python -m pip install -r docs/requirements.txt
       - name: Build documentation
         run: mkdocs build --strict -f docs/mkdocs.yml
-      - name: Configure GitHub Pages
-        if: github.event_name == 'push'
-        uses: actions/configure-pages@v5
+      # No `configure-pages` step: it exists to hand a framework its base
+      # path, and mkdocs.yml sets `site_url` explicitly. Keeping it only added
+      # a step that reads the Pages API and fails the whole build when the
+      # answer isn't what it wants.
       - name: Upload GitHub Pages artifact
         if: github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
