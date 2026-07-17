@@ -21,7 +21,7 @@ silent `accounts/default` fallback.
 Use this lane for local dogfooding and one-repo bots:
 
 ```bash
-brnrd bind . telegram
+brnrd gate bind . telegram
 brnrd up
 ```
 
@@ -33,13 +33,13 @@ project home.
 For multi-repo routing through brnrd service, connect once and add repos:
 
 ```bash
-brnrd connect https://brnrd.dev
-brnrd add .
+brnrd account connect https://brnrd.dev
+brnrd account add .
 brnrd up
 ```
 
-`brnrd connect` persists the connected `account_id` in the repo's cloud gate
-state. `brnrd add <repo>` registers the target repo in:
+`brnrd account connect` persists the connected `account_id` in the repo's cloud gate
+state. `brnrd account add <repo>` registers the target repo in:
 
 ```text
 $XDG_STATE_HOME/brnrd/accounts/<account-id>/home/account/repos.json

@@ -42,7 +42,7 @@ class BrnrdAuthError(RuntimeError):
     pass
 
 
-_AUTH_HINT = "Re-run `brnrd connect` to link this daemon to your brnrd repo."
+_AUTH_HINT = "Re-run `brnrd account connect` to link this daemon to your brnrd repo."
 
 # A 401 is retried, not fatal — see `run_loop`. Slow cadence, because the one
 # case that deserves patience (a transient server-side auth failure) resolves
@@ -190,7 +190,7 @@ def propose_config_change(
     except Exception as e:
         # Distinguish "connected but the mint failed" from "not connected":
         # the caller's user-facing message must not tell a cloud-connected
-        # account to run `brnrd connect` when the real story is e.g. a 422
+        # account to run `brnrd account connect` when the real story is e.g. a 422
         # (server allowlist out of lockstep — observed live 2026-07-11) or
         # a deploy-window 502. The error detail is the actionable part.
         print(f"[brnrd:cloud] config-change proposal mint failed: {e}")
@@ -206,7 +206,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         if status.get("status") == "paired" and status.get("daemon_token"):
             break
         if time.monotonic() > deadline:
-            raise TimeoutError("pairing timed out — re-run `brnrd connect`")
+            raise TimeoutError("pairing timed out — re-run `brnrd account connect`")
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
     capabilities = dict(state.get("capabilities") or {})
@@ -243,7 +243,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
 
 
 def setup(brr_dir: Path) -> None:
-    print("[brnrd] Run `brnrd connect` to link this daemon to a brnrd repo.")
+    print("[brnrd] Run `brnrd account connect` to link this daemon to a brnrd repo.")
 
 
 def auth(brr_dir: Path) -> None:

@@ -1,7 +1,7 @@
 """Interactive setup: token paste / repo binding / trigger selection.
 
 ``setup(brr_dir)`` is the one-step CLI entry; ``auth`` and ``bind``
-stay separate so ``brnrd auth github`` and ``brnrd bind github`` keep
+stay separate so ``brnrd gate auth github`` and ``brnrd gate bind github`` keep
 working independently.
 """
 
@@ -90,7 +90,7 @@ def _prompt_bool_trigger(label: str, default: bool = False) -> bool:
 def bind(brr_dir: Path) -> None:
     state_dict = state._load_state(brr_dir)
     if state.resolve_token(state_dict) is None:
-        print("[brnrd] Run `brnrd auth github` first.")
+        print("[brnrd] Run `brnrd gate auth github` first.")
         return
 
     repo_root = brr_dir.parent

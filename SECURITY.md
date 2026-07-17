@@ -94,7 +94,7 @@ as the owner's. Source-trust-tiered environments are tracked as release work.
   knowledge base, and the dominion. `.brr/` is gitignored.
 - **What managed mode sees.** The inbound message body (nulled after the reply is
   delivered), and durable routing metadata (sender id/username, chat id, repo name,
-  comment URL). If you run `brnrd connect`, dashboard publishing also mirrors
+  comment URL). If you run `brnrd account connect`, dashboard publishing also mirrors
   **derived** repo knowledge — active plan, decision ledger, run summaries, open-PR
   titles/URLs, quota — to brnrd.dev. Your source code does not leave the machine.
   Diffense review packs transit brnrd.dev in memory only, TTL-bounded, behind an

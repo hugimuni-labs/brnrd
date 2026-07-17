@@ -5,7 +5,7 @@ Credentials and runtime state live in ``.brr/gates/slack.json``.
 Required setup:
 - Create a Slack app with ``channels:history``, ``channels:read``,
   ``chat:write`` scopes.
-- Run ``brnrd setup slack`` to save the bot token and choose the channel.
+- Run ``brnrd gate setup slack`` to save the bot token and choose the channel.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def auth(brr_dir: Path) -> None:
 def bind(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     if "token" not in state:
-        print("[brnrd] Run `brnrd auth slack` first.")
+        print("[brnrd] Run `brnrd gate auth slack` first.")
         return
     channel = input("Slack channel ID (C0...): ").strip()
     if not channel:
