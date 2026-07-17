@@ -991,6 +991,46 @@ class TestInvocationTracing:
         assert captured["env"]["BRR_PORTAL_STATE"] == "/tmp/state.json"
         assert captured["env"]["EXISTING_ENV"] == "kept"
 
+    def test_invoke_runner_spawns_exactly_one_child_process(
+        self, tmp_path, monkeypatch,
+    ):
+        """The invoke path owns exactly one subprocess: the runner itself.
+
+        Regression pin for the #442 leak: `_uses_codex_shell` resolved a bare
+        runner name through `_selection_profiles`, whose generated view probes
+        Shell binaries via `subprocess.run` on a cold cache — a second child
+        process born inside every invocation, just to decide a stderr scrub.
+        (`_build_cmd` had the same latent probe; both now resolve probe-free.)
+        The probe cache is cleared first so this stays deterministic under
+        `-k` subsets, standalone runs, and full runs alike — the sibling
+        invoke-path tests were green for months only because earlier tests
+        happened to warm that cache. The local `.brr` exists so profile-source
+        resolution needs no `git rev-parse` child either.
+        """
+        from brr import runner_cores
+
+        runner_cores.probe_shell_models.cache_clear()
+        (tmp_path / ".brr").mkdir()
+        calls = []
+
+        def _fake_popen(*_args, **kwargs):
+            calls.append(kwargs)
+            return _fake_proc(kwargs, out="ok\n")
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="one-popen",
+            prompt="hi",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+
+        result = invoke_runner("mock", invocation, cfg={})
+
+        assert result.ok
+        assert len(calls) == 1
+
     def test_invoke_runner_skips_response_write_when_no_path(self, tmp_path):
         repo_root = tmp_path
         cfg = {
