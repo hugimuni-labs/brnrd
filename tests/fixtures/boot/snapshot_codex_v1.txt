@@ -485,9 +485,9 @@ the field exists at the gate boundary, treat it as the product shape for
 presentation — it replaces the earlier appearance-knob schema, which mistook
 the voice for a preference.
 
-## Workflow preferences
+## Work surface
 
-No workflow doc yet — author `workflow.md` at the account-dominion root to make the collaboration's pace and flow explicit and editable: autonomy scope (user-woken → their request; self-woken → your agenda), delivery ceremony, merge/gating policy, progress cadence. Until it exists, default to asking on genuine forks and keeping progress visible.
+No authored surface yet. Start at `surface/index.md`; pages placed under `surface/` are discovered by the next wake and dashboard.
 
 ---
 ## Run Context Bundle
@@ -568,10 +568,8 @@ source manifest:
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
   · Stranded-memory warning (repo moved)            daemon-live  health             0  computed
   · Dominion digest (self-inject)                   resident     memory             0  computed
-  · Active inter-run plan (CS5)                     resident     plan               0  computed
+  ✓ Discovered work surface                         resident     surface          147  computed
   · Stored runner policy (CS6)                      resident     policy             0  computed
-  ✓ Workflow preferences (CS8)                      resident     policy           378  computed
-  · Decision ledger (CS7)                           resident     ledger             0  computed
   · Task-matched pitfalls                           resident     memory             0  computed
   · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
@@ -581,13 +579,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  42.4%
-  substrate       8,083 B  25.8%
-  identity        5,449 B  17.4%
-  runtime         4,092 B  13.1%
-  policy            378 B   1.2%
+  contract       13,274 B  42.7%
+  substrate       8,083 B  26.0%
+  identity        5,449 B  17.5%
+  runtime         4,092 B  13.2%
+  surface           147 B   0.5%
   unattributed       14 B
-  wake total     31,290 B
+  wake total     31,059 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

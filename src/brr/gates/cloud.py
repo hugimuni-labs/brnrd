@@ -29,7 +29,7 @@ _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
 # (no model tokens), so it can refresh well inside the dashboard's 300s
 # staleness threshold without costing anything but wall-clock.
 _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
-# Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue/run-ledger) used
+# Dashboard snapshots (activity/surface/quota/live-runs/PR-review-queue/run-ledger) used
 # to publish once per `_loop_once` iteration, which is paced by the inbox
 # long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
 # responsiveness, never for dashboard freshness. That coupling capped every
@@ -326,7 +326,7 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     # its own follow-up message to lose (found live 2026-07-11).
     _publish_runners(brr_dir, state)
     _publish_activity(brr_dir, inbox_dir, state)
-    _publish_plans(brr_dir, state)
+    _publish_surface(brr_dir, state)
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
@@ -593,8 +593,8 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
         print(f"[brnrd:cloud] activity publish failed: {e}")
 
 
-def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
-    """Read CS5/CS7 plan + ledger files for CPS mirroring, if resolvable.
+def _surface_snapshot(brr_dir: Path) -> dict[str, list[dict[str, str]]] | None:
+    """Read the discovered authored work surface for hosted mirroring.
 
     Returns ``None`` (not published) rather than raising when the account
     dominion can't be resolved read-only — a plain repo-local `.brr/`
@@ -605,39 +605,36 @@ def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
     repo_root = brr_dir.parent
     try:
         ctx = account_mod.resolve_context(repo_root, create=False)
-        label = account_mod.repo_label(repo_root)
-        repo_plan = account_mod.active_plan_path(ctx, label)
-        cross_plan = account_mod.cross_repo_plans_path(ctx) / "active.md"
-        ledger = account_mod.decisions_ledger_path(ctx)
-        workflow = account_mod.workflow_doc_path(ctx)
-        return {
-            "repo_plan_md": repo_plan.read_text() if repo_plan.exists() else "",
-            "cross_repo_plan_md": cross_plan.read_text() if cross_plan.exists() else "",
-            "decision_ledger_md": ledger.read_text() if ledger.exists() else "",
-            "workflow_md": workflow.read_text() if workflow.exists() else "",
-        }
+        surface = account_mod.work_surface_path(ctx)
+        return {"files": [
+            {
+                "path": path.relative_to(surface).as_posix(),
+                "markdown": path.read_text(encoding="utf-8"),
+            }
+            for path in account_mod.work_surface_files(ctx)
+        ]}
     except Exception as e:
-        print(f"[brnrd:cloud] plans snapshot skipped: {e}")
+        print(f"[brnrd:cloud] surface snapshot skipped: {e}")
         return None
 
 
-def _publish_plans(brr_dir: Path, state: dict) -> None:
+def _publish_surface(brr_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
-    snapshot = _plans_snapshot(brr_dir)
+    snapshot = _surface_snapshot(brr_dir)
     if snapshot is None:
         return
     try:
         _request(
             state["brnrd_url"],
             "PUT",
-            "/v1/daemons/plans",
+            "/v1/daemons/surface",
             token=state["token"],
             json=snapshot,
             timeout=10,
         )
     except Exception as e:
-        print(f"[brnrd:cloud] plans publish failed: {e}")
+        print(f"[brnrd:cloud] surface publish failed: {e}")
 
 
 def _quota_window(

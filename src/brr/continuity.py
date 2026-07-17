@@ -6,9 +6,9 @@ live here.
 
 The distinction this module exists to enforce: **observed, not authored.**
 
-A wake already perceives a great deal about its own past — ``Recent Activity``,
-the active plan, the decision ledger.  Every line of it is prose the resident
-wrote to itself last wake.  That is a message in a bottle: exactly as good as
+A wake already perceives a great deal about its own past — ``Recent Activity``
+and the authored work surface. Every line is prose the resident/user wrote.
+That is a message in a bottle: exactly as good as
 last wake's discipline, and free to drift from the world in total silence.
 Authored memory never brings bad news about itself.
 

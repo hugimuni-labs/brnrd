@@ -79,8 +79,8 @@ _LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
 _MAX_LOG_ENTRIES = 10
 _MAX_LOG_BYTES = 4096
 
-# Byte budget for the resident-authored, append-only blocks (CS5 active
-# plan, CS7 decision ledger). Both had no cap at all until 2026-07-09 —
+# Per-page byte budget inside the resident/user-authored work surface. Its
+# plan and decision-ledger ancestors had no cap at all until 2026-07-09 —
 # unlike the self-inject digest (`dominion.DEFAULT_INJECT_BUDGET_BYTES`)
 # and Knowledge Sources (`knowledge._MAX_TOTAL_BYTES`), which have carried
 # an enforced budget since their own introduction. "Keep it short" /
@@ -100,7 +100,7 @@ _H2_SPLIT_RE = re.compile(r"(?m)(?=^## )")
 def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> str:
     """Trim an append-only, chronological-ascending page to fit *max_bytes*.
 
-    CS5/CS7 pages only ever grow — the resident's own convention is "add an
+    Accreting surface pages only ever grow — the resident's convention is "add an
     entry", never "prune the last one" (see ``_MAX_ACCRETING_BLOCK_BYTES``).
     Mirrors ``_read_recent_log``'s newest-first, entry-boundary-aware
     accumulation, generalized past ``kb/log.md``'s bracketed ``## [date]``
@@ -270,7 +270,7 @@ def _build_relabelled_repo_block(repo_root: Path) -> str:
         "## ⚠ Your memory is under this repo's previous address\n\n"
         f"This repo is registered as `{stale}`, but its remote now says "
         f"`{current}`. Every resident-memory scope is keyed by the repo "
-        "label, so the knowledge, dominion, plan, runner policy and run "
+        "label, so the knowledge, dominion, work surface, runner policy and run "
         "history you would normally wake into are **on disk but not being "
         "read** — filed under the old label.\n\n"
         "This is not a fresh project. Do not re-derive it, and do not start "
@@ -408,14 +408,13 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     return pitfalls.format_block(matched)
 
 
-def _build_inter_run_plan_block(repo_root: Path) -> str:
-    """Render the active inter-run plan when one exists in the account dominion.
+def _build_work_surface_block(repo_root: Path) -> str:
+    """Render the discovered shared work surface as one orientation block.
 
-    CS5: the resident leaves a plan in ``plans/<repo-slug>/active.md`` (or
-    ``plans/_cross-repo/active.md`` for cross-repo work) and the daemon
-    injects it at the top of the next wake — perception=injection, no poll
-    needed. The resident updates or retires the plan as the work evolves.
-    Returns ``""`` when no plan file exists or when the dominion is off.
+    Membership is filesystem-authored: every non-hidden Markdown file below
+    ``surface/`` rides the wake without a new prompt mount. ``index.md`` leads;
+    all remaining files follow by relative path. A total budget bounds the
+    surface while preserving each accreting page's newest entries.
     """
     from . import account as acc
     from . import config as conf
@@ -430,103 +429,43 @@ def _build_inter_run_plan_block(repo_root: Path) -> str:
     if not ctx.enabled:
         return ""
 
-    label = acc.repo_label(repo_root, cfg)
-    plan_path = acc.active_plan_path(ctx, label)
-    cross_path = acc.cross_repo_plans_path(ctx) / "active.md"
+    surface = acc.work_surface_path(ctx)
     budget = int(
         cfg.get(
-            "dominion.plan_inject_budget_bytes",
-            cfg.get("dominion_plan_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES),
+            "dominion.surface_inject_budget_bytes",
+            cfg.get("dominion_surface_inject_budget_bytes", 48_000),
         )
     )
-
     blocks: list[str] = []
-    for path, hint in (
-        (plan_path, f"`plans/{label}/active.md`"),
-        (cross_path, "`plans/_cross-repo/active.md`"),
-    ):
-        if path.is_file():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                blocks.append(_tail_trim_entries(content, budget, hint))
+    remaining = max(0, budget)
+    for path in acc.work_surface_files(ctx):
+        relative = path.relative_to(surface).as_posix()
+        content = path.read_text(encoding="utf-8").strip()
+        if not content or remaining <= 0:
+            continue
+        allowance = min(remaining, _MAX_ACCRETING_BLOCK_BYTES)
+        rendered = _tail_trim_entries(content, allowance, f"`surface/{relative}`")
+        block = f"### {relative}\n\n{rendered}"
+        size = len(block.encode("utf-8"))
+        if size > remaining:
+            break
+        blocks.append(block)
+        remaining -= size
 
     if not blocks:
-        return ""
-
-    body = "\n\n---\n\n".join(blocks)
-    return (
-        "## Active inter-run plan\n\n"
-        "Persisted between wakes in the account dominion — the plan you left "
-        f"yourself. Update `{plan_path}` (absolute — not relative to your "
-        "dominion directory; a copy left under the dominion's own `plans/` is "
-        "never injected) or retire it by emptying the file as the work "
-        "evolves.\n\n"
-        f"{body}"
-    )
-
-
-def _build_workflow_block(repo_root: Path) -> str:
-    """Render the account-wide workflow preferences doc (CS8).
-
-    ``workflow.md`` at the account-dominion root is the declared pace and
-    flow of the collaboration — delivery ceremony, autonomy scope (whose
-    agenda a wake follows), merge/gating policy, progress-visibility
-    cadence. Co-owned: the user edits it directly (it is mirrored to the
-    dashboard beside the plans), the resident updates it when the two of
-    them agree the flow should change. Injected every wake so the
-    preferences govern rather than rot.
-
-    When the file is absent, a one-line orientation names the slot — the
-    same stance as the thread-of-record pointer: brr points, the resident
-    (or user) authors.
-    """
-    from . import account as acc
-    from . import config as conf
-
-    cfg = conf.load_config(repo_root)
-    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
-        return ""
-    try:
-        ctx = acc.resolve_context(repo_root, cfg, create=False)
-    except Exception:
-        return ""
-    if not ctx.enabled:
-        return ""
-
-    path = acc.workflow_doc_path(ctx)
-    header = (
-        "## Workflow preferences\n\n"
-        "How the user and you have agreed work should flow — autonomy, "
-        "delivery, gating, cadence. Co-owned and standing: follow it, and "
-        f"when the flow should change, change the file (`{path}`) so the "
-        "agreement is visible on both sides (it renders on the dashboard). "
-        "It complements the playbook (your private craft) — this is the "
-        "*shared* contract about pace and flow.\n\n"
-    )
-    if not path.is_file():
-        # No absolute path here: this branch lands in the deterministic boot
-        # snapshot, which must stay machine-independent. The present-case
-        # header (below) names the full path, like the plan block does.
         return (
-            "## Workflow preferences\n\n"
-            "No workflow doc yet — author `workflow.md` at the account-"
-            "dominion root to make the collaboration's pace and flow "
-            "explicit and editable: autonomy scope (user-woken → their "
-            "request; self-woken → your agenda), delivery ceremony, "
-            "merge/gating policy, progress cadence. Until it exists, "
-            "default to asking on genuine forks and keeping progress "
-            "visible."
+            "## Work surface\n\n"
+            "No authored surface yet. Start at `surface/index.md`; pages placed "
+            "under `surface/` are discovered by the next wake and dashboard."
         )
-    content = path.read_text(encoding="utf-8").strip()
-    if not content:
-        return ""
-    budget = int(
-        cfg.get(
-            "dominion.workflow_inject_budget_bytes",
-            cfg.get("dominion_workflow_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES),
-        )
+    return (
+        "## Work surface\n\n"
+        "The shared user/resident orientation, discovered from one authored "
+        f"root: `{surface}`. Add, move, or link Markdown there; do not create "
+        "parallel orientation roots elsewhere in home. The dashboard mirrors "
+        "the same discovered set.\n\n"
+        + "\n\n---\n\n".join(blocks)
     )
-    return header + _tail_trim_entries(content, budget, "`workflow.md`")
 
 
 def _build_runner_policy_block(repo_root: Path) -> str:
@@ -574,52 +513,6 @@ def _build_runner_policy_block(repo_root: Path) -> str:
         "new policy body. The daemon parks it for operator approval before "
         "mutating `runner-policy/.../policy.md`.\n\n"
         + "\n\n".join(blocks)
-    )
-
-
-def _build_decision_ledger_block(repo_root: Path) -> str:
-    """Render the resident-maintained decision ledger when present.
-
-    CS7: the resident creates and maintains ``ledger/decisions.md`` in the
-    account dominion — a user-facing through-line of recent decisions and
-    current plan-position in plain language. Complements ``kb/log.md``
-    (technical, resident-facing) with something a user can read directly.
-    Web-visible via the account dominion remote when one is configured.
-    Returns ``""`` when the ledger file does not exist.
-    """
-    from . import account as acc
-    from . import config as conf
-
-    cfg = conf.load_config(repo_root)
-    try:
-        ctx = acc.resolve_context(repo_root, cfg, create=False)
-    except Exception:
-        return ""
-    if not ctx.enabled:
-        return ""
-
-    ledger_path = acc.decisions_ledger_path(ctx)
-    if not ledger_path.is_file():
-        return ""
-    content = ledger_path.read_text(encoding="utf-8").strip()
-    if not content:
-        return ""
-    budget = int(
-        cfg.get(
-            "dominion.ledger_inject_budget_bytes",
-            cfg.get(
-                "dominion_ledger_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES
-            ),
-        )
-    )
-    content = _tail_trim_entries(content, budget, "`ledger/decisions.md`")
-
-    return (
-        "## Decision ledger\n\n"
-        "Resident-maintained cross-run decisions and plan-position "
-        "(account dominion `ledger/decisions.md`) — the user-facing "
-        "through-line alongside `kb/log.md`.\n\n"
-        f"{content}"
     )
 
 
@@ -826,8 +719,8 @@ def _build_injected_blocks_with_contracts(
     from .bootscore import (
         ContractEntry,
         OWNER_PRODUCT, OWNER_RESIDENT, OWNER_PROJECT, OWNER_DAEMON_LIVE,
-        AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_PLAN, AUTHORITY_POLICY,
-        AUTHORITY_LEDGER, AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH,
+        AUTHORITY_IDENTITY, AUTHORITY_MEMORY, AUTHORITY_SURFACE, AUTHORITY_POLICY,
+        AUTHORITY_KNOWLEDGE, AUTHORITY_ACTIVITY, AUTHORITY_HEALTH,
     )
 
     keyed: list[tuple[str, str]] = []
@@ -881,20 +774,20 @@ def _build_injected_blocks_with_contracts(
     if dominion_block:
         keyed.append(("dominion", dominion_block))
 
-    # 3. CS5 — active inter-run plan
-    inter_run_plan = _build_inter_run_plan_block(repo_root)
+    # 3. One discovered shared orientation root.
+    work_surface = _build_work_surface_block(repo_root)
     contracts.append(ContractEntry(
-        block_key="inter-run-plan",
-        label="Active inter-run plan (CS5)",
+        block_key="work-surface",
+        label="Discovered work surface",
         owner=OWNER_RESIDENT,
-        authority=AUTHORITY_PLAN,
+        authority=AUTHORITY_SURFACE,
         freshness=None,
         location="computed",
-        present=bool(inter_run_plan),
-        bytes=_rendered_bytes(inter_run_plan),
+        present=bool(work_surface),
+        bytes=_rendered_bytes(work_surface),
     ))
-    if inter_run_plan:
-        keyed.append(("inter-run-plan", inter_run_plan))
+    if work_surface:
+        keyed.append(("work-surface", work_surface))
 
     # 4. CS6 — stored runner policy
     runner_policy = _build_runner_policy_block(repo_root)
@@ -911,37 +804,7 @@ def _build_injected_blocks_with_contracts(
     if runner_policy:
         keyed.append(("runner-policy", runner_policy))
 
-    # 4b. CS8 — workflow preferences (shared pace-and-flow contract)
-    workflow_block = _build_workflow_block(repo_root)
-    contracts.append(ContractEntry(
-        block_key="workflow",
-        label="Workflow preferences (CS8)",
-        owner=OWNER_RESIDENT,
-        authority=AUTHORITY_POLICY,
-        freshness=None,
-        location="computed",
-        present=bool(workflow_block),
-        bytes=_rendered_bytes(workflow_block),
-    ))
-    if workflow_block:
-        keyed.append(("workflow", workflow_block))
-
-    # 5. CS7 — decision ledger
-    decision_ledger = _build_decision_ledger_block(repo_root)
-    contracts.append(ContractEntry(
-        block_key="decision-ledger",
-        label="Decision ledger (CS7)",
-        owner=OWNER_RESIDENT,
-        authority=AUTHORITY_LEDGER,
-        freshness=None,
-        location="computed",
-        present=bool(decision_ledger),
-        bytes=_rendered_bytes(decision_ledger),
-    ))
-    if decision_ledger:
-        keyed.append(("decision-ledger", decision_ledger))
-
-    # 6. Pitfalls matching the task
+    # 5. Pitfalls matching the task
     pitfalls_block = _build_pitfalls_block(repo_root, task_text) if task_text else ""
     contracts.append(ContractEntry(
         block_key="pitfalls",
@@ -1013,17 +876,14 @@ def _build_injected_blocks(
 
     1. Resident identity core — product-owned invariant contract
     2. Dominion digest (living playbook + ``self-inject``)
-    3. Active inter-run plan (CS5) — the plan the resident left itself
+    3. Discovered work surface — the shared authored orientation
     4. Stored runner policy (CS6) — standing runner preferences
-    5. Decision ledger (CS7) — user-facing through-line of recent decisions
-    6. Pitfalls matching the task
-    7. Recent-activity log tail
-    8. kb health note
+    5. Pitfalls matching the task
+    6. Recent-activity log tail
+    7. kb health note
 
-    Each CS5/CS6/CS7 block is silent when no file exists — never a
-    constant tax, only present when the resident wrote something.  The
-    ordering puts the product identity contract before the resident-owned
-    state (dominion + active plan + policy + ledger), then the shared project
+    The ordering puts the product identity contract before the resident-owned
+    state (dominion + work surface + policy), then the shared project
     history, so a waking can distinguish authority layers in read order.
 
     Shared by ``_join_prompt_parts`` and ``build_injected_context``; whatever
@@ -1086,8 +946,8 @@ def _join_prompt_parts(
     """Stitch preamble, optional recent-context block, and trailer.
 
     ``inject_blocks=False`` skips the resident stack entirely — the base
-    injected blocks (identity core, dominion digest, inter-run plan, runner
-    policy, decision ledger, pitfalls, knowledge sources, kb health) and the
+    injected blocks (identity core, dominion digest, work surface, runner
+    policy, pitfalls, knowledge sources, kb health) and the
     introspection dev-mode block. That's the B4 worker trim: a bounded
     worker wake gets its task and files, not the standing resident context.
     The ``diffense`` review-pack step is independent of that trim (a worker
@@ -1883,8 +1743,8 @@ def build_daemon_prompt(
     ``worker=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
     swaps in the slim worker stack: ``worker.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
-    (identity core, dominion digest, inter-run plan, runner policy, decision
-    ledger, pitfalls, knowledge sources, kb health, introspection) are
+    (identity core, dominion digest, work surface, runner policy, pitfalls,
+    knowledge sources, kb health, introspection) are
     skipped entirely — a worker wake still gets ``daemon-substrate.md`` (it
     still runs under the daemon and needs the delivery/portal mechanics) and
     the full Run Context Bundle (its actual task). Default ``False`` is
