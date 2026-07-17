@@ -320,12 +320,12 @@ The boot kernel opens with a `continuity:` line that names what changed
 since the resident last stood in this checkout. This is the **world's
 readout**, not the resident's prose — read from the prior wake's persisted
 boot-score, the local git history, and the forge cache, never from the
-dominion's authored memory or the active plan.
+dominion's authored memory or the shared work surface.
 
 The point is a distinction the earlier frames missed. A resident perceives
-many things about its own past — the active plan, the decision ledger,
-authored Recent Activity — and every line of it is prose the resident wrote
-to itself last wake. That is a message in a bottle: exactly as good as last
+many things about its own past — the authored work surface and Recent
+Activity — and every line is prose the resident/user wrote. That is a message
+in a bottle: exactly as good as last
 wake's discipline, and free to drift from the world in silence. Authored
 memory never brings bad news about itself.
 

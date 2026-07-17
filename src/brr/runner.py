@@ -949,7 +949,7 @@ def _prompt_stdin(cfg: dict[str, Any], prompt: str) -> str | None:
 # (and much smaller than) the overall ``ARG_MAX`` (~2 MiB) that ``getconf
 # ARG_MAX`` reports. Observed in production 2026-07-07: a director-tick
 # wake's assembled prompt reached 176 KB (the growing self-inject playbook +
-# kb recent-activity + decision ledger), and ``execve`` rejected it outright
+# kb recent-activity + the authored work surface), and ``execve`` rejected it outright
 # with ``OSError: [Errno 7] Argument list too long`` before brr ever started
 # the subprocess -- the whole thought was lost, not just slowed down. This
 # threshold sits comfortably under the 131072-byte kernel cap so growth

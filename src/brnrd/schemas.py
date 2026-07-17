@@ -181,27 +181,21 @@ class ActivityList(BaseModel):
     activity: list[ActivityRecordOut]
 
 
-class PlansReport(BaseModel):
-    """CPS (Current Planned State) snapshot a daemon pushes for its account.
+class SurfaceFileIn(BaseModel):
+    """One discovered Markdown page, relative to the home's ``surface/``."""
 
-    ``repo_plan_md`` is this daemon's repo-scoped CS5 active plan;
-    ``cross_repo_plan_md`` and ``decision_ledger_md`` are account-wide
-    (CS5 cross-repo plan, CS7 decision ledger) and get overwritten by
-    whichever connected daemon reports last — same last-write-wins shape
-    as the activity snapshot, acceptable because these are single-writer
-    per account in practice (one resident's dominion).
-    """
-
-    repo_plan_md: str = ""
-    cross_repo_plan_md: str = ""
-    decision_ledger_md: str = ""
-    # CS8 — account-wide workflow preferences doc (workflow.md at the
-    # account-dominion root): the user↔resident pace-and-flow contract.
-    workflow_md: str = ""
+    path: str = Field(min_length=1, max_length=512)
+    markdown: str = Field(default="", max_length=200_000)
 
 
-class PlansOut(PlansReport):
-    plans_updated_at: datetime | None = None
+class SurfaceReport(BaseModel):
+    """The complete authored work surface discovered by one daemon."""
+
+    files: list[SurfaceFileIn] = Field(default_factory=list, max_length=200)
+
+
+class SurfaceOut(SurfaceReport):
+    surface_updated_at: datetime | None = None
 
 
 class QuotaWindowIn(BaseModel):
@@ -270,7 +264,7 @@ class QuotaReport(BaseModel):
     """Runner-quota snapshot a daemon pushes for itself (#237).
 
     Replaces this daemon token's whole quota list, same last-write-wins
-    shape as the Activity/Plans mirrors (`ActivityReport`/`PlansReport`) —
+    shape as the Activity/Surface mirrors (`ActivityReport`/`SurfaceReport`) —
     see `src/brr/gates/cloud.py::_quota_snapshot` for the daemon-side
     collector this feeds from.
     """
