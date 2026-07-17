@@ -145,15 +145,14 @@
 							{wake.repo_label ?? ''}
 						</span>
 					</div>
-					<p
-						class="mt-1.5 truncate text-stone-300"
-						title={wake.summary}
-						use:typeReveal={{ text: wake.summary }}
-					>
+					<!-- Full text, wrapped — a truncated wake spec answers nothing
+					     (2026-07-17: "the scheduled runs elements don't really
+					     expand render the whole text"). -->
+					<p class="mt-1.5 break-words text-stone-300" use:typeReveal={{ text: wake.summary }}>
 						{wake.summary}
 					</p>
 					{#if wake.conversation_key}
-						<p class="truncate font-mono text-[10px] text-stone-600">
+						<p class="break-all font-mono text-[10px] text-stone-600">
 							→ {wake.conversation_key}
 						</p>
 					{/if}
