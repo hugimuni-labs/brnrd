@@ -14,6 +14,8 @@ brnrd.db
 *.sqlite3
 # diffense render spike scratch output
 out.html
+# mkdocs build output (`mkdocs build -f docs/mkdocs.yml`)
+/docs/site/
 # ad-hoc UI screenshots dropped in repo root for a resident to read;
 # handoff scratch, not repo history
 /screenshots/
