@@ -1,18 +1,21 @@
 /**
- * The loom band maps time onto two independent logarithmic half-axes.
- * One minute is the logarithm's unit: it keeps the curve numerically
- * readable while still giving recent events more room than old ones.
+ * The loom band is a shelf, not a plotted axis (2026-07-17 steer: "very
+ * good as idea, very poor as implementation"). Real activity clusters in
+ * time, so positioning runs by timestamp piled every bar into a corner and
+ * left the strip dead. The shelf keeps the temporal *order* — newest row
+ * touches the NOW seam — and spends the horizontal space on magnitude
+ * instead: past bar length ∝ spend, future bar length ∝ distance-to-fire.
+ * Age itself stays on the thermal color, where it always lived.
  */
-export const LOOM_LOG_UNIT_MS = 60_000;
 export const LOOM_PAST_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const LOOM_MIN_FUTURE_HORIZON_MS = 6 * 60 * 60 * 1000;
 export const LOOM_CENTER_ZONE_PX = 120;
 export const LOOM_DUE_SOON_MS = 15 * 60 * 1000;
 
 /**
- * Scrollback stops for the past half-axis ("can't scroll back",
- * 2026-07-16). Discrete windows, not continuous zoom: each step is a
- * legible unit a reader can name, and the log curve re-fits the new span.
+ * Scrollback stops for the past shelf ("can't scroll back", 2026-07-16).
+ * Discrete windows, not continuous zoom: each step is a legible unit a
+ * reader can name; the shelf re-fills with the runs of the new span.
  */
 export const LOOM_PAST_WINDOWS_MS = [
 	6 * 60 * 60 * 1000,
@@ -27,26 +30,17 @@ export function loomPastWindowLabel(windowMs: number): string {
 	return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
-function clamp(value: number, minimum: number, maximum: number): number {
-	return Math.max(minimum, Math.min(maximum, value));
-}
-
-function logFraction(valueMs: number, limitMs: number): number {
-	const value = clamp(valueMs, 0, limitMs);
-	return Math.log1p(value / LOOM_LOG_UNIT_MS) / Math.log1p(limitMs / LOOM_LOG_UNIT_MS);
-}
-
-/** Position inside the past half: 0 = window edge, 1 = NOW boundary. */
-export function loomPastPosition(ageMs: number, windowMs: number = LOOM_PAST_WINDOW_MS): number {
-	if (!Number.isFinite(ageMs)) return 0;
-	return 1 - logFraction(ageMs, windowMs);
-}
-
-/** Position inside the future half: 0 = NOW boundary, 1 = horizon edge. */
-export function loomFuturePosition(etaMs: number, horizonMs: number): number {
-	const safeHorizon = Math.max(LOOM_MIN_FUTURE_HORIZON_MS, horizonMs);
-	if (!Number.isFinite(etaMs)) return 1;
-	return logFraction(etaMs, safeHorizon);
+/**
+ * Bar length for a shelf row, as a fraction of the half-band. Square-root
+ * scaled: spend and ETA are both long-tailed, and a linear scale would let
+ * one marathon run flatten every other bar into an unreadable sliver. The
+ * floor keeps even a zero-magnitude row visibly a bar, not a dot.
+ */
+export function loomBarFraction(value: number, maxValue: number): number {
+	if (!Number.isFinite(value) || value <= 0) return 0.06;
+	if (!Number.isFinite(maxValue) || maxValue <= 0) return 0.06;
+	const fraction = Math.sqrt(Math.min(value, maxValue) / maxValue);
+	return 0.06 + 0.94 * fraction;
 }
 
 /**
