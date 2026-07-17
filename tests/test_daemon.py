@@ -2672,22 +2672,32 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     with pytest.raises(StopIteration):
         daemon.start(tmp_path, dev_reload=True)
 
-    # The dispatch order is deterministic: the main thread records
-    # write-pid → watch:1 → status:processing → submits the worker;
-    # the worker thread records worker → status:done → push during
-    # the scan-interval sleep; the next iteration records watch:2 →
-    # observes the empty pool → reexecs; the finally block records
-    # clear-pid.
-    assert order == [
+    # What this test is named for, and the only thing that must hold: the
+    # reexec never happens until the finished task has been published. The
+    # daemon latches "changed" and waits for the pool to drain, so a push in
+    # flight defers the reexec rather than losing it.
+    #
+    # The *interleaving* is not deterministic, and asserting one made this test
+    # flaky under load. The main thread polls the watcher every _SCAN_INTERVAL
+    # (0.05s) while the worker thread runs on its own schedule; when the worker
+    # needs more than one tick to reach `push`, extra `watch:N` ticks appear —
+    # correct behaviour that a hard-coded list reads as a regression. Assert
+    # the causal contract; let the scheduler be the scheduler.
+    causal = [step for step in order if not step.startswith("watch:")]
+    assert causal == [
         "write-pid",
-        "watch:1",
         "status:processing",
         "worker",
         "status:done",
         "push",
-        "watch:2",
         "clear-pid",
     ]
+    # The watcher is polled at least until it reports a change (call 2), and
+    # the reexec — the StopIteration above, immediately before clear-pid — is
+    # strictly after the push.
+    assert order.index("push") < order.index("clear-pid")
+    assert order.count("watch:1") == 1 and "watch:2" in order
+    assert watcher.calls >= 2
 
 
 def test_max_concurrent_spawns_config_parsing():

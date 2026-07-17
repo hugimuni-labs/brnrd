@@ -796,3 +796,67 @@ def _relabel_registry(ctx: HomeContext, old_label: str, new_label: str) -> None:
         home_kind=ctx.kind,
         home_id=ctx.home_id,
     )
+
+
+def detect_relabelled_repo(
+    ctx: HomeContext, repo_root: Path, current_label: str
+) -> str | None:
+    """Return the stale label this repo is still registered under, if it moved.
+
+    The failure this exists for is invisible from the inside: after a repo
+    changes address, every memory scope re-keys, the wake's dominion/knowledge
+    blocks silently render empty, and a blank home is indistinguishable from a
+    new project. The resident cannot tell it has *lost* anything — so the
+    detection has to come from outside its context.
+
+    The registry is the tell. It maps label → root, and a move leaves this
+    repo's root registered under the old label while ``repo_label`` derives the
+    new one. Same root, different label, and the old label still has memory on
+    disk ⇒ ``brnrd account relabel`` has not been run yet.
+
+    Returns ``None`` for the ordinary cases: registered under the current
+    label, unregistered, or a stale entry with no memory behind it (nothing to
+    lose, nothing to say).
+    """
+
+    if not current_label:
+        return None
+    # NB: ``resolve_context`` auto-registers the current repo under its derived
+    # label, so after a move the registry holds *both* labels pointing at this
+    # same root. "Is the current label registered?" is therefore always yes and
+    # tells us nothing — the question that discriminates is which label the
+    # memory is actually sitting under.
+    if _label_has_memory(ctx, current_label):
+        return None
+    try:
+        here = repo_root.resolve()
+    except OSError:
+        here = repo_root.absolute()
+
+    for label, repo in ctx.repos.items():
+        if label == current_label:
+            continue
+        try:
+            there = repo.root.resolve()
+        except OSError:
+            there = repo.root.absolute()
+        if there != here:
+            continue
+        # Same tree, another label, and that label is where the memory lives:
+        # it moved and the migration hasn't run. A stale entry over an empty
+        # home is bookkeeping, not a loss — stay quiet for it.
+        if _label_has_memory(ctx, label):
+            return label
+    return None
+
+
+def _label_has_memory(ctx: HomeContext, label: str) -> bool:
+    """True when any slug-keyed scope for *label* holds something."""
+
+    for _scope, path, _home in relabel_scopes(ctx, label):
+        try:
+            if path.is_dir() and any(path.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
