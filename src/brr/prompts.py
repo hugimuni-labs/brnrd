@@ -239,6 +239,50 @@ def _build_context_block(repo_root: Path) -> str:
     )
 
 
+def _build_relabelled_repo_block(repo_root: Path) -> str:
+    """Warn a wake that its memory is stranded under this repo's old address.
+
+    Injected rather than left to be discovered, because it is the one gap a
+    resident structurally cannot notice from the inside: when a repo changes
+    address every memory scope re-keys, the dominion and knowledge blocks
+    render empty, and an amputated home looks exactly like a fresh project.
+    There is no absence to observe — only a smaller wake that reads as normal.
+
+    So the warning has to arrive as perception, not as something to go and
+    check. Returns ``""`` in every ordinary case (see
+    ``account.detect_relabelled_repo``), so the block costs nothing until the
+    day it matters.
+    """
+    from . import account
+    from . import config as conf
+
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        current = account.repo_label(repo_root, cfg)
+        stale = account.detect_relabelled_repo(ctx, repo_root, current)
+    except Exception:  # noqa: BLE001 — orientation must never fail a wake
+        return ""
+    if not stale:
+        return ""
+
+    return (
+        "## ⚠ Your memory is under this repo's previous address\n\n"
+        f"This repo is registered as `{stale}`, but its remote now says "
+        f"`{current}`. Every resident-memory scope is keyed by the repo "
+        "label, so the knowledge, dominion, plan, runner policy and run "
+        "history you would normally wake into are **on disk but not being "
+        "read** — filed under the old label.\n\n"
+        "This is not a fresh project. Do not re-derive it, and do not start "
+        "writing a second memory beside the first: the migration exists.\n\n"
+        f"    brnrd account relabel {stale} {current} --dry-run\n"
+        f"    brnrd account relabel {stale} {current}\n\n"
+        "It moves every scope, rekeys the registry, and commits both homes. "
+        "If you are mid-task, say this to the user first — it is almost "
+        "certainly more urgent than what you were woken for."
+    )
+
+
 def _build_dominion_block(repo_root: Path) -> str:
     """Render the wake-time self-inject digest from the agent's dominion.
 
@@ -804,6 +848,23 @@ def _build_injected_blocks_with_contracts(
     ))
     if identity_core:
         keyed.append(("identity-core", identity_core))
+
+    # 1b. Stranded memory after a repo move. Ahead of the dominion digest on
+    # purpose: it explains why that block is about to be empty, and a wake that
+    # reads the emptiness first has already started re-deriving.
+    relabelled_block = _build_relabelled_repo_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="relabelled-repo",
+        label="Stranded-memory warning (repo moved)",
+        owner=OWNER_DAEMON_LIVE,
+        authority=AUTHORITY_HEALTH,
+        freshness=None,
+        location="computed",
+        present=bool(relabelled_block),
+        bytes=_rendered_bytes(relabelled_block),
+    ))
+    if relabelled_block:
+        keyed.append(("relabelled-repo", relabelled_block))
 
     # 2. Dominion digest (living playbook + self-inject)
     dominion_block = _build_dominion_block(repo_root)
