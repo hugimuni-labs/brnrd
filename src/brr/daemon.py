@@ -2426,7 +2426,11 @@ def _run_worker(
                 account_context=account_context,
                 stats=output_stats,
             )
-            _drain_agent_card(emit, task, eid, card_path, card_state)
+            _drain_agent_card(
+                emit, task, eid, card_path, card_state,
+                account_context=account_context,
+                repo_label=task.meta.get("repo_label"),
+            )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
@@ -2481,7 +2485,11 @@ def _run_worker(
                 account_context=account_context,
                 stats=output_stats,
             )
-            _drain_agent_card(emit, task, eid, card_path, card_state)
+            _drain_agent_card(
+                emit, task, eid, card_path, card_state,
+                account_context=account_context,
+                repo_label=task.meta.get("repo_label"),
+            )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
@@ -2563,7 +2571,11 @@ def _run_worker(
                 account_context=account_context,
                 stats=output_stats,
             )
-        _drain_agent_card(emit, task, eid, card_path, card_state)
+        _drain_agent_card(
+            emit, task, eid, card_path, card_state,
+            account_context=account_context,
+            repo_label=task.meta.get("repo_label"),
+        )
         _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
         _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
         _write_live_portal_state(
@@ -4816,6 +4828,9 @@ def _drain_agent_card(
     event_id: str,
     card_path: Path | None,
     state: dict[str, object],
+    *,
+    account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> bool:
     """Promote the agent-composed card narration into a ``card_composed`` packet.
 
@@ -4876,6 +4891,19 @@ def _drain_agent_card(
         event_id=event_id,
         text=projection,
     )
+    # A running run's node used to carry a frame and its traffic but no body,
+    # because the body was only captured at closeout — so the one run a reader
+    # is most likely to open, the one happening now, read as the emptiest.
+    # The card is already on disk and already changed; mirroring it here costs
+    # one write per actual card edit and makes the live node whole. Closeout
+    # still captures the final card, so the durable body is unchanged.
+    if account_context is not None and repo_label:
+        try:
+            _persist_run_body(
+                account_context, task, repo_label=repo_label, card_path=card_path,
+            )
+        except Exception:  # noqa: BLE001 - a card-control bug must not break a run
+            pass
     return True
 
 
