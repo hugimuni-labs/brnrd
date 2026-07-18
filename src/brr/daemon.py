@@ -67,6 +67,7 @@ from . import claude_usage
 from . import gitops
 from . import hooks as hooks_mod
 from . import knowledge
+from . import message_store
 from . import presence
 from . import prompts
 from . import codex_status
@@ -1698,6 +1699,7 @@ def _run_worker(
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
         task.meta["repo_label"] = repo_label
+        protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
         _persist_run_state_doc(
             account_context, task, repo_label=repo_label,
             stage="deduplicated", cfg=cfg,
@@ -1726,6 +1728,9 @@ def _run_worker(
         resp_path = protocol.response_path(responses_dir, eid)
         task.terminal_reply = body
         protocol.write_response(responses_dir, eid, body)
+        _stage_terminal_response(
+            task, account_context, event, resp_path,
+        )
         _record_response_artifact(emit, task, resp_path)
         _set_event_status_if_present(event, "done")
         emit("finalizing", run_id=task.id, stage="deduplicated")
@@ -1749,6 +1754,7 @@ def _run_worker(
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
+    protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
     # Persist the comparison base and the current verdict once, on the run
     # manifest. User-facing readers can then suppress the mechanically-created
     # placeholder branch without paying a git probe on every dashboard tick.
@@ -2607,28 +2613,39 @@ def _run_worker(
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
-                if _terminal_stream_duplicates_delivered(task, resp_path):
+                terminal_duplicate = _terminal_stream_duplicates_delivered(task, resp_path)
+                schedule_without_gate = event.get("source") == "schedule"
+                suppression_reason = (
+                    "duplicate of a delivered reply"
+                    if terminal_duplicate
+                    else "no gate owns schedule events"
+                    if schedule_without_gate
+                    else ""
+                )
+                _stage_terminal_response(
+                    task,
+                    account_context,
+                    event,
+                    resp_path,
+                    suppressed_reason=suppression_reason,
+                )
+                if terminal_duplicate:
                     # Static dispatch call: the terminal stream is an exact
                     # duplicate of a reply this run already delivered to the
                     # waking thread mid-run (outbox partial). Shipping it
                     # again double-posts on the one surface the user watches;
                     # the content is already in the conversation log, so the
-                    # file is dropped, not archived.
-                    try:
-                        resp_path.unlink()
-                    except OSError:
-                        pass
+                    # durable message is stamped as already delivered.
                     task.meta["terminal_stream_suppressed"] = True
                     print(
                         f"[brnrd] worker {eid}: terminal stream suppressed "
                         "(duplicate of a delivered reply)"
                     )
-                else:
+                elif not schedule_without_gate:
                     _record_response_artifact(emit, task, resp_path)
-            # Snapshot before marking the event deliverable. Gate delivery
-            # owns the response file and deletes it after a successful send;
-            # closeout (reply archive + relic collection) runs concurrently
-            # with that gate and must not race it for the only copy.
+            # Keep an in-memory snapshot for closeout consumers; the response
+            # carrier now stays on disk too, but synthetic/older gates can
+            # still race the transition during deploy skew.
             terminal_reply = protocol.read_response(responses_dir, eid)
             task.update_status("done", runs_dir)
             _set_event_status_if_present(event, "done")
@@ -3821,6 +3838,91 @@ def _record_outbox_notice(outbox_dir: Path | None, text: str) -> None:
         pass
 
 
+def _retire_outbox_staging(path: Path) -> None:
+    """Move an accepted staging file aside without deleting message content."""
+
+    try:
+        target_dir = path.parent / ".processed"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / path.name
+        if target.exists():
+            target = target_dir / f"{time.time_ns()}-{path.name}"
+        path.replace(target)
+    except OSError:
+        pass
+
+
+def _stage_outbound(
+    task: Run,
+    account_context: account.AccountContext | None,
+    *,
+    body: str,
+    kind: str,
+    target_event: str = "",
+    target_gate: str = "",
+    target_thread: str = "",
+    source_ref: str = "",
+    status: str = message_store.PENDING,
+    reason: str = "",
+) -> Path | None:
+    if account_context is None or not account_context.enabled:
+        return None
+    label = str(task.meta.get("repo_label") or account_context.default_repo.label)
+    return message_store.stage(
+        account_context,
+        repo_label=label,
+        run_id=task.id,
+        body=body,
+        kind=kind,
+        target_event=target_event,
+        target_gate=target_gate,
+        target_thread=target_thread,
+        source_ref=source_ref,
+        status=status,
+        reason=reason,
+    )
+
+
+def _stage_terminal_response(
+    task: Run,
+    account_context: account.AccountContext | None,
+    event: dict,
+    response_path: Path,
+    *,
+    suppressed_reason: str = "",
+) -> Path | None:
+    body = protocol.read_response(response_path.parent, str(event.get("id") or "")) or ""
+    status = (
+        message_store.UNDELIVERABLE
+        if suppressed_reason == "no gate owns schedule events"
+        else message_store.PENDING
+    )
+    path = _stage_outbound(
+        task,
+        account_context,
+        body=body,
+        kind="terminal",
+        target_event=str(event.get("id") or ""),
+        target_gate=str(event.get("source") or ""),
+        target_thread=str(event.get("conversation_key") or task.conversation_key),
+        source_ref=str(response_path),
+        status=status,
+        reason=suppressed_reason,
+    )
+    if path is not None:
+        protocol.attach_message_path(response_path, path)
+        if suppressed_reason and status == message_store.PENDING:
+            message_store.transition(
+                path,
+                message_store.DELIVERED,
+                gate="deduplicated",
+                platform_message_id="already-delivered",
+            )
+    if suppressed_reason:
+        protocol.update_event_meta(event, terminal_suppressed=True)
+    return path
+
+
 def _read_outbox_notices(outbox_dir: Path | None) -> list[dict[str, str]]:
     if outbox_dir is None:
         return []
@@ -3981,19 +4083,20 @@ def _drain_outbox(
     - **Another pending event** (``event: <id>``, interleaving): the
       resident folded a quick request in without waiting for its own
       spawn — promote the body to *that* event's queue and mark *that*
-      event ``done`` so the gate delivers the reply to its thread and
-      cleans it up. A target that isn't a live pending event is dropped
-      (don't misroute).
+      event ``done`` so the gate delivers the reply to its thread. A target
+      that isn't live becomes an ``undeliverable`` run message (never
+      misrouted or silently dropped).
     - **A gate destination** (``gate: <name>`` + target metadata): an
       agent-initiated message with no waiting event (a scheduled ping, an
       out-of-bound note). ``_deliver_out_of_bound`` synthesizes an
-      already-``done`` event the gate delivers and cleans up. ``event:``
+      already-``done`` event the gate delivers. ``event:``
       is "reply to a waiting thread"; ``gate:`` is "send to a
       destination".
 
-    Each promotion is indexed on the conversation log and emits an
-    ``interim_response`` packet; the consumed file is removed. ``.tmp``
-    files are skipped so the agent has an atomic-write staging name.
+    Each promotion is persisted in the run message store, indexed on the
+    conversation log, and emits an ``interim_response`` packet. The accepted
+    staging file moves under ``.processed``; ``.tmp`` files are skipped so the
+    agent has an atomic-write staging name.
     Returns the count promoted — a promoting drain is also a liveness
     check-in. Errors are swallowed: a drain bug must never break a run.
 
@@ -4047,7 +4150,7 @@ def _drain_outbox(
                 if stats is not None:
                     stats["current"] = stats.get("current", 0) + 1
                     stats["runner_policy"] = stats.get("runner_policy", 0) + 1
-            fpath.unlink(missing_ok=True)
+            _retire_outbox_staging(fpath)
             continue
         if _config_change_requested(fm):
             if _queue_config_change_proposal(
@@ -4064,25 +4167,51 @@ def _drain_outbox(
                 if stats is not None:
                     stats["current"] = stats.get("current", 0) + 1
                     stats["config_change"] = stats.get("config_change", 0) + 1
-            fpath.unlink(missing_ok=True)
+            _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("respawn")):
-            if _queue_respawn_request(
+            dispatched = _queue_respawn_request(
                 emit, task, repo_root, inbox_dir, event_id, fm, body, outbox_dir,
-            ):
+            )
+            if dispatched:
                 promoted += 1
+                message_path = _stage_outbound(
+                    task, account_context,
+                    body=body or task.body,
+                    kind="dispatch",
+                    target_gate="respawn",
+                    source_ref=str(fpath),
+                )
+                if message_path:
+                    message_store.transition(
+                        message_path, message_store.DELIVERED,
+                        gate="dispatch", platform_message_id="respawn-event",
+                    )
                 if stats is not None:
                     stats["respawn"] = stats.get("respawn", 0) + 1
-            fpath.unlink(missing_ok=True)
+            _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("spawn")):
-            if _queue_spawn_request(
+            dispatched = _queue_spawn_request(
                 emit, task, inbox_dir, event_id, fm, body, outbox_dir,
-            ):
+            )
+            if dispatched:
                 promoted += 1
+                message_path = _stage_outbound(
+                    task, account_context,
+                    body=body,
+                    kind="dispatch",
+                    target_gate="spawn",
+                    source_ref=str(fpath),
+                )
+                if message_path:
+                    message_store.transition(
+                        message_path, message_store.DELIVERED,
+                        gate="dispatch", platform_message_id="spawn-event",
+                    )
                 if stats is not None:
                     stats["spawn"] = stats.get("spawn", 0) + 1
-            fpath.unlink(missing_ok=True)
+            _retire_outbox_staging(fpath)
             continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
@@ -4090,14 +4219,29 @@ def _drain_outbox(
             # with no waiting event (a scheduled ping, an out-of-bound
             # note). Synthesize an already-`done` event the gate delivers
             # and cleans up; it never wakes a thought.
+            gate_available = _gate_can_deliver(emit.brr_dir, gate)
+            message_path = _stage_outbound(
+                task,
+                account_context,
+                body=body,
+                kind="outbound",
+                target_gate=gate,
+                target_thread=str(fm.get("thread") or ""),
+                source_ref=str(fpath),
+                status=(
+                    message_store.PENDING
+                    if gate_available else message_store.UNDELIVERABLE
+                ),
+                reason=("" if gate_available else f"gate {gate!r} is not configured"),
+            )
             if _deliver_out_of_bound(
                 emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
-                outbox_dir,
+                outbox_dir, message_path=message_path,
             ):
                 promoted += 1
                 if stats is not None:
                     stats["outbound"] = stats.get("outbound", 0) + 1
-            fpath.unlink(missing_ok=True)
+            _retire_outbox_staging(fpath)
             continue
         target = str(fm.get("event") or "").strip()
         target = target or event_id
@@ -4111,10 +4255,40 @@ def _drain_outbox(
                 f"reply dropped: event {target} is not pending (already handled, "
                 f"or the id is wrong) — the message was NOT delivered",
             )
-            fpath.unlink(missing_ok=True)
+            _stage_outbound(
+                task,
+                account_context,
+                body=body,
+                kind="interim",
+                target_event=target,
+                source_ref=str(fpath),
+                status=message_store.UNDELIVERABLE,
+                reason=f"event {target} has no live gate owner",
+            )
+            _retire_outbox_staging(fpath)
             continue
-        ppath = protocol.write_partial(responses_dir, target, body) if body else None
-        fpath.unlink(missing_ok=True)
+        message_path = _stage_outbound(
+            task,
+            account_context,
+            body=body,
+            kind="interim",
+            target_event=target,
+            target_gate=str(
+                (target_event or {}).get("source") or getattr(task, "source", "")
+            ),
+            target_thread=str(
+                (target_event or {}).get("conversation_key")
+                or getattr(task, "conversation_key", "")
+            ),
+            source_ref=str(fpath),
+        )
+        ppath = (
+            protocol.write_partial(
+                responses_dir, target, body, message_path=message_path,
+            )
+            if body else None
+        )
+        _retire_outbox_staging(fpath)
         if not ppath:
             continue
         promoted += 1
@@ -4196,6 +4370,7 @@ def _deliver_out_of_bound(
     fm: dict,
     body: str,
     outbox_dir: Path | None = None,
+    message_path: Path | None = None,
 ) -> bool:
     """Queue an agent-initiated message to a gate destination.
 
@@ -4230,10 +4405,18 @@ def _deliver_out_of_bound(
     if gate == "forge":
         target_meta.setdefault("github_action", "pull_request")
     new_path = protocol.create_event(
-        inbox_dir, event_source, "", status="done", **target_meta,
+        inbox_dir,
+        event_source,
+        "",
+        status="done",
+        run_id=task.id,
+        repo_label=str(getattr(task, "meta", {}).get("repo_label") or ""),
+        **target_meta,
     )
     new_eid = new_path.stem
-    protocol.write_response(responses_dir, new_eid, body)
+    protocol.write_response(
+        responses_dir, new_eid, body, message_path=message_path,
+    )
     if gate == "forge" and outbox_dir is not None:
         # Acceptance receipt, not a claim that the asynchronous forge gate has
         # already created the PR. The synchronous Stop flush makes this marker
@@ -4568,19 +4751,13 @@ def _fire_due_schedules(
 def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
     """Retire a gateless (``schedule``-source) event after it completes.
 
-    A self-scheduled thought has no gate to deliver its response to or
-    clean up after it — its effect is the work it did, not a chat reply —
-    so the daemon deletes the event and any response/partials itself.
-    Returns True when it cleaned up.
+    A self-scheduled thought has no delivery gate. Its terminal message is
+    retained as ``undeliverable`` in the run store and the dispatch event is
+    closed in place, preserving the same audit shape as every other target.
     """
     if event.get("source") != "schedule" or not event.get("_path"):
         return False
-    eid = event.get("id", "")
-    protocol.cleanup(
-        event["_path"],
-        protocol.response_path(responses_dir, eid),
-        protocol.partials_dir(responses_dir, eid),
-    )
+    protocol.set_status(event, "delivered")
     return True
 
 
@@ -4693,61 +4870,9 @@ def _capture_knowledge(
     outbox_dir: Path | None = None,
     terminal_reply: str | None = None,
 ) -> None:
-    """Archive this run's terminal reply, then commit + push the knowledge chain.
-
-    The counterpart to :func:`_capture_dominion` for the *other* durable
-    memory. Two steps, in this order, because the second makes the first
-    linkable:
-
-    1. **Archive the terminal reply** — the run's answer of record, written
-       to ``replies/<repo>/<run-id>.md`` in the knowledge repo and reported
-       as a ``reply`` relic. Must land before ``append_closed_run``, which
-       is where relics are collected.
-    2. **Capture the kb** — commit and push what the resident wrote this
-       thought (``knowledge.capture``, #357). Until this existed, nothing in
-       brnrd ever pushed the kb: every write depended on a resident
-       remembering a manual three-step dance, and a run that forgot left
-       durable prose sitting uncommitted in a working tree.
-
-    Best-effort throughout: a failure here must never break a delivered run.
-    """
+    """Commit + push knowledge edits; replies now belong to the home run store."""
     if not bool(cfg.get("knowledge.capture", True)):
-        task.meta["reply_archive"] = "disabled"
         return
-    reply_rel: str | None = None
-    if not bool(cfg.get("knowledge.archive_replies", True)):
-        task.meta["reply_archive"] = "disabled"
-    elif event is None or responses_dir is None:
-        task.meta["reply_archive"] = "skipped"
-    else:
-        eid = str(event.get("id") or "")
-        # The response path is a delivery queue entry, not an archive: a gate
-        # may already have sent and deleted it once the event became ``done``.
-        # Normal runner paths snapshot the body before that transition; the
-        # file read remains as a compatibility fallback for synthetic callers.
-        body = terminal_reply
-        if body is None:
-            body = protocol.read_response(responses_dir, eid) if eid else ""
-        if body and body.strip():
-            reply_rel = knowledge.archive_reply(
-                repo_root,
-                run_id=task.id,
-                body=body,
-                repo_label=str(task.meta.get("repo_label") or "") or None,
-                meta={
-                    "event": eid,
-                    "source": str(event.get("source") or ""),
-                    "thread": str(
-                        (event.get("meta") or {}).get("conversation_key") or ""
-                    ),
-                    "runner": str(task.meta.get("runner") or ""),
-                    "delivered_at": _format_utc_after(0),
-                },
-                cfg=cfg,
-            )
-            task.meta["reply_archive"] = "archived" if reply_rel else "failed"
-        else:
-            task.meta["reply_archive"] = "skipped"
 
     captured_pages: list[str] = []
     moved = knowledge.capture(
@@ -4767,17 +4892,6 @@ def _capture_knowledge(
         url = knowledge.kb_page_url(repo_root, page, cfg)
         relics.append(
             outbox_dir, "kb", path=page, **({"url": url} if url else {}),
-        )
-    if reply_rel:
-        url = knowledge.knowledge_file_url(repo_root, reply_rel, cfg)
-        reply_body = protocol.frontmatter_body(body or "")
-        excerpt = next(
-            (line.strip() for line in reply_body.splitlines() if line.strip()), "",
-        )[:120]
-        relics.append(
-            outbox_dir, "reply", path=reply_rel,
-            **({"excerpt": excerpt} if excerpt else {}),
-            **({"url": url} if url else {}),
         )
 
 
@@ -5804,6 +5918,22 @@ def start(
 
     cfg = conf.load_config(repo_root)
     account_context = account.resolve_context(repo_root, cfg)
+    for registered in account_context.repos.values():
+        try:
+            migrated = message_store.migrate_legacy(
+                account_context,
+                repo_root=registered.root,
+                repo_label=registered.label,
+                brr_dir=gitops.shared_brr_dir(registered.root),
+            )
+            if any(migrated.values()):
+                print(
+                    "[brnrd] message store: migrated "
+                    f"{migrated['partials']} orphan partials and "
+                    f"{migrated['replies']} archived replies for {registered.label}"
+                )
+        except Exception as exc:  # noqa: BLE001 - migration must not block boot
+            print(f"[brnrd] message-store migration skipped for {registered.label}: {exc}")
     max_retries = int(cfg.get("response_retries", 1))
     burst_window = float(
         cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT))

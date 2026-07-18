@@ -193,7 +193,7 @@ def _deliver_responses(
     token: str,
     channel: str,
 ) -> None:
-    def deliver(event: dict, body: str) -> None:
+    def deliver(event: dict, body: str) -> dict:
         event_channel = str(event.get("slack_channel") or channel)
         # Match the progress card: prefer the parent thread when the
         # source message was itself a reply, otherwise treat the source
@@ -206,7 +206,7 @@ def _deliver_responses(
         params: dict = {"channel": event_channel, "text": body}
         if thread_ts:
             params["thread_ts"] = thread_ts
-        _slack_api(token, "chat.postMessage", params)
+        return _slack_api(token, "chat.postMessage", params)
 
     runtime.deliver_responses(inbox_dir, responses_dir, "slack", deliver)
 

@@ -548,8 +548,9 @@ def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
         ("secret", 111, None, "first answer", 501),
         ("secret", 222, 7, "second answer", 502),
     ]
-    assert not first.exists()
-    assert not second.exists()
+    # Events survive delivery — status transitions replace file deletion.
+    assert protocol.parse_frontmatter(first.read_text(encoding="utf-8"))["status"] == "delivered"
+    assert protocol.parse_frontmatter(second.read_text(encoding="utf-8"))["status"] == "delivered"
 
 
 def test_replies_skip_reply_to_when_event_has_no_message_id(tmp_path, monkeypatch):
