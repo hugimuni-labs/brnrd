@@ -301,3 +301,85 @@ export function messageTarget(metadata: Record<string, string>): string {
 export function messageInstant(metadata: Record<string, string>): string {
 	return metadata.delivered_at || metadata.created_at || '';
 }
+
+// ── The targeted view (loom-as-spine) ────────────────────────────────────
+//
+// The selected loom frame shows a *smaller and more targeted* read of the
+// node than the standalone page (maintainer, 2026-07-19: "keep the loom as
+// the spine"). Navigating away costs the reader their position in the band,
+// so the band stays put and the frame fills; the `/runs/...` page remains the
+// addressable deep link for sharing.
+
+/**
+ * The `## Now` section of a run body, or the whole body when it has none.
+ *
+ * Mirrors `daemon._card_now_projection`, deliberately and by hand: both sides
+ * read the same resident-authored Markdown, and the compact projection is a
+ * presentation rule, not data the writer should have to duplicate. One-section
+ * legacy cards stay valid — an absent `## Now` means the whole body *is* the
+ * now.
+ */
+export function nowProjection(body: string): string {
+	const lines = body.replace(/\r\n/g, '\n').split('\n');
+	const start = lines.findIndex((line) => line.trim().toLowerCase() === '## now');
+	if (start === -1) return body.trim();
+	const projected: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (line.startsWith('## ')) break;
+		projected.push(line);
+	}
+	return projected.join('\n').trim();
+}
+
+/**
+ * Does this body carry anything outside its `## Now` section?
+ *
+ * The question the expand affordance actually asks. A body with no sections
+ * at all is entirely the now, and a body whose only section is `## Now` has
+ * nothing further to give — in both cases the projection already showed the
+ * reader everything.
+ */
+export function hasSectionsBeyondNow(body: string): boolean {
+	const lines = body.replace(/\r\n/g, '\n').split('\n');
+	const headings = lines.filter((line) => line.startsWith('## '));
+	if (headings.length === 0) return false;
+	if (headings.some((line) => line.trim().toLowerCase() !== '## now')) return true;
+	// Only `## Now` headings: anything before the first one is body the
+	// projection dropped.
+	const first = lines.findIndex((line) => line.startsWith('## '));
+	return lines.slice(0, first).join('\n').trim() !== '';
+}
+
+export interface NodeDigest {
+	/** Present only when the node is mirrored at all. */
+	mirrored: boolean;
+	status: string;
+	stage: string;
+	runner: string;
+	/** The `## Now` projection of the body; '' when no body exists yet. */
+	now: string;
+	messageCount: number;
+	/** True when expanding would actually reveal something more. */
+	hasMore: boolean;
+}
+
+/** Everything the selected frame needs, without composing the full page. */
+export function nodeDigest(node: RunNode): NodeDigest {
+	const frame = node.state ? frontmatterDocument(node.state.markdown) : null;
+	const body = node.body ? node.body.markdown : '';
+	const now = body ? nowProjection(body) : '';
+	return {
+		mirrored: node.mirrored,
+		status: frame?.metadata.status ?? '',
+		stage: frame?.metadata.stage ?? '',
+		runner: frame?.metadata.runner_name ?? '',
+		now,
+		messageCount: node.messages.length,
+		// Only offer the expand when it reveals something the reader cannot
+		// already see. Comparing the projection against the raw body is not
+		// that test — a body that is *only* a `## Now` section still differs
+		// from its projection by the heading line, which would arm an expand
+		// that shows the same words twice.
+		hasMore: node.messages.length > 0 || hasSectionsBeyondNow(body)
+	};
+}
