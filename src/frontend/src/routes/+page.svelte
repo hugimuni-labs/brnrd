@@ -378,7 +378,7 @@
 	<div class="ignite" style="--ignite-delay: 600ms">
 		<div class="mt-4 flex items-baseline justify-between gap-3">
 			<p class="eyebrow">
-				§0a · {loomSelection === null
+				§2a · {loomSelection === null
 					? 'now'
 					: loomSelection.kind === 'wake'
 						? 'selected wake'
@@ -425,7 +425,7 @@
 	</div>
 
 	<div class="ignite" style="--ignite-delay: 1000ms">
-		<p class="eyebrow mt-6">§1 · instruments</p>
+		<p class="eyebrow mt-6">§2b · instruments</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 			use:typeReveal={{ text: 'last 24h', delay: 1150 }}
@@ -481,7 +481,7 @@
 	</div>
 
 	<div class="ignite" style="--ignite-delay: 1900ms">
-		<p class="eyebrow mt-8">§2 · config-change requests</p>
+		<p class="eyebrow mt-8">§2c · config-change requests</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 			use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
@@ -500,7 +500,7 @@
 	</div>
 
 	<div class="ignite" style="--ignite-delay: 2300ms">
-		<p class="eyebrow mt-8">§3 · pr review queue</p>
+		<p class="eyebrow mt-8">§2d · pr review queue</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 			use:typeReveal={{ text: 'PR review queue', delay: 2450 }}
