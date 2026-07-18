@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>brnrd // run graph · Gurio/brr</title>
+<style>
+:root{
+  --bg:#0c0906;--fg:#f3e8d8;
+  --amber:#d9a441;--amber-d:rgba(217,164,65,.55);--amber-t:rgba(217,164,65,.78);
+  --ice:#6fd3ff;--ice-d:rgba(111,211,255,.65);
+  --teal:rgba(79,168,122,.65);
+  --pbg:rgba(21,16,10,.85);--sbg:rgba(41,32,20,.65);
+  --bdr:rgba(120,95,55,.32);
+  --mut:#8a7a5c;--dim:#5c4f3a;
+  --err:#e85a4f;--ok:#4fa87a;
+  --mono:ui-monospace,'Cascadia Code','SF Mono',Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:12px;line-height:1.4}
+
+/* CRT tell — same grammar as the dashboard */
+body::before{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:100;
+  background-image:
+    repeating-linear-gradient(rgba(243,232,216,.018) 0 1px,transparent 1px 3px),
+    radial-gradient(ellipse at 50% 0%,rgba(217,164,65,.07),transparent 58%),
+    radial-gradient(ellipse at 50% 100%,rgba(217,164,65,.03),transparent 65%);
+  box-shadow:inset 0 0 0 1px rgba(198,224,235,.09),inset 0 0 60px 8px rgba(4,3,2,.5);
+}
+
+header{
+  padding:10px 16px 9px;border-bottom:1px solid var(--bdr);
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+}
+.brand{font-size:15px;letter-spacing:.08em;text-shadow:0 0 14px rgba(217,164,65,.3)}
+.eyebrow{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+.eyebrow::before{content:'// '}
+.h-meta{font-size:10px;color:var(--mut);letter-spacing:.04em}
+
+/* ── main grid ── */
+.main{position:relative;display:grid;grid-template-columns:272px 1fr}
+
+/* ── spine ── */
+.spine{
+  padding:10px 8px 32px 12px;
+  display:flex;flex-direction:column;gap:5px;
+  border-right:1px solid rgba(120,95,55,.18);
+}
+
+/* TIS-100-style bracket-cornered run cell */
+.rc{
+  border:1px solid var(--bdr);background:var(--pbg);
+  padding:6px 8px;position:relative;overflow:hidden;cursor:default;
+  --c:8px;--cw:1.2px;--cc:rgba(217,164,65,.4);
+  background-image:
+    linear-gradient(to right,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to bottom,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to left,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to bottom,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to right,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to top,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to left,var(--cc) var(--cw),transparent var(--cw)),
+    linear-gradient(to top,var(--cc) var(--cw),transparent var(--cw));
+  background-repeat:no-repeat;
+  background-size:var(--c) var(--c),var(--c) var(--c),var(--c) var(--c),var(--c) var(--c),
+                  var(--c) var(--c),var(--c) var(--c),var(--c) var(--c),var(--c) var(--c);
+  background-position:top left,top left,top right,top right,
+                       bottom left,bottom left,bottom right,bottom right;
+}
+.rc:hover{border-color:rgba(120,95,55,.55)}
+.rc.live{
+  border-color:rgba(217,164,65,.42);--cc:rgba(217,164,65,.72);
+  box-shadow:0 0 10px rgba(217,164,65,.07),inset 0 0 14px rgba(217,164,65,.025);
+}
+.rc.here{
+  border-color:rgba(111,211,255,.38);--cc:rgba(111,211,255,.6);
+  box-shadow:0 0 12px rgba(111,211,255,.06);
+}
+/* header row inside cell */
+.rh{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.rid{font-size:10px;color:var(--mut);flex-shrink:0}
+.rnr{font-size:10px;color:var(--amber);opacity:.8;flex-shrink:0}
+.dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.da{background:var(--amber);box-shadow:0 0 4px var(--amber)}
+.dd{background:var(--mut);opacity:.7}
+.dh{background:var(--ice);box-shadow:0 0 4px var(--ice)}
+.rsrc{font-size:9px;color:var(--dim);margin-left:auto}
+/* gist line */
+.rg{font-size:11px;color:var(--fg);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rg.stop{color:var(--mut);font-style:italic}
+/* branch line */
+.rbr{font-size:10px;color:var(--amber);opacity:.52;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* scan bar for active cells */
+.scan{position:absolute;bottom:0;left:0;right:0;height:1px;overflow:hidden}
+.scan::after{
+  content:'';position:absolute;inset:0 auto 0 0;width:28%;
+  background:linear-gradient(to right,transparent,var(--amber),transparent);
+  animation:scan 2.4s linear infinite;
+}
+@keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(460%)}}
+/* time gap marker */
+.gap{border-top:1px dashed rgba(120,95,55,.2);margin:3px 0;position:relative}
+.gap::after{
+  content:attr(data-g);position:absolute;right:2px;top:-9px;
+  font-size:9px;color:var(--dim);
+}
+
+/* ── lanes ── */
+.lanes{
+  padding:10px 12px 32px 40px;
+  display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;
+}
+.lane{display:flex;flex-direction:column;gap:4px;min-width:148px;max-width:170px}
+.lh{
+  font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);
+  padding-bottom:3px;border-bottom:1px solid var(--bdr);margin-bottom:1px;
+}
+.lh::before{content:'// '}
+/* artifact node */
+.an{border:1px solid var(--bdr);background:var(--sbg);padding:4px 6px;font-size:10px}
+.an.prm{border-color:rgba(79,168,122,.26)}
+.an.bra{border-color:rgba(217,164,65,.36);background:rgba(41,32,20,.85)}
+.an.kbp{border-color:rgba(111,211,255,.2)}
+.at{display:block;color:var(--fg);opacity:.88;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-bottom:2px;font-size:10px}
+.am{font-size:9px;color:var(--mut)}
+.as{font-size:9px;letter-spacing:.05em;text-transform:uppercase}
+.asm{color:var(--ok)}.asa{color:var(--amber)}.ask{color:var(--ice);opacity:.8}
+
+/* SVG edge overlay */
+.eo{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+
+/* legend */
+.legend{
+  padding:6px 16px;border-top:1px solid var(--bdr);
+  display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:10px;color:var(--mut);
+}
+.ll{display:flex;align-items:center;gap:4px}
+.lb{width:18px;height:1.5px}
+
+@media(max-width:640px){
+  .main{grid-template-columns:1fr}
+  .lanes{padding-left:12px;flex-wrap:wrap}
+  .lane{min-width:130px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">brnrd</span>
+  <span class="eyebrow">run graph</span>
+  <span class="h-meta">Gurio/brr · snapshot 2026-07-17 · 15 runs · newest top</span>
+</header>
+
+<div class="main" id="main">
+  <div class="spine" id="spine"></div>
+  <div class="lanes" id="lanes"></div>
+  <svg class="eo" id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+
+<div class="legend">
+  <div class="ll"><div class="lb" style="background:var(--amber-t)"></div>PR / branch produced</div>
+  <div class="ll"><div class="lb" style="background:var(--ice-d)"></div>kb page touched</div>
+  <div class="ll"><div class="lb" style="background:var(--teal)"></div>message / reply</div>
+  <div class="ll" style="margin-left:auto">
+    <span style="color:var(--ice)">●</span>&nbsp;this run&ensp;
+    <span style="color:var(--amber)">●</span>&nbsp;active&ensp;
+    <span style="color:var(--mut)">●</span>&nbsp;done
+  </div>
+</div>
+
+<script>
+// ── data snapshot 2026-07-17 (baked from the latest 15 runs) ────────────────
+const RUNS = [
+  { id:'run-260717-2354-b2mo', time:'23:54', ts:1434, st:'here', src:'spawn', rn:'sonnet', gist:'graph-mock prototype',       br:'brr/graph-mock',    prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2352-a1my', time:'23:52', ts:1432, st:'live', src:'spawn', rn:'opus',   gist:'corpus join: kb→dashboard',  br:'brr/corpus-join',   prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2347-yna6', time:'23:47', ts:1427, st:'live', src:'spawn', rn:'codex',  gist:'produce facet + hook brief', br:'brr/produce-facet', prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2338-5znu', time:'23:38', ts:1418, st:'live', src:'cloud', rn:'fable',  gist:'kb+home join discussion',    br:null,                prs:[],   kb:[],              msgs:['kb-join-design'] },
+  { id:'run-260717-2233-13qj', time:'22:33', ts:1353, st:'done', src:'cloud', rn:'fable',  gist:'review work-surface crash',  br:null,                prs:[450],kb:[],              msgs:[] },
+  { id:'run-260717-2140-tcks', time:'21:40', ts:1300, st:'done', src:'cloud', rn:'codex',  gist:'shape link plans/ledger',    br:null,                prs:[],   kb:['kb-plan-loom'],msgs:[] },
+  { id:'run-260717-2117-8krs', time:'21:17', ts:1277, st:'done', src:'cloud', rn:'fable',  gist:'body-vs-backend corpus',     br:null,                prs:[449],kb:[],              msgs:[] },
+  { id:'run-260717-2105-aakx', time:'21:05', ts:1265, st:'done', src:'cloud', rn:'fable',  gist:'home history: commit/run',   br:null,                prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2058-nlog', time:'20:58', ts:1258, st:'done', src:'cloud', rn:'fable',  gist:'work-surface in home',       br:null,                prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2048-i99t', time:'20:48', ts:1248, st:'done', src:'cloud', rn:'fable',  gist:'[stop signal]',              br:null,                prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-2048-2842', time:'20:48', ts:1248, st:'done', src:'cloud', rn:'codex',  gist:'push produce to kb?',        br:null,                prs:[],   kb:['kb-log'],      msgs:[] },
+  { id:'run-260717-1934-484n', time:'19:34', ts:1174, st:'done', src:'cloud', rn:'fable',  gist:'loom resident-owned',        br:null,                prs:[444],kb:['kb-plan-loom'],msgs:[] },
+  { id:'run-260717-1552-sqe4', time:'15:52', ts:952,  st:'done', src:'cloud', rn:'opus',   gist:'brnrd.dev naming',           br:null,                prs:[],   kb:[],              msgs:[] },
+  { id:'run-260717-1052-c04l', time:'10:52', ts:652,  st:'done', src:'spawn', rn:'codex',  gist:'docs-fold PR built',         br:'brr/docs-fold',     prs:[445],kb:[],              msgs:[] },
+  { id:'run-260717-1047-wtgm', time:'10:47', ts:647,  st:'done', src:'cloud', rn:'opus',   gist:'docs fold approved',         br:null,                prs:[445],kb:[],              msgs:[] },
+];
+
+const PR_NODES = [
+  { id:'pr-450', num:450, label:'surface-migration-hardening', ago:'43m' },
+  { id:'pr-449', num:449, label:'home-work-surface',           ago:'1h'  },
+  { id:'pr-445', num:445, label:'docs-fold',                   ago:'12h' },
+  { id:'pr-444', num:444, label:'loom-shelf',                  ago:'23h' },
+];
+
+const BR_NODES = [
+  { id:'br-gm', name:'brr/graph-mock',    run:'run-260717-2354-b2mo' },
+  { id:'br-cj', name:'brr/corpus-join',   run:'run-260717-2352-a1my' },
+  { id:'br-pf', name:'brr/produce-facet', run:'run-260717-2347-yna6' },
+];
+
+const KB_NODES = [
+  { id:'kb-plan-loom', file:'plan-loom-realtime-build.md' },
+  { id:'kb-log',       file:'log.md (890KB)' },
+];
+
+const MSG_NODES = [
+  { id:'kb-join-design', label:'kb-join design' },
+];
+
+// Edges: { f: run-id, t: artifact-id, ty: 'pr'|'br'|'kb'|'ms' }
+const EDGES = [
+  { f:'run-260717-2354-b2mo', t:'br-gm',        ty:'br' },
+  { f:'run-260717-2352-a1my', t:'br-cj',        ty:'br' },
+  { f:'run-260717-2347-yna6', t:'br-pf',        ty:'br' },
+  { f:'run-260717-2338-5znu', t:'kb-join-design',ty:'ms'},
+  { f:'run-260717-2233-13qj', t:'pr-450',        ty:'pr' },
+  { f:'run-260717-2117-8krs', t:'pr-449',        ty:'pr' },
+  { f:'run-260717-2140-tcks', t:'kb-plan-loom',  ty:'kb' },
+  { f:'run-260717-1934-484n', t:'kb-plan-loom',  ty:'kb' },
+  { f:'run-260717-2048-2842', t:'kb-log',        ty:'kb' },
+  { f:'run-260717-1052-c04l', t:'pr-445',        ty:'pr' },
+  { f:'run-260717-1047-wtgm', t:'pr-445',        ty:'pr' },
+  { f:'run-260717-1934-484n', t:'pr-444',        ty:'pr' },
+];
+
+const COLORS = {
+  pr:'rgba(217,164,65,.82)',
+  br:'rgba(217,164,65,.48)',
+  kb:'rgba(111,211,255,.7)',
+  ms:'rgba(79,168,122,.65)',
+};
+
+// ── render spine ─────────────────────────────────────────────────────────────
+function renderSpine() {
+  const el = document.getElementById('spine');
+  let prevTs = null;
+  RUNS.forEach(r => {
+    if (prevTs !== null && prevTs - r.ts > 60) {
+      const g = document.createElement('div');
+      g.className = 'gap';
+      const hrs = Math.round((prevTs - r.ts) / 60 * 10) / 10;
+      g.dataset.g = `${hrs}h gap`;
+      el.appendChild(g);
+    }
+    prevTs = r.ts;
+
+    const c = document.createElement('div');
+    c.className = 'rc' + (r.st === 'here' ? ' here' : r.st === 'live' ? ' live' : '');
+    c.id = r.id;
+
+    const shortId = r.id.replace('run-260717-', '');
+    const dotCls = r.st === 'here' ? 'dh' : r.st === 'live' ? 'da' : 'dd';
+
+    c.innerHTML = `
+      <div class="rh">
+        <span class="rid">${shortId}</span>
+        <span class="rnr">${r.rn}</span>
+        <span class="dot ${dotCls}"></span>
+        <span class="rsrc">${r.src}&middot;${r.time}</span>
+      </div>
+      <div class="rg${r.gist.startsWith('[') ? ' stop' : ''}">${r.gist}</div>
+      ${r.br ? `<div class="rbr">&rarr;&nbsp;${r.br}</div>` : ''}
+    `;
+
+    if (r.st === 'live' || r.st === 'here') {
+      const sb = document.createElement('div'); sb.className = 'scan';
+      c.appendChild(sb);
+    }
+    el.appendChild(c);
+  });
+}
+
+// ── render lanes ─────────────────────────────────────────────────────────────
+function mkLane(id, label) {
+  const d = document.createElement('div');
+  d.className = 'lane'; d.id = id;
+  d.innerHTML = `<div class="lh">${label}</div>`;
+  return d;
+}
+function mkArtifact(id, cls, title, meta) {
+  const d = document.createElement('div');
+  d.className = `an ${cls}`; d.id = id;
+  d.innerHTML = `<span class="at">${title}</span><span class="am">${meta}</span>`;
+  return d;
+}
+
+function renderLanes() {
+  const el = document.getElementById('lanes');
+
+  const pl = mkLane('lane-pr', 'PRs');
+  PR_NODES.forEach(p => pl.appendChild(
+    mkArtifact(p.id, 'prm', `PR #${p.num} ${p.label}`,
+      `<span class="as asm">MERGED</span> ${p.ago} ago`)
+  ));
+  el.appendChild(pl);
+
+  const bl = mkLane('lane-br', 'Active branches');
+  BR_NODES.forEach(b => bl.appendChild(
+    mkArtifact(b.id, 'bra', b.name, '<span class="as asa">running</span>')
+  ));
+  el.appendChild(bl);
+
+  const kl = mkLane('lane-kb', 'KB pages');
+  KB_NODES.forEach(k => kl.appendChild(
+    mkArtifact(k.id, 'kbp', k.file, '<span class="as ask">kb</span>')
+  ));
+  el.appendChild(kl);
+
+  const ml = mkLane('lane-ms', 'Messages');
+  MSG_NODES.forEach(m => ml.appendChild(
+    mkArtifact(m.id, 'kbp', m.label, '<span class="as ask">reply</span>')
+  ));
+  el.appendChild(ml);
+}
+
+// ── draw orthogonal edges ────────────────────────────────────────────────────
+function drawEdges() {
+  const svg = document.getElementById('svg');
+  const main = document.getElementById('main');
+  const cr = main.getBoundingClientRect();
+
+  // Resize SVG to match container
+  svg.setAttribute('width', cr.width);
+  svg.setAttribute('height', cr.height);
+
+  // Clear previous
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const TRACK_BASE = 278;  // just inside the spine right edge
+  const TRACK_STEP = 5;    // px between parallel traces
+
+  EDGES.forEach((e, i) => {
+    const fromEl = document.getElementById(e.f);
+    const toEl   = document.getElementById(e.t);
+    if (!fromEl || !toEl) return;
+
+    const fr = fromEl.getBoundingClientRect();
+    const tr = toEl.getBoundingClientRect();
+
+    // Container-relative coords (stable regardless of page scroll since
+    // both elements and cr move together)
+    const fx = fr.right  - cr.left;
+    const fy = fr.top    - cr.top + fr.height / 2;
+    const tx = tr.left   - cr.left;
+    const ty = tr.top    - cr.top + tr.height / 2;
+
+    // Staggered track in the channel between spine and lanes
+    const xTrack = TRACK_BASE + (i % 7) * TRACK_STEP;
+
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', `${fx},${fy} ${xTrack},${fy} ${xTrack},${ty} ${tx},${ty}`);
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', COLORS[e.ty]);
+    poly.setAttribute('stroke-width', e.ty === 'br' ? '1' : '1.5');
+    poly.setAttribute('stroke-linejoin', 'miter');
+    if (e.ty === 'br') poly.setAttribute('stroke-dasharray', '3 3');
+    svg.appendChild(poly);
+
+    // Terminal dot at artifact end
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', tx); dot.setAttribute('cy', ty); dot.setAttribute('r', '2.5');
+    dot.setAttribute('fill', COLORS[e.ty]);
+    svg.appendChild(dot);
+  });
+}
+
+// ── init ─────────────────────────────────────────────────────────────────────
+renderSpine();
+renderLanes();
+requestAnimationFrame(() => requestAnimationFrame(drawEdges));
+window.addEventListener('resize', drawEdges);
+window.addEventListener('scroll', drawEdges);
+</script>
+</body>
+</html>
