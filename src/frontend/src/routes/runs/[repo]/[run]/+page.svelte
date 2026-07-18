@@ -10,7 +10,7 @@
 	import RunNode from '$lib/RunNode.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
-	import { runIdSlug } from '$lib/runNode';
+	import { runLedgerRowsForNode } from '$lib/runNode';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 
 	// The widest window the ledger API honours (7 days); a run node is usually
@@ -22,6 +22,7 @@
 	let unauthenticated = $state(false);
 	let ledgerRows = $state<RunLedgerRow[] | null>(null);
 	let ledgerStale = $state(false);
+	let ledgerError = $state<string | null>(null);
 
 	let repoSlug = $derived(page.params.repo ?? '');
 	let runId = $derived(page.params.run ?? '');
@@ -35,16 +36,18 @@
 		}
 		try {
 			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, LEDGER_SPAN_MS);
-			// The route carries the *sanitized* run id (it is a directory name),
-			// so match ledger rows through the same sanitizer.
-			const wanted = runIdSlug(runId);
-			ledgerRows = receipts.rows.filter((row) => runIdSlug(row.run_id ?? '') === wanted);
+			// Route segments are sanitized directory names. Match both of them:
+			// one account can mirror several repos whose generated run ids may overlap.
+			ledgerRows = runLedgerRowsForNode(receipts.rows, repoSlug, runId);
 			ledgerStale = receipts.stale;
-		} catch {
+			ledgerError = null;
+		} catch (e) {
 			// The receipt is a supplement, not the page. A 401 here is already
 			// carried by the surface fetch (same session cookie), and any other
-			// failure should leave the mirrored node readable rather than blank.
+			// failure should leave the mirrored node readable without pretending
+			// that a failed fetch proved the run was outside the ledger window.
 			ledgerRows = [];
+			ledgerError = e instanceof Error ? e.message : 'ledger fetch failed';
 		}
 	});
 </script>
@@ -64,5 +67,5 @@
 {:else if data === null}
 	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-stone-500">reading run node…</div>
 {:else}
-	<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} />
+	<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
 {/if}

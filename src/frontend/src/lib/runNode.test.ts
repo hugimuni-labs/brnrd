@@ -7,6 +7,7 @@ import {
 	messageTarget,
 	messageTone,
 	repoRunSlug,
+	runLedgerRowsForNode,
 	runIdSlug,
 	runNodeFromSurface,
 	runNodeHref,
@@ -49,6 +50,17 @@ test('runNodeHrefForPath turns a corpus run path into an edge, and ignores the r
 	assert.equal(runNodeHrefForPath('knowledge/repos/Gurio__brr/design.md'), null);
 	assert.equal(runNodeHrefForPath('runs/Gurio__brr'), null);
 	assert.equal(runNodeHrefForPath('surface/index.md'), null);
+});
+
+test('runLedgerRowsForNode matches both repo and run directory slugs', () => {
+	const row = (repo_label: string, run_id: string) =>
+		({ repo_label, run_id }) as Parameters<typeof runLedgerRowsForNode>[0][number];
+	const rows = [
+		row('Gurio/brr', 'run shared'),
+		row('Other/repo', 'run shared'),
+		row('Gurio/brr', 'run-other')
+	];
+	assert.deepEqual(runLedgerRowsForNode(rows, 'Gurio__brr', 'run-shared'), [rows[0]]);
 });
 
 test('frontmatterDocument keeps metadata separate from rendered prose', () => {
