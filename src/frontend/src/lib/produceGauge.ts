@@ -1,7 +1,9 @@
 import type { RelicRecord, RunLedgerRow } from './runLedger';
 
 export const PRODUCE_GAUGE_WINDOW_MS = 24 * 60 * 60 * 1000;
-export const PRODUCE_GAUGE_LEDGER_LIMIT = 100;
+// Shared with the loom: enough published rows to cover its seven-day shelf
+// at the observed run rate while the gauge still rolls up only trailing 24h.
+export const PRODUCE_GAUGE_LEDGER_LIMIT = 256;
 
 export interface ShellQuotaSpend {
 	shell: string;

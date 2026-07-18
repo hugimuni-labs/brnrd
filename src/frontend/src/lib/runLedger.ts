@@ -242,9 +242,14 @@ export class RunLedgerAuthError extends Error {}
  * 401 (no session cookie), same shape as the other dashboard fetchers. */
 export async function fetchRunLedger(
 	fetchImpl: typeof fetch = fetch,
-	limit = 10
+	limit = 10,
+	spanMs?: number
 ): Promise<RunLedgerResponse> {
-	const res = await fetchImpl(`/v1/dashboard/run-ledger?limit=${limit}`, {
+	const params = new URLSearchParams({ limit: String(limit) });
+	if (spanMs !== undefined) {
+		params.set('span_seconds', String(Math.max(1, Math.round(spanMs / 1000))));
+	}
+	const res = await fetchImpl(`/v1/dashboard/run-ledger?${params.toString()}`, {
 		credentials: 'include'
 	});
 	if (res.status === 401) {
