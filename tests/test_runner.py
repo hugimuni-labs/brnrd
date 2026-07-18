@@ -49,6 +49,16 @@ def test_clean_runner_environ_strips_parent_agent_session_leakage(monkeypatch):
     assert cleaned.get("BRR_KEEP_ME") == "yes"
 
 
+def test_clean_runner_environ_makes_gh_token_authoritative(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "human-token")
+    monkeypatch.setenv("GH_TOKEN", "bot-token")
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert cleaned["GH_TOKEN"] == "bot-token"
+    assert "GITHUB_TOKEN" not in cleaned
+
+
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
     assert result is None or isinstance(result, str)
