@@ -7,6 +7,8 @@ import {
 	messageInstant,
 	messageTarget,
 	messageTone,
+	nodeDigest,
+	nowProjection,
 	repoRunSlug,
 	runLedgerRowsForNode,
 	runIdSlug,
@@ -245,4 +247,48 @@ test('edge fields are lifted out of the generic frame list, not duplicated', () 
 	}).map((field) => field.label);
 
 	assert.deepEqual(labels, ['status']);
+});
+
+test('nowProjection mirrors the daemon card projection, including its fallback', () => {
+	assert.equal(
+		nowProjection('## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story.'),
+		'Driving tests.'
+	);
+	// A body with no sections is entirely the now — legacy one-note cards.
+	assert.equal(nowProjection('Plain legacy note'), 'Plain legacy note');
+	assert.equal(nowProjection(''), '');
+	assert.equal(nowProjection('## NOW\nx\n'), 'x');
+	// A double-spaced heading is not a match — on this side or the Python one
+	// (`line.strip().casefold() == "## now"` leaves the inner space too), so
+	// the whole body is the now. Pinned because the two must agree even here.
+	assert.equal(nowProjection('##  now\nx'), '##  now\nx');
+});
+
+test('nodeDigest offers the expand only when expanding reveals something', () => {
+	const node = (files: SurfaceResponse['files']) =>
+		nodeDigest(runNodeFromSurface(surface(files), 'Gurio__brr', 'run-1'));
+
+	const sectioned = node([
+		{
+			path: 'runs/Gurio__brr/run-1/state.md',
+			markdown: '---\nstatus: running\nstage: running\nrunner_name: claude-opus\n---\n',
+			layer: 'runs'
+		},
+		{ path: 'runs/Gurio__brr/run-1/body.md', markdown: '## Now\n\nx\n\n## Arc\n\ny', layer: 'runs' }
+	]);
+	assert.equal(sectioned.now, 'x');
+	assert.equal(sectioned.status, 'running');
+	assert.equal(sectioned.runner, 'claude-opus');
+	assert.equal(sectioned.hasMore, true);
+
+	// A one-section body with no traffic has nothing behind the expand.
+	const flat = node([
+		{ path: 'runs/Gurio__brr/run-1/state.md', markdown: '---\nstatus: done\n---\n', layer: 'runs' },
+		{ path: 'runs/Gurio__brr/run-1/body.md', markdown: '## Now\n\nonly this', layer: 'runs' }
+	]);
+	assert.equal(flat.hasMore, false);
+	assert.equal(flat.messageCount, 0);
+
+	// An unmirrored node reports itself rather than rendering empty vitals.
+	assert.equal(node([]).mirrored, false);
 });
