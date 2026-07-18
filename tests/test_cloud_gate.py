@@ -273,6 +273,49 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert protocol.list_pending(inbox_dir) == []
 
 
+def test_streaming_interims_and_terminal_all_reach_the_platform(tmp_path, monkeypatch):
+    """Regression (2026-07-18): the gate posted every delivery as ``done``,
+    so the server closed the event on the first interim and silently skipped
+    every later forward — the run's final reply vanished while the daemon
+    cleaned it up as delivered. Interims post ``processing`` now; the close
+    belongs to the terminal alone."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={"repo_id": pid, "body": "task", "reply_to": {"chat": 1}},
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    (event,) = protocol.list_pending(inbox_dir)
+
+    # Mid-run: an interim lands while the event is still processing.
+    protocol.set_status(event, "processing")
+    protocol.write_partial(responses_dir, event["id"], "interim: found something")
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert [item.body for item in forwarder.items] == ["interim: found something"]
+
+    # Closeout: the terminal reply must still reach the platform.
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, event["id"], "final: the whole story")
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert [item.body for item in forwarder.items] == [
+        "interim: found something",
+        "final: the whole story",
+    ]
+    assert protocol.list_done(inbox_dir, "cloud") == []
+
+
 def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
     from brr.run import Run
 
