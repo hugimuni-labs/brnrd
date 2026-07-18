@@ -177,8 +177,13 @@ def test_work_surface_files_ignores_symlinked_directories(tmp_path):
 
 
 def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
-    """One layered corpus: authored surface, then knowledge, then replies —
-    home-relative paths, index-first, same hardening as the surface."""
+    """One layered corpus: authored surface, then knowledge, then per-run messages.
+
+    The 'replies' layer now reads from home/runs/<slug>/ rather than
+    knowledge/replies/<slug>/ — run messages live on the private side of the
+    ACL (home repo, not shared knowledge repo). The layer name stays 'replies'
+    so the frontend render contract is unchanged.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     write_repo_scaffold(repo)
@@ -189,13 +194,18 @@ def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
     (surface / "index.md").write_text("# Work surface", encoding="utf-8")
     (surface / "workflow.md").write_text("gating", encoding="utf-8")
 
-    knowledge = account.knowledge_path(ctx)
-    kb = knowledge / account.REPOS_PATH / "Gurio__brr"
+    knowledge_root = account.knowledge_path(ctx)
+    kb = knowledge_root / account.REPOS_PATH / "Gurio__brr"
     kb.mkdir(parents=True, exist_ok=True)
     (kb / "design.md").write_text("# Design", encoding="utf-8")
-    replies = knowledge / account.REPLIES_PATH / "Gurio__brr"
-    replies.mkdir(parents=True, exist_ok=True)
-    (replies / "run-x.md").write_text("reply", encoding="utf-8")
+
+    # Run messages now live in home/runs/<slug>/<run-id>/messages/
+    from brr import message_store as ms
+    ms_dir = ms.run_messages_dir(ctx, "Gurio/brr", "run-x")
+    ms_dir.mkdir(parents=True, exist_ok=True)
+    (ms_dir / "000001-terminal.md").write_text(
+        "---\nstatus: delivered\n---\n\nreply body\n", encoding="utf-8",
+    )
 
     # Hardening: a symlinked directory in the knowledge layer must not leak.
     outside = tmp_path / "outside"
@@ -210,7 +220,8 @@ def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
     assert paths[0] == "surface/index.md"  # index leads its layer
     assert "surface/workflow.md" in paths
     assert "knowledge/repos/Gurio__brr/design.md" in paths
-    assert "knowledge/replies/Gurio__brr/run-x.md" in paths
+    # The run's message appears under runs/ (the new home-relative location).
+    assert any(p.startswith("runs/") and "run-x" in p for p in paths)
     assert not any("secret" in p for p in paths)
     # Each layer appears contiguously in reading order.
     assert [f.layer for f in files if f.path.startswith("knowledge/repos/")] == ["knowledge"]
@@ -464,7 +475,8 @@ def test_relabel_scopes_covers_every_slug_keyed_path(tmp_path):
     ctx, _repo = _relabel_home(tmp_path)
     scopes = {scope for scope, _path, _home in account.relabel_scopes(ctx, "Gurio/brr")}
     assert scopes == {
-        "dominion", "surface-plans", "runner-policy", "run-state", "knowledge", "replies",
+        "dominion", "surface-plans", "runner-policy", "run-state",
+        "runs", "knowledge", "replies",
     }
 
 
@@ -473,7 +485,7 @@ def test_relabel_moves_every_scope_and_rekeys_the_registry(tmp_path):
 
     moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
 
-    assert len(moves) == 6
+    assert len(moves) == 7  # +1 for the new "runs" scope
     for scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
         assert not path.exists(), f"{scope} left behind at the old slug"
     for scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
@@ -497,7 +509,7 @@ def test_relabel_dry_run_touches_nothing(tmp_path):
         ctx, "Gurio/brr", "hugimuni-labs/brnrd", dry_run=True
     )
 
-    assert len(moves) == 6
+    assert len(moves) == 7  # +1 for the new "runs" scope
     for _scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
         assert path.exists(), "dry run moved something"
     for _scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
@@ -577,7 +589,7 @@ def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
     moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
 
     assert {move.scope for move in moves} == {
-        "dominion", "surface-plans", "run-state", "knowledge", "replies",
+        "dominion", "surface-plans", "runs", "run-state", "knowledge", "replies",
     }
 
 

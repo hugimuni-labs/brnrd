@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .. import protocol
+from .. import message_store, protocol
 
 _BACKOFF_MAX = 120
 _PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -270,22 +270,21 @@ def deliver_stream(
     inbox_dir: Path,
     responses_dir: Path,
     source: str,
-    deliver_partial: Callable[[dict, str], None],
-    deliver_terminal: Callable[[dict, str], None] | None = None,
+    deliver_partial: Callable[[dict, str], object],
+    deliver_terminal: Callable[[dict, str], object] | None = None,
 ) -> None:
-    """Stream a per-event response queue, then the terminal response.
+    """Stream pending durable messages, then close the event in place.
 
     The multi-response delivery surface (see
     ``kb/design-multi-response.md``). For each **active**
     (``processing`` or ``done``) event matching *source*, oldest first:
 
-    1. deliver each pending interim response in order, deleting it
-       after a successful send — so delivery is resumable: a transient
-       platform error retries from the first undelivered partial on the
-       next loop;
-    2. **only when the event is ``done``**, deliver the terminal
-       response (``<eid>.md``) and clean up the event, terminal file,
-       and partials queue.
+    1. deliver each pending interim response in order, transitioning its
+       durable run message only after the platform confirms;
+    2. **only when the event is ``done``**, deliver the terminal response
+       (``<eid>.md``), then transition the event to ``delivered``. Response
+       carriers remain as deploy-skew recovery material; delivery state is
+       never file absence.
 
     *deliver_partial* sends an interim message; *deliver_terminal* sends
     the closing message (defaults to *deliver_partial*). The split lets
@@ -300,18 +299,41 @@ def deliver_stream(
         try:
             for ppath in protocol.list_partials(responses_dir, eid):
                 body = protocol.read_partial(ppath)
-                if body:
-                    deliver_partial(event, body)
-                ppath.unlink(missing_ok=True)
+                message_path = message_store.message_path_from_queue(ppath)
+                message = message_store.read(message_path) if message_path else None
+                if message and message.get("status") != message_store.PENDING:
+                    continue
+                receipt = deliver_partial(event, body) if body else None
+                if message_path:
+                    message_store.transition(
+                        message_path,
+                        message_store.DELIVERED,
+                        gate=source,
+                        platform_message_id=message_store.receipt_id(receipt),
+                    )
+                else:
+                    # A pre-store daemon may have staged this carrier while a
+                    # post-store gate was already running. Preserve it under a
+                    # non-queue suffix instead of unlinking or double-posting.
+                    ppath.replace(ppath.with_suffix(".delivered"))
             if event.get("status") == "done":
                 body = protocol.read_response(responses_dir, eid)
-                if body is not None:
-                    deliver_terminal(event, body)
-                protocol.cleanup(
-                    event["_path"],
-                    protocol.response_path(responses_dir, eid),
-                    protocol.partials_dir(responses_dir, eid),
-                )
+                response_path = protocol.response_path(responses_dir, eid)
+                message_path = message_store.message_path_from_queue(response_path)
+                message = message_store.read(message_path) if message_path else None
+                suppressed = bool(event.get("terminal_suppressed"))
+                if body is not None and not suppressed and (
+                    message is None or message.get("status") == message_store.PENDING
+                ):
+                    receipt = deliver_terminal(event, body)
+                    if message_path:
+                        message_store.transition(
+                            message_path,
+                            message_store.DELIVERED,
+                            gate=source,
+                            platform_message_id=message_store.receipt_id(receipt),
+                        )
+                protocol.set_status(event, "delivered")
         except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
             print(f"[brnrd:{source}] delivery error for {eid}: {e}")
             continue
@@ -321,13 +343,13 @@ def deliver_responses(
     inbox_dir: Path,
     responses_dir: Path,
     source: str,
-    deliver: Callable[[dict, str], None],
+    deliver: Callable[[dict, str], object],
 ) -> None:
-    """Deliver responses for *source* (interim + terminal), then clean up.
+    """Deliver responses for *source* (interim + terminal), then close status.
 
     Thin wrapper over :func:`deliver_stream` for gates whose interim and
     terminal messages are delivered the same way (telegram, slack,
     cloud). A plain single-response run delivers exactly one message and
-    cleans up on ``done`` — unchanged from before the streaming queue.
+    transitions to ``delivered`` on ``done``.
     """
     deliver_stream(inbox_dir, responses_dir, source, deliver)

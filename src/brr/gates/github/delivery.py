@@ -98,7 +98,7 @@ def _thread_reply_body(event: dict, body: str) -> str:
     return preface + body
 
 
-def _post_comment(token: str, event: dict, body: str) -> None:
+def _post_comment(token: str, event: dict, body: str) -> object:
     """Post one message (interim or terminal) as a GitHub comment.
 
     Raises on a missing target or API error so the streaming driver
@@ -120,7 +120,7 @@ def _post_comment(token: str, event: dict, body: str) -> None:
         post_path = pull_comment_replies(repo, pr_number, review_cid)
     else:
         post_path = issue_comments(repo, number)
-    client._api_post(token, post_path, body={"body": threaded_body})
+    return client._api_post(token, post_path, body={"body": threaded_body})
 
 
 def _event_field(event: dict, *names: str) -> str:
@@ -142,7 +142,7 @@ def _deliver_pull_request(
     body: str,
     *,
     default_repo: str | None = None,
-) -> None:
+) -> object:
     """Create or refresh a PR from a ``gate: github``/``gate: forge`` event."""
     repo = _event_field(event, "github_repo", "repo") or (default_repo or "")
     head = _event_field(event, "head", "github_head")
@@ -155,6 +155,7 @@ def _deliver_pull_request(
         token, repo, head=head, title=title, body=body, base=base,
     )
     print(f"[brnrd:github] pull request delivered -> {url or head}")
+    return {"url": url or head}
 
 
 def _deliver_responses(
@@ -166,15 +167,14 @@ def _deliver_responses(
     *,
     source: str = "github",
 ) -> None:
-    def deliver_partial(event: dict, body: str) -> None:
+    def deliver_partial(event: dict, body: str) -> object:
         if _is_pull_request_delivery(event):
-            return
-        _post_comment(token, event, body)
+            return None
+        return _post_comment(token, event, body)
 
-    def deliver_terminal(event: dict, body: str) -> None:
+    def deliver_terminal(event: dict, body: str) -> object:
         if _is_pull_request_delivery(event):
-            _deliver_pull_request(token, event, body, default_repo=repo)
-            return
+            return _deliver_pull_request(token, event, body, default_repo=repo)
         # The branch footer (committed SHA + compare link) is the
         # thread's closing context, so it rides only the terminal reply.
         event_repo = event.get("github_repo")
@@ -183,7 +183,7 @@ def _deliver_responses(
             footer = _branch_footer(event_repo, task)
             if footer:
                 body = body.rstrip() + footer + "\n"
-        _post_comment(token, event, body)
+        return _post_comment(token, event, body)
 
     runtime.deliver_stream(
         inbox_dir, responses_dir, source, deliver_partial, deliver_terminal,
