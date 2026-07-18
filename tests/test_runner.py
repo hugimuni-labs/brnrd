@@ -1210,10 +1210,14 @@ class TestKilledRunnerStillSpeaks:
 
         def _reaper():
             for _ in range(100):
-                proc = runner_mod._active_proc
-                if proc is not None:
+                with runner_mod._proc_lock:
+                    procs = [
+                        p for label, p in runner_mod._active_procs.items()
+                        if label.startswith("killed")
+                    ]
+                if procs:
                     _time.sleep(0.4)
-                    proc.send_signal(signal.SIGTERM)
+                    procs[0].send_signal(signal.SIGTERM)
                     return
                 _time.sleep(0.05)
 
@@ -1488,13 +1492,12 @@ class TestRetryReason:
 
 
 class TestKillActive:
-    """kill_active is the cross-thread handle the daemon's heartbeat and
-    shutdown use to reclaim the single-flight slot."""
+    """kill_active is the cross-thread kill-everything handle daemon
+    shutdown uses; per-run enforcement goes through kill_matching."""
 
     def test_kills_live_process_then_noop(self):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        with runner_mod._proc_lock:
-            runner_mod._active_proc = proc
+        runner_mod._register_active_proc("test-kill-active", proc)
         try:
             assert runner_mod.kill_active() is True
             proc.wait(timeout=5)
@@ -1502,14 +1505,13 @@ class TestKillActive:
             # Already dead: nothing live to signal.
             assert runner_mod.kill_active() is False
         finally:
-            with runner_mod._proc_lock:
-                runner_mod._active_proc = None
+            runner_mod._clear_active_proc("test-kill-active")
             if proc.poll() is None:
                 proc.kill()
 
     def test_noop_when_idle(self):
         with runner_mod._proc_lock:
-            runner_mod._active_proc = None
+            runner_mod._active_procs.clear()
         assert runner_mod.kill_active() is False
 
     def test_invocation_timeout_seconds_overrides_cfg_default(self):
