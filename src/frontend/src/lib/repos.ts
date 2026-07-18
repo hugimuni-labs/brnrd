@@ -27,7 +27,6 @@ export interface ConnectedRepo {
 	gates: GateHealth[];
 	setup_command: string;
 	telegram_pair_enabled: boolean;
-	bot_invite_enabled: boolean;
 }
 
 export interface GateHealth {
@@ -76,7 +75,6 @@ export interface ReposResponse {
 	install_url: string;
 	github_app_slug: string;
 	github_bot_login: string;
-	github_bot_user_login: string;
 	notice: string | null;
 	setup_installation_id: string;
 }
@@ -151,13 +149,6 @@ export function connectRepo(
 		},
 		fetchImpl
 	);
-}
-
-export function inviteRepoBot(
-	repoId: string,
-	fetchImpl: typeof fetch = fetch
-): Promise<RepoActionResponse> {
-	return postRepoAction(`/v1/repos/${encodeURIComponent(repoId)}/invite-bot`, {}, fetchImpl);
 }
 
 export function pairRepoTelegram(
