@@ -57,6 +57,12 @@ def _account_id(client: TestClient, login: str = "Gurio") -> str:
         return account.id
 
 
+def test_bot_user_identity_does_not_inherit_app_identity():
+    settings = Settings(github_bot_login="brnrd-dev")
+
+    assert settings.github_bot_user_login == "brnrd-bot"
+
+
 def _add_installation_repo(
     client: TestClient,
     account_id: str,
