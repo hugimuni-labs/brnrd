@@ -81,6 +81,7 @@ def register(
     kind: str,
     stream: str | None = None,
     label: str | None = None,
+    name: str | None = None,
     run_id: str | None = None,
     repo_label: str | None = None,
     entry_id: str | None = None,
@@ -125,6 +126,7 @@ def register(
         "kind": kind,
         "stream": stream or "",
         "label": label or "",
+        "name": name or "",
         "run_id": run_id or "",
         "repo_label": repo_label or "",
         "pid": int(pid if pid is not None else os.getpid()),
@@ -142,13 +144,17 @@ def register(
     return entry
 
 
-def heartbeat(brr_dir: Path, entry_id: str, *, now: float | None = None) -> bool:
+def heartbeat(
+    brr_dir: Path, entry_id: str, *, name: str | None = None, now: float | None = None
+) -> bool:
     """Refresh a participant's ``last_seen``. Returns False if it's gone."""
     path = _presence_dir(brr_dir) / f"{entry_id}.json"
     entry = _read(path)
     if entry is None:
         return False
     entry["last_seen"] = now if now is not None else time.time()
+    if name is not None:
+        entry["name"] = name
     try:
         _atomic_write(path, json.dumps(entry))
     except OSError:
