@@ -565,7 +565,7 @@ def test_dashboard_live_runs_api_returns_runs():
         daemon = Daemon(
             id="dmn-live-c", repo_id=pid, token_id="tok-live-c", daemon_name="laptop",
             live_runs_json=json.dumps(
-                [{"id": "pres-2", "kind": "daemon", "stream": "telegram:x:", "label": "Ship dashboard slice", "run_id": "run-b", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
+                [{"id": "pres-2", "kind": "daemon", "stream": "telegram:x:", "label": "Ship dashboard slice", "name": "run naming", "run_id": "run-b", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
             ),
             live_runs_updated_at=datetime.now(timezone.utc),
         )
@@ -577,6 +577,7 @@ def test_dashboard_live_runs_api_returns_runs():
     body = r.json()
     assert body["runs"][0]["run_id"] == "run-b"
     assert body["runs"][0]["label"] == "Ship dashboard slice"
+    assert body["runs"][0]["name"] == "run naming"
     assert body["stale"] is False
 
 
