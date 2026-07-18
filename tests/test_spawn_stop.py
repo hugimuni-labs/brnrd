@@ -289,3 +289,128 @@ def test_run_progress_folds_stopped_as_terminal(tmp_path):
     assert view.phase == "stopped"
     assert view.failure_kind == "stopped"
     assert view.detail == "stopped by run-parent"
+
+
+# ── daemon: the to: message verb + worker view isolation ────────────
+
+
+class TestMessageVerb:
+    def test_message_lands_as_child_only_event(self, tmp_path, monkeypatch):
+        daemon._register_spawn_control("evt-child", "run-parent")
+        daemon._bind_spawn_control_run("evt-child", "run-child")
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: run-child\n---\nfocus on the failing test\n")],
+        )
+
+        assert n == 1
+        assert stats.get("spawn_message") == 1
+        msgs = [
+            ev for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "dispatch_message"
+        ]
+        assert len(msgs) == 1
+        msg = msgs[0]
+        assert msg["spawn_message_for_event"] == "evt-child"
+        assert msg["spawn_message_from_run"] == "run-parent"
+        assert msg["body"] == "focus on the failing test"
+        assert "spawn_message" in [p.type for p in emitted]
+
+        # Visibility: only the addressed child's view carries it.
+        child_view = daemon._pending_events_for_agent(
+            inbox, "evt-child", worker=True)
+        assert [e["id"] for e in child_view] == [msg["id"]]
+        resident_view = daemon._pending_events_for_agent(inbox, "evt-lead")
+        assert msg["id"] not in [e["id"] for e in resident_view]
+
+    def test_message_refused_for_foreign_child(self, tmp_path, monkeypatch):
+        daemon._register_spawn_control("evt-child", "run-somebody-else")
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: evt-child\n---\nsteer\n")],
+        )
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("not dispatched by this run" in x["text"] for x in notices)
+
+    def test_message_refused_for_stopped_child(self, tmp_path, monkeypatch):
+        daemon._register_spawn_control("evt-child", "run-parent")
+        with daemon._spawn_controls_lock:
+            daemon._spawn_controls["evt-child"]["stopped"] = True
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: evt-child\n---\nsteer\n")],
+        )
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("being stopped" in x["text"] for x in notices)
+
+    def test_message_with_empty_body_is_dropped(self, tmp_path, monkeypatch):
+        daemon._register_spawn_control("evt-child", "run-parent")
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("msg.md", "---\nto: evt-child\n---\n\n")],
+        )
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("empty body" in x["text"] for x in notices)
+
+
+class TestWorkerViewIsolation:
+    def test_worker_view_hides_user_thread_events(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        protocol.create_event(inbox, "telegram", "user says hi")
+        msg = protocol.create_event(
+            inbox, "dispatch_message", "steer",
+            spawn_message_for_event="evt-child",
+            spawn_message_from_run="run-parent",
+        )
+
+        worker_view = daemon._pending_events_for_agent(
+            inbox, "evt-child", worker=True)
+        assert [e["id"] for e in worker_view] == [msg.stem]
+
+        other_worker = daemon._pending_events_for_agent(
+            inbox, "evt-other-child", worker=True)
+        assert other_worker == []
+
+    def test_resident_view_hides_edge_messages_keeps_user_events(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        user_ev = protocol.create_event(inbox, "telegram", "user says hi")
+        protocol.create_event(
+            inbox, "dispatch_message", "steer",
+            spawn_message_for_event="evt-child",
+            spawn_message_from_run="run-parent",
+        )
+
+        resident_view = daemon._pending_events_for_agent(inbox, "evt-lead")
+        assert [e["id"] for e in resident_view] == [user_ev.stem]
+
+    def test_retire_child_messages(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        protocol.create_event(
+            inbox, "dispatch_message", "steer",
+            spawn_message_for_event="evt-child",
+        )
+        other = protocol.create_event(
+            inbox, "dispatch_message", "steer",
+            spawn_message_for_event="evt-other",
+        )
+
+        daemon._retire_child_messages(inbox, "evt-child")
+
+        remaining = [
+            ev["id"] for ev in protocol.list_pending(inbox)
+            if ev.get("source") == "dispatch_message"
+        ]
+        assert remaining == [other.stem]

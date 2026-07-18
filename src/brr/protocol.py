@@ -64,7 +64,9 @@ def frontmatter_body(text: str) -> str:
 # Routing selectors that may lead an outbox message's frontmatter. Used
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
-_OUTBOX_ROUTING_KEYS = ("event", "gate", "respawn", "spawn", "stop", "runner_policy")
+_OUTBOX_ROUTING_KEYS = (
+    "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
+)
 
 
 def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
