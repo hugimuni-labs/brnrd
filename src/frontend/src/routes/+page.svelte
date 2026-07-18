@@ -17,6 +17,7 @@
 		type RunnersResponse
 	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
+	import { runNodeHref } from '$lib/runNode';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
 		ScheduledWakesAuthError,
@@ -213,6 +214,16 @@
 				)
 			: []
 	);
+	// The node route for whatever run is selected, live or closed. A live cell
+	// only ever opened this sheet, so the running run — the one a reader is
+	// most likely to want — had no way through to its own node at all.
+	let selectedNodeHref = $derived.by(() => {
+		if (loomSelection?.kind !== 'run') return null;
+		const live = selectedLiveRuns[0];
+		if (live?.run_id) return runNodeHref(live.repo_label, live.run_id);
+		const closed = selectedLedgerRows.find((row) => row.run_id);
+		return closed?.run_id ? runNodeHref(closed.repo_label, closed.run_id) : null;
+	});
 	let selectedWakes = $derived(
 		loomSelection?.kind === 'wake'
 			? (scheduledWakes ?? []).filter((wake) => wake.id === loomSelection!.id)
@@ -401,13 +412,23 @@
 							: 'selected run · receipt'}
 			</p>
 			{#if loomSelection !== null}
-				<button
-					type="button"
-					class="cursor-pointer font-mono text-[10px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
-					onclick={() => (loomSelection = null)}
-				>
-					✕ back to now
-				</button>
+				<div class="flex shrink-0 items-baseline gap-3">
+					{#if selectedNodeHref}
+						<a
+							href={selectedNodeHref}
+							class="font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+						>
+							run node →
+						</a>
+					{/if}
+					<button
+						type="button"
+						class="cursor-pointer font-mono text-[10px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+						onclick={() => (loomSelection = null)}
+					>
+						✕ back to now
+					</button>
+				</div>
 			{/if}
 		</div>
 		<div class="mt-2">
