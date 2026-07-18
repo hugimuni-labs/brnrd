@@ -20,7 +20,7 @@
 	let { data }: Props = $props();
 
 	// Which layer sections are open in the nav (authored open by default; knowledge
-	// and replies collapsed — the file list is too long to show all at once).
+	// and runs collapsed — the file list is too long to show all at once).
 	let expandedLayers = new SvelteSet(['authored']);
 	// Per-layer: which dir-group keys are open.
 	let expandedDirs = new SvelteMap<string, SvelteSet<string>>();
@@ -171,7 +171,7 @@
 	{:else}
 		<div class="grid gap-3 md:grid-cols-[minmax(11rem,0.28fr)_minmax(0,1fr)]">
 			<!-- Nav tree: height-capped so 260-file lists don't stretch the page.
-			     Each layer is a toggleable section; knowledge/replies sub-group by dir. -->
+			     Each layer is a toggleable section; knowledge/runs sub-group by dir. -->
 			<nav class="subpanel max-h-[70vh] overflow-y-auto p-2" aria-label="Corpus files">
 				{#each navTree as navLayer (navLayer.layer)}
 					{@const layerOpen = expandedLayers.has(navLayer.layer)}
@@ -200,7 +200,7 @@
 								>
 							{/each}
 						{:else}
-							<!-- Dir-grouped layer (knowledge repos/<slug>, replies/<slug>) -->
+							<!-- Dir-grouped layer (knowledge repos/<slug>, runs/<slug>/<run>) -->
 							{#each navLayer.dirs as dir (dir.key)}
 								{@const dirOpen = expandedDirs.get(navLayer.layer)?.has(dir.key) ?? false}
 								<button

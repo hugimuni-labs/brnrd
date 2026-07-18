@@ -51,7 +51,7 @@ other so they don't drift.
 | `<name>.md` with `to: <run-or-event-id>` frontmatter | concurrent ▸ worker steer | Message a concurrent child **this run** dispatched (same ownership check as `stop:`). The body lands as a `dispatch_message` event that **only the addressed worker's** `inbox.json` / portal-state surfaces — it never dispatches a run of its own, other runs never see it, and whatever the child has not folded in is retired when the child ends. A steer, not a new contract: the child folds it into its existing work and should not `event:`-address it. Workers are thread-isolated (they get their contract and these edge messages, not the user thread's recent turns or pending events), so this verb is the *only* way words reach a running worker. Refusals land in `notices`. |
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
-| `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
+| `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `.task-classification` | slot control | One short slug naming this run's **shape** for the cost ledger (`dashboard-slice`, `kb-brainstorm`, `bugfix`, …). Write it any time before closeout; the `Stop` hook nudges if it is still missing at the boundary, but that is a last catch, not permission to wait. Left unwritten, that ledger row's `task_classification` is **null forever** — and it is the one join key the cost-estimate workstream rolls up on. `spawn:` / `respawn:` frontmatter takes a `task_classification:` key to tag a child at hand-off. A control file, never delivered. |
 | `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
@@ -79,12 +79,11 @@ in a form something other than prose can read.
 
 **Auto-derived — write nothing for these.** Commits, the pushed branch, a
 self-reported PR, **kb pages committed by the knowledge capture**, and your
-**terminal reply** are collected at closeout. The
-reply is archived into the knowledge repo (`replies/<repo>/<run-id>.md`,
-outside the kb page tree) and reported back as a `{"kind": "reply", "url": …}`
-relic, so a run's answer of record is durable and linkable instead of buried
-in a chat scroll. Terminal replies only — interim messages are thinking out
-loud, and are not archived.
+**terminal reply** are collected at closeout. Every outbound reply is born
+under `runs/<repo>/<run-id>/messages/NNNNNN-<kind>.md` and reported as a reply
+relic. Delivery changes its frontmatter from `pending` to `delivered` or
+`undeliverable`, stamping the platform receipt when one exists. The message is
+never unlinked, so the run's full edge traffic remains durable.
 
 The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `issue`,
 `comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable

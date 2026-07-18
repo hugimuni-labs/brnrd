@@ -204,7 +204,7 @@ def test_daemon_owned_run_state_is_not_drift(tmp_path: Path) -> None:
     """**The one that matters.**
 
     The dominion *always* carries one untracked file mid-wake:
-    ``run-state/<this-run>.md``, written by the daemon at run start and
+    ``runs/<repo>/<run>/state.md``, written by the daemon at run start and
     committed by the capture net at run *end*.  Counting it meant ``drift: the
     capture net did not close`` would fire on **every wake, forever** — a
     permanent lie about a capture net that was working perfectly and simply had
@@ -216,8 +216,9 @@ def test_daemon_owned_run_state_is_not_drift(tmp_path: Path) -> None:
     brr_dir = _brr_with_prior_wake(tmp_path)
     dom = tmp_path / "dominion"
     _git_repo(dom)
-    (dom / "run-state").mkdir()
-    (dom / "run-state" / "run-260713-2331-qk3d.md").write_text("live", encoding="utf-8")
+    state = dom / "runs" / "Gurio__brr" / "run-260713-2331-qk3d" / "state.md"
+    state.parent.mkdir(parents=True)
+    state.write_text("live", encoding="utf-8")
 
     c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
     assert c.mount == "✓"          # exercise the real path, not an early return
