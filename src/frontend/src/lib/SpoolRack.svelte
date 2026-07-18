@@ -44,8 +44,8 @@
 	}
 
 	/** Who actually answers the next wake: the tap when one is parked,
-	 *  the pin otherwise. The "next wake" badge follows this, so the rack
-	 *  never shows two contradictory answers to one question. */
+	 *  the pin otherwise. This still drives emphasis, while the badges keep
+	 *  standing default and one-shot request as visibly different concepts. */
 	function isNextWake(profile: RunnerProfile): boolean {
 		return wakeRequest ? isRequested(profile) : isPinned(profile);
 	}
@@ -111,22 +111,14 @@
 								class="border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
 								>next wake · requested</span
 							>
-						{:else if nextWake}
-							<!-- The threaded shuttle: who wakes next unless addressed
-							     otherwise. Label + border, never color alone. -->
-							<span
-								class="border border-amber-700/70 bg-amber-950/40 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-300 uppercase"
-								>next wake</span
-							>
 						{:else if pinned}
-							<!-- Pinned default, superseded for one wake by the tap.
-							     Sky, not amber: the standing pin and the one-shot
-							     request are different concepts and wear different
-							     colors. Tapping here restores the default (cancels
-							     the parked request). -->
+							<!-- The standing pin is never a one-shot request. It may be
+							     active or temporarily superseded, but its name stays DEFAULT
+							     so the rack cannot recreate the ambiguity the header fixes. -->
 							<span
-								class="border border-sky-800/70 bg-sky-950/40 px-1.5 py-0.5 text-[10px] tracking-wide text-sky-300 uppercase"
-								>default · tap to restore</span
+								class="border px-1.5 py-0.5 text-[10px] tracking-wide uppercase {nextWake
+									? 'border-amber-700/70 bg-amber-950/40 text-amber-300'
+									: 'border-sky-800/70 bg-sky-950/40 text-sky-300'}">default</span
 							>
 						{/if}
 						{#if profile.class}
