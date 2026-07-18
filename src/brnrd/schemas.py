@@ -110,6 +110,12 @@ class DaemonRegistered(BaseModel):
     repo_id: str
 
 
+class PublishingCredential(BaseModel):
+    token: str
+    expires_at: datetime
+    login: str
+
+
 class DaemonDeregister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
 
