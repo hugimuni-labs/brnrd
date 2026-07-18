@@ -187,18 +187,17 @@ def test_invoke_with_heartbeat_runs_runner_on_separate_thread():
 
 
 def _real_sleep_invoke(seconds: int = 30):
-    """A fake backend whose invoke registers a real killable subprocess as
-    the active runner, so kill_active() can reclaim it like in production."""
+    """A fake backend whose invoke registers a real killable subprocess in
+    the active-proc registry, so kill_matching() can reclaim it like in
+    production."""
 
     def invoke(_ctx, _runner, invocation, cfg, *, trace=False):
         proc = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})"])
-        with runner_mod._proc_lock:
-            runner_mod._active_proc = proc
+        runner_mod._register_active_proc(invocation.label, proc)
         try:
             proc.wait()
         finally:
-            with runner_mod._proc_lock:
-                runner_mod._active_proc = None
+            runner_mod._clear_active_proc(invocation.label)
         return RunnerResult(
             invocation=invocation, runner_name="codex", command=["sleep"],
             stdout="", stderr="", returncode=proc.returncode,

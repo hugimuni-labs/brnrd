@@ -34,8 +34,58 @@ from typing import Any
 _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
 
-_active_proc: subprocess.Popen | None = None
+# Live runner subprocesses, keyed by invocation label. The daemon runs the
+# resident's thought *and* up to ``spawn.max_concurrent`` worker children in
+# one process, each invoking its own runner subprocess concurrently — a
+# single module-global handle (the pre-2026-07-18 shape) meant a budget kill
+# for one run could terminate a *different* run's process, and a finishing
+# spawn nulled the handle out from under a still-live sibling. Labels are
+# ``{event-id}-attempt-{n}`` for daemon runs, so a prefix match on
+# ``{event-id}-`` addresses "whatever process this run is currently driving".
+_active_procs: dict[str, subprocess.Popen] = {}
 _proc_lock = threading.Lock()
+
+
+def _register_active_proc(label: str, proc: subprocess.Popen) -> None:
+    with _proc_lock:
+        _active_procs[label] = proc
+
+
+def _clear_active_proc(label: str) -> None:
+    with _proc_lock:
+        _active_procs.pop(label, None)
+
+
+def _kill_procs(procs: list[subprocess.Popen]) -> bool:
+    killed = False
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        try:
+            proc.kill()
+        except OSError:
+            continue
+        killed = True
+    return killed
+
+
+def kill_matching(label_prefix: str) -> bool:
+    """Terminate live runner subprocess(es) whose label starts with *prefix*.
+
+    The targeted sibling of :func:`kill_active`: the daemon's budget
+    enforcement kills exactly its own invocation (exact label), and the
+    ``stop:`` dispatch verb kills a spawned child's current attempt by its
+    event-id prefix. Returns ``True`` when at least one live process was
+    signalled. Safe from any thread.
+    """
+    if not label_prefix:
+        return False
+    with _proc_lock:
+        procs = [
+            proc for label, proc in _active_procs.items()
+            if label.startswith(label_prefix)
+        ]
+    return _kill_procs(procs)
 
 
 # Environment variables an agent CLI sets for *its own* session that must not
@@ -78,23 +128,19 @@ def clean_runner_environ() -> dict[str, str]:
 
 
 def kill_active() -> bool:
-    """Terminate the in-flight runner subprocess, if one is running.
+    """Terminate every in-flight runner subprocess.
 
-    Returns ``True`` when a live process was signalled. Safe to call from
-    any thread — it reads the handle under ``_proc_lock`` and kills outside
-    it. The daemon's heartbeat uses this to enforce an extensible budget,
-    and shutdown uses it to reclaim the single-flight slot promptly instead
-    of waiting out the wall-clock backstop. No-op when nothing is running.
+    Shutdown semantics: daemon teardown uses this to reclaim the resident
+    slot *and* any live concurrent spawns promptly instead of waiting out
+    their (long, possibly extended) budgets. Per-run enforcement (budget
+    kill, the ``stop:`` verb) goes through :func:`kill_matching` so one
+    run's deadline can never terminate a sibling's process. Returns
+    ``True`` when at least one live process was signalled. Safe from any
+    thread — handles are read under ``_proc_lock`` and killed outside it.
     """
     with _proc_lock:
-        proc = _active_proc
-    if proc is None or proc.poll() is not None:
-        return False
-    try:
-        proc.kill()
-    except OSError:
-        return False
-    return True
+        procs = list(_active_procs.values())
+    return _kill_procs(procs)
 
 
 DEFAULT_RUNNER_TIMEOUT = 7200
@@ -169,7 +215,7 @@ class RunnerInvocation:
     # Wall-clock backstop for ``proc.communicate``. ``None`` falls back to
     # ``runner_timeout(cfg)``. The daemon passes a generous hard cap here
     # and enforces the real (extensible) budget from its heartbeat — see
-    # ``daemon._invoke_with_heartbeat`` and ``kill_active``.
+    # ``daemon._invoke_with_heartbeat`` and ``kill_matching``.
     timeout_seconds: int | None = None
     # Extra environment variables for the runner subprocess. Daemon runs
     # use this to expose live portal paths (BRR_PORTAL_STATE,
@@ -1201,7 +1247,6 @@ def invoke_runner(
     final reply to stdout (progress streams to stderr); brr has no need
     to know per-runner output flags.
     """
-    global _active_proc
     cfg = cfg or {}
 
     from . import runner_select
@@ -1243,8 +1288,16 @@ def invoke_runner(
     try:
         with open(out_path, "w", encoding="utf-8") as f_out, \
                 open(err_path, "w", encoding="utf-8") as f_err:
+            proc_key = invocation.label or f"invoke-{id(invocation)}"
             with _proc_lock:
-                _active_proc = subprocess.Popen(
+                # A duplicate label must not shadow a live sibling's handle
+                # (it would orphan that proc from every kill path).
+                base_key = proc_key
+                bump = 1
+                while proc_key in _active_procs:
+                    proc_key = f"{base_key}#{bump}"
+                    bump += 1
+                proc = _active_procs[proc_key] = subprocess.Popen(
                     cmd,
                     cwd=invocation.cwd,
                     stdin=(
@@ -1256,7 +1309,6 @@ def invoke_runner(
                     text=True,
                     env=proc_env,
                 )
-            proc = _active_proc
             if prompt_stdin is not None and proc.stdin is not None:
                 # Cannot deadlock: stdout/stderr are *files*, not pipes, so the child
                 # is never blocked on a full pipe we are not draining. It reads the
@@ -1282,7 +1334,9 @@ def invoke_runner(
         returncode = 127
     finally:
         with _proc_lock:
-            _active_proc = None
+            for key, live in list(_active_procs.items()):
+                if live.poll() is not None:
+                    _active_procs.pop(key, None)
 
     if returncode != 127:
         stdout = _read_capture(out_path)
