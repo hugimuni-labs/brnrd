@@ -30,13 +30,6 @@ def read_response(responses_dir: Path, event_id: str) -> str | None:
     return protocol.read_response(responses_dir, event_id)
 
 
-def cleanup(event_path: Path, response_path: Path | None) -> None:
-    """Delete event and response files after delivery."""
-    event_path.unlink(missing_ok=True)
-    if response_path:
-        response_path.unlink(missing_ok=True)
-
-
 def import_gate(name: str):
     """Dynamically import a built-in gate module by name."""
     return importlib.import_module(f".{name}", package=__name__)
