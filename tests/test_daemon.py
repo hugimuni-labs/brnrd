@@ -3713,6 +3713,72 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     assert "run_state_url" not in task.meta
 
 
+def test_dispatch_edge_is_recorded_on_both_run_nodes(tmp_path):
+    """A spawned child stamps its parent; the parent's own rewrite keeps it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+
+    def persist(run_id, stage, meta=None):
+        task = Run(
+            id=run_id, event_id=f"evt-{run_id}", body="work",
+            source="telegram", status="running", meta=dict(meta or {}),
+        )
+        return daemon._persist_run_state_doc(
+            ctx, task, repo_label="Gurio/brr", stage=stage,
+        )
+
+    parent = persist("run-parent", "running")
+    child = persist(
+        "run-child", "done", {"spawn_parent_run_id": "run-parent"},
+    )
+
+    assert "parent_run_id: run-parent" in child.read_text(encoding="utf-8")
+    assert "child_run_ids: run-child" in parent.read_text(encoding="utf-8")
+
+    # A second child appends rather than replacing, and re-persisting the
+    # same child stays idempotent.
+    persist("run-child-2", "done", {"spawn_parent_run_id": "run-parent"})
+    persist("run-child", "done", {"spawn_parent_run_id": "run-parent"})
+    assert (
+        "child_run_ids: run-child, run-child-2"
+        in parent.read_text(encoding="utf-8")
+    )
+
+    # The parent's own closeout rewrite must not drop the accreted half.
+    persist("run-parent", "done")
+    assert (
+        "child_run_ids: run-child, run-child-2"
+        in parent.read_text(encoding="utf-8")
+    )
+
+
+def test_dispatch_edge_skips_a_parent_that_left_no_run_node(tmp_path):
+    """No document, no fabricated edge — and the child still persists."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-orphan", event_id="evt-orphan", body="work", source="spawn",
+        status="done", meta={"spawn_parent_run_id": "run-never-written"},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="done",
+    )
+
+    assert "parent_run_id: run-never-written" in path.read_text(encoding="utf-8")
+    assert not (ctx.runs_dir / "Gurio__brr" / "run-never-written").exists()
+
+
 def test_run_body_captures_the_resident_card_without_daemon_prose(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -4178,3 +4244,93 @@ def test_worker_boot_prompt_excludes_foreign_pending_events(
 
     assert task.status == "done"
     assert prompt_kwargs.get("pending_events") == []
+
+
+def test_dispatch_edge_backfill_replays_the_ledger_onto_existing_nodes(tmp_path):
+    """The edge was recorded in the ledger long before it reached the node."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    for run_id in ("run-old-parent", "run-old-child"):
+        daemon._persist_run_state_doc(
+            ctx,
+            Run(id=run_id, event_id=f"evt-{run_id}", body="work", source="telegram"),
+            repo_label="Gurio/brr",
+            stage="done",
+        )
+    ledger = daemon.run_ledger.ledger_path(repo)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "run_id": "run-old-child",
+                    "parent_run_id": "run-old-parent",
+                    "repo_label": "Gurio/brr",
+                },
+                # A ledger row whose node was never written links nothing.
+                {
+                    "run_id": "run-absent",
+                    "parent_run_id": "run-old-parent",
+                    "repo_label": "Gurio/brr",
+                },
+                {"run_id": "run-old-parent"},
+                "not-json-below",
+            )
+        )
+        + "\nnot json at all\n",
+        encoding="utf-8",
+    )
+
+    assert daemon._backfill_dispatch_edges(ctx) == 1
+    # Replaying it is a no-op, not a duplicated edge.
+    assert daemon._backfill_dispatch_edges(ctx) == 0
+
+    node = ctx.runs_dir / "Gurio__brr"
+    child = (node / "run-old-child" / "state.md").read_text(encoding="utf-8")
+    parent = (node / "run-old-parent" / "state.md").read_text(encoding="utf-8")
+    assert "parent_run_id: run-old-parent" in child
+    assert "child_run_ids: run-old-child\n" in parent
+    assert "run-absent" not in parent
+
+
+def test_dispatch_edges_survive_a_fleet_closing_at_once(tmp_path):
+    """A fleet's children stamp one parent concurrently; no edge is lost."""
+    import concurrent.futures
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    daemon._persist_run_state_doc(
+        ctx,
+        Run(id="run-fleet", event_id="evt-fleet", body="work", source="telegram"),
+        repo_label="Gurio/brr",
+        stage="running",
+    )
+    children = [f"run-child-{index}" for index in range(12)]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(
+            lambda child: daemon._record_dispatch_edge(
+                ctx,
+                repo_label="Gurio/brr",
+                parent_run_id="run-fleet",
+                child_run_id=child,
+            ),
+            children,
+        ))
+
+    text = (ctx.runs_dir / "Gurio__brr" / "run-fleet" / "state.md").read_text(
+        encoding="utf-8",
+    )
+    recorded = daemon.protocol.parse_frontmatter(text)["child_run_ids"]
+    assert sorted(item.strip() for item in recorded.split(",")) == sorted(children)
