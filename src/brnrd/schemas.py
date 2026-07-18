@@ -182,16 +182,25 @@ class ActivityList(BaseModel):
 
 
 class SurfaceFileIn(BaseModel):
-    """One discovered Markdown page, relative to the home's ``surface/``."""
+    """One discovered Markdown page in the unified corpus, home-relative.
+
+    ``path`` is relative to the brnrd home (``surface/index.md``,
+    ``knowledge/repos/<slug>/foo.md``) so cross-layer links resolve. ``layer``
+    places it in the authored surface, the knowledge base, or the archived
+    replies; ``truncated`` marks a mirror capped for payload size (the file
+    still appears in the listing — see the cloud gate's corpus publisher).
+    """
 
     path: str = Field(min_length=1, max_length=512)
-    markdown: str = Field(default="", max_length=200_000)
+    markdown: str = Field(default="", max_length=300_000)
+    layer: str = Field(default="authored", max_length=32)
+    truncated: bool = False
 
 
 class SurfaceReport(BaseModel):
-    """The complete authored work surface discovered by one daemon."""
+    """The complete corpus (surface + knowledge + replies) from one daemon."""
 
-    files: list[SurfaceFileIn] = Field(default_factory=list, max_length=200)
+    files: list[SurfaceFileIn] = Field(default_factory=list, max_length=4000)
 
 
 class SurfaceOut(SurfaceReport):

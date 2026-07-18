@@ -1,11 +1,58 @@
 export interface SurfaceFile {
 	path: string;
 	markdown: string;
+	// Corpus join: which layer this home-relative page belongs to, and whether
+	// its mirror was capped by the gate. Both optional so a pre-corpus mirror
+	// (surface-only, no layer key) still renders — missing layer = 'authored'.
+	layer?: string;
+	truncated?: boolean;
 }
 export interface SurfaceResponse {
 	generated_at: string;
 	files: SurfaceFile[];
 	reported_at: string | null;
+}
+
+// Reading order for the corpus browser: what the resident authored, then the
+// knowledge it curated, then the run replies that knowledge archives.
+export const LAYER_ORDER = ['authored', 'knowledge', 'replies'] as const;
+export const LAYER_LABELS: Record<string, string> = {
+	authored: 'surface',
+	knowledge: 'knowledge',
+	replies: 'replies'
+};
+
+export interface LayerGroup {
+	layer: string;
+	label: string;
+	files: SurfaceFile[];
+}
+
+export function fileLayer(file: SurfaceFile): string {
+	return file.layer ?? 'authored';
+}
+
+/** Group corpus files by layer in reading order; empty layers are dropped. */
+export function groupByLayer(files: SurfaceFile[]): LayerGroup[] {
+	const buckets = new Map<string, SurfaceFile[]>();
+	for (const file of files) {
+		const layer = fileLayer(file);
+		const bucket = buckets.get(layer) ?? [];
+		bucket.push(file);
+		buckets.set(layer, bucket);
+	}
+	const ordered: LayerGroup[] = [];
+	const emit = (layer: string) => {
+		const bucket = buckets.get(layer);
+		if (bucket && bucket.length) {
+			ordered.push({ layer, label: LAYER_LABELS[layer] ?? layer, files: bucket });
+			buckets.delete(layer);
+		}
+	};
+	for (const layer of LAYER_ORDER) emit(layer);
+	// Any unrecognized layer follows the known order rather than vanishing.
+	for (const layer of [...buckets.keys()]) emit(layer);
+	return ordered;
 }
 
 export type MarkdownBlock =
