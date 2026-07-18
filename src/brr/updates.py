@@ -46,6 +46,9 @@ PACKET_TYPES = (
     "done",
     "failed",
     "conflict",
+    # Wyrd §3 (the stop verb): a parent stopping its concurrent dispatchee.
+    "spawn_stop_requested",
+    "stopped",
 )
 
 
