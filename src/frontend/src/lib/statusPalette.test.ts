@@ -12,7 +12,12 @@ import {
 	glowFor,
 	urgencyForLevel
 } from './statusPalette.ts';
-import { TYPE_REVEAL_GLYPHS, typeRevealDuration, typeRevealProgress } from './transitions.ts';
+import {
+	TYPE_REVEAL_GLYPHS,
+	shouldRestartReveal,
+	typeRevealDuration,
+	typeRevealProgress
+} from './transitions.ts';
 
 function luminance(hex: string): number {
 	const channels = hex
@@ -63,4 +68,15 @@ test('type reveal uses the approved frontier and logarithmic timing', () => {
 	assert.equal(typeRevealProgress(1), 1);
 	assert.equal(typeRevealDuration(0), 500);
 	assert.equal(typeRevealDuration(500), 1200);
+});
+
+// The reveal froze mid-string and stranded its scramble glyphs because the
+// action cancelled its in-flight frame before checking whether the update
+// even carried new text. Identity is the whole test: a same-text update must
+// neither restart the reveal nor interrupt it.
+test('shouldRestartReveal restarts on new text only', () => {
+	assert.equal(shouldRestartReveal('', 'reading the ledger…'), true);
+	assert.equal(shouldRestartReveal('done', 'running'), true);
+	assert.equal(shouldRestartReveal('running', 'running'), false);
+	assert.equal(shouldRestartReveal('', ''), false);
 });
