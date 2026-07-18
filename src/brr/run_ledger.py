@@ -26,6 +26,9 @@ LEDGER_NAME = "run-ledger.jsonl"
 ESTIMATE_ACTUAL = "actual"
 TASK_CLASSIFICATION_CONTROL_NAME = ".task-classification"
 _TASK_CLASSIFICATION_MAX_BYTES = 200
+RUN_NAME_CONTROL_NAME = ".name"
+_RUN_NAME_MAX_BYTES = 240
+_RUN_NAME_MAX_CHARS = 60
 
 _BEFORE_WEEKLY_KEY = "run_ledger_weekly_used_before"
 _BEFORE_FIVE_HOUR_KEY = "run_ledger_five_hour_used_before"
@@ -46,6 +49,7 @@ _ROW_FIELDS = (
     "source_system",
     "external_refs",
     "reply_archive",
+    "name",
     "task_classification",
     "parent_run_id",
     "is_subspawn",
@@ -232,6 +236,7 @@ def build_closed_run_row(
         "source_system": _source_system(task),
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
         "reply_archive": _str_or_none(task.meta.get("reply_archive")),
+        "name": read_run_name_control(outbox_dir) or "",
         "task_classification": task_classification(task),
         "parent_run_id": _str_or_none(task.meta.get("spawn_parent_run_id")),
         "is_subspawn": bool(task.meta.get("spawn_immediate")),
@@ -404,6 +409,19 @@ def read_task_classification_control(outbox_dir: Path | None) -> str | None:
     text = raw[:_TASK_CLASSIFICATION_MAX_BYTES].decode("utf-8", errors="replace")
     value = _str_or_none(text.splitlines()[0]) if text.splitlines() else None
     return value.lower().replace("_", "-") if value else None
+
+
+def read_run_name_control(outbox_dir: Path | None) -> str | None:
+    """Read the resident-authored one-line run name, capped for dashboards."""
+    if outbox_dir is None:
+        return None
+    try:
+        raw = (outbox_dir / RUN_NAME_CONTROL_NAME).read_bytes()
+    except OSError:
+        return None
+    lines = raw[:_RUN_NAME_MAX_BYTES].decode("utf-8", errors="replace").splitlines()
+    value = lines[0].strip()[:_RUN_NAME_MAX_CHARS] if lines else ""
+    return value or None
 
 
 def usd_credits_equivalent(levels: Mapping[str, Any] | None) -> float | None:

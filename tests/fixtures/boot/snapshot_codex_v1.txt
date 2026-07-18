@@ -360,6 +360,7 @@ becomes attention, action, and a reply is yours.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.
+  - `.name` — first line is this run's short resident-authored name (60 chars max).
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
     pages, and your terminal reply auto-derive; add `issue` / `comment` /
@@ -574,7 +575,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      8,923  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,009  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -591,13 +592,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  41.6%
-  substrate       8,923 B  28.0%
-  identity        5,449 B  17.1%
+  contract       13,274 B  41.5%
+  substrate       9,009 B  28.2%
+  identity        5,449 B  17.0%
   runtime         4,092 B  12.8%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     31,899 B
+  wake total     31,985 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
