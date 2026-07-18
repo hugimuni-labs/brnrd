@@ -44,6 +44,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import traceback
@@ -5491,6 +5492,150 @@ def _record_response_artifact(
     )
 
 
+def _backfill_dispatch_edges(account_context: account.AccountContext) -> int:
+    """Recover dispatch edges for run nodes written before the field existed.
+
+    The edge was never lost, only unrecorded on the node: ``run_ledger`` has
+    carried ``parent_run_id`` on every spawned run since the ledger existed.
+    This replays those rows onto the durable documents so the tree is
+    navigable through its whole history rather than only forward from the
+    first daemon that knew about the field.
+
+    Idempotent, and it only ever writes an edge whose *child* document is
+    really there — a ledger row for a run that left no node is a row about a
+    run, not evidence of a node to link.
+    """
+    if not account_context.enabled or not account_context.runs_dir.is_dir():
+        return 0
+    recorded = 0
+    for registered in account_context.repos.values():
+        try:
+            lines = run_ledger.ledger_path(registered.root).read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(row, dict):
+                continue
+            child_id = str(row.get("run_id") or "").strip()
+            parent_id = str(row.get("parent_run_id") or "").strip()
+            if not child_id or not parent_id:
+                continue
+            label = str(row.get("repo_label") or registered.label)
+            child_path = account.run_dir(account_context, label, child_id) / "state.md"
+            try:
+                text = child_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if protocol.parse_frontmatter(text).get("parent_run_id") != parent_id:
+                lines_out = text.splitlines()
+                if not lines_out or lines_out[0] != "---":
+                    continue
+                try:
+                    fm_end = lines_out.index("---", 1)
+                except ValueError:
+                    continue
+                lines_out.insert(fm_end, f"parent_run_id: {parent_id}")
+                protocol._atomic_write(child_path, "\n".join(lines_out) + "\n")
+                recorded += 1
+            _record_dispatch_edge(
+                account_context,
+                repo_label=label,
+                parent_run_id=parent_id,
+                child_run_id=child_id,
+            )
+    return recorded
+
+
+def _existing_child_run_ids(path: Path) -> list[str]:
+    """Read the accreted ``child_run_ids`` list off an existing state document."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    value = protocol.parse_frontmatter(text).get("child_run_ids")
+    if not isinstance(value, str):
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _record_dispatch_edge(
+    account_context: account.AccountContext | None,
+    *,
+    repo_label: str,
+    parent_run_id: str,
+    child_run_id: str,
+) -> Path | None:
+    """Record the parent→child half of a Wyrd dispatch edge.
+
+    The child half is one frontmatter field on the child's own document
+    (``parent_run_id``), written by its state-doc writer from meta it already
+    carries. The reverse half cannot be: a parent usually writes its final
+    state document before, or concurrently with, the children it dispatched,
+    so nothing in the parent's own closeout knows the child's run id.
+
+    So the child stamps its parent, surgically — an append to the parent's
+    existing ``child_run_ids`` list, leaving every other line of the daemon's
+    attestation untouched. The list is order-preserving and deduplicated, and
+    a parent whose document does not exist (different account, pruned, never
+    written) is a no-op rather than a fabricated file: an edge is only ever
+    recorded between two runs that both really happened.
+
+    A fleet's children can close simultaneously, so the read-modify-write is
+    held under a cross-process lock — kept in the system temp dir, since a
+    lock file inside home would land in the account repo's own history. A
+    lock that cannot be taken degrades to the unguarded write rather than
+    dropping the edge: the boot backfill replays the ledger and repairs any
+    edge a race did lose, so this path is self-healing either way.
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    if not parent_run_id or not child_run_id:
+        return None
+    path = account.run_dir(account_context, repo_label, parent_run_id) / "state.md"
+    lock_name = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    with gitops.file_lock(Path(tempfile.gettempdir()) / f"brnrd-edge-{lock_name}.lock"):
+        return _write_dispatch_edge(path, child_run_id)
+
+
+def _write_dispatch_edge(path: Path, child_run_id: str) -> Path | None:
+    """The locked read-modify-write half of :func:`_record_dispatch_edge`."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        return None
+    try:
+        fm_end = lines.index("---", 1)
+    except ValueError:
+        return None
+    children: list[str] = []
+    field_index: int | None = None
+    for index in range(1, fm_end):
+        key, separator, value = lines[index].partition(":")
+        if separator and key.strip() == "child_run_ids":
+            field_index = index
+            children = [item.strip() for item in value.split(",") if item.strip()]
+            break
+    if child_run_id in children:
+        return path
+    children.append(child_run_id)
+    rendered = f"child_run_ids: {', '.join(children)}"
+    if field_index is None:
+        lines.insert(fm_end, rendered)
+    else:
+        lines[field_index] = rendered
+    protocol._atomic_write(path, "\n".join(lines) + "\n")
+    return path
+
+
 def _persist_run_state_doc(
     account_context: account.AccountContext | None,
     task: Run,
@@ -5528,6 +5673,18 @@ def _persist_run_state_doc(
     ]
     if task.conversation_key:
         lines.append(f"conversation_key: {task.conversation_key}")
+    # Dispatch edge, child half (wyrd §1): who dispatched this run. `source`
+    # already names the *kind* of dispatcher (user gate, schedule, spawn);
+    # this names the identity, which is the only half a render cannot infer.
+    parent_run_id = str(task.meta.get("spawn_parent_run_id") or "").strip()
+    if parent_run_id:
+        lines.append(f"parent_run_id: {parent_run_id}")
+    # Preserve the reverse half stamped onto this document by children that
+    # finished after it was last written. The writer owns every other line;
+    # this one field is accreted from outside and must survive a rewrite.
+    existing_children = _existing_child_run_ids(path)
+    if existing_children:
+        lines.append(f"child_run_ids: {', '.join(existing_children)}")
     has_new_commit = task.meta.get("has_new_commit") is True
     for key in (
         "runner_name",
@@ -5578,6 +5735,13 @@ def _persist_run_state_doc(
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(path)
     task.meta["run_state_path"] = str(path)
+    if parent_run_id:
+        _record_dispatch_edge(
+            account_context,
+            repo_label=repo_label,
+            parent_run_id=parent_run_id,
+            child_run_id=task.id,
+        )
     url = account.run_state_blob_url(account_context, path, cfg=cfg)
     if url:
         task.meta["run_state_url"] = url
@@ -6511,6 +6675,12 @@ def start(
             print(f"[brnrd] run-state janitor: reaped {len(reaped_state_docs)} zombie run(s)")
     except Exception as exc:  # noqa: BLE001 - janitor must not block boot
         print(f"[brnrd] run-state janitor skipped: {exc}")
+    try:
+        backfilled = _backfill_dispatch_edges(account_context)
+        if backfilled:
+            print(f"[brnrd] wyrd: recovered dispatch edges for {backfilled} run(s)")
+    except Exception as exc:  # noqa: BLE001 - backfill must not block boot
+        print(f"[brnrd] dispatch-edge backfill skipped: {exc}")
     for registered in account_context.repos.values():
         try:
             migrated = message_store.migrate_legacy(
