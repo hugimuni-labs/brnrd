@@ -52,7 +52,7 @@ def _gh_cli_token() -> str | None:
 
 
 def _env_token() -> str | None:
-    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
         token = os.environ.get(name)
         if token:
             return token.strip()

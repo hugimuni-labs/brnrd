@@ -122,9 +122,17 @@ def clean_runner_environ() -> dict[str, str]:
     agent's session identity and, critically, its safe-mode flag — so hooks,
     skills, and plugins behave as they would for a normal top-level run.
     """
-    return {
+    cleaned = {
         k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_CONTAMINANTS
     }
+    # GitHub CLI defines GH_TOKEN as the automation-specific override for
+    # GITHUB_TOKEN.  Keep that choice unambiguous for every tool in the runner,
+    # including tools that happen to inspect GITHUB_TOKEN first: when the
+    # operator supplies GH_TOKEN, inherited human credentials must not leak
+    # into the child alongside it.
+    if cleaned.get("GH_TOKEN"):
+        cleaned.pop("GITHUB_TOKEN", None)
+    return cleaned
 
 
 def kill_active() -> bool:

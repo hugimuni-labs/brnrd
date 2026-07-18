@@ -399,8 +399,8 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     # Forward the GitHub token when the operator sets it in the environment
-    # directly; runs triggered by the GitHub gate additionally receive it
-    # injected from the gate's stored state (see _resolve_github_gate_token).
+    # directly; Docker runs can additionally receive a resolved fallback
+    # credential (see _resolve_docker_github_token).
     "GITHUB_TOKEN",
     "GH_TOKEN",
 )
@@ -445,14 +445,17 @@ def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
-def _resolve_github_gate_token(brr_dir: Path) -> str | None:
-    """Return the token stored in the GitHub gate's state file, or from env.
+def _resolve_docker_github_token(brr_dir: Path) -> str | None:
+    """Resolve the GitHub token a Docker runner should publish with.
 
-    Used to inject ``GITHUB_TOKEN`` into Docker containers when a run was
-    triggered by the GitHub gate, so the runner's ``gh`` CLI and HTTPS git
-    operations are authenticated without relying on the system keyring (which
-    is unavailable inside a container).
+    An explicit ``GH_TOKEN`` is the publishing-identity override and therefore
+    wins over the local GitHub gate's stored ingress token.  Without it, the
+    gate token remains the most specific credential, followed by the legacy
+    ``GITHUB_TOKEN`` env and the host gh account.
     """
+    token = os.environ.get("GH_TOKEN")
+    if token and token.strip():
+        return token.strip()
     state_path = brr_dir / "gates" / "github.json"
     if state_path.exists():
         try:
@@ -462,10 +465,9 @@ def _resolve_github_gate_token(brr_dir: Path) -> str | None:
                 return stored.strip()
         except Exception:
             pass
-    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
-        val = os.environ.get(name)
-        if val:
-            return val.strip()
+    token = os.environ.get("GITHUB_TOKEN")
+    if token and token.strip():
+        return token.strip()
     if shutil.which("gh") is not None:
         try:
             result = subprocess.run(
@@ -487,6 +489,8 @@ def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
         if not name or name in seen:
             continue
         seen.add(name)
+        if name == "GITHUB_TOKEN" and os.environ.get("GH_TOKEN"):
+            continue
         if os.environ.get(name):
             args.extend(["-e", name])
     return args
@@ -583,7 +587,7 @@ def _docker_git_config_env_args(github_token_available: bool = False) -> list[st
                 "credential.helper",
                 "!f() { test \"$1\" = get || exit 0; "
                 "echo username=x-access-token; "
-                "echo \"password=${GITHUB_TOKEN:-$GH_TOKEN}\"; }; f",
+                "echo \"password=${GH_TOKEN:-$GITHUB_TOKEN}\"; }; f",
             ),
         ])
 
@@ -605,7 +609,7 @@ def _docker_github_token_for_git(ctx: RunContext) -> str | None:
     token = ctx.env_state.get("github_token")
     if isinstance(token, str) and token.strip():
         return token.strip()
-    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
         val = os.environ.get(name)
         if val and val.strip():
             return val.strip()
@@ -686,11 +690,13 @@ class DockerEnv(WorktreeEnv):
         # — which silently breaks any run that needs to look up sibling
         # PRs, read upstream issues, or open a fresh PR from a worktree
         # branch even when the run wasn't strictly triggered by the
-        # github gate. Resolution prefers stored gate state, then
-        # daemon-side env vars, then ``gh auth token``; absent all
-        # three the field stays unset and the container runs with no
-        # GitHub auth, same as before.
-        token = _resolve_github_gate_token(repo_root / ".brr")
+        # github gate. Resolution prefers an explicit publishing GH_TOKEN,
+        # then stored gate state, legacy GITHUB_TOKEN, and ``gh auth token``;
+        # absent all four the field stays unset and the container runs with no
+        # GitHub auth, same as before.  An explicit GH_TOKEN is checked first:
+        # it selects the runner's publishing identity without changing the
+        # local gate credential that owns ingress.
+        token = _resolve_docker_github_token(repo_root / ".brr")
         if token:
             ctx.env_state["github_token"] = token
 
