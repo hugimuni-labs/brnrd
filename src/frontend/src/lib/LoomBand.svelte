@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
+	import { runNodeHref } from './runNode';
 	import { liveRunDisplayName, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
@@ -60,6 +61,7 @@
 	// legend carries produce — in type, not pictograms.
 	interface ShelfRun {
 		id: string;
+		repoLabel: string | null;
 		ageMs: number;
 		wallSeconds: number;
 		color: string;
@@ -87,6 +89,7 @@
 	function shelfRuns(rows: RunLedgerRow[], timestamp: number, windowMs: number): ShelfRun[] {
 		const grouped: Array<{
 			id: string;
+			repoLabel: string | null;
 			endedAt: number;
 			wallSeconds: number;
 			relics: RelicRecord[];
@@ -99,12 +102,14 @@
 			if (!id) continue;
 			const current = grouped.find((group) => group.id === id);
 			if (current) {
+				current.repoLabel ??= row.repo_label;
 				current.endedAt = Math.max(current.endedAt, endedAt);
 				current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
 				current.relics.push(...(row.external_refs ?? []));
 			} else {
 				grouped.push({
 					id,
+					repoLabel: row.repo_label,
 					endedAt,
 					wallSeconds: row.wall_clock_seconds ?? 0,
 					relics: [...(row.external_refs ?? [])]
@@ -118,6 +123,7 @@
 				const produce = produceLegend(group.relics);
 				return {
 					id: group.id,
+					repoLabel: group.repoLabel,
 					ageMs,
 					wallSeconds: group.wallSeconds,
 					color: THERMAL_STOPS[loomPastStop(ageMs)],
@@ -245,12 +251,11 @@
 				</span>
 			{/if}
 			{#each runs as run, index (run.id)}
-				<button
-					type="button"
+				<a
+					href={runNodeHref(run.repoLabel, run.id)}
 					class="flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5"
 					style={`color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`}
 					title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
-					onclick={() => select('run', run.id)}
 					in:glitchReveal={{ duration: 240, delay: index * 24 }}
 				>
 					<span
@@ -265,7 +270,7 @@
 						style={`width: ${(loomBarFraction(run.wallSeconds, maxWallSeconds) * 62).toFixed(2)}%; background-color: ${run.color}`}
 						aria-hidden="true"
 					></span>
-				</button>
+				</a>
 			{/each}
 		</div>
 
