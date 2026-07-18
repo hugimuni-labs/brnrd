@@ -4037,3 +4037,58 @@ def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
     assert len(notices) == 1
     assert "evt-does-not-exist" in notices[0]["text"]
     assert "NOT delivered" in notices[0]["text"]
+
+
+def test_worker_boot_prompt_excludes_foreign_pending_events(
+    tmp_path, monkeypatch,
+):
+    """A worker's boot prompt gets the same pending-event isolation as its
+    live inbox.json.
+
+    Found live (2026-07-18, first wyrd fleet): the live inbox correctly
+    showed a worker zero foreign events, but the boot-prompt snapshot was
+    built without ``worker=`` — so the worker's prompt listed two of the
+    maintainer's pending telegram messages under "Inbox — other pending
+    events" while inbox.json stayed empty. Isolation must hold on both
+    surfaces; the prompt is the one the worker actually reads at wake.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-worker-child", source="spawn",
+        body="bounded worker task",
+    )
+    event["spawn_immediate"] = True
+    event["worker"] = True
+    event["environment"] = "worktree"
+    # A foreign user message pending in the shared inbox at worker boot.
+    protocol.create_event(
+        tmp_path / ".brr" / "inbox", "telegram", "user says something private",
+    )
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+
+    prompt_kwargs: dict = {}
+
+    def fake_prompt(task, eid, rp, root, **kw):
+        prompt_kwargs.update(kw)
+        return f"PROMPT {eid}"
+
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert prompt_kwargs.get("pending_events") == []
