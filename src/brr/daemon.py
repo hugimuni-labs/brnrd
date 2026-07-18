@@ -3379,12 +3379,11 @@ def _change_token(payload: dict[str, object]) -> str:
     stable = {
         key: value
         for key, value in payload.items()
-        # ``scm`` is excluded like ``elapsed_seconds`` below: modified-file
-        # churn during normal editing should not bump the token and trip a
-        # post-tool injection on every edit. Git posture is a boundary
-        # signal — the seed (session-start) and stop hooks render it
-        # unconditionally; mid-run it stays quiet.
-        if key not in {"generated_at", "change_token", "scm"}
+        # ``scm`` and ``produce`` are excluded like ``elapsed_seconds`` below:
+        # ordinary editing/committing should not bump the token and trip a
+        # post-tool injection. Both ride a delta already rendering for another
+        # reason; SCM additionally renders at the seed/stop boundaries.
+        if key not in {"generated_at", "change_token", "scm", "produce"}
     }
     budget = stable.get("budget")
     if isinstance(budget, dict):
@@ -3439,9 +3438,9 @@ def _write_live_portal_state(
 
     ``inbox.json`` answers only which events are pending. This broader
     capsule answers "what needs my attention now?" for the running
-    resident: input, delivery/card posture, budget state, and local SCM
-    posture (unpushed commits / modified files) in one daemon-owned file
-    refreshed on the heartbeat cadence.
+    resident: input, delivery/card posture, budget state, local SCM posture
+    (unpushed commits / modified files), and compiled produce in one
+    daemon-owned file refreshed on the heartbeat cadence.
 
     *refresh_levels* controls whether the Claude usage scrape may run:
     ``True`` (default, heartbeat path) allows a cache-miss to trigger the
@@ -3556,6 +3555,15 @@ def _write_live_portal_state(
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
+            "produce": (
+                relics.live_summary(
+                    work_dir,
+                    branch=task.meta.get("branch_name"),
+                    seed_ref=task.meta.get("seed_ref"),
+                    outbox_dir=outbox_dir,
+                )
+                if work_dir else {"known": False}
+            ),
             "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
             # Task-classification presence: the ledger's only rollup-by-shape
             # join key (``run_ledger.py`` §``task_classification``), and one a

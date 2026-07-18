@@ -10,7 +10,7 @@ import time
 from brr import hooks
 
 
-def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
+def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
             task_classification=None, current_event="evt-1"):
     # ``current_event`` mirrors production: the daemon always writes the key,
@@ -35,6 +35,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
     }
     if scm is not None:
         payload["scm"] = scm
+    if produce is not None:
+        payload["produce"] = produce
     if resources is not None:
         payload["resources"] = resources
     if card is not None:
@@ -289,6 +291,52 @@ def test_scm_unknown_is_silent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_produce_line_renders_attested_kinds(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+        produce={
+            "known": True,
+            "counts": {"commit": 2, "branch": 1, "pr": 1, "kb": 1,
+                       "issue": 1},
+            "latest_commit": "a1b2c3d",
+            "branch": "brr/foo",
+            "pr": 451,
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert (
+        "- produce: 2 commit(s) (latest a1b2c3d) · branch brr/foo · "
+        "PR #451 · 1 kb page · 1 issue"
+    ) in ctx
+
+
+def test_produce_line_is_silent_when_empty(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        produce={"known": True, "counts": {}, "latest_commit": None,
+                 "branch": "brr/foo", "pr": None},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert "produce:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_produce_only_does_not_open_mid_run_render_gate(tmp_path):
+    path = _portal(
+        tmp_path, token="t1", pending=0,
+        produce={
+            "known": True,
+            "counts": {"commit": 1, "branch": 1},
+            "latest_commit": "a1b2c3d",
+            "branch": "brr/foo",
+            "pr": None,
+        },
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert hooks.format_delta(payload) is None
 
 
 def test_stop_nudges_unwritten_task_classification(tmp_path):
