@@ -125,6 +125,7 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
+_RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
 # How far back the exact-duplicate scan looks. A genuine re-delivery (one
 # external message fanned to two configured channels) is near-simultaneous;
 # anything older sharing an origin key is a coincidental id collision, not a
@@ -5507,6 +5508,7 @@ def _persist_run_state_doc(
         "publish_status",
         "reply_archive",
         "success_signal",
+        "pid",
     ):
         value = task.meta.get(key)
         if value not in (None, ""):
@@ -5550,6 +5552,114 @@ def _persist_run_state_doc(
     if url:
         task.meta["run_state_url"] = url
     return path
+
+
+def _closed_ledger_run_ids(account_context: account.AccountContext) -> set[str]:
+    """Return run ids proved closed by any repo ledger in this account."""
+    closed: set[str] = set()
+    for registered in account_context.repos.values():
+        path = run_ledger.ledger_path(registered.root)
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            run_id = str(row.get("run_id") or "") if isinstance(row, dict) else ""
+            if run_id:
+                closed.add(run_id)
+    return closed
+
+
+def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
+    """Rewrite a RUNNING state document as a retained, explicit failure."""
+    lines = text.splitlines()
+    try:
+        fm_end = lines.index("---", 1)
+    except ValueError:
+        return text
+    replacements = {
+        "status": "error",
+        "stage": "reaped",
+        "reaped_at": reaped_at,
+        "reap_reason": reason,
+    }
+    seen: set[str] = set()
+    for index in range(1, fm_end):
+        key, separator, _value = lines[index].partition(":")
+        if separator and key in replacements:
+            lines[index] = f"{key}: {replacements[key]}"
+            seen.add(key)
+    for key, value in replacements.items():
+        if key not in seen:
+            lines.insert(fm_end, f"{key}: {value}")
+            fm_end += 1
+    for index in range(fm_end + 1, len(lines)):
+        if lines[index].startswith("- status:"):
+            lines[index] = "- status: error"
+        elif lines[index].startswith("- stage:"):
+            lines[index] = "- stage: reaped"
+    return "\n".join(lines) + "\n"
+
+
+def _reap_zombie_run_state_docs(
+    account_context: account.AccountContext,
+    *,
+    now: float | None = None,
+    ancient_after_seconds: float = _RUN_STATE_REAP_AFTER_SECONDS,
+) -> list[Path]:
+    """Reap account run-state docs that are provably no longer running.
+
+    Presence is the live authority. With no matching presence (and no
+    optional live pid recorded on the document), a closed ledger row proves
+    the run ended; otherwise age supplies a conservative crash-recovery
+    backstop. Documents are rewritten, never deleted.
+    """
+    if not account_context.enabled or not account_context.run_state_dir.is_dir():
+        return []
+    timestamp = time.time() if now is None else now
+    live_run_ids: set[str] = set()
+    for registered in account_context.repos.values():
+        for entry in presence.list_active(gitops.shared_brr_dir(registered.root), now=timestamp):
+            run_id = str(entry.get("run_id") or "")
+            if run_id:
+                live_run_ids.add(run_id)
+    closed_run_ids = _closed_ledger_run_ids(account_context)
+    reaped: list[Path] = []
+    reaped_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+    for path in sorted(account_context.run_state_dir.rglob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+            fields = protocol.parse_frontmatter(text)
+            modified_at = path.stat().st_mtime
+        except OSError:
+            continue
+        if str(fields.get("status") or "").casefold() != "running":
+            continue
+        run_id = str(fields.get("run_id") or "")
+        if not run_id or run_id in live_run_ids:
+            continue
+        try:
+            pid = int(fields.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid and presence.pid_alive(pid):
+            continue
+        ledger_closed = run_id in closed_run_ids
+        ancient = timestamp - modified_at >= ancient_after_seconds
+        if not (ledger_closed or ancient):
+            continue
+        proof = "closed ledger row" if ledger_closed else "state document exceeded the boot safety horizon"
+        reason = f"boot janitor: no live presence or pid; {proof}"
+        protocol._atomic_write(
+            path,
+            _reaped_run_state_text(text, reaped_at=reaped_at, reason=reason),
+        )
+        reaped.append(path)
+    return reaped
 
 
 def _event_requires_thread_delivery(event: dict) -> bool:
@@ -6330,6 +6440,12 @@ def start(
 
     cfg = conf.load_config(repo_root)
     account_context = account.resolve_context(repo_root, cfg)
+    try:
+        reaped_state_docs = _reap_zombie_run_state_docs(account_context)
+        if reaped_state_docs:
+            print(f"[brnrd] run-state janitor: reaped {len(reaped_state_docs)} zombie run(s)")
+    except Exception as exc:  # noqa: BLE001 - janitor must not block boot
+        print(f"[brnrd] run-state janitor skipped: {exc}")
     for registered in account_context.repos.values():
         try:
             migrated = message_store.migrate_legacy(
