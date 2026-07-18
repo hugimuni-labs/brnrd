@@ -527,11 +527,18 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
 
 
 _RUN_LEDGER_STALE_SECONDS = 300
-# Match the daemon's published envelope; the produce gauge asks for all of it.
-_RUN_LEDGER_API_LIMIT = 100
+# Match the daemon's published envelope; the loom asks for all of it before
+# selecting a 6h→7d shelf window.
+_RUN_LEDGER_API_LIMIT = 256
 
 
-def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, Any]:
+def _run_ledger_views(
+    db: Session,
+    repos: list[Repo],
+    limit: int,
+    *,
+    span_seconds: int | None = None,
+) -> dict[str, Any]:
     """Account-scoped closed-run receipt feed (#271)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
@@ -554,6 +561,18 @@ def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, A
             continue
         for entry in entries:
             if not isinstance(entry, dict):
+                continue
+            ended_value = entry.get("ended_at")
+            if isinstance(ended_value, str):
+                try:
+                    ended_value = datetime.fromisoformat(ended_value.replace("Z", "+00:00"))
+                except ValueError:
+                    ended_value = None
+            ended_at = _dt(ended_value) if isinstance(ended_value, datetime) else None
+            if (
+                span_seconds is not None
+                and (ended_at is None or (now - ended_at).total_seconds() > span_seconds)
+            ):
                 continue
             run_key = str(entry.get("run_id") or "")
             if not run_key:
@@ -838,7 +857,12 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
 
 
 @router.get("/v1/dashboard/run-ledger")
-def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = Depends(get_db)) -> JSONResponse:
+def dashboard_run_ledger_api(
+    request: Request,
+    limit: int = 10,
+    span_seconds: int | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
     """Account-scoped closed-run receipt feed (#271)."""
     account_id = _account_id(request, db)
     if account_id is None:
@@ -848,7 +872,8 @@ def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = De
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account.id)
     capped = max(1, min(limit, _RUN_LEDGER_API_LIMIT))
-    view = _run_ledger_views(db, repos, capped)
+    span = None if span_seconds is None else max(1, min(span_seconds, 7 * 24 * 3600))
+    view = _run_ledger_views(db, repos, capped, span_seconds=span)
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
