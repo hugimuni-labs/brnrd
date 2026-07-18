@@ -26,6 +26,7 @@ def test_register_then_list(tmp_path):
     assert entry["kind"] == "daemon"
     assert entry["stream"] == "telegram:1:"
     assert entry["label"] == "Investigate live-runs labels"
+    assert entry["name"] == ""
     assert entry["run_id"] == "t1"
     assert entry["repo_label"] == "Gurio/brr"
     assert entry["pid"] > 0
@@ -88,6 +89,13 @@ def test_heartbeat_refreshes_and_keeps_alive(tmp_path):
 def test_heartbeat_missing_entry_is_false(tmp_path):
     brr = tmp_path / ".brr"
     assert presence.heartbeat(brr, "nope") is False
+
+
+def test_heartbeat_refreshes_resident_authored_name(tmp_path):
+    brr = tmp_path / ".brr"
+    entry = presence.register(brr, kind="daemon", run_id="t1")
+    assert presence.heartbeat(brr, entry["id"], name="dashboard name") is True
+    assert presence.list_active(brr)[0]["name"] == "dashboard name"
 
 
 def test_deregister_removes(tmp_path):

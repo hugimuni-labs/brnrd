@@ -100,6 +100,7 @@ becomes attention, action, and a reply is yours.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.
+  - `.name` — first line is this run's short resident-authored name (60 chars max).
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
     pages, and your terminal reply auto-derive; add `issue` / `comment` /

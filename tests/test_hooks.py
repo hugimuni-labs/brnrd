@@ -12,7 +12,7 @@ from brr import hooks
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
-            task_classification=None, current_event="evt-1"):
+            task_classification=None, name=None, current_event="evt-1"):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -43,6 +43,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["card"] = card
     if task_classification is not None:
         payload["task_classification"] = task_classification
+    if name is not None:
+        payload["name"] = name
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -378,6 +380,19 @@ def test_seed_never_renders_task_classification_nudge(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert ".task-classification" not in ctx
+
+
+def test_midrun_nudges_unwritten_run_name_but_stop_does_not(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+        name={"written": False}, budget={"elapsed_seconds": 240, "budget_seconds": 3600},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert ".name" in out["hookSpecificOutput"]["additionalContext"]
+
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert ".name" not in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_post_tool_surfaces_stale_card(tmp_path):
