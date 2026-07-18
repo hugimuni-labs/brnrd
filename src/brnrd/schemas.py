@@ -359,6 +359,7 @@ class LiveRunIn(BaseModel):
     kind: str = Field(default="", max_length=32)
     stream: str = Field(default="", max_length=256)
     label: str = Field(default="", max_length=256)
+    name: str = Field(default="", max_length=60)
     run_id: str = Field(default="", max_length=64)
     repo_label: str = Field(default="", max_length=256)
     started_at: str | None = None
@@ -458,6 +459,7 @@ class RunLedgerRowIn(BaseModel):
     core_mismatch: bool | None = None
     repo_label: str | None = None
     source_system: str | None = None
+    name: str | None = None
     external_refs: list[Any] | None = None
     task_classification: str | None = None
     parent_run_id: str | None = None
