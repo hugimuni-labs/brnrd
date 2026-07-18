@@ -50,4 +50,5 @@ token type and repository permissions GitHub supports for the ownership model.
 Git commit attribution is independent of API authentication. Configure
 `user.name` and an email verified by the dedicated account if commits should
 also appear as authored by it. Never write either token into the repository or
-brnrd config.
+brnrd config. The dedicated account needs Write access to create branches; a
+comment-only or Triage collaborator cannot publish the runner's work.
