@@ -37,3 +37,17 @@ Until they land:
 
 See [Connect](../../getting-started/connect/) for setup commands and
 [Security & privacy](../../security/) for the full trust posture.
+
+## Separate the door from the author
+
+A gate credential owns ingress and replies for that channel. Runner-authored
+GitHub produce—branches, pull requests, issue comments—is a separate identity.
+Set a dedicated account's token as `GH_TOKEN` in the daemon environment to
+make that identity authoritative for runner subprocesses; inherited
+`GITHUB_TOKEN` credentials are then withheld from the runner. Use the narrowest
+token type and repository permissions GitHub supports for the ownership model.
+
+Git commit attribution is independent of API authentication. Configure
+`user.name` and an email verified by the dedicated account if commits should
+also appear as authored by it. Never write either token into the repository or
+brnrd config.
