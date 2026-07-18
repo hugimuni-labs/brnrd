@@ -100,7 +100,12 @@
 									: 'text-stone-400'}"
 							>
 								<span class="truncate">{row.label}</span>
-								<span style={`color: ${LEVEL_COLOR[level]}`}>{row.percentLabel}</span>
+								<span class="flex items-baseline gap-1">
+									{#if row.resetShort}
+										<span class="text-stone-500">↻{row.resetShort}</span>
+									{/if}
+									<span style={`color: ${LEVEL_COLOR[level]}`}>{row.percentLabel}</span>
+								</span>
 							</div>
 							<div class="h-[3px] w-full bg-stone-900" role="img" aria-label={row.tooltip}>
 								<div
@@ -110,6 +115,23 @@
 									style={`width: ${row.percent ?? 0}%; ${statusBarStyle(level, LEVEL_COLOR[level])}`}
 								></div>
 							</div>
+							{#if row.timeFraction !== null}
+								<!-- The window's own clock: how far through this
+								     5h/week period we are. Reads against the fuel
+								     bar above it — time ahead of fuel = burning
+								     slow, fuel ahead of time = burning hot. -->
+								<div
+									class="mt-[1px] h-[1.5px] w-full bg-stone-900/70"
+									aria-hidden="true"
+								>
+									<div
+										class="h-full bg-stone-600 transition-[width] duration-500 ease-out {row.stale
+											? 'opacity-40'
+											: ''}"
+										style={`width: ${row.timeFraction * 100}%`}
+									></div>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
