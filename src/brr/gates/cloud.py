@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+import hashlib
 import json
 import subprocess
 import threading
@@ -326,7 +327,7 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     # its own follow-up message to lose (found live 2026-07-11).
     _publish_runners(brr_dir, state)
     _publish_activity(brr_dir, inbox_dir, state)
-    _publish_surface(brr_dir, state)
+    _publish_corpus(brr_dir, state)
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
@@ -593,48 +594,115 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
         print(f"[brnrd:cloud] activity publish failed: {e}")
 
 
-def _surface_snapshot(brr_dir: Path) -> dict[str, list[dict[str, str]]] | None:
-    """Read the discovered authored work surface for hosted mirroring.
+# The unified corpus (authored surface + home knowledge + archived replies) is
+# published on *change*, not every tick: the old per-tick full-text PUT suited a
+# handful of small authored pages, but the knowledge layer is ~150 files and
+# megabytes (an 890KB log among them) — re-sending that every 25s is waste and,
+# on a slow link, a staleness tax. Each mirrored file is also capped so one huge
+# page cannot bloat the payload; a capped file still appears in the listing,
+# marked ``truncated`` rather than silently dropped.
+_CORPUS_FILE_CAP_BYTES = 256 * 1024
 
-    Returns ``None`` (not published) rather than raising when the account
-    dominion can't be resolved read-only — a plain repo-local `.brr/`
-    without an account context is a normal, supported shape, not an error.
+# Last successfully published corpus fingerprint, keyed by brr_dir. Module-level
+# because a single publisher thread owns this loop (see _dashboard_publish_loop),
+# and because "" after a restart is the right default: republish once on boot so
+# a schema/convention change (e.g. the home-relative path move) always lands.
+_corpus_publish_hash: dict[str, str] = {}
+
+
+def _corpus_resolve(brr_dir: Path):
+    """Resolve the account corpus read-only: ``(files, knowledge_dir)`` or None.
+
+    ``None`` (skip publish) rather than raising when no account context resolves
+    — a plain repo-local ``.brr/`` without an account home is a normal shape.
     """
     from .. import account as account_mod
 
     repo_root = brr_dir.parent
     try:
         ctx = account_mod.resolve_context(repo_root, create=False)
-        surface = account_mod.work_surface_path(ctx)
-        return {"files": [
-            {
-                "path": path.relative_to(surface).as_posix(),
-                "markdown": path.read_text(encoding="utf-8"),
-            }
-            for path in account_mod.work_surface_files(ctx)
-        ]}
+        return account_mod.corpus_files(ctx), account_mod.knowledge_path(ctx)
     except Exception as e:
-        print(f"[brnrd:cloud] surface snapshot skipped: {e}")
+        print(f"[brnrd:cloud] corpus snapshot skipped: {e}")
         return None
 
 
-def _publish_surface(brr_dir: Path, state: dict) -> None:
+def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
+    """A cheap change signal for the corpus — no full reads of the large layer.
+
+    Authored pages are few, so their content is hashed directly. Knowledge and
+    replies pages are many and large, so they contribute only (path, size,
+    mtime) plus the knowledge repo HEAD sha — enough to notice a curate or a
+    sync without reading the 890KB log on every heartbeat.
+    """
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.layer.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(f.path.encode("utf-8"))
+        h.update(b"\x00")
+        if f.layer == "authored":
+            try:
+                h.update(f.abspath.read_bytes())
+            except OSError:
+                pass
+        else:
+            try:
+                st = f.abspath.stat()
+                h.update(f"{st.st_size}:{st.st_mtime_ns}".encode("utf-8"))
+            except OSError:
+                pass
+        h.update(b"\n")
+    # A connected home may not have linked knowledge yet; missing the nested
+    # repo is a normal shape, so the change signal just omits the HEAD shard.
+    head = gitops.rev_parse(knowledge_dir, "HEAD") if knowledge_dir.is_dir() else None
+    if head:
+        h.update(head.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _corpus_payload(files: list) -> list[dict]:
+    """Read each corpus file for the PUT, capping oversized mirrors."""
+    payload: list[dict] = []
+    for f in files:
+        try:
+            raw = f.abspath.read_text(encoding="utf-8")
+        except OSError:
+            continue  # a file that vanished mid-tick is not fatal; skip it
+        truncated = False
+        encoded = raw.encode("utf-8")
+        if len(encoded) > _CORPUS_FILE_CAP_BYTES:
+            # Cut on a byte boundary, then drop any partial trailing char.
+            raw = encoded[:_CORPUS_FILE_CAP_BYTES].decode("utf-8", "ignore")
+            truncated = True
+        payload.append({"path": f.path, "markdown": raw, "layer": f.layer, "truncated": truncated})
+    return payload
+
+
+def _publish_corpus(brr_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
-    snapshot = _surface_snapshot(brr_dir)
-    if snapshot is None:
+    resolved = _corpus_resolve(brr_dir)
+    if resolved is None:
         return
+    files, knowledge_dir = resolved
+    fingerprint = _corpus_fingerprint(files, knowledge_dir)
+    key = str(brr_dir)
+    if _corpus_publish_hash.get(key) == fingerprint:
+        return  # unchanged since the last publish — skip the network round-trip
     try:
         _request(
             state["brnrd_url"],
             "PUT",
             "/v1/daemons/surface",
             token=state["token"],
-            json=snapshot,
-            timeout=10,
+            json={"files": _corpus_payload(files)},
+            timeout=15,
         )
+        # Mark clean only after a successful PUT so a failed publish retries.
+        _corpus_publish_hash[key] = fingerprint
     except Exception as e:
-        print(f"[brnrd:cloud] surface publish failed: {e}")
+        print(f"[brnrd:cloud] corpus publish failed: {e}")
 
 
 def _quota_window(
