@@ -44,6 +44,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import traceback
@@ -5531,7 +5532,7 @@ def _backfill_dispatch_edges(account_context: account.AccountContext) -> int:
                 text = child_path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            if f"parent_run_id: {parent_id}" not in text:
+            if protocol.parse_frontmatter(text).get("parent_run_id") != parent_id:
                 lines_out = text.splitlines()
                 if not lines_out or lines_out[0] != "---":
                     continue
@@ -5584,12 +5585,26 @@ def _record_dispatch_edge(
     a parent whose document does not exist (different account, pruned, never
     written) is a no-op rather than a fabricated file: an edge is only ever
     recorded between two runs that both really happened.
+
+    A fleet's children can close simultaneously, so the read-modify-write is
+    held under a cross-process lock — kept in the system temp dir, since a
+    lock file inside home would land in the account repo's own history. A
+    lock that cannot be taken degrades to the unguarded write rather than
+    dropping the edge: the boot backfill replays the ledger and repairs any
+    edge a race did lose, so this path is self-healing either way.
     """
     if account_context is None or not account_context.enabled:
         return None
     if not parent_run_id or not child_run_id:
         return None
     path = account.run_dir(account_context, repo_label, parent_run_id) / "state.md"
+    lock_name = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    with gitops.file_lock(Path(tempfile.gettempdir()) / f"brnrd-edge-{lock_name}.lock"):
+        return _write_dispatch_edge(path, child_run_id)
+
+
+def _write_dispatch_edge(path: Path, child_run_id: str) -> Path | None:
+    """The locked read-modify-write half of :func:`_record_dispatch_edge`."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
