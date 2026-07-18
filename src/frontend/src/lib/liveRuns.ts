@@ -16,6 +16,7 @@ export interface LiveRun {
 	kind: string;
 	stream: string;
 	label: string;
+	name: string;
 	run_id: string;
 	repo_label: string;
 	started_at: string | null;
@@ -55,6 +56,11 @@ export interface LiveRunsResponse {
 	// the slice-1 publish didn't already carry. `null` before any daemon
 	// has reported it (pre-upgrade daemon, or never published yet).
 	spawn_max_concurrent: number | null;
+}
+
+/** Resident-authored name wins; the waking-message excerpt remains a fallback. */
+export function liveRunDisplayName(run: Pick<LiveRun, 'name' | 'label' | 'kind'>): string {
+	return run.name || run.label || run.kind || 'run';
 }
 
 export class LiveRunsAuthError extends Error {}

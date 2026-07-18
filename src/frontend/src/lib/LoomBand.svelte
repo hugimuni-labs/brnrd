@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
-	import type { LiveRun } from './liveRuns';
+	import { liveRunDisplayName, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
 		LOOM_CENTER_ZONE_PX,
@@ -291,12 +291,12 @@
 							type="button"
 							class="min-w-0 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
 							style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
-							title={run.label || run.kind || run.repo_label || 'live run'}
+							title={liveRunDisplayName(run) || run.repo_label || 'live run'}
 							onclick={() => select('run', run.run_id || run.id)}
 							in:glitchReveal={{ duration: 260, delay: 35 + index * 38 }}
 						>
 							<span class="block truncate text-[9px]">
-								{run.label || run.kind || run.repo_label || 'live run'}
+								{liveRunDisplayName(run) || run.repo_label || 'live run'}
 							</span>
 							{#if elapsedLabel(run)}
 								<span class="mt-0.5 block text-[8px] text-amber-500/80">
