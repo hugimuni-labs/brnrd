@@ -186,8 +186,8 @@ class SurfaceFileIn(BaseModel):
 
     ``path`` is relative to the brnrd home (``surface/index.md``,
     ``knowledge/repos/<slug>/foo.md``) so cross-layer links resolve. ``layer``
-    places it in the authored surface, the knowledge base, or the archived
-    replies; ``truncated`` marks a mirror capped for payload size (the file
+    places it in the authored surface, the knowledge base, or the durable run
+    nodes; ``truncated`` marks a mirror capped for payload size (the file
     still appears in the listing — see the cloud gate's corpus publisher).
     """
 
@@ -198,7 +198,7 @@ class SurfaceFileIn(BaseModel):
 
 
 class SurfaceReport(BaseModel):
-    """The complete corpus (surface + knowledge + replies) from one daemon."""
+    """The complete corpus (surface + knowledge + runs) from one daemon."""
 
     files: list[SurfaceFileIn] = Field(default_factory=list, max_length=4000)
 

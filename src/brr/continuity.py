@@ -26,6 +26,7 @@ fail to boot because its own memory was hard to read.  A failed read degrades to
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -163,7 +164,10 @@ def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
             )
 
     if dominion_repo is not None:
-        out = _run_git(dominion_repo, "status", "--porcelain")
+        # Expand untracked directories to leaf paths: ``runs/`` contains both
+        # daemon-owned ``state.md`` and resident-owned ``body.md`` files, so a
+        # collapsed ``?? runs/`` entry cannot be classified truthfully.
+        out = _run_git(dominion_repo, "status", "--porcelain", "--untracked-files=all")
         if out:
             n = sum(1 for line in out.splitlines() if _is_resident_memory(line))
             if n:
@@ -177,7 +181,7 @@ def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
 
 #: Daemon-owned bookkeeping inside the dominion repo.  Not resident memory, and
 #: never evidence of a dropped capture.
-_DAEMON_OWNED_PREFIXES = ("run-state/",)
+_DAEMON_OWNED_RUN_STATE = re.compile(r"^runs/[^/]+/[^/]+/state\.md$")
 
 
 def _is_resident_memory(porcelain_line: str) -> bool:
@@ -185,7 +189,7 @@ def _is_resident_memory(porcelain_line: str) -> bool:
 
     Caught on the first live render of this very function, which is the only
     reason it is not shipping as a permanent lie.  The dominion always has one
-    untracked file mid-wake — ``run-state/<this-run>.md``, written by the daemon
+    untracked file mid-wake — ``runs/<repo>/<run>/state.md``, written by the daemon
     at run start and committed by the capture net at run *end*.  Counting it
     meant ``drift: the capture net did not close`` would fire on **every wake,
     forever**, describing a capture net that was in fact working perfectly and
@@ -204,7 +208,7 @@ def _is_resident_memory(porcelain_line: str) -> bool:
     path = porcelain_line[3:].strip() if len(porcelain_line) > 3 else ""
     if not path:
         return False
-    return not any(path.startswith(p) for p in _DAEMON_OWNED_PREFIXES)
+    return _DAEMON_OWNED_RUN_STATE.fullmatch(path) is None
 
 
 def build_continuity(

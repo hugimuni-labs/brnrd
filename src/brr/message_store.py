@@ -41,13 +41,7 @@ def run_messages_dir(
     repo_label: str,
     run_id: str,
 ) -> Path:
-    return (
-        account.context_home_root(ctx)
-        / account.RUNS_PATH
-        / account.slug_repo_label(repo_label)
-        / (_SAFE.sub("-", run_id).strip("-.") or "unknown-run")
-        / MESSAGES_PATH
-    )
+    return account.run_dir(ctx, repo_label, run_id) / MESSAGES_PATH
 
 
 def _render(meta: dict[str, object], body: str) -> str:
