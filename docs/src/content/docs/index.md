@@ -1,8 +1,21 @@
-# brnrd
+---
+title: brnrd
+description: Local coding agents, reachable from anywhere, with continuity across runs.
+template: splash
+hero:
+  title: Local agents go brr.
+  tagline: Your coding agents already live where the work is. brnrd gives them a doorbell, a memory, and a live line back to you — from anywhere.
+  actions:
+    - text: Install brnrd
+      link: ./getting-started/install/
+      icon: right-arrow
+      variant: primary
+    - text: Read the trust boundary
+      link: ./security/
+      icon: open-book
+---
 
-**Local agents go brr. From anywhere.**
-
-Claude Code, Codex, and Gemini CLI already live where the work is: your repo,
+Claude Code, Codex, and Gemini CLI live where the work is: your repo,
 shell, credentials, and test setup. brnrd gives them a doorbell, a memory, and
 a live line back to you.
 
@@ -33,14 +46,14 @@ you · Telegram / Slack / GitHub / dashboard
 
 Your checkout and run execution stay on your machine. Remote messages use the
 transport you choose, and managed mode has an additional, documented mirror
-for derived project knowledge. Read [Security & privacy](security.md) before
+for derived project knowledge. Read [Security & privacy](./security/) before
 opening a gate.
 
 ## Start here
 
-1. [Install brnrd](getting-started/install.md).
-2. [Choose a managed or self-hosted connection](getting-started/connect.md).
-3. [Send your first task](getting-started/first-task.md).
+1. [Install brnrd](./getting-started/install/).
+2. [Choose a managed or self-hosted connection](./getting-started/connect/).
+3. [Send your first task](./getting-started/first-task/).
 
 ## Current posture
 
