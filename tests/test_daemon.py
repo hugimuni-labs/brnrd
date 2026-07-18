@@ -120,6 +120,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert task.status == "done"
     assert task.body == "raw event body"
     assert task.env == "worktree"
+    assert task.meta["pid"] == os.getpid()
     # Happy path: the daemon-run invocation is the only runner call —
     # no separate triage stage, no retry. The labelled-kind check
     # captures both halves of that intent in one assertion.
@@ -127,6 +128,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "done"
+    assert persisted.meta["pid"] == os.getpid()
     response = (tmp_path / ".brr" / "responses" / "evt-1.md").read_text(encoding="utf-8")
     assert response == "plain answer\n"
 
