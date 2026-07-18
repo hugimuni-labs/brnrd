@@ -1012,9 +1012,35 @@ def test_docker_github_token_rewrites_ssh_remotes(tmp_path, monkeypatch):
     assert "GIT_CONFIG_KEY_3=credential.helper" in env_values
     assert any(
         v.startswith("GIT_CONFIG_VALUE_3=!f()")
-        and "password=${GITHUB_TOKEN:-$GH_TOKEN}" in v
+        and "password=${GH_TOKEN:-$GITHUB_TOKEN}" in v
         for v in env_values
     )
+
+
+def test_docker_gh_token_overrides_gate_and_github_token(tmp_path, monkeypatch):
+    """GH_TOKEN selects the runner's publishing identity everywhere.
+
+    A local GitHub gate may still hold a human ingress token, and a daemon
+    manager may contribute GITHUB_TOKEN. Neither may leak into the runner when
+    the operator explicitly selects a bot through GH_TOKEN.
+    """
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setenv("GITHUB_TOKEN", "human-env-token")
+    monkeypatch.setenv("GH_TOKEN", "bot-publish-token")
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "human-gate-token"}', encoding="utf-8",
+    )
+
+    task = Run(id="task-bot", event_id="evt-bot", body="publish", source="telegram")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    passed = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
+    assert "GH_TOKEN" in passed
+    assert "GITHUB_TOKEN" not in passed
+    assert not any(value.startswith("GITHUB_TOKEN=") for value in passed)
 
 
 def test_docker_github_token_can_come_from_gh_cli(tmp_path, monkeypatch):
