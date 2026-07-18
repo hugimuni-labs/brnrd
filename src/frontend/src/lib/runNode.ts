@@ -11,6 +11,7 @@
 // so this module is a pure composition over that response — no new endpoint,
 // no second copy of the data.
 
+import type { RunLedgerRow } from './runLedger';
 import type { SurfaceFile, SurfaceResponse } from './surface';
 
 export interface FrontmatterDocument {
@@ -73,6 +74,19 @@ export function runNodeHrefForPath(path: string): string | null {
 	const [, slug, run] = parts;
 	if (!slug || !run) return null;
 	return `/runs/${encodeURIComponent(slug)}/${encodeURIComponent(run)}`;
+}
+
+/** Select the receipt for this node without bleeding across account repos. */
+export function runLedgerRowsForNode(
+	rows: RunLedgerRow[],
+	repoSlug: string,
+	runId: string
+): RunLedgerRow[] {
+	const wantedRun = runIdSlug(runId);
+	return rows.filter(
+		(row) =>
+			repoRunSlug(row.repo_label) === repoSlug && runIdSlug(row.run_id ?? '') === wantedRun
+	);
 }
 
 /**
