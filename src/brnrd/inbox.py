@@ -167,6 +167,20 @@ def long_poll(session_factory: sessionmaker, repo_id: str, since: int, *, max_wa
 
 
 def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder) -> Event | None:
+    """Forward one daemon message for *event_id*; close the event on ``done``.
+
+    The streaming protocol posts interim messages with a non-``done`` status
+    (``processing``): those forward to the platform but leave the event open,
+    so the terminal reply still owns the close. Only ``status="done"`` marks
+    the event responded. The responded guard stays first: a closed event
+    accepts no further forwards (idempotent terminal retries return quietly
+    instead of double-posting).
+
+    Regression this shape guards (2026-07-18): every post used to carry
+    ``done``, so the first interim closed the event server-side and each
+    later forward — including the run's final reply — was silently skipped
+    while still ACKed 200, which the daemon took as delivered and cleaned up.
+    """
     event = db.execute(select(Event).where(Event.event_id == event_id, Event.repo_id == repo_id)).scalar_one_or_none()
     if event is None:
         return None
@@ -177,6 +191,10 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
         forwarder(ForwardItem(event_id=event_id, reply_to=_loads(event.reply_to), body=body_markdown, status=status))
     except Exception as e:
         raise DeliveryError(str(e)) from e
+
+    if status != "done":
+        # Interim: forwarded, event stays open for the terminal close.
+        return event
 
     now = datetime.now(timezone.utc)
     created = event.created_at
