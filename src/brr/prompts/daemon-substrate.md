@@ -74,6 +74,13 @@ becomes attention, action, and a reply is yours.
     queued child is cancelled before it starts, a running one has its process
     killed and finalizes as `stopped` (partial work salvaged, completion note
     returns as a pending event). Refusals land in `notices`.
+  - `to: <run-or-event-id>` → a mid-flight steer to a concurrent child this
+    run dispatched: lands as an event only that worker's `inbox.json` /
+    portal-state shows. The child folds it in; it is not a new contract and
+    not for `event:`-addressing. Unconsumed messages die with the child.
+    Workers are thread-isolated: they see their contract and these edge
+    messages, never the user thread — steer through this verb, not prose in
+    the thread.
   - `runner_policy: propose` → park a policy change for operator approval.
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit. Re-read at plan / todo boundaries and once immediately
