@@ -77,27 +77,36 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     - **Canonical** — a ``---``-fenced frontmatter block, exactly as
       :func:`parse_frontmatter` / :func:`frontmatter_body` handle it.
     - **Lenient** — a leading ``key: value`` block with *no opening
-      fence*, terminated by a ``---`` line: e.g. ``event: <id>\\n---\\nbody``.
+      fence*, ended by a ``---`` line, a blank line, or the first
+      non-``key: value`` line: e.g. ``event: <id>\\n---\\nbody``,
+      ``event: <id>\\n\\nbody``, or ``spawn: true\\n# Task``.
 
     The lenient shape exists because the resident reaches for it
     naturally — the delivery contract names ``event:`` / ``gate:`` /
     ``respawn:`` as
     "frontmatter" without showing the fences, and writing the selector
-    line then a ``---`` separator reads as obviously correct. Under the
-    strict parser that silently failed: the routing was dropped, the
-    literal ``event:`` line leaked into the delivered message, and the
-    reply attached to the run's *lead* event instead of its target (the
-    "messed-up quotes" failure). Tolerating it moves the lesson off the
-    "remember the exact fences" rung of the robustness ladder.
+    line then a separator reads as obviously correct. Under the strict
+    parser that silently failed: the routing was dropped, the literal
+    ``event:`` line leaked into the delivered message, and the reply
+    attached to the run's *lead* event instead of its target (the
+    "messed-up quotes" failure). The original lenient parse accepted only
+    a ``---`` terminator — and a blank-line-terminated block (the most
+    natural Markdown-adjacent shape of all) degraded exactly the same
+    silent way (found live, 2026-07-18). Tolerating these moves the
+    lesson off the "remember the exact fences" rung of the robustness
+    ladder.
 
     To avoid mistaking a plain message for routing, the lenient path
     engages **only** when the first non-empty line is a recognised
     routing selector (``event:`` / ``gate:`` / ``respawn:`` /
-    ``spawn:`` / ``runner_policy:``) *and* a closing ``---``
-    line follows in the contiguous leading key-block. A normal message
-    that merely contains ``---`` dividers (a PLAN, say) is never touched.
-    Misparses degrade safely: the drain drops an unknown ``event:`` target
-    or unconfigured ``gate:`` with a console note rather than misdelivering.
+    ``spawn:`` / ``stop:`` / ``to:`` / ``runner_policy:``) *and* its
+    value is a single bare token (``evt-…``, ``true``, a gate name).
+    Prose that happens to open with ``event: the meeting is moved``
+    fails the token test and stays a plain body; a normal message that
+    merely contains ``---`` dividers (a PLAN, say) is never touched.
+    Misparses still degrade safely: the drain drops an unknown
+    ``event:`` target or unconfigured ``gate:`` with a notice rather
+    than misdelivering.
     """
     if text.startswith("---\n"):
         return parse_frontmatter(text), frontmatter_body(text)
@@ -113,6 +122,11 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     lead_key = first.split(":", 1)[0].strip() if ":" in first else ""
     if lead_key not in _OUTBOX_ROUTING_KEYS:
         return {}, text
+    lead_value = first.split(":", 1)[1].strip()
+    if not lead_value or not re.fullmatch(r"\S+", lead_value):
+        # ``event: the meeting is moved`` — a routing key leading prose,
+        # not a routing selector. Leave the message intact.
+        return {}, text
 
     block: list[str] = []
     j = idx
@@ -122,12 +136,30 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
             meta = _parse_block(block, 0)[0] if block else {}
             body = "".join(lines[j + 1:])
             return meta, body
-        if stripped == "" or (":" in stripped and not stripped.startswith("#")):
+        if stripped == "":
+            # Blank line ends the key-block. A ``---`` fence directly
+            # below (blank lines between) still counts as the terminator
+            # so the fence line never leaks into the body.
+            k = j
+            while k < len(lines) and not lines[k].strip():
+                k += 1
+            if k < len(lines) and lines[k].strip() == "---":
+                j = k
+                continue
+            meta = _parse_block(block, 0)[0] if block else {}
+            body = "".join(lines[k:])
+            return meta, body
+        if ":" in stripped and not stripped.startswith("#"):
             block.append(lines[j].rstrip("\n"))
             j += 1
             continue
-        break
-    return {}, text
+        # First non-``key: value`` line (a heading, prose) ends the
+        # block: the validated leading selector already settled intent.
+        meta = _parse_block(block, 0)[0] if block else {}
+        body = "".join(lines[j:])
+        return meta, body
+    meta = _parse_block(block, 0)[0] if block else {}
+    return meta, ""
 
 
 def _parse_block(lines: list[str], base_indent: int) -> tuple[dict[str, Any], int]:
