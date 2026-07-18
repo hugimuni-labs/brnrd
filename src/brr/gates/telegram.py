@@ -148,11 +148,11 @@ def _send_with_overflow(
     text: str,
     *,
     reply_to_message_id: int | None = None,
-) -> None:
+) -> dict:
     body = delivery.resolve_overflow(
         text, limit=_MAX_TG_LEN, gist_fn=delivery.post_gist
     )
-    _send_message(
+    return _send_message(
         token, chat_id, body, topic_id,
         reply_to_message_id=reply_to_message_id,
     )
@@ -566,13 +566,13 @@ def _deliver_responses(
     default_chat_id: int | None = None,
     default_topic_id: int | None = None,
 ) -> None:
-    def deliver(event: dict, body: str) -> None:
+    def deliver(event: dict, body: str) -> dict:
         chat_id = _event_int(event, "telegram_chat_id", default_chat_id)
         if chat_id is None:
             raise RuntimeError("missing chat id")
         topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
         reply_to = _event_int(event, "telegram_message_id")
-        _send_with_overflow(
+        return _send_with_overflow(
             token, chat_id, topic_id, body, reply_to_message_id=reply_to,
         )
 
