@@ -148,6 +148,26 @@ function buildRevealCells(node: HTMLElement, text: string): RevealCell[] {
 }
 
 /**
+ * Does an action update carry new text, or is it the same string arriving
+ * again?
+ *
+ * Load-bearing, and the source of a live bug (reported 2026-07-18: reveals
+ * stopping half-way and leaving the scramble frontier glyphs on screen). The
+ * action cancelled its in-flight frame *before* testing identity, so any
+ * reactive update that re-ran it with unchanged text — a sibling poll, a
+ * store tick, a parent re-render — killed the animation permanently and froze
+ * whatever the last drawn frame happened to be.
+ *
+ * Identity is the whole test. A remount builds a fresh action instance with
+ * an empty `currentText`, which is what makes an expanding block replay its
+ * reveal; a same-text update inside one instance must never restart *or*
+ * interrupt.
+ */
+export function shouldRestartReveal(currentText: string, nextText: string): boolean {
+	return nextText !== currentText;
+}
+
+/**
  * Per-character streaming reveal with a fixed-width scramble frontier.
  * The true text occupies every character cell from frame zero; opacity,
  * never DOM width, changes during the animation. Mounting an expanded block
@@ -164,10 +184,10 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 	}
 
 	function start(next: TypeRevealParams) {
+		const text = next.text ?? node.textContent ?? '';
+		if (!shouldRestartReveal(currentText, text)) return;
 		cancelAnimationFrame(frame);
 		clearTimeout(timer);
-		const text = next.text ?? node.textContent ?? '';
-		if (text === currentText && node.querySelector('[data-type-reveal-cell]')) return;
 		currentText = text;
 
 		if (!text || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -197,7 +217,13 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 				}
 			});
 
+			// Settle on the last frame: collapse the per-character scaffolding
+			// back to plain text. A finished reveal otherwise keeps every cell's
+			// absolutely positioned scramble span in the DOM at opacity 0 — one
+			// missed inline style away from being the frontier glyphs a reader
+			// sees stranded at the end of a fully revealed string.
 			if (ratio < 1) frame = requestAnimationFrame(draw);
+			else settle(text);
 		};
 
 		timer = window.setTimeout(() => {

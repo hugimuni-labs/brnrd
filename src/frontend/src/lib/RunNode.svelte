@@ -50,6 +50,7 @@
 	// it only as the fallback.
 	let repoLabel = $derived(frame?.metadata.repo_label || repoSlug.replaceAll('__', '/'));
 	let edges = $derived(dispatchEdges(frame?.metadata ?? {}, repoSlug, knownPaths));
+	let running = $derived((frame?.metadata.status ?? '').toLowerCase() === 'running');
 
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
@@ -179,6 +180,14 @@
 				<div class="text-sm text-stone-300">
 					<MarkdownContent markdown={node.body.markdown} sourcePath={node.body.path} {knownPaths} />
 				</div>
+			{:else if running}
+				<!-- A live node is not an empty one. The daemon mirrors the card as
+				     it changes, so an absent body here means the run has not
+				     written one *yet* — a different statement from a closed run
+				     that never wrote one at all. -->
+				<p class="mt-3 text-sm text-stone-500">
+					This run is still going and has not written its card yet.
+				</p>
 			{:else}
 				<p class="mt-3 text-sm text-stone-500">
 					No body was captured — the run wrote no card, or it predates the runfile weld.
@@ -199,8 +208,12 @@
 			</div>
 			{#if node.messages.length === 0}
 				<div class="panel mt-2 p-4 text-sm text-stone-500">
-					No receipted messages are present. This run may predate the message store or have produced
-					no deliverable traffic.
+					{#if running}
+						Nothing has left this run yet.
+					{:else}
+						No receipted messages are present. This run may predate the message store or have
+						produced no deliverable traffic.
+					{/if}
 				</div>
 			{:else}
 				<div class="mt-2 space-y-2">
