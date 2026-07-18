@@ -102,3 +102,71 @@ test('fuel rows derive compact shell and model labels from every reported window
 	assert.equal(rows[0].tooltip, 'claude · 5h: 61% left · resets 17:00');
 	assert.match(rows[3].tooltip, /unknown · resets 2026-/u);
 });
+
+test('fuelRows derives countdown and window-elapsed fraction from resets_at', () => {
+	const nowMs = 1_784_400_000_000; // epoch seconds 1_784_400_000
+	const shells = [
+		{
+			shell: 'claude',
+			status: 'ok',
+			windows: [
+				{
+					label: '5h window',
+					used: null,
+					limit: null,
+					percent: 61,
+					reset: 'resets 17:00',
+					resets_at: 1_784_400_000 + 2 * 3600 + 30 * 60 // 2h30m left of 5h
+				},
+				{
+					label: 'weekly',
+					used: null,
+					limit: null,
+					percent: 48,
+					reset: null,
+					resets_at: 1_784_400_000 + 4 * 86400 + 2 * 3600 // 4d2h left of 7d
+				},
+				{
+					label: 'weekly',
+					used: null,
+					limit: null,
+					percent: 10,
+					reset: null
+					// no resets_at: older daemon report
+				}
+			]
+		}
+	];
+
+	const rows = fuelRows(shells, nowMs);
+	assert.equal(rows[0].resetShort, '2h30m');
+	assert.ok(Math.abs((rows[0].timeFraction ?? 0) - 0.5) < 0.001);
+	assert.equal(rows[1].resetShort, '4d2h');
+	assert.ok(Math.abs((rows[1].timeFraction ?? 0) - (1 - (4 * 86400 + 2 * 3600) / (7 * 86400))) < 0.001);
+	assert.equal(rows[2].resetShort, null);
+	assert.equal(rows[2].timeFraction, null);
+});
+
+test('fuelRows clamps an already-passed reset to zero, full window', () => {
+	const nowMs = 1_784_400_000_000;
+	const shells = [
+		{
+			shell: 'claude',
+			status: 'ok',
+			windows: [
+				{
+					label: '5h window',
+					used: null,
+					limit: null,
+					percent: 0,
+					reset: null,
+					resets_at: 1_784_400_000 - 60
+				}
+			]
+		}
+	];
+
+	const rows = fuelRows(shells, nowMs);
+	assert.equal(rows[0].resetShort, '0m');
+	assert.equal(rows[0].timeFraction, 1);
+});
