@@ -165,10 +165,15 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
 
 @router.put("/surface", response_model=schemas.SurfaceOut)
 def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    """Replace the account's discovered authored work-surface mirror."""
+    """Replace the account's discovered corpus mirror (surface + knowledge).
+
+    Paths are home-relative (``surface/…``, ``knowledge/…``) since the corpus
+    join (#PR corpus-join); the traversal guard rejects absolute/``..``/hidden
+    parts exactly as it did for the surface-relative convention.
+    """
 
     seen: set[str] = set()
-    files: list[dict[str, str]] = []
+    files: list[dict[str, object]] = []
     for item in payload.files:
         path = PurePosixPath(item.path)
         if path.is_absolute() or ".." in path.parts or any(part.startswith(".") for part in path.parts):
@@ -177,7 +182,7 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
         if normalized in seen:
             raise HTTPException(status_code=422, detail=f"duplicate surface path: {normalized}")
         seen.add(normalized)
-        files.append({"path": normalized, "markdown": item.markdown})
+        files.append({"path": normalized, "markdown": item.markdown, "layer": item.layer, "truncated": item.truncated})
 
     now = datetime.now(timezone.utc)
     account = db.get(Account, principal.account_id)

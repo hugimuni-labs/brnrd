@@ -394,8 +394,59 @@ def test_loop_publishes_discovered_surface_snapshot(tmp_path, monkeypatch):
         repo_row = db.get(RepoModel, pid)
         account_row = db.get(AccountModel, repo_row.account_id)
         files = json.loads(account_row.surface_json)
-        assert {item["path"] for item in files} == {"index.md", "something-new.md"}
-        assert next(item for item in files if item["path"] == "something-new.md")["markdown"] == "discovered without a new mount"
+        # Corpus join: paths are now home-relative and carry their layer.
+        assert {item["path"] for item in files} == {"surface/index.md", "surface/something-new.md"}
+        page_row = next(item for item in files if item["path"] == "surface/something-new.md")
+        assert page_row["markdown"] == "discovered without a new mount"
+        assert page_row["layer"] == "authored"
+
+
+def test_corpus_publish_is_change_gated(tmp_path, monkeypatch):
+    """The corpus re-PUTs only when it changes — the big knowledge layer is not
+    resent every tick."""
+    import json
+
+    from brr import account
+    from brnrd.models import Account as AccountModel, Repo as RepoModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers).status_code == 200
+    cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0})
+    cloud._corpus_publish_hash.pop(str(brr_dir), None)
+
+    puts: list[str] = []
+    routed = _route_to(client)
+
+    def _counting(url, method, path, **kw):
+        if path == "/v1/daemons/surface":
+            puts.append(path)
+        return routed(url, method, path, **kw)
+
+    monkeypatch.setattr(cloud, "_request", _counting)
+
+    ctx = account.resolve_context(brr_dir.parent, create=True)
+    index = account.work_surface_path(ctx) / "index.md"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("# Work surface", encoding="utf-8")
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)  # unchanged → no second PUT
+    assert puts.count("/v1/daemons/surface") == 1
+
+    index.write_text("# Work surface — edited", encoding="utf-8")
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)  # changed → PUT again
+    assert puts.count("/v1/daemons/surface") == 2
+
+
+def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
+    """Best-effort posture: a home with no linked knowledge repo still hashes."""
+    digest = cloud._corpus_fingerprint([], tmp_path / "missing-knowledge")
+    assert digest
 
 
 def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):

@@ -85,7 +85,10 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_github_login ON accounts (github_login)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_email ON accounts (email)"))
 
-    # Discovered user/resident-authored work surface mirror.
+    # Discovered corpus mirror (authored surface + home knowledge + replies).
+    # The layered files carry ``layer``/``truncated`` inside this JSON blob, so
+    # the corpus join needed no DDL — pre-corpus rows self-heal on the next
+    # full-replace publish (the daemon republishes once on boot).
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS surface_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS surface_updated_at TIMESTAMP"))
 
