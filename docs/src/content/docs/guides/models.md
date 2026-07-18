@@ -1,4 +1,7 @@
-# Models & quota
+---
+title: Models & quota
+description: Pin, select, escalate, and downshift local Shell and Core profiles.
+---
 
 brnrd separates the CLI process from the model it runs:
 
