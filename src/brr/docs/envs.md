@@ -125,9 +125,10 @@ leaves `gh` with an account it can't authenticate, which makes
 `gh auth status` exit non-zero and confuses agents even when other
 operations would have worked.
 
-Instead, brnrd resolves a token explicitly on every Docker task — checking
-stored gate state, daemon env vars (`GITHUB_TOKEN` / `GH_TOKEN`), then
-`gh auth token` on the host — and injects it as `GITHUB_TOKEN` inside
+Instead, brnrd resolves a token explicitly on every Docker task. An explicit
+`GH_TOKEN` selects the runner's publishing identity; otherwise brnrd checks
+stored gate state, legacy `GITHUB_TOKEN`, then `gh auth token` on the host.
+The resolved fallback is injected as `GITHUB_TOKEN` inside
 the container. The Docker command also configures git to rewrite common
 GitHub SSH remote forms (`git@github.com:...`,
 `ssh://git@github.com/...`) to HTTPS and supplies the token through an
@@ -137,11 +138,17 @@ even when no SSH agent is mounted. The net effect: `gh pr create`,
 the container, and `gh auth status` reports the injected token as the
 single active account.
 
+To make runner-authored GitHub produce belong to a dedicated account while a
+local gate continues using a separate ingress credential, set its token as
+`GH_TOKEN` in the daemon environment. The runner receives only that GitHub
+identity. Commit attribution remains Git's concern, so configure `user.name`
+and a verified bot email separately.
+
 If `gh auth token` can't return a token on the host (no PAT stored, no
-keyring, etc.), set `GITHUB_TOKEN` in the daemon's environment or run
+keyring, etc.), set `GH_TOKEN` in the daemon's environment or run
 the GitHub gate's `setup` flow to store one explicitly — both feed the
-same in-container injection path. A Personal Access Token with `repo`
-and `read:org` is sufficient for most workflows.
+same in-container injection path. Choose the narrowest token type and
+repository permissions that cover the operations the runner may perform.
 
 You can opt out of the credential-dir mounts with
 `docker.mount_credentials=false`. The mounts are read-write so refresh
