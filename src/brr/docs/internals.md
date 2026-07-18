@@ -275,14 +275,16 @@ shutdown kills the in-flight runner to reclaim the slot. The full
 protocol contract lives in `kb/design-multi-response.md`; the liveness
 contract in `kb/review-daemon-coherence-2026-06.md` §2.
 
-The resident may also **compose what its live progress card says** by
-writing a `.card` control dotfile in the same outbox directory. Tier-2
+The resident **maintains its run body** by writing a `.card` control dotfile
+in the same outbox directory. Tier-2
 boundaries synchronously request promotion; heartbeat and post-return recovery
 cover Tier-0/1. A `card_composed` packet emits only when the content has
-changed, and the renderer surfaces the text as a `note: …` tail line
-under the live phase. Rewrite the file to update; empty or delete it
-to withdraw. The daemon stays the renderer (header, sync line,
-phase log, terminal state); brnrd stays a transient relay. See
+changed, and the renderer surfaces only its `## Now` section as a `note: …`
+tail under the live phase. Rewrite the file as the run moves; later sections
+retain its arc, findings, and decisions. At closeout the full Markdown is
+captured as `runs/<repo>/<run>/body.md` beside the daemon's separately written
+`state.md`. The daemon stays the live renderer (header, sync line, phase log,
+terminal state). See
 `kb/design-co-maintainer.md` §8 and `kb/design-managed-delivery.md`.
 
 ## Run progress UX
@@ -292,8 +294,8 @@ every run: `run_created`, `env_prepared`, `container_started`,
 `attempt_started`, `attempt_failed`, `retrying`, `run_started`,
 `artifact_created`, `interim_response`, `card_composed`, `finalizing`,
 `container_preserved`, `push_started`, `push_done`, plus the terminal
-`done` / `failed` / `conflict`. `card_composed` is the resident's
-narration of its own progress (see the outbox `.card` seam above):
+`done` / `failed` / `conflict`. `card_composed` is the `## Now` projection
+of the resident's run body (see the outbox `.card` seam above):
 it lands on `RunProgressView.agent_card_text` and the renderer surfaces
 it as a `note:` tail line.
 

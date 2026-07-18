@@ -2079,8 +2079,9 @@ def _build_run_context_bundle(
                 "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
             )
         sections.append(
-            f"- card: `{outbox_path}/.card` — note body only; rewrite as "
-            "context shifts"
+            f"- card/run body: `{outbox_path}/.card` — resident-owned Markdown "
+            "write-head; keep `## Now` current for the live projection, preserve "
+            "the full run story below it; closeout captures it as `body.md`"
         )
     if branch_name and seed_ref:
         branch_line = (

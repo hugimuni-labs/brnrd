@@ -30,15 +30,15 @@ test('inlineTokens resolves known relative pages and refuses script links', () =
 	assert.equal(tokens[2].kind === 'link' && tokens[2].href, null);
 });
 
-test('groupByLayer orders authored → knowledge → replies and defaults missing layer', () => {
+test('groupByLayer orders authored → knowledge → runs and defaults missing layer', () => {
 	const groups = groupByLayer([
 		{ path: 'knowledge/repos/x/a.md', markdown: '', layer: 'knowledge' },
-		{ path: 'knowledge/replies/x/run.md', markdown: '', layer: 'replies' },
+		{ path: 'runs/x/run/body.md', markdown: '', layer: 'runs' },
 		{ path: 'surface/index.md', markdown: '' } // no layer → authored
 	]);
 	assert.deepEqual(
 		groups.map((g) => g.layer),
-		['authored', 'knowledge', 'replies']
+		['authored', 'knowledge', 'runs']
 	);
 	assert.equal(groups[0].files[0].path, 'surface/index.md');
 });
@@ -78,18 +78,19 @@ test('buildNavTree groups knowledge files by repos/<slug> dir', () => {
 	assert.equal(kl.dirs![1].count, 1);
 });
 
-test('buildNavTree groups replies files by slug dir', () => {
+test('buildNavTree groups run files by run directory', () => {
 	const tree = buildNavTree([
-		{ path: 'knowledge/replies/Gurio__brr/run-1.md', markdown: '', layer: 'replies' },
-		{ path: 'knowledge/replies/Gurio__brr/run-2.md', markdown: '', layer: 'replies' },
-		{ path: 'knowledge/replies/Other__repo/run-3.md', markdown: '', layer: 'replies' }
+		{ path: 'runs/Gurio__brr/run-1/body.md', markdown: '', layer: 'runs' },
+		{ path: 'runs/Gurio__brr/run-2/body.md', markdown: '', layer: 'runs' },
+		{ path: 'runs/Other__repo/run-3/body.md', markdown: '', layer: 'runs' }
 	]);
 	const [rl] = tree;
-	assert.equal(rl.layer, 'replies');
+	assert.equal(rl.layer, 'runs');
 	assert.ok(rl.dirs !== null);
-	assert.equal(rl.dirs![0].key, 'Gurio__brr');
-	assert.equal(rl.dirs![0].count, 2);
-	assert.equal(rl.dirs![1].key, 'Other__repo');
+	assert.equal(rl.dirs![0].key, 'Gurio__brr/run-1');
+	assert.equal(rl.dirs![0].count, 1);
+	assert.equal(rl.dirs![1].key, 'Gurio__brr/run-2');
+	assert.equal(rl.dirs![2].key, 'Other__repo/run-3');
 });
 
 test('buildNavTree keeps authored layer flat (no dirs)', () => {
@@ -105,7 +106,7 @@ test('buildNavTree keeps authored layer flat (no dirs)', () => {
 
 test('fileDirKey returns correct ancestor key for ancestor auto-expansion', () => {
 	assert.equal(fileDirKey('knowledge/repos/Gurio__brr/design.md', 'knowledge'), 'repos/Gurio__brr');
-	assert.equal(fileDirKey('knowledge/replies/Gurio__brr/run-1.md', 'replies'), 'Gurio__brr');
+	assert.equal(fileDirKey('runs/Gurio__brr/run-1/body.md', 'runs'), 'Gurio__brr/run-1');
 	assert.equal(fileDirKey('knowledge/_cross-repo/shared.md', 'knowledge'), '_cross-repo');
 	assert.equal(fileDirKey('surface/index.md', 'authored'), null);
 });
