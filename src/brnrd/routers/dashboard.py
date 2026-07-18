@@ -634,7 +634,7 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
-def _repo_view_out(row: dict[str, Any], *, github_bot_user_login: str) -> dict[str, Any]:
+def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
     repo: Repo = row["repo"]
     return {
         "id": repo.id,
@@ -657,7 +657,6 @@ def _repo_view_out(row: dict[str, Any], *, github_bot_user_login: str) -> dict[s
         "gates": row["gates"],
         "setup_command": row["setup_command"],
         "telegram_pair_enabled": True,
-        "bot_invite_enabled": repo.forge == "github" and bool(github_bot_user_login),
     }
 
 
@@ -712,15 +711,11 @@ def dashboard_repos_api(
     installed = _installed_repos(db, account.id)
     installations = _installations(db, account.id)
     connected_names = {repo.repo_full_name.casefold() for repo in repos}
-    github_bot_user_login = settings.github_bot_user_login.strip().lstrip("@")
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "account": {"id": account.id, "github_login": account.github_login},
-            "connected_repos": [
-                _repo_view_out(row, github_bot_user_login=github_bot_user_login)
-                for row in repo_views
-            ],
+            "connected_repos": [_repo_view_out(row) for row in repo_views],
             "connected_count": len(repos),
             "installations": [_installation_out(row) for row in installations],
             "installed_repos": [
@@ -732,7 +727,6 @@ def dashboard_repos_api(
             "install_url": settings.github_install_url,
             "github_app_slug": settings.github_app_slug,
             "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
-            "github_bot_user_login": github_bot_user_login,
             "notice": _notice_text(notice),
             "setup_installation_id": installation_id or "",
         }
