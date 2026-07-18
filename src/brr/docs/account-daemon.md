@@ -2,7 +2,7 @@
 
 The local daemon stores durable resident/run/control state in a git-backed
 **brnrd home**. The home can be project-local or account-scoped; both lanes use
-the same daemon loop, file protocol, run-state paths, repo-tagged resident
+the same daemon loop, file protocol, run-node paths, repo-tagged resident
 memory, and runner policy machinery.
 
 ## Project Lane
@@ -62,7 +62,9 @@ Current durable paths under a home:
 - `account/repos.json` — repo registry for account homes;
 - `dispatch/inbox/` and `dispatch/responses/` — account-dispatch queues;
 - `repos/<repo>/dominion/` — resident-owned repo memory;
-- `run-state/<repo>/<run>.md` — durable run-state documents;
+- `runs/<repo>/<run>/state.md` — daemon-attested run frame;
+- `runs/<repo>/<run>/body.md` — resident-authored run body (when written);
+- `runs/<repo>/<run>/messages/` — receipted edge traffic;
 - `surface/` — the single discovered user/resident-authored orientation root;
   its seed links `plans/<repo>/active.md`, `workflow.md`, and
   `ledger/decisions.md`, while arbitrary Markdown pages join by existing;
@@ -71,7 +73,7 @@ Current durable paths under a home:
 
 The wake and dashboard discover Markdown below `surface/`; adding a shared
 page does not add a prompt block, API field, or dashboard mount. Daemon-attested
-state such as `run-state/` remains outside this authored layer.
+state such as `runs/*/state.md` remains outside this authored layer.
 
 Remote durability is explicit. brnrd does not create a GitHub repo, gist, or
 forge object by default; point the home git repo at a remote only when you want

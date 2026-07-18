@@ -353,10 +353,12 @@ becomes attention, action, and a reply is yours.
   **check `notices` after any `spawn:` / `respawn:` / `event:`-addressed
   write** or the drop is invisible.
 - **control files** (never delivered — writing here is not speaking to anyone):
-  - `.card` — the live progress card; note body only, rewrite as context
-    shifts. Write a first line among the run's earliest actions: from the
-    watching side, a card that appears only when something forces it reads as
-    forgotten.
+  - `.card` — the resident-owned run-body write-head. Keep a `## Now` section
+    current for the compact live projection and preserve the run's arc,
+    findings, and decisions in later sections; closeout captures the full
+    Markdown as `runs/<repo>/<run>/body.md`. Write it among the run's earliest
+    actions: from the watching side, a body that appears only when something
+    forces it reads as forgotten.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.
@@ -543,7 +545,7 @@ Live values for this run's portals. Standing rules: §How the daemon drives you 
 - portal state: `/tmp/brr-fixture-outbox/portal-state.json` (env `BRR_PORTAL_STATE`) — pending events, posture, `change_token`
 - codex Shell: native progress/final channels are runner-local under brr — user-visible mid-run communication goes through `.card` / outbox / `gate:`; stdout stays the plain current-thread fallback
 - keepalive: `/tmp/brr-fixture-outbox/.keepalive` — first line ISO-8601 or `+<duration>` (`+30m`); rewrite to extend
-- card: `/tmp/brr-fixture-outbox/.card` — note body only; rewrite as context shifts
+- card/run body: `/tmp/brr-fixture-outbox/.card` — resident-owned Markdown write-head; keep `## Now` current for the live projection, preserve the full run story below it; closeout captures it as `body.md`
 - branch: `brr/fixture-branch` ⇐ `main` — commit here; brr publishes the branch you end on; themed work ⇒ rename to a descriptive `brr/<short-slug>` before committing
 
 ### Communication snapshot
@@ -575,7 +577,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,009  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,183  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -587,18 +589,18 @@ source manifest:
   · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,495  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,617  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  41.5%
-  substrate       9,009 B  28.2%
-  identity        5,449 B  17.0%
-  runtime         4,092 B  12.8%
+  contract       13,274 B  41.1%
+  substrate       9,183 B  28.4%
+  identity        5,449 B  16.9%
+  runtime         4,214 B  13.1%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     31,985 B
+  wake total     32,281 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
