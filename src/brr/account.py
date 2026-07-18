@@ -26,14 +26,13 @@ DEFAULT_STATE_NAMESPACE = "brnrd"
 REGISTRY_PATH = "account/repos.json"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
 RESPONSES_PATH = "dispatch/responses"
-RUN_STATE_PATH = "run-state"
 RUNS_PATH = "runs"
 REPOS_PATH = "repos"
 REPO_DOMINION_DIRNAME = "dominion"
 
 # Shared user/resident-authored orientation.  Everything below this root is
 # discovered by the wake and dashboard; adding a page does not require a code
-# change.  The daemon-owned frame (run-state/, dispatch/, account/) stays
+# change.  The daemon-owned frame (runs/*/state.md, dispatch/, account/) stays
 # outside this directory on purpose.
 SURFACE_PATH = "surface"
 
@@ -85,7 +84,7 @@ class HomeContext:
     dominion_repo: Path
     dispatch_inbox: Path
     responses_dir: Path
-    run_state_dir: Path
+    runs_dir: Path
     repos: dict[str, AccountRepo]
     default_repo: AccountRepo
     enabled: bool = True
@@ -385,8 +384,9 @@ def resolve_context(
             home_kind=kind,
             home_id=home_id,
         )
-        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH, SURFACE_PATH):
+        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUNS_PATH, SURFACE_PATH):
             (home_root / rel).mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_run_state(home_root)
         _migrate_legacy_work_surface(home_root)
         _seed_work_surface(home_root, current_label)
 
@@ -395,7 +395,7 @@ def resolve_context(
         dominion_repo=home_root,
         dispatch_inbox=home_root / DISPATCH_INBOX_PATH,
         responses_dir=home_root / RESPONSES_PATH,
-        run_state_dir=home_root / RUN_STATE_PATH,
+        runs_dir=home_root / RUNS_PATH,
         repos=repos,
         default_repo=default_repo,
         enabled=_truthy(cfg.get("account.enabled"), True),
@@ -415,6 +415,52 @@ def context_home_root(ctx: HomeContext) -> Path:
     """Return the brnrd home root for *ctx*."""
 
     return ctx.home_root or ctx.dominion_repo
+
+
+def run_dir(ctx: HomeContext, repo_label: str, run_id: str) -> Path:
+    """Return the one durable directory representing a Wyrd run node."""
+
+    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", run_id.strip()).strip("-._")
+    safe_run_id = safe_run_id or "unknown-run"
+    return ctx.runs_dir / slug_repo_label(repo_label) / safe_run_id
+
+
+def _migrate_legacy_run_state(home_root: Path) -> int:
+    """Fold ``run-state/<repo>/<run>.md`` into each run's ``state.md``.
+
+    State is a current snapshot rather than an append-only history. If an
+    interrupted migration left both paths, the newer snapshot wins; git keeps
+    the superseded version. The old tree is removed once empty so one run
+    cannot retain two canonical representations.
+    """
+
+    legacy_root = home_root / "run-state"
+    runs_root = home_root / RUNS_PATH
+    if not legacy_root.is_dir():
+        return 0
+    moved = 0
+    for source in sorted(legacy_root.glob("*/*.md")):
+        destination = runs_root / source.parent.name / source.stem / "state.md"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not destination.exists() or source.stat().st_mtime_ns >= destination.stat().st_mtime_ns:
+                source.replace(destination)
+            else:
+                source.unlink()
+            moved += 1
+        except OSError:
+            continue
+    for directory in sorted(legacy_root.rglob("*"), reverse=True):
+        if directory.is_dir():
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+    try:
+        legacy_root.rmdir()
+    except OSError:
+        pass
+    return moved
 
 
 def knowledge_path(ctx: HomeContext) -> Path:
@@ -493,7 +539,7 @@ def work_surface_path(ctx: AccountContext) -> Path:
 def _discover_markdown(root: Path) -> list[Path]:
     """Enumerate hardened Markdown files anywhere under *root* (unsorted).
 
-    Shared by the authored surface and the knowledge/replies corpus layers so
+    Shared by the authored surface and the knowledge/runs corpus layers so
     all three carry one hardening rule. ``os.walk`` runs with
     ``followlinks=False`` (the default) so a symlinked *directory* cannot
     smuggle an outside tree into the local-home mirror; file symlinks and
@@ -538,7 +584,7 @@ def work_surface_files(ctx: AccountContext) -> list[Path]:
 # ``runs/<slug>/<run>/messages/000001-terminal.md``) so a relative link authored in one
 # layer resolves into another with no rewrite.
 
-CORPUS_LAYERS = ("authored", "knowledge", "replies")
+CORPUS_LAYERS = ("authored", "knowledge", "runs")
 
 
 @dataclass(frozen=True)
@@ -553,7 +599,7 @@ class CorpusFile:
 def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
     """Enumerate the navigable corpus across the authored + knowledge layers.
 
-    Layers appear in reading order — authored, then knowledge, then replies —
+    Layers appear in reading order — authored, then knowledge, then runs —
     and within a layer ``index.md`` leads, then home-relative name order
     (matching :func:`work_surface_files`). Same hardening as the authored
     surface: no symlinked dirs/files, no hidden paths, ``.md`` only.
@@ -564,7 +610,7 @@ def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
     roots = (
         ("authored", work_surface_path(ctx)),
         ("knowledge", knowledge / REPOS_PATH),
-        ("replies", home / RUNS_PATH),
+        ("runs", home / RUNS_PATH),
     )
     result: list[CorpusFile] = []
     for layer, root in roots:
@@ -651,7 +697,7 @@ def _seed_work_surface(home_root: Path, repo_label_value: str) -> None:
         "## Shape\n\n"
         "Keep this layer free-form and link pages that belong together: those "
         "links become the later loom graph's edges. Daemon-attested files such "
-        "as `run-state/` are the frame around this authored body, not pages to "
+        "as `runs/*/state.md` frame each run body, not pages to "
         "move in here. Add a page when it earns a shared purpose; do not turn "
         "the surface into a form.\n",
         encoding="utf-8",
@@ -783,13 +829,13 @@ def run_state_blob_url(
     *,
     cfg: dict[str, Any] | None = None,
 ) -> str | None:
-    """Project a persisted run-state doc to a web-visible URL, or ``None``.
+    """Project a persisted run state document to a web-visible URL, or ``None``.
 
     The account dominion repo is local-first; once it tracks a forge-hosted
-    remote (the additive brnrd-projection step), a run-state document committed
-    under ``run-state/<label>/<run>.md`` has a stable blob URL. This derives it
+    remote (the additive brnrd-projection step), a run state document committed
+    under ``runs/<label>/<run>/state.md`` has a stable blob URL. This derives it
     from the dominion repo's remote so the live card and run surfaces can link
-    the durable run-state object instead of leaking a host-local path that a
+    the durable run state object instead of leaking a host-local path that a
     remote chat reader cannot open. Returns ``None`` for a purely-local
     dominion (no remote), an unparseable remote, or a path outside the store —
     callers then fall back to a non-path label rather than an absolute path.
@@ -877,7 +923,6 @@ def relabel_scopes(ctx: HomeContext, label: str) -> list[tuple[str, Path, str]]:
         ("dominion", ctx.dominion_repo / REPOS_PATH / slug, "dominion"),
         ("surface-plans", work_surface_path(ctx) / PLANS_PATH / slug, "dominion"),
         ("runner-policy", ctx.dominion_repo / RUNNER_POLICY_PATH / slug, "dominion"),
-        ("run-state", home_root / RUN_STATE_PATH / slug, "dominion"),
         ("runs", home_root / RUNS_PATH / slug, "dominion"),
         ("knowledge", knowledge_root / REPOS_PATH / slug, "knowledge"),
         ("replies", knowledge_root / REPLIES_PATH / slug, "knowledge"),

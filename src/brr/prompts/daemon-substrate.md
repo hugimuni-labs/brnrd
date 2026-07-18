@@ -93,10 +93,12 @@ becomes attention, action, and a reply is yours.
   **check `notices` after any `spawn:` / `respawn:` / `event:`-addressed
   write** or the drop is invisible.
 - **control files** (never delivered — writing here is not speaking to anyone):
-  - `.card` — the live progress card; note body only, rewrite as context
-    shifts. Write a first line among the run's earliest actions: from the
-    watching side, a card that appears only when something forces it reads as
-    forgotten.
+  - `.card` — the resident-owned run-body write-head. Keep a `## Now` section
+    current for the compact live projection and preserve the run's arc,
+    findings, and decisions in later sections; closeout captures the full
+    Markdown as `runs/<repo>/<run>/body.md`. Write it among the run's earliest
+    actions: from the watching side, a body that appears only when something
+    forces it reads as forgotten.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.task-classification` — one slug naming this run's shape, every run.
     Unwritten ⇒ that cost-ledger row is null forever.

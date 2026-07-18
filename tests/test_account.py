@@ -34,7 +34,7 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
     assert ctx.default_repo.root == repo_b
     assert ctx.dispatch_inbox == home / "dispatch" / "inbox"
     assert ctx.responses_dir == home / "dispatch" / "responses"
-    assert ctx.run_state_dir == home / "run-state"
+    assert ctx.runs_dir == home / "runs"
     registry = json.loads((home / "account" / "repos.json").read_text())
     assert registry["home_kind"] == "account"
     assert registry["home_id"] == "acct-1"
@@ -176,13 +176,11 @@ def test_work_surface_files_ignores_symlinked_directories(tmp_path):
     assert "index.md" in names
 
 
-def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
-    """One layered corpus: authored surface, then knowledge, then per-run messages.
+def test_corpus_files_joins_surface_knowledge_and_runs(tmp_path):
+    """One layered corpus: authored surface, knowledge, then whole run nodes.
 
-    The 'replies' layer now reads from home/runs/<slug>/ rather than
-    knowledge/replies/<slug>/ — run messages live on the private side of the
-    ACL (home repo, not shared knowledge repo). The layer name stays 'replies'
-    so the frontend render contract is unchanged.
+    The runs layer reads state, body, and messages from the private side of the
+    ACL (home repo, not shared knowledge repo).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -203,6 +201,8 @@ def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
     from brr import message_store as ms
     ms_dir = ms.run_messages_dir(ctx, "Gurio/brr", "run-x")
     ms_dir.mkdir(parents=True, exist_ok=True)
+    (ms_dir.parent / "state.md").write_text("# State", encoding="utf-8")
+    (ms_dir.parent / "body.md").write_text("## Now\n\nDone", encoding="utf-8")
     (ms_dir / "000001-terminal.md").write_text(
         "---\nstatus: delivered\n---\n\nreply body\n", encoding="utf-8",
     )
@@ -215,13 +215,15 @@ def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
 
     files = account.corpus_files(ctx)
     layers = [f.layer for f in files]
-    assert layers == sorted(layers, key=["authored", "knowledge", "replies"].index)  # grouped in order
+    assert layers == sorted(layers, key=["authored", "knowledge", "runs"].index)  # grouped in order
     paths = [f.path for f in files]
     assert paths[0] == "surface/index.md"  # index leads its layer
     assert "surface/workflow.md" in paths
     assert "knowledge/repos/Gurio__brr/design.md" in paths
     # The run's message appears under runs/ (the new home-relative location).
     assert any(p.startswith("runs/") and "run-x" in p for p in paths)
+    assert "runs/Gurio__brr/run-x/state.md" in paths
+    assert "runs/Gurio__brr/run-x/body.md" in paths
     assert not any("secret" in p for p in paths)
     # Each layer appears contiguously in reading order.
     assert [f.layer for f in files if f.path.startswith("knowledge/repos/")] == ["knowledge"]
@@ -267,7 +269,7 @@ def test_repo_dominion_path_is_repo_tagged(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -290,14 +292,14 @@ def test_run_state_blob_url_none_for_local_only_dominion(tmp_path):
     ctx = account.resolve_context(
         repo, {"home.path": str(tmp_path / "home")},
     )
-    doc = ctx.run_state_dir / "local" / "run.md"
+    doc = ctx.runs_dir / "local" / "run" / "state.md"
     doc.parent.mkdir(parents=True, exist_ok=True)
     doc.write_text("x", encoding="utf-8")
     assert account.run_state_blob_url(ctx, doc) is None
 
 
 def test_run_state_blob_url_projects_to_forge_remote(tmp_path):
-    """Once the dominion tracks a forge-hosted remote, a run-state doc gets a
+    """Once the dominion tracks a forge-hosted remote, a run state doc gets a
     stable blob URL derived from the remote and the doc's repo-relative path."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -308,14 +310,32 @@ def test_run_state_blob_url_projects_to_forge_remote(tmp_path):
         ["git", "remote", "add", "origin", "git@github.com:Gurio/account.git"],
         cwd=home, check=True,
     )
-    doc = ctx.run_state_dir / "Gurio__brr" / "run-260630.md"
+    doc = ctx.runs_dir / "Gurio__brr" / "run-260630" / "state.md"
     doc.parent.mkdir(parents=True, exist_ok=True)
     doc.write_text("x", encoding="utf-8")
     url = account.run_state_blob_url(ctx, doc)
     assert url == (
         "https://github.com/Gurio/account/blob/main/"
-        "run-state/Gurio__brr/run-260630.md"
+        "runs/Gurio__brr/run-260630/state.md"
     )
+
+
+def test_resolve_context_migrates_run_state_into_the_run_folder(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "home"
+    legacy = home / "run-state" / "Gurio__brr" / "run-old.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("---\nstatus: done\n---\n", encoding="utf-8")
+
+    ctx = account.resolve_context(
+        repo, {"home.path": str(home), "repo.label": "Gurio/brr"},
+    )
+
+    state = account.run_dir(ctx, "Gurio/brr", "run-old") / "state.md"
+    assert state.read_text(encoding="utf-8") == "---\nstatus: done\n---\n"
+    assert not (home / "run-state").exists()
 
 
 # ── CS5 — inter-run plan home ─────────────────────────────────────────
@@ -342,7 +362,7 @@ def test_active_plan_path_is_repo_tagged(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -359,7 +379,7 @@ def test_cross_repo_plans_path(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -379,7 +399,7 @@ def test_runner_policy_path_is_repo_tagged(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -396,7 +416,7 @@ def test_account_runner_policy_path(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -413,7 +433,7 @@ def test_runner_policy_proposals_path(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -433,7 +453,7 @@ def test_decisions_ledger_path(tmp_path):
         dominion_repo=tmp_path / "home",
         dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
         responses_dir=tmp_path / "home" / "dispatch" / "responses",
-        run_state_dir=tmp_path / "home" / "run-state",
+        runs_dir=tmp_path / "home" / "runs",
         repos={},
         default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -475,8 +495,7 @@ def test_relabel_scopes_covers_every_slug_keyed_path(tmp_path):
     ctx, _repo = _relabel_home(tmp_path)
     scopes = {scope for scope, _path, _home in account.relabel_scopes(ctx, "Gurio/brr")}
     assert scopes == {
-        "dominion", "surface-plans", "runner-policy", "run-state",
-        "runs", "knowledge", "replies",
+        "dominion", "surface-plans", "runner-policy", "runs", "knowledge", "replies",
     }
 
 
@@ -485,7 +504,7 @@ def test_relabel_moves_every_scope_and_rekeys_the_registry(tmp_path):
 
     moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
 
-    assert len(moves) == 7  # +1 for the new "runs" scope
+    assert len(moves) == 6
     for scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
         assert not path.exists(), f"{scope} left behind at the old slug"
     for scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
@@ -509,7 +528,7 @@ def test_relabel_dry_run_touches_nothing(tmp_path):
         ctx, "Gurio/brr", "hugimuni-labs/brnrd", dry_run=True
     )
 
-    assert len(moves) == 7  # +1 for the new "runs" scope
+    assert len(moves) == 6
     for _scope, path, _home in account.relabel_scopes(ctx, "Gurio/brr"):
         assert path.exists(), "dry run moved something"
     for _scope, path, _home in account.relabel_scopes(ctx, "hugimuni-labs/brnrd"):
@@ -589,7 +608,7 @@ def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
     moves = account.relabel_repo(ctx, "Gurio/brr", "hugimuni-labs/brnrd")
 
     assert {move.scope for move in moves} == {
-        "dominion", "surface-plans", "runs", "run-state", "knowledge", "replies",
+        "dominion", "surface-plans", "runs", "knowledge", "replies",
     }
 
 
@@ -636,7 +655,7 @@ def test_detect_relabelled_repo_ignores_a_sibling_repo_under_the_same_home(tmp_p
         dominion_repo=ctx.dominion_repo,
         dispatch_inbox=ctx.dispatch_inbox,
         responses_dir=ctx.responses_dir,
-        run_state_dir=ctx.run_state_dir,
+        runs_dir=ctx.runs_dir,
         repos=repos,
         default_repo=ctx.default_repo,
         kind=ctx.kind,
