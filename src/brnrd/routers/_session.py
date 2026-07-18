@@ -29,7 +29,6 @@ from brnrd.models import (
     TgPairCode,
     Token,
 )
-from brnrd.platforms import github_app as gh_app_client
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token  # noqa: F401
 from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core, telegram_pair_core
@@ -48,14 +47,11 @@ __all__ = [
     "_cookie_secure",
     "_disconnect_repo_core",
     "_dt",
-    "_ensure_bot_collaborator",
     "_github_auto_sync_if_needed",
     "_github_oauth_ready",
     "_github_sync_configured",
-    "_installation_id_for_repo",
     "_installations",
     "_installed_repos",
-    "_invite_repo_bot_core",
     "_json_account",
     "_json_body",
     "_needs_hosted_terms",
@@ -212,49 +208,9 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
     return "github-synced" if count else "github-sync-empty"
 
 
-def _installation_id_for_repo(db: Session, account_id: str, repo_full_name: str) -> str | None:
-    return db.execute(
-        select(GitHubInstallation.installation_id)
-        .join(GitHubInstalledRepo, GitHubInstalledRepo.github_installation_id == GitHubInstallation.id)
-        .where(GitHubInstallation.account_id == account_id, GitHubInstalledRepo.repo_full_name == repo_full_name)
-    ).scalar_one_or_none()
-
-
-def _ensure_bot_collaborator(request: Request, db: Session, account_id: str, repo: Repo) -> str:
-    """Invite the human-facing GitHub bot user into the repo."""
-    if repo.forge != "github":
-        return "repo-connected"
-    settings = request.app.state.settings
-    username = settings.github_bot_user_login.strip().lstrip("@")
-    if not username:
-        return "repo-connected-bot-invite-skipped"
-    installation_id = _installation_id_for_repo(db, account_id, repo.repo_full_name)
-    if not installation_id:
-        return "repo-connected-bot-invite-skipped"
-    permission = (
-        settings.github_bot_collaborator_permission or "push"
-    ).strip() or "push"
-    try:
-        result = gh_app_client.invite_collaborator(settings, installation_id, repo.repo_full_name, username, permission=permission)
-    except Exception as e:
-        print(f"[brnrd] github bot user invite failed for {repo.repo_full_name}: {e}")
-        return "repo-connected-bot-invite-failed"
-    if result.get("status_code") == 204:
-        return "repo-connected-bot-present"
-    return "repo-connected-bot-invited"
-
-
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo enabled. Set up a local brnrd daemon to start draining work.",
-        "repo-connected-bot-invited": "Repo enabled. brnrd invited the bot user for native GitHub mentions; accept the invitation as the bot user if needed.",
-        "repo-connected-bot-present": "Repo enabled. The bot user is already visible to this repo.",
-        "repo-connected-bot-invite-skipped": "Repo enabled. Could not find a synced installation for the bot-user invite.",
-        "repo-connected-bot-invite-failed": "Repo enabled, but brnrd could not invite the bot user. Check the bot-user login, GitHub App Administration permission, and logs.",
-        "repo-bot-invited": "brnrd invited the bot user for this repo; accept the invitation as the bot user if needed.",
-        "repo-bot-present": "The bot user is already visible to this repo.",
-        "repo-bot-invite-skipped": "Could not find a synced installation for the bot-user invite.",
-        "repo-bot-invite-failed": "Could not invite the bot user. Check the bot-user login, GitHub App Administration permission, and logs.",
         "repo-disconnected": "Repo disconnected from brnrd.",
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
@@ -332,7 +288,6 @@ def _connect_repo_core(
     repo_full_name = repo_full_name.strip()
     owner, name = _repo_parts(repo_full_name)
     repo = db.execute(select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)).scalar_one_or_none()
-    created = repo is None
     if repo is None:
         repo = Repo(id=ids.repo_id(), account_id=account.id, forge="github", repo_full_name=repo_full_name, repo_owner=owner, repo_name=name)
         db.add(repo)
@@ -340,16 +295,7 @@ def _connect_repo_core(
     repo.default_branch = default_branch or repo.default_branch
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
-    notice = _ensure_bot_collaborator(request, db, account.id, repo) if created else "repo-connected"
-    return notice
-
-
-def _invite_repo_bot_core(request: Request, db: Session, account_id: str, repo_id: str) -> str:
-    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
-    if repo is None:
-        raise HTTPException(status_code=404, detail="repo not found")
-    notice = _ensure_bot_collaborator(request, db, account_id, repo).replace("repo-connected-bot", "repo-bot")
-    return notice
+    return "repo-connected"
 
 
 def _pair_repo_telegram_core(request: Request, db: Session, account_id: str, repo_id: str):

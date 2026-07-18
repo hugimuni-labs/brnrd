@@ -57,12 +57,6 @@ def _account_id(client: TestClient, login: str = "Gurio") -> str:
         return account.id
 
 
-def test_bot_user_identity_does_not_inherit_app_identity():
-    settings = Settings(github_bot_login="brnrd-dev")
-
-    assert settings.github_bot_user_login == "brnrd-bot"
-
-
 def _add_installation_repo(
     client: TestClient,
     account_id: str,
@@ -128,7 +122,6 @@ def test_repos_page_redirects_to_dashboard():
     [
         ("get", "/v1/dashboard/repos", None),
         ("post", "/v1/repos/connect", {"repo_full_name": "Gurio/brr"}),
-        ("post", "/v1/repos/repo_missing/invite-bot", {}),
         ("post", "/v1/repos/repo_missing/telegram-pair", {}),
         ("post", "/v1/repos/repo_missing/disconnect", {}),
     ],
@@ -165,7 +158,6 @@ def test_dashboard_repos_api_returns_repo_management_payload():
     assert installed["Gurio/new"]["connected"] is False
     assert installed["Gurio/new"]["default_branch"] == "trunk"
     assert body["github_app_slug"] == "brnrd-dev"
-    assert body["github_bot_user_login"] == "brnrd-bot"
     assert body["oauth_ready"] is True
 
 
@@ -230,51 +222,6 @@ def test_dashboard_connect_repo_api_returns_error_notice_for_bad_name():
 
     assert r.status_code == 400
     assert r.json() == {"ok": False, "notice": "repo must look like owner/name"}
-
-
-def test_dashboard_invite_bot_api_returns_notice():
-    client = _client()
-    token = _login(client, login="Gurio")
-    repo_id = _create_repo(client, token)
-
-    r = client.post(f"/v1/repos/{repo_id}/invite-bot")
-
-    assert r.status_code == 200
-    assert r.json() == {
-        "ok": True,
-        "notice": "Could not find a synced installation for the bot-user invite.",
-    }
-
-
-def test_dashboard_invites_publishing_bot_with_write_access(monkeypatch):
-    from brnrd.routers import _session
-
-    client = _client()
-    token = _login(client, login="Gurio")
-    repo_id = _create_repo(client, token)
-    _add_installation_repo(client, _account_id(client), "Gurio/brr")
-    calls = []
-
-    def fake_invite(settings, installation_id, repo, username, *, permission):
-        calls.append((installation_id, repo, username, permission))
-        return {"status_code": 201}
-
-    monkeypatch.setattr(_session.gh_app_client, "invite_collaborator", fake_invite)
-
-    response = client.post(f"/v1/repos/{repo_id}/invite-bot")
-
-    assert response.status_code == 200
-    assert calls == [("42", "Gurio/brr", "brnrd-bot", "push")]
-
-
-def test_dashboard_repo_action_returns_error_notice_for_missing_repo():
-    client = _client()
-    _login(client, login="Gurio")
-
-    r = client.post("/v1/repos/repo_missing/invite-bot")
-
-    assert r.status_code == 404
-    assert r.json() == {"ok": False, "notice": "repo not found"}
 
 
 def test_dashboard_disconnect_removes_repo():

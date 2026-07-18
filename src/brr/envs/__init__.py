@@ -456,6 +456,9 @@ def _resolve_docker_github_token(brr_dir: Path) -> str | None:
     token = os.environ.get("GH_TOKEN")
     if token and token.strip():
         return token.strip()
+    token = os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN")
+    if token and token.strip():
+        return token.strip()
     state_path = brr_dir / "gates" / "github.json"
     if state_path.exists():
         try:
@@ -489,7 +492,9 @@ def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
         if not name or name in seen:
             continue
         seen.add(name)
-        if name == "GITHUB_TOKEN" and os.environ.get("GH_TOKEN"):
+        if name == "GITHUB_TOKEN" and (
+            os.environ.get("GH_TOKEN") or os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN")
+        ):
             continue
         if os.environ.get(name):
             args.extend(["-e", name])
@@ -699,6 +704,8 @@ class DockerEnv(WorktreeEnv):
         token = _resolve_docker_github_token(repo_root / ".brr")
         if token:
             ctx.env_state["github_token"] = token
+            if os.environ.get("GH_TOKEN") or os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
+                ctx.env_state["github_token_env"] = "GH_TOKEN"
 
         return ctx
 
@@ -764,9 +771,16 @@ class DockerEnv(WorktreeEnv):
             # container regardless of whether the system keyring is
             # reachable (it isn't inside Docker).
             *(
-                ["-e", f"GITHUB_TOKEN={ctx.env_state['github_token']}"]
+                [
+                    "-e",
+                    f"{ctx.env_state.get('github_token_env', 'GITHUB_TOKEN')}="
+                    f"{ctx.env_state['github_token']}",
+                ]
                 if ctx.env_state.get("github_token")
-                and not os.environ.get("GITHUB_TOKEN")
+                and not (
+                    ctx.env_state.get("github_token_env", "GITHUB_TOKEN") == "GITHUB_TOKEN"
+                    and os.environ.get("GITHUB_TOKEN")
+                )
                 else []
             ),
             # Bind-mount the repo at the *same absolute path* inside the
