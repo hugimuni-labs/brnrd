@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">brnrd</title>
+  <rect x="1" y="1" width="46" height="46" fill="#0c0906" stroke="#6f6250"/>
+  <path d="M10 15V9h6M32 9h6v6M10 33v6h6M38 33v6h-6" fill="none" stroke="#e8b34a" stroke-width="2"/>
+  <path d="M15 29c4-10 7 10 11 0s7 10 11 0" fill="none" stroke="#a8cbdb" stroke-width="2.4" stroke-linecap="square"/>
+  <circle cx="24" cy="18" r="2.5" fill="#f3ece0"/>
+</svg>

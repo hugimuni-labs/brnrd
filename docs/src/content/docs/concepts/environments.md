@@ -1,4 +1,7 @@
-# Runs & environments
+---
+title: Runs & environments
+description: Choose host, worktree, or Docker execution with an honest trust boundary.
+---
 
 The daemon assembles the current repo context, chooses the configured execution
 environment, starts a CLI runner, keeps the conversation live, and preserves
@@ -39,5 +42,5 @@ runs can remove scratch state.
 The runner executes commands with the authority brnrd grants it, and its
 approval prompts are bypassed deliberately. `worktree` protects your working
 tree, not your credentials or machine. Docker narrows filesystem visibility but
-is not a credential or containment boundary. Read [Security & privacy](../security.md)
+is not a credential or containment boundary. Read [Security & privacy](../../security/)
 before accepting tasks from other people.
