@@ -104,6 +104,46 @@ def test_gate_health_classifies_never_and_degraded_boundary(tmp_path):
     ]
 
 
+def test_gate_health_hides_error_after_a_newer_success(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    now = datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc)
+    path = runtime.health_path(brr_dir, "telegram")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({
+            "last_poll_ok": now.isoformat(),
+            "last_error": "network timed out",
+            "last_error_at": (now - timedelta(seconds=10)).isoformat(),
+        }),
+        encoding="utf-8",
+    )
+
+    [row] = runtime.gate_health_rows(brr_dir, gates=["telegram"], now=now)
+
+    assert row["status"] == "ok"
+    assert row["last_error"] is None
+
+
+def test_gate_health_keeps_error_newer_than_last_success(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    now = datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc)
+    path = runtime.health_path(brr_dir, "cloud")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({
+            "last_poll_ok": (now - timedelta(seconds=10)).isoformat(),
+            "last_error": "upstream 502",
+            "last_error_at": now.isoformat(),
+        }),
+        encoding="utf-8",
+    )
+
+    [row] = runtime.gate_health_rows(brr_dir, gates=["cloud"], now=now)
+
+    assert row["status"] == "degraded"
+    assert row["last_error"] == "upstream 502"
+
+
 @pytest.mark.parametrize(
     ("health", "expected"),
     [
