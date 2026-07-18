@@ -69,6 +69,11 @@ becomes attention, action, and a reply is yours.
     never memorise a number.** Its completion returns as a pending event; the
     parent still owns the original and must answer it with `event: <id>`.
     Spawning alone clears nothing.
+  - `stop: <run-or-event-id>` → kill a concurrent child *this run* dispatched
+    (wrong contract, superseded, runaway). Ownership-checked at the daemon: a
+    queued child is cancelled before it starts, a running one has its process
+    killed and finalizes as `stopped` (partial work salvaged, completion note
+    returns as a pending event). Refusals land in `notices`.
   - `runner_policy: propose` → park a policy change for operator approval.
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit. Re-read at plan / todo boundaries and once immediately
