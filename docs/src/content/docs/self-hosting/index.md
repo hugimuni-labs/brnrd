@@ -1,10 +1,13 @@
-# Self-hosting brnrd
+---
+title: Self-hosting brnrd
+description: Operate the daemon, coding-agent CLIs, gates, and credentials on a machine you control.
+---
 
 Self-hosting means keeping the brnrd daemon and coding-agent CLIs on a machine
 you control. That can be your workstation or an always-on host with access to
 the repositories and credentials the resident needs.
 
-Start with the normal [Install](../getting-started/install.md), then configure a
+Start with the normal [Install](../getting-started/install/), then configure a
 self-hosted gate:
 
 ```bash
@@ -29,7 +32,7 @@ Project work and runner execution remain local to that host. A self-hosted
 Telegram, Slack, or GitHub gate still carries messages through the transport's
 own service.
 
-Read [Security & privacy](../security.md) before exposing a gate. In particular,
+Read [Security & privacy](../security/) before exposing a gate. In particular,
 the currently shipped gates authorize rooms or trigger syntax rather than each
 sender.
 
