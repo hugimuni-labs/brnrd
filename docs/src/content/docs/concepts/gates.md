@@ -1,4 +1,7 @@
-# Gates & authorization
+---
+title: Gates & authorization
+description: Understand how channels reach the daemon and who can trigger work today.
+---
 
 A gate is the door between a channel and the daemon on your machine. Telegram,
 Slack, GitHub, and the managed cloud path carry requests in and replies out.
@@ -32,5 +35,5 @@ Until they land:
 - remember that every inbound message becomes potential instruction to an
   approval-bypassed coding agent.
 
-See [Connect](../getting-started/connect.md) for setup commands and
-[Security & privacy](../security.md) for the full trust posture.
+See [Connect](../../getting-started/connect/) for setup commands and
+[Security & privacy](../../security/) for the full trust posture.

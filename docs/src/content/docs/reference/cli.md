@@ -1,4 +1,7 @@
-# CLI reference
+---
+title: CLI reference
+description: The shipped brnrd command tree and common project settings.
+---
 
 This page reflects the public command tree printed by the installed CLI on
 2026-07-17. Run `brnrd <command> --help` for the exact options in your version.
@@ -78,5 +81,5 @@ core=default
 runner_policy=fixed
 ```
 
-See [Runs & environments](../concepts/environments.md) and
-[Models & quota](../guides/models.md) before changing these settings.
+See [Runs & environments](../../concepts/environments/) and
+[Models & quota](../../guides/models/) before changing these settings.
