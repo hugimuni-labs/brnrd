@@ -176,6 +176,46 @@ def test_work_surface_files_ignores_symlinked_directories(tmp_path):
     assert "index.md" in names
 
 
+def test_corpus_files_joins_surface_knowledge_and_replies(tmp_path):
+    """One layered corpus: authored surface, then knowledge, then replies —
+    home-relative paths, index-first, same hardening as the surface."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    ctx = account.resolve_context(repo, {"home.path": str(home), "repo.label": "Gurio/brr"})
+
+    surface = account.work_surface_path(ctx)
+    (surface / "index.md").write_text("# Work surface", encoding="utf-8")
+    (surface / "workflow.md").write_text("gating", encoding="utf-8")
+
+    knowledge = account.knowledge_path(ctx)
+    kb = knowledge / account.REPOS_PATH / "Gurio__brr"
+    kb.mkdir(parents=True, exist_ok=True)
+    (kb / "design.md").write_text("# Design", encoding="utf-8")
+    replies = knowledge / account.REPLIES_PATH / "Gurio__brr"
+    replies.mkdir(parents=True, exist_ok=True)
+    (replies / "run-x.md").write_text("reply", encoding="utf-8")
+
+    # Hardening: a symlinked directory in the knowledge layer must not leak.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("leak", encoding="utf-8")
+    (kb / "evil").symlink_to(outside, target_is_directory=True)
+
+    files = account.corpus_files(ctx)
+    layers = [f.layer for f in files]
+    assert layers == sorted(layers, key=["authored", "knowledge", "replies"].index)  # grouped in order
+    paths = [f.path for f in files]
+    assert paths[0] == "surface/index.md"  # index leads its layer
+    assert "surface/workflow.md" in paths
+    assert "knowledge/repos/Gurio__brr/design.md" in paths
+    assert "knowledge/replies/Gurio__brr/run-x.md" in paths
+    assert not any("secret" in p for p in paths)
+    # Each layer appears contiguously in reading order.
+    assert [f.layer for f in files if f.path.startswith("knowledge/repos/")] == ["knowledge"]
+
+
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))

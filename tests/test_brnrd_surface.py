@@ -49,9 +49,28 @@ def test_daemon_surface_snapshot_replaces_the_discovered_set():
     assert [item["path"] for item in posted.json()["files"]] == ["index.md", "plans/Gurio__brr/active.md"]
     assert posted.json()["surface_updated_at"] is not None
 
-    replaced = client.put("/v1/daemons/surface", json={"files": [{"path": "index.md", "markdown": "revised"}]}, headers=daemon_headers)
+    replaced = client.put("/v1/daemons/surface", json={"files": [{"path": "surface/index.md", "markdown": "revised"}]}, headers=daemon_headers)
     assert replaced.status_code == 200
-    assert replaced.json()["files"] == [{"path": "index.md", "markdown": "revised"}]
+    assert [item["path"] for item in replaced.json()["files"]] == ["surface/index.md"]
+
+
+def test_daemon_surface_carries_corpus_layer_and_truncation():
+    """The layered corpus: each file keeps its layer and truncation marker."""
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    posted = client.put("/v1/daemons/surface", json={"files": [
+        {"path": "surface/index.md", "markdown": "# Work surface", "layer": "authored"},
+        {"path": "knowledge/repos/Gurio__brr/log.md", "markdown": "capped", "layer": "knowledge", "truncated": True},
+        {"path": "knowledge/replies/Gurio__brr/run-x.md", "markdown": "reply", "layer": "replies"},
+    ]}, headers=daemon_headers)
+    assert posted.status_code == 200, posted.text
+    _login_cookie(client)
+    files = client.get("/v1/dashboard/surface").json()["files"]
+    by_path = {item["path"]: item for item in files}
+    assert by_path["knowledge/repos/Gurio__brr/log.md"]["layer"] == "knowledge"
+    assert by_path["knowledge/repos/Gurio__brr/log.md"]["truncated"] is True
+    assert by_path["knowledge/replies/Gurio__brr/run-x.md"]["layer"] == "replies"
+    assert by_path["surface/index.md"]["truncated"] is False
 
 
 @pytest.mark.parametrize("path", ["../secret.md", "/absolute.md", ".hidden.md"])
@@ -75,7 +94,8 @@ def test_dashboard_surface_returns_the_same_generic_file_set():
     response = client.get("/v1/dashboard/surface")
 
     assert response.status_code == 200
-    assert response.json()["files"] == files
+    got = [{"path": item["path"], "markdown": item["markdown"]} for item in response.json()["files"]]
+    assert got == files
     assert response.json()["reported_at"] is not None
 
 
