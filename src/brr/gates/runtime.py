@@ -151,6 +151,7 @@ def gate_health_rows(
     for gate in gates if gates is not None else configured_gates(brr_dir):
         health = load_health(brr_dir, gate)
         last_poll_ok = health.get("last_poll_ok")
+        polled_at: datetime | None = None
         age_seconds: int | None = None
         if isinstance(last_poll_ok, str):
             try:
@@ -166,6 +167,22 @@ def gate_health_rows(
             else "degraded" if age_seconds > degraded_after_s else "ok"
         )
         last_error = health.get("last_error")
+        last_error_at = health.get("last_error_at")
+        if (
+            isinstance(last_error, str)
+            and isinstance(last_error_at, str)
+            and polled_at
+        ):
+            try:
+                failed_at = datetime.fromisoformat(last_error_at.replace("Z", "+00:00"))
+                if failed_at.tzinfo is None:
+                    failed_at = failed_at.replace(tzinfo=timezone.utc)
+                if polled_at >= failed_at:
+                    last_error = None
+                else:
+                    status = "degraded"
+            except ValueError:
+                pass
         rows.append(
             {
                 "gate": gate,
