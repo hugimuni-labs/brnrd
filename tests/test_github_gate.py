@@ -1335,7 +1335,8 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
     # response body lands verbatim — no quote preface needed (and one
     # would just point the comment back at its own issue).
     assert posts == [("/repos/owner/name/issues/42/comments", {"body": "the answer"})]
-    assert not event_path.exists()
+    # Events survive delivery — status transitions replace file deletion.
+    assert protocol.parse_frontmatter(event_path.read_text(encoding="utf-8"))["status"] == "delivered"
 
 
 def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
@@ -2210,7 +2211,8 @@ def test_deliver_responses_opens_pull_request_event(tmp_path, monkeypatch):
         }),
     ]
     assert protocol.list_done(inbox, "github") == []
-    assert protocol.read_response(responses, event["id"]) is None
+    assert protocol._read_event(event["_path"])["status"] == "delivered"
+    assert protocol.read_response(responses, event["id"]) == "Projected body"
 
 
 def test_deliver_responses_ignores_legacy_diffense_create_pr_false(

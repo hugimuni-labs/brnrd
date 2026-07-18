@@ -27,6 +27,7 @@ REGISTRY_PATH = "account/repos.json"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
 RESPONSES_PATH = "dispatch/responses"
 RUN_STATE_PATH = "run-state"
+RUNS_PATH = "runs"
 REPOS_PATH = "repos"
 REPO_DOMINION_DIRNAME = "dominion"
 
@@ -56,8 +57,8 @@ LEDGER_PATH = "ledger"
 
 KNOWLEDGE_PATH = "knowledge"
 
-# Archived run replies inside home knowledge (see ``knowledge.py``); slug-keyed
-# like every other repo scope, so ``relabel_repo`` has to move it too.
+# Legacy reply archive. New delivery records live in ``runs/``; this name is
+# retained only so the idempotent migration can find pre-message-store homes.
 REPLIES_PATH = "replies"
 
 GITIGNORE = """\
@@ -529,12 +530,12 @@ def work_surface_files(ctx: AccountContext) -> list[Path]:
 # ── Unified corpus: the authored surface joined with home knowledge ──
 #
 # The dashboard renders one navigable corpus, not three disconnected trees:
-# the authored *surface* links kb *knowledge* pages link archived *replies*.
+# the authored *surface* links kb *knowledge* pages link per-run messages.
 # The two git repos (the dominion and the nested brnrd-knowledge clone) stay
 # separate — that split is the privacy/ACL boundary. The join happens here at
 # discovery, and downstream at render. Every path is *home-relative*
 # (``surface/index.md``, ``knowledge/repos/<slug>/foo.md``,
-# ``knowledge/replies/<slug>/run-x.md``) so a relative link authored in one
+# ``runs/<slug>/<run>/messages/000001-terminal.md``) so a relative link authored in one
 # layer resolves into another with no rewrite.
 
 CORPUS_LAYERS = ("authored", "knowledge", "replies")
@@ -563,7 +564,7 @@ def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
     roots = (
         ("authored", work_surface_path(ctx)),
         ("knowledge", knowledge / REPOS_PATH),
-        ("replies", knowledge / REPLIES_PATH),
+        ("replies", home / RUNS_PATH),
     )
     result: list[CorpusFile] = []
     for layer, root in roots:
@@ -877,6 +878,7 @@ def relabel_scopes(ctx: HomeContext, label: str) -> list[tuple[str, Path, str]]:
         ("surface-plans", work_surface_path(ctx) / PLANS_PATH / slug, "dominion"),
         ("runner-policy", ctx.dominion_repo / RUNNER_POLICY_PATH / slug, "dominion"),
         ("run-state", home_root / RUN_STATE_PATH / slug, "dominion"),
+        ("runs", home_root / RUNS_PATH / slug, "dominion"),
         ("knowledge", knowledge_root / REPOS_PATH / slug, "knowledge"),
         ("replies", knowledge_root / REPLIES_PATH / slug, "knowledge"),
     ]

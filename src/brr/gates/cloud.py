@@ -414,14 +414,14 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
     # consume the event's single delivery slot and the terminal reply vanished
     # while the daemon cleaned it up as delivered (found live 2026-07-18, the
     # overnight fleet closeout that never reached the maintainer).
-    def post(event: dict, body: str, status: str) -> None:
+    def post(event: dict, body: str, status: str) -> dict:
         cloud_event_id = event.get("cloud_event_id")
         if not cloud_event_id:
             raise RuntimeError("missing cloud_event_id")
         limit = _RESPONSE_LIMITS.get(event.get("cloud_platform") or "")
         if limit is not None:
             body = delivery.resolve_overflow(body, limit=limit, gist_fn=delivery.post_gist)
-        _request(state["brnrd_url"], "POST", "/v1/daemons/responses", token=state["token"], json={"event_id": cloud_event_id, "body_markdown": body, "status": status})
+        return _request(state["brnrd_url"], "POST", "/v1/daemons/responses", token=state["token"], json={"event_id": cloud_event_id, "body_markdown": body, "status": status})
 
     runtime.deliver_stream(
         inbox_dir,
