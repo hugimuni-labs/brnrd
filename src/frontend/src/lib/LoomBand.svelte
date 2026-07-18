@@ -29,10 +29,19 @@
 		now: number;
 		/** Selection is the page's: the band reports, the detail sheet answers. */
 		onSelect?: (kind: 'run' | 'wake', id: string) => void;
+		onPastWindowChange?: (windowMs: number) => void;
 		selectedId?: string | null;
 	}
 
-	let { ledgerRows, liveRuns, scheduledWakes, now, onSelect, selectedId = null }: Props = $props();
+	let {
+		ledgerRows,
+		liveRuns,
+		scheduledWakes,
+		now,
+		onSelect,
+		onPastWindowChange,
+		selectedId = null
+	}: Props = $props();
 
 	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
 	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
@@ -43,6 +52,7 @@
 	function cyclePastWindow() {
 		const index = LOOM_PAST_WINDOWS_MS.findIndex((window) => window >= pastWindowMs);
 		pastWindowMs = LOOM_PAST_WINDOWS_MS[(index + 1) % LOOM_PAST_WINDOWS_MS.length];
+		onPastWindowChange?.(pastWindowMs);
 	}
 
 	// The shelf model (2026-07-17 steer): one run = one horizontal bar row,

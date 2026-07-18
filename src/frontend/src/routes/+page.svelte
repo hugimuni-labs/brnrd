@@ -30,6 +30,7 @@
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
+	import { LOOM_PAST_WINDOW_MS } from '$lib/loomBand';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
@@ -156,6 +157,7 @@
 	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
+	let loomPastWindowMs = $state(LOOM_PAST_WINDOW_MS);
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
@@ -176,6 +178,27 @@
 	function selectFromLoom(kind: 'run' | 'wake', id: string) {
 		loomSelection =
 			loomSelection && loomSelection.kind === kind && loomSelection.id === id ? null : { kind, id };
+	}
+
+	function changeLoomPastWindow(windowMs: number) {
+		loomPastWindowMs = windowMs;
+		void refreshRunLedger();
+	}
+
+	async function refreshRunLedger() {
+		try {
+			// This feed also powers the 24h produce gauge. Preserve that floor
+			// while letting the loom request its longer 3d/7d scrollback spans.
+			const spanMs = Math.max(loomPastWindowMs, LOOM_PAST_WINDOW_MS);
+			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, spanMs);
+			runLedgerRows = receipts.rows;
+			runLedgerStale = receipts.stale;
+			runLedgerError = null;
+		} catch (e) {
+			if (!(e instanceof RunLedgerAuthError)) {
+				runLedgerError = e instanceof Error ? e.message : 'run-ledger fetch failed';
+			}
+		}
 	}
 
 	let selectedLiveRuns = $derived(
@@ -255,16 +278,7 @@
 				prReviewQueueError = e instanceof Error ? e.message : 'pr-review-queue fetch failed';
 			}
 		}
-		try {
-			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT);
-			runLedgerRows = receipts.rows;
-			runLedgerStale = receipts.stale;
-			runLedgerError = null;
-		} catch (e) {
-			if (!(e instanceof RunLedgerAuthError)) {
-				runLedgerError = e instanceof Error ? e.message : 'run-ledger fetch failed';
-			}
-		}
+		await refreshRunLedger();
 		try {
 			const requests = await fetchConfigRequests();
 			configRequests = requests.requests;
@@ -367,6 +381,7 @@
 				{scheduledWakes}
 				{now}
 				onSelect={selectFromLoom}
+				onPastWindowChange={changeLoomPastWindow}
 				selectedId={loomSelection?.id ?? null}
 			/>
 		</div>

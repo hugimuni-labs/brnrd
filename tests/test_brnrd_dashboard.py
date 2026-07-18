@@ -766,6 +766,38 @@ def test_dashboard_config_requests_api_requires_login():
     assert r.status_code == 401
 
 
+def test_dashboard_run_ledger_span_filters_before_limit():
+    """The loom's longer shelf windows refill from the closed ledger, not
+    merely re-filter the endpoint's latest fixed batch."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+    now = datetime.now(timezone.utc)
+    rows = [
+        {"run_id": "recent", "ended_at": (now - timedelta(hours=2)).isoformat()},
+        {"run_id": "older", "ended_at": (now - timedelta(days=2)).isoformat()},
+    ]
+    with client.app.state.SessionLocal() as db:
+        db.add(Daemon(
+            id="dmn-ledger-span", repo_id=pid, token_id="tok-ledger-span",
+            daemon_name="laptop", run_ledger_json=json.dumps(rows),
+            run_ledger_updated_at=now,
+        ))
+        db.commit()
+
+    one_day = client.get("/v1/dashboard/run-ledger?limit=1&span_seconds=86400")
+    assert one_day.status_code == 200
+    assert [row["run_id"] for row in one_day.json()["rows"]] == ["recent"]
+
+    seven_days = client.get("/v1/dashboard/run-ledger?limit=10&span_seconds=604800")
+    assert [row["run_id"] for row in seven_days.json()["rows"]] == ["recent", "older"]
+
+
 def test_dashboard_config_requests_api_returns_pending_oldest_first():
     """Reads the `config_change_requests` table directly (no daemon
     publish/mirror step, unlike live-runs/PR-queue/run-ledger) — only
