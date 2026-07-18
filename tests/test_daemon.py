@@ -340,10 +340,8 @@ def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     assert not (tmp_path / ".brr" / "outbox" / "evt-ledger").exists()
 
 
-def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
-    tmp_path, monkeypatch,
-):
-    """Reply archival must not race the gate for its delivery queue file."""
+def test_capture_knowledge_no_longer_archives_replies(tmp_path, monkeypatch):
+    """Terminal traffic belongs to home/runs, never the knowledge repo."""
     task = Run(
         id="run-reply-race",
         event_id="evt-reply-race",
@@ -354,22 +352,13 @@ def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
     responses = tmp_path / ".brr" / "responses"
     outbox = tmp_path / ".brr" / "outbox" / task.event_id
     outbox.mkdir(parents=True)
-    seen: dict[str, str] = {}
-
-    def fake_archive(_repo, *, body, **_kwargs):
-        seen["body"] = body
-        return "replies/Gurio__brr/run-reply-race.md"
-
-    monkeypatch.setattr(daemon.knowledge, "archive_reply", fake_archive)
-    monkeypatch.setattr(daemon.knowledge, "capture", lambda *_a, **_k: True)
     monkeypatch.setattr(
         daemon.knowledge,
-        "knowledge_file_url",
-        lambda *_a, **_k: "https://example.test/reply",
+        "archive_reply",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy archive used")),
     )
+    monkeypatch.setattr(daemon.knowledge, "capture", lambda *_a, **_k: True)
 
-    # No response file exists: this is the state after a fast gate has sent
-    # the terminal response and cleaned its queue entry.
     terminal_reply = "---\ngate: forge\n---\n\n" + "x" * 130 + "\nsecond line"
     daemon._capture_knowledge(
         tmp_path,
@@ -381,36 +370,8 @@ def test_capture_knowledge_uses_terminal_snapshot_after_gate_cleanup(
         terminal_reply=terminal_reply,
     )
 
-    assert seen["body"] == terminal_reply
-    assert daemon.relics.read_reported(outbox) == [{
-        "excerpt": "x" * 120,
-        "kind": "reply",
-        "path": "replies/Gurio__brr/run-reply-race.md",
-        "url": "https://example.test/reply",
-    }]
-    assert task.meta["reply_archive"] == "archived"
-
-
-def test_capture_knowledge_records_failed_reply_archive(tmp_path, monkeypatch):
-    task = Run(id="run-reply-failed", event_id="evt-reply-failed", body="answer")
-    responses = tmp_path / ".brr" / "responses"
-    outbox = tmp_path / ".brr" / "outbox" / task.event_id
-    outbox.mkdir(parents=True)
-
-    monkeypatch.setattr(daemon.knowledge, "archive_reply", lambda *_a, **_k: None)
-    monkeypatch.setattr(daemon.knowledge, "capture", lambda *_a, **_k: False)
-
-    daemon._capture_knowledge(
-        tmp_path,
-        {},
-        task,
-        event={"id": task.event_id},
-        responses_dir=responses,
-        outbox_dir=outbox,
-        terminal_reply="reply that could not be archived",
-    )
-
-    assert task.meta["reply_archive"] == "failed"
+    assert daemon.relics.read_reported(outbox) == []
+    assert "reply_archive" not in task.meta
 
 
 def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypatch):
