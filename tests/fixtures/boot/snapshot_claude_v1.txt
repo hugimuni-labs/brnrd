@@ -587,6 +587,7 @@ source manifest:
   · Task-matched pitfalls                           resident     memory             0  computed
   · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
+  · Your last run (node frame + Now + shape)        resident     memory             0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
   ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,487  computed
 
