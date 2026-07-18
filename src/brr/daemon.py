@@ -2432,6 +2432,17 @@ def _run_worker(
                 repo_label=task.meta.get("repo_label"),
             )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
+            # Advance the node's frame out of "created" the first time we can
+            # prove the agent is alive. Once, not per heartbeat: the frame is a
+            # lifecycle attestation, and rewriting it every 30s would churn the
+            # corpus fingerprint (and its full republish) for no new fact.
+            if not task.meta.get("run_state_running_recorded"):
+                task.meta["run_state_running_recorded"] = True
+                _persist_run_state_doc(
+                    account_context, task,
+                    repo_label=str(task.meta.get("repo_label") or ""),
+                    stage="running", cfg=cfg,
+                )
             _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
                 outbox_dir,
@@ -5690,11 +5701,19 @@ def _persist_run_state_doc(
     root = account.run_dir(account_context, repo_label, task.id)
     path = root / "state.md"
     root.mkdir(parents=True, exist_ok=True)
+    # ``Run.status`` has no *running* member in practice — the daemon moves a
+    # task from "pending" straight to its terminal value, and execution lives
+    # in the separate presence/run_progress lane. That left every mid-flight
+    # node reporting "pending" for its whole life, and every run that died off
+    # the clean closeout path frozen there forever (280 of 602 nodes on the
+    # live account, 2026-07-19). The frame reports *execution* instead, which
+    # is the question a reader inspecting a live run is actually asking.
+    status = "running" if stage == "running" and task.status == "pending" else task.status
     lines = [
         "---",
         f"run_id: {task.id}",
         f"event_id: {task.event_id}",
-        f"status: {task.status}",
+        f"status: {status}",
         f"stage: {stage}",
         f"repo_label: {repo_label}",
         f"source: {task.source}",
@@ -5740,7 +5759,7 @@ def _persist_run_state_doc(
         "---",
         f"# Run {task.id}",
         "",
-        f"- status: {task.status}",
+        f"- status: {status}",
         f"- stage: {stage}",
         f"- repo: {repo_label}",
         f"- source: {task.source or 'unknown'}",
@@ -5825,6 +5844,16 @@ def _closed_ledger_run_ids(account_context: account.AccountContext) -> set[str]:
     return closed
 
 
+# A node's frame is unfinished in two shapes, and until 2026-07-19 the janitor
+# only knew one of them. ``Run.status`` never actually reaches "running" — the
+# daemon moves a task from "pending" straight to its terminal value — so a run
+# that died off the clean closeout path froze at "pending", and the janitor,
+# looking only for "running", walked past every one of them: 280 of 602 nodes
+# on the live account, permanently claiming they had never started. The
+# guardrail was guarding a state the writer no longer produced.
+_UNFINISHED_RUN_STATUSES = frozenset({"running", "pending"})
+
+
 def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
     """Rewrite a RUNNING state document as a retained, explicit failure."""
     lines = text.splitlines()
@@ -5888,7 +5917,7 @@ def _reap_zombie_run_state_docs(
             modified_at = path.stat().st_mtime
         except OSError:
             continue
-        if str(fields.get("status") or "").casefold() != "running":
+        if str(fields.get("status") or "").casefold() not in _UNFINISHED_RUN_STATUSES:
             continue
         run_id = str(fields.get("run_id") or "")
         if not run_id or run_id in live_run_ids:
