@@ -527,7 +527,13 @@ def read_response(responses_dir: Path, event_id: str) -> str | None:
     return frontmatter_body(text).strip()
 
 
-def write_response(responses_dir: Path, event_id: str, body: str) -> Path:
+def write_response(
+    responses_dir: Path,
+    event_id: str,
+    body: str,
+    *,
+    message_path: Path | None = None,
+) -> Path:
     """Write a plain-text response file. Returns the file path.
 
     The wire format is just the body — there is no frontmatter
@@ -535,8 +541,10 @@ def write_response(responses_dir: Path, event_id: str, body: str) -> Path:
     filename so the daemon and gates can correlate without parsing.
     """
     responses_dir.mkdir(parents=True, exist_ok=True)
+    if message_path is not None:
+        body = f"---\nmessage_path: {message_path}\n---\n\n{body}"
     if not body.endswith("\n"):
-        body = body + "\n"
+        body += "\n"
     path = response_path(responses_dir, event_id)
     _atomic_write(path, body)
     return path
@@ -546,8 +554,8 @@ def write_response(responses_dir: Path, event_id: str, body: str) -> Path:
 # A per-event queue of interim responses the resident ships mid-flight
 # (the multi-response protocol, see kb/design-multi-response.md). The
 # terminal response stays ``<eid>.md``; partials live in
-# ``<eid>.partials/`` as ordered files, delivered before the terminal
-# and deleted as they go. Absent any partials, delivery is exactly the
+# ``<eid>.partials/`` as ordered compatibility carriers, delivered before the
+# terminal. Durable status lives in the referenced run message. Absent any partials, delivery is exactly the
 # single-response flow — this surface no-ops when unused.
 
 
@@ -560,8 +568,8 @@ def list_partials(responses_dir: Path, event_id: str) -> list[Path]:
     """Return pending interim response files for an event, oldest first.
 
     Names are zero-padded sequence numbers, so a lexical sort is a
-    chronological sort. Delivered partials are deleted, so the queue
-    holds only the not-yet-delivered tail.
+    chronological sort. The durable message status decides whether a retained
+    carrier is pending; legacy carriers move to a ``.delivered`` suffix.
     """
     pdir = partials_dir(responses_dir, event_id)
     if not pdir.exists():
@@ -572,22 +580,42 @@ def list_partials(responses_dir: Path, event_id: str) -> list[Path]:
     )
 
 
-def write_partial(responses_dir: Path, event_id: str, body: str) -> Path:
+def write_partial(
+    responses_dir: Path,
+    event_id: str,
+    body: str,
+    *,
+    message_path: Path | None = None,
+) -> Path:
     """Append an interim response to an event's queue. Returns the path.
 
     Sequence numbers continue past the current max so ordering survives
-    even though delivered partials are deleted (a reset can only happen
-    once the queue is empty, i.e. nothing is left to mis-order against).
+    across retained carriers.
     """
     pdir = partials_dir(responses_dir, event_id)
     pdir.mkdir(parents=True, exist_ok=True)
     existing = [int(p.stem) for p in pdir.glob("*.md") if p.stem.isdigit()]
     seq = (max(existing) + 1) if existing else 1
+    if message_path is not None:
+        body = f"---\nmessage_path: {message_path}\n---\n\n{body}"
     if not body.endswith("\n"):
-        body = body + "\n"
+        body += "\n"
     path = pdir / f"{seq:06d}.md"
     _atomic_write(path, body)
     return path
+
+
+def attach_message_path(path: Path, message_path: Path) -> None:
+    """Point an already-written response carrier at its durable message."""
+
+    text = path.read_text(encoding="utf-8")
+    meta = parse_frontmatter(text)
+    body = frontmatter_body(text)
+    meta["message_path"] = str(message_path)
+    lines = ["---"]
+    lines.extend(f"{key}: {_format_meta_value(value)}" for key, value in meta.items())
+    lines.extend(["---", "", body.lstrip("\n")])
+    _atomic_write(path, "\n".join(lines))
 
 
 def read_partial(path: Path) -> str | None:
