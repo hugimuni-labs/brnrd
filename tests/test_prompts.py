@@ -1412,3 +1412,83 @@ class TestRunnerPolicyInjection:
 
         assert "Stored runner policy" in prompt
         assert "Use haiku" in prompt
+
+
+def test_prior_run_block_hands_back_the_now_and_the_body_shape(tmp_path):
+    """Wyrd §5: the resident's own last run reaches the wake, compiled."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    node = tmp_path / "home" / "runs" / "Gurio__brr" / "run-prior"
+    node.mkdir(parents=True)
+    (node / "state.md").write_text(
+        "---\nrun_id: run-prior\nstatus: done\nstage: finished\n"
+        "runner_name: claude-opus\npublish_status: pushed\n---\n",
+        encoding="utf-8",
+    )
+    (node / "body.md").write_text(
+        "## Now\n\nLanding the edge writer.\n\n## Arc\n\nA long story.\n\n"
+        "## Open\n\nOne question.\n",
+        encoding="utf-8",
+    )
+
+    block = prompts._build_prior_run_block(repo)
+
+    assert "run-prior · done · finished · claude-opus · pushed" in block
+    assert "Landing the edge writer." in block
+    # The shape, not the territory: section names without their contents.
+    assert "also in that body: Arc · Open" in block
+    assert "A long story." not in block
+    assert "One question." not in block
+
+
+def test_prior_run_block_never_hands_back_the_current_run(tmp_path):
+    """A run's frame exists at prompt time; its body cannot. That is the guard."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    runs = tmp_path / "home" / "runs" / "Gurio__brr"
+    (runs / "run-current").mkdir(parents=True)
+    (runs / "run-current" / "state.md").write_text(
+        "---\nrun_id: run-current\nstatus: pending\n---\n", encoding="utf-8",
+    )
+
+    # Only a frame exists anywhere: nothing to hand back, and nothing invented.
+    assert prompts._build_prior_run_block(repo) == ""
+
+    (runs / "run-older").mkdir(parents=True)
+    (runs / "run-older" / "state.md").write_text(
+        "---\nrun_id: run-older\nstatus: done\n---\n", encoding="utf-8",
+    )
+    (runs / "run-older" / "body.md").write_text("## Now\n\nEarlier work.\n", encoding="utf-8")
+
+    block = prompts._build_prior_run_block(repo)
+    assert "run-older" in block
+    assert "run-current" not in block
+
+
+def test_prior_run_block_stays_inside_this_repo(tmp_path):
+    """A neighbouring repo's last run is a plausible wrong memory — worse than none."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    other = tmp_path / "home" / "runs" / "Other__repo" / "run-neighbour"
+    other.mkdir(parents=True)
+    (other / "body.md").write_text("## Now\n\nSomeone else's work.\n", encoding="utf-8")
+
+    assert prompts._build_prior_run_block(repo) == ""
