@@ -607,7 +607,7 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
         print(f"[brnrd:cloud] activity publish failed: {e}")
 
 
-# The unified corpus (authored surface + home knowledge + archived replies) is
+# The unified corpus (authored surface + home knowledge + complete run nodes) is
 # published on *change*, not every tick: the old per-tick full-text PUT suited a
 # handful of small authored pages, but the knowledge layer is ~150 files and
 # megabytes (an 890KB log among them) — re-sending that every 25s is waste and,
@@ -644,7 +644,7 @@ def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
     """A cheap change signal for the corpus — no full reads of the large layer.
 
     Authored pages are few, so their content is hashed directly. Knowledge and
-    replies pages are many and large, so they contribute only (path, size,
+    run pages are many and large, so they contribute only (path, size,
     mtime) plus the knowledge repo HEAD sha — enough to notice a curate or a
     sync without reading the 890KB log on every heartbeat.
     """

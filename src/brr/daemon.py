@@ -162,7 +162,7 @@ _QUOTA_CRITICAL_FLOOR_PCT_DEFAULT = 8.0
 _QUOTA_STRETCH_FACTOR_DEFAULT = 3.0
 _LIVE_INBOX_NAME = "inbox.json"
 _LIVE_PORTAL_STATE_NAME = "portal-state.json"
-# Agent-owned card narration: the resident writes this control dotfile
+# Agent-owned run body: the resident writes this control dotfile
 # in its outbox; the daemon drains it on each heartbeat into a
 # ``card_composed`` packet and the gate re-renders the live card. See
 # ``kb/design-managed-delivery.md`` for the relay-not-store stance the
@@ -181,10 +181,9 @@ _CARD_CONTROL_NAME = ".card"
 # small control dotfile the daemon reads on the heartbeat cadence, never
 # delivered as a chat message.
 _PR_CONTROL_NAME = ".pr"
-# Soft cap on the agent narration the daemon will accept from ``.card``.
-# Same intent as ``_format_agent_note``'s render cap: keep a runaway
-# resident from flooding a thread. Excess bytes are truncated.
-_CARD_CONTROL_MAX_BYTES = 4096
+# Soft cap on the live projection the daemon accepts from ``.card``. The full
+# body is copied at closeout; only the ``## Now`` projection rides packets.
+_CARD_CONTROL_MAX_BYTES = 64 * 1024
 # Staleness bar for the ``.card`` narration: the maintainer's own estimate
 # (2026-07-05) for how long a blank-or-unchanged card can sit on the one
 # surface a watching user sees before it reads as neglect rather than quiet
@@ -4844,6 +4843,7 @@ def _drain_agent_card(
         if not has_last or state["last"] == "":
             return False
         state["last"] = ""
+        state["projection"] = ""
         state["written_monotonic"] = time.monotonic()
         emit(
             "card_composed",
@@ -4866,14 +4866,40 @@ def _drain_agent_card(
     if has_last and state["last"] == body:
         return False
     state["last"] = body
+    projection = _card_now_projection(body)
+    state["projection"] = projection
     state["written_monotonic"] = time.monotonic()
     emit(
         "card_composed",
         run_id=task.id,
         event_id=event_id,
-        text=body,
+        text=projection,
     )
     return True
+
+
+def _card_now_projection(body: str) -> str:
+    """Project a sectioned run body onto the compact live card.
+
+    Existing one-note cards remain valid. A sectioned body exposes only its
+    ``## Now`` section; the rest belongs to the permanent runfile, not the
+    cramped live status card.
+    """
+
+    lines = body.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip().casefold() == "## now":
+            start = index + 1
+            break
+    if start is None:
+        return body
+    projected: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        projected.append(line)
+    return "\n".join(projected).strip()
 
 
 _MIRROR_CARD_GATES = ("telegram",)
@@ -4916,7 +4942,7 @@ def _emit_mirror_cards(
         mirrors = card_state.setdefault("mirrors", {})
         if not isinstance(mirrors, dict):  # pragma: no cover - state abuse
             return
-        narration = str(card_state.get("last") or "")
+        narration = str(card_state.get("projection") or card_state.get("last") or "")
         seen: set[str] = set()
         for ev in protocol.list_pending(inbox_dir):
             eid = str(ev.get("id") or "")
@@ -5488,8 +5514,8 @@ def _persist_run_state_doc(
     """
     if account_context is None or not account_context.enabled:
         return None
-    root = account_context.run_state_dir / account.slug_repo_label(repo_label)
-    path = root / f"{task.id}.md"
+    root = account.run_dir(account_context, repo_label, task.id)
+    path = root / "state.md"
     root.mkdir(parents=True, exist_ok=True)
     lines = [
         "---",
@@ -5558,6 +5584,35 @@ def _persist_run_state_doc(
     return path
 
 
+def _persist_run_body(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    card_path: Path | None,
+) -> Path | None:
+    """Capture the resident-owned ``.card`` write-head as ``body.md``.
+
+    The daemon composes none of this text. It copies the resident's final
+    Markdown at closeout, keeping live writes separate from the attested
+    ``state.md`` writer.
+    """
+
+    if account_context is None or not account_context.enabled or card_path is None:
+        return None
+    try:
+        body = card_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not body:
+        return None
+    path = account.run_dir(account_context, repo_label, task.id) / "body.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    protocol._atomic_write(path, body + "\n")
+    task.meta["run_body_path"] = str(path)
+    return path
+
+
 def _closed_ledger_run_ids(account_context: account.AccountContext) -> set[str]:
     """Return run ids proved closed by any repo ledger in this account."""
     closed: set[str] = set()
@@ -5622,7 +5677,7 @@ def _reap_zombie_run_state_docs(
     the run ended; otherwise age supplies a conservative crash-recovery
     backstop. Documents are rewritten, never deleted.
     """
-    if not account_context.enabled or not account_context.run_state_dir.is_dir():
+    if not account_context.enabled or not account_context.runs_dir.is_dir():
         return []
     timestamp = time.time() if now is None else now
     live_run_ids: set[str] = set()
@@ -5634,7 +5689,7 @@ def _reap_zombie_run_state_docs(
     closed_run_ids = _closed_ledger_run_ids(account_context)
     reaped: list[Path] = []
     reaped_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
-    for path in sorted(account_context.run_state_dir.rglob("*.md")):
+    for path in sorted(account_context.runs_dir.rglob("state.md")):
         try:
             text = path.read_text(encoding="utf-8")
             fields = protocol.parse_frontmatter(text)
@@ -6218,6 +6273,12 @@ def _run_worker_and_finalize(
 
         publish(repo_root, task)
         repo_label = str(task.meta.get("repo_label") or _repo_label(repo_root, event, cfg))
+        _persist_run_body(
+            account_context,
+            task,
+            repo_label=repo_label,
+            card_path=outbox_path / _CARD_CONTROL_NAME if outbox_path else None,
+        )
         _persist_run_state_doc(
             account_context,
             task,
