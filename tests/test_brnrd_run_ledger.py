@@ -77,6 +77,7 @@ _ROW = {
     "core_mismatch": False,
     "repo_label": "Gurio/brr",
     "source_system": "telegram",
+    "name": "",
     "external_refs": [{"gate": "telegram"}],
     "task_classification": "dashboard-slice",
     "parent_run_id": None,
