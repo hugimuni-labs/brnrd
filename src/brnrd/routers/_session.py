@@ -231,7 +231,9 @@ def _ensure_bot_collaborator(request: Request, db: Session, account_id: str, rep
     installation_id = _installation_id_for_repo(db, account_id, repo.repo_full_name)
     if not installation_id:
         return "repo-connected-bot-invite-skipped"
-    permission = (settings.github_bot_collaborator_permission or "triage").strip() or "triage"
+    permission = (
+        settings.github_bot_collaborator_permission or "push"
+    ).strip() or "push"
     try:
         result = gh_app_client.invite_collaborator(settings, installation_id, repo.repo_full_name, username, permission=permission)
     except Exception as e:
