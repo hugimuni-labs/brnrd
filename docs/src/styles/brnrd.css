@@ -1,0 +1,217 @@
+:root {
+  --sl-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sl-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --sl-content-width: 52rem;
+  --sl-text-h1: clamp(2.3rem, 6vw, 4.5rem);
+  --brnrd-amber: #e8b34a;
+  --brnrd-frost: #a8cbdb;
+  --brnrd-void: #0c0906;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #35260d;
+  --sl-color-accent: #e8b34a;
+  --sl-color-accent-high: #fff1ce;
+  --sl-color-white: #fffaf1;
+  --sl-color-gray-1: #f3ece0;
+  --sl-color-gray-2: #d8cec0;
+  --sl-color-gray-3: #a8a29e;
+  --sl-color-gray-4: #6f6250;
+  --sl-color-gray-5: #33281d;
+  --sl-color-gray-6: #1c140d;
+  --sl-color-black: #0c0906;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f7e8c6;
+  --sl-color-accent: #8a5b0f;
+  --sl-color-accent-high: #3f2700;
+  --sl-color-white: #171009;
+  --sl-color-gray-1: #33281d;
+  --sl-color-gray-2: #544636;
+  --sl-color-gray-3: #776a59;
+  --sl-color-gray-4: #a99c89;
+  --sl-color-gray-5: #dfd5c5;
+  --sl-color-gray-6: #eee6d8;
+  --sl-color-gray-7: #f8f2e8;
+  --sl-color-black: #fffaf1;
+}
+
+body {
+  background:
+    radial-gradient(circle at 82% 3%, color-mix(in srgb, var(--brnrd-amber) 12%, transparent), transparent 29rem),
+    radial-gradient(circle at 10% 12%, color-mix(in srgb, var(--brnrd-frost) 8%, transparent), transparent 24rem),
+    var(--sl-color-black);
+}
+
+body::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background-image:
+    repeating-linear-gradient(rgba(243, 232, 216, 0.018) 0 1px, transparent 1px 3px),
+    linear-gradient(rgba(168, 203, 219, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 203, 219, 0.02) 1px, transparent 1px);
+  background-size: auto, 28px 28px, 28px 28px;
+  mask-image: linear-gradient(180deg, #000, transparent 90%);
+}
+
+header.header {
+  border-bottom-color: color-mix(in srgb, var(--brnrd-frost) 24%, transparent);
+  background: color-mix(in srgb, var(--sl-color-black) 90%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.site-title {
+  font-family: var(--sl-font-mono);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--brnrd-amber) 35%, transparent);
+}
+
+.site-title img {
+  width: 2rem;
+  height: 2rem;
+}
+
+.sidebar-pane {
+  border-inline-end-color: color-mix(in srgb, var(--brnrd-frost) 20%, transparent);
+  background: color-mix(in srgb, var(--sl-color-black) 92%, transparent);
+}
+
+.sidebar-content a[aria-current='page'] {
+  border-inline-start: 2px solid var(--brnrd-amber);
+  background: color-mix(in srgb, var(--brnrd-amber) 10%, transparent);
+  font-weight: 750;
+}
+
+.group-label,
+.right-sidebar-panel h2 {
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sl-markdown-content :is(h1, h2, h3),
+.hero h1 {
+  font-family: var(--sl-font-mono);
+  letter-spacing: -0.045em;
+}
+
+.sl-markdown-content h2 {
+  border-top: 1px solid color-mix(in srgb, var(--brnrd-frost) 18%, transparent);
+  padding-top: 1.4rem;
+}
+
+.sl-markdown-content a:not([class]) {
+  text-decoration-color: color-mix(in srgb, var(--brnrd-amber) 52%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid color-mix(in srgb, var(--brnrd-frost) 18%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--brnrd-frost) 7%, transparent);
+}
+
+.expressive-code,
+.card,
+.starlight-aside {
+  --ec-brdRad: 0;
+  border-radius: 0;
+}
+
+.card,
+.starlight-aside {
+  border-color: color-mix(in srgb, var(--brnrd-frost) 24%, transparent);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 58%, transparent);
+}
+
+.hero {
+  position: relative;
+  margin-top: clamp(1.5rem, 6vw, 5rem);
+  border: 1px solid color-mix(in srgb, var(--brnrd-amber) 28%, transparent);
+  padding: clamp(2rem, 7vw, 5.5rem);
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--sl-color-black) 94%, transparent), color-mix(in srgb, var(--sl-color-black) 65%, transparent)),
+    radial-gradient(circle at 88% 44%, color-mix(in srgb, var(--brnrd-amber) 18%, transparent), transparent 24rem);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.26), inset 0 0 40px color-mix(in srgb, var(--brnrd-amber) 3%, transparent);
+}
+
+.hero::after {
+  --corner: 14px;
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top left / var(--corner) 2px no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top left / 2px var(--corner) no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top right / var(--corner) 2px no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top right / 2px var(--corner) no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom left / var(--corner) 2px no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom left / 2px var(--corner) no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom right / var(--corner) 2px no-repeat,
+    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom right / 2px var(--corner) no-repeat;
+  opacity: 0.72;
+}
+
+.hero h1 {
+  max-width: 12ch;
+  color: var(--sl-color-white);
+  font-size: clamp(3rem, 9vw, 7rem);
+  line-height: 0.88;
+  text-shadow: 0 0 34px color-mix(in srgb, var(--brnrd-amber) 22%, transparent);
+}
+
+.hero .tagline {
+  max-width: 44rem;
+  color: var(--sl-color-gray-2);
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  line-height: 1.6;
+}
+
+.sl-link-button {
+  border-radius: 0;
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sl-link-button.primary {
+  border-color: color-mix(in srgb, var(--brnrd-amber) 56%, transparent);
+  background: color-mix(in srgb, var(--brnrd-amber) 18%, var(--sl-color-black));
+  color: var(--sl-color-white);
+}
+
+.sl-link-button.primary:hover {
+  background: color-mix(in srgb, var(--brnrd-amber) 26%, var(--sl-color-black));
+}
+
+@media (max-width: 50rem) {
+  .hero {
+    padding: 2rem 1.25rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.8rem, 18vw, 5.5rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

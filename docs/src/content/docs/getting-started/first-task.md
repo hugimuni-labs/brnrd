@@ -1,4 +1,7 @@
-# First task
+---
+title: First task
+description: Send a task, watch the live card, steer the run, and receive a durable receipt.
+---
 
 With the daemon running, send a message through the gate you connected:
 

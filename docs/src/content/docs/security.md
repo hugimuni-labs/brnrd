@@ -1,4 +1,7 @@
-# Security & privacy
+---
+title: Security & privacy
+description: The current authorization, execution, data-flow, and operator trust boundaries.
+---
 
 brnrd runs coding agents with your authority against real repositories. Runner
 approval prompts are bypassed on purpose so unattended work can execute. Any

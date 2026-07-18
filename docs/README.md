@@ -6,11 +6,14 @@ The site deploys from this directory to GitHub Pages through
 Preview it locally from the repository root:
 
 ```bash
-python -m venv .venv-docs
-. .venv-docs/bin/activate
-python -m pip install -r docs/requirements.txt
-mkdocs serve -f docs/mkdocs.yml
+cd docs
+npm ci
+npm run dev
 ```
+
+`npm run check` runs Astro diagnostics, a production build, and the generated
+site's internal-link check. The GitHub Pages deployment serves `docs/dist/` at
+`https://gurio.github.io/brr/`.
 
 Documentation changes ride in the same pull request as the code change that
 caused them.
