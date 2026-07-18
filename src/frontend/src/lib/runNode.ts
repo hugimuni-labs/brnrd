@@ -84,8 +84,7 @@ export function runLedgerRowsForNode(
 ): RunLedgerRow[] {
 	const wantedRun = runIdSlug(runId);
 	return rows.filter(
-		(row) =>
-			repoRunSlug(row.repo_label) === repoSlug && runIdSlug(row.run_id ?? '') === wantedRun
+		(row) => repoRunSlug(row.repo_label) === repoSlug && runIdSlug(row.run_id ?? '') === wantedRun
 	);
 }
 
@@ -178,9 +177,17 @@ export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 	{ key: 'success_signal', label: 'signal' }
 ];
 
-// Rendered elsewhere on the page (run id, repo label) or host-local noise a
-// remote reader cannot act on (pid, the local reply-archive path).
-const FRAME_SUPPRESSED = ['run_id', 'repo_label', 'pid', 'reply_archive'];
+// Rendered elsewhere on the page (run id, repo label; the dispatch edges get
+// their own navigable footer) or host-local noise a remote reader cannot act
+// on (pid, the local reply-archive path).
+const FRAME_SUPPRESSED = [
+	'run_id',
+	'repo_label',
+	'pid',
+	'reply_archive',
+	'parent_run_id',
+	'child_run_ids'
+];
 
 export interface FrameField {
 	label: string;
@@ -200,6 +207,70 @@ export function frameFields(metadata: Record<string, string>): FrameField[] {
 		if (!seen.has(key) && value) fields.push({ label: key, value });
 	}
 	return fields;
+}
+
+// ── Dispatch edges ───────────────────────────────────────────────────────
+//
+// Every run is dispatched by someone (wyrd §1). `source` names the *kind* of
+// dispatcher — a user gate, the schedule, a parent run — and the daemon's
+// `parent_run_id` / `child_run_ids` frontmatter names the identity when the
+// dispatcher or dispatchee is itself a run.
+//
+// A neighbour is only a link when its node is actually in this corpus
+// snapshot. An unmirrored neighbour is still a true edge and still named; it
+// simply has nowhere to go yet, and saying so beats a href that 404s into
+// "node not mirrored".
+
+export interface DispatchEdge {
+	runId: string;
+	href: string | null;
+}
+
+export interface DispatchEdges {
+	/** Prose for a dispatcher that is not a run: the thread, or the schedule. */
+	origin: string;
+	parent: DispatchEdge | null;
+	children: DispatchEdge[];
+}
+
+function edgeTo(repoSlug: string, runId: string, mirrored: Set<string>): DispatchEdge {
+	const slug = runIdSlug(runId);
+	const href = mirrored.has(`runs/${repoSlug}/${slug}/state.md`)
+		? `/runs/${encodeURIComponent(repoSlug)}/${encodeURIComponent(slug)}`
+		: null;
+	return { runId, href };
+}
+
+/**
+ * Describe how this node hangs off the tree.
+ *
+ * Sibling edges are deliberately absent: two children of one parent are
+ * related through it, and rendering that as a direct edge would invent
+ * structure the daemon never recorded — the exact move that let a worker pass
+ * a sibling's receipt off as its own (wyrd §3).
+ */
+export function dispatchEdges(
+	metadata: Record<string, string>,
+	repoSlug: string,
+	mirroredPaths: Set<string>
+): DispatchEdges {
+	const parentId = (metadata.parent_run_id ?? '').trim();
+	const children = (metadata.child_run_ids ?? '')
+		.split(',')
+		.map((item) => item.trim())
+		.filter(Boolean)
+		.map((runId) => edgeTo(repoSlug, runId, mirroredPaths));
+	let origin = '';
+	if (!parentId) {
+		const source = (metadata.source ?? '').trim();
+		if (source === 'schedule') origin = 'a scheduled wake';
+		else if (source) origin = metadata.conversation_key || `the ${source} thread`;
+	}
+	return {
+		origin,
+		parent: parentId ? edgeTo(repoSlug, parentId, mirroredPaths) : null,
+		children
+	};
 }
 
 // ── Message presentation ─────────────────────────────────────────────────
