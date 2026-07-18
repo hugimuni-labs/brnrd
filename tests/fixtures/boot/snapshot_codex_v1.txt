@@ -329,6 +329,18 @@ becomes attention, action, and a reply is yours.
     never memorise a number.** Its completion returns as a pending event; the
     parent still owns the original and must answer it with `event: <id>`.
     Spawning alone clears nothing.
+  - `stop: <run-or-event-id>` → kill a concurrent child *this run* dispatched
+    (wrong contract, superseded, runaway). Ownership-checked at the daemon: a
+    queued child is cancelled before it starts, a running one has its process
+    killed and finalizes as `stopped` (partial work salvaged, completion note
+    returns as a pending event). Refusals land in `notices`.
+  - `to: <run-or-event-id>` → a mid-flight steer to a concurrent child this
+    run dispatched: lands as an event only that worker's `inbox.json` /
+    portal-state shows. The child folds it in; it is not a new contract and
+    not for `event:`-addressing. Unconsumed messages die with the child.
+    Workers are thread-isolated: they see their contract and these edge
+    messages, never the user thread — steer through this verb, not prose in
+    the thread.
   - `runner_policy: propose` → park a policy change for operator approval.
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit. Re-read at plan / todo boundaries and once immediately
@@ -562,7 +574,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      8,083  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      8,923  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -579,13 +591,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  42.7%
-  substrate       8,083 B  26.0%
-  identity        5,449 B  17.5%
-  runtime         4,092 B  13.2%
+  contract       13,274 B  41.6%
+  substrate       8,923 B  28.0%
+  identity        5,449 B  17.1%
+  runtime         4,092 B  12.8%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     31,059 B
+  wake total     31,899 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
