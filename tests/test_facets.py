@@ -91,7 +91,7 @@ def test_build_coexisting_known_with_sibling_summary():
     res = facets.build(
         quota_summary="42%",
         coexisting=[
-            {"run_id": "run-a", "label": "fix the frontend build", "kind": "daemon"},
+            {"run_id": "run-a", "name": "frontend repair", "label": "fix the frontend build", "kind": "daemon"},
             {"run_id": "run-b", "stream": "telegram:1:", "kind": "daemon"},
         ],
     )
@@ -99,7 +99,7 @@ def test_build_coexisting_known_with_sibling_summary():
     assert facet["status"] == "known"
     assert facet["required"] is False
     assert "2 sibling runs" in facet["summary"]
-    assert "fix the frontend build" in facet["summary"]
+    assert "frontend repair" in facet["summary"]
     assert len(facet["siblings"]) == 2
 
 

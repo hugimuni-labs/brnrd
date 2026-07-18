@@ -160,6 +160,7 @@ export interface RunLedgerRow {
 	substitution_reason: string | null;
 	repo_label: string | null;
 	source_system: string | null;
+	name: string | null;
 	external_refs: RelicRecord[] | null;
 	task_classification: string | null;
 	parent_run_id: string | null;

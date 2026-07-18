@@ -2441,7 +2441,10 @@ def _run_worker(
                 brr_dir=brr_dir,
             )
             if presence_id:
-                presence.heartbeat(brr_dir, presence_id)
+                presence.heartbeat(
+                    brr_dir, presence_id,
+                    name=run_ledger.read_run_name_control(outbox_dir) or "",
+                )
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
                 "heartbeat",
@@ -3673,6 +3676,7 @@ def _write_live_portal_state(
                     run_ledger.read_task_classification_control(outbox_dir)
                 ),
             },
+            "name": {"written": bool(run_ledger.read_run_name_control(outbox_dir))},
             "resources": _resources_facet(
                 quota_summary,
                 # Per-Shell level source (see _collect_levels): Codex reads its
