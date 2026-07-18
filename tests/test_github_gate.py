@@ -182,6 +182,13 @@ def test_resolve_token_falls_back_to_env(monkeypatch):
     assert github.resolve_token({}) == "env-token"
 
 
+def test_env_token_matches_gh_cli_precedence(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "generic-token")
+    monkeypatch.setenv("GH_TOKEN", "automation-token")
+
+    assert state._env_token() == "automation-token"
+
+
 def test_resolve_token_returns_none_when_nothing(monkeypatch):
     monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
