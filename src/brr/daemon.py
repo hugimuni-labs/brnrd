@@ -1992,7 +1992,13 @@ def _run_worker(
     # Snapshot of other waiting events so the resident has immediate
     # orientation at wake. A live copy is also refreshed in the outbox
     # below and on every heartbeat.
-    pending_events_snapshot = _pending_events_for_agent(inbox_dir, eid)
+    # Workers get the same isolation here as the live inbox below: the
+    # user thread's pending events belong to the dispatcher. Found live
+    # 2026-07-18 — a worker's boot prompt listed two of the maintainer's
+    # telegram messages while inbox.json correctly showed none.
+    pending_events_snapshot = _pending_events_for_agent(
+        inbox_dir, eid, worker=is_worker_run,
+    )
     if woven_sibling_ids:
         pending_events_snapshot = [
             ev for ev in pending_events_snapshot
