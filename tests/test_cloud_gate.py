@@ -443,6 +443,12 @@ def test_corpus_publish_is_change_gated(tmp_path, monkeypatch):
     assert puts.count("/v1/daemons/surface") == 2
 
 
+def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
+    """Best-effort posture: a home with no linked knowledge repo still hashes."""
+    digest = cloud._corpus_fingerprint([], tmp_path / "missing-knowledge")
+    assert digest
+
+
 def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     """#237: real per-shell quota windows replace the dashboard's UNKNOWN card."""
     import json as json_mod

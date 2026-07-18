@@ -653,7 +653,9 @@ def _corpus_fingerprint(files: list, knowledge_dir: Path) -> str:
             except OSError:
                 pass
         h.update(b"\n")
-    head = gitops.rev_parse(knowledge_dir, "HEAD")  # committed-churn signal
+    # A connected home may not have linked knowledge yet; missing the nested
+    # repo is a normal shape, so the change signal just omits the HEAD shard.
+    head = gitops.rev_parse(knowledge_dir, "HEAD") if knowledge_dir.is_dir() else None
     if head:
         h.update(head.encode("utf-8"))
     return h.hexdigest()
