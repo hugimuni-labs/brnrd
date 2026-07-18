@@ -228,7 +228,7 @@ def test_dashboard_run_ledger_api_returns_rows():
     assert body["stale"] is False
 
 
-def test_dashboard_run_ledger_api_caps_a_busy_window_at_one_hundred_rows():
+def test_dashboard_run_ledger_api_caps_a_busy_window_at_published_envelope():
     client = _client()
     _account_headers, _daemon_headers, pid = _repo_and_daemon(client)
     _login(client)
@@ -238,7 +238,7 @@ def test_dashboard_run_ledger_api_caps_a_busy_window_at_one_hundred_rows():
             "run_id": f"run-{i:03d}",
             "ended_at": (datetime.now(timezone.utc) - timedelta(seconds=i)).isoformat(),
         }
-        for i in range(105)
+        for i in range(300)
     ]
 
     with client.app.state.SessionLocal() as db:
@@ -257,5 +257,5 @@ def test_dashboard_run_ledger_api_caps_a_busy_window_at_one_hundred_rows():
     response = client.get("/v1/dashboard/run-ledger?limit=500")
 
     assert response.status_code == 200
-    assert len(response.json()["rows"]) == 100
+    assert len(response.json()["rows"]) == 256
     assert response.json()["rows"][0]["run_id"] == "run-000"

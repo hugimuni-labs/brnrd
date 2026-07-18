@@ -120,6 +120,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert task.status == "done"
     assert task.body == "raw event body"
     assert task.env == "worktree"
+    assert task.meta["pid"] == os.getpid()
     # Happy path: the daemon-run invocation is the only runner call —
     # no separate triage stage, no retry. The labelled-kind check
     # captures both halves of that intent in one assertion.
@@ -127,6 +128,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "done"
+    assert persisted.meta["pid"] == os.getpid()
     response = (tmp_path / ".brr" / "responses" / "evt-1.md").read_text(encoding="utf-8")
     assert response == "plain answer\n"
 
@@ -3709,6 +3711,61 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     # remote on the dominion there is no web URL to surface yet.
     assert task.meta["run_state_path"] == str(path)
     assert "run_state_url" not in task.meta
+
+
+def test_boot_janitor_reaps_only_provably_dead_running_state_docs(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    now = 1_800_000_000.0
+
+    def state(run_id: str, *, pid: int | None = None) -> Path:
+        meta = {"repo_label": "Gurio/brr"}
+        if pid is not None:
+            meta["pid"] = pid
+        task = Run(
+            id=run_id, event_id=f"evt-{run_id}", body="work",
+            source="telegram", status="running", meta=meta,
+        )
+        path = daemon._persist_run_state_doc(ctx, task, repo_label="Gurio/brr", stage="running")
+        assert path is not None
+        os.utime(path, (now, now))
+        return path
+
+    closed = state("run-closed")
+    ancient = state("run-ancient")
+    fresh = state("run-fresh")
+    live = state("run-live")
+    pid_live = state("run-pid", pid=os.getpid())
+    os.utime(ancient, (now - 2 * 86400, now - 2 * 86400))
+    os.utime(live, (now - 2 * 86400, now - 2 * 86400))
+    os.utime(pid_live, (now - 2 * 86400, now - 2 * 86400))
+
+    ledger = daemon.run_ledger.ledger_path(repo)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({"run_id": "run-closed"}) + "\n", encoding="utf-8")
+    presence.register(
+        daemon.gitops.shared_brr_dir(repo), kind="daemon", run_id="run-live",
+        pid=os.getpid(), now=now,
+    )
+
+    reaped = daemon._reap_zombie_run_state_docs(ctx, now=now)
+
+    assert reaped == [ancient, closed]
+    for path in reaped:
+        text = path.read_text(encoding="utf-8")
+        fields = protocol.parse_frontmatter(text)
+        assert fields["status"] == "error"
+        assert fields["stage"] == "reaped"
+        assert fields["reap_reason"].startswith("boot janitor:")
+        assert "- status: error" in text
+        assert "- stage: reaped" in text
+    for path in (fresh, live, pid_live):
+        assert protocol.parse_frontmatter(path.read_text(encoding="utf-8"))["status"] == "running"
 
 
 def test_capture_dominion_commits_account_home(tmp_path):
