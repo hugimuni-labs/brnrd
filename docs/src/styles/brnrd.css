@@ -72,8 +72,10 @@ header.header {
 }
 
 .site-title img {
-  width: 2rem;
-  height: 2rem;
+  width: 2.15rem;
+  height: 2.15rem;
+  border: 1px solid color-mix(in srgb, var(--brnrd-amber) 38%, transparent);
+  object-fit: cover;
 }
 
 .sidebar-pane {
@@ -97,8 +99,7 @@ header.header {
   text-transform: uppercase;
 }
 
-.sl-markdown-content :is(h1, h2, h3),
-.hero h1 {
+.sl-markdown-content :is(h1, h2, h3) {
   font-family: var(--sl-font-mono);
   letter-spacing: -0.045em;
 }
@@ -130,79 +131,6 @@ header.header {
 .starlight-aside {
   border-color: color-mix(in srgb, var(--brnrd-frost) 24%, transparent);
   background: color-mix(in srgb, var(--sl-color-gray-6) 58%, transparent);
-}
-
-.hero {
-  position: relative;
-  margin-top: clamp(1.5rem, 6vw, 5rem);
-  border: 1px solid color-mix(in srgb, var(--brnrd-amber) 28%, transparent);
-  padding: clamp(2rem, 7vw, 5.5rem);
-  background:
-    linear-gradient(100deg, color-mix(in srgb, var(--sl-color-black) 94%, transparent), color-mix(in srgb, var(--sl-color-black) 65%, transparent)),
-    radial-gradient(circle at 88% 44%, color-mix(in srgb, var(--brnrd-amber) 18%, transparent), transparent 24rem);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.26), inset 0 0 40px color-mix(in srgb, var(--brnrd-amber) 3%, transparent);
-}
-
-.hero::after {
-  --corner: 14px;
-  position: absolute;
-  inset: -1px;
-  pointer-events: none;
-  content: '';
-  background:
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top left / var(--corner) 2px no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top left / 2px var(--corner) no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top right / var(--corner) 2px no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) top right / 2px var(--corner) no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom left / var(--corner) 2px no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom left / 2px var(--corner) no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom right / var(--corner) 2px no-repeat,
-    linear-gradient(var(--brnrd-amber), var(--brnrd-amber)) bottom right / 2px var(--corner) no-repeat;
-  opacity: 0.72;
-}
-
-.hero h1 {
-  max-width: 12ch;
-  color: var(--sl-color-white);
-  font-size: clamp(3rem, 9vw, 7rem);
-  line-height: 0.88;
-  text-shadow: 0 0 34px color-mix(in srgb, var(--brnrd-amber) 22%, transparent);
-}
-
-.hero .tagline {
-  max-width: 44rem;
-  color: var(--sl-color-gray-2);
-  font-size: clamp(1.05rem, 2vw, 1.35rem);
-  line-height: 1.6;
-}
-
-.sl-link-button {
-  border-radius: 0;
-  font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  font-weight: 850;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sl-link-button.primary {
-  border-color: color-mix(in srgb, var(--brnrd-amber) 56%, transparent);
-  background: color-mix(in srgb, var(--brnrd-amber) 18%, var(--sl-color-black));
-  color: var(--sl-color-white);
-}
-
-.sl-link-button.primary:hover {
-  background: color-mix(in srgb, var(--brnrd-amber) 26%, var(--sl-color-black));
-}
-
-@media (max-width: 50rem) {
-  .hero {
-    padding: 2rem 1.25rem;
-  }
-
-  .hero h1 {
-    font-size: clamp(2.8rem, 18vw, 5.5rem);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
