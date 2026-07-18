@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from ._session import (
     _connect_repo_core,
     _disconnect_repo_core,
-    _invite_repo_bot_core,
     _json_account,
     _json_body,
     _pair_repo_telegram_core,
@@ -41,16 +40,6 @@ async def connect_repo_api(request: Request, db: Session = Depends(get_db)):
             forge_repo_id=_payload_str(payload, "forge_repo_id"),
             default_branch=_payload_str(payload, "default_branch"),
         )
-    except HTTPException as exc:
-        return _repo_error_response(exc)
-    return _repo_action_response(notice)
-
-
-@router.post("/v1/repos/{repo_id}/invite-bot")
-def invite_repo_bot_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
-    account = _json_account(request, db)
-    try:
-        notice = _invite_repo_bot_core(request, db, account.id, repo_id)
     except HTTPException as exc:
         return _repo_error_response(exc)
     return _repo_action_response(notice)

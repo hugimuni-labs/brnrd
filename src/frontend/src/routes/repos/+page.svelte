@@ -5,7 +5,6 @@
 		connectRepo,
 		disconnectRepo,
 		fetchRepos,
-		inviteRepoBot,
 		pairRepoTelegram,
 		type ConnectedRepo,
 		type InstalledRepo,
@@ -97,10 +96,6 @@
 			}
 			return result;
 		});
-	}
-
-	function inviteBot(repo: ConnectedRepo) {
-		runAction(`invite:${repo.id}`, () => inviteRepoBot(repo.id));
 	}
 
 	function pairTelegram(repo: ConnectedRepo) {
@@ -344,15 +339,6 @@
 										disabled={pendingAction !== null}
 										onclick={() => pairTelegram(repo)}
 										>{actionBusy(`pair:${repo.id}`) ? 'pairing' : 'pair Telegram'}</button
-									>
-									<button
-										type="button"
-										class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-										disabled={pendingAction !== null || !repo.bot_invite_enabled}
-										onclick={() => inviteBot(repo)}
-										>{actionBusy(`invite:${repo.id}`)
-											? 'inviting'
-											: `invite @${data.github_bot_user_login || data.github_bot_login}`}</button
 									>
 									{#if confirmingDisconnect === repo.id}
 										<button

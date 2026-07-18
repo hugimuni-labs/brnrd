@@ -57,6 +57,23 @@ def test_clean_runner_environ_makes_gh_token_authoritative(monkeypatch):
 
     assert cleaned["GH_TOKEN"] == "bot-token"
     assert "GITHUB_TOKEN" not in cleaned
+    assert cleaned["GIT_CONFIG_COUNT"] == "3"
+    assert cleaned["GIT_CONFIG_KEY_0"] == "url.https://github.com/.insteadOf"
+    assert cleaned["GIT_CONFIG_VALUE_0"] == "git@github.com:"
+    assert cleaned["GIT_CONFIG_KEY_2"] == "credential.helper"
+    assert "password=$GH_TOKEN" in cleaned["GIT_CONFIG_VALUE_2"]
+
+
+def test_clean_runner_environ_uses_managed_app_token_without_leaking_marker(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "human-token")
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert cleaned["GH_TOKEN"] == "app-token"
+    assert "GITHUB_TOKEN" not in cleaned
+    assert "BRNRD_MANAGED_GITHUB_TOKEN" not in cleaned
 
 
 def test_detect_runner_returns_string_or_none():

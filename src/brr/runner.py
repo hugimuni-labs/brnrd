@@ -130,9 +130,34 @@ def clean_runner_environ() -> dict[str, str]:
     # including tools that happen to inspect GITHUB_TOKEN first: when the
     # operator supplies GH_TOKEN, inherited human credentials must not leak
     # into the child alongside it.
+    managed_github_token = cleaned.pop("BRNRD_MANAGED_GITHUB_TOKEN", "")
+    if not cleaned.get("GH_TOKEN") and managed_github_token:
+        cleaned["GH_TOKEN"] = managed_github_token
     if cleaned.get("GH_TOKEN"):
         cleaned.pop("GITHUB_TOKEN", None)
+        _inject_github_git_config(cleaned)
     return cleaned
+
+
+def _inject_github_git_config(env: dict[str, str]) -> None:
+    """Make GH_TOKEN authoritative for both ``gh`` and Git transport."""
+    try:
+        offset = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        offset = 0
+    pairs = (
+        ("url.https://github.com/.insteadOf", "git@github.com:"),
+        ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
+        (
+            "credential.helper",
+            "!f() { test \"$1\" = get || exit 0; "
+            "echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f",
+        ),
+    )
+    env["GIT_CONFIG_COUNT"] = str(offset + len(pairs))
+    for index, (key, value) in enumerate(pairs, start=offset):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
 
 
 def kill_active() -> bool:

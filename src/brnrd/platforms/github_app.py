@@ -60,17 +60,36 @@ def list_app_installations(settings) -> list[dict[str, Any]]:
     return installations
 
 
-def installation_access_token(settings, installation_id: str) -> str:
+def installation_access_credential(
+    settings,
+    installation_id: str,
+    *,
+    repository_ids: list[int] | None = None,
+    repositories: list[str] | None = None,
+) -> dict[str, str]:
+    """Mint a short-lived installation credential, optionally repo-scoped."""
     jwt_token = app_jwt(settings)
     url = f"{settings.github_api_base_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
+    body = None
+    if repository_ids:
+        body = {"repository_ids": repository_ids}
+    elif repositories:
+        body = {"repositories": repositories}
     with httpx.Client(timeout=20) as client:
-        response = client.post(url, headers=_headers(settings, jwt_token))
+        response = client.post(url, headers=_headers(settings, jwt_token), json=body)
         response.raise_for_status()
         data = response.json()
     token = data.get("token")
     if not isinstance(token, str) or not token:
         raise RuntimeError("GitHub installation token response did not include a token")
-    return token
+    expires_at = data.get("expires_at")
+    if not isinstance(expires_at, str) or not expires_at:
+        raise RuntimeError("GitHub installation token response did not include expires_at")
+    return {"token": token, "expires_at": expires_at}
+
+
+def installation_access_token(settings, installation_id: str) -> str:
+    return installation_access_credential(settings, installation_id)["token"]
 
 
 def list_installation_repositories(settings, installation_id: str) -> list[dict[str, Any]]:
@@ -85,32 +104,3 @@ def list_installation_repositories(settings, installation_id: str) -> list[dict[
             repos.extend(data.get("repositories") or [])
             url = response.links.get("next", {}).get("url")
     return repos
-
-
-def invite_collaborator(
-    settings,
-    installation_id: str,
-    repo_full_name: str,
-    username: str,
-    *,
-    permission: str = "push",
-) -> dict[str, Any]:
-    """Invite a GitHub user as a repository collaborator using the App installation.
-
-    This is for the human-facing bot user identity such as ``brnrd-bot``. It is
-    distinct from the GitHub App identity such as ``brnrd-dev[bot]``.
-    """
-    token = installation_access_token(settings, installation_id)
-    url = f"{settings.github_api_base_url.rstrip('/')}/repos/{repo_full_name}/collaborators/{username}"
-    with httpx.Client(timeout=20) as client:
-        response = client.put(
-            url,
-            headers=_headers(settings, token),
-            json={"permission": permission},
-        )
-        # 201 = invitation created, 204 = already collaborator or permission updated
-        if response.status_code not in (201, 204):
-            response.raise_for_status()
-        data = response.json() if response.content else {}
-    data["status_code"] = response.status_code
-    return data

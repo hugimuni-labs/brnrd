@@ -14,12 +14,47 @@ pytest.importorskip("sqlalchemy")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app  # noqa: E402
+from brnrd import create_app, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Event  # noqa: E402
+from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
+from brnrd.platforms import github_app as github_app_platform  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "github-webhook-secret"
+
+
+def test_installation_credential_request_is_restricted_to_repo(monkeypatch):
+    seen = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"token": "ghs_one", "expires_at": "2099-01-01T00:00:00Z"}
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, *, headers, json):
+            seen.update(url=url, headers=headers, json=json)
+            return Response()
+
+    monkeypatch.setattr(github_app_platform, "app_jwt", lambda settings: "jwt")
+    monkeypatch.setattr(github_app_platform.httpx, "Client", Client)
+    credential = github_app_platform.installation_access_credential(
+        Settings(), "73", repository_ids=[4242],
+    )
+
+    assert credential == {"token": "ghs_one", "expires_at": "2099-01-01T00:00:00Z"}
+    assert seen["json"] == {"repository_ids": [4242]}
 
 
 def _build_env(monkeypatch, **extra_settings):
@@ -89,6 +124,67 @@ def _daemon_headers(client, acc, repo_id):
         params={"poll_secret": pair["poll_secret"]},
     ).json()["daemon_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_daemon_mints_repo_scoped_app_publishing_credential(env, monkeypatch):
+    app, client, _ = env
+    acc = _account(client)
+    repo_id = _repo(client, acc)
+    daemon_headers = _daemon_headers(client, acc, repo_id)
+    with app.state.SessionLocal() as db:
+        repo = db.get(Repo, repo_id)
+        repo.forge_repo_id = "4242"
+        installation = GitHubInstallation(
+            id=ids.github_installation_id(),
+            account_id=repo.account_id,
+            installation_id="73",
+            target_login="owner",
+            target_type="User",
+        )
+        db.add(installation)
+        db.flush()
+        db.add(
+            GitHubInstalledRepo(
+                id=ids.github_installed_repo_id(),
+                github_installation_id=installation.id,
+                repo_full_name=repo.repo_full_name,
+                forge_repo_id="4242",
+            )
+        )
+        db.commit()
+
+    seen = {}
+
+    def fake_credential(
+        settings, installation_id, *, repository_ids=None, repositories=None,
+    ):
+        seen.update(
+            installation_id=installation_id,
+            repository_ids=repository_ids,
+            repositories=repositories,
+        )
+        return {"token": "ghs_repo_scoped", "expires_at": "2099-01-01T00:00:00Z"}
+
+    monkeypatch.setattr(
+        "brnrd.routers.daemons.github_app_client.installation_access_credential",
+        fake_credential,
+    )
+    response = client.post(
+        "/v1/daemons/publishing-credential", headers=daemon_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "token": "ghs_repo_scoped",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "login": "brnrd-dev[bot]",
+    }
+    assert seen == {
+        "installation_id": "73",
+        "repository_ids": [4242],
+        "repositories": None,
+    }
 
 
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",

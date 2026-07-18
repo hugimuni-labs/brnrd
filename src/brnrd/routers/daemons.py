@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from .. import ids, inbox as inbox_service, schemas, wake_requests
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
-from ..models import Account, ActivityRecord, Daemon, Event, Repo
+from ..models import Account, ActivityRecord, Daemon, Event, GitHubInstallation, GitHubInstalledRepo, Repo
+from ..platforms import github_app as github_app_client
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 
@@ -88,6 +89,51 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
     db.add(daemon)
     db.commit()
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
+
+
+@router.post("/publishing-credential", response_model=schemas.PublishingCredential)
+def publishing_credential(
+    request: Request,
+    response: Response,
+    principal: Principal = Depends(require_daemon),
+    db: Session = Depends(get_db),
+):
+    """Mint the repo-scoped App identity used by managed runner publishing."""
+    repo = db.get(Repo, principal.repo_id)
+    if repo is None or repo.forge != "github":
+        raise HTTPException(status_code=404, detail="GitHub repo not found")
+    installed = db.execute(
+        select(GitHubInstalledRepo, GitHubInstallation)
+        .join(
+            GitHubInstallation,
+            GitHubInstallation.id == GitHubInstalledRepo.github_installation_id,
+        )
+        .where(
+            GitHubInstallation.account_id == principal.account_id,
+            GitHubInstalledRepo.repo_full_name == repo.repo_full_name,
+        )
+        .order_by(GitHubInstallation.last_synced_at.desc())
+    ).first()
+    if installed is None:
+        raise HTTPException(status_code=409, detail="GitHub App is not installed for this repo")
+    installed_repo, installation = installed
+    raw_repo_id = installed_repo.forge_repo_id or repo.forge_repo_id
+    try:
+        repository_id = int(raw_repo_id or "")
+    except ValueError:
+        repository_id = None
+    credential = github_app_client.installation_access_credential(
+        request.app.state.settings,
+        installation.installation_id,
+        repository_ids=[repository_id] if repository_id is not None else None,
+        repositories=None if repository_id is not None else [repo.repo_name],
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return schemas.PublishingCredential(
+        token=credential["token"],
+        expires_at=credential["expires_at"],
+        login=f"{request.app.state.settings.github_app_slug}[bot]",
+    )
 
 
 @router.put("/activity", response_model=schemas.ActivityList)

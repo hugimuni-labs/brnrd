@@ -6,6 +6,7 @@ from collections import deque
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import subprocess
 import threading
 import time
@@ -37,6 +38,10 @@ _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 # dashboard snapshot at ~25s stale by construction. Publishing runs on its
 # own short cadence instead — see kb/plan-loom-realtime-build.md slice 0.
 _DASHBOARD_PUBLISH_INTERVAL_S = 3
+_PUBLISHING_TOKEN_REFRESH_S = 10 * 60
+_publishing_token_expires_at = 0.0
+_publishing_token_retry_at = 0.0
+_publishing_token_lock = threading.Lock()
 
 
 class BrnrdAuthError(RuntimeError):
@@ -270,6 +275,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # vanished, the restart didn't help, the daemon looked healthy).
         # The poll loop below re-attempts registration once it gets through.
         print(f"[brnrd:cloud] register failed: {e}, will retry")
+    _try_refresh_publishing_credential(state, force=True)
     threading.Thread(
         target=_dashboard_publish_loop,
         args=(brr_dir, inbox_dir),
@@ -280,6 +286,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     auth_backoff = _AUTH_RETRY_MIN_S
     while True:
         try:
+            _try_refresh_publishing_credential(_load_state(brr_dir))
             _loop_once(brr_dir, inbox_dir, responses_dir)
             runtime.record_loop_health(brr_dir, "cloud", ok=True)
             backoff = 1
@@ -360,6 +367,46 @@ def _register(brr_dir: Path, state: dict) -> None:
     caps = dict(state.get("capabilities") or {})
     caps.update(_repo_capabilities(brr_dir))
     _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": caps})
+
+
+def _refresh_publishing_credential(state: dict, *, force: bool = False) -> None:
+    """Keep the managed GitHub App token in memory, never cloud state."""
+    global _publishing_token_expires_at
+    if os.environ.get("GH_TOKEN"):
+        return
+    now = time.time()
+    with _publishing_token_lock:
+        if not force and _publishing_token_expires_at - now > _PUBLISHING_TOKEN_REFRESH_S:
+            return
+        credential = _request(
+            state["brnrd_url"],
+            "POST",
+            "/v1/daemons/publishing-credential",
+            token=state["token"],
+            timeout=20,
+        )
+        expires_at = datetime.fromisoformat(str(credential["expires_at"]).replace("Z", "+00:00"))
+        os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = str(credential["token"])
+        _publishing_token_expires_at = expires_at.timestamp()
+        print(
+            f"[brnrd:cloud] publishing as {credential.get('login') or 'GitHub App'} "
+            f"(credential expires {expires_at.isoformat()})"
+        )
+
+
+def _try_refresh_publishing_credential(state: dict, *, force: bool = False) -> None:
+    """Refresh best-effort without letting publishing auth stall chat ingress."""
+    global _publishing_token_retry_at
+    now = time.time()
+    if not force and now < _publishing_token_retry_at:
+        return
+    try:
+        _refresh_publishing_credential(state, force=force)
+    except Exception as exc:
+        _publishing_token_retry_at = now + 5 * 60
+        print(f"[brnrd:cloud] publishing credential unavailable: {exc}")
+    else:
+        _publishing_token_retry_at = 0.0
 
 
 def _origin_meta(reply_to: dict) -> dict:
