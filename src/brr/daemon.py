@@ -1765,6 +1765,10 @@ def _run_worker(
     # placeholder branch without paying a git probe on every dashboard tick.
     task.meta["seed_ref"] = branch_plan.seed_ref
     task.meta["has_new_commit"] = False
+    # The boot janitor runs in a future daemon process. Persist this daemon's
+    # pid so that future boot can prove the process which owned the run is
+    # gone instead of treating an absent pid as equivalent evidence.
+    task.meta["pid"] = os.getpid()
     _record_task_runner(task, runner_choice)
     _persist_run_state_doc(
         account_context, task, repo_label=repo_label, stage="created", cfg=cfg,
