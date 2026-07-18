@@ -12,6 +12,7 @@
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
 	import type { RunLedgerRow } from './runLedger';
 	import {
+		dispatchEdges,
 		frameFields,
 		frontmatterDocument,
 		messageInstant,
@@ -48,6 +49,7 @@
 	// reverse (a repo whose name already held '__' cannot round-trip), so use
 	// it only as the fallback.
 	let repoLabel = $derived(frame?.metadata.repo_label || repoSlug.replaceAll('__', '/'));
+	let edges = $derived(dispatchEdges(frame?.metadata ?? {}, repoSlug, knownPaths));
 
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
@@ -197,8 +199,8 @@
 			</div>
 			{#if node.messages.length === 0}
 				<div class="panel mt-2 p-4 text-sm text-stone-500">
-					No receipted messages are present. This run may predate the message store or have
-					produced no deliverable traffic.
+					No receipted messages are present. This run may predate the message store or have produced
+					no deliverable traffic.
 				</div>
 			{:else}
 				<div class="mt-2 space-y-2">
@@ -235,5 +237,53 @@
 				</div>
 			{/if}
 		</section>
+
+		<!-- ── Edges: where this node hangs off the tree ──────────────────── -->
+		<footer class="panel mt-6 p-4" aria-labelledby="edges-heading">
+			<div class="flex items-baseline justify-between gap-3 border-b border-stone-800 pb-2">
+				<h2 id="edges-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
+					dispatch edges
+				</h2>
+				<span class="shrink-0 font-mono text-[10px] text-stone-600">wyrd</span>
+			</div>
+			<dl class="mt-3 space-y-2 font-mono text-[11px]">
+				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+					<dt class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase">dispatched by</dt>
+					<dd class="min-w-0 break-all text-stone-300">
+						{#if edges.parent}
+							{#if edges.parent.href}
+								<a class="text-amber-200 hover:text-amber-100" href={edges.parent.href}
+									>{edges.parent.runId}</a
+								>
+							{:else}
+								{edges.parent.runId} <span class="text-stone-600">· not mirrored</span>
+							{/if}
+						{:else if edges.origin}
+							{edges.origin}
+						{:else}
+							<span class="text-stone-600">unrecorded</span>
+						{/if}
+					</dd>
+				</div>
+				{#if edges.children.length > 0}
+					<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<dt class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase">dispatched</dt>
+						<dd class="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-stone-300">
+							{#each edges.children as child (child.runId)}
+								{#if child.href}
+									<a class="break-all text-amber-200 hover:text-amber-100" href={child.href}
+										>{child.runId}</a
+									>
+								{:else}
+									<span class="break-all"
+										>{child.runId} <span class="text-stone-600">· not mirrored</span></span
+									>
+								{/if}
+							{/each}
+						</dd>
+					</div>
+				{/if}
+			</dl>
+		</footer>
 	{/if}
 </div>
