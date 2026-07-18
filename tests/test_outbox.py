@@ -994,3 +994,62 @@ class TestTerminalStreamDedupe:
         resp = responses / "evt-1.md"
         resp.write_text("same text\n")
         assert not daemon._terminal_stream_duplicates_delivered(task, resp)
+
+
+class TestLiveRunBodyMirror:
+    """A running run's node carries its card, not an empty body section."""
+
+    def test_card_change_mirrors_the_body_onto_the_run_node(
+        self, tmp_path, monkeypatch,
+    ):
+        repo = tmp_path / "repo"
+        (repo / ".brr").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        ctx = daemon.account.resolve_context(
+            repo,
+            {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "home")},
+        )
+        outbox = repo / ".brr" / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        card = outbox / ".card"
+        card.write_text("## Now\n\nMid-flight.\n", encoding="utf-8")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=repo / ".brr", conversation_key="k", event_id="evt-1",
+        )
+        task = daemon.Run(
+            id="run-live", event_id="evt-1", body="work", source="telegram",
+            status="running", meta={"repo_label": "Gurio/brr"},
+        )
+        state: dict = {}
+
+        assert daemon._drain_agent_card(
+            emit, task, "evt-1", card, state,
+            account_context=ctx, repo_label="Gurio/brr",
+        ) is True
+
+        body = ctx.runs_dir / "Gurio__brr" / "run-live" / "body.md"
+        assert body.read_text(encoding="utf-8") == "## Now\n\nMid-flight.\n"
+
+        # A re-read with unchanged text is still a no-op; no rewrite storm.
+        card.write_text("## Now\n\nLater.\n", encoding="utf-8")
+        assert daemon._drain_agent_card(
+            emit, task, "evt-1", card, state,
+            account_context=ctx, repo_label="Gurio/brr",
+        ) is True
+        assert body.read_text(encoding="utf-8") == "## Now\n\nLater.\n"
+
+    def test_without_an_account_context_the_drain_is_unchanged(
+        self, tmp_path, monkeypatch,
+    ):
+        outbox = tmp_path / ".brr" / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        card = outbox / ".card"
+        card.write_text("plain\n", encoding="utf-8")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1",
+        )
+        task = types.SimpleNamespace(id="task-1")
+
+        assert daemon._drain_agent_card(emit, task, "evt-1", card, {}) is True
