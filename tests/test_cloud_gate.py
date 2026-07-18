@@ -117,6 +117,50 @@ def test_relay_pack_noop_without_config(tmp_path):
     assert cloud.relay_pack(tmp_path / ".brr", {"cards": []}) is None
 
 
+def test_managed_publishing_credential_stays_in_memory(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(cloud, "_publishing_token_expires_at", 0.0)
+    calls = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {
+            "token": "ghs_app",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "login": "brnrd-dev[bot]",
+        }
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    state = {"brnrd_url": "https://brnrd.dev", "token": "bd_daemon"}
+
+    cloud._refresh_publishing_credential(state, force=True)
+
+    assert os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] == "ghs_app"
+    assert calls == [
+        (
+            "POST",
+            "/v1/daemons/publishing-credential",
+            {"token": "bd_daemon", "timeout": 20},
+        )
+    ]
+    assert "ghs_app" not in state.values()
+
+
+def test_explicit_gh_token_skips_managed_credential(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "operator-token")
+    monkeypatch.setattr(
+        cloud,
+        "_request",
+        lambda *args, **kwargs: pytest.fail("managed credential should not be requested"),
+    )
+
+    cloud._refresh_publishing_credential(
+        {"brnrd_url": "https://brnrd.dev", "token": "bd_daemon"},
+        force=True,
+    )
+
+
 def test_connect_persists_token(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     scripted = iter(
@@ -1218,6 +1262,7 @@ def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cloud.threading, "Thread", _StubThread)
     monkeypatch.setattr(cloud, "_register", lambda *_a, **_k: None)
+    monkeypatch.setattr(cloud, "_try_refresh_publishing_credential", lambda *_a, **_k: None)
 
     def stop_after_one(*_a, **_k):
         # NB: not a BrnrdAuthError — a 401 is retried now, not fatal.
@@ -1461,6 +1506,7 @@ def test_run_loop_survives_auth_error_instead_of_exiting(tmp_path, monkeypatch):
         raise cloud.BrnrdAuthError("invalid token")
 
     monkeypatch.setattr(cloud, "_request", fail_request)  # register 401s too
+    monkeypatch.setattr(cloud, "_try_refresh_publishing_credential", lambda *_a, **_k: None)
     monkeypatch.setattr(cloud, "_loop_once", loop_once)
     monkeypatch.setattr(cloud.time, "sleep", lambda _s: None)
     monkeypatch.setattr(cloud, "_dashboard_publish_loop", lambda *_a, **_k: None)
@@ -1495,6 +1541,7 @@ def test_run_loop_retries_auth_then_recovers_and_registers(tmp_path, monkeypatch
             raise _StopLoop
 
     monkeypatch.setattr(cloud, "_register", register)
+    monkeypatch.setattr(cloud, "_try_refresh_publishing_credential", lambda *_a, **_k: None)
     monkeypatch.setattr(cloud, "_loop_once", loop_once)
     monkeypatch.setattr(cloud.time, "sleep", lambda _s: None)
     monkeypatch.setattr(cloud, "_dashboard_publish_loop", lambda *_a, **_k: None)
