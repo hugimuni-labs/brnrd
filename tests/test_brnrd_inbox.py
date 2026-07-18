@@ -155,6 +155,56 @@ def test_response_records_metadata_only(env):
     assert again["events"][0]["body"] is None
 
 
+def test_interim_responses_forward_without_closing_the_event(env):
+    """Streaming over the cloud relay: interims (``status="processing"``)
+    forward to the platform but leave the event open — only the terminal
+    ``done`` closes it, and a duplicate terminal after close is ACKed
+    without re-forwarding (regression 2026-07-18: the first interim used
+    to close the event and swallow the final reply)."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    for body in ("first interim", "second interim"):
+        r = client.post(
+            "/v1/daemons/responses",
+            json={"event_id": event_id, "body_markdown": body, "status": "processing"},
+            headers=dmn,
+        )
+        assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status != Event.STATUS_RESPONDED  # still open for the terminal
+
+    r = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "final reply", "status": "done"},
+        headers=dmn,
+    )
+    assert r.status_code == 200, r.text
+    assert [item.body for item in forwarder.items] == [
+        "first interim", "second interim", "final reply",
+    ]
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+
+    # Terminal retry after close: ACKed, not double-posted to the platform.
+    r = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "final reply", "status": "done"},
+        headers=dmn,
+    )
+    assert r.status_code == 200
+    assert len(forwarder.items) == 3
+
+
 def test_long_poll_times_out_empty(env):
     _, client, _ = env
     acc = _account(client)
