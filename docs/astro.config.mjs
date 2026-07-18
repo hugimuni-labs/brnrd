@@ -10,10 +10,10 @@ export default defineConfig({
       title: 'brnrd',
       description: 'Local coding agents, reachable from anywhere, with continuity across runs.',
       logo: {
-        src: './src/assets/sigil.svg',
+        src: './src/assets/brr-avatar.png',
         alt: 'brnrd',
       },
-      favicon: '/favicon.svg',
+      favicon: '/brr-avatar.png',
       editLink: {
         baseUrl: 'https://github.com/Gurio/brr/edit/main/docs/src/content/docs/',
       },
