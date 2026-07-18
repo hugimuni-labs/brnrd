@@ -3407,6 +3407,40 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
     assert facet["modified_files"] == 1
 
 
+def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    task = Run(
+        id="run-1", event_id="evt-1", body="", source="telegram",
+        meta={"branch_name": "brr/work", "seed_ref": "main"},
+    )
+    seen = {}
+
+    def fake_live_summary(repo_root, **kwargs):
+        seen.update({"repo_root": repo_root, **kwargs})
+        return {"known": True, "counts": {"issue": 1},
+                "latest_commit": None, "branch": "brr/work", "pr": None}
+
+    monkeypatch.setattr(daemon.relics, "live_summary", fake_live_summary)
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        work_dir=work_dir,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["produce"]["counts"] == {"issue": 1}
+    assert seen == {
+        "repo_root": work_dir,
+        "branch": "brr/work",
+        "seed_ref": "main",
+        "outbox_dir": outbox_dir,
+    }
+
+
 # ── _resources_facet (portal-state work-status posture) ──────────────
 
 
