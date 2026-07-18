@@ -852,6 +852,21 @@ def _build_injected_blocks_with_contracts(
     if context:
         keyed.append(("recent-activity", context))
 
+    # 8b. The resident's own last run node (wyrd §5)
+    prior_run = _build_prior_run_block(repo_root)
+    contracts.append(ContractEntry(
+        block_key="prior-run",
+        label="Your last run (node frame + Now + shape)",
+        owner=OWNER_RESIDENT,
+        authority=AUTHORITY_MEMORY,
+        freshness=None,
+        location="computed",
+        present=bool(prior_run),
+        bytes=_rendered_bytes(prior_run),
+    ))
+    if prior_run:
+        keyed.append(("prior-run", prior_run))
+
     # 9. kb health findings
     kb_health_block = _build_kb_health_block(repo_root)
     contracts.append(ContractEntry(
@@ -2564,3 +2579,146 @@ def _format_turn(prefix: str, body: str) -> str:
         return f"- {prefix}: {body}".rstrip()
     indented = "\n".join(f"  {line}" if line else "" for line in body.splitlines())
     return f"- {prefix}:\n{indented}".rstrip()
+
+
+# Wyrd §5, closing the resident half (maintainer, 2026-07-19: "not the whole
+# thing, now + one line is fine"). The runs layer is the corpus's largest — the
+# user can open any node on the dashboard — but nothing carried it back to the
+# resident, who therefore maintained the run body strictly forward-blind: it
+# wrote `.card` every wake and never once saw what the last one said. §5 claims
+# the two faces are the same object at two unfoldings; this is the block that
+# made that true rather than aspirational.
+#
+# Deliberately not the whole node. The frame's one line answers "how did it
+# end", the body's `## Now` answers "what was I doing" — and the full node
+# stays one `Read` away for the rare wake that needs the middle.
+_PRIOR_RUN_FRAME_KEYS = ("status", "stage", "runner_name", "publish_status", "branch_name")
+
+
+def _prior_run_node(repo_root: Path) -> tuple[Path, Path] | None:
+    """Locate the newest run node that actually wrote a body, or ``None``.
+
+    Newest-body rather than newest-node is what keeps the *current* run out of
+    its own wake: at prompt-build time this run's frame already exists (the
+    daemon writes it at dispatch) but its body cannot — the body is mirrored
+    from a card the resident has not written yet. The selection rule is the
+    exclusion rule, with no run id to thread through.
+    """
+    from . import account as account_mod
+    from . import config as conf
+
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return None
+    if not ctx.enabled or not ctx.runs_dir.is_dir():
+        return None
+    # Scoped to *this* repo's runs. Falling back to the whole account would
+    # hand a wake the last run of a neighbouring repo, which is worse than
+    # handing it nothing: a plausible, wrong memory is harder to catch than
+    # an absent one.
+    from . import daemon as daemon_mod
+
+    label = daemon_mod._repo_label(repo_root, None, cfg)
+    if not label:
+        return None
+    root = ctx.runs_dir / account_mod.slug_repo_label(label)
+    if not root.is_dir():
+        return None
+    newest: tuple[float, Path] | None = None
+    for body in root.glob("*/body.md"):
+        try:
+            stamp = body.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or stamp > newest[0]:
+            newest = (stamp, body)
+    if newest is None:
+        return None
+    return newest[1].parent / "state.md", newest[1]
+
+
+def _build_prior_run_block(repo_root: Path) -> str:
+    """Hand the resident its own last run: one attestation line + that run's Now."""
+    from . import protocol
+
+    located = _prior_run_node(repo_root)
+    if located is None:
+        return ""
+    state_path, body_path = located
+    try:
+        body = body_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    now = _now_projection(body)
+    if not now:
+        return ""
+    fields: dict[str, str] = {}
+    try:
+        fields = protocol.parse_frontmatter(state_path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
+    run_id = str(fields.get("run_id") or body_path.parent.name)
+    parts = [run_id]
+    parts.extend(
+        str(fields[key]) for key in _PRIOR_RUN_FRAME_KEYS
+        if str(fields.get(key) or "").strip()
+    )
+    shape = _body_section_shape(body)
+    rendered = [
+        "## Your last run\n",
+        "The node you wrote last wake, from `runs/<repo>/<run>/`: the attested "
+        "frame in one line, the `## Now` you left on the card, and the shape "
+        "of the rest. Section names, not their contents — the map of what that "
+        "run recorded, so a wake knows whether the territory is worth opening. "
+        "The full body and the run's message traffic live on the node.\n",
+        f"`{' · '.join(parts)}`\n",
+        now,
+    ]
+    if shape:
+        rendered.append("\nalso in that body: " + " · ".join(shape))
+    return "\n".join(rendered)
+
+
+def _body_section_shape(body: str) -> list[str]:
+    """The body's ``##`` section names, minus the ``Now`` already rendered.
+
+    The compiled half of the wake's memory (maintainer, 2026-07-19: "maybe
+    header + sections' headers, maybe just top"). A heading list is a
+    remarkably high ratio of orientation to tokens: "also in that body: Arc ·
+    Decisions · Open" tells a wake what kind of run that was and what it would
+    find, at a cost that does not scale with how much the run actually wrote.
+    """
+    names: list[str] = []
+    for line in body.splitlines():
+        if not line.startswith("## "):
+            continue
+        name = line[3:].strip()
+        if name and name.casefold() != "now":
+            names.append(name)
+    return names
+
+
+def _now_projection(body: str) -> str:
+    """The body's ``## Now`` section, or the whole body when it has none.
+
+    Third implementation of one rule (``daemon._card_now_projection``,
+    ``runNode.ts:nowProjection``). Kept local rather than imported from the
+    daemon: prompts must not pull the daemon module into every wake's import
+    graph for eighteen lines of string handling.
+    """
+    lines = body.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip().casefold() == "## now":
+            start = index + 1
+            break
+    if start is None:
+        return body.strip()
+    projected: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        projected.append(line)
+    return "\n".join(projected).strip()
