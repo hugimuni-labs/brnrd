@@ -1,4 +1,7 @@
-# The resident
+---
+title: The resident
+description: The repo-aware continuity that survives across Runner processes and models.
+---
 
 A resident is the repo-aware coworker behind the remote door. Claude Code,
 Codex, or Gemini CLI is the medium for a particular run; the resident is the
@@ -33,4 +36,4 @@ every run reread the project's entire history.
 
 Changing the Shell or Core does not create a new coworker. A cheaper Core can
 handle routine work, while the same resident can hand a hard pass to a stronger
-local Core with its context intact. See [Models & quota](../guides/models.md).
+local Core with its context intact. See [Models & quota](../../guides/models/).
