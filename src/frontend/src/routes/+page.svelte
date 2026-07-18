@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import WindowTrack from '$lib/WindowTrack.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
@@ -442,33 +441,11 @@
 			{/if}
 		</div>
 
-		<div class="mt-4 space-y-3">
-			{#if unauthenticated}
-				<p class="text-sm text-stone-400">
-					Sign in to see live quota windows — <a
-						class="text-sky-400 underline"
-						href="/login?next=/"
-						rel="external">log in</a
-					>.
-				</p>
-			{:else if error}
-				<p class="text-sm text-red-400">{error}</p>
-			{:else if shells === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else if shells.length === 0}
-				<p class="text-sm text-stone-500">No connected daemon has reported quota yet.</p>
-			{:else}
-				{#each shells as shell (shell.shell)}
-					<WindowTrack {shell} {now} />
-				{/each}
-				{#if generatedAt}
-					<p class="text-right text-[11px] text-stone-600">
-						daemon report as of {new Date(generatedAt).toLocaleTimeString()}
-					</p>
-				{/if}
-			{/if}
-		</div>
-
+		<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
+		     fuel lives in the §1 capacity strip's compact bars now — one
+		     surface per fact (loom-viewport §10 dedup). WindowTrack itself
+		     is gone with them; its palette conventions live on in
+		     statusPalette.ts and the comments that cite it. -->
 		<div class="mt-4">
 			{#if liveRunsError}
 				<p class="text-sm text-red-400">{liveRunsError}</p>
