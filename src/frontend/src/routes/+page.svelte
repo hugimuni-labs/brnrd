@@ -17,7 +17,8 @@
 		type RunnersResponse
 	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
-	import { runNodeHref } from '$lib/runNode';
+	import RunNodeInline from '$lib/RunNodeInline.svelte';
+	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
 		ScheduledWakesAuthError,
@@ -217,12 +218,16 @@
 	// The node route for whatever run is selected, live or closed. A live cell
 	// only ever opened this sheet, so the running run — the one a reader is
 	// most likely to want — had no way through to its own node at all.
-	let selectedNodeHref = $derived.by(() => {
+	let selectedNode = $derived.by(() => {
 		if (loomSelection?.kind !== 'run') return null;
 		const live = selectedLiveRuns[0];
-		if (live?.run_id) return runNodeHref(live.repo_label, live.run_id);
-		const closed = selectedLedgerRows.find((row) => row.run_id);
-		return closed?.run_id ? runNodeHref(closed.repo_label, closed.run_id) : null;
+		const source = live?.run_id ? live : selectedLedgerRows.find((row) => row.run_id);
+		if (!source?.run_id) return null;
+		return {
+			repoSlug: repoRunSlug(source.repo_label),
+			runId: runIdSlug(source.run_id),
+			href: runNodeHref(source.repo_label, source.run_id)
+		};
 	});
 	let selectedWakes = $derived(
 		loomSelection?.kind === 'wake'
@@ -370,20 +375,45 @@
 		<div class="flex items-baseline justify-between gap-3">
 			<div>
 				<p class="eyebrow">§1 · capacity + dispatch</p>
-				<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">next wake · fuel</h2>
+				<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">
+					next wake · fuel
+				</h2>
 			</div>
-			<p class="font-mono text-[10px] text-stone-500">{runnersError ?? (shells === null ? 'report loading' : `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}</p>
+			<p class="font-mono text-[10px] text-stone-500">
+				{runnersError ??
+					(shells === null
+						? 'report loading'
+						: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
+			</p>
 		</div>
-		<ControlStrip runners={runnersData} {shells} {runnersError} {runnersNote} onTap={tapWakeRunner} />
+		<ControlStrip
+			runners={runnersData}
+			{shells}
+			{runnersError}
+			{runnersNote}
+			onTap={tapWakeRunner}
+		/>
 	</section>
 
 	<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
 		<div class="flex items-baseline justify-between gap-3">
 			<div>
 				<p class="eyebrow">§2 · loom</p>
-				<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">{liveRuns === null ? 'reading the run field' : `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}</h2>
+				<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">
+					{liveRuns === null
+						? 'reading the run field'
+						: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
+				</h2>
 			</div>
-			<p class="font-mono text-[10px] {liveRunsError ? 'text-red-400' : liveRunsStale ? 'text-amber-400' : 'text-stone-500'}">{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}</p>
+			<p
+				class="font-mono text-[10px] {liveRunsError
+					? 'text-red-400'
+					: liveRunsStale
+						? 'text-amber-400'
+						: 'text-stone-500'}"
+			>
+				{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
+			</p>
 		</div>
 		<div class="mt-2">
 			<LoomBand
@@ -397,148 +427,162 @@
 			/>
 		</div>
 
-	<!-- The detail sheet: the band's other half. Everything the dissolved
+		<!-- The detail sheet: the band's other half. Everything the dissolved
 	     live-runs / scheduled-wakes / run-receipts sections used to say is
 	     said here, for the selected thread of time only. -->
-	<div class="ignite" style="--ignite-delay: 600ms">
-		<div class="mt-4 flex items-baseline justify-between gap-3">
-			<p class="eyebrow">
-				§2a · {loomSelection === null
-					? 'now'
-					: loomSelection.kind === 'wake'
-						? 'selected wake'
-						: selectedLiveRuns.length > 0
-							? 'selected run · live'
-							: 'selected run · receipt'}
-			</p>
-			{#if loomSelection !== null}
-				<div class="flex shrink-0 items-baseline gap-3">
-					{#if selectedNodeHref}
-						<a
-							href={selectedNodeHref}
-							class="font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+		<div class="ignite" style="--ignite-delay: 600ms">
+			<div class="mt-4 flex items-baseline justify-between gap-3">
+				<p class="eyebrow">
+					§2a · {loomSelection === null
+						? 'now'
+						: loomSelection.kind === 'wake'
+							? 'selected wake'
+							: selectedLiveRuns.length > 0
+								? 'selected run · live'
+								: 'selected run · receipt'}
+				</p>
+				{#if loomSelection !== null}
+					<div class="flex shrink-0 items-baseline gap-3">
+						<button
+							type="button"
+							class="cursor-pointer font-mono text-[10px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+							onclick={() => (loomSelection = null)}
 						>
-							run node →
-						</a>
+							✕ back to now
+						</button>
+					</div>
+				{/if}
+			</div>
+			<div class="mt-2">
+				{#if loomSelection?.kind === 'wake'}
+					{#if scheduledWakesError}
+						<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
 					{/if}
-					<button
-						type="button"
-						class="cursor-pointer font-mono text-[10px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
-						onclick={() => (loomSelection = null)}
-					>
-						✕ back to now
-					</button>
-				</div>
-			{/if}
-		</div>
-		<div class="mt-2">
-			{#if loomSelection?.kind === 'wake'}
-				{#if scheduledWakesError}
-					<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
-				{/if}
-				{#if selectedWakes.length > 0}
-					<ScheduleLane wakes={selectedWakes} {now} />
+					{#if selectedWakes.length > 0}
+						<ScheduleLane wakes={selectedWakes} {now} />
+					{:else}
+						<p class="text-sm text-stone-500">that wake left the schedule — it likely fired.</p>
+					{/if}
+				{:else if loomSelection?.kind === 'run'}
+					<!-- The loom stays the spine: a selected run fills this frame with
+				     its own node instead of sending the reader to a page and
+				     costing them their place in the band. Vitals and receipt
+				     first, the node's own `## Now` under them, everything heavier
+				     behind the panel's expand. -->
+					{#if selectedLiveRuns.length > 0}
+						<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
+					{:else if selectedLedgerRows.length > 0}
+						<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+					{:else}
+						<p class="text-sm text-stone-500">
+							no receipt rows for that run in the current window.
+						</p>
+					{/if}
+					{#if selectedNode}
+						<div class="mt-2">
+							<RunNodeInline
+								data={surfaceData}
+								repoSlug={selectedNode.repoSlug}
+								runId={selectedNode.runId}
+								href={selectedNode.href}
+							/>
+						</div>
+					{/if}
+				{:else if liveRunsError}
+					<p class="text-sm text-red-400">{liveRunsError}</p>
+				{:else if liveRuns === null}
+					<p class="text-sm text-stone-500">Loading…</p>
 				{:else}
-					<p class="text-sm text-stone-500">that wake left the schedule — it likely fired.</p>
+					<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 				{/if}
-			{:else if loomSelection?.kind === 'run' && selectedLiveRuns.length > 0}
-				<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
-			{:else if loomSelection?.kind === 'run'}
-				{#if selectedLedgerRows.length > 0}
-					<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
-				{:else}
-					<p class="text-sm text-stone-500">no receipt rows for that run in the current window.</p>
-				{/if}
-			{:else if liveRunsError}
-				<p class="text-sm text-red-400">{liveRunsError}</p>
-			{:else if liveRuns === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else}
-				<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
-			{/if}
-		</div>
-	</div>
-
-	<div class="ignite" style="--ignite-delay: 1000ms">
-		<p class="eyebrow mt-6">§2b · instruments</p>
-		<h2
-			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'last 24h', delay: 1150 }}
-		>
-			last 24h
-		</h2>
-		<div class="mt-3">
-			{#if runLedgerError}
-				<p class="text-sm text-red-400">{runLedgerError}</p>
-			{:else if runLedgerRows === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else}
-				<ProduceGauge rows={runLedgerRows} stale={runLedgerStale} {now} />
-			{/if}
+			</div>
 		</div>
 
-		<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
+		<div class="ignite" style="--ignite-delay: 1000ms">
+			<p class="eyebrow mt-6">§2b · instruments</p>
+			<h2
+				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				use:typeReveal={{ text: 'last 24h', delay: 1150 }}
+			>
+				last 24h
+			</h2>
+			<div class="mt-3">
+				{#if runLedgerError}
+					<p class="text-sm text-red-400">{runLedgerError}</p>
+				{:else if runLedgerRows === null}
+					<p class="text-sm text-stone-500">Loading…</p>
+				{:else}
+					<ProduceGauge rows={runLedgerRows} stale={runLedgerStale} {now} />
+				{/if}
+			</div>
+
+			<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
 		     fuel lives in the §1 capacity strip's compact bars now — one
 		     surface per fact (loom-viewport §10 dedup). WindowTrack itself
 		     is gone with them; its palette conventions live on in
 		     statusPalette.ts and the comments that cite it. -->
-		<div class="mt-4">
-			{#if liveRunsError}
-				<p class="text-sm text-red-400">{liveRunsError}</p>
-			{:else if liveRuns === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else}
-				<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
-			{/if}
+			<div class="mt-4">
+				{#if liveRunsError}
+					<p class="text-sm text-red-400">{liveRunsError}</p>
+				{:else if liveRuns === null}
+					<p class="text-sm text-stone-500">Loading…</p>
+				{:else}
+					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
+				{/if}
+			</div>
 		</div>
-	</div>
 
-	<div class="ignite" style="--ignite-delay: 1900ms">
-		<p class="eyebrow mt-8">§2c · config-change requests</p>
-		<h2
-			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
-		>
-			pending settings requests
-		</h2>
-		<div class="mt-3">
-			{#if configRequestsError}
-				<p class="text-sm text-red-400">{configRequestsError}</p>
-			{:else if configRequests === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else}
-				<ConfigRequests requests={configRequests} {now} />
-			{/if}
+		<div class="ignite" style="--ignite-delay: 1900ms">
+			<p class="eyebrow mt-8">§2c · config-change requests</p>
+			<h2
+				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
+			>
+				pending settings requests
+			</h2>
+			<div class="mt-3">
+				{#if configRequestsError}
+					<p class="text-sm text-red-400">{configRequestsError}</p>
+				{:else if configRequests === null}
+					<p class="text-sm text-stone-500">Loading…</p>
+				{:else}
+					<ConfigRequests requests={configRequests} {now} />
+				{/if}
+			</div>
 		</div>
-	</div>
 
-	<div class="ignite" style="--ignite-delay: 2300ms">
-		<p class="eyebrow mt-8">§2d · pr review queue</p>
-		<h2
-			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'PR review queue', delay: 2450 }}
-		>
-			PR review queue
-		</h2>
-		<div class="mt-3">
-			{#if prReviewQueueError}
-				<p class="text-sm text-red-400">{prReviewQueueError}</p>
-			{:else if prReviewQueue === null}
-				<p class="text-sm text-stone-500">Loading…</p>
-			{:else}
-				<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
-			{/if}
+		<div class="ignite" style="--ignite-delay: 2300ms">
+			<p class="eyebrow mt-8">§2d · pr review queue</p>
+			<h2
+				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+				use:typeReveal={{ text: 'PR review queue', delay: 2450 }}
+			>
+				PR review queue
+			</h2>
+			<div class="mt-3">
+				{#if prReviewQueueError}
+					<p class="text-sm text-red-400">{prReviewQueueError}</p>
+				{:else if prReviewQueue === null}
+					<p class="text-sm text-stone-500">Loading…</p>
+				{:else}
+					<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+				{/if}
+			</div>
 		</div>
-	</div>
 	</section>
 
 	<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
 		<div class="flex items-baseline justify-between gap-3">
 			<div>
 				<p class="eyebrow">§3 · corpus</p>
-				<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">work surface</h2>
+				<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">
+					work surface
+				</h2>
 			</div>
-			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-stone-500'}">{surfaceError ?? (surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}</p>
+			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-stone-500'}">
+				{surfaceError ??
+					(surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}
+			</p>
 		</div>
 		<p class="mt-1 text-sm text-stone-400">
 			The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
