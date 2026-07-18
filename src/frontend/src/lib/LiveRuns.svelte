@@ -3,7 +3,7 @@
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { typeReveal } from './transitions';
-	import { ageSince, type LiveRun } from './liveRuns';
+	import { ageSince, liveRunDisplayName, type LiveRun } from './liveRuns';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 
 	interface Props {
@@ -127,7 +127,7 @@
 	{:else}
 		<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each runs as run (run.id)}
-				{@const primary = run.label || run.kind || 'run'}
+				{@const primary = liveRunDisplayName(run)}
 				{@const secondary = run.label
 					? `${run.repo_label || 'unknown repo'} · ${run.kind || 'run'}`
 					: run.repo_label || 'unknown repo'}

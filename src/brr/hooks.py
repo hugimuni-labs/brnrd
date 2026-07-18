@@ -434,6 +434,16 @@ def format_delta(
             "`bugfix`, `kb-brainstorm`) before this ends, or this run's "
             "run_ledger row has a null task_classification forever."
         )
+    # A name is useful while the run is still visible, not as a closeout
+    # chore. Give the resident a few minutes to orient, then gently surface
+    # the omission at ordinary hook boundaries; Stop is deliberately quiet.
+    run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
+    elapsed = budget.get("elapsed_seconds")
+    if not stop and not run_name.get("written") and isinstance(elapsed, (int, float)) and elapsed >= 240:
+        lines.append(
+            "- .name: still unwritten — add a short resident-authored run name "
+            "so the live dashboard can identify this work beyond its waking-message excerpt."
+        )
     # Card staleness (all phases): the note is the one live surface a
     # watching user sees between replies, so its own silence needs the same
     # "this is attention-worthy" framing pending events got 2026-07-05 — a

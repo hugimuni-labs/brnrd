@@ -333,7 +333,7 @@ def build(
         }
     else:
         names = [
-            str(e.get("label") or e.get("stream") or e.get("run_id") or "?")
+            str(e.get("name") or e.get("label") or e.get("stream") or e.get("run_id") or "?")
             for e in coexisting[:3]
         ]
         n = len(coexisting)

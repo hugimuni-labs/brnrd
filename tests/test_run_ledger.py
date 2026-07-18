@@ -19,6 +19,7 @@ _ROW_FIELDS = {
     "source_system",
     "external_refs",
     "reply_archive",
+    "name",
     "task_classification",
     "parent_run_id",
     "is_subspawn",
@@ -113,6 +114,7 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["context_window_used"] == 12.5
     assert row["external_refs"] == []
     assert row["reply_archive"] is None
+    assert row["name"] == ""
     assert row["estimate_vs_actual"] == "actual"
 
 
@@ -266,6 +268,14 @@ def test_task_classification_normalizes_case_and_underscores(tmp_path):
 def test_read_task_classification_control_missing_file_and_dir(tmp_path):
     assert run_ledger.read_task_classification_control(tmp_path / "no-outbox") is None
     assert run_ledger.read_task_classification_control(None) is None
+
+
+def test_read_run_name_control_uses_first_line_and_caps_length(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".name").write_text("x" * 70 + "\nignored\n", encoding="utf-8")
+    assert run_ledger.read_run_name_control(outbox) == "x" * 60
+    assert run_ledger.read_run_name_control(tmp_path / "missing") is None
 
 
 def test_subspawn_row_carries_parent_run_id(tmp_path, monkeypatch):
