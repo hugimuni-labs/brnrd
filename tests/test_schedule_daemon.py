@@ -227,7 +227,7 @@ def test_fire_due_ignores_quota_pacing_without_resolvable_runner(tmp_path):
     assert fired == {"upkeep"}
 
 
-def test_retire_internal_event_cleans_up_schedule_source(tmp_path):
+def test_retire_internal_event_closes_schedule_source_in_place(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -236,8 +236,8 @@ def test_retire_internal_event_cleans_up_schedule_source(tmp_path):
     protocol.write_response(responses, path.stem, "done")
 
     assert daemon._retire_internal_event(event, responses) is True
-    assert not path.exists()
-    assert not protocol.response_exists(responses, path.stem)
+    assert protocol._read_event(path)["status"] == "delivered"
+    assert protocol.response_exists(responses, path.stem)
 
 
 def test_retire_internal_event_leaves_gate_events_alone(tmp_path):
