@@ -1048,7 +1048,7 @@ def test_run_ledger_snapshot_tails_recent_rows_and_skips_malformed(tmp_path):
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
     ledger = brr_dir / "run-ledger.jsonl"
-    rows = [{"run_id": f"run-{i}", "ended_at": "2026-07-07T19:00:00Z"} for i in range(125)]
+    rows = [{"run_id": f"run-{i}", "ended_at": "2026-07-07T19:00:00Z"} for i in range(300)]
     ledger.write_text(
         "\n".join(json_mod.dumps(row) for row in rows[:50])
         + "\nnot json\n"
@@ -1059,9 +1059,9 @@ def test_run_ledger_snapshot_tails_recent_rows_and_skips_malformed(tmp_path):
 
     snapshot = cloud._run_ledger_snapshot(brr_dir)
 
-    assert len(snapshot) == 100
-    assert snapshot[0]["run_id"] == "run-25"
-    assert snapshot[-1]["run_id"] == "run-124"
+    assert len(snapshot) == 256
+    assert snapshot[0]["run_id"] == "run-44"
+    assert snapshot[-1]["run_id"] == "run-299"
 
 
 def test_run_ledger_snapshot_missing_file_is_empty(tmp_path):

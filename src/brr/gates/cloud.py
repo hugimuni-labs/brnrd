@@ -1365,9 +1365,9 @@ def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
         print(f"[brnrd:cloud] pr-review-queue publish failed: {e}")
 
 
-# Roughly four busy days at the observed ~25 runs/day: enough for the
-# dashboard's trailing-24h gauge without turning every publish into history.
-_RUN_LEDGER_SNAPSHOT_LIMIT = 100
+# Covers the loom's declared seven-day shelf at the observed ~25 runs/day,
+# with headroom for bursts, without turning every 3s publish into full history.
+_RUN_LEDGER_SNAPSHOT_LIMIT = 256
 
 
 def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
