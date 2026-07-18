@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 import time
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,11 @@ HOOK_STATE_NAME = ".hook-state.json"
 CARD_NAME = ".card"
 TASK_CLASSIFICATION_NAME = ".task-classification"
 FORGE_HANDOFF_NAME = ".forge-handoff"
+# The run body rides the closeout delta whole. Capped only against a
+# pathological card: this is the resident's own prose, and truncating it is a
+# worse failure than the tokens it costs at a once-per-run boundary.
+_STOP_BODY_MAX_CHARS = 6000
+
 _CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
 _CLOSEOUT_ARTIFACTS = {
     "card": (
@@ -156,6 +162,20 @@ def _read_json(path: Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _read_card_body(ctx: HookContext) -> str | None:
+    """Read the resident's `.card` fresh, for the closeout delta.
+
+    ``None`` when there is no outbox to read from, so the caller can fall back
+    to the portal snapshot rather than assert an empty body.
+    """
+    if ctx.outbox_dir is None:
+        return None
+    try:
+        return (ctx.outbox_dir / CARD_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def _read_hook_state(ctx: HookContext) -> dict[str, Any]:
     return _read_json(ctx.state_path)
 
@@ -226,7 +246,11 @@ def _touch_flush(ctx: HookContext) -> None:
 
 
 def format_delta(
-    payload: dict[str, Any], *, seed: bool = False, stop: bool = False
+    payload: dict[str, Any],
+    *,
+    seed: bool = False,
+    stop: bool = False,
+    run_body: str | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -461,6 +485,38 @@ def format_delta(
             "line) so the surface the user is watching isn't sitting blank "
             "or stale."
         )
+    # The run's own body, at closeout only (maintainer, 2026-07-19: "run's own
+    # body on stop - right, that's what I actually meant").
+    #
+    # Stop is the moment `.card` is captured as the node's permanent `body.md`
+    # — the run writing its own record. It is also the moment the resident is
+    # least able to write it: on a long run the *earliest* card text is the
+    # first thing to fall out of context, so the record gets finalised against
+    # a memory of itself rather than the thing itself. The body is already in
+    # this payload for the live card; handing it back here costs one render at
+    # the one boundary where it is the working material.
+    #
+    # Deliberately not the prior run's body (the first shape proposed): that
+    # one is one `Read` away and the wake's heading list says whether it is
+    # worth opening. This one has no fallback — gone from context is just gone.
+    if stop:
+        # Read from the artifact, never the heartbeat snapshot — the same
+        # doctrine the closeout obligations keep. A card rewritten in the run's
+        # final action predates no portal write, and handing back a stale body
+        # at the exact moment it becomes permanent is the failure this whole
+        # block exists to prevent.
+        body = (run_body if run_body is not None else str(card.get("text") or "")).strip()
+        if body:
+            if len(body) > _STOP_BODY_MAX_CHARS:
+                # Keep the tail: the run's latest thinking is the part the
+                # closeout is being written from, and the head is the part
+                # most likely still in context.
+                body = "…\n" + body[-_STOP_BODY_MAX_CHARS:]
+            lines.append(
+                "- your run body (`.card`, captured as this node's body.md at "
+                "closeout — the whole arc, not the live projection):\n"
+                + textwrap.indent(body, "  ")
+            )
     # Work-status posture (cost / quota / parallelism). Known fields carry
     # their value; not-yet-built ones read as named states with reasons so the
     # resident sees the slot honestly rather than a gap. It renders on seed /
@@ -849,7 +905,7 @@ def compute_neutral(
         # signal.
         stop_token = portal.get("change_token")
         if stop_token != state.get("stop_last_token"):
-            inject = format_delta(portal, stop=True)
+            inject = format_delta(portal, stop=True, run_body=_read_card_body(ctx))
         state["stop_last_token"] = stop_token
         state["last_token"] = stop_token
     else:
