@@ -8,7 +8,7 @@
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import ProduceGauge from '$lib/ProduceGauge.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
-	import SpoolRack from '$lib/SpoolRack.svelte';
+	import ControlStrip from '$lib/ControlStrip.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import {
 		RunnersAuthError,
@@ -342,6 +342,8 @@
 		</h1>
 	</header>
 
+	<ControlStrip runners={runnersData} {shells} {runnersError} {runnersNote} onTap={tapWakeRunner} />
+
 	<section class="ignite" style="--ignite-delay: 250ms">
 		<p class="eyebrow mt-4">§0 · loom</p>
 		<div class="mt-2">
@@ -464,47 +466,8 @@
 		</div>
 	</section>
 
-	<section class="ignite" style="--ignite-delay: 1500ms">
-		<p class="eyebrow mt-8">§2 · spool rack</p>
-		<h2
-			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'runners', delay: 1650 }}
-		>
-			runners
-		</h2>
-		<p class="mt-1 text-sm text-stone-400">
-			The bodies available for the next wake — every Shell+Core profile your daemons discovered
-			locally, cheapest first. The marked spool is who answers unless you ask otherwise. Tap a row
-			to hand the <em>next</em> wake that body — one wake, cancelable until it fires; a durable default
-			change stays a conversation with the resident (a parked settings request below).
-		</p>
-		<div class="mt-3">
-			<!-- Error above the rack, not instead of it: a failed *action* must
-			     not blank the panel the user is acting on. -->
-			{#if runnersError}
-				<p class="mb-2 text-sm text-red-400">{runnersError}</p>
-			{/if}
-			{#if runnersNote}
-				<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
-			{/if}
-			{#if runnersData === null}
-				{#if !runnersError}
-					<p class="text-sm text-stone-500">Loading…</p>
-				{/if}
-			{:else}
-				<SpoolRack
-					profiles={runnersData.profiles}
-					defaultProfile={runnersData.default}
-					stale={runnersData.stale}
-					wakeRequest={runnersData.wake_request ?? null}
-					onTap={tapWakeRunner}
-				/>
-			{/if}
-		</div>
-	</section>
-
 	<section class="ignite" style="--ignite-delay: 1900ms">
-		<p class="eyebrow mt-8">§2a · config-change requests</p>
+		<p class="eyebrow mt-8">§2 · config-change requests</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 			use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
