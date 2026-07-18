@@ -46,7 +46,7 @@ def _host() -> str:
         return ""
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     """Return True if *pid* is a live process on this host."""
     if pid <= 0:
         return False
@@ -199,7 +199,7 @@ def list_active(
             continue
         last_seen = float(entry.get("last_seen") or 0)
         same_host = bool(entry.get("host")) and entry.get("host") == host
-        dead_pid = same_host and not _pid_alive(int(entry.get("pid") or 0))
+        dead_pid = same_host and not pid_alive(int(entry.get("pid") or 0))
         if dead_pid or last_seen < cutoff:
             path.unlink(missing_ok=True)
             continue
