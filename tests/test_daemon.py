@@ -4334,3 +4334,65 @@ def test_dispatch_edges_survive_a_fleet_closing_at_once(tmp_path):
     )
     recorded = daemon.protocol.parse_frontmatter(text)["child_run_ids"]
     assert sorted(item.strip() for item in recorded.split(",")) == sorted(children)
+
+
+def test_running_stage_reports_execution_not_the_pending_lifecycle(tmp_path):
+    """A mid-flight node says "running", not the lifecycle's "pending"."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-mid", event_id="evt-mid", body="work", source="telegram",
+        status="pending",
+    )
+
+    created = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="created",
+    ).read_text(encoding="utf-8")
+    assert "status: pending" in created
+
+    running = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running",
+    ).read_text(encoding="utf-8")
+    assert "status: running" in running
+    assert "- status: running" in running
+
+    # A terminal status is never overwritten by the stage.
+    task.status = "done"
+    finished = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running",
+    ).read_text(encoding="utf-8")
+    assert "status: done" in finished
+
+
+def test_boot_janitor_reaps_runs_frozen_at_pending_too(tmp_path):
+    """The 280-node class: died off the closeout path, still claiming pending."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-frozen", event_id="evt-frozen", body="work", source="telegram",
+        status="pending", meta={"repo_label": "Gurio/brr"},
+    )
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="created",
+    )
+    ledger = daemon.run_ledger.ledger_path(repo)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({"run_id": "run-frozen"}) + "\n", encoding="utf-8")
+
+    reaped = daemon._reap_zombie_run_state_docs(ctx)
+
+    assert path in reaped
+    text = path.read_text(encoding="utf-8")
+    assert "status: error" in text
+    assert "stage: reaped" in text
+    assert "closed ledger row" in text
