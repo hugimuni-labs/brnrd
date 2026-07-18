@@ -4,6 +4,7 @@ Prompt-assembly tests live in ``tests/test_prompts.py``.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -50,6 +51,13 @@ def test_clean_runner_environ_strips_parent_agent_session_leakage(monkeypatch):
 
 
 def test_clean_runner_environ_makes_gh_token_authoritative(monkeypatch):
+    # This test models a daemon shaping a fresh runner. The test suite itself can
+    # now run *inside* an App-authored runner whose outer process already carries
+    # the same runner-scoped Git config; clear that host fixture instead of
+    # mistaking intentional append semantics for duplicate production output.
+    for key in tuple(os.environ):
+        if key == "GIT_CONFIG_COUNT" or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "human-token")
     monkeypatch.setenv("GH_TOKEN", "bot-token")
 
