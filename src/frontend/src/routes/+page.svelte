@@ -342,10 +342,25 @@
 		</h1>
 	</header>
 
-	<ControlStrip runners={runnersData} {shells} {runnersError} {runnersNote} onTap={tapWakeRunner} />
+	<section class="ignite mt-4" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
+		<div class="flex items-baseline justify-between gap-3">
+			<div>
+				<p class="eyebrow">§1 · capacity + dispatch</p>
+				<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">next wake · fuel</h2>
+			</div>
+			<p class="font-mono text-[10px] text-stone-500">{runnersError ?? (shells === null ? 'report loading' : `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}</p>
+		</div>
+		<ControlStrip runners={runnersData} {shells} {runnersError} {runnersNote} onTap={tapWakeRunner} />
+	</section>
 
-	<section class="ignite" style="--ignite-delay: 250ms">
-		<p class="eyebrow mt-4">§0 · loom</p>
+	<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
+		<div class="flex items-baseline justify-between gap-3">
+			<div>
+				<p class="eyebrow">§2 · loom</p>
+				<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">{liveRuns === null ? 'reading the run field' : `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}</h2>
+			</div>
+			<p class="font-mono text-[10px] {liveRunsError ? 'text-red-400' : liveRunsStale ? 'text-amber-400' : 'text-stone-500'}">{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}</p>
+		</div>
 		<div class="mt-2">
 			<LoomBand
 				ledgerRows={runLedgerRows}
@@ -356,12 +371,11 @@
 				selectedId={loomSelection?.id ?? null}
 			/>
 		</div>
-	</section>
 
 	<!-- The detail sheet: the band's other half. Everything the dissolved
 	     live-runs / scheduled-wakes / run-receipts sections used to say is
 	     said here, for the selected thread of time only. -->
-	<section class="ignite" style="--ignite-delay: 600ms">
+	<div class="ignite" style="--ignite-delay: 600ms">
 		<div class="mt-4 flex items-baseline justify-between gap-3">
 			<p class="eyebrow">
 				§0a · {loomSelection === null
@@ -408,9 +422,9 @@
 				<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 			{/if}
 		</div>
-	</section>
+	</div>
 
-	<section class="ignite" style="--ignite-delay: 1000ms">
+	<div class="ignite" style="--ignite-delay: 1000ms">
 		<p class="eyebrow mt-6">§1 · instruments</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -464,9 +478,9 @@
 				<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
 			{/if}
 		</div>
-	</section>
+	</div>
 
-	<section class="ignite" style="--ignite-delay: 1900ms">
+	<div class="ignite" style="--ignite-delay: 1900ms">
 		<p class="eyebrow mt-8">§2 · config-change requests</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -483,9 +497,9 @@
 				<ConfigRequests requests={configRequests} {now} />
 			{/if}
 		</div>
-	</section>
+	</div>
 
-	<section class="ignite" style="--ignite-delay: 2300ms">
+	<div class="ignite" style="--ignite-delay: 2300ms">
 		<p class="eyebrow mt-8">§3 · pr review queue</p>
 		<h2
 			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
@@ -502,16 +516,17 @@
 				<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
 			{/if}
 		</div>
+	</div>
 	</section>
 
-	<section class="ignite" style="--ignite-delay: 2700ms">
-		<p class="eyebrow mt-8">§3a · work surface</p>
-		<h2
-			class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'work surface', delay: 2850 }}
-		>
-			work surface
-		</h2>
+	<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
+		<div class="flex items-baseline justify-between gap-3">
+			<div>
+				<p class="eyebrow">§3 · corpus</p>
+				<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">work surface</h2>
+			</div>
+			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-stone-500'}">{surfaceError ?? (surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}</p>
+		</div>
 		<p class="mt-1 text-sm text-stone-400">
 			The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
 		</p>
