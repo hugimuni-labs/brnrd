@@ -1,4 +1,7 @@
-# Install
+---
+title: Install
+description: Install brnrd and verify a local coding-agent Runner.
+---
 
 brnrd needs Python 3.10 or newer, git, and at least one supported coding-agent
 CLI on `PATH`: Claude Code (`claude`), Codex (`codex`), or Gemini CLI
@@ -41,4 +44,4 @@ brnrd up --dev-reload
 
 ## Next
 
-Continue to [Connect](connect.md) and choose your door.
+Continue to [Connect](../connect/) and choose your door.
