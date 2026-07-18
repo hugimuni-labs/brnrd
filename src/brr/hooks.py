@@ -232,7 +232,7 @@ def format_delta(
 
     Short on purpose: it is woven into the agent's context every boundary,
     so it carries only what shifts attention — pending events, delivery
-    acks, budget pressure.
+    acks, budget pressure — plus the run's compact attested produce briefing.
 
     Two boundaries render *unconditionally* (``seed`` and ``stop``): the
     seed is the initial capsule, and the stop is the closeout capsule. At
@@ -262,6 +262,9 @@ def format_delta(
     )
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
     scm = payload.get("scm") if isinstance(payload.get("scm"), dict) else {}
+    produce = (
+        payload.get("produce") if isinstance(payload.get("produce"), dict) else {}
+    )
     card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
     resources = (
         payload.get("resources")
@@ -327,6 +330,48 @@ def format_delta(
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
+    # Produce is already attested by relics.py; the briefing only compresses
+    # it. It rides hook deltas that are rendering for an existing reason and
+    # is intentionally absent from the mid-run gate below, so committing work
+    # cannot manufacture an injection by itself.
+    produce_counts = (
+        produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
+    )
+    if produce.get("known") and any(
+        int(count or 0) > 0 for count in produce_counts.values()
+    ):
+        parts: list[str] = []
+        commit_count = int(produce_counts.get("commit", 0) or 0)
+        if commit_count:
+            commit_part = f"{commit_count} commit(s)"
+            if produce.get("latest_commit"):
+                commit_part += f" (latest {produce['latest_commit']})"
+            parts.append(commit_part)
+        branch_count = int(produce_counts.get("branch", 0) or 0)
+        if branch_count:
+            parts.append(
+                f"branch {produce['branch']}" if produce.get("branch")
+                else f"{branch_count} branch(es)"
+            )
+        pr_count = int(produce_counts.get("pr", 0) or 0)
+        if pr_count:
+            parts.append(
+                f"PR #{produce['pr']}" if produce.get("pr") is not None
+                else f"{pr_count} PR(s)"
+            )
+        for kind, label in (
+            ("kb", "kb page"),
+            ("issue", "issue"),
+            ("comment", "comment"),
+            ("message", "message"),
+            ("file", "file"),
+        ):
+            count = int(produce_counts.get(kind, 0) or 0)
+            if count:
+                suffix = "" if count == 1 else "s"
+                parts.append(f"{count} {label}{suffix}")
+        if parts:
+            lines.append("- produce: " + " · ".join(parts))
     # Affirmative-empty: an *addressed* run reaching closeout with nothing
     # communicated anywhere is suspicious, not silent — surface the absence at
     # the boundary, before the slot is gone. A warn, not a requirement: the

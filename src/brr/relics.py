@@ -51,6 +51,10 @@ from . import knowledge
 
 CONTROL_NAME = ".relics.jsonl"
 
+_LIVE_KINDS = {
+    "commit", "branch", "pr", "kb", "issue", "comment", "message", "file",
+}
+
 # A run that appends more than this is almost certainly looping, not
 # reporting produce; cap rather than let one bad run blow up every reader
 # downstream (ledger row, dashboard payload, chat card).
@@ -297,3 +301,66 @@ def counts_by_kind(relics: list[dict[str, Any]]) -> dict[str, int]:
             continue
         out[kind] = out.get(kind, 0) + 1
     return out
+
+
+def live_summary(
+    repo_root: Path,
+    *,
+    branch: str | None,
+    seed_ref: str | None,
+    outbox_dir: Path | None,
+) -> dict[str, Any]:
+    """Compile the run's attested produce for its live portal facet.
+
+    This deliberately projects the same auto-derived and resident-reported
+    records as closeout rather than creating a second accounting path.  It is
+    read on the heartbeat, so every failure collapses to an explicit unknown
+    facet instead of escaping into daemon liveness.
+    """
+    try:
+        root = Path(repo_root)
+        if not root.is_dir():
+            return {"known": False}
+        records = derive_auto(
+            root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
+        ) + read_reported(outbox_dir)
+
+        # A .pr number is useful live even when forge URL derivation cannot
+        # inspect a remote.  derive_auto includes it in the normal case; add
+        # the same attested control record only when that path degraded.
+        if not any(record.get("kind") == "pr" for record in records):
+            pr_control = _read_pr_control(outbox_dir)
+            if pr_control:
+                records.append({"kind": "pr", "number": int(pr_control)})
+
+        latest_commit = next(
+            (
+                str(record["sha"])
+                for record in records
+                if record.get("kind") == "commit" and record.get("sha")
+            ),
+            None,
+        )
+        pr_number = None
+        for record in records:
+            if record.get("kind") != "pr" or not record.get("number"):
+                continue
+            try:
+                pr_number = int(record["number"])
+            except (TypeError, ValueError):
+                continue
+            break
+        counts = {
+            kind: count
+            for kind, count in counts_by_kind(records).items()
+            if kind in _LIVE_KINDS
+        }
+        return {
+            "known": True,
+            "counts": counts,
+            "latest_commit": latest_commit,
+            "branch": branch,
+            "pr": pr_number,
+        }
+    except Exception:
+        return {"known": False}
