@@ -1839,13 +1839,25 @@ def _run_worker(
     task.meta["outbox_path"] = str(outbox_dir)
     task.meta.update(branch_plan.meta_items())
 
+    # Wyrd §3, worker thread isolation: a worker-stack child talks to its
+    # dispatcher and its dispatchees, nobody else. It gets its contract
+    # (the event body) and any parent messages — not the user thread's
+    # recent turns, history, or burst siblings. The agenda-lock pitfall
+    # (a worker following the thread's hottest topic instead of its
+    # contract, and once forging a receipt from a sibling's SHA riding
+    # the decoration, both caught live 2026-07) retires at the daemon
+    # instead of by prompt discipline.
+    is_worker_run = bool(event.get("worker"))
     event_body_for_prompt = event.get("body", "") or ""
-    woven_body, woven_sibling_ids = _weave_burst_siblings_into_body(
-        inbox_dir,
-        event,
-        cfg,
-        correspondent_key=correspondent_key,
-        conversation_key=conv_key,
+    woven_body, woven_sibling_ids = (
+        (None, set()) if is_worker_run
+        else _weave_burst_siblings_into_body(
+            inbox_dir,
+            event,
+            cfg,
+            correspondent_key=correspondent_key,
+            conversation_key=conv_key,
+        )
     )
     if woven_body:
         event_body_for_prompt = woven_body
@@ -1938,7 +1950,7 @@ def _run_worker(
             brr_dir, brr_dir / "runs" / task.id / "history",
             conv_key, correspondent_key,
         )
-        if conv_key else []
+        if conv_key and not is_worker_run else []
     )
     communication_snapshot = (
         conversations.build_communication_snapshot(
@@ -1950,7 +1962,7 @@ def _run_worker(
             recent_limit=prompts.RECENT_CONVERSATION_MAX,
             history_groups=history_groups,
         )
-        if conv_key else None
+        if conv_key and not is_worker_run else None
     )
     if communication_snapshot is not None:
         # Forge-state facet (co-maintainer §5, #113): the resident's
@@ -1986,7 +1998,7 @@ def _run_worker(
             ev for ev in pending_events_snapshot
             if str(ev.get("id") or "") not in woven_sibling_ids
         ]
-    _write_live_inbox(outbox_dir, inbox_dir, eid)
+    _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
 
     # Other thoughts awake right now (presence registry), excluding this
     # one — so the resident knows it may share the dominion with a
@@ -2405,7 +2417,7 @@ def _run_worker(
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
-            _write_live_inbox(outbox_dir, inbox_dir, eid)
+            _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
                 outbox_dir,
                 inbox_dir,
@@ -2457,7 +2469,7 @@ def _run_worker(
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
-            _write_live_inbox(outbox_dir, inbox_dir, eid)
+            _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
                 outbox_dir,
                 inbox_dir,
@@ -2539,7 +2551,7 @@ def _run_worker(
             )
         _drain_agent_card(emit, task, eid, card_path, card_state)
         _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
-        _write_live_inbox(outbox_dir, inbox_dir, eid)
+        _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
         _write_live_portal_state(
             outbox_dir,
             inbox_dir,
@@ -3164,6 +3176,8 @@ def _pending_event_record(ev: dict) -> dict[str, object]:
 def _pending_events_for_agent(
     inbox_dir: Path,
     current_event_id: str,
+    *,
+    worker: bool = False,
 ) -> list[dict[str, object]]:
     """Return other waiting events the resident may fold in.
 
@@ -3186,6 +3200,15 @@ def _pending_events_for_agent(
             continue
         if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
             continue
+        # Dispatch-edge traffic (wyrd §3): a `to:` message is visible only
+        # to the child it addresses — never to the resident's own view.
+        edge_target = str(ev.get("spawn_message_for_event") or "")
+        if edge_target and edge_target != current_event_id:
+            continue
+        # A worker-stack run sees only its own edge traffic — the user
+        # thread's pending events belong to its dispatcher, not to it.
+        if worker and not edge_target:
+            continue
         events.append(_pending_event_record(ev))
     return events
 
@@ -3194,6 +3217,8 @@ def _write_live_inbox(
     outbox_dir: Path | None,
     inbox_dir: Path,
     current_event_id: str,
+    *,
+    worker: bool = False,
 ) -> Path | None:
     """Refresh the live inbox view exposed to the running resident.
 
@@ -3210,7 +3235,9 @@ def _write_live_inbox(
             "generated_at": time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "current_event": current_event_id,
-            "events": _pending_events_for_agent(inbox_dir, current_event_id),
+            "events": _pending_events_for_agent(
+                inbox_dir, current_event_id, worker=worker,
+            ),
         }
         path = outbox_dir / _LIVE_INBOX_NAME
         protocol._atomic_write(
@@ -3524,7 +3551,10 @@ def _write_live_portal_state(
         return None
     try:
         outbox_dir.mkdir(parents=True, exist_ok=True)
-        events = _pending_events_for_agent(inbox_dir, current_event_id)
+        events = _pending_events_for_agent(
+            inbox_dir, current_event_id,
+            worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
+        )
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
         pending_files = _outbox_message_files(outbox_dir)
@@ -4042,6 +4072,91 @@ def _retire_spawn_control(spawn_event_id: str) -> None:
         _spawn_controls.pop(spawn_event_id, None)
 
 
+def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
+    """Retire unconsumed parent→child messages once the child is over.
+
+    A ``to:`` message exists only for the addressed child's lifetime — it
+    is edge traffic, not a dispatchable event. Whatever the child did not
+    fold in dies with it; leaving it pending would leak a permanently
+    invisible event (every view filters it to a run that no longer exists).
+    """
+    if inbox_dir is None or not spawn_event_id:
+        return
+    for ev in protocol.list_pending(inbox_dir):
+        if str(ev.get("spawn_message_for_event") or "") == spawn_event_id:
+            protocol.set_status(ev, "done")
+
+
+def _queue_child_message(
+    emit: _WorkerEmit,
+    task: Run,
+    inbox_dir: Path | None,
+    event_id: str,
+    fm: dict,
+    body: str,
+    outbox_dir: Path | None = None,
+) -> bool:
+    """Handle a ``to: <id>`` outbox directive (wyrd §3, the message verb).
+
+    Parent→child traffic along the dispatch edge: an inbox event only the
+    addressed worker sees (its ``inbox.json`` / portal-state; every other
+    view filters it out, and it never dispatches a run of its own). The
+    child folds it into its work — it is a steer, not a new contract, and
+    not an event the child should ``event:``-address. Ownership-checked
+    like ``stop:``; refusals land in ``portal-state.json → notices``.
+    """
+    target = str(fm.get("to") or "").strip()
+    if not target:
+        _record_outbox_notice(outbox_dir, "message dropped: no target run/event id")
+        return False
+    if not body.strip():
+        _record_outbox_notice(outbox_dir, f"message to {target!r} dropped: empty body")
+        return False
+    control = _find_spawn_control(target)
+    if control is None:
+        _record_outbox_notice(
+            outbox_dir,
+            f"message refused: {target!r} matches no live concurrent spawn "
+            "(already finished, never dispatched here, or the id is wrong)",
+        )
+        return False
+    if str(control.get("parent_run_id")) != task.id:
+        _record_outbox_notice(
+            outbox_dir,
+            f"message refused: {target!r} was not dispatched by this run — "
+            "a run messages only its own dispatchees (kb/design-wyrd.md §3)",
+        )
+        return False
+    if control.get("stopped"):
+        _record_outbox_notice(
+            outbox_dir,
+            f"message refused: {target!r} is being stopped",
+        )
+        return False
+    if inbox_dir is None:
+        _record_outbox_notice(outbox_dir, "message dropped: no inbox to queue into")
+        return False
+    spawn_event_id = str(control["event_id"])
+    new_path = protocol.create_event(
+        inbox_dir,
+        "dispatch_message",
+        body.strip(),
+        spawn_message_for_event=spawn_event_id,
+        spawn_message_for_run=str(control.get("run_id") or ""),
+        spawn_message_from_run=task.id,
+    )
+    print(f"[brnrd] outbox: message to {target} ({new_path.stem}) by {task.id}")
+    emit(
+        "spawn_message",
+        run_id=task.id,
+        event_id=event_id,
+        spawn_event_id=spawn_event_id,
+        message_event_id=new_path.stem,
+        target=target,
+    )
+    return True
+
+
 def _queue_stop_request(
     emit: _WorkerEmit,
     task: Run,
@@ -4099,6 +4214,7 @@ def _queue_stop_request(
             # Never dispatched: cancel the inbox event so it never starts,
             # and post the completion note ourselves — no future, no reap.
             protocol.set_status(pending, "cancelled")
+            _retire_child_messages(inbox_dir, spawn_event_id)
             stage = "cancelled-before-start"
             if not already_stopped:
                 try:
@@ -4406,6 +4522,28 @@ def _drain_outbox(
                     )
                 if stats is not None:
                     stats["spawn"] = stats.get("spawn", 0) + 1
+            _retire_outbox_staging(fpath)
+            continue
+        if str(fm.get("to") or "").strip():
+            handled = _queue_child_message(
+                emit, task, inbox_dir, event_id, fm, body, outbox_dir,
+            )
+            if handled:
+                promoted += 1
+                message_path = _stage_outbound(
+                    task, account_context,
+                    body=body,
+                    kind="dispatch",
+                    target_gate="spawn-message",
+                    source_ref=str(fpath),
+                )
+                if message_path:
+                    message_store.transition(
+                        message_path, message_store.DELIVERED,
+                        gate="dispatch", platform_message_id="spawn-message-event",
+                    )
+                if stats is not None:
+                    stats["spawn_message"] = stats.get("spawn_message", 0) + 1
             _retire_outbox_staging(fpath)
             continue
         if str(fm.get("stop") or "").strip():
@@ -6326,8 +6464,11 @@ def start(
                         _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
                     if spawn["event"] is not None:
                         # The child is over; its dispatch-edge control (and
-                        # with it, stoppability) retires with it.
-                        _retire_spawn_control(str(spawn["event"].get("id") or ""))
+                        # with it, stoppability) retires with it, as does any
+                        # unconsumed parent→child message traffic.
+                        spawn_eid = str(spawn["event"].get("id") or "")
+                        _retire_spawn_control(spawn_eid)
+                        _retire_child_messages(spawn["inbox_dir"], spawn_eid)
                 active_spawns = still_running
 
             # Quiescent reload: only re-exec between thoughts, so a
@@ -6517,7 +6658,11 @@ def start(
             burst_hold = 0.0
             if current is None and not reload_requested:
                 pending = [
-                    t for t in (scanned or []) if not t.event.get("spawn_immediate")
+                    t for t in (scanned or [])
+                    if not t.event.get("spawn_immediate")
+                    # Edge traffic (`to:` messages) is injected into a live
+                    # child's views, never dispatched as its own thought.
+                    and not t.event.get("spawn_message_for_event")
                 ]
                 if pending:
                     pending = _handle_daemon_control_events(
