@@ -102,6 +102,7 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(fake_home))
     for name in envs._DOCKER_DEFAULT_PASSTHROUGH_ENV:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(
         envs.subprocess,
         "run",
@@ -1039,6 +1040,27 @@ def test_docker_gh_token_overrides_gate_and_github_token(tmp_path, monkeypatch):
 
     passed = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
     assert "GH_TOKEN" in passed
+    assert "GITHUB_TOKEN" not in passed
+    assert not any(value.startswith("GITHUB_TOKEN=") for value in passed)
+
+
+def test_docker_managed_app_token_overrides_human_credentials(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "human-env-token")
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-installation-token")
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "human-gate-token"}', encoding="utf-8",
+    )
+
+    task = Run(id="task-app", event_id="evt-app", body="publish", source="telegram")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    passed = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
+    assert "GH_TOKEN=app-installation-token" in passed
     assert "GITHUB_TOKEN" not in passed
     assert not any(value.startswith("GITHUB_TOKEN=") for value in passed)
 
