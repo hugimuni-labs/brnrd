@@ -489,20 +489,18 @@ def work_surface_path(ctx: AccountContext) -> Path:
     return context_home_root(ctx) / SURFACE_PATH
 
 
-def work_surface_files(ctx: AccountContext) -> list[Path]:
-    """Return authored Markdown files in stable orientation order.
+def _discover_markdown(root: Path) -> list[Path]:
+    """Enumerate hardened Markdown files anywhere under *root* (unsorted).
 
-    ``index.md`` leads when present; every other path sorts by its
-    home-relative name. Symlinks and hidden paths are excluded so a page cannot
-    turn the local-home mirror into an arbitrary filesystem reader.
+    Shared by the authored surface and the knowledge/replies corpus layers so
+    all three carry one hardening rule. ``os.walk`` runs with
+    ``followlinks=False`` (the default) so a symlinked *directory* cannot
+    smuggle an outside tree into the local-home mirror; file symlinks and
+    hidden paths are excluded below for the same reason.
     """
 
-    root = work_surface_path(ctx)
     if not root.is_dir():
         return []
-    # os.walk with followlinks=False (the default) so a symlinked *directory*
-    # cannot smuggle an outside tree into the mirror; file symlinks and hidden
-    # paths are excluded below for the same reason.
     files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
@@ -512,7 +510,73 @@ def work_surface_files(ctx: AccountContext) -> list[Path]:
             path = Path(dirpath) / name
             if path.is_file() and not path.is_symlink():
                 files.append(path)
+    return files
+
+
+def work_surface_files(ctx: AccountContext) -> list[Path]:
+    """Return authored Markdown files in stable orientation order.
+
+    ``index.md`` leads when present; every other path sorts by its
+    home-relative name. Symlinks and hidden paths are excluded so a page cannot
+    turn the local-home mirror into an arbitrary filesystem reader.
+    """
+
+    root = work_surface_path(ctx)
+    files = _discover_markdown(root)
     return sorted(files, key=lambda path: (path.name != "index.md", path.relative_to(root).as_posix()))
+
+
+# ── Unified corpus: the authored surface joined with home knowledge ──
+#
+# The dashboard renders one navigable corpus, not three disconnected trees:
+# the authored *surface* links kb *knowledge* pages link archived *replies*.
+# The two git repos (the dominion and the nested brnrd-knowledge clone) stay
+# separate — that split is the privacy/ACL boundary. The join happens here at
+# discovery, and downstream at render. Every path is *home-relative*
+# (``surface/index.md``, ``knowledge/repos/<slug>/foo.md``,
+# ``knowledge/replies/<slug>/run-x.md``) so a relative link authored in one
+# layer resolves into another with no rewrite.
+
+CORPUS_LAYERS = ("authored", "knowledge", "replies")
+
+
+@dataclass(frozen=True)
+class CorpusFile:
+    """One discovered Markdown page in the unified corpus."""
+
+    layer: str  # one of CORPUS_LAYERS
+    path: str  # home-relative posix path
+    abspath: Path
+
+
+def corpus_files(ctx: AccountContext) -> list[CorpusFile]:
+    """Enumerate the navigable corpus across the authored + knowledge layers.
+
+    Layers appear in reading order — authored, then knowledge, then replies —
+    and within a layer ``index.md`` leads, then home-relative name order
+    (matching :func:`work_surface_files`). Same hardening as the authored
+    surface: no symlinked dirs/files, no hidden paths, ``.md`` only.
+    """
+
+    home = context_home_root(ctx)
+    knowledge = knowledge_path(ctx)
+    roots = (
+        ("authored", work_surface_path(ctx)),
+        ("knowledge", knowledge / REPOS_PATH),
+        ("replies", knowledge / REPLIES_PATH),
+    )
+    result: list[CorpusFile] = []
+    for layer, root in roots:
+        entries: list[CorpusFile] = []
+        for abspath in _discover_markdown(root):
+            try:
+                rel = abspath.relative_to(home).as_posix()
+            except ValueError:
+                continue  # a root outside home (never expected) is not corpus
+            entries.append(CorpusFile(layer=layer, path=rel, abspath=abspath))
+        entries.sort(key=lambda f: (Path(f.path).name != "index.md", f.path))
+        result.extend(entries)
+    return result
 
 
 def _contains_no_files(root: Path) -> bool:
