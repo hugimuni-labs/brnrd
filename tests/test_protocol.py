@@ -109,13 +109,52 @@ class TestParseOutboxMessage:
         assert meta == {}
         assert body == text
 
-    def test_routing_selector_without_fence_stays_body(self):
-        # No closing ``---`` → not confident it's frontmatter; leave intact
-        # rather than guess an event id out of prose.
+    def test_routing_selector_leading_prose_stays_body(self):
+        # A routing key leading a prose value (spaces) is not a selector;
+        # leave intact rather than guess an event id out of prose.
         text = "event: the meeting is moved\nsee you there\n"
         meta, body = protocol.parse_outbox_message(text)
         assert meta == {}
         assert body == text
+
+    def test_routing_selector_leading_prose_with_blank_stays_body(self):
+        # Same guard across a blank line: the token test, not the
+        # terminator shape, is what decides.
+        text = "event: the meeting is moved\n\nsee you there\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_lenient_blank_line_terminated_block(self):
+        # Found live 2026-07-18: ``event: <id>`` + blank line + body — the
+        # natural Markdown shape — used to degrade silently to a
+        # current-thread message with the selector leaked as prose.
+        meta, body = protocol.parse_outbox_message(
+            "event: evt-9\n\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
+
+    def test_lenient_blank_line_terminated_spawn_block(self):
+        meta, body = protocol.parse_outbox_message(
+            "spawn: true\nshell: codex\ncore: gpt-5.6-terra\n\n# Task: do the thing\n\ndetails\n")
+        assert meta == {"spawn": True, "shell": "codex", "core": "gpt-5.6-terra"}
+        assert body == "# Task: do the thing\n\ndetails\n"
+
+    def test_lenient_heading_terminated_block(self):
+        # A validated selector followed directly by a heading: the block
+        # ends where the kv-lines do; nothing leaks, nothing is dropped.
+        meta, body = protocol.parse_outbox_message(
+            "spawn: true\n# Task: sweep\nprose\n")
+        assert meta == {"spawn": True}
+        assert body == "# Task: sweep\nprose\n"
+
+    def test_lenient_blank_then_fence_still_fences(self):
+        # A blank line between the kv-block and its ``---`` fence: the
+        # fence still terminates, and never leaks into the body.
+        meta, body = protocol.parse_outbox_message(
+            "event: evt-9\n\n---\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
 
 
 class TestEvents:
