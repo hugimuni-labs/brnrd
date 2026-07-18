@@ -35,6 +35,7 @@ PHASES = (
     "delivered",
     "failed",
     "conflict",
+    "stopped",
 )
 
 STATES = ("active", "succeeded", "failed")
@@ -59,6 +60,7 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "done": "delivered",
     "failed": "failed",
     "conflict": "conflict",
+    "stopped": "stopped",
     # ``card_composed`` annotates the card body but does not advance the
     # phase — it can land in any phase (preparing, running, finalizing)
     # while the resident narrates what it is doing.
@@ -69,6 +71,10 @@ _TERMINAL_STATE: dict[str, str] = {
     "done": "succeeded",
     "failed": "failed",
     "conflict": "failed",
+    # A parent-issued `stop:` (wyrd §3). Not a success, and the run
+    # delivered nothing — "failed" state keeps every ended-without-
+    # delivery consumer honest; the "stopped" phase carries the why.
+    "stopped": "failed",
 }
 
 
@@ -226,7 +232,7 @@ def _latest_run_id(records: list[dict[str, Any]]) -> str | None:
     return None
 
 
-_TERMINAL_PHASE_NAMES = {"delivered", "failed", "conflict"}
+_TERMINAL_PHASE_NAMES = {"delivered", "failed", "conflict", "stopped"}
 
 
 def _open_phase(view: RunProgressView, name: str, ts: str | None,
@@ -536,6 +542,13 @@ def _project(
         elif ptype == "attending":
             view.detail = str(record.get("reason") or "attending").strip()
             _open_phase(view, "attending", ts)
+        elif ptype == "stopped":
+            view.state = "failed"
+            view.failure_kind = "stopped"
+            stopped_by = str(record.get("stopped_by") or "").strip()
+            view.detail = (
+                f"stopped by {stopped_by}" if stopped_by else "stopped by parent"
+            )
         elif ptype == "failed":
             view.state = "failed"
             stage = record.get("stage")
