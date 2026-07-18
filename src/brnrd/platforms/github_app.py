@@ -87,7 +87,14 @@ def list_installation_repositories(settings, installation_id: str) -> list[dict[
     return repos
 
 
-def invite_collaborator(settings, installation_id: str, repo_full_name: str, username: str, *, permission: str = "triage") -> dict[str, Any]:
+def invite_collaborator(
+    settings,
+    installation_id: str,
+    repo_full_name: str,
+    username: str,
+    *,
+    permission: str = "push",
+) -> dict[str, Any]:
     """Invite a GitHub user as a repository collaborator using the App installation.
 
     This is for the human-facing bot user identity such as ``brnrd-bot``. It is
