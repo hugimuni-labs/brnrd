@@ -15,8 +15,29 @@ export interface FuelRow {
 	label: string;
 	percent: number | null;
 	percentLabel: string;
+	/** Compact time-to-reset, e.g. `4d2h` / `3h50m` / `47m`. */
+	resetShort: string | null;
+	/** Fraction of this window already elapsed (0..1), for the time track. */
+	timeFraction: number | null;
 	tooltip: string;
 	stale: boolean;
+}
+
+/** Known window lengths by compact name; a window we can't size renders
+ *  its countdown text but no elapsed track (never a fabricated fraction). */
+const WINDOW_DURATION_S: Record<string, number> = {
+	'5h': 5 * 3600,
+	week: 7 * 86400
+};
+
+function shortDelta(seconds: number): string {
+	const s = Math.max(0, Math.floor(seconds));
+	const d = Math.floor(s / 86400);
+	const h = Math.floor((s % 86400) / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	if (d > 0) return `${d}d${h}h`;
+	if (h > 0) return `${h}h${m}m`;
+	return `${m}m`;
 }
 
 /**
@@ -75,7 +96,7 @@ function resetLabel(window: QuotaWindow): string | null {
  * the very next report, while model-specific weekly pools still read as their
  * model (for example `fable · week`) instead of a misleading shell duplicate.
  */
-export function fuelRows(shells: QuotaShell[]): FuelRow[] {
+export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): FuelRow[] {
 	return shells.flatMap((shell) =>
 		shell.windows.map((window, index) => {
 			const compact = compactWindowName(window);
@@ -88,11 +109,28 @@ export function fuelRows(shells: QuotaShell[]): FuelRow[] {
 			const label = `${owner} · ${compact.window}`;
 			const reset = resetLabel(window);
 
+			// Reset visibility (2026-07-18 ask): the fuel bar answers "how
+			// much is left", the countdown + time track answer "how long
+			// until it refills". Both derive from `resets_at`; a report
+			// without it (older daemon) keeps the bar and drops the clock.
+			const secondsLeft =
+				window.resets_at === null || window.resets_at === undefined
+					? null
+					: window.resets_at - nowMs / 1000;
+			const resetShort = secondsLeft === null ? null : shortDelta(secondsLeft);
+			const duration = WINDOW_DURATION_S[compact.window];
+			const timeFraction =
+				secondsLeft === null || !duration
+					? null
+					: Math.max(0, Math.min(1, 1 - secondsLeft / duration));
+
 			return {
 				id: `${shell.shell}:${window.label}:${index}`,
 				label,
 				percent,
 				percentLabel,
+				resetShort,
+				timeFraction,
 				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}`,
 				stale: shell.status === 'stale'
 			};
