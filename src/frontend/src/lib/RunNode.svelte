@@ -28,9 +28,17 @@
 		/** Ledger rows for this run, or null while the receipt is still loading. */
 		ledgerRows?: RunLedgerRow[] | null;
 		ledgerStale?: boolean;
+		ledgerError?: string | null;
 	}
 
-	let { data, repoSlug, runId, ledgerRows = null, ledgerStale = false }: Props = $props();
+	let {
+		data,
+		repoSlug,
+		runId,
+		ledgerRows = null,
+		ledgerStale = false,
+		ledgerError = null
+	}: Props = $props();
 
 	let node = $derived(runNodeFromSurface(data, repoSlug, runId));
 	let frame = $derived(node.state ? frontmatterDocument(node.state.markdown) : null);
@@ -87,6 +95,10 @@
 		<h2 id="receipt-heading" class="sr-only">ledger receipt</h2>
 		{#if ledgerRows === null}
 			<p class="panel p-4 font-mono text-xs text-stone-500">reading the ledger…</p>
+		{:else if ledgerError}
+			<p class="panel p-4 text-sm text-stone-500">
+				Ledger receipt unavailable — {ledgerError}. The mirrored run node remains readable below.
+			</p>
 		{:else if ledgerRows.length > 0}
 			<RunLedgerReceipt rows={ledgerRows} stale={ledgerStale} />
 		{:else}
@@ -185,7 +197,8 @@
 			</div>
 			{#if node.messages.length === 0}
 				<div class="panel mt-2 p-4 text-sm text-stone-500">
-					No receipted messages — this run spoke only through its terminal reply, or not at all.
+					No receipted messages are present. This run may predate the message store or have
+					produced no deliverable traffic.
 				</div>
 			{:else}
 				<div class="mt-2 space-y-2">
