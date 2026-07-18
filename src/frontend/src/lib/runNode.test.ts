@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	dispatchEdges,
 	frameFields,
 	frontmatterDocument,
 	messageInstant,
@@ -189,4 +190,59 @@ test('messageTarget and messageInstant read the frontmatter the store actually w
 	assert.equal(messageInstant({ created_at: 'a', delivered_at: 'b' }), 'b');
 	assert.equal(messageInstant({ created_at: 'a' }), 'a');
 	assert.equal(messageInstant({}), '');
+});
+
+test('dispatch edges link only to neighbours the corpus actually mirrors', () => {
+	const mirrored = new Set(['runs/Gurio__brr/run-parent/state.md']);
+	const edges = dispatchEdges(
+		{
+			source: 'spawn',
+			parent_run_id: 'run-parent',
+			child_run_ids: 'run-parent, run-ghost'
+		},
+		'Gurio__brr',
+		mirrored
+	);
+
+	assert.equal(edges.origin, '');
+	assert.deepEqual(edges.parent, { runId: 'run-parent', href: '/runs/Gurio__brr/run-parent' });
+	// A real edge whose node is not in this snapshot is named, not linked.
+	assert.deepEqual(edges.children, [
+		{ runId: 'run-parent', href: '/runs/Gurio__brr/run-parent' },
+		{ runId: 'run-ghost', href: null }
+	]);
+});
+
+test('a run with no parent names its non-run dispatcher instead', () => {
+	assert.equal(
+		dispatchEdges({ source: 'schedule' }, 'Gurio__brr', new Set()).origin,
+		'a scheduled wake'
+	);
+	assert.equal(
+		dispatchEdges(
+			{ source: 'telegram', conversation_key: 'telegram:155783668:' },
+			'Gurio__brr',
+			new Set()
+		).origin,
+		'telegram:155783668:'
+	);
+	assert.equal(
+		dispatchEdges({ source: 'github' }, 'Gurio__brr', new Set()).origin,
+		'the github thread'
+	);
+	// Nothing recorded stays nothing — no invented origin.
+	const bare = dispatchEdges({}, 'Gurio__brr', new Set());
+	assert.equal(bare.origin, '');
+	assert.equal(bare.parent, null);
+	assert.deepEqual(bare.children, []);
+});
+
+test('edge fields are lifted out of the generic frame list, not duplicated', () => {
+	const labels = frameFields({
+		status: 'done',
+		parent_run_id: 'run-parent',
+		child_run_ids: 'run-child'
+	}).map((field) => field.label);
+
+	assert.deepEqual(labels, ['status']);
 });
