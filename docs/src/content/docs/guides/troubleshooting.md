@@ -1,4 +1,7 @@
-# Troubleshooting
+---
+title: Troubleshooting
+description: Diagnose the daemon, gates, Runners, updates, and service lifecycle.
+---
 
 ## Is the daemon running?
 
