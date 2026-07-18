@@ -1603,7 +1603,7 @@ def _account_context_for_policy(tmp_path):
         dominion_repo=home,
         dispatch_inbox=home / "dispatch" / "inbox",
         responses_dir=home / "dispatch" / "responses",
-        run_state_dir=home / "run-state",
+        runs_dir=home / "runs",
         repos={},
         default_repo=daemon.account.AccountRepo(label="Gurio/brr", root=tmp_path),
     )
@@ -3700,7 +3700,7 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
         stage="created",
     )
 
-    assert path == ctx.run_state_dir / "Gurio__brr" / "run-state.md"
+    assert path == ctx.runs_dir / "Gurio__brr" / "run-state" / "state.md"
     text = path.read_text(encoding="utf-8")
     assert "run_id: run-state" in text
     assert "repo_label: Gurio/brr" in text
@@ -3711,6 +3711,35 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     # remote on the dominion there is no web URL to surface yet.
     assert task.meta["run_state_path"] == str(path)
     assert "run_state_url" not in task.meta
+
+
+def test_run_body_captures_the_resident_card_without_daemon_prose(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-body", event_id="evt-body", body="build it", source="telegram")
+    card = tmp_path / ".card"
+    body = "## Now\n\nTesting.\n\n## Arc\n\nThe resident wrote this.\n"
+    card.write_text(body, encoding="utf-8")
+
+    path = daemon._persist_run_body(
+        ctx, task, repo_label="Gurio/brr", card_path=card,
+    )
+
+    assert path == ctx.runs_dir / "Gurio__brr" / "run-body" / "body.md"
+    assert path.read_text(encoding="utf-8") == body
+    assert task.meta["run_body_path"] == str(path)
+
+
+def test_card_now_projection_keeps_the_full_body_off_the_live_card():
+    body = "## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story."
+
+    assert daemon._card_now_projection(body) == "Driving tests."
+    assert daemon._card_now_projection("Plain legacy note") == "Plain legacy note"
 
 
 def test_boot_janitor_reaps_only_provably_dead_running_state_docs(tmp_path):

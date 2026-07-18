@@ -14,12 +14,12 @@ export interface SurfaceResponse {
 }
 
 // Reading order for the corpus browser: what the resident authored, then the
-// knowledge it curated, then the run replies that knowledge archives.
-export const LAYER_ORDER = ['authored', 'knowledge', 'replies'] as const;
+// knowledge it curated, then the complete run nodes in home.
+export const LAYER_ORDER = ['authored', 'knowledge', 'runs'] as const;
 export const LAYER_LABELS: Record<string, string> = {
 	authored: 'surface',
 	knowledge: 'knowledge',
-	replies: 'replies'
+	runs: 'runs'
 };
 
 export interface LayerGroup {
@@ -64,13 +64,13 @@ export function basename(path: string): string {
 // Collapsible sub-directory key within a layer's nav section. Derive this from
 // the mirrored path instead of prescribing the corpus' free-form directories:
 // knowledge/repos/Gurio__brr/page.md -> repos/Gurio__brr
-// knowledge/replies/Gurio__brr/run.md -> Gurio__brr
+// runs/Gurio__brr/run-id/body.md -> Gurio__brr/run-id
 // Authored pages intentionally remain a small flat menu.
 function fileDir(path: string, layer: string): string | null {
 	if (layer === 'authored') return null;
 	const prefixes: Record<string, string[]> = {
 		knowledge: ['knowledge'],
-		replies: ['knowledge', 'replies']
+		runs: ['runs']
 	};
 	const parts = path.split('/');
 	const prefix = prefixes[layer] ?? [];
@@ -97,7 +97,7 @@ export interface NavLayer {
 	layer: string;
 	label: string;
 	count: number;
-	// knowledge and replies layers group files into collapsible dirs;
+	// knowledge and runs layers group files into collapsible dirs;
 	// authored renders as a flat list (dirs === null).
 	dirs: NavDir[] | null;
 	flatFiles: SurfaceFile[];
@@ -106,7 +106,7 @@ export interface NavLayer {
 /** Build the collapsible nav tree from the flat corpus file list. */
 export function buildNavTree(files: SurfaceFile[]): NavLayer[] {
 	return groupByLayer(files).map(({ layer, label, files: layerFiles }) => {
-		const useDirs = layer === 'knowledge' || layer === 'replies';
+		const useDirs = layer === 'knowledge' || layer === 'runs';
 		if (!useDirs) {
 			return { layer, label, count: layerFiles.length, dirs: null, flatFiles: layerFiles };
 		}
