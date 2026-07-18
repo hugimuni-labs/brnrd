@@ -1,0 +1,142 @@
+<script lang="ts">
+	// The run node as the selected loom frame's content, rather than a page you
+	// leave the loom to reach (maintainer, 2026-07-19: "let's keep the loom as
+	// the spine"). Same composition as `RunNode.svelte`, same corpus response
+	// already on this page — but a *targeted* read: the run's `## Now`, its
+	// vitals, and a count. Everything heavier sits behind one expand, and the
+	// standalone `/runs/...` page stays the addressable deep link.
+	import MarkdownContent from './MarkdownContent.svelte';
+	import {
+		messageInstant,
+		messageTarget,
+		messageTone,
+		nodeDigest,
+		runNodeFromSurface
+	} from './runNode';
+	import type { SurfaceResponse } from './surface';
+
+	interface Props {
+		data: SurfaceResponse | null;
+		repoSlug: string;
+		runId: string;
+		href: string;
+	}
+
+	let { data, repoSlug, runId, href }: Props = $props();
+
+	let expanded = $state(false);
+	let node = $derived(data ? runNodeFromSurface(data, repoSlug, runId) : null);
+	let digest = $derived(node ? nodeDigest(node) : null);
+	let knownPaths = $derived(new Set((data?.files ?? []).map((file) => file.path)));
+
+	const TONE_CLASS: Record<string, string> = {
+		delivered: 'text-emerald-400/80',
+		pending: 'text-amber-400',
+		undeliverable: 'text-red-400',
+		unknown: 'text-stone-500'
+	};
+
+	function instantLabel(raw: string): string {
+		if (!raw) return '';
+		const timestamp = Date.parse(raw);
+		return Number.isNaN(timestamp) ? raw : new Date(timestamp).toLocaleTimeString();
+	}
+</script>
+
+{#if data === null}
+	<p class="panel p-3 font-mono text-[11px] text-stone-500">reading the corpus…</p>
+{:else if !digest?.mirrored}
+	<!-- Not every selected run has a node: the corpus republishes on change, and
+	     runs that closed before the weld never had one. Say so quietly here —
+	     this is a supporting panel, not the page that owes a full explanation. -->
+	<p class="panel p-3 font-mono text-[11px] text-stone-500">
+		no run node mirrored for this run yet
+	</p>
+{:else}
+	<div class="panel p-3">
+		<div
+			class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-stone-800 pb-2 font-mono text-[10px]"
+		>
+			<span class="min-w-0 truncate tracking-wide text-amber-200 uppercase">
+				run node{digest.stage ? ` · ${digest.stage}` : ''}
+			</span>
+			<span class="shrink-0 text-stone-500">
+				{digest.status || 'unknown'}{digest.runner ? ` · ${digest.runner}` : ''}
+			</span>
+		</div>
+
+		{#if digest.now}
+			<div class="text-sm text-stone-300">
+				<MarkdownContent markdown={digest.now} sourcePath={node?.body?.path ?? ''} {knownPaths} />
+			</div>
+		{:else}
+			<p class="mt-2 font-mono text-[11px] text-stone-500">
+				{digest.status === 'running' ? 'no card written yet' : 'this run wrote no card'}
+			</p>
+		{/if}
+
+		<div class="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+			<div class="flex items-baseline gap-3 font-mono text-[10px]">
+				{#if digest.hasMore}
+					<button
+						type="button"
+						class="cursor-pointer tracking-wide text-stone-500 uppercase hover:text-stone-300"
+						onclick={() => (expanded = !expanded)}
+					>
+						{expanded ? '▾ less' : '▸ more'}
+					</button>
+				{/if}
+				<span class="text-stone-600">
+					{digest.messageCount} message{digest.messageCount === 1 ? '' : 's'}
+				</span>
+			</div>
+			<a
+				{href}
+				class="shrink-0 font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+			>
+				full node →
+			</a>
+		</div>
+
+		{#if expanded}
+			<!-- The expand is where following costs something: the rest of the
+			     body, and the run's own traffic with its receipts. Kept inside
+			     the frame so the band never scrolls out from under the reader. -->
+			<div class="mt-3 space-y-3 border-t border-stone-800 pt-3">
+				{#if node?.body && digest.now !== node.body.markdown.trim()}
+					<div class="text-sm text-stone-300">
+						<MarkdownContent
+							markdown={node.body.markdown}
+							sourcePath={node.body.path}
+							{knownPaths}
+						/>
+					</div>
+				{/if}
+				{#each node?.messages ?? [] as message (message.file.path)}
+					{@const tone = messageTone(message.metadata.status)}
+					{@const target = messageTarget(message.metadata)}
+					<article class="border-l border-stone-800 pl-3">
+						<div
+							class="flex flex-wrap items-baseline justify-between gap-x-3 font-mono text-[10px]"
+						>
+							<span class="min-w-0 truncate text-amber-200/80">
+								{message.metadata.kind || 'message'}{target ? ` → ${target}` : ''}
+							</span>
+							<span class="shrink-0 {TONE_CLASS[tone]}">
+								{message.metadata.status || 'recorded'}
+								{instantLabel(messageInstant(message.metadata))}
+							</span>
+						</div>
+						<div class="text-sm text-stone-400">
+							<MarkdownContent
+								markdown={message.body}
+								sourcePath={message.file.path}
+								{knownPaths}
+							/>
+						</div>
+					</article>
+				{/each}
+			</div>
+		{/if}
+	</div>
+{/if}
