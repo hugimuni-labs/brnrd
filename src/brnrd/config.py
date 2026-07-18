@@ -98,7 +98,9 @@ class Settings:
         "BRNRD_GITHUB_BOT_USER_LOGIN",
         default="brnrd-bot",
     )
-    github_bot_collaborator_permission: str = os.environ.get("BRNRD_GITHUB_BOT_COLLABORATOR_PERMISSION", "triage")
+    github_bot_collaborator_permission: str = os.environ.get(
+        "BRNRD_GITHUB_BOT_COLLABORATOR_PERMISSION", "push"
+    )
     github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
     # #408 — default-closed authorization gate: logins here bypass the

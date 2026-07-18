@@ -246,6 +246,27 @@ def test_dashboard_invite_bot_api_returns_notice():
     }
 
 
+def test_dashboard_invites_publishing_bot_with_write_access(monkeypatch):
+    from brnrd.routers import _session
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token)
+    _add_installation_repo(client, _account_id(client), "Gurio/brr")
+    calls = []
+
+    def fake_invite(settings, installation_id, repo, username, *, permission):
+        calls.append((installation_id, repo, username, permission))
+        return {"status_code": 201}
+
+    monkeypatch.setattr(_session.gh_app_client, "invite_collaborator", fake_invite)
+
+    response = client.post(f"/v1/repos/{repo_id}/invite-bot")
+
+    assert response.status_code == 200
+    assert calls == [("42", "Gurio/brr", "brnrd-bot", "push")]
+
+
 def test_dashboard_repo_action_returns_error_notice_for_missing_repo():
     client = _client()
     _login(client, login="Gurio")
