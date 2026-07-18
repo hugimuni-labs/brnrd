@@ -1,26 +1,61 @@
 <script lang="ts">
+	// The one renderer for mirrored corpus Markdown. Both readers use it: the
+	// corpus browser (WorkSurface, which drives its own outline and hands over
+	// pre-split blocks) and the Wyrd run node page (which hands over raw
+	// markdown). Typography and link resolution live here so the two cannot
+	// drift apart.
 	import { inlineTokens, markdownBlocks, type MarkdownBlock } from './surface';
+	import { runNodeHrefForPath } from './runNode';
 
 	interface Props {
-		markdown: string;
+		/** Raw page text. Ignored when `blocks` is supplied. */
+		markdown?: string;
+		/** Pre-parsed blocks, for callers that split a page themselves. */
+		blocks?: MarkdownBlock[];
+		/** Corpus path this text came from — resolves relative links. */
 		sourcePath?: string;
 		knownPaths?: Set<string>;
+		/**
+		 * In-page handler for a link that resolves to another corpus file. When
+		 * a caller owns a reading pane (WorkSurface) it selects there. Without
+		 * one, a link into a run node still navigates — as a real route — and
+		 * anything else renders as inert text rather than a dead link.
+		 */
+		onNavigate?: (target: string, anchor: string | null) => void;
 	}
 
-	let { markdown, sourcePath = '', knownPaths = new Set<string>() }: Props = $props();
-	let blocks = $derived(markdownBlocks(markdown));
+	let {
+		markdown = '',
+		blocks: providedBlocks,
+		sourcePath = '',
+		knownPaths = new Set<string>(),
+		onNavigate
+	}: Props = $props();
+
+	let blocks = $derived(providedBlocks ?? markdownBlocks(markdown));
 </script>
 
 {#snippet inline(text: string)}
 	{#each inlineTokens(text, sourcePath, knownPaths) as token, i (i)}
 		{#if token.kind === 'strong'}<strong class="font-semibold text-stone-100">{token.text}</strong>
+		{:else if token.kind === 'link' && token.target && onNavigate}<button
+				class="cursor-pointer text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
+				onclick={() => onNavigate(token.target!, token.anchor)}>{token.text}</button
+			>
+		{:else if token.kind === 'link' && token.target && runNodeHrefForPath(token.target)}<a
+				class="text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
+				href={runNodeHrefForPath(token.target)}>{token.text}</a
+			>
 		{:else if token.kind === 'link' && token.href}<a
 				class="text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
 				href={token.href}
 				target="_blank"
 				rel="external noreferrer">{token.text}</a
 			>
-		{:else if token.kind === 'link'}<span class="text-stone-400">{token.text}</span>
+		{:else if token.kind === 'link'}<span
+				class="text-stone-500"
+				title="corpus target is not present">{token.text}</span
+			>
 		{:else}{token.text}{/if}
 	{/each}
 {/snippet}

@@ -61,7 +61,13 @@
 	// legend carries produce — in type, not pictograms.
 	interface ShelfRun {
 		id: string;
-		repoLabel: string | null;
+		/**
+		 * Route to this run's Wyrd node, or null when the row has no real
+		 * `run_id` (the shelf id then falls back to an event id or timestamp,
+		 * which names no durable node — those rows keep the select-only
+		 * behaviour instead of linking somewhere that can never resolve).
+		 */
+		href: string | null;
 		ageMs: number;
 		wallSeconds: number;
 		color: string;
@@ -89,6 +95,7 @@
 	function shelfRuns(rows: RunLedgerRow[], timestamp: number, windowMs: number): ShelfRun[] {
 		const grouped: Array<{
 			id: string;
+			runId: string | null;
 			repoLabel: string | null;
 			endedAt: number;
 			wallSeconds: number;
@@ -102,6 +109,7 @@
 			if (!id) continue;
 			const current = grouped.find((group) => group.id === id);
 			if (current) {
+				current.runId ??= row.run_id;
 				current.repoLabel ??= row.repo_label;
 				current.endedAt = Math.max(current.endedAt, endedAt);
 				current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
@@ -109,6 +117,7 @@
 			} else {
 				grouped.push({
 					id,
+					runId: row.run_id,
 					repoLabel: row.repo_label,
 					endedAt,
 					wallSeconds: row.wall_clock_seconds ?? 0,
@@ -123,7 +132,7 @@
 				const produce = produceLegend(group.relics);
 				return {
 					id: group.id,
-					repoLabel: group.repoLabel,
+					href: group.runId ? runNodeHref(group.repoLabel, group.runId) : null,
 					ageMs,
 					wallSeconds: group.wallSeconds,
 					color: THERMAL_STOPS[loomPastStop(ageMs)],
@@ -201,7 +210,31 @@
 	}
 
 	let nextWake = $derived(wakes.find((wake) => wakeEta(wake) > 0) ?? null);
+
+	// One row geometry, whether the cell ends up a link or a button — the band
+	// is a 128px instrument and the two must not drift a pixel apart.
+	const SHELF_ROW_CLASS =
+		'flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5';
+
+	function shelfRowStyle(run: ShelfRun): string {
+		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`;
+	}
 </script>
+
+{#snippet shelfRow(run: ShelfRun)}
+	<span
+		class="truncate font-mono text-[9px] leading-none whitespace-nowrap"
+		class:opacity-50={run.bare}
+	>
+		{run.legend}
+	</span>
+	<span
+		class="h-[7px] shrink-0 rounded-l-[1px]"
+		class:opacity-40={run.bare}
+		style={`width: ${(loomBarFraction(run.wallSeconds, maxWallSeconds) * 62).toFixed(2)}%; background-color: ${run.color}`}
+		aria-hidden="true"
+	></span>
+{/snippet}
 
 <div
 	class="panel overflow-hidden px-3 py-2.5"
@@ -250,27 +283,33 @@
 					no runs in {loomPastWindowLabel(pastWindowMs)}
 				</span>
 			{/if}
+			<!-- A closed run is a *place*, so its cell is a real link into that
+			     run's Wyrd node — right-clickable, openable in a tab, and a URL
+			     you can send someone. Rows with no durable run id keep the older
+			     select-into-the-sheet behaviour; identical geometry either way. -->
 			{#each runs as run, index (run.id)}
-				<a
-					href={runNodeHref(run.repoLabel, run.id)}
-					class="flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5"
-					style={`color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`}
-					title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
-					in:glitchReveal={{ duration: 240, delay: index * 24 }}
-				>
-					<span
-						class="truncate font-mono text-[9px] leading-none whitespace-nowrap"
-						class:opacity-50={run.bare}
+				{#if run.href}
+					<a
+						href={run.href}
+						class={SHELF_ROW_CLASS}
+						style={shelfRowStyle(run)}
+						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
+						in:glitchReveal={{ duration: 240, delay: index * 24 }}
 					>
-						{run.legend}
-					</span>
-					<span
-						class="h-[7px] shrink-0 rounded-l-[1px]"
-						class:opacity-40={run.bare}
-						style={`width: ${(loomBarFraction(run.wallSeconds, maxWallSeconds) * 62).toFixed(2)}%; background-color: ${run.color}`}
-						aria-hidden="true"
-					></span>
-				</a>
+						{@render shelfRow(run)}
+					</a>
+				{:else}
+					<button
+						type="button"
+						class={SHELF_ROW_CLASS}
+						style={shelfRowStyle(run)}
+						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
+						onclick={() => select('run', run.id)}
+						in:glitchReveal={{ duration: 240, delay: index * 24 }}
+					>
+						{@render shelfRow(run)}
+					</button>
+				{/if}
 			{/each}
 		</div>
 
