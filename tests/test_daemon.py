@@ -4297,3 +4297,40 @@ def test_dispatch_edge_backfill_replays_the_ledger_onto_existing_nodes(tmp_path)
     assert "parent_run_id: run-old-parent" in child
     assert "child_run_ids: run-old-child\n" in parent
     assert "run-absent" not in parent
+
+
+def test_dispatch_edges_survive_a_fleet_closing_at_once(tmp_path):
+    """A fleet's children stamp one parent concurrently; no edge is lost."""
+    import concurrent.futures
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    daemon._persist_run_state_doc(
+        ctx,
+        Run(id="run-fleet", event_id="evt-fleet", body="work", source="telegram"),
+        repo_label="Gurio/brr",
+        stage="running",
+    )
+    children = [f"run-child-{index}" for index in range(12)]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(
+            lambda child: daemon._record_dispatch_edge(
+                ctx,
+                repo_label="Gurio/brr",
+                parent_run_id="run-fleet",
+                child_run_id=child,
+            ),
+            children,
+        ))
+
+    text = (ctx.runs_dir / "Gurio__brr" / "run-fleet" / "state.md").read_text(
+        encoding="utf-8",
+    )
+    recorded = daemon.protocol.parse_frontmatter(text)["child_run_ids"]
+    assert sorted(item.strip() for item in recorded.split(",")) == sorted(children)
