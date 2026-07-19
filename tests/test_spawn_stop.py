@@ -21,13 +21,13 @@ from brr import daemon, protocol, run_progress, runner, updates
 
 @pytest.fixture(autouse=True)
 def _clean_registries():
-    with daemon._spawn_controls_lock:
-        daemon._spawn_controls.clear()
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
     with runner._proc_lock:
         runner._active_procs.clear()
     yield
-    with daemon._spawn_controls_lock:
-        daemon._spawn_controls.clear()
+    with daemon._run_controls_lock:
+        daemon._run_controls.clear()
     with runner._proc_lock:
         stale = list(runner._active_procs.values())
         runner._active_procs.clear()
@@ -96,8 +96,8 @@ def _drain_stop(tmp_path, monkeypatch, files, *, task_id="run-parent"):
 
 class TestStopVerb:
     def test_stop_running_child_kills_its_process(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-parent")
-        daemon._bind_spawn_control_run("evt-child", "run-child")
+        daemon._register_run_control("evt-child", "run-parent")
+        daemon._bind_run_control("evt-child", "run-child")
         killed = []
         monkeypatch.setattr(
             daemon.runner, "kill_matching",
@@ -111,7 +111,7 @@ class TestStopVerb:
         assert n == 1
         assert stats.get("stop") == 1
         assert killed == ["evt-child-attempt-"]
-        control = daemon._find_spawn_control("evt-child")
+        control = daemon._find_run_control("evt-child")
         assert control["stopped"] is True
         assert control["stopped_by"] == "run-parent"
         assert control["stop_reason"] == "wrong contract"
@@ -119,8 +119,8 @@ class TestStopVerb:
         assert "spawn_stop_requested" in types_seen
 
     def test_stop_addressed_by_child_run_id(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-parent")
-        daemon._bind_spawn_control_run("evt-child", "run-child")
+        daemon._register_run_control("evt-child", "run-parent")
+        daemon._bind_run_control("evt-child", "run-child")
         killed = []
         monkeypatch.setattr(
             daemon.runner, "kill_matching",
@@ -133,10 +133,10 @@ class TestStopVerb:
 
         assert n == 1
         assert killed == ["evt-child-attempt-"]
-        assert daemon._stopped_spawn_control("evt-child") is not None
+        assert daemon._stopped_run_control("evt-child") is not None
 
     def test_stop_refused_for_foreign_child(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-somebody-else")
+        daemon._register_run_control("evt-child", "run-somebody-else")
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,
@@ -145,7 +145,7 @@ class TestStopVerb:
 
         assert n == 0
         assert stats.get("stop") is None
-        assert daemon._stopped_spawn_control("evt-child") is None
+        assert daemon._stopped_run_control("evt-child") is None
         notices = daemon._read_outbox_notices(outbox)
         assert any("not dispatched by this run" in n["text"] for n in notices)
 
@@ -168,7 +168,7 @@ class TestStopVerb:
             spawn_immediate=True, spawn_parent_run_id="run-parent",
         )
         spawn_eid = path.stem
-        daemon._register_spawn_control(spawn_eid, "run-parent")
+        daemon._register_run_control(spawn_eid, "run-parent")
         killed = []
         monkeypatch.setattr(
             daemon.runner, "kill_matching",
@@ -296,8 +296,8 @@ def test_run_progress_folds_stopped_as_terminal(tmp_path):
 
 class TestMessageVerb:
     def test_message_lands_as_child_only_event(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-parent")
-        daemon._bind_spawn_control_run("evt-child", "run-child")
+        daemon._register_run_control("evt-child", "run-parent")
+        daemon._bind_run_control("evt-child", "run-child")
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,
@@ -325,7 +325,7 @@ class TestMessageVerb:
         assert msg["id"] not in [e["id"] for e in resident_view]
 
     def test_message_refused_for_foreign_child(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-somebody-else")
+        daemon._register_run_control("evt-child", "run-somebody-else")
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,
@@ -337,9 +337,9 @@ class TestMessageVerb:
         assert any("not dispatched by this run" in x["text"] for x in notices)
 
     def test_message_refused_for_stopped_child(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-parent")
-        with daemon._spawn_controls_lock:
-            daemon._spawn_controls["evt-child"]["stopped"] = True
+        daemon._register_run_control("evt-child", "run-parent")
+        with daemon._run_controls_lock:
+            daemon._run_controls["evt-child"]["stopped"] = True
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,
@@ -351,7 +351,7 @@ class TestMessageVerb:
         assert any("being stopped" in x["text"] for x in notices)
 
     def test_message_with_empty_body_is_dropped(self, tmp_path, monkeypatch):
-        daemon._register_spawn_control("evt-child", "run-parent")
+        daemon._register_run_control("evt-child", "run-parent")
 
         n, inbox, outbox, emitted, stats = _drain_stop(
             tmp_path, monkeypatch,

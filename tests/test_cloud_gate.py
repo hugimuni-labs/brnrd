@@ -15,6 +15,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brr import protocol  # noqa: E402
+from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -665,6 +666,50 @@ def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
         "summary": "$1.15 this session (estimated)",
         "updated_at": "2026-07-07T20:20:00Z",
     }
+
+
+def test_claude_quota_shell_publishes_burn_and_samples_the_reading(tmp_path):
+    """Burn was Codex-only because only Codex left a timestamped series on disk.
+    Claude — the Shell doing most of the spending — had no instrument at all.
+    The published row now carries the same reading, and the publish path itself
+    feeds the store it is measured from."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-burn-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {
+                    "buckets": {
+                        "session": {"remaining_percentage": 40.0},
+                        "week": {"remaining_percentage": 60.0},
+                    }
+                },
+                "session_used_percentage": 60.0,
+                "session_resets_at": 1784300000.0,
+                "week_used_percentage": 40.0,
+                "week_resets_at": 1784490642.0,
+                "updated_at": "2026-07-13T18:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+    assert shell is not None
+    # Thin evidence on a cold store: absent, not invented.
+    assert "burn" in shell
+    assert shell["burn"] is None
+    # …but the read that produced the row was itself sampled, which is the only
+    # way the series ever starts.
+    rows = [
+        json_mod.loads(line)
+        for line in usage_samples.log_path(brr_dir).read_text().splitlines()
+    ]
+    assert {r["window_minutes"] for r in rows} == {300.0, 10080.0}
+    assert all(r["shell"] == "claude" for r in rows)
 
 
 def test_claude_quota_shell_refreshes_stale_idle_cache(tmp_path, monkeypatch):
@@ -1799,7 +1844,7 @@ def test_codex_quota_row_carries_the_trailing_burn(tmp_path, monkeypatch):
         },
     )
     burn = {"window_minutes": 10080.0, "burned_percent": 22.0, "sustainable": False}
-    monkeypatch.setattr(cloud.codex_status, "recent_burn", lambda *a, **k: burn)
+    monkeypatch.setattr(cloud.usage_samples, "recent_burn", lambda *a, **k: burn)
 
     shell = cloud._codex_quota_shell(tmp_path / ".brr")
 
@@ -1819,7 +1864,7 @@ def test_codex_quota_burn_is_absent_when_the_evidence_is_too_thin(tmp_path, monk
             "quota": {"primary_remaining_percent": 53.0, "primary_window_minutes": 10080},
         },
     )
-    monkeypatch.setattr(cloud.codex_status, "recent_burn", lambda *a, **k: None)
+    monkeypatch.setattr(cloud.usage_samples, "recent_burn", lambda *a, **k: None)
 
     shell = cloud._codex_quota_shell(tmp_path / ".brr")
 
