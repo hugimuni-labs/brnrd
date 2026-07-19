@@ -79,7 +79,6 @@ _ROW = {
     "source_system": "telegram",
     "name": "",
     "external_refs": [{"gate": "telegram"}],
-    "task_classification": "dashboard-slice",
     "parent_run_id": None,
     "is_subspawn": False,
     "tokens_input": 1200,
@@ -133,17 +132,16 @@ def test_daemon_run_ledger_snapshot_replaces_rows():
     posted = client.put("/v1/daemons/run-ledger", json={"rows": [_ROW]}, headers=daemon_headers)
     assert posted.status_code == 200, posted.text
     body = posted.json()
-    assert body["rows"][0]["task_classification"] == "dashboard-slice"
     assert body["rows"][0]["tokens_cache_read"] is None
     assert body["run_ledger_updated_at"] is not None
 
     replaced = client.put(
         "/v1/daemons/run-ledger",
-        json={"rows": [{**_ROW, "run_id": "run-2", "task_classification": None}]},
+        json={"rows": [{**_ROW, "run_id": "run-2", "name": "second"}]},
         headers=daemon_headers,
     )
     assert replaced.status_code == 200
-    assert replaced.json()["rows"] == [{**_ROW, "run_id": "run-2", "task_classification": None}]
+    assert replaced.json()["rows"] == [{**_ROW, "run_id": "run-2", "name": "second"}]
 
 
 def test_daemon_run_ledger_requires_registration():
@@ -176,11 +174,11 @@ def test_dashboard_run_ledger_dedupes_limits_newest_first():
 
     now = datetime.now(timezone.utc)
     older_rows = [
-        {**_ROW, "run_id": "run-a", "ended_at": "2026-07-07T19:00:00Z", "task_classification": "old"},
+        {**_ROW, "run_id": "run-a", "ended_at": "2026-07-07T19:00:00Z", "name": "old"},
         {**_ROW, "run_id": "run-b", "ended_at": "2026-07-07T19:20:00Z"},
     ]
     newer_rows = [
-        {**_ROW, "run_id": "run-a", "ended_at": "2026-07-07T19:30:00Z", "task_classification": "new"},
+        {**_ROW, "run_id": "run-a", "ended_at": "2026-07-07T19:30:00Z", "name": "new"},
         {**_ROW, "run_id": "run-c", "ended_at": "2026-07-07T18:00:00Z"},
     ]
     with client.app.state.SessionLocal() as db:
@@ -202,7 +200,7 @@ def test_dashboard_run_ledger_dedupes_limits_newest_first():
         view = _run_ledger_views(db, repos, limit=2)
 
     assert [row["run_id"] for row in view["rows"]] == ["run-a", "run-b"]
-    assert view["rows"][0]["task_classification"] == "new"
+    assert view["rows"][0]["name"] == "new"
     assert view["stale"] is False
 
 
@@ -259,3 +257,23 @@ def test_dashboard_run_ledger_api_caps_a_busy_window_at_published_envelope():
     assert response.status_code == 200
     assert len(response.json()["rows"]) == 256
     assert response.json()["rows"][0]["run_id"] == "run-000"
+
+
+def test_daemon_run_ledger_tolerates_retired_task_classification_key():
+    """Rows written before the 2026-07-19 cut carry ``task_classification``.
+    They are on disk and are never migrated, so ingestion must accept them —
+    the retired key is simply dropped, not a 422."""
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    legacy = {**_ROW, "run_id": "run-legacy", "task_classification": "dashboard-slice"}
+    posted = client.put(
+        "/v1/daemons/run-ledger", json={"rows": [legacy]}, headers=daemon_headers,
+    )
+    assert posted.status_code == 200, posted.text
+    row = posted.json()["rows"][0]
+    assert row["run_id"] == "run-legacy"
+    assert "task_classification" not in row

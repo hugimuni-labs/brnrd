@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { relicIcon, relicLabel, taskClassificationLabel } from './runLedger.ts';
+import { relicIcon, relicLabel } from './runLedger.ts';
 
 test('unknown relics use the first non-empty descriptive field', () => {
 	assert.equal(relicLabel({ kind: 'artifact', text: '', path: 'report.md', note: 'later' }), 'report.md');
@@ -13,8 +13,4 @@ test('unknown relics use the first non-empty descriptive field', () => {
 test('reply relics prefer their archived content excerpt', () => {
 	assert.equal(relicLabel({ kind: 'reply', excerpt: 'Shipped the fix.' }), 'Shipped the fix.');
 	assert.equal(relicLabel({ kind: 'reply' }), 'reply');
-});
-
-test('historic classification spellings normalize for display', () => {
-	assert.equal(taskClassificationLabel('Director_Tick'), 'director-tick');
 });

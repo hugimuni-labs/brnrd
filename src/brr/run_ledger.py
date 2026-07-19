@@ -24,8 +24,6 @@ from .run import Run
 
 LEDGER_NAME = "run-ledger.jsonl"
 ESTIMATE_ACTUAL = "actual"
-TASK_CLASSIFICATION_CONTROL_NAME = ".task-classification"
-_TASK_CLASSIFICATION_MAX_BYTES = 200
 RUN_NAME_CONTROL_NAME = ".name"
 _RUN_NAME_MAX_BYTES = 240
 _RUN_NAME_MAX_CHARS = 60
@@ -50,7 +48,6 @@ _ROW_FIELDS = (
     "external_refs",
     "reply_archive",
     "name",
-    "task_classification",
     "parent_run_id",
     "is_subspawn",
     "tokens_input",
@@ -237,7 +234,6 @@ def build_closed_run_row(
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
         "reply_archive": _str_or_none(task.meta.get("reply_archive")),
         "name": read_run_name_control(outbox_dir) or "",
-        "task_classification": task_classification(task),
         "parent_run_id": _str_or_none(task.meta.get("spawn_parent_run_id")),
         "is_subspawn": bool(task.meta.get("spawn_immediate")),
         "tokens_input": tokens["tokens_input"],
@@ -375,40 +371,6 @@ def external_refs(value: Any) -> list[Any]:
     if isinstance(value, tuple):
         return list(value)
     return []
-
-
-def task_classification(task: Run) -> str | None:
-    for key in (
-        "task_classification",
-        "classification",
-        "task.classification",
-        "task_class",
-    ):
-        value = _str_or_none(task.meta.get(key))
-        if value:
-            return value.lower().replace("_", "-")
-    return None
-
-
-def read_task_classification_control(outbox_dir: Path | None) -> str | None:
-    """Read the resident-authored ``.task-classification`` control file.
-
-    A run tags its own cost-ledger shape by writing a one-line slug to this
-    dotfile anytime before closeout (``kb/design-quota-scheduling-loom.md``
-    §"Tracking-table schema" calls this "the only field that makes
-    rollup-by-shape possible"). Best-effort: an unreadable or missing file
-    is silently ``None``, never a closeout failure.
-    """
-    if outbox_dir is None:
-        return None
-    path = outbox_dir / TASK_CLASSIFICATION_CONTROL_NAME
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    text = raw[:_TASK_CLASSIFICATION_MAX_BYTES].decode("utf-8", errors="replace")
-    value = _str_or_none(text.splitlines()[0]) if text.splitlines() else None
-    return value.lower().replace("_", "-") if value else None
 
 
 def read_run_name_control(outbox_dir: Path | None) -> str | None:
