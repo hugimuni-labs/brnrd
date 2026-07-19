@@ -12,7 +12,7 @@ from brr import hooks
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
-            task_classification=None, name=None, current_event="evt-1"):
+            name=None, current_event="evt-1"):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -41,8 +41,6 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["resources"] = resources
     if card is not None:
         payload["card"] = card
-    if task_classification is not None:
-        payload["task_classification"] = task_classification
     if name is not None:
         payload["name"] = name
     path = tmp_path / "portal-state.json"
@@ -377,47 +375,6 @@ def test_produce_only_does_not_open_mid_run_render_gate(tmp_path):
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert hooks.format_delta(payload) is None
-
-
-def test_stop_nudges_unwritten_task_classification(tmp_path):
-    # 2026-07-08: a card-staleness-style forcing function, requested directly
-    # after a run caught itself nearly closing out without writing this
-    # control file — the miss is silent otherwise (no error, a `run_ledger`
-    # row's task_classification just stays null forever).
-    _portal(tmp_path, token="t1", pending=0,
-            task_classification={"written": False})
-    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ".task-classification" in ctx
-    assert "not written yet" in ctx
-
-
-def test_stop_silent_when_task_classification_written(tmp_path):
-    _portal(tmp_path, token="t1", pending=0,
-            task_classification={"written": True})
-    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ".task-classification" not in ctx
-
-
-def test_post_tool_never_renders_task_classification_nudge(tmp_path):
-    # Unlike the card, an unwritten control file mid-run is not itself a
-    # problem — it legitimately gets written anytime before closeout — so
-    # this stays a stop-only boundary signal, same shape as SCM.
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
-            task_classification={"written": False})
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ".task-classification" not in ctx
-
-
-def test_seed_never_renders_task_classification_nudge(tmp_path):
-    _portal(tmp_path, token="t1", pending=0,
-            task_classification={"written": False})
-    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert ".task-classification" not in ctx
 
 
 def test_midrun_nudges_unwritten_run_name_but_stop_does_not(tmp_path):
@@ -872,12 +829,12 @@ def test_guard_respects_the_shells_own_loop_breaker(tmp_path):
     assert out.get("decision") != "block"
 
 
-# ── Escalated artifact obligations (card / task-classification) ───────────
+# ── Escalated artifact obligations (card) ─────────────────────────────────
 
 _GOOD_REPLY = "wired it up.\n\n**done** — committed abc1234 on brr/x"
 
 
-def _armed_obl(tmp_path, obligations="card,classification", flavour="claude"):
+def _armed_obl(tmp_path, obligations="card", flavour="claude"):
     env = _armed(tmp_path, flavour)
     env["BRR_CLOSEOUT_OBLIGATIONS"] = obligations
     return env
@@ -887,46 +844,34 @@ def test_guard_blocks_when_card_missing(tmp_path):
     """A closeout with a clean reply but no `.card` still blocks — the card is
     the surface the user watched the whole run."""
     _portal(tmp_path, token="t1", pending=0)
-    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
     assert out["decision"] == "block"
     assert ".card" in out["reason"]
-
-
-def test_guard_blocks_when_classification_missing(tmp_path):
-    _portal(tmp_path, token="t1", pending=0)
-    (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
-    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
-    assert out["decision"] == "block"
-    assert ".task-classification" in out["reason"]
 
 
 def test_guard_blank_artifact_counts_as_unwritten(tmp_path):
     """An empty / whitespace-only control file is not a written obligation."""
     _portal(tmp_path, token="t1", pending=0)
     (tmp_path / hooks.CARD_NAME).write_text("   \n", encoding="utf-8")
-    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("x", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
     assert out["decision"] == "block"
     assert ".card" in out["reason"]
 
 
 def test_guard_capsule_lists_every_unmet_at_once(tmp_path):
-    """Reply ends on nothing AND both artifacts missing → one capsule naming
-    all three, not three chained Stop blocks (#282 loop safety)."""
+    """Reply ends on nothing AND the card missing → one capsule naming both,
+    not two chained Stop blocks (#282 loop safety)."""
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("just prose"), _armed_obl(tmp_path))
     assert out["decision"] == "block"
     reason = out["reason"]
     assert "ends on nothing" in reason
     assert ".card" in reason
-    assert ".task-classification" in reason
 
 
 def test_guard_passes_when_every_obligation_met(tmp_path):
     _portal(tmp_path, token="t1", pending=0)
     (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
-    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), _armed_obl(tmp_path))
     assert out.get("decision") != "block"
 
@@ -986,7 +931,6 @@ def _armed_scm(tmp_path, repo, obligations="scm", seed="main"):
     """Arm the SCM obligation with card+classification already satisfied, so a
     block can only come from the SCM clause. Outbox lives in `tmp_path`."""
     (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
-    (tmp_path / hooks.TASK_CLASSIFICATION_NAME).write_text("bugfix", encoding="utf-8")
     env = _armed_obl(tmp_path, obligations=obligations)
     env["BRR_REPO_DIR"] = str(repo)
     env["BRR_SEED_REF"] = seed

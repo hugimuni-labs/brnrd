@@ -61,16 +61,14 @@ _FLUSH_ACK_TIMEOUT_SECONDS = 5.0
 HOOK_STATE_NAME = ".hook-state.json"
 
 # Closeout artifact obligations the armed guard can escalate from the soft
-# `inject` mention (see `format_delta`, which already surfaces a missing
-# `.task-classification` / stale card / unpushed SCM as additionalContext)
-# to a hard `block`. Each maps to a control file the resident owes by
-# closeout. The check reads the *file*, fresh, at Stop — never the
+# `inject` mention (see `format_delta`, which already surfaces a stale card
+# / unpushed SCM as additionalContext) to a hard `block`. Each maps to a
+# control file the resident owes by closeout. The check reads the *file*, fresh, at Stop — never the
 # heartbeat portal snapshot, which can predate a control file written in the
 # run's final action. That is the same "assert only from THE artifact"
 # doctrine the next-move guard keeps, and why escalation lives here rather
 # than promoting the portal-derived `inject` lines in place.
 CARD_NAME = ".card"
-TASK_CLASSIFICATION_NAME = ".task-classification"
 FORGE_HANDOFF_NAME = ".forge-handoff"
 # The run body rides the closeout delta whole. Capped only against a
 # pathological card: this is the resident's own prose, and truncating it is a
@@ -81,18 +79,12 @@ _STOP_BODY_MAX_CHARS = 6000
 # not be able to flood the one boundary the resident reads most carefully.
 _STOP_MANIFEST_MAX_RECORDS = 40
 
-_CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
+_CLOSEOUT_ARTIFACT_ORDER = ("card",)
 _CLOSEOUT_ARTIFACTS = {
     "card": (
         CARD_NAME,
         "no `.card` was written — put one line on the progress surface the "
         "user watches between replies",
-    ),
-    "classification": (
-        TASK_CLASSIFICATION_NAME,
-        "no `.task-classification` was written — add the one-slug run shape "
-        "(its run_ledger row joins the cost rollup on that field and stays "
-        "null without it)",
     ),
 }
 
@@ -467,25 +459,6 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
-    # Task-classification presence (stop only): unlike the card, there is
-    # nothing wrong with it being unwritten mid-run — the file legitimately
-    # gets written anytime before closeout — so this renders only at the
-    # boundary where "still missing" actually means something. A
-    # card-staleness-style forcing function requested directly
-    # (2026-07-07/08) after a run caught itself nearly shipping without it:
-    # the miss is silent otherwise — no error, just a `run_ledger` row whose
-    # `task_classification` stays null forever, the one field the whole
-    # cost-rollup workstream joins on.
-    task_cls = (
-        payload.get("task_classification")
-        if isinstance(payload.get("task_classification"), dict) else {}
-    )
-    if stop and not task_cls.get("written"):
-        lines.append(
-            "- .task-classification: not written yet — a short slug (e.g. "
-            "`bugfix`, `kb-brainstorm`) before this ends, or this run's "
-            "run_ledger row has a null task_classification forever."
-        )
     # A name is useful while the run is still visible, not as a closeout
     # chore. Give the resident a few minutes to orient, then gently surface
     # the omission at ordinary hook boundaries; Stop is deliberately quiet.
