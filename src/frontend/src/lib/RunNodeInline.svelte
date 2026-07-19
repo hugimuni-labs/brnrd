@@ -16,6 +16,7 @@
 	} from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 	import type { SurfaceResponse } from './surface';
+	import { glitchReveal, typeReveal } from './transitions';
 
 	interface Props {
 		data: SurfaceResponse | null;
@@ -54,12 +55,27 @@
 	let digest = $derived(node ? nodeDigest(node) : null);
 	let knownPaths = $derived(new Set((data?.files ?? []).map((file) => file.path)));
 
+	// Composed here rather than inline: `typeReveal` needs the exact string it
+	// is revealing, and a `{@const}` cannot be declared inside a plain element.
+	let heading = $derived(`run node${digest?.stage ? ` · ${digest.stage}` : ''}`);
+	let identity = $derived(
+		`${digest?.status || 'unknown'}${digest?.runner ? ` · ${digest.runner}` : ''}`
+	);
+	/** The empty-state lines are text that *arrives* too — a run that has just
+	 *  started genuinely transitions through "no card written yet". */
+	let cardEmptyLabel = $derived(
+		digest?.status === 'running' ? 'no card written yet' : 'this run wrote no card'
+	);
+	let produceEmptyLabel = $derived(
+		digest?.status === 'running' ? 'nothing committed yet' : 'this run produced nothing'
+	);
+
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
 		collected: 'text-emerald-400/60',
 		pending: 'text-amber-400',
 		undeliverable: 'text-red-400',
-		unknown: 'text-stone-500'
+		unknown: 'text-ink-quiet'
 	};
 
 	function instantLabel(raw: string): string {
@@ -70,16 +86,20 @@
 </script>
 
 {#if data === null}
-	<p class="panel p-3 font-mono text-[11px] text-stone-500">reading the corpus…</p>
+	<p class="panel p-3 font-mono text-[11px] text-ink-quiet">reading the corpus…</p>
 {:else if !digest?.mirrored}
 	<!-- Not every selected run has a node: the corpus republishes on change, and
 	     runs that closed before the weld never had one. Say so quietly here —
 	     this is a supporting panel, not the page that owes a full explanation. -->
-	<p class="panel p-3 font-mono text-[11px] text-stone-500">
+	<p class="panel p-3 font-mono text-[11px] text-ink-quiet">
 		no run node mirrored for this run yet
 	</p>
 {:else}
-	<div class="panel p-3">
+	<!-- The panel assembles rather than fading in: same `glitchReveal` grammar
+	     the loom's own frames use, so selecting a frame reads as this dashboard
+	     rather than as a generic disclosure. Kept short — the reveal is a
+	     flourish, not a wait. -->
+	<div class="panel p-3" in:glitchReveal={{ duration: 260 }}>
 		<div
 			class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-stone-800 pb-2 font-mono text-[10px]"
 		>
@@ -94,12 +114,15 @@
 						aria-hidden="true"
 					></span>
 				{/if}
-				<span class="min-w-0 truncate tracking-wide text-amber-200 uppercase">
-					run node{digest.stage ? ` · ${digest.stage}` : ''}
+				<span
+					class="min-w-0 truncate tracking-wide text-amber-200 uppercase"
+					use:typeReveal={{ text: heading }}
+				>
+					{heading}
 				</span>
 			</span>
-			<span class="shrink-0 text-stone-500">
-				{digest.status || 'unknown'}{digest.runner ? ` · ${digest.runner}` : ''}
+			<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: identity }}>
+				{identity}
 			</span>
 		</div>
 
@@ -107,21 +130,26 @@
 			<!-- The vitals line: one row of live/receipt facts, in the node's own
 			     header, instead of a whole second panel restating the run. -->
 			<div
-				class="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] text-stone-500"
+				class="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] text-ink-quiet"
 			>
 				{#each vitals as vital (vital)}
-					<span>{vital}</span>
+					<span use:typeReveal={{ text: vital }}>{vital}</span>
 				{/each}
 			</div>
 		{/if}
 
 		{#if digest.now}
 			<div class="text-sm text-stone-300">
-				<MarkdownContent markdown={digest.now} sourcePath={node?.body?.path ?? ''} {knownPaths} />
+				<MarkdownContent
+					markdown={digest.now}
+					sourcePath={node?.body?.path ?? ''}
+					{knownPaths}
+					reveal
+				/>
 			</div>
 		{:else}
-			<p class="mt-2 font-mono text-[11px] text-stone-500">
-				{digest.status === 'running' ? 'no card written yet' : 'this run wrote no card'}
+			<p class="mt-2 font-mono text-[11px] text-ink-quiet" use:typeReveal={{ text: cardEmptyLabel }}>
+				{cardEmptyLabel}
 			</p>
 		{/if}
 
@@ -143,20 +171,22 @@
 		     accrues from commits, so a running run that hasn't committed has an
 		     honestly empty manifest, and a closed one never made anything. -->
 		<div class="mt-2 border-t border-stone-800/70 pt-2">
-			<p class="font-mono text-[10px] tracking-wide text-stone-600 uppercase">produce</p>
+			<p class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">produce</p>
 			{#if digest.produce}
 				<div class="mt-1 text-sm text-stone-300">
 					<MarkdownContent
 						markdown={digest.produce}
 						sourcePath={node?.state?.path ?? ''}
 						{knownPaths}
+						reveal
 					/>
 				</div>
 			{:else}
-				<p class="mt-1 font-mono text-[11px] text-stone-500">
-					{digest.status === 'running'
-						? 'nothing committed yet'
-						: 'this run produced nothing'}
+				<p
+					class="mt-1 font-mono text-[11px] text-ink-quiet"
+					use:typeReveal={{ text: produceEmptyLabel }}
+				>
+					{produceEmptyLabel}
 				</p>
 			{/if}
 		</div>
@@ -166,13 +196,13 @@
 				{#if digest.hasMore}
 					<button
 						type="button"
-						class="cursor-pointer tracking-wide text-stone-500 uppercase hover:text-stone-300"
+						class="cursor-pointer tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 						onclick={() => (expanded = !expanded)}
 					>
 						{expanded ? '▾ less' : '▸ more'}
 					</button>
 				{/if}
-				<span class="text-stone-600">
+				<span class="text-ink-mute">
 					{digest.messageCount} message{digest.messageCount === 1 ? '' : 's'}
 				</span>
 			</div>
@@ -200,7 +230,10 @@
 			<!-- The expand is where following costs something: the rest of the
 			     body, and the run's own traffic with its receipts. Kept inside
 			     the frame so the band never scrolls out from under the reader. -->
-			<div class="mt-3 space-y-3 border-t border-stone-800 pt-3">
+			<div
+				class="mt-3 space-y-3 border-t border-stone-800 pt-3"
+				in:glitchReveal={{ duration: 240 }}
+			>
 				{#if node?.body && digest.now !== node.body.markdown.trim()}
 					<div class="text-sm text-stone-300">
 						<MarkdownContent
