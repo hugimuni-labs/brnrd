@@ -30,6 +30,7 @@
 		statusDotStyle,
 		type GlowUrgency
 	} from './statusPalette';
+	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 
 	interface Props {
 		ledgerRows: RunLedgerRow[] | null;
@@ -47,6 +48,15 @@
 		 * files is how the receipt goes missing.
 		 */
 		stopRun?: (runId: string) => Promise<unknown>;
+		/**
+		 * Open PRs waiting on a review. The one lens whose subject is an
+		 * artifact rather than a run, so its count comes from a different feed
+		 * (see `loomLens.ts` → `LENS_REVIEW`).
+		 */
+		reviewCount?: number;
+		/** The page owns lens state, same as selection: the band reports. */
+		lens?: string;
+		onLensChange?: (lens: string) => void;
 	}
 
 	let {
@@ -57,7 +67,10 @@
 		onSelect,
 		onPastWindowChange,
 		selectedId = null,
-		stopRun = requestRunStop
+		stopRun = requestRunStop,
+		reviewCount = 0,
+		lens = LENS_ALL,
+		onLensChange
 	}: Props = $props();
 
 	// #476: the stop affordance's local state. `armedStopId` is the run whose
@@ -158,6 +171,16 @@
 		return parts.join(' ');
 	}
 
+	/** The window predicate, lifted out of `shelfRuns` so the lens vocabulary
+	 *  and the shelf are derived from the same set of rows. A lens offered over
+	 *  a wider set than the shelf renders would count rows the reader cannot
+	 *  see. */
+	function inPastWindow(row: RunLedgerRow, timestamp: number, windowMs: number): boolean {
+		const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
+		const ageMs = timestamp - endedAt;
+		return Number.isFinite(endedAt) && ageMs >= 0 && ageMs <= windowMs;
+	}
+
 	function shelfRuns(rows: RunLedgerRow[], timestamp: number, windowMs: number): ShelfRun[] {
 		const grouped: Array<{
 			id: string;
@@ -211,7 +234,19 @@
 			.sort((a, b) => a.ageMs - b.ageMs);
 	}
 
-	let runs = $derived(shelfRuns(ledgerRows ?? [], now, pastWindowMs));
+	// The lens vocabulary is derived from the rows on screen, so it moves with
+	// the past window — step 6h → 7d and a dispatch source that had no runs in
+	// the near window appears as a chip. Nothing here holds a list of the legal
+	// values; see `loomLens.ts` for why that is the whole point.
+	let windowRows = $derived(
+		(ledgerRows ?? []).filter((row) => inPastWindow(row, now, pastWindowMs))
+	);
+	let lenses = $derived(availableLenses(windowRows, reviewCount));
+	// A selection can outlive its lens (the window narrowed, the rows aged out).
+	// Reconciling here rather than trusting the prop keeps the shelf and the
+	// chip row from disagreeing for a poll.
+	let activeLens = $derived(reconcileLens(lens, lenses));
+	let runs = $derived(shelfRuns(applyLens(windowRows, activeLens), now, pastWindowMs));
 	let maxWallSeconds = $derived(Math.max(...runs.map((run) => run.wallSeconds), 0));
 	let wakes = $derived(
 		[...(scheduledWakes ?? [])]
@@ -316,6 +351,38 @@
 	class="panel overflow-hidden px-3 py-2.5"
 	aria-label="past produce, live runs now, and scheduled future"
 >
+	<!-- The lens rail (wyrd §4 band 2). Every chip here was derived from the
+	     rows on screen a moment ago — the origins from `source_system`, the
+	     shapes from the relic manifests, the stack from `is_subspawn`. None of
+	     them is a name anything chose; that is what replaced the coined
+	     `.task-classification` slug rather than a tidier enum of the same kind.
+	     The rail is also where `/activity` and the standing PR-review section
+	     went: "what has this been doing" and "what is waiting on me" are
+	     questions you ask of the board, not panels that sit on it. -->
+	{#if lenses.length > 1}
+		<div
+			class="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] leading-none"
+			role="group"
+			aria-label="lenses over the past shelf"
+		>
+			{#each lenses as candidate (candidate.id)}
+				<button
+					type="button"
+					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
+					class:text-amber-200={activeLens === candidate.id}
+					class:text-stone-600={activeLens !== candidate.id}
+					class:hover:text-stone-400={activeLens !== candidate.id}
+					aria-pressed={activeLens === candidate.id}
+					title={candidate.facet === 'artifact'
+						? `${candidate.count} PR${candidate.count === 1 ? '' : 's'} waiting on a review`
+						: `${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
+					onclick={() => onLensChange?.(activeLens === candidate.id ? LENS_ALL : candidate.id)}
+				>
+					{candidate.label}<span class="ml-1 text-stone-700">{candidate.count}</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
 	<div
 		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-stone-600 uppercase"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
@@ -354,9 +421,14 @@
 			class="loom-shelf flex min-w-0 flex-col gap-px overflow-y-auto pr-1.5"
 			aria-label="closed runs in the selected past window"
 		>
+			<!-- An empty shelf under an active lens means something different from
+			     an empty window, and saying "no runs in 24h" while 26 runs sit
+			     one click away would be the band lying about its own contents. -->
 			{#if ledgerRows !== null && runs.length === 0}
-				<span class="m-auto truncate font-mono text-[9px] text-stone-700">
-					no runs in {loomPastWindowLabel(pastWindowMs)}
+				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-stone-700">
+					{activeLens === LENS_ALL
+						? `no runs in ${loomPastWindowLabel(pastWindowMs)}`
+						: `no runs match this lens in ${loomPastWindowLabel(pastWindowMs)}`}
 				</span>
 			{/if}
 			<!-- A closed run is a *place*, so its cell is a real link into that
