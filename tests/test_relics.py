@@ -192,9 +192,11 @@ def test_live_summary_compiles_auto_and_reported_produce(tmp_path: Path):
     relics.append(outbox, "kb", path="design-run-relics.md")
     relics.append(outbox, "summary", text="not a counted relic")
 
-    assert relics.live_summary(
+    summary = relics.live_summary(
         repo, branch="brr/work", seed_ref="main", outbox_dir=outbox,
-    ) == {
+    )
+    records = summary.pop("records")
+    assert summary == {
         "known": True,
         "counts": {
             "commit": 2, "branch": 1, "pr": 1, "issue": 1, "kb": 1,
@@ -203,6 +205,13 @@ def test_live_summary_compiles_auto_and_reported_produce(tmp_path: Path):
         "branch": "brr/work",
         "pr": 451,
     }
+    # The manifest itself rides alongside the counts: the node's frame renders
+    # it, and the resident's closeout briefing reads it to write a receipt from
+    # what the run actually made rather than from memory.
+    assert {record["kind"] for record in records} == {
+        "commit", "branch", "pr", "issue", "kb", "summary",
+    }
+    assert any(record.get("sha") == latest for record in records)
 
 
 def test_live_summary_never_raises(tmp_path: Path, monkeypatch):

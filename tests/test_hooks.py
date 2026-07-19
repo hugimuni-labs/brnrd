@@ -316,6 +316,44 @@ def test_produce_line_renders_attested_kinds(tmp_path):
     ) in ctx
 
 
+def test_stop_briefing_carries_the_produce_manifest(tmp_path):
+    """The resident reads its own manifest at closeout, not a count line.
+
+    Counts answer "how much"; a resident writing a receipt is asking "what",
+    and reconstructing that from memory is exactly how a run names three of
+    its four commits (maintainer, 2026-07-19: "make the live accrued relics
+    useful for you too"). Same records the node's `## Produce` renders.
+    """
+    _portal(
+        tmp_path, token="t1", pending=0,
+        produce={
+            "known": True,
+            "counts": {"commit": 1, "pr": 1},
+            "latest_commit": "a1b2c3d",
+            "branch": "brr/foo",
+            "pr": 451,
+            "records": [
+                {"kind": "commit", "sha": "a1b2c3d99", "subject": "do it",
+                 "url": "https://forge/c/a1b2c3d"},
+                {"kind": "pr", "number": 451, "url": "https://forge/pr/451"},
+            ],
+        },
+    )
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = stop["hookSpecificOutput"]["additionalContext"]
+    assert "your produce this run" in ctx
+    assert "\U0001f528 a1b2c3d do it \u2014 https://forge/c/a1b2c3d" in ctx
+    assert "\U0001f500 PR #451 \u2014 https://forge/pr/451" in ctx
+
+    # Mid-run the compression is right: the manifest is a closeout shape, and
+    # repeating it at every tool boundary would be noise the reader learns to
+    # skip.
+    post, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "your produce this run" not in (
+        (post.get("hookSpecificOutput") or {}).get("additionalContext") or ""
+    )
+
+
 def test_produce_line_is_silent_when_empty(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
