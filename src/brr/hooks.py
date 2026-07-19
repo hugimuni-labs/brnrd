@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from . import facets
+from . import relics
 
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
@@ -75,6 +76,10 @@ FORGE_HANDOFF_NAME = ".forge-handoff"
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
 _STOP_BODY_MAX_CHARS = 6000
+# The closeout produce manifest. Generous — a run that made 40 things
+# should see them — but bounded, because a runaway `.relics.jsonl` must
+# not be able to flood the one boundary the resident reads most carefully.
+_STOP_MANIFEST_MAX_RECORDS = 40
 
 _CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
 _CLOSEOUT_ARTIFACTS = {
@@ -396,6 +401,29 @@ def format_delta(
                 parts.append(f"{count} {label}{suffix}")
         if parts:
             lines.append("- produce: " + " · ".join(parts))
+        # At the closeout boundary the compression is the wrong shape. The
+        # resident is writing a receipt *from* this list — naming the commits,
+        # linking the PR, saying what the run made — and a count line makes it
+        # reconstruct from memory what the daemon already knows exactly
+        # (maintainer, 2026-07-19: "make the live accrued relics useful for
+        # you too... inspected as you go to maintain the focus"). This is the
+        # resident's rendering of the node's own `## Produce` section: same
+        # records, both faces of one run.
+        records = produce.get("records")
+        if stop and isinstance(records, list) and records:
+            manifest = [
+                f"  {relics.icon(str(r.get('kind') or ''))} {relics.label(r)}"
+                + (f" — {r['url']}" if r.get("url") else "")
+                for r in records[:_STOP_MANIFEST_MAX_RECORDS]
+                if isinstance(r, dict) and relics.label(r).strip()
+            ]
+            if manifest:
+                overflow = len(records) - len(manifest)
+                lines.append(
+                    "- your produce this run (the manifest this node carries, "
+                    "and what a receipt should name):\n" + "\n".join(manifest)
+                    + (f"\n  … and {overflow} more" if overflow > 0 else "")
+                )
     # Affirmative-empty: an *addressed* run reaching closeout with nothing
     # communicated anywhere is suspicious, not silent — surface the absence at
     # the boundary, before the slot is gone. A warn, not a requirement: the
@@ -480,11 +508,24 @@ def format_delta(
     if card_stale:
         age = card.get("age_seconds")
         age_txt = f"{age}s" if age is not None else "a while"
-        lines.append(
-            f"- card: no change in {age_txt} — rewrite .card (even one "
-            "line) so the surface the user is watching isn't sitting blank "
-            "or stale."
-        )
+        moved = card.get("state_moved_seconds")
+        if card.get("active") and moved is not None:
+            # Name the movement, not the clock. The nudge now fires only when
+            # a fact the card would report has changed since the card was
+            # written, so it can say what the card is behind *on* — which is
+            # also the difference between a forcing function and a nag you
+            # learn to silence with a cosmetic edit.
+            lines.append(
+                f"- card: the run moved {moved}s ago (produce, branch, "
+                "delivery, or pending events) and .card hasn't been rewritten "
+                f"since — it's {age_txt} old and now describes a different run."
+            )
+        else:
+            lines.append(
+                f"- card: no change in {age_txt} — rewrite .card (even one "
+                "line) so the surface the user is watching isn't sitting blank "
+                "or stale."
+            )
     # The run's own body, at closeout only (maintainer, 2026-07-19: "run's own
     # body on stop - right, that's what I actually meant").
     #

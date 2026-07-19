@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	bodySection,
 	dispatchEdges,
 	frameFields,
 	frontmatterDocument,
@@ -291,4 +292,32 @@ test('nodeDigest offers the expand only when expanding reveals something', () =>
 
 	// An unmirrored node reports itself rather than rendering empty vitals.
 	assert.equal(node([]).mirrored, false);
+});
+
+test('bodySection lifts the produce manifest off the attested frame', () => {
+	// The node's produce arrives as Markdown in `state.md` rather than as a
+	// parallel JSON schema — the relic vocabulary was already hand-mirrored in
+	// two places and a third copy was not worth a section of links.
+	const frame = [
+		'# Run run-1',
+		'',
+		'- status: running',
+		'',
+		'## Request',
+		'',
+		'do the thing',
+		'',
+		'## Produce',
+		'',
+		'- 🔨 [abc1234 do the thing](https://forge/commit/abc1234)',
+		'- 🔀 [PR #487](https://forge/pr/487)'
+	].join('\n');
+	assert.equal(
+		bodySection(frame, 'Produce'),
+		'- 🔨 [abc1234 do the thing](https://forge/commit/abc1234)\n- 🔀 [PR #487](https://forge/pr/487)'
+	);
+	assert.equal(bodySection(frame, 'Request'), 'do the thing');
+	// A node written before produce was recorded on the frame reads empty —
+	// which the renderer must not flatten into "produced nothing".
+	assert.equal(bodySection('# Run run-1\n\n- status: done', 'Produce'), '');
 });
