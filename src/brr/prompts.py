@@ -1158,7 +1158,7 @@ def _build_orientation(
 
     if is_daemon and not is_worker:
         steps.append(OrientationStep(
-            action="write .card + .task-classification",
+            action="write .card",
             reason="the card is the surface the user watches while you think",
         ))
 

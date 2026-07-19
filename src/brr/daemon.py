@@ -2100,10 +2100,9 @@ def _run_worker(
         if cfg.get("hooks.next_move", False) and not task.meta.get("worker"):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
             # Same arming, same control-arm discipline: the guard also escalates
-            # the two clean artifact obligations (card, task-classification)
-            # from format_delta's soft `inject` mention to a hard block. Both
-            # are pure fresh-file existence checks.
-            obligations = ["card", "classification"]
+            # the clean artifact obligation (card) from format_delta's soft
+            # `inject` mention to a hard block. A pure fresh-file existence check.
+            obligations = ["card"]
             # The SCM obligation, now armed (product call made 2026-07-15). It
             # is NOT a file check but a fresh-git read at Stop, so the hook needs
             # the checkout + seed ref. Armed only for `host`: that is the one
@@ -3816,19 +3815,6 @@ def _write_live_portal_state(
             "scm": scm_facet,
             "produce": produce_facet,
             "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
-            # Task-classification presence: the ledger's only rollup-by-shape
-            # join key (``run_ledger.py`` §``task_classification``), and one a
-            # resident can go a whole run without writing since nothing
-            # breaks when it's missing — the row's field just stays null
-            # forever. A card-staleness-style forcing function, named
-            # directly after a live near-miss (2026-07-07,
-            # run-260707-2243-nf13's own predecessor caught it only because
-            # the maintainer's question forced a self-check).
-            "task_classification": {
-                "written": bool(
-                    run_ledger.read_task_classification_control(outbox_dir)
-                ),
-            },
             "name": {"written": bool(run_ledger.read_run_name_control(outbox_dir))},
             "resources": _resources_facet(
                 quota_summary,
@@ -3981,7 +3967,7 @@ def _queue_respawn_request(
         "origin_message_key", "respawn", "event", "gate",
         "runner", "proposed_runner", "shell", "core", "at", "defer_until",
         "carry_forward", "quality", "quality_escalation", "escalation",
-        "worker", "task_classification",
+        "worker",
     }
     meta = {
         k: v for k, v in current.items()
@@ -4004,9 +3990,6 @@ def _queue_respawn_request(
         meta["defer_until"] = defer_until
     if worker:
         meta["worker"] = True
-    task_classification = str(fm.get("task_classification") or "").strip()
-    if task_classification:
-        meta["task_classification"] = task_classification
     reason = str(fm.get("reason") or "").strip()
     meta["respawned_from_event"] = event_id
     meta["respawned_by_run"] = task.id
@@ -4476,9 +4459,6 @@ def _queue_spawn_request(
         meta["shell"] = proposed
     if core:
         meta["core"] = core
-    task_classification = str(fm.get("task_classification") or "").strip()
-    if task_classification:
-        meta["task_classification"] = task_classification
     if task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
     reason = str(fm.get("reason") or "").strip()
@@ -6781,11 +6761,6 @@ def _run_worker_and_finalize(
             Path(str(task.meta["outbox_path"]))
             if task.meta.get("outbox_path") else None
         )
-        control_classification = run_ledger.read_task_classification_control(
-            outbox_path
-        )
-        if control_classification:
-            task.meta["task_classification"] = control_classification
         # Before the ledger: the reply archive reports a ``reply`` relic, and
         # ``append_closed_run`` is what collects relics.
         _capture_knowledge(

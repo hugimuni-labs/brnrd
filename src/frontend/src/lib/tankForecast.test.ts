@@ -42,7 +42,6 @@ function row(over: Partial<RunLedgerRow> = {}): RunLedgerRow {
 		source_system: 'telegram',
 		name: null,
 		external_refs: null,
-		task_classification: null,
 		parent_run_id: null,
 		is_subspawn: null,
 		tokens_input: null,
@@ -139,11 +138,11 @@ describe('scheduledCost', () => {
 	it('joins on source_system, which the daemon writes — not on the slug', () => {
 		const rows = [
 			...calibration,
-			row({ source_system: 'schedule', tokens_input: 60000, task_classification: 'director-tick' }),
-			row({ source_system: 'schedule', tokens_input: 80000, task_classification: 'director_tick' }),
+			row({ source_system: 'schedule', tokens_input: 60000 }),
+			row({ source_system: 'schedule', tokens_input: 80000 }),
 			// Same shape of run, a slug nobody will ever join on again. It still
 			// counts, because the join never looked at the slug.
-			row({ source_system: 'schedule', tokens_input: 70000, task_classification: 'plan-review' }),
+			row({ source_system: 'schedule', tokens_input: 70000 }),
 			row({ source_system: 'telegram', tokens_input: 900000 })
 		];
 		const cost = scheduledCost(rows);
