@@ -76,7 +76,7 @@
 		{/if}
 	</div>
 	{#if profiles.length === 0}
-		<p class="font-mono text-xs text-stone-500">No daemon has reported its catalog yet.</p>
+		<p class="font-mono text-xs text-ink-quiet">No daemon has reported its catalog yet.</p>
 	{:else}
 		<div class="space-y-1.5">
 			{#each profiles as profile (profile.name)}
@@ -99,7 +99,7 @@
 								? 'text-amber-200'
 								: 'text-stone-300'}">{profile.name}</span
 						>
-						<span class="font-mono text-[11px] text-stone-500"
+						<span class="font-mono text-[11px] text-ink-quiet"
 							>{profile.shell ?? '?'} · {coreLabel(profile)}</span
 						>
 					</div>
@@ -127,14 +127,14 @@
 							>
 						{/if}
 						{#if profile.cost_rank !== null && profile.cost_rank !== undefined}
-							<span class="text-stone-500">rank {profile.cost_rank}</span>
+							<span class="text-ink-quiet">rank {profile.cost_rank}</span>
 						{/if}
 						{#if profile.quota_source}
-							<span class="text-stone-600">{profile.quota_source}</span>
+							<span class="text-ink-mute">{profile.quota_source}</span>
 						{/if}
 						{#if profile.capability_score !== null && profile.capability_score !== undefined}
 							<span
-								class="text-stone-500"
+								class="text-ink-quiet"
 								title={profile.capability_freshness
 									? `benchmark as of ${profile.capability_freshness}`
 									: undefined}>cap {profile.capability_score}</span

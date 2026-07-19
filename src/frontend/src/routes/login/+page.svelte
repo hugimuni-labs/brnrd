@@ -33,7 +33,7 @@
 	<div class="mt-6 grid grid-cols-1 items-start gap-8 md:mt-14 md:grid-cols-[minmax(0,1fr)_320px]">
 		<section aria-label="what brnrd is">
 			<p class="font-mono text-3xl font-semibold tracking-tight text-amber-100">brnrd</p>
-			<p class="mt-1 font-mono text-[11px] tracking-wide text-stone-500 uppercase">
+			<p class="mt-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 				drain local · route wisely
 			</p>
 
@@ -78,7 +78,7 @@
 			{#if error}
 				<p class="mt-4 text-sm text-red-400">{error}</p>
 			{:else if context === null}
-				<p class="mt-4 text-sm text-stone-500">Loading…</p>
+				<p class="mt-4 text-sm text-ink-quiet">Loading…</p>
 			{:else if context.authenticated}
 				<button
 					type="button"
@@ -98,7 +98,7 @@
 					</svg>
 					<span>sign in with GitHub</span>
 				</a>
-				<p class="mt-3 text-xs text-stone-500">
+				<p class="mt-3 text-xs text-ink-quiet">
 					New accounts continue through the
 					<a class="text-sky-400 underline" href="/terms">brnrd beta hosted-execution terms</a>
 					before using the dashboard.
@@ -106,10 +106,10 @@
 			{:else}
 				<button
 					type="button"
-					class="mt-4 w-full cursor-not-allowed border border-stone-800 px-3 py-2 font-mono text-[12px] tracking-wide text-stone-500 uppercase"
+					class="mt-4 w-full cursor-not-allowed border border-stone-800 px-3 py-2 font-mono text-[12px] tracking-wide text-ink-quiet uppercase"
 					disabled>GitHub login unavailable</button
 				>
-				<p class="mt-3 text-xs text-stone-500">
+				<p class="mt-3 text-xs text-ink-quiet">
 					OAuth client settings are missing on this brnrd server.
 				</p>
 			{/if}
