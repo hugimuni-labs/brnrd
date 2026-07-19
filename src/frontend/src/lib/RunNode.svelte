@@ -63,6 +63,7 @@
 
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
+		collected: 'text-emerald-400/60',
 		pending: 'text-amber-400',
 		undeliverable: 'text-red-400',
 		unknown: 'text-stone-500'
