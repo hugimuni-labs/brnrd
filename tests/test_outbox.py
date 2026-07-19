@@ -672,7 +672,9 @@ def test_live_portal_state_flags_stale_card(tmp_path):
     assert payload["card"]["stale"] is True
     assert payload["card"]["age_seconds"] >= 240
 
-    # Written long ago, run itself younger than the card write.
+    # Written long ago, but the run has not moved since: NOT stale. An old
+    # card describing a run that hasn't changed is an accurate card, and the
+    # only way to satisfy a pure timer is a cosmetic edit (2026-07-19).
     path = daemon._write_live_portal_state(
         outbox, inbox, current["id"], task, phase="running",
         card_state={
@@ -682,7 +684,36 @@ def test_live_portal_state_flags_stale_card(tmp_path):
         start_monotonic=daemon.time.monotonic() - 1,
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card"]["stale"] is False
+
+    # Same old card, but now the run has moved (a new pending event) and the
+    # movement is itself older than the threshold: stale, with the reason.
+    task.meta["run_state_moved_monotonic"] = daemon.time.monotonic() - 300
+    path = daemon._write_live_portal_state(
+        outbox, inbox, current["id"], task, phase="running",
+        card_state={
+            "last": "old note",
+            "written_monotonic": daemon.time.monotonic() - 400,
+        },
+        start_monotonic=daemon.time.monotonic() - 600,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["card"]["stale"] is True
+    assert payload["card"]["state_moved_seconds"] >= 240
+
+    # Movement the card already caught up with stays quiet, however old the
+    # movement is.
+    task.meta["run_state_moved_monotonic"] = daemon.time.monotonic() - 300
+    path = daemon._write_live_portal_state(
+        outbox, inbox, current["id"], task, phase="running",
+        card_state={
+            "last": "caught up",
+            "written_monotonic": daemon.time.monotonic() - 10,
+        },
+        start_monotonic=daemon.time.monotonic() - 600,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card"]["stale"] is False
 
     # Fresh write stays quiet.
     path = daemon._write_live_portal_state(
