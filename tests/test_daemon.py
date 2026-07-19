@@ -3609,9 +3609,11 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "run_id: run-state" in text
     assert "repo_label: Gurio/brr" in text
-    assert "- runner: codex" in text
+    assert "runner_name: codex" in text
     assert "reply_archive: archived" in text
-    assert "- reply archive: archived" in text
+    # The body no longer restates frontmatter facts as bullets — the
+    # non-repetitive-node cut, 2026-07-19.
+    assert "- runner:" not in text
     # The local store path is recorded as a dev breadcrumb; with no forge
     # remote on the dominion there is no web URL to surface yet.
     assert task.meta["run_state_path"] == str(path)
@@ -3762,8 +3764,6 @@ def test_boot_janitor_reaps_only_provably_dead_running_state_docs(tmp_path):
         assert fields["status"] == "error"
         assert fields["stage"] == "reaped"
         assert fields["reap_reason"].startswith("boot janitor:")
-        assert "- status: error" in text
-        assert "- stage: reaped" in text
     for path in (fresh, live, pid_live):
         assert protocol.parse_frontmatter(path.read_text(encoding="utf-8"))["status"] == "running"
 
@@ -4328,7 +4328,6 @@ def test_running_stage_reports_execution_not_the_pending_lifecycle(tmp_path):
         ctx, task, repo_label="Gurio/brr", stage="running",
     ).read_text(encoding="utf-8")
     assert "status: running" in running
-    assert "- status: running" in running
 
     # A terminal status is never overwritten by the stage.
     task.status = "done"

@@ -310,3 +310,61 @@ def test_counts_by_kind_excludes_summary():
 def test_icon_known_and_unknown_kind():
     assert relics.icon("commit") == "🔨"
     assert relics.icon("something-new") == "•"
+
+
+def test_collection_scope_passes_through_worktree_pins(tmp_path: Path):
+    branch, seed = relics.collection_scope(
+        {"branch_name": "brr/work", "seed_ref": "main"}, tmp_path,
+    )
+    assert (branch, seed) == ("brr/work", "main")
+
+
+def test_collection_scope_host_run_measures_from_start_head(tmp_path: Path):
+    """A host run has no assigned branch; the scope is the checkout's current
+    branch against the run-start HEAD OID, so work merged back into the seed
+    branch still books as this run's commits."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    start_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    # The usual host flow: branch, commit, merge back, end on main.
+    subprocess.run(["git", "checkout", "-b", "brr/feature"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="the work")
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "merge", "--no-ff", "brr/feature", "-m", "merge"],
+                   cwd=repo, check=True)
+
+    branch, seed = relics.collection_scope(
+        {"seed_ref": "main", "host_start_oid": start_oid}, repo,
+    )
+    assert branch == "main"
+    assert seed == start_oid
+
+    out = relics.derive_auto(repo, branch=branch, seed_ref=seed, outbox_dir=None)
+    subjects = [r.get("subject") for r in out if r["kind"] == "commit"]
+    # Both the work and the merge are commits that appeared during the run;
+    # the pre-run seed commit is not.
+    assert "the work" in subjects
+    assert "seed" not in subjects
+
+
+def test_collection_scope_detached_head_yields_no_branch(tmp_path: Path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "--detach", oid], cwd=repo, check=True,
+                   capture_output=True)
+    branch, seed = relics.collection_scope({"seed_ref": "main"}, repo)
+    assert branch is None
+    assert seed == "main"
+
+
+def test_collection_scope_without_work_dir_is_meta_only():
+    assert relics.collection_scope({}, None) == (None, None)
