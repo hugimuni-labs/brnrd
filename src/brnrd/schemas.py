@@ -400,6 +400,10 @@ class LiveRunsReport(BaseModel):
     """
 
     runs: list[LiveRunIn] = Field(default_factory=list)
+    # Stop-request ids this daemon has dispatched into the kill path since
+    # its last publish (#476 wyrd §3) — same ack economics as
+    # `RunnersReport.consumed_wake_request_ids`.
+    consumed_run_stop_request_ids: list[str] = Field(default_factory=list)
     # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
     # here rather than a new endpoint — loom-envelope Phase 1's one piece of
     # data the live-runs publish didn't already carry (the active count is
@@ -408,10 +412,23 @@ class LiveRunsReport(BaseModel):
     spawn_max_concurrent: int | None = None
 
 
+class RunStopRequestOut(BaseModel):
+    """A user-issued "stop that run" (#476 wyrd §3)."""
+
+    request_id: str
+    run_id: str
+    requested_at: datetime | None = None
+    status: str
+
+
 class LiveRunsOut(BaseModel):
     runs: list[LiveRunIn]
     live_runs_updated_at: datetime | None = None
     spawn_max_concurrent: int | None = None
+    # Piggyback channel: the account's pending run stops ride back on the
+    # daemon's own live-runs publish tick, so a tap reaches the kill path
+    # within one tick without a new polling loop.
+    pending_run_stop_requests: list[RunStopRequestOut] = Field(default_factory=list)
 
 
 class PRReviewItemIn(BaseModel):
