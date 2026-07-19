@@ -57,9 +57,17 @@
 	// so it is lifted out of the frame's prose into its own section rather than
 	// reading as a footnote under the request summary.
 	let produce = $derived(frame ? bodySection(frame.body, 'Produce') : '');
-	let frameProse = $derived(
-		frame ? frame.body.split(/^## Produce$/im)[0].trim() : ''
-	);
+	// Frame prose starts at the first `## ` section. Everything before it —
+	// the `# Run <id>` heading and, on nodes written before 2026-07-19, a
+	// bullet list restating the frontmatter — duplicates what this page
+	// already renders (the h1 and the fields grid above), so it is dropped
+	// for old and new nodes alike rather than only fixed at the writer.
+	let frameProse = $derived.by(() => {
+		if (!frame) return '';
+		const beforeProduce = frame.body.split(/^## Produce$/im)[0];
+		const firstSection = beforeProduce.search(/^## /m);
+		return firstSection < 0 ? '' : beforeProduce.slice(firstSection).trim();
+	});
 
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
