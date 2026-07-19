@@ -480,9 +480,29 @@ def _runner_shell(runner_name: str | None) -> str | None:
 
 
 def _delta(after: Any, before: Any) -> float | None:
+    """A run's quota draw, or ``None`` when the window reset underneath it.
+
+    These columns are *used*-percentages, so the draw is ``after - before``.
+    That subtraction is only meaningful while both readings belong to the same
+    window: when a 5h or weekly window rolls over (or a reset credit is spent)
+    mid-run, ``used`` drops back toward zero and the run books a large negative
+    cost — it gets *credited* for spending. Live evidence at the time this
+    guard was written: 5 of 181 weekly rows and 20 of 253 five-hour rows on
+    this account were negative, reaching -77 and -83 respectively, and
+    ``usd_subscription_attributed`` (derived from the weekly delta) inherited
+    the sign.
+
+    ``codex_status.recent_burn`` already refuses to measure across a reset for
+    exactly this reason; the ledger simply never learned the same lesson.
+    A reset is unrecoverable here — the pre-reset portion of the run's spend
+    went with the old window — so the honest row is a null, which every
+    consumer already handles, rather than a negative that reads as real.
+    """
     after_num = _num(after)
     before_num = _num(before)
     if after_num is None or before_num is None:
+        return None
+    if after_num < before_num:
         return None
     return round(after_num - before_num, 6)
 

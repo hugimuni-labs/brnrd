@@ -504,3 +504,73 @@ def test_row_surfaces_substitution_reason(tmp_path, monkeypatch):
     row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert row["substitution_reason"] == "fallback->claude-opus-4-8"
     assert row["core_mismatch"] is True
+
+
+def test_window_reset_mid_run_yields_null_not_a_negative_cost(monkeypatch, tmp_path):
+    """A window that rolls over mid-run must not credit the run for spending.
+
+    The delta columns are *used*-percentages, so `after - before` is only a
+    cost while both readings belong to the same window. When the 5h or weekly
+    window resets (or a reset credit is spent) mid-run, `used` drops back
+    toward zero and the subtraction goes negative — the run books a large
+    negative cost, and `usd_subscription_attributed`, derived from the weekly
+    delta, inherits the sign.
+
+    Found on the live account 2026-07-19: 5 of 181 weekly rows and 20 of 253
+    five-hour rows were negative, reaching -77 and -83. `codex_status.
+    recent_burn` already refuses to measure across a reset for exactly this
+    reason; the ledger had never learned it.
+    """
+    snapshots = iter([
+        _levels(weekly=60.0, five_hour=80.0),
+        # Both windows refilled while the run was working.
+        _levels(weekly=2.0, five_hour=1.0, tokens={"input_tokens": 100}),
+    ])
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: next(snapshots))
+
+    task = _task()
+    run_ledger.mark_run_started(task, "codex", None, None)
+    task.meta["started_at"] = "2026-07-06T10:00:00Z"
+    task.meta["ended_at"] = "2026-07-06T10:00:05Z"
+
+    path = run_ledger.append_closed_run(
+        tmp_path, task, {"run_ledger.subscription_price.codex": 20},
+    )
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert row["weekly_pct_delta"] is None
+    assert row["five_hour_pct_delta"] is None
+    # The dollar attribution rides the weekly delta, so it must go null too
+    # rather than reporting a negative charge.
+    assert row["usd_subscription_attributed"] is None
+    # Everything not derived from the reset windows still lands.
+    assert row["tokens_input"] == 100
+
+
+def test_a_flat_window_still_reports_a_real_zero(monkeypatch, tmp_path):
+    """Guarding resets must not swallow the honest "cost below resolution" row.
+
+    The provider reports whole percents, so any run cheaper than ~1% of the
+    window legitimately reads 0.0 — 51 of 181 weekly rows on the live account.
+    That is a measurement, not a reset, and it must survive as 0.0 rather than
+    collapsing into the same null the reset case produces.
+    """
+    snapshots = iter([
+        _levels(weekly=40.0, five_hour=10.0),
+        _levels(weekly=40.0, five_hour=10.0, tokens={"input_tokens": 10}),
+    ])
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: next(snapshots))
+
+    task = _task()
+    run_ledger.mark_run_started(task, "codex", None, None)
+    task.meta["started_at"] = "2026-07-06T10:00:00Z"
+    task.meta["ended_at"] = "2026-07-06T10:00:05Z"
+
+    path = run_ledger.append_closed_run(
+        tmp_path, task, {"run_ledger.subscription_price.codex": 20},
+    )
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert row["weekly_pct_delta"] == 0.0
+    assert row["five_hour_pct_delta"] == 0.0
+    assert row["usd_subscription_attributed"] == 0.0

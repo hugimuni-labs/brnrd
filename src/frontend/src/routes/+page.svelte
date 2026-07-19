@@ -204,23 +204,42 @@
 		}
 	}
 
+	// Which run this frame is about. A loom selection names one explicitly;
+	// with *nothing* selected and exactly one run live, that run is the answer
+	// to "what's happening now" and the frame focuses it.
+	//
+	// Before this, the unselected frame fell through to `<LiveRuns />`, which
+	// renders neither produce nor a link to the run's own node — so the panel a
+	// reader looks at by default was the one panel with no way through to the
+	// node, and no manifest (maintainer, 2026-07-19: "the current run view
+	// doesn't show any produce, and doesn't have a link for the detailed run
+	// view"). #480 gave the node link to the *selected* sheet and never carried
+	// it here. Focusing the sole live run reuses the node panel wholesale
+	// rather than teaching a second component to render produce — the same
+	// one-run-one-panel rule #486 settled.
+	let focusRunId = $derived.by(() => {
+		if (loomSelection?.kind === 'run') return loomSelection.id;
+		if (loomSelection !== null) return null;
+		const live = liveRuns ?? [];
+		return live.length === 1 ? (live[0].run_id || live[0].id) : null;
+	});
 	let selectedLiveRuns = $derived(
-		loomSelection?.kind === 'run'
-			? (liveRuns ?? []).filter((run) => (run.run_id || run.id) === loomSelection!.id)
-			: []
+		focusRunId === null
+			? []
+			: (liveRuns ?? []).filter((run) => (run.run_id || run.id) === focusRunId)
 	);
 	let selectedLedgerRows = $derived(
-		loomSelection?.kind === 'run'
-			? (runLedgerRows ?? []).filter(
-					(row) => (row.run_id ?? row.event_id ?? row.ended_at ?? '') === loomSelection!.id
+		focusRunId === null
+			? []
+			: (runLedgerRows ?? []).filter(
+					(row) => (row.run_id ?? row.event_id ?? row.ended_at ?? '') === focusRunId
 				)
-			: []
 	);
 	// The node route for whatever run is selected, live or closed. A live cell
 	// only ever opened this sheet, so the running run — the one a reader is
 	// most likely to want — had no way through to its own node at all.
 	let selectedNode = $derived.by(() => {
-		if (loomSelection?.kind !== 'run') return null;
+		if (focusRunId === null) return null;
 		const live = selectedLiveRuns[0];
 		const source = live?.run_id ? live : selectedLedgerRows.find((row) => row.run_id);
 		if (!source?.run_id) return null;
@@ -442,6 +461,9 @@
 			{runnersError}
 			{runnersNote}
 			onTap={tapWakeRunner}
+			ledgerRows={runLedgerRows}
+			{scheduledWakes}
+			{now}
 		/>
 	</section>
 
@@ -487,7 +509,11 @@
 				     moment the node became the single answer. -->
 				<p class="eyebrow">
 					§2a · {loomSelection === null
-						? 'now'
+						? focusRunId === null
+							? 'now'
+							: selectedNode && selectedNodeMirrored
+								? 'now · node'
+								: 'now'
 						: loomSelection.kind === 'wake'
 							? 'selected wake'
 							: selectedNode && selectedNodeMirrored
@@ -518,7 +544,7 @@
 					{:else}
 						<p class="text-sm text-stone-500">that wake left the schedule — it likely fired.</p>
 					{/if}
-				{:else if loomSelection?.kind === 'run'}
+				{:else if loomSelection?.kind === 'run' || focusRunId !== null}
 					<!-- The loom stays the spine: a selected run fills this frame with
 				     its own node instead of sending the reader to a page and
 				     costing them their place in the band. One panel, not three —
