@@ -82,14 +82,14 @@
 		{/if}
 	</div>
 	{#if summary.runCount === 0}
-		<p class="mt-2 text-sm text-stone-500">no closed runs in the last {windowLabel}</p>
+		<p class="mt-2 text-sm text-ink-quiet">no closed runs in the last {windowLabel}</p>
 	{:else}
 		<div
 			class="mt-3 flex flex-wrap items-stretch gap-3 font-mono tracking-tight"
 			aria-label="24-hour spend and produce"
 		>
 			<section class="subpanel flex-none px-3 py-2.5" aria-label="spend">
-				<p class="mb-2 text-[10px] leading-none tracking-[0.18em] text-stone-500 uppercase">
+				<p class="mb-2 text-[10px] leading-none tracking-[0.18em] text-ink-quiet uppercase">
 					spend
 				</p>
 				<div class="flex flex-nowrap items-start gap-4">
@@ -118,11 +118,11 @@
 					→
 				</div>
 				<section class="subpanel flex-none px-3 py-2.5" aria-label="produce">
-					<p class="mb-2 text-[10px] leading-none tracking-[0.18em] text-stone-500 uppercase">
+					<p class="mb-2 text-[10px] leading-none tracking-[0.18em] text-ink-quiet uppercase">
 						produce
 					</p>
 					{#if produceParts.length === 0}
-						<p class="whitespace-nowrap text-[11px] text-stone-500">no recorded produce</p>
+						<p class="whitespace-nowrap text-[11px] text-ink-quiet">no recorded produce</p>
 					{:else}
 						<div class="flex flex-nowrap items-start gap-4">
 							{#each produceParts as part (part.label)}
@@ -145,7 +145,7 @@
 		{#if linkedProduce.length > 0}
 			<details class="group mt-3 border-t border-stone-800/70 pt-2 font-mono">
 				<summary
-					class="flex cursor-pointer list-none items-center justify-between gap-3 text-[10px] tracking-[0.12em] text-stone-500 uppercase"
+					class="flex cursor-pointer list-none items-center justify-between gap-3 text-[10px] tracking-[0.12em] text-ink-quiet uppercase"
 				>
 					<span>linked produce · {linkedProduce.length}</span>
 					<span class="group-open:hidden">▼ expand</span>
