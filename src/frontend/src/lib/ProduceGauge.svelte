@@ -1,11 +1,13 @@
 <script lang="ts">
 	import {
+		PRODUCE_GAUGE_WINDOW_MS,
 		gaugeDuration,
 		gaugeTokens,
 		gaugeUsd,
 		produceGaugeLinks,
 		rollupProduceGauge
 	} from './produceGauge';
+	import { loomPastWindowLabel } from './loomBand';
 	import { relicIcon, type RunLedgerRow } from './runLedger';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN } from './statusPalette';
 
@@ -13,11 +15,16 @@
 		rows: RunLedgerRow[];
 		stale: boolean;
 		now: number;
+		/** The span this gauge rolls up — the loom's past dial, not a constant.
+		 *  Its caption names the *actual* window, so the dial and the number
+		 *  under it can never disagree the way a hardcoded "last 24h" did. */
+		windowMs?: number;
 	}
 
-	let { rows, stale, now }: Props = $props();
-	let summary = $derived(rollupProduceGauge(rows, now));
-	let linkedProduce = $derived(produceGaugeLinks(rows, now));
+	let { rows, stale, now, windowMs = PRODUCE_GAUGE_WINDOW_MS }: Props = $props();
+	let summary = $derived(rollupProduceGauge(rows, now, windowMs));
+	let linkedProduce = $derived(produceGaugeLinks(rows, now, windowMs));
+	let windowLabel = $derived(loomPastWindowLabel(windowMs));
 
 	interface GaugePart {
 		value: string;
@@ -66,7 +73,7 @@
 
 <div class="panel p-4">
 	<div class="flex items-center justify-between gap-3">
-		<span class="eyebrow">last 24h · spend → produce</span>
+		<span class="eyebrow">last {windowLabel} · spend → produce</span>
 		{#if stale}
 			<span
 				class="shrink-0 border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
@@ -75,7 +82,7 @@
 		{/if}
 	</div>
 	{#if summary.runCount === 0}
-		<p class="mt-2 text-sm text-stone-500">no closed runs in the last 24h</p>
+		<p class="mt-2 text-sm text-stone-500">no closed runs in the last {windowLabel}</p>
 	{:else}
 		<div
 			class="mt-3 flex flex-wrap items-stretch gap-3 font-mono tracking-tight"

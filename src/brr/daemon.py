@@ -88,7 +88,7 @@ from . import sync
 from . import transcript
 from . import updates
 from . import worktree
-from .run import Run
+from .run import Run, list_runs, run_manifest_path
 
 class _RunnerRuntime(NamedTuple):
     """What resolving a runner profile yields for one attempt.
@@ -5942,6 +5942,70 @@ def _reap_zombie_run_state_docs(
     return reaped
 
 
+def _reap_zombie_run_manifests(
+    account_context: account.AccountContext,
+    *,
+    now: float | None = None,
+    ancient_after_seconds: float = _RUN_STATE_REAP_AFTER_SECONDS,
+) -> list[Path]:
+    """Reap local run manifests left unfinished by a killed daemon.
+
+    The account run-state document and the repo's ``.brr/runs/<id>/run.md``
+    manifest are two stores of the same fact, and until 2026-07-19 only the
+    first one was ever reaped (see ``_reap_zombie_run_state_docs``, #481).
+    That mattered because the manifest is what the cloud activity publisher
+    reads: ``_run_activity_records`` reports exactly the pending/running
+    manifests, so every run the daemon was killed out from under stayed in
+    the account's ``/activity`` feed forever, claiming to be running. Live
+    measurement on 2026-07-19: 279 of 281 published rows were phantoms, the
+    oldest from 2026-06-21, against 279 stuck manifests on disk.
+
+    Same proof discipline as the state-doc janitor — presence is the live
+    authority, a closed ledger row proves the end, age is the conservative
+    crash-recovery backstop — and the same retention stance: the manifest is
+    rewritten as an explicit ``error``, never deleted.
+    """
+    if not account_context.enabled:
+        return []
+    timestamp = time.time() if now is None else now
+    closed_run_ids = _closed_ledger_run_ids(account_context)
+    reaped_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+    reaped: list[Path] = []
+    for registered in account_context.repos.values():
+        brr_dir = gitops.shared_brr_dir(registered.root)
+        runs_dir = brr_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+        live_run_ids = {
+            str(entry.get("run_id") or "")
+            for entry in presence.list_active(brr_dir, now=timestamp)
+        }
+        for task in list_runs(runs_dir):
+            if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
+                continue
+            if task.id in live_run_ids:
+                continue
+            manifest = run_manifest_path(runs_dir, task.id)
+            try:
+                modified_at = manifest.stat().st_mtime
+            except OSError:
+                continue
+            ledger_closed = task.id in closed_run_ids
+            ancient = timestamp - modified_at >= ancient_after_seconds
+            if not (ledger_closed or ancient):
+                continue
+            proof = (
+                "closed ledger row"
+                if ledger_closed
+                else "manifest exceeded the boot safety horizon"
+            )
+            task.meta["reaped_at"] = reaped_at
+            task.meta["reap_reason"] = f"boot janitor: no live presence; {proof}"
+            task.update_status("error", runs_dir)
+            reaped.append(manifest)
+    return reaped
+
+
 def _event_requires_thread_delivery(event: dict) -> bool:
     """True when the originating event has a user-facing thread to close."""
     return str(event.get("source") or "") not in _INTERNAL_EVENT_SOURCES
@@ -6732,6 +6796,15 @@ def start(
             print(f"[brnrd] run-state janitor: reaped {len(reaped_state_docs)} zombie run(s)")
     except Exception as exc:  # noqa: BLE001 - janitor must not block boot
         print(f"[brnrd] run-state janitor skipped: {exc}")
+    try:
+        # The same zombies in the other store. The state doc feeds the Wyrd
+        # node; the manifest feeds the cloud activity publisher — reaping one
+        # and not the other is what left /activity claiming 279 live runs.
+        reaped_manifests = _reap_zombie_run_manifests(account_context)
+        if reaped_manifests:
+            print(f"[brnrd] run-manifest janitor: reaped {len(reaped_manifests)} zombie run(s)")
+    except Exception as exc:  # noqa: BLE001 - janitor must not block boot
+        print(f"[brnrd] run-manifest janitor skipped: {exc}")
     try:
         backfilled = _backfill_dispatch_edges(account_context)
         if backfilled:
