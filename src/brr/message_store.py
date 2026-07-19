@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,13 @@ from .run import list_runs
 MESSAGES_PATH = "messages"
 PENDING = "pending"
 DELIVERED = "delivered"
+COLLECTED = "collected"
 UNDELIVERABLE = "undeliverable"
-_TERMINAL = {DELIVERED, UNDELIVERABLE}
+# ``collected`` is the dispatch-edge counterpart of ``delivered``: a worker's
+# terminal report is consumed by the parent run that spawned it, not by a
+# gate. Both carry a receipt, so both stamp the same receipt fields.
+_RECEIPTED = {DELIVERED, COLLECTED}
+_TERMINAL = _RECEIPTED | {UNDELIVERABLE}
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _WRITE_LOCK = threading.Lock()
 
@@ -153,7 +159,7 @@ def transition(
             return False
         meta = {k: v for k, v in message.items() if k not in {"body", "_path"}}
         meta["status"] = status
-        if status == DELIVERED:
+        if status in _RECEIPTED:
             meta["platform_gate"] = gate
             meta["platform_message_id"] = platform_message_id
             meta["delivered_at"] = delivered_at or _now()
@@ -211,6 +217,52 @@ def _artifact_owners(conversations_dir: Path) -> dict[str, str]:
             if source and run_id and ".partials/" in source:
                 owners[source] = run_id
     return owners
+
+
+def resolve_stranded(
+    ctx: account.HomeContext,
+    *,
+    repo_label: str,
+    gate_owned: Callable[[str], bool],
+) -> dict[str, int]:
+    """Retire records left ``pending`` by a gate that never existed (#454).
+
+    Before the dispatch-tree sources learned to resolve their own records,
+    a reply addressed to an event no gate owns was staged ``pending`` and
+    nothing ever moved it — the residue #454 tracked after #459 made the
+    class visible. Two populations wear that one status:
+
+    * a worker's terminal report (``target_gate: spawn``), which the
+      spawning parent *did* read along the dispatch edge → ``collected``;
+    * everything else — interims to ``spawn``/``spawn_completed``/
+      ``dispatch_message``/``schedule`` events, which nothing consumes →
+      ``undeliverable``.
+
+    Boot-only is the right cadence *because the producers are fixed*: no
+    new stranded record can be created, so this only ever has legacy rows
+    to find. It is idempotent — a terminal record is never revisited.
+    """
+    counts = {"collected": 0, "undeliverable": 0}
+    runs_root = ctx.runs_dir / account.slug_repo_label(repo_label)
+    if not runs_root.is_dir():
+        return counts
+    for messages_dir in sorted(runs_root.glob(f"*/{MESSAGES_PATH}")):
+        for message in list_messages(messages_dir, status=PENDING):
+            gate = str(message.get("target_gate") or "")
+            if not gate or gate_owned(gate):
+                continue
+            if gate == "spawn" and message.get("kind") == "terminal":
+                if transition(
+                    message["_path"], COLLECTED,
+                    gate="dispatch-edge", platform_message_id="legacy-sweep",
+                ):
+                    counts["collected"] += 1
+            elif transition(
+                message["_path"], UNDELIVERABLE,
+                reason=f"no gate owns {gate} events (resolved by the #454 sweep)",
+            ):
+                counts["undeliverable"] += 1
+    return counts
 
 
 def migrate_legacy(

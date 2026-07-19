@@ -181,6 +181,7 @@ test('messageTone recognises exactly the statuses message_store writes', () => {
 	assert.equal(messageTone('delivered'), 'delivered');
 	assert.equal(messageTone('pending'), 'pending');
 	assert.equal(messageTone('undeliverable'), 'undeliverable');
+	assert.equal(messageTone('collected'), 'collected');
 	assert.equal(messageTone('failed'), 'unknown');
 	assert.equal(messageTone(undefined), 'unknown');
 });
