@@ -12,6 +12,7 @@
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
 	import type { RunLedgerRow } from './runLedger';
 	import {
+		bodySection,
 		dispatchEdges,
 		frameFields,
 		frontmatterDocument,
@@ -51,6 +52,14 @@
 	let repoLabel = $derived(frame?.metadata.repo_label || repoSlug.replaceAll('__', '/'));
 	let edges = $derived(dispatchEdges(frame?.metadata ?? {}, repoSlug, knownPaths));
 	let running = $derived((frame?.metadata.status ?? '').toLowerCase() === 'running');
+	// Produce is attested frame content, but it is also the answer to the
+	// question this page mostly gets opened to ask ("what did this run make?"),
+	// so it is lifted out of the frame's prose into its own section rather than
+	// reading as a footnote under the request summary.
+	let produce = $derived(frame ? bodySection(frame.body, 'Produce') : '');
+	let frameProse = $derived(
+		frame ? frame.body.split(/^## Produce$/im)[0].trim() : ''
+	);
 
 	const TONE_CLASS: Record<string, string> = {
 		delivered: 'text-emerald-400/80',
@@ -151,10 +160,10 @@
 						</div>
 					{/each}
 				</dl>
-				{#if frame.body}
+				{#if frameProse}
 					<div class="mt-2 text-sm text-stone-300">
 						<MarkdownContent
-							markdown={frame.body}
+							markdown={frameProse}
 							sourcePath={node.state?.path ?? ''}
 							{knownPaths}
 						/>
@@ -162,6 +171,39 @@
 				{/if}
 			{:else}
 				<p class="mt-3 text-sm text-stone-500">No attested frame was captured for this run.</p>
+			{/if}
+		</section>
+
+		<!-- ── Produce: what the run made ─────────────────────────────────── -->
+		<!-- The manifest now lives on the run's own permanent document instead
+		     of only in the ledger receipt, whose API window reaches back seven
+		     days. A node older than that week can still say what it produced. -->
+		<section class="panel mt-4 p-4" aria-labelledby="produce-heading">
+			<div class="flex items-baseline justify-between gap-3 border-b border-stone-800 pb-2">
+				<h2 id="produce-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
+					produce
+				</h2>
+				<span class="shrink-0 font-mono text-[10px] text-stone-600">
+					{running ? 'accruing' : 'daemon-attested'}
+				</span>
+			</div>
+			{#if produce}
+				<div class="text-sm text-stone-300">
+					<MarkdownContent markdown={produce} sourcePath={node.state?.path ?? ''} {knownPaths} />
+				</div>
+			{:else if running}
+				<p class="mt-3 text-sm text-stone-500">
+					Nothing produced yet — commits, branches, PRs and kb pages appear here as this run makes
+					them.
+				</p>
+			{:else}
+				<!-- Absence here is genuinely ambiguous and must not be flattened:
+				     a run that made nothing and a node written before produce was
+				     recorded on the frame look identical from the corpus. Say both. -->
+				<p class="mt-3 text-sm text-stone-500">
+					No produce recorded on this node — the run made nothing durable, or it closed before
+					produce was written to the frame. The ledger receipt above is the other witness.
+				</p>
 			{/if}
 		</section>
 
