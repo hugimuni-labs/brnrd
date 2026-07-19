@@ -20,7 +20,6 @@ _ROW_FIELDS = {
     "external_refs",
     "reply_archive",
     "name",
-    "task_classification",
     "parent_run_id",
     "is_subspawn",
     "tokens_input",
@@ -240,34 +239,6 @@ def test_append_preserves_prior_rows(tmp_path, monkeypatch):
         for line in path.read_text(encoding="utf-8").splitlines()
     ]
     assert [row["run_id"] for row in rows] == ["run-one", "run-two"]
-
-
-def test_read_task_classification_control_reads_first_line(tmp_path):
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".task-classification").write_text(
-        "dashboard-slice\nignored second line\n", encoding="utf-8"
-    )
-
-    assert (
-        run_ledger.read_task_classification_control(outbox) == "dashboard-slice"
-    )
-
-
-def test_task_classification_normalizes_case_and_underscores(tmp_path):
-    task = _task("run-classification")
-    task.meta["task_classification"] = "Director_Tick"
-    assert run_ledger.task_classification(task) == "director-tick"
-
-    outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / ".task-classification").write_text("Director_Tick\n", encoding="utf-8")
-    assert run_ledger.read_task_classification_control(outbox) == "director-tick"
-
-
-def test_read_task_classification_control_missing_file_and_dir(tmp_path):
-    assert run_ledger.read_task_classification_control(tmp_path / "no-outbox") is None
-    assert run_ledger.read_task_classification_control(None) is None
 
 
 def test_read_run_name_control_uses_first_line_and_caps_length(tmp_path):

@@ -136,10 +136,6 @@ export function relicLabel(r: RelicRecord): string {
 	}
 }
 
-export function taskClassificationLabel(value: string | null): string | null {
-	return value?.toLowerCase().replaceAll('_', '-') ?? null;
-}
-
 export interface RunLedgerRow {
 	run_id: string | null;
 	event_id: string | null;
@@ -162,7 +158,6 @@ export interface RunLedgerRow {
 	source_system: string | null;
 	name: string | null;
 	external_refs: RelicRecord[] | null;
-	task_classification: string | null;
 	parent_run_id: string | null;
 	is_subspawn: boolean | null;
 	tokens_input: number | null;
