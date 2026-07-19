@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import ids, inbox as inbox_service, schemas, wake_requests
+from .. import ids, inbox as inbox_service, run_stop_requests, schemas, wake_requests
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
 from ..models import Account, ActivityRecord, Daemon, Event, GitHubInstallation, GitHubInstalledRepo, Repo
@@ -327,10 +327,22 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
+    # #476 wyrd §3 stop piggyback, mirroring the #328 wake-request handshake
+    # on `put_runners`: retire the stops this daemon just dispatched into the
+    # kill path, then hand back the account's still-pending ones so a user's
+    # tap reaches a burning run within one publish tick.
+    run_stop_requests.mark_consumed(
+        db, principal.account_id, payload.consumed_run_stop_request_ids,
+    )
+    pending_stops = run_stop_requests.pending_for_account(db, principal.account_id)
     return schemas.LiveRunsOut(
         runs=payload.runs,
         live_runs_updated_at=now,
         spawn_max_concurrent=payload.spawn_max_concurrent,
+        pending_run_stop_requests=[
+            schemas.RunStopRequestOut(**run_stop_requests.view(row))
+            for row in pending_stops
+        ],
     )
 
 
