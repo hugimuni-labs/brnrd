@@ -127,6 +127,10 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
 _RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
+# How often a live daemon re-sweeps both run-truth stores for zombies. See
+# ``_sweep_zombie_runs``: boot-only made a data repair the user had to
+# schedule by restarting.
+_ZOMBIE_SWEEP_INTERVAL_SECONDS = 30 * 60.0
 # How far back the exact-duplicate scan looks. A genuine re-delivery (one
 # external message fanned to two configured channels) is near-simultaneous;
 # anything older sharing an origin key is a coincidental id collision, not a
@@ -2436,12 +2440,25 @@ def _run_worker(
             # prove the agent is alive. Once, not per heartbeat: the frame is a
             # lifecycle attestation, and rewriting it every 30s would churn the
             # corpus fingerprint (and its full republish) for no new fact.
-            if not task.meta.get("run_state_running_recorded"):
+            #
+            # Produce is the one thing on the frame that legitimately moves
+            # mid-run, so it gets the same treatment the card drain got in
+            # #480: rewrite on a real change, never on the clock. Collecting
+            # the manifest is cheap (a bounded `git log` plus two control
+            # files); republishing the corpus is not, so the fingerprint is
+            # the gate.
+            produce_moved = False
+            if task.meta.get("run_state_running_recorded"):
+                produce_moved = _run_state_produce_changed(
+                    task, work_dir=run_root, outbox_dir=outbox_dir,
+                )
+            if not task.meta.get("run_state_running_recorded") or produce_moved:
                 task.meta["run_state_running_recorded"] = True
                 _persist_run_state_doc(
                     account_context, task,
                     repo_label=str(task.meta.get("repo_label") or ""),
                     stage="running", cfg=cfg,
+                    work_dir=run_root, outbox_dir=outbox_dir,
                 )
             _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
             _write_live_portal_state(
@@ -3504,6 +3521,84 @@ def _read_pr_control(pr_path: Path) -> str | None:
     return forges.parse_pull_request_number(text)
 
 
+def _note_run_state_movement(
+    task: Run,
+    *,
+    scm: dict[str, object] | None,
+    produce: dict[str, object] | None,
+    stats: dict[str, object] | None,
+    events: list[dict[str, object]] | None,
+) -> float | None:
+    """Stamp and return when this run's observable state last moved.
+
+    "Moved" means something a run card would legitimately report changed:
+    the working tree / branch (``scm``), the produce manifest, what the run
+    has delivered, or which events are waiting on it. Deliberately *not*
+    elapsed time, tool calls, or token spend — a run can burn twenty minutes
+    inside one test suite without a single fact about it changing, and that
+    is precisely the case the old timer nagged about.
+
+    Returns the monotonic instant of the last movement, or ``None`` before
+    the first observation (where there is nothing to be behind).
+    """
+    try:
+        digest = json.dumps(
+            {
+                "scm": scm,
+                "produce": produce,
+                "delivered": {
+                    key: stats.get(key) for key in ("current", "other", "outbound")
+                } if stats else None,
+                "events": sorted(
+                    str(event.get("event_id") or "") for event in (events or [])
+                ),
+            },
+            sort_keys=True,
+            default=str,
+        )
+    except Exception:
+        return task.meta.get("run_state_moved_monotonic")
+    now = time.monotonic()
+    if task.meta.get("run_state_digest") != digest:
+        task.meta["run_state_digest"] = digest
+        # The first observation establishes a baseline rather than counting as
+        # movement: otherwise every run would open one stale-card timer at
+        # wake, which is the timer this whole change is replacing.
+        if task.meta.get("run_state_moved_monotonic") is None and "run_state_digest_seen" not in task.meta:
+            task.meta["run_state_digest_seen"] = True
+        else:
+            task.meta["run_state_moved_monotonic"] = now
+    return task.meta.get("run_state_moved_monotonic")
+
+
+def _card_is_stale(
+    *,
+    card_written_monotonic: float | None,
+    state_moved_monotonic: float | None,
+    card_active: bool,
+) -> bool:
+    """Is the run's card behind the run?
+
+    Three conditions, all required: the run has moved, the card has not been
+    rewritten since it moved, and enough time has passed that the resident
+    has plainly moved on rather than being mid-action.
+
+    A run that has never written a card at all keeps the old unconditional
+    clock — the card is the surface the user watches, and its *first* write
+    is owed early regardless of whether anything has happened yet.
+    """
+    if not card_active:
+        return bool(
+            card_written_monotonic is not None
+            and time.monotonic() - card_written_monotonic > _CARD_STALE_SECONDS
+        )
+    if state_moved_monotonic is None or card_written_monotonic is None:
+        return False
+    if card_written_monotonic >= state_moved_monotonic:
+        return False
+    return time.monotonic() - state_moved_monotonic > _CARD_STALE_SECONDS
+
+
 def _change_token(payload: dict[str, object]) -> str:
     stable = {
         key: value
@@ -3527,7 +3622,7 @@ def _change_token(payload: dict[str, object]) -> str:
     if isinstance(card, dict):
         stable["card"] = {
             key: value for key, value in card.items()
-            if key != "age_seconds"
+            if key not in {"age_seconds", "state_moved_seconds"}
         }
     encoded = json.dumps(
         stable,
@@ -3611,6 +3706,33 @@ def _write_live_portal_state(
             time.monotonic() - card_written_monotonic
             if isinstance(card_written_monotonic, (int, float)) else None
         )
+        scm_facet = _scm_facet(work_dir, task.meta.get("branch_name"))
+        produce_facet = (
+            relics.live_summary(
+                work_dir,
+                branch=task.meta.get("branch_name"),
+                seed_ref=task.meta.get("seed_ref"),
+                outbox_dir=outbox_dir,
+            )
+            if work_dir else {"known": False}
+        )
+        # Staleness is measured against the run's *movement*, not the wall
+        # clock (maintainer, 2026-07-19, agreeing with the run that raised it:
+        # "tied to elapsed-since-last-state-changing-action, it'd keep the
+        # pressure where it belongs"). A timer-only rule fires on an accurate
+        # card during a long test suite, and the cheapest way to satisfy it is
+        # a cosmetic edit — which trains writing to the file to quiet the
+        # nudge rather than because the surface moved. Here the nudge can only
+        # fire when something a card would actually report has changed since
+        # the card was last written.
+        state_moved_monotonic = _note_run_state_movement(
+            task, scm=scm_facet, produce=produce_facet, stats=stats, events=events,
+        )
+        card_stale = _card_is_stale(
+            card_written_monotonic=card_written_monotonic,
+            state_moved_monotonic=state_moved_monotonic,
+            card_active=bool(card_text),
+        )
         run_levels, run_level_slots = _collect_levels(
             runner_name, outbox_dir, work_dir,
             refresh=refresh_levels, shared_dir=brr_dir,
@@ -3671,8 +3793,13 @@ def _write_live_portal_state(
                 "age_seconds": (
                     int(card_age) if card_age is not None else None
                 ),
-                "stale": bool(
-                    card_age is not None and card_age > _CARD_STALE_SECONDS
+                "stale": card_stale,
+                # What the staleness verdict is measured against, so the
+                # briefing can say *why* the card is behind rather than only
+                # that it is old.
+                "state_moved_seconds": (
+                    int(time.monotonic() - state_moved_monotonic)
+                    if state_moved_monotonic is not None else None
                 ),
             },
             "budget": {
@@ -3686,16 +3813,8 @@ def _write_live_portal_state(
                 ),
                 "keepalive": _keepalive_state(keepalive_path),
             },
-            "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
-            "produce": (
-                relics.live_summary(
-                    work_dir,
-                    branch=task.meta.get("branch_name"),
-                    seed_ref=task.meta.get("seed_ref"),
-                    outbox_dir=outbox_dir,
-                )
-                if work_dir else {"known": False}
-            ),
+            "scm": scm_facet,
+            "produce": produce_facet,
             "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
             # Task-classification presence: the ledger's only rollup-by-shape
             # join key (``run_ledger.py`` §``task_classification``), and one a
@@ -5603,6 +5722,88 @@ def _existing_child_run_ids(path: Path) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _existing_produce_lines(path: Path) -> list[str]:
+    """Recover the ``## Produce`` section already on a state document.
+
+    Same accretion discipline as ``child_run_ids``: a rewrite that cannot
+    re-derive produce (no work dir in scope at that call site) must not
+    silently delete what an earlier write proved. Absence of evidence is not
+    a manifest of nothing.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    marker = "\n## Produce\n"
+    index = text.find(marker)
+    if index < 0:
+        return []
+    section = text[index + 1:]
+    # The section runs to the next heading of the same level or to EOF.
+    for offset, line in enumerate(section.splitlines()):
+        if offset and line.startswith("## "):
+            section = "\n".join(section.splitlines()[:offset])
+            break
+    return ["", *section.rstrip().splitlines()]
+
+
+def _run_state_produce_changed(
+    task: Run,
+    *,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> bool:
+    """True when the run's produce has moved since the node was last written.
+
+    Read-only: the fingerprint is only *stored* by the writer, so a probe
+    that decides "no change" can never make the next write believe it
+    already published something it did not.
+    """
+    if work_dir is None:
+        return False
+    try:
+        records = relics.collect(
+            Path(work_dir),
+            branch=task.meta.get("branch_name"),
+            seed_ref=task.meta.get("seed_ref"),
+            outbox_dir=outbox_dir,
+        )
+    except Exception:
+        return False
+    return relics.fingerprint(records) != task.meta.get("run_state_produce_fingerprint")
+
+
+def _run_state_produce_lines(
+    path: Path,
+    task: Run,
+    *,
+    work_dir: Path | None,
+    outbox_dir: Path | None,
+) -> list[str]:
+    """The node's produce section: freshly collected, or preserved.
+
+    Collection is the same path the ledger uses at closeout
+    (``relics.collect``) rather than a second accounting, so the node and the
+    receipt can never disagree about what a run made. Every failure degrades
+    to the previously written section — produce is a convenience on a
+    lifecycle attestation, and must never be able to fail a state write.
+    """
+    if work_dir is None:
+        return _existing_produce_lines(path)
+    try:
+        records = relics.collect(
+            Path(work_dir),
+            branch=task.meta.get("branch_name"),
+            seed_ref=task.meta.get("seed_ref"),
+            outbox_dir=outbox_dir,
+        )
+    except Exception:
+        return _existing_produce_lines(path)
+    task.meta["run_state_produce_fingerprint"] = relics.fingerprint(records)
+    rendered = relics.render_markdown(records)
+    return rendered if rendered else _existing_produce_lines(path)
+
+
 def _record_dispatch_edge(
     account_context: account.AccountContext | None,
     *,
@@ -5682,6 +5883,8 @@ def _persist_run_state_doc(
     repo_label: str,
     stage: str,
     cfg: dict | None = None,
+    work_dir: Path | None = None,
+    outbox_dir: Path | None = None,
 ) -> Path | None:
     """Write the durable account-level run-state document for *task*.
 
@@ -5778,6 +5981,19 @@ def _persist_run_state_doc(
         if len(summary) > 240:
             summary = summary[:239].rstrip() + "..."
         lines.extend(["", "## Request", "", summary])
+    # Produce, on the node itself (maintainer, 2026-07-19: "the idea of the run
+    # weld was that you maintain the relics as the run goes, and then at stop
+    # the run file *with relics* is presented as the main summarized inspection
+    # point"). Until now relics were collected only by
+    # ``run_ledger.append_closed_run`` and rendered only from the ledger API,
+    # whose window reaches back seven days — so a run's own permanent document
+    # could never say what the run made, and a *live* run had no manifest at
+    # all. Collecting here puts produce where the rest of the run's truth lives
+    # and makes it accrue while the run is still working.
+    produce_lines = _run_state_produce_lines(
+        path, task, work_dir=work_dir, outbox_dir=outbox_dir,
+    )
+    lines.extend(produce_lines)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -5883,6 +6099,42 @@ def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
         elif lines[index].startswith("- stage:"):
             lines[index] = "- stage: reaped"
     return "\n".join(lines) + "\n"
+
+
+def _sweep_zombie_runs(
+    account_context: account.AccountContext | None,
+) -> dict[str, int]:
+    """Reap both run-truth stores of runs that are provably no longer running.
+
+    Ran at boot only until 2026-07-19, which made a data repair something the
+    *user* had to schedule: 279 phantom manifests sat in the published
+    activity feed for as long as it took someone to be at a keyboard and
+    restart the daemon. A janitor that can only run at boot is a janitor
+    that runs when the mess is least likely to be noticed, so this is now a
+    named sweep the daemon also performs on an interval.
+
+    Both stores, always: the state doc feeds the Wyrd node and the manifest
+    feeds the cloud activity publisher, and reaping one without the other is
+    the exact split that produced those phantoms.
+    """
+    swept = {"state_docs": 0, "manifests": 0}
+    if account_context is None:
+        return swept
+    try:
+        reaped_state_docs = _reap_zombie_run_state_docs(account_context)
+        swept["state_docs"] = len(reaped_state_docs)
+        if reaped_state_docs:
+            print(f"[brnrd] run-state janitor: reaped {len(reaped_state_docs)} zombie run(s)")
+    except Exception as exc:  # noqa: BLE001 - janitor must never block the daemon
+        print(f"[brnrd] run-state janitor skipped: {exc}")
+    try:
+        reaped_manifests = _reap_zombie_run_manifests(account_context)
+        swept["manifests"] = len(reaped_manifests)
+        if reaped_manifests:
+            print(f"[brnrd] run-manifest janitor: reaped {len(reaped_manifests)} zombie run(s)")
+    except Exception as exc:  # noqa: BLE001 - janitor must never block the daemon
+        print(f"[brnrd] run-manifest janitor skipped: {exc}")
+    return swept
 
 
 def _reap_zombie_run_state_docs(
@@ -6570,6 +6822,8 @@ def _run_worker_and_finalize(
             repo_label=repo_label,
             stage="finished",
             cfg=cfg,
+            work_dir=repo_root,
+            outbox_dir=outbox_path,
         )
         _capture_dominion(
             repo_root,
@@ -6790,21 +7044,7 @@ def start(
 
     cfg = conf.load_config(repo_root)
     account_context = account.resolve_context(repo_root, cfg)
-    try:
-        reaped_state_docs = _reap_zombie_run_state_docs(account_context)
-        if reaped_state_docs:
-            print(f"[brnrd] run-state janitor: reaped {len(reaped_state_docs)} zombie run(s)")
-    except Exception as exc:  # noqa: BLE001 - janitor must not block boot
-        print(f"[brnrd] run-state janitor skipped: {exc}")
-    try:
-        # The same zombies in the other store. The state doc feeds the Wyrd
-        # node; the manifest feeds the cloud activity publisher — reaping one
-        # and not the other is what left /activity claiming 279 live runs.
-        reaped_manifests = _reap_zombie_run_manifests(account_context)
-        if reaped_manifests:
-            print(f"[brnrd] run-manifest janitor: reaped {len(reaped_manifests)} zombie run(s)")
-    except Exception as exc:  # noqa: BLE001 - janitor must not block boot
-        print(f"[brnrd] run-manifest janitor skipped: {exc}")
+    _sweep_zombie_runs(account_context)
     try:
         backfilled = _backfill_dispatch_edges(account_context)
         if backfilled:
@@ -6903,10 +7143,20 @@ def start(
     # _notify_spawn_parent_of_crash.
     active_spawns: list[dict] = []
     reload_requested = False
+    # The zombie sweep runs on a slow interval as well as at boot, so a
+    # long-lived daemon repairs its own stores instead of waiting for the
+    # next restart to notice. Slow on purpose: the only thing it can find
+    # mid-life is a run killed out from under the daemon, which is rare and
+    # never urgent — the cost of noticing it an hour late is nil, the cost of
+    # rescanning both stores every tick is not.
+    next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
 
     wake = protocol.inbox_wake()
     try:
         while running:
+            if time.monotonic() >= next_zombie_sweep:
+                next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
+                _sweep_zombie_runs(account_context)
             # Consume any pending wake signal up front, before we read the
             # inbox below: a set that lands after this clear (a gate
             # enqueuing mid-iteration) keeps the flag set, so the wait at
