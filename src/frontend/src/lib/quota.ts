@@ -51,8 +51,10 @@ export interface QuotaSpend {
 }
 
 export interface QuotaBurn {
-	/** Which window the burn is measured against (Codex reports only the weekly
-	 *  one since 2026-07-12 — see `brr/codex_status.py::recent_burn`). */
+	/** Which window the burn is measured against — the longest on record for
+	 *  that shell, since the ceiling that matters is the one you can't wait
+	 *  out. (Codex has reported only the weekly window since 2026-07-12; Claude
+	 *  reports both. See `brr/usage_samples.py::recent_burn`.) */
 	window_minutes: number;
 	/** Horizon the rate was measured over, and projected forward across. */
 	hours: number;
@@ -74,9 +76,15 @@ export interface QuotaShell {
 	shell: string;
 	status: 'known' | 'stale' | 'unknown' | string;
 	windows: QuotaWindow[];
-	/** Derived short-horizon burn rate — Codex only, and only on daemon builds
-	 *  since 2026-07-13. Absent when the evidence is too thin to project from
-	 *  (fewer than two samples, or a span under 30 minutes). */
+	/** Derived short-horizon burn rate, **both shells** since 2026-07-19: it is
+	 *  measured off brr's own quota-sample store rather than Codex's session
+	 *  rollouts, so it no longer depends on which shell happens to leave
+	 *  timestamped readings on disk. Absent when the evidence is too thin to
+	 *  project from (fewer than two samples, or a span under 30 minutes).
+	 *
+	 *  Nothing renders this yet — the reading is correct and published, and the
+	 *  §1 tank line still derives its own rate from window arithmetic. Those
+	 *  are two measurements of one quantity and should become one. */
 	burn?: QuotaBurn | null;
 	/** Present only for shells with a proven per-run spend figure (Claude
 	 *  today; absent, not null, on shells/builds with no such collector). */
