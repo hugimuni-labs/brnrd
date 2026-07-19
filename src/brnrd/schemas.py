@@ -484,7 +484,6 @@ class RunLedgerRowIn(BaseModel):
     source_system: str | None = None
     name: str | None = None
     external_refs: list[Any] | None = None
-    task_classification: str | None = None
     parent_run_id: str | None = None
     is_subspawn: bool | None = None
     tokens_input: int | None = None

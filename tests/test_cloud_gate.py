@@ -1187,7 +1187,7 @@ def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
             {
                 "run_id": "run-ledger-cloud",
                 "ended_at": "2026-07-07T19:30:00Z",
-                "task_classification": "dashboard-slice",
+                "task_classification": "dashboard-slice",  # retired 2026-07-19; on-disk rows still carry it
             }
         )
         + "\n",
@@ -1204,7 +1204,8 @@ def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
         rows = json_mod.loads(daemon.run_ledger_json)
     assert rows[0]["run_id"] == "run-ledger-cloud"
     assert rows[0]["ended_at"] == "2026-07-07T19:30:00Z"
-    assert rows[0]["task_classification"] == "dashboard-slice"
+    # The retired key is tolerated on read and dropped on publish, never a crash.
+    assert "task_classification" not in rows[0]
     assert rows[0]["tokens_input"] is None
 
 

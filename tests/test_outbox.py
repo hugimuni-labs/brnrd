@@ -728,38 +728,6 @@ def test_live_portal_state_flags_stale_card(tmp_path):
     assert payload["card"]["stale"] is False
 
 
-def test_live_portal_state_flags_unwritten_task_classification(tmp_path):
-    # 2026-07-08: the ledger's only rollup-by-shape join key, silently null
-    # forever if a run never gets around to writing the control file — the
-    # portal facet is what the stop-hook nudge (test_hooks.py) reads.
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    outbox = brr_dir / "outbox" / "evt-A"
-    outbox.mkdir(parents=True)
-    protocol.create_event(inbox, source="github", body="current")
-    current = protocol.list_pending(inbox)[0]
-    protocol.set_status(current, "processing")
-    task = Run(
-        id="run-1", event_id=current["id"], body="work", status="running",
-        env="host", meta={"branch_name": "brr/live-state"},
-    )
-
-    path = daemon._write_live_portal_state(
-        outbox, inbox, current["id"], task, phase="running",
-        card_state={}, start_monotonic=daemon.time.monotonic(),
-    )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["task_classification"]["written"] is False
-
-    (outbox / ".task-classification").write_text("bugfix\n", encoding="utf-8")
-    path = daemon._write_live_portal_state(
-        outbox, inbox, current["id"], task, phase="running",
-        card_state={}, start_monotonic=daemon.time.monotonic(),
-    )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["task_classification"]["written"] is True
-
-
 def test_interim_response_packet_updates_card(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:1:"
