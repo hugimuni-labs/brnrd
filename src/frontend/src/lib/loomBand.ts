@@ -52,54 +52,6 @@ export function loomCellClickSelects(event: {
 	return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
 }
 
-/**
- * How long an armed stop stays armed before it disarms itself. Long enough
- * to read the word "stop?" and mean it, short enough that a control left
- * armed by a mis-tap can't be committed by an unrelated click a minute later.
- */
-export const LOOM_STOP_ARM_WINDOW_MS = 4000;
-
-/**
- * What does this click on a live cell's stop control mean?
- *
- * Killing a running thought is not undoable and not free — partial work is
- * salvaged, but the thought does not resume. That argues for a confirmation;
- * the loom's register argues against a modal. So: arm, then commit. The first
- * tap turns the control into the word "stop?", the second commits, and the arm
- * lapses on its own after `LOOM_STOP_ARM_WINDOW_MS`. Two deliberate taps on a
- * 20px target in a dense band is the cheapest thing that isn't a bare tap.
- *
- * The #486 lesson applies here as it did to the cell itself — split the
- * *gesture*, not the element. The stop control is its own button beside the
- * cell rather than nested inside it (nesting is invalid HTML anyway), and it
- * ignores every click shape the cell's own `loomCellClickSelects` ignores:
- * modified and non-primary clicks belong to the browser, not to us. A stop
- * must never be something a ctrl-click or a middle-click can trip into.
- *
- * Lives here, not inline in the component, for the same reason
- * `loomCellClickSelects` does: "which clicks kill a run" is the entire
- * question and deserves a test that doesn't need a browser.
- */
-export function loomStopGesture(
-	event: {
-		button?: number;
-		metaKey?: boolean;
-		ctrlKey?: boolean;
-		shiftKey?: boolean;
-		altKey?: boolean;
-		defaultPrevented?: boolean;
-	},
-	armedAt: number | null,
-	now: number
-): 'ignore' | 'arm' | 'commit' {
-	if (!loomCellClickSelects(event)) return 'ignore';
-	if (armedAt === null) return 'arm';
-	// A lapsed arm re-arms rather than committing: the reader's second tap is
-	// answering a prompt that is no longer on screen.
-	if (now - armedAt > LOOM_STOP_ARM_WINDOW_MS) return 'arm';
-	return 'commit';
-}
-
 export function loomPastWindowLabel(windowMs: number): string {
 	const hours = Math.round(windowMs / 3_600_000);
 	return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;

@@ -147,7 +147,7 @@
 		<p class="eyebrow">brnrd · repos</p>
 		<a
 			href="/"
-			class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+			class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 			>dashboard</a
 		>
 	</div>
@@ -169,7 +169,7 @@
 	{:else if error}
 		<p class="mt-6 text-sm text-red-400">{error}</p>
 	{:else if data === null}
-		<p class="mt-6 text-sm text-stone-500">Loading...</p>
+		<p class="mt-6 text-sm text-ink-quiet">Loading...</p>
 	{:else}
 		{#if actionResult}
 			<div
@@ -177,14 +177,14 @@
 			>
 				<div class="flex items-start justify-between gap-3">
 					<div>
-						<p class="font-mono text-[11px] tracking-wide text-stone-500 uppercase">
+						<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 							{actionResult.ok ? 'result' : 'error'}
 						</p>
 						<p class="mt-1">{actionResult.notice}</p>
 					</div>
 					<button
 						type="button"
-						class="cursor-pointer font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+						class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 						onclick={() => (actionResult = null)}>clear</button
 					>
 				</div>
@@ -213,17 +213,17 @@
 	     mobile 2026-07-11 — installed-repo cards overflowing the panel). -->
 		<div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
 			<div class="subpanel p-3">
-				<p class="font-mono text-[10px] tracking-wide text-stone-500 uppercase">signed in</p>
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">signed in</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
 			</div>
 			<div class="subpanel p-3">
-				<p class="font-mono text-[10px] tracking-wide text-stone-500 uppercase">enabled repos</p>
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">enabled repos</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">
 					{data.connected_count} of {data.installed_repos.length} synced
 				</p>
 			</div>
 			<div class="subpanel p-3">
-				<p class="font-mono text-[10px] tracking-wide text-stone-500 uppercase">GitHub App</p>
+				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">GitHub App</p>
 				<p class="mt-1 truncate font-mono text-sm text-amber-100">{data.github_app_slug}</p>
 			</div>
 		</div>
@@ -237,13 +237,13 @@
 					</h2>
 				</div>
 				<span
-					class="shrink-0 border border-stone-800 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-stone-500 uppercase"
+					class="shrink-0 border border-stone-800 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-ink-quiet uppercase"
 					>{connectedRepos.length} enabled</span
 				>
 			</div>
 
 			{#if connectedRepos.length === 0}
-				<p class="text-sm text-stone-500">No repos enabled yet.</p>
+				<p class="text-sm text-ink-quiet">No repos enabled yet.</p>
 			{:else}
 				<div class="space-y-2">
 					{#each connectedRepos as repo (repo.id)}
@@ -262,7 +262,7 @@
 										</h3>
 									</div>
 									<div
-										class="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-stone-500"
+										class="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-ink-quiet"
 									>
 										<span>{repo.forge}</span>
 										<span>{branchLabel(repo.default_branch)}</span>
@@ -303,7 +303,7 @@
 														</span>
 														<span style={`color: ${color}`}>{gate.status}</span>
 													</div>
-													<p class="mt-0.5 font-mono text-[10px] text-stone-600">
+													<p class="mt-0.5 font-mono text-[10px] text-ink-mute">
 														poll {gateAge(gate.age_seconds)}
 													</p>
 													{#if gate.last_error}
@@ -321,7 +321,7 @@
 									{#if repo.daemon_status !== 'online'}
 										<details class="mt-2">
 											<summary
-												class="cursor-pointer font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+												class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 												>setup command</summary
 											>
 											<pre
@@ -352,14 +352,14 @@
 										>
 										<button
 											type="button"
-											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 											disabled={pendingAction !== null}
 											onclick={() => (confirmingDisconnect = null)}>cancel</button
 										>
 									{:else}
 										<button
 											type="button"
-											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 											disabled={pendingAction !== null}
 											onclick={() => (confirmingDisconnect = repo.id)}>disconnect</button
 										>
@@ -380,7 +380,7 @@
 						installed repositories
 					</h2>
 					{#if data.installations.length > 0}
-						<p class="mt-1 text-sm text-stone-500">
+						<p class="mt-1 text-sm text-ink-quiet">
 							Synced from
 							{data.installations
 								.map((installation) => installation.target_login || installation.installation_id)
@@ -397,9 +397,9 @@
 			</div>
 
 			{#if data.installations.length === 0}
-				<p class="text-sm text-stone-500">No GitHub App installation is connected yet.</p>
+				<p class="text-sm text-ink-quiet">No GitHub App installation is connected yet.</p>
 			{:else if availableInstalled.length === 0}
-				<p class="text-sm text-stone-500">
+				<p class="text-sm text-ink-quiet">
 					All {connectedInstalled.length} synced repositories are enabled.
 				</p>
 			{:else}
@@ -410,7 +410,7 @@
 								<p class="truncate font-mono text-sm font-semibold text-amber-100">
 									{repo.repo_full_name}
 								</p>
-								<p class="mt-1 truncate font-mono text-[11px] text-stone-500">
+								<p class="mt-1 truncate font-mono text-[11px] text-ink-quiet">
 									{branchLabel(repo.default_branch)} · pushed {repo.pushed_label}
 								</p>
 							</div>
@@ -427,7 +427,7 @@
 			{/if}
 
 			<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
-				<p class="font-mono text-[11px] tracking-wide text-stone-500 uppercase">manual connect</p>
+				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">manual connect</p>
 				<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
 					<input
 						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
