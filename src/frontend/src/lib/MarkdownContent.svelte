@@ -6,7 +6,15 @@
 	// drift apart.
 	import { inlineTokens, markdownBlocks, type MarkdownBlock } from './surface';
 	import { runNodeHrefForPath } from './runNode';
-	import { typeReveal } from './transitions';
+	import { getContext } from 'svelte';
+	import {
+		REVEAL_LEDGER,
+		revealBudgetMask,
+		revealTimeline,
+		typeReveal,
+		type RevealLedger,
+		type TypeRevealParams
+	} from './transitions';
 
 	interface Props {
 		/** Raw page text. Ignored when `blocks` is supplied. */
@@ -24,27 +32,29 @@
 		 */
 		onNavigate?: (target: string, anchor: string | null) => void;
 		/**
-		 * Stream plain-text blocks in with the dashboard's `typeReveal` instead
-		 * of painting them at once.
+		 * Stream this document's text in with the dashboard's `typeReveal`
+		 * instead of painting it at once.
 		 *
-		 * Opt-in, and deliberately not the default: the corpus browser renders
-		 * whole documents, where per-character reveal on a long page is noise.
-		 * The run node is the opposite case — short, live, rewritten while you
-		 * watch — and it was the one surface on this dashboard with no motion
-		 * language at all (reported 2026-07-19: "no glitch typeReveal"). The
-		 * node panel absorbed the LiveRuns card, whose every text line streamed,
-		 * and did not carry the motion across; the same absorption had already
-		 * dropped the relic links (#486) and the liveness dot (#495). Motion is
-		 * an affordance here, not decoration: it is how this surface says *this
-		 * text just arrived*, which on a card rewritten mid-run is the whole
-		 * point.
+		 * The reveal is how these surfaces say *this text just arrived*, which
+		 * on a card rewritten mid-run is the whole point — and, per the
+		 * maintainer 2026-07-19, is wanted on the read surfaces too, not only
+		 * the live ones. Two earlier limits are gone with it:
 		 *
-		 * Only blocks that are entirely plain text reveal. `typeReveal` owns its
-		 * node's DOM — it rebuilds the subtree into per-character cells — so a
-		 * block carrying links or bold would have its markup flattened to
-		 * characters and its affordances destroyed. Those render normally; a
-		 * mixed page streams its prose and paints its links, which is the right
-		 * trade and not a limitation worth engineering around.
+		 * - It no longer skips blocks carrying links or bold. `typeReveal` owns
+		 *   its node's DOM, so the old cut applied it to whole blocks and had to
+		 *   refuse any block with markup in it — which on a run body or a kb
+		 *   page is most of them, so the motion read as patchy rather than
+		 *   absent. It now runs per inline *token*, inside a plain span nested in
+		 *   the `<a>`/`<strong>`, and the tokens share one sweep
+		 *   (`revealTimeline`) so a single head crosses the line. Links keep
+		 *   their href; bold keeps its weight; the prose still streams.
+		 * - It is no longer gated per page. `revealBudgetMask` bounds it to the
+		 *   first screenful of characters, which is the honest form of the old
+		 *   "a long page is noise" worry.
+		 *
+		 * Code blocks never reveal: `typeReveal` rebuilds text into per-word
+		 * nowrap spans, which is exactly wrong for whitespace-significant
+		 * content.
 		 */
 		reveal?: boolean;
 	}
@@ -58,69 +68,91 @@
 		reveal = false
 	}: Props = $props();
 
-	/** A block streams only if nothing in it would be destroyed by doing so. */
-	function plain(text: string): boolean {
-		return reveal && inlineTokens(text, sourcePath, knownPaths).every((t) => t.kind === 'text');
+	let blocks = $derived(providedBlocks ?? markdownBlocks(markdown));
+
+	/** Revealable characters in a block — code is excluded, so it costs none. */
+	function blockLength(block: MarkdownBlock): number {
+		if (block.kind === 'code') return 0;
+		if (block.kind === 'list') return block.items.reduce((sum, item) => sum + item.length, 0);
+		return block.text.length;
 	}
 
-	let blocks = $derived(providedBlocks ?? markdownBlocks(markdown));
+	// A page that mounts several of these shares one budget between them (see
+	// `revealLedger`); a lone renderer with no page around it falls back to its
+	// own. Without the ledger the run node's ten documents each passed their own
+	// cap and together animated 14,500 cells.
+	const ledger = getContext<RevealLedger | undefined>(REVEAL_LEDGER);
+
+	let revealing = $derived.by(() => {
+		if (!reveal) return blocks.map(() => false);
+		const lengths = blocks.map(blockLength);
+		return ledger ? ledger.claim(sourcePath, lengths) : revealBudgetMask(lengths);
+	});
+
+	/**
+	 * Blocks enter as a chorus, not in unison. The stagger is per block and
+	 * uniform *within* one — the tokens of a line must share a start instant or
+	 * their shared sweep stops agreeing about where the head is.
+	 */
+	const BLOCK_STAGGER_MS = 55;
+	const BLOCK_STAGGER_CAP_MS = 640;
+	function blockDelay(index: number): number {
+		return Math.min(BLOCK_STAGGER_CAP_MS, index * BLOCK_STAGGER_MS);
+	}
 </script>
 
-{#snippet inline(text: string)}
-	{#each inlineTokens(text, sourcePath, knownPaths) as token, i (i)}
-		{#if token.kind === 'strong'}<strong class="font-semibold text-stone-100">{token.text}</strong>
+<!-- One token's text, streaming or painted. Splitting this out keeps every
+     token kind below to a single branch instead of a revealed/plain pair. -->
+{#snippet label(text: string, stream: TypeRevealParams | null)}
+	{#if stream}<span use:typeReveal={stream}>{text}</span>{:else}{text}{/if}
+{/snippet}
+
+{#snippet inline(text: string, streams: boolean, delay: number)}
+	{@const tokens = inlineTokens(text, sourcePath, knownPaths)}
+	{@const sweep = revealTimeline(tokens.map((token) => token.text.length))}
+	{#each tokens as token, i (i)}
+		{@const stream = streams ? { text: token.text, delay, ...sweep[i] } : null}
+		{#if token.kind === 'strong'}<strong class="font-semibold text-stone-100"
+				>{@render label(token.text, stream)}</strong
+			>
 		{:else if token.kind === 'link' && token.target && onNavigate}<button
 				class="cursor-pointer text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
-				onclick={() => onNavigate(token.target!, token.anchor)}>{token.text}</button
+				onclick={() => onNavigate(token.target!, token.anchor)}
+				>{@render label(token.text, stream)}</button
 			>
 		{:else if token.kind === 'link' && token.target && runNodeHrefForPath(token.target)}<a
 				class="text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
-				href={runNodeHrefForPath(token.target)}>{token.text}</a
+				href={runNodeHrefForPath(token.target)}>{@render label(token.text, stream)}</a
 			>
 		{:else if token.kind === 'link' && token.href}<a
 				class="text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
 				href={token.href}
 				target="_blank"
-				rel="external noreferrer">{token.text}</a
+				rel="external noreferrer">{@render label(token.text, stream)}</a
 			>
 		{:else if token.kind === 'link'}<span
 				class="text-ink-quiet"
-				title="corpus target is not present">{token.text}</span
+				title="corpus target is not present">{@render label(token.text, stream)}</span
 			>
-		{:else}{token.text}{/if}
+		{:else}{@render label(token.text, stream)}{/if}
 	{/each}
 {/snippet}
 
-{#snippet listItem(text: string)}
-	{#if plain(text)}<span use:typeReveal={{ text }}>{text}</span>
-	{:else}{@render inline(text)}{/if}
-{/snippet}
-
-{#snippet renderBlock(block: MarkdownBlock)}
+{#snippet renderBlock(block: MarkdownBlock, streams: boolean, delay: number)}
 	{#if block.kind === 'heading'}
 		{#if block.level === 1}<h2 class="mt-4 mb-2 text-lg font-semibold text-amber-100">
-				{@render inline(block.text)}
+				{@render inline(block.text, streams, delay)}
 			</h2>
-		{:else if plain(block.text)}<h3
-				class="mt-4 mb-1 font-mono text-xs tracking-wide text-amber-200 uppercase"
-				use:typeReveal={{ text: block.text }}
-			>
-				{block.text}
-			</h3>
 		{:else}<h3 class="mt-4 mb-1 font-mono text-xs tracking-wide text-amber-200 uppercase">
-				{@render inline(block.text)}
+				{@render inline(block.text, streams, delay)}
 			</h3>{/if}
-	{:else if block.kind === 'paragraph'}
-		{#if plain(block.text)}<p class="my-2 leading-relaxed" use:typeReveal={{ text: block.text }}>
-				{block.text}
-			</p>
-		{:else}<p class="my-2 leading-relaxed">
-				{@render inline(block.text)}
-			</p>{/if}
+	{:else if block.kind === 'paragraph'}<p class="my-2 leading-relaxed">
+			{@render inline(block.text, streams, delay)}
+		</p>
 	{:else if block.kind === 'quote'}<blockquote
 			class="my-2 border-l-2 border-amber-800 pl-3 text-stone-400"
 		>
-			{@render inline(block.text)}
+			{@render inline(block.text, streams, delay)}
 		</blockquote>
 	{:else if block.kind === 'code'}<pre
 			class="my-2 overflow-x-auto rounded bg-stone-950 p-3 font-mono text-xs text-stone-300"><code
@@ -128,14 +160,14 @@
 			></pre>
 	{:else if block.kind === 'list'}
 		{#if block.ordered}<ol class="my-2 list-decimal space-y-1 pl-5">
-				{#each block.items as item, i (i)}<li>{@render listItem(item)}</li>{/each}
+				{#each block.items as item, i (i)}<li>{@render inline(item, streams, delay)}</li>{/each}
 			</ol>
 		{:else}<ul class="my-2 list-disc space-y-1 pl-5">
-				{#each block.items as item, i (i)}<li>{@render listItem(item)}</li>{/each}
+				{#each block.items as item, i (i)}<li>{@render inline(item, streams, delay)}</li>{/each}
 			</ul>{/if}
 	{/if}
 {/snippet}
 
 {#each blocks as block, i (i)}
-	{@render renderBlock(block)}
+	{@render renderBlock(block, revealing[i], blockDelay(i))}
 {/each}
