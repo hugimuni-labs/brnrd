@@ -34,6 +34,7 @@
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
+	import { LENS_ALL, LENS_REVIEW } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
@@ -142,8 +143,11 @@
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
 	// Loom slice 4 (kb/design-continuous-presence.md §3.2.1): queued intent —
-	// the scheduled/queued wakes lane. Same activity feed the /activity page
-	// filters, narrowed to kind=scheduled; no new backend data.
+	// the scheduled/queued wakes lane, narrowed to kind=scheduled; no new
+	// backend data. (It reads the same account activity feed the retired
+	// /activity page did — that endpoint outlives its page, since the daemon
+	// still publishes to it and this lane and the live-runs view both read it.
+	// Retiring the endpoint itself is a separate cut with its own blast.)
 	let scheduledWakes = $state<ScheduledWake[] | null>(null);
 	let scheduledWakesError = $state<string | null>(null);
 	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
@@ -177,6 +181,20 @@
 	// selection. No selection = the "now" default, all live runs.
 	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
 	let loomSelection = $state<LoomSelection>(null);
+
+	// The lens (wyrd §4 band 2). Page-owned for the same reason selection is:
+	// the band reports a choice, the frame below answers it. This is also where
+	// `/activity` and the standing §2d PR-review section went — see the lens
+	// rail comment in `LoomBand.svelte`.
+	let loomLens = $state<string>(LENS_ALL);
+
+	function changeLoomLens(next: string) {
+		loomLens = next;
+		// A lens is a change of question, so a selection made under the old one
+		// is stale. Clearing it also keeps the review lens from opening onto a
+		// run node that has nothing to do with the queue it just asked for.
+		loomSelection = null;
+	}
 
 	function selectFromLoom(kind: 'run' | 'wake', id: string) {
 		loomSelection =
@@ -407,14 +425,14 @@
 			     ("a small one somewhere") — a plain link, not a nav bar this
 			     single-page dashboard doesn't otherwise have. -->
 			<div class="flex items-center gap-4">
-				<!-- #327: the full activity history (runs, scheduled wakes,
-				     parked respawns) — a client-side route in this same SPA,
-				     replacing the retired Jinja /activity page. -->
-				<a
-					href="/activity"
-					class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
-					>activity</a
-				>
+				<!-- /activity retired 2026-07-19. Its honest content — open runs,
+				     queued wakes, parked respawns — is the loom's NOW seam and
+				     future shelf, and its one real affordance over them (filter
+				     and scroll back through history) is the lens rail plus the
+				     past-window stepper. It survived this long as a page mostly
+				     because it was reporting 279 phantom running runs; once #486
+				     reaped those it rendered about three rows. Folded, not
+				     re-fitted. -->
 				<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 				<a
@@ -496,6 +514,9 @@
 				onSelect={selectFromLoom}
 				onPastWindowChange={changeLoomPastWindow}
 				selectedId={loomSelection?.id ?? null}
+				reviewCount={prReviewQueue?.length ?? 0}
+				lens={loomLens}
+				onLensChange={changeLoomLens}
 			/>
 		</div>
 
@@ -508,7 +529,9 @@
 				     "· receipt" for any closed run, which stopped being true the
 				     moment the node became the single answer. -->
 				<p class="eyebrow">
-					§2a · {loomSelection === null
+					§2a · {loomLens === LENS_REVIEW
+						? 'needs review'
+						: loomSelection === null
 						? focusRunId === null
 							? 'now'
 							: selectedNode && selectedNodeMirrored
@@ -535,7 +558,20 @@
 				{/if}
 			</div>
 			<div class="mt-2">
-				{#if loomSelection?.kind === 'wake'}
+				{#if loomLens === LENS_REVIEW}
+					<!-- The review lens answers here rather than in a standing section
+					     of its own. §2d used to occupy the page permanently to say
+					     "0 PRs" most of the time; as a lens it is one chip that only
+					     exists when something is actually waiting, and it borrows the
+					     frame the loom already has. Same component, no new fetch. -->
+					{#if prReviewQueueError}
+						<p class="text-sm text-red-400">{prReviewQueueError}</p>
+					{:else if prReviewQueue === null}
+						<p class="text-sm text-stone-500">Loading…</p>
+					{:else}
+						<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+					{/if}
+				{:else if loomSelection?.kind === 'wake'}
 					{#if scheduledWakesError}
 						<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
 					{/if}
@@ -639,24 +675,11 @@
 			</div>
 		</div>
 
-		<div class="ignite" style="--ignite-delay: 2300ms">
-			<p class="eyebrow mt-8">§2d · pr review queue</p>
-			<h2
-				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: 'PR review queue', delay: 2450 }}
-			>
-				PR review queue
-			</h2>
-			<div class="mt-3">
-				{#if prReviewQueueError}
-					<p class="text-sm text-red-400">{prReviewQueueError}</p>
-				{:else if prReviewQueue === null}
-					<p class="text-sm text-stone-500">Loading…</p>
-				{:else}
-					<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
-				{/if}
-			</div>
-		</div>
+		<!-- §2d (the standing PR review queue) retired 2026-07-19: it is a lens
+		     now, rendered in §2a when selected. A panel that reads "no PRs
+		     waiting" for most of a day is a panel spending permanent page space
+		     on an intermittent fact — wyrd §4 band 2 called it a lens over
+		     artifact edges from the start, and this is that. -->
 	</section>
 
 	<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
