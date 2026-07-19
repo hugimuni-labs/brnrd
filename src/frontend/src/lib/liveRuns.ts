@@ -44,6 +44,12 @@ export interface LiveRun {
 	phase: string | null;
 	card_text: string | null;
 	card_updated_at: string | null;
+	// #476 wyrd §3: a stop the account owner has parked for this run, not yet
+	// consumed by the daemon. Server-side (rather than a fact the client holds
+	// in memory) so the cell keeps saying "stopping" across a reload — and so
+	// it says only that: the run is still running until the daemon's next sync
+	// finalizes it as `stopped`.
+	stop_requested?: boolean;
 }
 
 export interface LiveRunsResponse {
@@ -76,6 +82,35 @@ export async function fetchLiveRuns(fetchImpl: typeof fetch = fetch): Promise<Li
 		throw new Error(`live-runs fetch failed: ${res.status}`);
 	}
 	return (await res.json()) as LiveRunsResponse;
+}
+
+/** A parked run stop (#476 wyrd §3). Not cancelable: by the time the row
+ * exists the only thing between it and a dead process is one daemon sync. */
+export interface RunStopRequest {
+	request_id: string;
+	run_id: string;
+	requested_at: string | null;
+	status: string;
+}
+
+/** Ask the daemon to stop a burning run. Async by nature — this parks the
+ * request; the daemon consumes it on its next sync and the run finalizes as
+ * `stopped` with partial work salvaged. */
+export async function requestRunStop(
+	runId: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<RunStopRequest> {
+	const res = await fetchImpl(`/v1/dashboard/runs/${encodeURIComponent(runId)}/stop`, {
+		method: 'POST',
+		credentials: 'include'
+	});
+	if (res.status === 401) {
+		throw new LiveRunsAuthError('not signed in');
+	}
+	if (!res.ok) {
+		throw new Error(res.status === 404 ? 'that run is no longer live' : `stop failed: ${res.status}`);
+	}
+	return ((await res.json()) as { stop_request: RunStopRequest }).stop_request;
 }
 
 /** "3m ago" / "just now" — a live run's age since it started, ticking off

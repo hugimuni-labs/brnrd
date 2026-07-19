@@ -47,6 +47,10 @@ def runner_wake_request_id() -> str:
     return _rid("wake")
 
 
+def run_stop_request_id() -> str:
+    return _rid("stopreq")
+
+
 def channel_route_id() -> str:
     return _rid("chan")
 

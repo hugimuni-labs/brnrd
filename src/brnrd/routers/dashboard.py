@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import wake_requests
+from brnrd import run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
@@ -818,15 +818,67 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account.id)
     view = _live_runs_views(db, repos)
+    # #476 wyrd §3: a stop is asynchronous — the daemon consumes it on its
+    # next sync. Marking the row here (rather than letting the client hold
+    # the fact in memory) is what lets the cell keep saying "stopping"
+    # across a reload, and keeps it from claiming a terminal state the
+    # system has not reached yet.
+    stopping = run_stop_requests.pending_run_ids(db, account_id)
+    runs = [
+        {
+            **row,
+            "stop_requested": bool(
+                stopping & {str(row.get("run_id") or ""), str(row.get("id") or "")}
+            ),
+        }
+        for row in view["runs"]
+    ]
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "runs": view["runs"],
+            "runs": runs,
             "stale": view["stale"],
             "reported_at": view["generated_at"],
             "spawn_max_concurrent": view["spawn_max_concurrent"],
         }
     )
+
+
+@router.post("/v1/dashboard/runs/{run_id}/stop")
+def dashboard_run_stop(run_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Park a stop for a burning run (#476 wyrd §3, the user-side affordance).
+
+    Authority note. The ``stop:`` outbox verb is deliberately restricted to a
+    run's own dispatchees, so a run cannot reach sideways and kill a sibling
+    it knows nothing about. That restriction is about *runs* as principals —
+    it bounds an agent's blast radius to work it started. A human account
+    owner is a different principal: every run on their daemons burns their
+    quota, on their machine, under their authority, and the whole point of
+    this affordance is the case the dispatch-edge rule cannot serve — a
+    top-level resident thought nobody dispatched. So the check here is
+    account scope and nothing narrower: any run the account can *see* on its
+    live-runs view, it may stop. The daemon still enforces its own half (it
+    only kills runs in its own control registry), so an account cannot reach
+    into someone else's daemon by guessing a run id.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    run_id = str(run_id or "").strip()
+    if not run_id or len(run_id) > 64:
+        return JSONResponse({"detail": "run id required"}, status_code=422)
+    repos = _repos(db, account_id)
+    live = _live_runs_views(db, repos)["runs"]
+    known = {str(row.get("run_id") or "") for row in live} | {
+        str(row.get("id") or "") for row in live
+    }
+    if run_id not in known:
+        # Not 404-as-authorization: the account genuinely has nothing burning
+        # under that handle, and parking a stop for it would sit pending
+        # until its TTL and then expire silently.
+        return JSONResponse({"detail": "no live run with that id"}, status_code=404)
+    row = run_stop_requests.create(db, account_id, run_id)
+    return JSONResponse({"stop_request": run_stop_requests.view(row)})
 
 
 @router.get("/v1/dashboard/pr-review-queue")

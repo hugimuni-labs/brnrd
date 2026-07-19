@@ -2,19 +2,26 @@
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
 	import { runNodeHref } from './runNode';
-	import { liveRunDisplayName, type LiveRun } from './liveRuns';
+	import {
+		LiveRunsAuthError,
+		liveRunDisplayName,
+		requestRunStop,
+		type LiveRun
+	} from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
 		LOOM_CENTER_ZONE_PX,
 		LOOM_DUE_SOON_MS,
 		LOOM_PAST_WINDOWS_MS,
 		LOOM_PAST_WINDOW_MS,
+		LOOM_STOP_ARM_WINDOW_MS,
 		loomBarFraction,
 		loomCellClickSelects,
 		loomFutureHorizon,
 		loomFutureStop,
 		loomPastStop,
-		loomPastWindowLabel
+		loomPastWindowLabel,
+		loomStopGesture
 	} from './loomBand';
 	import {
 		STATUS_BURNING,
@@ -23,6 +30,7 @@
 		statusDotStyle,
 		type GlowUrgency
 	} from './statusPalette';
+	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 
 	interface Props {
 		ledgerRows: RunLedgerRow[] | null;
@@ -33,6 +41,22 @@
 		onSelect?: (kind: 'run' | 'wake', id: string) => void;
 		onPastWindowChange?: (windowMs: number) => void;
 		selectedId?: string | null;
+		/**
+		 * Seam for tests (#476). The band calls the endpoint itself rather than
+		 * routing a stop up through the page: the affordance, its confirmation,
+		 * and its receipt line are one thing, and splitting them across two
+		 * files is how the receipt goes missing.
+		 */
+		stopRun?: (runId: string) => Promise<unknown>;
+		/**
+		 * Open PRs waiting on a review. The one lens whose subject is an
+		 * artifact rather than a run, so its count comes from a different feed
+		 * (see `loomLens.ts` → `LENS_REVIEW`).
+		 */
+		reviewCount?: number;
+		/** The page owns lens state, same as selection: the band reports. */
+		lens?: string;
+		onLensChange?: (lens: string) => void;
 	}
 
 	let {
@@ -42,8 +66,62 @@
 		now,
 		onSelect,
 		onPastWindowChange,
-		selectedId = null
+		selectedId = null,
+		stopRun = requestRunStop,
+		reviewCount = 0,
+		lens = LENS_ALL,
+		onLensChange
 	}: Props = $props();
+
+	// #476: the stop affordance's local state. `armedStopId` is the run whose
+	// control is showing "stop?"; `stoppedIds` remembers runs stopped in this
+	// session so the cell flips to "stopping" on the tap rather than waiting a
+	// full poll for the server to agree.
+	let armedStopId = $state<string | null>(null);
+	let armedAt: number | null = null;
+	let stoppedIds = $state<Set<string>>(new Set());
+	let stopNote = $state<string | null>(null);
+
+	async function tapStop(event: MouseEvent, runId: string) {
+		// The cell behind this control selects on click; a stop must not also
+		// be a selection, so the gesture stops here.
+		event.stopPropagation();
+		const gesture = loomStopGesture(event, armedStopId === runId ? armedAt : null, Date.now());
+		if (gesture === 'ignore') return;
+		if (gesture === 'arm') {
+			armedStopId = runId;
+			armedAt = Date.now();
+			stopNote = 'tap again to stop — this does not resume';
+			return;
+		}
+		armedStopId = null;
+		armedAt = null;
+		try {
+			await stopRun(runId);
+			stoppedIds = new Set(stoppedIds).add(runId);
+			// Deliberately not "stopped": the daemon has not consumed it yet.
+			stopNote = 'stopping — ends on the next daemon sync, partial work kept';
+		} catch (e) {
+			// A swallowed stop must be loud (the 2026-07-11 lesson): the user
+			// just tried to kill a burning run and nothing happened.
+			stopNote =
+				e instanceof LiveRunsAuthError
+					? 'session expired — sign in again, then re-tap'
+					: e instanceof Error
+						? e.message
+						: 'stop request failed';
+		}
+	}
+
+	// The arm lapses on its own, so a control left armed by a mis-tap can't be
+	// committed by an unrelated click later. `now` already ticks for the band.
+	$effect(() => {
+		if (armedStopId !== null && armedAt !== null && now - armedAt > LOOM_STOP_ARM_WINDOW_MS) {
+			armedStopId = null;
+			armedAt = null;
+			stopNote = null;
+		}
+	});
 
 	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
 	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
@@ -91,6 +169,16 @@
 			kb > 0 ? `${kb}kb` : ''
 		].filter(Boolean);
 		return parts.join(' ');
+	}
+
+	/** The window predicate, lifted out of `shelfRuns` so the lens vocabulary
+	 *  and the shelf are derived from the same set of rows. A lens offered over
+	 *  a wider set than the shelf renders would count rows the reader cannot
+	 *  see. */
+	function inPastWindow(row: RunLedgerRow, timestamp: number, windowMs: number): boolean {
+		const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
+		const ageMs = timestamp - endedAt;
+		return Number.isFinite(endedAt) && ageMs >= 0 && ageMs <= windowMs;
 	}
 
 	function shelfRuns(rows: RunLedgerRow[], timestamp: number, windowMs: number): ShelfRun[] {
@@ -146,7 +234,19 @@
 			.sort((a, b) => a.ageMs - b.ageMs);
 	}
 
-	let runs = $derived(shelfRuns(ledgerRows ?? [], now, pastWindowMs));
+	// The lens vocabulary is derived from the rows on screen, so it moves with
+	// the past window — step 6h → 7d and a dispatch source that had no runs in
+	// the near window appears as a chip. Nothing here holds a list of the legal
+	// values; see `loomLens.ts` for why that is the whole point.
+	let windowRows = $derived(
+		(ledgerRows ?? []).filter((row) => inPastWindow(row, now, pastWindowMs))
+	);
+	let lenses = $derived(availableLenses(windowRows, reviewCount));
+	// A selection can outlive its lens (the window narrowed, the rows aged out).
+	// Reconciling here rather than trusting the prop keeps the shelf and the
+	// chip row from disagreeing for a poll.
+	let activeLens = $derived(reconcileLens(lens, lenses));
+	let runs = $derived(shelfRuns(applyLens(windowRows, activeLens), now, pastWindowMs));
 	let maxWallSeconds = $derived(Math.max(...runs.map((run) => run.wallSeconds), 0));
 	let wakes = $derived(
 		[...(scheduledWakes ?? [])]
@@ -251,6 +351,38 @@
 	class="panel overflow-hidden px-3 py-2.5"
 	aria-label="past produce, live runs now, and scheduled future"
 >
+	<!-- The lens rail (wyrd §4 band 2). Every chip here was derived from the
+	     rows on screen a moment ago — the origins from `source_system`, the
+	     shapes from the relic manifests, the stack from `is_subspawn`. None of
+	     them is a name anything chose; that is what replaced the coined
+	     `.task-classification` slug rather than a tidier enum of the same kind.
+	     The rail is also where `/activity` and the standing PR-review section
+	     went: "what has this been doing" and "what is waiting on me" are
+	     questions you ask of the board, not panels that sit on it. -->
+	{#if lenses.length > 1}
+		<div
+			class="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] leading-none"
+			role="group"
+			aria-label="lenses over the past shelf"
+		>
+			{#each lenses as candidate (candidate.id)}
+				<button
+					type="button"
+					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
+					class:text-amber-200={activeLens === candidate.id}
+					class:text-stone-600={activeLens !== candidate.id}
+					class:hover:text-stone-400={activeLens !== candidate.id}
+					aria-pressed={activeLens === candidate.id}
+					title={candidate.facet === 'artifact'
+						? `${candidate.count} PR${candidate.count === 1 ? '' : 's'} waiting on a review`
+						: `${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
+					onclick={() => onLensChange?.(activeLens === candidate.id ? LENS_ALL : candidate.id)}
+				>
+					{candidate.label}<span class="ml-1 text-stone-700">{candidate.count}</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
 	<div
 		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-stone-600 uppercase"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
@@ -289,9 +421,14 @@
 			class="loom-shelf flex min-w-0 flex-col gap-px overflow-y-auto pr-1.5"
 			aria-label="closed runs in the selected past window"
 		>
+			<!-- An empty shelf under an active lens means something different from
+			     an empty window, and saying "no runs in 24h" while 26 runs sit
+			     one click away would be the band lying about its own contents. -->
 			{#if ledgerRows !== null && runs.length === 0}
-				<span class="m-auto truncate font-mono text-[9px] text-stone-700">
-					no runs in {loomPastWindowLabel(pastWindowMs)}
+				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-stone-700">
+					{activeLens === LENS_ALL
+						? `no runs in ${loomPastWindowLabel(pastWindowMs)}`
+						: `no runs match this lens in ${loomPastWindowLabel(pastWindowMs)}`}
 				</span>
 			{/if}
 			<!-- A closed run is a *place*, so its cell is a real link into that
@@ -355,24 +492,64 @@
 			{:else}
 				<div class="absolute inset-1 flex flex-col justify-center gap-1 overflow-hidden">
 					{#each liveRuns.slice(0, 2) as run, index (run.id)}
-						<button
-							type="button"
-							class="min-w-0 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
-							style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
-							title={liveRunDisplayName(run) || run.repo_label || 'live run'}
-							onclick={() => select('run', run.run_id || run.id)}
+						{@const stopId = run.run_id || run.id}
+						{@const stopping = run.stop_requested || stoppedIds.has(stopId)}
+						<div
+							class="flex min-w-0 items-stretch gap-px"
 							in:glitchReveal={{ duration: 260, delay: 35 + index * 38 }}
 						>
-							<span class="block truncate text-[9px]">
-								{liveRunDisplayName(run) || run.repo_label || 'live run'}
-							</span>
-							{#if elapsedLabel(run)}
-								<span class="mt-0.5 block text-[8px] text-amber-500/80">
-									{elapsedLabel(run)}
+							<button
+								type="button"
+								class="min-w-0 flex-1 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
+								style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
+								title={liveRunDisplayName(run) || run.repo_label || 'live run'}
+								onclick={() => select('run', stopId)}
+							>
+								<span class="block truncate text-[9px]">
+									{liveRunDisplayName(run) || run.repo_label || 'live run'}
 								</span>
+								{#if elapsedLabel(run)}
+									<span class="mt-0.5 block text-[8px] text-amber-500/80">
+										{stopping ? 'stopping…' : elapsedLabel(run)}
+									</span>
+								{/if}
+							</button>
+							<!-- The stop affordance (#476 wyrd §3). Its own button beside
+							     the cell, never nested inside it: the selecting click has a
+							     settled grammar and a kill must not ride it. Arm-then-commit
+							     (`loomStopGesture`) because a stopped thought does not
+							     resume. Once parked it stays "stopping" — the daemon
+							     consumes it on its next sync, and the cell must not claim a
+							     terminal state the system has not reached. -->
+							{#if stopping}
+								<span
+									class="flex w-7 shrink-0 items-center justify-center border border-amber-800/40 font-mono text-[8px] text-amber-600/80"
+									title="stop requested — the daemon ends this run on its next sync"
+								>
+									···
+								</span>
+							{:else}
+								<button
+									type="button"
+									class="w-7 shrink-0 cursor-pointer border border-red-900/60 bg-stone-950/90 font-mono text-[8px] text-red-400/90 hover:bg-red-950/40"
+									title={armedStopId === stopId
+										? 'tap again to stop this run — partial work is salvaged, the thought does not resume'
+										: 'stop this run'}
+									aria-label={`stop run ${liveRunDisplayName(run) || stopId}`}
+									onclick={(event) => tapStop(event, stopId)}
+								>
+									{armedStopId === stopId ? 'stop?' : '×'}
+								</button>
 							{/if}
-						</button>
+						</div>
 					{/each}
+					{#if stopNote}
+						<!-- Receipt line: a tap that gets swallowed must never be silent
+						     (found live 2026-07-11 on the spool rack's own taps). -->
+						<span class="truncate text-center font-mono text-[8px] text-amber-400/90">
+							{stopNote}
+						</span>
+					{/if}
 					{#if liveRuns.length > 2}
 						<span class="text-center font-mono text-[8px] text-amber-500/70"
 							>+{liveRuns.length - 2}</span

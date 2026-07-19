@@ -3,12 +3,14 @@ import test from 'node:test';
 
 import {
 	LOOM_MIN_FUTURE_HORIZON_MS,
+	LOOM_STOP_ARM_WINDOW_MS,
 	loomBarFraction,
 	loomCellClickSelects,
 	loomFutureHorizon,
 	loomFutureStop,
 	loomPastStop,
-	loomPastWindowLabel
+	loomPastWindowLabel,
+	loomStopGesture
 } from './loomBand.ts';
 
 const NOW = Date.parse('2026-07-16T18:00:00Z');
@@ -75,5 +77,39 @@ test('a plain left click selects; every modified click still follows the link', 
 		loomCellClickSelects({ button: 0, defaultPrevented: true }),
 		false,
 		'something upstream already handled it'
+	);
+});
+
+// #476: the stop affordance. Killing a running thought is not undoable, so a
+// bare tap is the wrong gesture — but a modal is the wrong weight for a cell
+// this small. Arm, then commit, and let the arm lapse on its own.
+test('a stop needs two deliberate taps, and only unmodified primary ones', () => {
+	const now = NOW;
+
+	assert.equal(loomStopGesture({ button: 0 }, null, now), 'arm', 'first tap only arms');
+	assert.equal(loomStopGesture({ button: 0 }, now - 500, now), 'commit', 'second tap commits');
+
+	// Every gesture the browser owns is still the browser's, exactly as on the
+	// cell itself — a stop must never be something a ctrl-click can trip into.
+	assert.equal(loomStopGesture({ button: 1 }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 2 }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 0, ctrlKey: true }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 0, metaKey: true }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 0, shiftKey: true }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 0, altKey: true }, now, now), 'ignore');
+	assert.equal(loomStopGesture({ button: 0, defaultPrevented: true }, now, now), 'ignore');
+});
+
+test('a lapsed arm re-arms rather than committing', () => {
+	const armedAt = NOW - LOOM_STOP_ARM_WINDOW_MS - 1;
+	assert.equal(
+		loomStopGesture({ button: 0 }, armedAt, NOW),
+		'arm',
+		'the prompt it would be answering is no longer on screen'
+	);
+	assert.equal(
+		loomStopGesture({ button: 0 }, NOW - LOOM_STOP_ARM_WINDOW_MS + 1, NOW),
+		'commit',
+		'still inside the window'
 	);
 });
