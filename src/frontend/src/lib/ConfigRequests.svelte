@@ -26,7 +26,7 @@
 		>
 	</div>
 	{#if requests.length === 0}
-		<p class="text-sm text-stone-500">No pending settings requests from any daemon.</p>
+		<p class="text-sm text-ink-quiet">No pending settings requests from any daemon.</p>
 	{:else}
 		<ul class="space-y-2">
 			{#each requests as req (req.id)}
@@ -47,14 +47,14 @@
 								<span class="block truncate font-medium text-amber-100">
 									{req.config_key}: {req.current_value || '(unset)'} → {req.requested_value}
 								</span>
-								<span class="block truncate text-stone-500">
+								<span class="block truncate text-ink-quiet">
 									{req.repo_label || 'unknown repo'}{req.reason ? ` · ${req.reason}` : ''}
 								</span>
 							</span>
 						</span>
 						<span class="flex shrink-0 items-center gap-2 font-mono">
 							<span class="uppercase tracking-wide" style={`color: ${PENDING_COLOR}`}>pending</span>
-							<span class="text-stone-500">{ageSinceCreated(req.created_at, now) ?? ''}</span>
+							<span class="text-ink-quiet">{ageSinceCreated(req.created_at, now) ?? ''}</span>
 							<a
 								class="text-sky-400 underline hover:text-sky-300"
 								href={req.approve_url}

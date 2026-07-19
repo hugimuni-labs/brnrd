@@ -370,7 +370,7 @@
 					type="button"
 					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
 					class:text-amber-200={activeLens === candidate.id}
-					class:text-stone-600={activeLens !== candidate.id}
+					class:text-ink-mute={activeLens !== candidate.id}
 					class:hover:text-stone-400={activeLens !== candidate.id}
 					aria-pressed={activeLens === candidate.id}
 					title={candidate.facet === 'artifact'
@@ -378,13 +378,13 @@
 						: `${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
 					onclick={() => onLensChange?.(activeLens === candidate.id ? LENS_ALL : candidate.id)}
 				>
-					{candidate.label}<span class="ml-1 text-stone-700">{candidate.count}</span>
+					{candidate.label}<span class="ml-1 text-ink-mute">{candidate.count}</span>
 				</button>
 			{/each}
 		</div>
 	{/if}
 	<div
-		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-stone-600 uppercase"
+		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
 	>
 		<span>
@@ -397,14 +397,14 @@
 				past · {loomPastWindowLabel(pastWindowMs)}
 			</button>
 			{#if runs.length > 0}
-				<span class="ml-1 text-stone-700">· {runs.length} run{runs.length === 1 ? '' : 's'}</span>
+				<span class="ml-1 text-ink-mute">· {runs.length} run{runs.length === 1 ? '' : 's'}</span>
 			{/if}
 		</span>
 		<span class="text-center text-amber-200">now</span>
 		<span class="text-right">
 			future
 			{#if wakes.length > 0}
-				<span class="ml-1 normal-case text-stone-700">· {wakes.length}</span>
+				<span class="ml-1 normal-case text-ink-mute">· {wakes.length}</span>
 			{/if}
 		</span>
 	</div>
@@ -425,7 +425,7 @@
 			     an empty window, and saying "no runs in 24h" while 26 runs sit
 			     one click away would be the band lying about its own contents. -->
 			{#if ledgerRows !== null && runs.length === 0}
-				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-stone-700">
+				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-ink-mute">
 					{activeLens === LENS_ALL
 						? `no runs in ${loomPastWindowLabel(pastWindowMs)}`
 						: `no runs match this lens in ${loomPastWindowLabel(pastWindowMs)}`}
@@ -470,7 +470,7 @@
 		<div class="relative z-10 border-x border-amber-900/40 bg-stone-950/70 px-1">
 			{#if liveRuns === null}
 				<div
-					class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-stone-700"
+					class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-ink-mute"
 				>
 					acquiring
 				</div>
@@ -484,7 +484,7 @@
 						{new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 					</span>
 					{#if nextWake}
-						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-stone-600">
+						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-ink-mute">
 							next {etaLabel(wakeEta(nextWake))}
 						</span>
 					{/if}
@@ -567,7 +567,7 @@
 			aria-label="scheduled wakes"
 		>
 			{#if scheduledWakes !== null && wakes.length === 0}
-				<span class="m-auto truncate font-mono text-[9px] text-stone-700"> nothing queued </span>
+				<span class="m-auto truncate font-mono text-[9px] text-ink-mute"> nothing queued </span>
 			{/if}
 			{#each wakes as wake, index (wake.id)}
 				{@const eta = wakeEta(wake)}

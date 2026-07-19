@@ -117,7 +117,7 @@
 		{/if}
 	</div>
 	{#if runs.length === 0}
-		<p class="text-sm text-stone-500">Nothing awake right now.</p>
+		<p class="text-sm text-ink-quiet">Nothing awake right now.</p>
 	{:else}
 		<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each runs as run (run.id)}
@@ -161,9 +161,9 @@
 									{label(run, lvl)}
 								</span>
 							</span>
-							<span class="flex shrink-0 items-center gap-1.5 font-mono text-stone-500">
+							<span class="flex shrink-0 items-center gap-1.5 font-mono text-ink-quiet">
 								{ageSince(run.started_at, now) ?? ''}
-								<span class="text-[9px] text-stone-600">{isOpen ? '▲' : '▼'}</span>
+								<span class="text-[9px] text-ink-mute">{isOpen ? '▲' : '▼'}</span>
 							</span>
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
@@ -177,7 +177,7 @@
 								>
 							{/if}
 						</p>
-						<p class="truncate text-stone-500" use:typeReveal={{ text: secondary }}>{secondary}</p>
+						<p class="truncate text-ink-quiet" use:typeReveal={{ text: secondary }}>{secondary}</p>
 						{#if runner}
 							<!-- Runner identity is its own line: appending it after the
 							     task/repo text made the very information #374 added vanish
@@ -225,12 +225,12 @@
 									{run.card_text}
 								</p>
 								{#if run.card_updated_at}
-									<p class="font-mono text-[10px] text-stone-600">
+									<p class="font-mono text-[10px] text-ink-mute">
 										note updated {clock(run.card_updated_at)}
 									</p>
 								{/if}
 							{/if}
-							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-stone-500">
+							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-ink-quiet">
 								<span>run: {run.run_id || run.id}</span>
 								<span>runner: {runner ?? '—'}</span>
 								<span>phase: {run.phase ?? '—'}</span>
