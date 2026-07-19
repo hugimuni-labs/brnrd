@@ -2,7 +2,7 @@
 // supply against draw.
 //
 // The design doc speced this as *planned* draw, priced from "median spend per
-// classification", on the stated ground that the `.task-classification` slug
+// classification", on the stated ground that the run-shape slug
 // "has been feeding this for weeks". Going to derive it killed that premise:
 // 165 distinct slugs across 270 ledger rows, 141 of them appearing exactly
 // once. The slug is coined fresh by each run with no vocabulary to conform to,
@@ -159,11 +159,10 @@ export interface ScheduledCost {
 /**
  * What one scheduled wake actually costs, measured.
  *
- * The join key is `source_system`, not `task_classification`: the daemon
- * writes it, a run cannot improvise it, and it is filled on every row. That
- * distinction is the whole reason this function exists — `director-tick` is
- * the *one* slug with a real population (34 rows) precisely because a schedule
- * entry supplies it rather than a resident inventing one at closeout.
+ * The join key is `source_system`: the daemon writes it, a run cannot
+ * improvise it, and it is filled on every row. That distinction is the whole
+ * reason this function exists — it is why the resident-coined run-shape slug
+ * was cut (2026-07-19) and this measures off a daemon-written field instead.
  */
 export function scheduledCost(rows: RunLedgerRow[], shell?: string): ScheduledCost | null {
 	const tokens: number[] = [];
