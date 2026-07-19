@@ -480,11 +480,24 @@ def format_delta(
     if card_stale:
         age = card.get("age_seconds")
         age_txt = f"{age}s" if age is not None else "a while"
-        lines.append(
-            f"- card: no change in {age_txt} — rewrite .card (even one "
-            "line) so the surface the user is watching isn't sitting blank "
-            "or stale."
-        )
+        moved = card.get("state_moved_seconds")
+        if card.get("active") and moved is not None:
+            # Name the movement, not the clock. The nudge now fires only when
+            # a fact the card would report has changed since the card was
+            # written, so it can say what the card is behind *on* — which is
+            # also the difference between a forcing function and a nag you
+            # learn to silence with a cosmetic edit.
+            lines.append(
+                f"- card: the run moved {moved}s ago (produce, branch, "
+                "delivery, or pending events) and .card hasn't been rewritten "
+                f"since — it's {age_txt} old and now describes a different run."
+            )
+        else:
+            lines.append(
+                f"- card: no change in {age_txt} — rewrite .card (even one "
+                "line) so the surface the user is watching isn't sitting blank "
+                "or stale."
+            )
     # The run's own body, at closeout only (maintainer, 2026-07-19: "run's own
     # body on stop - right, that's what I actually meant").
     #
