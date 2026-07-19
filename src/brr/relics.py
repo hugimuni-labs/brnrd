@@ -19,7 +19,7 @@ Two collection paths, deliberately different in cost to the resident:
   optional one-line summary. Nothing auto-tracks "which issue did this run
   comment on" today (#317 named this explicitly as the one genuinely new
   piece of bookkeeping) — a resident appends one JSON line per relic,
-  same weight as writing ``.task-classification`` or ``.pr``.
+  same weight as writing ``.pr``.
 
 Kb pages committed by the daemon's knowledge capture are auto-reported at
 closeout alongside commits, branch, PR, and the archived terminal reply.
@@ -33,7 +33,7 @@ Append format — one JSON object per line, at least a ``"kind"`` key:
 
 Everything here is best-effort: a malformed line, a missing git repo, an
 unparseable remote — all degrade to "fewer relics", never a closeout
-failure. Same posture as the ``.pr``/``.task-classification`` readers this
+failure. Same posture as the ``.pr`` reader this
 module sits alongside.
 """
 
