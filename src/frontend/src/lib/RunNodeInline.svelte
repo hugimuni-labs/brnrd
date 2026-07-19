@@ -95,17 +95,26 @@
 			</p>
 		{/if}
 
-		{#if digest.produce}
-			<!-- Produce, unexpanded. #486 collapsed this panel to be the only
-			     rendering of a selected run and folded relic *counts* into the
-			     vitals line — but a count is not a link, so the manifest
-			     retreated to the shelf row's expansion. The run's own document
-			     carries it now, so it sits where the run's other truth sits, and
-			     it accrues while the run is still working rather than appearing
-			     at stop. Deliberately above the expand: produce is the summary,
-			     not the detail. -->
-			<div class="mt-2 border-t border-stone-800/70 pt-2">
-				<p class="font-mono text-[10px] tracking-wide text-stone-600 uppercase">produce</p>
+		<!-- Produce, unexpanded. #486 collapsed this panel to be the only
+		     rendering of a selected run and folded relic *counts* into the
+		     vitals line — but a count is not a link, so the manifest
+		     retreated to the shelf row's expansion. The run's own document
+		     carries it now, so it sits where the run's other truth sits, and
+		     it accrues while the run is still working rather than appearing
+		     at stop. Deliberately above the expand: produce is the summary,
+		     not the detail.
+
+		     The heading renders unconditionally (maintainer, 2026-07-19: "the
+		     current run view doesn't show any produce"). It used to be gated on
+		     the section existing, which made "this run has made nothing yet"
+		     and "this feature isn't deployed" the same blank space — and both
+		     were true at once that morning, which is exactly why it was
+		     unreadable. Absence is tensed the way #480 tensed the body: produce
+		     accrues from commits, so a running run that hasn't committed has an
+		     honestly empty manifest, and a closed one never made anything. -->
+		<div class="mt-2 border-t border-stone-800/70 pt-2">
+			<p class="font-mono text-[10px] tracking-wide text-stone-600 uppercase">produce</p>
+			{#if digest.produce}
 				<div class="mt-1 text-sm text-stone-300">
 					<MarkdownContent
 						markdown={digest.produce}
@@ -113,8 +122,14 @@
 						{knownPaths}
 					/>
 				</div>
-			</div>
-		{/if}
+			{:else}
+				<p class="mt-1 font-mono text-[11px] text-stone-500">
+					{digest.status === 'running'
+						? 'nothing committed yet'
+						: 'this run produced nothing'}
+				</p>
+			{/if}
+		</div>
 
 		<div class="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 			<div class="flex items-baseline gap-3 font-mono text-[10px]">
