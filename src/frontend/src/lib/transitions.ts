@@ -101,6 +101,30 @@ export function typeRevealProgress(elapsedRatio: number): number {
 	return Math.log1p(12 * t) / Math.log(13);
 }
 
+/**
+ * How many character cells ahead of the reveal head carry scramble glyphs.
+ *
+ * A fixed band is a length-dependent bug, which is what made the frontier
+ * read as "stopped scrambling" on the run body (reported 2026-07-19). The
+ * duration is capped at 1200ms, so the head's speed scales with the string:
+ * on a 20-character label it crosses under 3 cells per frame and every
+ * character passes through a fixed 3-cell band, but on a 600-character card
+ * body it crosses 8–17, leaping clean over the band. Measured against a
+ * 60fps frame budget, a fixed band scrambled 100% of a short label's cells
+ * and only 36% of a 600-character body's — with a hard ceiling of 3 × 72
+ * frames however long the text got.
+ *
+ * So the band is the head's own velocity: it spans exactly the cells the
+ * head just crossed, floored at the original 3. Short strings are
+ * byte-identical to the fixed band (their advance never reaches 3); long
+ * ones scramble 93%+ of their cells at any length. The residual head cells
+ * are the ones the log curve reveals on its first drawn frame — instant by
+ * design, not skipped.
+ */
+export function frontierWidth(previousVisible: number, visible: number): number {
+	return Math.max(3, visible - previousVisible);
+}
+
 interface RevealCell {
 	target: HTMLSpanElement;
 	scramble: HTMLSpanElement;
@@ -199,16 +223,19 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 		const duration = next.duration ?? typeRevealDuration(cells.length);
 		const delay = next.delay ?? Math.floor(Math.random() * 72);
 		const startedAt = performance.now() + delay;
+		let previousVisible = 0;
 
 		const draw = (now: number) => {
 			const elapsed = Math.max(0, now - startedAt);
 			const ratio = Math.min(1, elapsed / duration);
 			const visible = Math.floor(typeRevealProgress(ratio) * cells.length);
 			const scrambleFrame = Math.floor(elapsed / 42);
+			const band = frontierWidth(previousVisible, visible);
+			previousVisible = visible;
 
 			cells.forEach((cell, index) => {
 				const revealed = index < visible || ratio === 1;
-				const frontier = !revealed && index < visible + 3;
+				const frontier = !revealed && index < visible + band;
 				cell.target.style.opacity = revealed ? '1' : '0';
 				cell.scramble.style.opacity = frontier ? '0.72' : '0';
 				if (frontier) {
