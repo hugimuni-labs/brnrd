@@ -10,6 +10,7 @@
 		LOOM_PAST_WINDOWS_MS,
 		LOOM_PAST_WINDOW_MS,
 		loomBarFraction,
+		loomCellClickSelects,
 		loomFutureHorizon,
 		loomFutureStop,
 		loomPastStop,
@@ -203,6 +204,16 @@
 		onSelect?.(kind, id);
 	}
 
+	// A plain left click fills §2a and keeps the reader in the band; every
+	// modified click still follows the anchor. The rule itself lives in
+	// `loomBand.ts` (`loomCellClickSelects`) so it can be tested without a
+	// browser — it is the whole of the defect this slice fixes.
+	function selectFromCell(event: MouseEvent, id: string) {
+		if (!loomCellClickSelects(event)) return;
+		event.preventDefault();
+		select('run', id);
+	}
+
 	function elapsedLabel(run: LiveRun): string {
 		const started = run.started_at ? Date.parse(run.started_at) : Number.NaN;
 		if (!Number.isFinite(started)) return '';
@@ -285,15 +296,18 @@
 			{/if}
 			<!-- A closed run is a *place*, so its cell is a real link into that
 			     run's Wyrd node — right-clickable, openable in a tab, and a URL
-			     you can send someone. Rows with no durable run id keep the older
-			     select-into-the-sheet behaviour; identical geometry either way. -->
+			     you can send someone. A plain left click, though, fills the
+			     detail frame below rather than navigating: the loom is the spine
+			     and the reader keeps their place (see `selectFromCell`). Rows
+			     with no durable run id are select-only; identical geometry. -->
 			{#each runs as run, index (run.id)}
 				{#if run.href}
 					<a
 						href={run.href}
 						class={SHELF_ROW_CLASS}
 						style={shelfRowStyle(run)}
-						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
+						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)} — click to open below, ctrl/⌘-click for the full node`}
+						onclick={(event) => selectFromCell(event, run.id)}
 						in:glitchReveal={{ duration: 240, delay: index * 24 }}
 					>
 						{@render shelfRow(run)}

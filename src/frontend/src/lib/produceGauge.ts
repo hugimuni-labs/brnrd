@@ -1,5 +1,10 @@
 import type { RelicRecord, RunLedgerRow } from './runLedger';
 
+// The gauge's *default* span, not its only one. The loom's past dial owns the
+// page's time scope (2026-07-19: "the 24h block is too static/limiting") and
+// hands its current window down here, so turning the dial moves the band and
+// the instruments under it together. A caller that passes nothing still gets
+// trailing 24h.
 export const PRODUCE_GAUGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Shared with the loom: enough published rows to cover its seven-day shelf
 // at the observed run rate while the gauge still rolls up only trailing 24h.
@@ -40,8 +45,12 @@ function sumPresent(rows: RunLedgerRow[], field: keyof RunLedgerRow): number | n
 	return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
 }
 
-function recentGaugeRows(rows: RunLedgerRow[], nowMs: number): RunLedgerRow[] {
-	const cutoff = nowMs - PRODUCE_GAUGE_WINDOW_MS;
+function recentGaugeRows(
+	rows: RunLedgerRow[],
+	nowMs: number,
+	windowMs: number = PRODUCE_GAUGE_WINDOW_MS
+): RunLedgerRow[] {
+	const cutoff = nowMs - windowMs;
 	return rows.filter((row) => {
 		if (!row.ended_at) return false;
 		const ended = Date.parse(row.ended_at);
@@ -65,13 +74,15 @@ function produceLinkLabel(relic: RelicRecord): string {
 }
 
 /** Roll up the spend and produce proved by rows closed during the trailing
- * 24 hours. Invalid timestamps and absent metrics disappear instead of
- * becoming fabricated zeroes. */
+ * window (default 24h; the page passes the loom's current span). Invalid
+ * timestamps and absent metrics disappear instead of becoming fabricated
+ * zeroes. */
 export function rollupProduceGauge(
 	rows: RunLedgerRow[],
-	nowMs: number = Date.now()
+	nowMs: number = Date.now(),
+	windowMs: number = PRODUCE_GAUGE_WINDOW_MS
 ): ProduceGaugeSummary {
-	const recent = recentGaugeRows(rows, nowMs);
+	const recent = recentGaugeRows(rows, nowMs, windowMs);
 
 	const quota = new Map<string, number>();
 	for (const row of recent) {
@@ -127,11 +138,12 @@ export function rollupProduceGauge(
  * navigable links. Summary prose and non-counted relic kinds stay out. */
 export function produceGaugeLinks(
 	rows: RunLedgerRow[],
-	nowMs: number = Date.now()
+	nowMs: number = Date.now(),
+	windowMs: number = PRODUCE_GAUGE_WINDOW_MS
 ): ProduceGaugeLink[] {
 	const seen = new Set<string>();
 	const links: ProduceGaugeLink[] = [];
-	for (const row of recentGaugeRows(rows, nowMs)) {
+	for (const row of recentGaugeRows(rows, nowMs, windowMs)) {
 		for (const relic of Array.isArray(row.external_refs) ? row.external_refs : []) {
 			if (relic === null || typeof relic !== 'object') continue;
 			const rawKind = String(relic.kind ?? '').toLowerCase();
