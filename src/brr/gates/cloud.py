@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import claude_status, claude_usage, codex_status, codex_usage, gitops, presence, protocol, run_ledger, run_progress, runner_quota
+from .. import claude_status, claude_usage, codex_status, codex_usage, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
 from .. import dominion, schedule as schedule_mod, wake_request
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -867,6 +867,7 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         ),
         codex_status.load_levels(),
     )
+    usage_samples.record(brr_dir, "codex", levels)
     quota = levels.get("quota") if isinstance(levels, dict) else None
     if not isinstance(quota, dict):
         return None
@@ -882,7 +883,7 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         # failed probe can never make a frozen rollout look live.
         "updated_at": levels.get("updated_at"),
         "windows": windows,
-        # Trailing burn (`codex_status.recent_burn`). Not a window and never
+        # Trailing burn (`usage_samples.recent_burn`). Not a window and never
         # drawn as one: a *rate*, derived from the timestamped rollout samples
         # brr already tails. It exists because OpenAI stopped publishing the 5h
         # window for this account on 2026-07-12 (proven at the source: the
@@ -890,7 +891,12 @@ def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         # question that bar answered — am I burning too fast right now? — lost
         # its only instrument. A weekly percentage cannot answer it: 53% left is
         # calm at a drip and an alarm at six points an hour. This says which.
-        "burn": codex_status.recent_burn(),
+        #
+        # Measured off the shell-agnostic sample store, not a rollout scan: the
+        # readings brr already takes every heartbeat *are* the series, for both
+        # Shells (`usage_samples`). One store, so the two rows can never
+        # disagree about the same account.
+        "burn": usage_samples.recent_burn(brr_dir, "codex"),
         # Free "Full reset (Weekly + 5 hr)" grants sitting unredeemed on the
         # account — only the app-server seam knows about these, and a quota row
         # that reads 4% left while four resets go unused is telling half a truth.
@@ -956,6 +962,7 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         )
         if outbox_dir else None
     )
+    usage_samples.record(brr_dir, "claude", levels)
     quota = levels.get("quota") if isinstance(levels, dict) else None
     buckets = quota.get("buckets") if isinstance(quota, dict) else None
     credits = _claude_credits_block(brr_dir, usage_levels=levels)
@@ -994,6 +1001,12 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
             ),
             *week_model_windows,
         ],
+        # Trailing burn, same reading and same discipline as the Codex row —
+        # this Shell simply had no series to measure until `usage_samples`
+        # started keeping one. It is the Shell doing most of the spending, so
+        # "am I burning too fast right now?" was going unanswered exactly where
+        # it mattered most.
+        "burn": usage_samples.recent_burn(brr_dir, "claude"),
         "credits": credits,
     }
 
