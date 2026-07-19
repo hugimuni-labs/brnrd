@@ -431,6 +431,14 @@ def live_summary(
             "latest_commit": latest_commit,
             "branch": branch,
             "pr": pr_number,
+            # The manifest itself, not only its shape. Counts answer "how
+            # much"; a resident checking its own work mid-run is asking
+            # "what" — and at closeout it is writing a receipt *from* this
+            # list (maintainer, 2026-07-19: "make the live accrued relics
+            # useful for you too... inspected as you go to maintain the
+            # focus"). Same records the node's frame renders, so the two
+            # faces of the run cannot drift.
+            "records": records,
         }
     except Exception:
         return {"known": False}

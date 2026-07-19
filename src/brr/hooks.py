@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from . import facets
+from . import relics
 
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
@@ -75,6 +76,10 @@ FORGE_HANDOFF_NAME = ".forge-handoff"
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
 _STOP_BODY_MAX_CHARS = 6000
+# The closeout produce manifest. Generous — a run that made 40 things
+# should see them — but bounded, because a runaway `.relics.jsonl` must
+# not be able to flood the one boundary the resident reads most carefully.
+_STOP_MANIFEST_MAX_RECORDS = 40
 
 _CLOSEOUT_ARTIFACT_ORDER = ("card", "classification")
 _CLOSEOUT_ARTIFACTS = {
@@ -396,6 +401,29 @@ def format_delta(
                 parts.append(f"{count} {label}{suffix}")
         if parts:
             lines.append("- produce: " + " · ".join(parts))
+        # At the closeout boundary the compression is the wrong shape. The
+        # resident is writing a receipt *from* this list — naming the commits,
+        # linking the PR, saying what the run made — and a count line makes it
+        # reconstruct from memory what the daemon already knows exactly
+        # (maintainer, 2026-07-19: "make the live accrued relics useful for
+        # you too... inspected as you go to maintain the focus"). This is the
+        # resident's rendering of the node's own `## Produce` section: same
+        # records, both faces of one run.
+        records = produce.get("records")
+        if stop and isinstance(records, list) and records:
+            manifest = [
+                f"  {relics.icon(str(r.get('kind') or ''))} {relics.label(r)}"
+                + (f" — {r['url']}" if r.get("url") else "")
+                for r in records[:_STOP_MANIFEST_MAX_RECORDS]
+                if isinstance(r, dict) and relics.label(r).strip()
+            ]
+            if manifest:
+                overflow = len(records) - len(manifest)
+                lines.append(
+                    "- your produce this run (the manifest this node carries, "
+                    "and what a receipt should name):\n" + "\n".join(manifest)
+                    + (f"\n  … and {overflow} more" if overflow > 0 else "")
+                )
     # Affirmative-empty: an *addressed* run reaching closeout with nothing
     # communicated anywhere is suspicious, not silent — surface the absence at
     # the boundary, before the slot is gone. A warn, not a requirement: the
