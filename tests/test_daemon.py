@@ -3982,7 +3982,10 @@ def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     def fake_run_worker(*args, **kwargs):
         return task
 
-    def fake_persist(_ctx, persisted_task, *, repo_label, stage, cfg=None):
+    def fake_persist(
+        _ctx, persisted_task, *, repo_label, stage, cfg=None,
+        work_dir=None, outbox_dir=None,
+    ):
         calls.append(("persist", stage))
         persisted_task.meta["run_state_stage"] = stage
         return tmp_path / "state.md"
@@ -4457,3 +4460,86 @@ def test_boot_janitor_reaps_runs_frozen_at_pending_too(tmp_path):
     assert "status: error" in text
     assert "stage: reaped" in text
     assert "closed ledger row" in text
+
+
+def test_run_state_doc_carries_produce_and_preserves_it(tmp_path, monkeypatch):
+    """The node states its own produce (maintainer, 2026-07-19).
+
+    Until now relics were collected only by ``run_ledger.append_closed_run``
+    and rendered only from the ledger API's seven-day window, so a run's own
+    permanent document could never say what the run made — and a live run had
+    no manifest anywhere. Produce belongs on the frame, and a rewrite that
+    cannot re-derive it must preserve rather than erase it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-produce",
+        event_id="evt-produce",
+        body="make something",
+        source="telegram",
+        status="running",
+        meta={"branch_name": "brr/thing", "seed_ref": "main"},
+    )
+
+    monkeypatch.setattr(
+        daemon.relics,
+        "collect",
+        lambda *_args, **_kwargs: [
+            {"kind": "commit", "sha": "abc1234def", "subject": "do the thing",
+             "url": "https://forge/commit/abc1234"},
+            {"kind": "pr", "number": 487, "url": "https://forge/pr/487"},
+        ],
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running",
+        work_dir=repo, outbox_dir=None,
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "## Produce" in text
+    assert "[abc1234 do the thing](https://forge/commit/abc1234)" in text
+    assert "[PR #487](https://forge/pr/487)" in text
+    # The fingerprint is stored so the heartbeat can rewrite the node when
+    # produce moves, and only then.
+    assert task.meta["run_state_produce_fingerprint"]
+
+    # A rewrite from a call site with no work dir in scope must not silently
+    # delete an already-proven manifest.
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished",
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "[PR #487](https://forge/pr/487)" in text
+    assert "stage: finished" in text
+
+
+def test_run_state_produce_change_detection(tmp_path, monkeypatch):
+    """The node is rewritten when produce moves, never on a timer."""
+    task = Run(
+        id="run-fp", event_id="evt-fp", body="x", status="running",
+        meta={"branch_name": "brr/thing"},
+    )
+    records = [{"kind": "commit", "sha": "aaa", "subject": "one"}]
+    monkeypatch.setattr(daemon.relics, "collect", lambda *_a, **_k: records)
+
+    # No fingerprint recorded yet: the first observation is a change.
+    assert daemon._run_state_produce_changed(
+        task, work_dir=tmp_path, outbox_dir=None) is True
+
+    task.meta["run_state_produce_fingerprint"] = daemon.relics.fingerprint(records)
+    assert daemon._run_state_produce_changed(
+        task, work_dir=tmp_path, outbox_dir=None) is False
+
+    records.append({"kind": "pr", "number": 9})
+    assert daemon._run_state_produce_changed(
+        task, work_dir=tmp_path, outbox_dir=None) is True
+
+    # The probe is read-only: it must never convince the next write that it
+    # already published something it did not.
+    assert task.meta["run_state_produce_fingerprint"] != daemon.relics.fingerprint(records)
