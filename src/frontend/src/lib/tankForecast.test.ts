@@ -164,6 +164,54 @@ describe('scheduledCost', () => {
 	it('is null below three scheduled samples', () => {
 		assert.equal(scheduledCost([row({ source_system: 'schedule', tokens_input: 1 })]), null);
 	});
+
+	it('prices a shell against its own rows — a percent is not a shared unit', () => {
+		// Claude's weekly window and codex's are different budgets, so a percent
+		// of one is not a percent of the other. Measured on the live account
+		// 2026-07-19: ~48,330 tokens per claude weekly percent against ~30,375
+		// for codex. Blending them prices whichever window leads the strip with
+		// a ratio dominated by whichever shell simply ran more often — here,
+		// four claude calibration rows against one codex row.
+		const rows = [
+			...calibration, // claude, 40k tokens per weekly percent
+			row({ runner_shell: 'codex', tokens_input: 20000, weekly_pct_delta: 1 }),
+			row({ runner_shell: 'codex', tokens_input: 20000, weekly_pct_delta: 1 }),
+			row({ runner_shell: 'codex', tokens_input: 20000, weekly_pct_delta: 1 }),
+			row({ runner_shell: 'codex', tokens_input: 20000, weekly_pct_delta: 1 }),
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 }),
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 }),
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 })
+		];
+
+		assert.equal(tokensPerWeeklyPercent(rows, 'claude'), 40000);
+		assert.equal(tokensPerWeeklyPercent(rows, 'codex'), 20000);
+
+		// The same 60k scheduled wake costs 1.5% of the claude week and 3% of
+		// the codex week. Pricing it once, blended, would have split the
+		// difference and been wrong for both.
+		const codex = scheduledCost(rows, 'codex');
+		assert.equal(codex?.samples, 3);
+		assertClose(codex?.percentOfWeek, 3, 5);
+	});
+
+	it('yields no price for a shell with too few of its own rows', () => {
+		// The fallback that must not exist: borrowing the other shell's ratio.
+		// The caller shows the wake count with the cost omitted instead.
+		const rows = [
+			...calibration,
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 }),
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 }),
+			row({ runner_shell: 'codex', source_system: 'schedule', tokens_input: 60000 })
+		];
+		assert.equal(scheduledCost(rows, 'codex')?.percentOfWeek, null);
+	});
+
+	it('matches shells case-insensitively across the two producers', () => {
+		// The quota snapshot's `shell` and the ledger's `runner_shell` are
+		// written by different producers; a casing drift must not silently
+		// empty the calibration.
+		assert.equal(tokensPerWeeklyPercent(calibration, 'Claude'), 40000);
+	});
 });
 
 describe('wakesBefore', () => {
