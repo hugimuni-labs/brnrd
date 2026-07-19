@@ -3863,6 +3863,67 @@ def test_boot_janitor_reaps_only_provably_dead_running_state_docs(tmp_path):
         assert protocol.parse_frontmatter(path.read_text(encoding="utf-8"))["status"] == "running"
 
 
+def test_boot_janitor_reaps_the_run_manifest_store_too(tmp_path):
+    """The activity publisher reads manifests, not state docs.
+
+    Until 2026-07-19 the janitor only walked ``state.md``, so a run the daemon
+    was killed out from under stayed ``running`` in ``.brr/runs/<id>/run.md``
+    forever — and ``cloud.py::_run_activity_records`` publishes exactly the
+    pending/running manifests, which is how /activity came to report 279 live
+    runs against two real ones. Same proof rules as its twin: presence wins,
+    a closed ledger row proves the end, age is the crash backstop.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    now = 1_800_000_000.0
+    runs_dir = daemon.gitops.shared_brr_dir(repo) / "runs"
+
+    def manifest(run_id: str, status: str = "running") -> Path:
+        task = Run(
+            id=run_id, event_id=f"evt-{run_id}", body="work",
+            source="telegram", status=status,
+        )
+        path = task.save(runs_dir)
+        os.utime(path, (now, now))
+        return path
+
+    closed = manifest("run-closed")
+    ancient = manifest("run-ancient")
+    pending_ancient = manifest("run-pending", status="pending")
+    fresh = manifest("run-fresh")
+    live = manifest("run-live")
+    done = manifest("run-done", status="done")
+    for path in (ancient, pending_ancient, live, done):
+        os.utime(path, (now - 2 * 86400, now - 2 * 86400))
+
+    ledger = daemon.run_ledger.ledger_path(repo)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({"run_id": "run-closed"}) + "\n", encoding="utf-8")
+    presence.register(
+        daemon.gitops.shared_brr_dir(repo), kind="daemon", run_id="run-live",
+        pid=os.getpid(), now=now,
+    )
+
+    reaped = daemon._reap_zombie_run_manifests(ctx, now=now)
+
+    assert sorted(reaped) == sorted([ancient, closed, pending_ancient])
+    for path in reaped:
+        fields = protocol.parse_frontmatter(path.read_text(encoding="utf-8"))
+        assert fields["status"] == "error"
+        assert fields["reap_reason"].startswith("boot janitor:")
+        assert fields["reaped_at"]
+    # A live run, a young one, and an already-terminal one are all untouched —
+    # the reaper must never overwrite a real status with a guess.
+    assert protocol.parse_frontmatter(fresh.read_text(encoding="utf-8"))["status"] == "running"
+    assert protocol.parse_frontmatter(live.read_text(encoding="utf-8"))["status"] == "running"
+    assert protocol.parse_frontmatter(done.read_text(encoding="utf-8"))["status"] == "done"
+
+
 def test_capture_dominion_commits_account_home(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
