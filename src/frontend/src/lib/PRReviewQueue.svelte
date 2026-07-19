@@ -31,7 +31,7 @@
 		{/if}
 	</div>
 	{#if prs.length === 0}
-		<p class="text-sm text-stone-500">No open PRs waiting on review.</p>
+		<p class="text-sm text-ink-quiet">No open PRs waiting on review.</p>
 	{:else}
 		<ul class="space-y-2">
 			{#each prs as pr (`${pr.repo_label}#${pr.number}`)}
@@ -60,7 +60,7 @@
 									#{pr.number}
 									{pr.title || 'Untitled PR'}
 								</a>
-								<span class="block truncate text-stone-500">
+								<span class="block truncate text-ink-quiet">
 									{pr.repo_label || 'unknown repo'}{pr.author ? ` · ${pr.author}` : ''}
 								</span>
 							</span>
@@ -69,7 +69,7 @@
 							<span class="uppercase tracking-wide" style={`color: ${statusColor}`}
 								>{statusLabel}</span
 							>
-							<span class="text-stone-500">{ageSinceCreated(pr.created_at, now) ?? ''}</span>
+							<span class="text-ink-quiet">{ageSinceCreated(pr.created_at, now) ?? ''}</span>
 						</span>
 					</div>
 				</li>

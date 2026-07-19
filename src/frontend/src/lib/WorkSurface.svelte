@@ -109,12 +109,12 @@
 <div class="panel p-4">
 	<div class="mb-3 flex items-center justify-between gap-3 text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">corpus</span>
-		{#if data.reported_at}<span class="font-mono text-[10px] text-stone-600"
+		{#if data.reported_at}<span class="font-mono text-[10px] text-ink-mute"
 				>mirrored {new Date(data.reported_at).toLocaleString()}</span
 			>{/if}
 	</div>
 	{#if data.files.length === 0}
-		<p class="text-sm text-stone-500">No corpus mirrored yet.</p>
+		<p class="text-sm text-ink-quiet">No corpus mirrored yet.</p>
 	{:else}
 		<div class="grid gap-3 md:grid-cols-[minmax(11rem,0.28fr)_minmax(0,1fr)]">
 			<!-- Nav tree: height-capped so 260-file lists don't stretch the page.
@@ -126,12 +126,12 @@
 					<button
 						class="mt-2 flex w-full items-center gap-1 rounded px-2 py-0.5 text-left font-mono text-[10px] tracking-wide uppercase first:mt-0 {layerOpen
 							? 'text-stone-400 hover:text-stone-300'
-							: 'text-stone-600 hover:text-stone-400'}"
+							: 'text-ink-mute hover:text-stone-400'}"
 						onclick={() => toggleLayer(navLayer.layer)}
 					>
 						<span class="shrink-0">{layerOpen ? '▾' : '▸'}</span>
 						<span class="truncate">{navLayer.label}</span>
-						<span class="ml-auto shrink-0 text-stone-700">·{navLayer.count}</span>
+						<span class="ml-auto shrink-0 text-ink-mute">·{navLayer.count}</span>
 					</button>
 					{#if layerOpen}
 						{#if navLayer.dirs === null}
@@ -141,7 +141,7 @@
 									class="block w-full truncate rounded px-2 py-1 text-left font-mono text-[11px] {file.path ===
 									selected?.path
 										? 'bg-amber-950/50 text-amber-200'
-										: 'text-stone-500 hover:bg-stone-900 hover:text-stone-300'}"
+										: 'text-ink-quiet hover:bg-stone-900 hover:text-stone-300'}"
 									title={file.path}
 									onclick={() => select(file.path)}>{basename(file.path)}</button
 								>
@@ -152,13 +152,13 @@
 								{@const dirOpen = expandedDirs.get(navLayer.layer)?.has(dir.key) ?? false}
 								<button
 									class="mt-0.5 flex w-full items-center gap-1 rounded px-2 py-0.5 text-left font-mono text-[10px] {dirOpen
-										? 'text-stone-500 hover:text-stone-400'
-										: 'text-stone-600 hover:text-stone-500'}"
+										? 'text-ink-quiet hover:text-stone-400'
+										: 'text-ink-mute hover:text-ink-quiet'}"
 									onclick={() => toggleDir(navLayer.layer, dir.key)}
 								>
 									<span class="shrink-0">{dirOpen ? '▾' : '▸'}</span>
 									<span class="truncate">{dir.key}</span>
-									<span class="ml-auto shrink-0 text-stone-700">·{dir.count}</span>
+									<span class="ml-auto shrink-0 text-ink-mute">·{dir.count}</span>
 								</button>
 								{#if dirOpen}
 									{#each dir.files as file (file.path)}
@@ -166,7 +166,7 @@
 											class="block w-full truncate rounded py-1 pl-6 pr-2 text-left font-mono text-[11px] {file.path ===
 											selected?.path
 												? 'bg-amber-950/50 text-amber-200'
-												: 'text-stone-500 hover:bg-stone-900 hover:text-stone-300'}"
+												: 'text-ink-quiet hover:bg-stone-900 hover:text-stone-300'}"
 											title={file.path}
 											onclick={() => select(file.path)}>{basename(file.path)}</button
 										>
@@ -181,7 +181,7 @@
 			<article class="subpanel min-w-0 p-4 text-sm text-stone-300" in:fade={{ duration: 120 }}>
 				<!-- Pane header: path + expand/collapse all (when outline mode is active) -->
 				<div class="mb-3 flex items-baseline justify-between gap-2 border-b border-stone-800 pb-2">
-					<span class="font-mono text-[10px] text-stone-600">{selected?.path}</span>
+					<span class="font-mono text-[10px] text-ink-mute">{selected?.path}</span>
 					{#if sections}
 						<button
 							class="shrink-0 font-mono text-[10px] text-amber-400/70 hover:text-amber-300"
@@ -210,7 +210,7 @@
 									class="flex w-full items-baseline gap-1.5 text-left"
 									onclick={() => toggleSection(i)}
 								>
-									<span class="shrink-0 font-mono text-[10px] text-stone-600"
+									<span class="shrink-0 font-mono text-[10px] text-ink-mute"
 										>{section.tail.length > 0 ? (expandedSections.has(i) ? '▾' : '▸') : '·'}</span
 									>
 									{#if section.heading.level === 1}
@@ -221,7 +221,7 @@
 										>
 									{/if}
 									{#if !expandedSections.has(i) && section.tail.length > 0}
-										<span class="ml-auto shrink-0 font-mono text-[10px] text-stone-700"
+										<span class="ml-auto shrink-0 font-mono text-[10px] text-ink-mute"
 											>+{section.tail.length}</span
 										>
 									{/if}
