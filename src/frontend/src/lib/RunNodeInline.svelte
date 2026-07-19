@@ -6,7 +6,7 @@
 	// vitals, and a count. Everything heavier sits behind one expand, and the
 	// standalone `/runs/...` page stays the addressable deep link.
 	import MarkdownContent from './MarkdownContent.svelte';
-	import type { HeartbeatLevel } from './liveRuns';
+	import { LiveRunsAuthError, requestRunStop, type HeartbeatLevel } from './liveRuns';
 	import {
 		messageInstant,
 		messageTarget,
@@ -40,9 +40,64 @@
 		 * off-theme next to every other live surface (maintainer, 2026-07-19).
 		 */
 		liveLevel?: HeartbeatLevel | null;
+		/**
+		 * Seam for tests, and the reason the stop lives here rather than on the
+		 * loom (maintainer, 2026-07-19: "move the delete button, it should be on
+		 * expanded view, similar to how we handle the repo disconnect on the
+		 * repos page… main screen, but not on the loom… or at least not like
+		 * that, eating space").
+		 *
+		 * #492 put the stop in the loom cell, where a `w-7` sibling button stole
+		 * width from a 9px-text cell that had none to give — a destructive
+		 * control competing for space with the run's own name. The loom is a
+		 * *band*: its job is position and density, and it cannot afford an
+		 * affordance that must be readable to be safe.
+		 */
+		stopRun?: (runId: string) => Promise<unknown>;
 	}
 
-	let { data, repoSlug, runId, href, vitals = [], liveLevel = null }: Props = $props();
+	let {
+		data,
+		repoSlug,
+		runId,
+		href,
+		vitals = [],
+		liveLevel = null,
+		stopRun = requestRunStop
+	}: Props = $props();
+
+	// Confirm-then-commit, in the repos page's own grammar: an explicit pair of
+	// buttons rather than the loom's timed arm. #492's `loomStopGesture` armed on
+	// one tap and lapsed after four seconds, which was the right answer for a
+	// 20px target in a dense band — and that constraint is exactly what moving
+	// the control removed. A visible `cancel` beside a visible `confirm stop`
+	// says what a self-disarming glyph could only imply.
+	let confirmingStop = $state(false);
+	let stopPending = $state(false);
+	let stopped = $state(false);
+	let stopNote = $state<string | null>(null);
+
+	async function commitStop() {
+		confirmingStop = false;
+		stopPending = true;
+		try {
+			await stopRun(runId);
+			stopped = true;
+			// Deliberately not "stopped": the daemon has not consumed it yet.
+			stopNote = 'stopping — ends on the next daemon sync, partial work kept';
+		} catch (e) {
+			// A swallowed stop must be loud (the 2026-07-11 lesson): the reader
+			// just tried to kill a burning run and nothing visible happened.
+			stopNote =
+				e instanceof LiveRunsAuthError
+					? 'session expired — sign in again, then retry'
+					: e instanceof Error
+						? e.message
+						: 'stop request failed';
+		} finally {
+			stopPending = false;
+		}
+	}
 
 	const LIVE_COLOR: Record<HeartbeatLevel, string> = {
 		running: STATUS_GOOD,
@@ -148,7 +203,10 @@
 				/>
 			</div>
 		{:else}
-			<p class="mt-2 font-mono text-[11px] text-ink-quiet" use:typeReveal={{ text: cardEmptyLabel }}>
+			<p
+				class="mt-2 font-mono text-[11px] text-ink-quiet"
+				use:typeReveal={{ text: cardEmptyLabel }}
+			>
 				{cardEmptyLabel}
 			</p>
 		{/if}
@@ -193,7 +251,10 @@
 
 		<div class="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 			<div class="flex items-baseline gap-3 font-mono text-[10px]">
-				{#if digest.hasMore}
+				<!-- A live run always offers the expand even with nothing more to
+				     read: the stop control lives down there, and gating the only
+				     way to reach it on unrelated content would strand it. -->
+				{#if digest.hasMore || liveLevel}
 					<button
 						type="button"
 						class="cursor-pointer tracking-wide text-ink-quiet uppercase hover:text-stone-300"
@@ -241,6 +302,45 @@
 							sourcePath={node.body.path}
 							{knownPaths}
 						/>
+					</div>
+				{/if}
+				{#if liveLevel}
+					<!-- The stop, at the bottom of the expand: destructive, so it sits
+					     past everything a reader came here to read, and only exists
+					     while the run is actually live. A closed run has nothing to
+					     stop, and rendering a dead control is how a surface teaches
+					     people to ignore it. -->
+					<div
+						class="flex flex-wrap items-center gap-2 border-t border-stone-800/70 pt-3 font-mono text-[10px]"
+					>
+						{#if stopped}
+							<span class="tracking-wide text-amber-500 uppercase">stopping</span>
+						{:else if confirmingStop}
+							<button
+								type="button"
+								class="cursor-pointer border border-red-900/60 bg-stone-950/70 px-2 py-1 tracking-wide text-red-300 uppercase hover:bg-red-950/40 disabled:cursor-wait disabled:opacity-50"
+								disabled={stopPending}
+								onclick={commitStop}>{stopPending ? 'stopping' : 'confirm stop'}</button
+							>
+							<button
+								type="button"
+								class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+								disabled={stopPending}
+								onclick={() => (confirmingStop = false)}>cancel</button
+							>
+							<span class="text-ink-mute">partial work is kept; the thought does not resume</span>
+						{:else}
+							<button
+								type="button"
+								class="cursor-pointer border border-stone-800 px-2 py-1 tracking-wide text-ink-quiet uppercase hover:text-red-300"
+								onclick={() => (confirmingStop = true)}>stop run</button
+							>
+						{/if}
+						{#if stopNote}
+							<!-- Receipt line: a tap that gets swallowed must never be silent
+							     (found live 2026-07-11 on the spool rack's own taps). -->
+							<span class="text-amber-400/90">{stopNote}</span>
+						{/if}
 					</div>
 				{/if}
 				{#each node?.messages ?? [] as message (message.file.path)}
