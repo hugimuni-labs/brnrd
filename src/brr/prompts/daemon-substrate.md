@@ -100,8 +100,6 @@ becomes attention, action, and a reply is yours.
     actions: from the watching side, a body that appears only when something
     forces it reads as forgotten.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
-  - `.task-classification` — one slug naming this run's shape, every run.
-    Unwritten ⇒ that cost-ledger row is null forever.
   - `.name` — first line is this run's short resident-authored name (60 chars max).
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb

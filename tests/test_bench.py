@@ -239,7 +239,7 @@ def test_drift_scenario_puts_its_obligations_late():
     for fu in drift.followups:
         assert fu.after.startswith("+"), "drift's follow-up must fire on a delay"
         assert bench._followup_delay(fu) >= 120, "too early to have drifted"
-    for probe in ("mount", "classification", "commit", "card", "fold", "next_move"):
+    for probe in ("mount", "commit", "card", "fold", "next_move"):
         assert probe in drift.probes
 
 
@@ -314,18 +314,6 @@ def test_probe_mount_refuses_to_guess_without_a_wake():
 
 
 # ── Late obligations ─────────────────────────────────────────────────
-
-
-def test_probe_classification_reads_the_ledger_not_the_reply():
-    drift = bench.SCENARIOS["drift"]
-    null_row = _t(ledger_rows=[{"task_classification": None}])
-    assert not bench.probe_classification(null_row, drift).passed
-
-    written = _t(ledger_rows=[{"task_classification": "bugfix"}])
-    result = bench.probe_classification(written, drift)
-    assert result.passed and "bugfix" in result.detail
-
-    assert not bench.probe_classification(_t(), drift).passed
 
 
 def test_probe_commit_ignores_the_scaffold_commit():

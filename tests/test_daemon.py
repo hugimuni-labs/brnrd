@@ -400,52 +400,6 @@ def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypa
     ]
 
 
-def test_run_worker_finalize_reads_task_classification_control(tmp_path, monkeypatch):
-    """A ``.task-classification`` control file tags the ledger row.
-
-    The resident-authored slug (kb/design-quota-scheduling-loom.md's "only
-    field that makes rollup-by-shape possible") must survive from the
-    control file the runner wrote mid-run into the actual ledger row, not
-    just be readable in isolation (see test_run_ledger.py's unit test for
-    the reader itself).
-    """
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-classified")
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *args, **kwargs: "PROMPT",
-    )
-    monkeypatch.setattr(
-        daemon.run_ledger, "load_quota_levels", lambda *a, **kw: None,
-    )
-
-    def _invoke(ctx, runner_name, invocation, _cfg, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        outbox = Path(ctx.outbox_env)
-        outbox.mkdir(parents=True, exist_ok=True)
-        (outbox / ".task-classification").write_text(
-            "dashboard-slice\n", encoding="utf-8",
-        )
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs, "get_env", lambda _name: StubWorktreeEnv(invoke_fn=_invoke),
-    )
-
-    task = daemon._run_worker_and_finalize(
-        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
-    )
-
-    ledger = tmp_path / ".brr" / "run-ledger.jsonl"
-    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 1
-    assert rows[0]["run_id"] == task.id
-    assert rows[0]["task_classification"] == "dashboard-slice"
 def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     tmp_path, monkeypatch,
 ):
@@ -890,53 +844,6 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert protocol.event_is_deferred(spawned)
 
 
-def test_drain_outbox_respawn_carries_task_classification(tmp_path):
-    """``task_classification:`` frontmatter tags the ledger row for the child.
-
-    Explicit-only: the parent's own pending-event meta must not leak a stale
-    classification onto a child that didn't ask for one.
-    """
-    brr_dir = tmp_path / ".brr"
-    inbox = brr_dir / "inbox"
-    responses = brr_dir / "responses"
-    outbox = brr_dir / "outbox" / "evt-current"
-    outbox.mkdir(parents=True)
-    path = protocol.create_event(
-        inbox,
-        "telegram",
-        "original task",
-        status="processing",
-        task_classification="parent-classification-must-not-leak",
-    )
-    event_id = path.stem
-    (outbox / "respawn.md").write_text(
-        "---\n"
-        "respawn: true\n"
-        "shell: codex-mini\n"
-        "task_classification: dashboard-slice\n"
-        "---\n"
-        "carry forward\n",
-        encoding="utf-8",
-    )
-    task = Run(id="run-dispatch", event_id=event_id, body="original task", source="telegram")
-
-    promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
-        task,
-        responses,
-        event_id,
-        outbox,
-        inbox,
-    )
-
-    assert promoted == 1
-    spawned = [
-        ev for ev in protocol.list_pending(inbox)
-        if ev.get("respawned_from_event") == event_id
-    ][0]
-    assert spawned["task_classification"] == "dashboard-slice"
-
-
 def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     """A respawn this run just queued must not show up as attention-owed.
 
@@ -1236,7 +1143,6 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
         "---\n"
         "spawn: true\n"
         "shell: codex-mini\n"
-        "task_classification: reset-epoch-plumbing\n"
         "reason: cheaper core has quota headroom\n"
         "---\n"
         "bounded task for a concurrent worker child\n",
@@ -1278,7 +1184,6 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     # kb/design-director-loop.md).
     assert spawned["environment"] == "worktree"
     assert spawned["shell"] == "codex-mini"
-    assert spawned["task_classification"] == "reset-epoch-plumbing"
     assert spawned["repo_label"] == "Gurio/brr"
     # Reuses the respawn-origin exclusion so the parent's own attention
     # gate doesn't nag it about a dispatch it just made on purpose.
@@ -4174,7 +4079,7 @@ def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
     )
     event_id = path.stem
     (outbox / "spawn.md").write_text(
-        "---\nspawn: true\ntask_classification: setup-assist\n---\nbounded side task\n",
+        "---\nspawn: true\n---\nbounded side task\n",
         encoding="utf-8",
     )
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
