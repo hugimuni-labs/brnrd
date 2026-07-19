@@ -4833,9 +4833,9 @@ def _drain_outbox(
         # sources (spawn, spawn_completed, dispatch_message) have no gate and
         # no collector for interims — only a worker's *terminal* report is
         # collected — so a partial written here would orphan and the record
-        # would sit pending forever. Say so at staging time instead.
-        # An absent source is unknown, not impossible: only assert
-        # undeliverability about a source we can actually see.
+        # would sit pending forever. Say so at staging time instead — but
+        # only about a source we can actually see: an absent one is unknown,
+        # not impossible.
         deliverable = not target_source or _gate_owns_source(target_source)
         message_path = _stage_outbound(
             task,
