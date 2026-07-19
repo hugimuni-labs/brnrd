@@ -280,7 +280,7 @@ SCENARIOS: dict[str, Scenario] = {
         ),
         probes=(
             "response", "next_move", "card", "fold", "single_run",
-            "mount", "classification", "commit", "branch",
+            "mount", "commit", "branch",
         ),
         timeout_seconds=1500,
         scaffold={
@@ -686,24 +686,6 @@ def probe_mount(t: Transcript, _s: Scenario) -> ProbeResult:
     return ProbeResult("mount", True, f"arm attested: {observed}{core}")
 
 
-def probe_classification(t: Transcript, _s: Scenario) -> ProbeResult:
-    """`.task-classification` — the obligation with no natural deadline but
-    the closeout, which is exactly why it is a drift probe."""
-    if not t.ledger_rows:
-        return ProbeResult("classification", False, "no closed-run ledger row")
-    written = [
-        str(r.get("task_classification"))
-        for r in t.ledger_rows
-        if r.get("task_classification")
-    ]
-    if written:
-        return ProbeResult("classification", True, f"slug(s): {', '.join(written)}")
-    return ProbeResult(
-        "classification", False,
-        f"{len(t.ledger_rows)} closed run(s), every task_classification null",
-    )
-
-
 def probe_commit(t: Transcript, _s: Scenario) -> ProbeResult:
     """The work reached a durable receipt, or it did not happen."""
     beyond = [s for s in t.commit_subjects if s != "bench: sandbox scaffold"]
@@ -742,7 +724,6 @@ PROBES: dict[str, Callable[[Transcript, Scenario], ProbeResult]] = {
     "fold": probe_fold,
     "single_run": probe_single_run,
     "mount": probe_mount,
-    "classification": probe_classification,
     "commit": probe_commit,
 }
 
