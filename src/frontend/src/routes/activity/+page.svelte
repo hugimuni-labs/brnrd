@@ -139,8 +139,15 @@
 		>
 	</div>
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">activity</h1>
+	<!-- Says what the feed is, not what it looks like. The publisher
+	     (`cloud.py::_run_activity_records`) sends only pending/running
+	     manifests plus queued wakes and parked respawns — this was never
+	     history, and calling it "everything reported" is how it read as one.
+	     Closed runs and their produce live in the loom's past shelf. -->
 	<p class="mt-2 text-sm text-stone-400">
-		Everything connected daemons have reported — runs, scheduled wakes, parked respawns.
+		What connected daemons report as <em>open</em> — runs in flight, scheduled wakes, parked
+		respawns. Closed runs and their receipts live on the
+		<a class="text-sky-400 underline" href="/">loom</a>.
 	</p>
 
 	{#if unauthenticated}

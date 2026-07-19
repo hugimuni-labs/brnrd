@@ -18,7 +18,8 @@
 	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import RunNodeInline from '$lib/RunNodeInline.svelte';
-	import { repoRunSlug, runIdSlug, runNodeHref } from '$lib/runNode';
+	import { nodeDigest, repoRunSlug, runIdSlug, runNodeFromSurface, runNodeHref } from '$lib/runNode';
+	import { durationLabel } from '$lib/runLedger';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
 		ScheduledWakesAuthError,
@@ -32,7 +33,7 @@
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
-	import { LOOM_PAST_WINDOW_MS } from '$lib/loomBand';
+	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
@@ -229,6 +230,55 @@
 			href: runNodeHref(source.repo_label, source.run_id)
 		};
 	});
+	// One run, one panel (2026-07-19: "the live run kinda duplicates the info…
+	// live run repeats after the run node block"). §2a used to stack the
+	// LiveRuns card *and* the ledger receipt *and* the node — three renderings
+	// of one run, from three fetches, saying the same thing in three grammars.
+	//
+	// The node is the answer whenever the corpus has one: it is the run's own
+	// authored account of itself. What the other two carried that the node
+	// doesn't — live elapsed, runner identity, produce counts — is not dropped,
+	// it collapses into a single vitals line in the node's header. Only when
+	// no node is mirrored (a run that closed before the weld, or one whose
+	// corpus push hasn't landed) do the old cards still answer.
+	let selectedNodeMirrored = $derived.by(() => {
+		if (!selectedNode || !surfaceData) return false;
+		const node = runNodeFromSurface(surfaceData, selectedNode.repoSlug, selectedNode.runId);
+		return nodeDigest(node).mirrored;
+	});
+	let selectedVitals = $derived.by(() => {
+		const parts: string[] = [];
+		const live = selectedLiveRuns[0];
+		if (live) {
+			const started = live.started_at ? Date.parse(live.started_at) : Number.NaN;
+			if (Number.isFinite(started)) {
+				parts.push(`${durationLabel(Math.max(0, (now - started) / 1000))} elapsed`);
+			}
+			const runner = [live.runner?.shell, live.runner?.core].filter(Boolean).join(' · ');
+			if (runner) parts.push(runner);
+			if (live.phase) parts.push(live.phase);
+			if (live.is_subspawn) parts.push('↳ spawn');
+		} else {
+			const row = selectedLedgerRows.find((candidate) => candidate.run_id) ?? selectedLedgerRows[0];
+			if (row) {
+				if (row.wall_clock_seconds) parts.push(durationLabel(row.wall_clock_seconds));
+				const relics = row.external_refs ?? [];
+				const prs = relics.filter((relic) => relic.kind === 'pr').length;
+				const commits = relics.filter((relic) => relic.kind === 'commit').length;
+				const kb = relics.filter(
+					(relic) => relic.kind === 'kb' || relic.kind === 'kb_page'
+				).length;
+				const produce = [
+					prs > 0 ? `${prs}pr` : '',
+					commits > 0 ? `${commits}c` : '',
+					kb > 0 ? `${kb}kb` : ''
+				].filter(Boolean);
+				if (produce.length > 0) parts.push(produce.join(' '));
+			}
+		}
+		return parts;
+	});
+
 	let selectedWakes = $derived(
 		loomSelection?.kind === 'wake'
 			? (scheduledWakes ?? []).filter((wake) => wake.id === loomSelection!.id)
@@ -432,14 +482,19 @@
 	     said here, for the selected thread of time only. -->
 		<div class="ignite" style="--ignite-delay: 600ms">
 			<div class="mt-4 flex items-baseline justify-between gap-3">
+				<!-- The label names the panel that actually renders. It used to say
+				     "· receipt" for any closed run, which stopped being true the
+				     moment the node became the single answer. -->
 				<p class="eyebrow">
 					§2a · {loomSelection === null
 						? 'now'
 						: loomSelection.kind === 'wake'
 							? 'selected wake'
-							: selectedLiveRuns.length > 0
-								? 'selected run · live'
-								: 'selected run · receipt'}
+							: selectedNode && selectedNodeMirrored
+								? 'selected run · node'
+								: selectedLiveRuns.length > 0
+									? 'selected run · live'
+									: 'selected run · receipt'}
 				</p>
 				{#if loomSelection !== null}
 					<div class="flex shrink-0 items-baseline gap-3">
@@ -466,10 +521,18 @@
 				{:else if loomSelection?.kind === 'run'}
 					<!-- The loom stays the spine: a selected run fills this frame with
 				     its own node instead of sending the reader to a page and
-				     costing them their place in the band. Vitals and receipt
-				     first, the node's own `## Now` under them, everything heavier
-				     behind the panel's expand. -->
-					{#if selectedLiveRuns.length > 0}
+				     costing them their place in the band. One panel, not three —
+				     the node speaks, with the live/receipt vitals folded into its
+				     header and everything heavier behind its own expand. -->
+					{#if selectedNode && selectedNodeMirrored}
+						<RunNodeInline
+							data={surfaceData}
+							repoSlug={selectedNode.repoSlug}
+							runId={selectedNode.runId}
+							href={selectedNode.href}
+							vitals={selectedVitals}
+						/>
+					{:else if selectedLiveRuns.length > 0}
 						<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
 					{:else if selectedLedgerRows.length > 0}
 						<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
@@ -477,16 +540,6 @@
 						<p class="text-sm text-stone-500">
 							no receipt rows for that run in the current window.
 						</p>
-					{/if}
-					{#if selectedNode}
-						<div class="mt-2">
-							<RunNodeInline
-								data={surfaceData}
-								repoSlug={selectedNode.repoSlug}
-								runId={selectedNode.runId}
-								href={selectedNode.href}
-							/>
-						</div>
 					{/if}
 				{:else if liveRunsError}
 					<p class="text-sm text-red-400">{liveRunsError}</p>
@@ -500,11 +553,15 @@
 
 		<div class="ignite" style="--ignite-delay: 1000ms">
 			<p class="eyebrow mt-6">§2b · instruments</p>
+			<!-- The instruments read the loom's dial, not a constant of their own
+			     (2026-07-19: "the 24h block is too static/limiting"). One time
+			     scope for the section: step the past label above, and this
+			     heading, the gauge caption, and its rollup all move with it. -->
 			<h2
 				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: 'last 24h', delay: 1150 }}
+				use:typeReveal={{ text: `last ${loomPastWindowLabel(loomPastWindowMs)}`, delay: 1150 }}
 			>
-				last 24h
+				last {loomPastWindowLabel(loomPastWindowMs)}
 			</h2>
 			<div class="mt-3">
 				{#if runLedgerError}
@@ -512,7 +569,12 @@
 				{:else if runLedgerRows === null}
 					<p class="text-sm text-stone-500">Loading…</p>
 				{:else}
-					<ProduceGauge rows={runLedgerRows} stale={runLedgerStale} {now} />
+					<ProduceGauge
+						rows={runLedgerRows}
+						stale={runLedgerStale}
+						{now}
+						windowMs={loomPastWindowMs}
+					/>
 				{/if}
 			</div>
 

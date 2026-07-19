@@ -129,3 +129,31 @@ test('linked produce stays inside the window, counted vocabulary, and safe URL s
 		{ kind: 'reply', label: 'done — receipt', url: 'https://example.test/reply/1' }
 	]);
 });
+
+// The instruments used to hold their own 24h constant while the loom above
+// them cycled 6h → 7d, so turning the dial moved the band and left the gauge —
+// and its "last 24h" caption — frozen. The window is a parameter now; these
+// pin that it actually reaches both the rollup and the link list.
+test('the gauge rolls up whatever window the loom hands it', () => {
+	const rows = [
+		row({ ended_at: '2026-07-16T17:00:00Z', wall_clock_seconds: 60 }),
+		row({ ended_at: '2026-07-14T17:00:00Z', wall_clock_seconds: 600 })
+	];
+
+	equal(rollupProduceGauge(rows, NOW).runCount, 1, 'default stays trailing 24h');
+	equal(rollupProduceGauge(rows, NOW, 6 * 3_600_000).runCount, 1);
+	equal(rollupProduceGauge(rows, NOW, 7 * 86_400_000).runCount, 2, '7d reaches the older run');
+	equal(rollupProduceGauge(rows, NOW, 7 * 86_400_000).wallClockSeconds, 660);
+});
+
+test('produce links honour the same window as the rollup', () => {
+	const rows = [
+		row({
+			ended_at: '2026-07-14T17:00:00Z',
+			external_refs: [{ kind: 'pr', number: 7, url: 'https://example.test/pr/7' }]
+		})
+	];
+
+	deepEqual(produceGaugeLinks(rows, NOW), [], 'outside 24h the relic is not claimed');
+	equal(produceGaugeLinks(rows, NOW, 7 * 86_400_000).length, 1);
+});
