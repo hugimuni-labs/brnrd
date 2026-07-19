@@ -492,7 +492,7 @@ def _delta(after: Any, before: Any) -> float | None:
     ``usd_subscription_attributed`` (derived from the weekly delta) inherited
     the sign.
 
-    ``codex_status.recent_burn`` already refuses to measure across a reset for
+    ``usage_samples.recent_burn`` already refuses to measure across a reset for
     exactly this reason; the ledger simply never learned the same lesson.
     A reset is unrecoverable here — the pre-reset portion of the run's spend
     went with the old window — so the honest row is a null, which every
