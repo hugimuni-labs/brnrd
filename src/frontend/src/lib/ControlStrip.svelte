@@ -79,17 +79,17 @@
 			onclick={() => (expanded = !expanded)}
 		>
 			<div
-				class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-stone-500 uppercase"
+				class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 			>
 				<span>next-wake runner</span>
-				<span class="text-stone-600 group-hover:text-stone-400" aria-hidden="true"
+				<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
 					>{expanded ? '▾' : '▸'} rack</span
 				>
 			</div>
 			{#if runners === null}
-				<div class="font-mono text-xs text-stone-500">next wake · loading…</div>
+				<div class="font-mono text-xs text-ink-quiet">next wake · loading…</div>
 			{:else if blocks.length === 0}
-				<div class="font-mono text-xs text-stone-500">next wake · unavailable</div>
+				<div class="font-mono text-xs text-ink-quiet">next wake · unavailable</div>
 			{:else}
 				<div class="flex min-w-0 items-stretch gap-1.5">
 					{#each blocks as block (block.kind)}
@@ -97,7 +97,7 @@
 							title={profileTitle(block.profile.name)}
 							class="min-w-0 border px-2 py-1 font-mono {block.active
 								? 'border-amber-700/70 bg-amber-950/55 text-amber-100'
-								: 'border-stone-800/60 bg-stone-950/30 text-stone-500 opacity-55'}"
+								: 'border-stone-800/60 bg-stone-950/30 text-ink-quiet opacity-55'}"
 						>
 							<span class="block truncate text-[11px] font-medium">
 								{block.active ? 'next wake · ' : ''}{block.profile.name}
@@ -115,11 +115,11 @@
 		</button>
 
 		<div class="min-w-0 p-2.5" aria-label="quota fuel">
-			<div class="mb-1 font-mono text-[9px] tracking-[0.13em] text-stone-500 uppercase">fuel</div>
+			<div class="mb-1 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase">fuel</div>
 			{#if shells === null}
-				<div class="font-mono text-[10px] text-stone-600">loading quota…</div>
+				<div class="font-mono text-[10px] text-ink-mute">loading quota…</div>
 			{:else if fuel.length === 0}
-				<div class="font-mono text-[10px] text-stone-600">no quota report</div>
+				<div class="font-mono text-[10px] text-ink-mute">no quota report</div>
 			{:else}
 				<div class="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-4">
 					{#each fuel as row (row.id)}
@@ -127,13 +127,13 @@
 						<div class="min-w-0" title={row.tooltip}>
 							<div
 								class="mb-0.5 flex items-baseline justify-between gap-1 font-mono text-[9px] {row.stale
-									? 'text-stone-600'
+									? 'text-ink-mute'
 									: 'text-stone-400'}"
 							>
 								<span class="truncate">{row.label}</span>
 								<span class="flex items-baseline gap-1">
 									{#if row.resetShort}
-										<span class="text-stone-500">↻{row.resetShort}</span>
+										<span class="text-ink-quiet">↻{row.resetShort}</span>
 									{/if}
 									<span style={`color: ${LEVEL_COLOR[level]}`}>{row.percentLabel}</span>
 								</span>
@@ -184,7 +184,7 @@
 			class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px]"
 			aria-label="tank forecast"
 		>
-			<span class="tracking-[0.13em] text-stone-500 uppercase">tank</span>
+			<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
 			<span class="text-stone-400">{lead.label}</span>
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
 			{#if lead.ratePerHour !== null}
@@ -196,7 +196,7 @@
 				     deciding whether to dispatch deserves to know which one is
 				     speaking. -->
 				<span
-					class="text-stone-600"
+					class="text-ink-mute"
 					title={lead.rateSource === 'measured'
 						? `current pace, measured over the last ${Math.round((lead.rateSpanMinutes ?? 0) / 60)}h of samples`
 						: 'average draw across this whole window so far'}
@@ -209,7 +209,7 @@
 				<!-- The half the window cannot know: what is already queued to
 				     draw on it. Priced from runs the daemon tagged
 				     `source_system=schedule`, never from a self-reported slug. -->
-				<span class="text-stone-500" title="scheduled wakes queued before this window resets">
+				<span class="text-ink-quiet" title="scheduled wakes queued before this window resets">
 					· {lead.committedWakes} scheduled ≈ {lead.committedDraw < 1
 						? lead.committedDraw.toFixed(1)
 						: Math.round(lead.committedDraw)}%
@@ -217,10 +217,10 @@
 			{:else if lead.committedWakes > 0}
 				<!-- Count without a price: the wakes are real, the per-wake cost
 				     is not yet measurable. Saying so beats inventing a number. -->
-				<span class="text-stone-600">· {lead.committedWakes} scheduled, cost unmeasured</span>
+				<span class="text-ink-mute">· {lead.committedWakes} scheduled, cost unmeasured</span>
 			{/if}
 			{#if lead.stale}
-				<span class="text-stone-600">· stale report</span>
+				<span class="text-ink-mute">· stale report</span>
 			{/if}
 		</div>
 	{/if}
@@ -238,7 +238,7 @@
 			{/if}
 			{#if runners === null}
 				{#if !runnersError}
-					<p class="text-sm text-stone-500">Loading…</p>
+					<p class="text-sm text-ink-quiet">Loading…</p>
 				{/if}
 			{:else}
 				<SpoolRack

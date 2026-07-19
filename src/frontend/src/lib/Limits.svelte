@@ -78,7 +78,7 @@
 				style={`width: ${headroomPct ?? 0}%; ${contention ? statusBarStyle(level, color) : `background-color: ${color}`}`}
 			></div>
 		</div>
-		<div class="mt-1 text-right font-mono text-[11px] text-stone-500">
+		<div class="mt-1 text-right font-mono text-[11px] text-ink-quiet">
 			concurrent worker-stack children, `spawn.max_concurrent`
 		</div>
 	</div>

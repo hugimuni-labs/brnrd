@@ -2,26 +2,19 @@
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
 	import { runNodeHref } from './runNode';
-	import {
-		LiveRunsAuthError,
-		liveRunDisplayName,
-		requestRunStop,
-		type LiveRun
-	} from './liveRuns';
+	import { liveRunDisplayName, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
 		LOOM_CENTER_ZONE_PX,
 		LOOM_DUE_SOON_MS,
 		LOOM_PAST_WINDOWS_MS,
 		LOOM_PAST_WINDOW_MS,
-		LOOM_STOP_ARM_WINDOW_MS,
 		loomBarFraction,
 		loomCellClickSelects,
 		loomFutureHorizon,
 		loomFutureStop,
 		loomPastStop,
-		loomPastWindowLabel,
-		loomStopGesture
+		loomPastWindowLabel
 	} from './loomBand';
 	import {
 		STATUS_BURNING,
@@ -42,13 +35,6 @@
 		onPastWindowChange?: (windowMs: number) => void;
 		selectedId?: string | null;
 		/**
-		 * Seam for tests (#476). The band calls the endpoint itself rather than
-		 * routing a stop up through the page: the affordance, its confirmation,
-		 * and its receipt line are one thing, and splitting them across two
-		 * files is how the receipt goes missing.
-		 */
-		stopRun?: (runId: string) => Promise<unknown>;
-		/**
 		 * Open PRs waiting on a review. The one lens whose subject is an
 		 * artifact rather than a run, so its count comes from a different feed
 		 * (see `loomLens.ts` → `LENS_REVIEW`).
@@ -67,61 +53,10 @@
 		onSelect,
 		onPastWindowChange,
 		selectedId = null,
-		stopRun = requestRunStop,
 		reviewCount = 0,
 		lens = LENS_ALL,
 		onLensChange
 	}: Props = $props();
-
-	// #476: the stop affordance's local state. `armedStopId` is the run whose
-	// control is showing "stop?"; `stoppedIds` remembers runs stopped in this
-	// session so the cell flips to "stopping" on the tap rather than waiting a
-	// full poll for the server to agree.
-	let armedStopId = $state<string | null>(null);
-	let armedAt: number | null = null;
-	let stoppedIds = $state<Set<string>>(new Set());
-	let stopNote = $state<string | null>(null);
-
-	async function tapStop(event: MouseEvent, runId: string) {
-		// The cell behind this control selects on click; a stop must not also
-		// be a selection, so the gesture stops here.
-		event.stopPropagation();
-		const gesture = loomStopGesture(event, armedStopId === runId ? armedAt : null, Date.now());
-		if (gesture === 'ignore') return;
-		if (gesture === 'arm') {
-			armedStopId = runId;
-			armedAt = Date.now();
-			stopNote = 'tap again to stop — this does not resume';
-			return;
-		}
-		armedStopId = null;
-		armedAt = null;
-		try {
-			await stopRun(runId);
-			stoppedIds = new Set(stoppedIds).add(runId);
-			// Deliberately not "stopped": the daemon has not consumed it yet.
-			stopNote = 'stopping — ends on the next daemon sync, partial work kept';
-		} catch (e) {
-			// A swallowed stop must be loud (the 2026-07-11 lesson): the user
-			// just tried to kill a burning run and nothing happened.
-			stopNote =
-				e instanceof LiveRunsAuthError
-					? 'session expired — sign in again, then re-tap'
-					: e instanceof Error
-						? e.message
-						: 'stop request failed';
-		}
-	}
-
-	// The arm lapses on its own, so a control left armed by a mis-tap can't be
-	// committed by an unrelated click later. `now` already ticks for the band.
-	$effect(() => {
-		if (armedStopId !== null && armedAt !== null && now - armedAt > LOOM_STOP_ARM_WINDOW_MS) {
-			armedStopId = null;
-			armedAt = null;
-			stopNote = null;
-		}
-	});
 
 	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
 	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
@@ -370,7 +305,7 @@
 					type="button"
 					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
 					class:text-amber-200={activeLens === candidate.id}
-					class:text-stone-600={activeLens !== candidate.id}
+					class:text-ink-mute={activeLens !== candidate.id}
 					class:hover:text-stone-400={activeLens !== candidate.id}
 					aria-pressed={activeLens === candidate.id}
 					title={candidate.facet === 'artifact'
@@ -378,13 +313,13 @@
 						: `${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
 					onclick={() => onLensChange?.(activeLens === candidate.id ? LENS_ALL : candidate.id)}
 				>
-					{candidate.label}<span class="ml-1 text-stone-700">{candidate.count}</span>
+					{candidate.label}<span class="ml-1 text-ink-mute">{candidate.count}</span>
 				</button>
 			{/each}
 		</div>
 	{/if}
 	<div
-		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-stone-600 uppercase"
+		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
 	>
 		<span>
@@ -397,14 +332,14 @@
 				past · {loomPastWindowLabel(pastWindowMs)}
 			</button>
 			{#if runs.length > 0}
-				<span class="ml-1 text-stone-700">· {runs.length} run{runs.length === 1 ? '' : 's'}</span>
+				<span class="ml-1 text-ink-mute">· {runs.length} run{runs.length === 1 ? '' : 's'}</span>
 			{/if}
 		</span>
 		<span class="text-center text-amber-200">now</span>
 		<span class="text-right">
 			future
 			{#if wakes.length > 0}
-				<span class="ml-1 normal-case text-stone-700">· {wakes.length}</span>
+				<span class="ml-1 normal-case text-ink-mute">· {wakes.length}</span>
 			{/if}
 		</span>
 	</div>
@@ -425,7 +360,7 @@
 			     an empty window, and saying "no runs in 24h" while 26 runs sit
 			     one click away would be the band lying about its own contents. -->
 			{#if ledgerRows !== null && runs.length === 0}
-				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-stone-700">
+				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-ink-mute">
 					{activeLens === LENS_ALL
 						? `no runs in ${loomPastWindowLabel(pastWindowMs)}`
 						: `no runs match this lens in ${loomPastWindowLabel(pastWindowMs)}`}
@@ -470,7 +405,7 @@
 		<div class="relative z-10 border-x border-amber-900/40 bg-stone-950/70 px-1">
 			{#if liveRuns === null}
 				<div
-					class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-stone-700"
+					class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-ink-mute"
 				>
 					acquiring
 				</div>
@@ -484,7 +419,7 @@
 						{new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 					</span>
 					{#if nextWake}
-						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-stone-600">
+						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-ink-mute">
 							next {etaLabel(wakeEta(nextWake))}
 						</span>
 					{/if}
@@ -493,7 +428,10 @@
 				<div class="absolute inset-1 flex flex-col justify-center gap-1 overflow-hidden">
 					{#each liveRuns.slice(0, 2) as run, index (run.id)}
 						{@const stopId = run.run_id || run.id}
-						{@const stopping = run.stop_requested || stoppedIds.has(stopId)}
+						<!-- Server truth only now: the optimistic "I just tapped it"
+						     state belongs to the panel that issued the stop, not to a
+						     band that merely reports position. -->
+						{@const stopping = run.stop_requested}
 						<div
 							class="flex min-w-0 items-stretch gap-px"
 							in:glitchReveal={{ duration: 260, delay: 35 + index * 38 }}
@@ -514,42 +452,16 @@
 									</span>
 								{/if}
 							</button>
-							<!-- The stop affordance (#476 wyrd §3). Its own button beside
-							     the cell, never nested inside it: the selecting click has a
-							     settled grammar and a kill must not ride it. Arm-then-commit
-							     (`loomStopGesture`) because a stopped thought does not
-							     resume. Once parked it stays "stopping" — the daemon
-							     consumes it on its next sync, and the cell must not claim a
-							     terminal state the system has not reached. -->
-							{#if stopping}
-								<span
-									class="flex w-7 shrink-0 items-center justify-center border border-amber-800/40 font-mono text-[8px] text-amber-600/80"
-									title="stop requested — the daemon ends this run on its next sync"
-								>
-									···
-								</span>
-							{:else}
-								<button
-									type="button"
-									class="w-7 shrink-0 cursor-pointer border border-red-900/60 bg-stone-950/90 font-mono text-[8px] text-red-400/90 hover:bg-red-950/40"
-									title={armedStopId === stopId
-										? 'tap again to stop this run — partial work is salvaged, the thought does not resume'
-										: 'stop this run'}
-									aria-label={`stop run ${liveRunDisplayName(run) || stopId}`}
-									onclick={(event) => tapStop(event, stopId)}
-								>
-									{armedStopId === stopId ? 'stop?' : '×'}
-								</button>
-							{/if}
+							<!-- The stop control used to sit here as a `w-7` sibling
+							     (#492). It moved to the node panel's expanded view
+							     (`RunNodeInline`) on 2026-07-19: a destructive action was
+							     taking width from a 9px cell that had none to spare, and
+							     the loom's job is position and density, not affordances
+							     that must be readable to be safe. The *state* stays — a
+							     stopping run still says so, because that is information
+							     the band should carry, and it costs no width. -->
 						</div>
 					{/each}
-					{#if stopNote}
-						<!-- Receipt line: a tap that gets swallowed must never be silent
-						     (found live 2026-07-11 on the spool rack's own taps). -->
-						<span class="truncate text-center font-mono text-[8px] text-amber-400/90">
-							{stopNote}
-						</span>
-					{/if}
 					{#if liveRuns.length > 2}
 						<span class="text-center font-mono text-[8px] text-amber-500/70"
 							>+{liveRuns.length - 2}</span
@@ -567,7 +479,7 @@
 			aria-label="scheduled wakes"
 		>
 			{#if scheduledWakes !== null && wakes.length === 0}
-				<span class="m-auto truncate font-mono text-[9px] text-stone-700"> nothing queued </span>
+				<span class="m-auto truncate font-mono text-[9px] text-ink-mute"> nothing queued </span>
 			{/if}
 			{#each wakes as wake, index (wake.id)}
 				{@const eta = wakeEta(wake)}

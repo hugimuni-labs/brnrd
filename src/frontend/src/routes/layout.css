@@ -1,5 +1,41 @@
 @import 'tailwindcss';
 
+/* The ink ramp — semantic text tiers, bound once (2026-07-19).
+   ------------------------------------------------------------------
+   Reported as "really hard to read on a sunny day"; measured, it is not
+   a daylight problem and not a hue problem. Against the void (#0c0906),
+   WCAG AA wants 4.5:1 for the 9–11px mono this dashboard is mostly made
+   of, and the palette carried 160 pieces of text below it:
+
+       stone-300   13.33  ok     41 uses
+       stone-400    7.88  ok     34 uses
+       stone-500    4.14  FAIL  111 uses  <- most common text colour here
+       stone-600    2.60  FAIL   40 uses
+       stone-700    1.93  FAIL    9 uses
+
+   It failed in a dark room too; the dark-adapted eye just reads sub-AA
+   grey as "quiet" rather than as missing. Daylight raises the screen's
+   effective black floor, compressing precisely the bottom of the range,
+   so the unreadable tier is the first thing to go. The sunny day was the
+   revealing condition, not the cause.
+
+   The corollary is why this is a *collapse* and not a lift: five grey
+   tiers, and only three of them resolvable. stone-600 against stone-700
+   (2.60 vs 1.93) is not a hierarchy the eye can read — it is two
+   flavours of gone, costing a distinction it never delivered. So the two
+   dead tiers merge into one legible `mute`, and `quiet` takes over the
+   111 uses that were carrying most of the chrome.
+
+   Bound as variables, not as 160 literals, for the reason the next ask
+   already names: a genuine daylight theme is a rebinding of three values
+   here plus the canvas, not a rewrite of eighteen components. These are
+   text tiers only — `border-stone-800` / `bg-stone-900` chrome keeps the
+   stone scale, where dim is correct and contrast rules don't apply. */
+@theme {
+	--color-ink-quiet: #a8a29e; /* 7.88:1 — labels, timestamps, vitals */
+	--color-ink-mute: #8a827a; /* 5.25:1 — counts, eyebrows, the tier below */
+}
+
 /* Root canvas — 2026-07-07 amber/ice pass: warm void + parchment text,
    with component chrome in stone and stale/link affordances in sky.
    2026-07-08 visual-language pass (kb/design-brand-visual-language.md):
@@ -158,12 +194,16 @@ body::before {
 	font-size: 0.6875rem;
 	letter-spacing: 0.14em;
 	text-transform: uppercase;
-	color: #8a7a5c;
+	/* Same lift as the ink ramp above, holding the eyebrow's warm tint so it
+	   still reads as annotation rather than as another grey tier: 4.75 -> 7.02
+	   for the label, 2.49 -> 5.88 for the `//` mark, which was the single
+	   least readable glyph on the surface. */
+	color: #a89878;
 }
 
 .eyebrow::before {
 	content: '// ';
-	color: #5c4f3a;
+	color: #9a8a6a;
 }
 
 /* Boot glitch (kb/design-brand-visual-language.md §3): `_` -> `b_d` ->

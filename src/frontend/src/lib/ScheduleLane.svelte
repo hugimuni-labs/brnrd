@@ -79,12 +79,12 @@
 	<div class="mb-3 flex items-center justify-between text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">scheduled wakes</span
 		>
-		<span class="font-mono text-[10px] tracking-wide text-stone-600 uppercase">
+		<span class="font-mono text-[10px] tracking-wide text-ink-mute uppercase">
 			{sorted.length} queued
 		</span>
 	</div>
 	{#if sorted.length === 0}
-		<p class="text-sm text-stone-500">Nothing queued — every wake right now is a spoken one.</p>
+		<p class="text-sm text-ink-quiet">Nothing queued — every wake right now is a spoken one.</p>
 	{:else}
 		<!-- The horizon ruler: now → furthest wake. Each marker is a wake
 		     approaching the left edge; the daemon fires it when it arrives. -->
@@ -103,7 +103,7 @@
 				{/each}
 			</div>
 			<div
-				class="mt-1 flex justify-between font-mono text-[9px] tracking-wide text-stone-600 uppercase"
+				class="mt-1 flex justify-between font-mono text-[9px] tracking-wide text-ink-mute uppercase"
 			>
 				<span>now</span>
 				<span>{horizonLabel(horizonMs)}</span>
@@ -137,11 +137,11 @@
 							     The trigger kind is the difference between "this will
 							     keep happening" and "this happens once" — worth a chip. -->
 							<span
-								class="shrink-0 border border-stone-800 bg-stone-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-stone-500 uppercase"
+								class="shrink-0 border border-stone-800 bg-stone-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-ink-quiet uppercase"
 								>{wake.phase === 'every' ? 'recurring' : 'one-shot'}</span
 							>
 						</span>
-						<span class="shrink-0 font-mono text-[10px] text-stone-600">
+						<span class="shrink-0 font-mono text-[10px] text-ink-mute">
 							{wake.repo_label ?? ''}
 						</span>
 					</div>
@@ -152,7 +152,7 @@
 						{wake.summary}
 					</p>
 					{#if wake.conversation_key}
-						<p class="break-all font-mono text-[10px] text-stone-600">
+						<p class="break-all font-mono text-[10px] text-ink-mute">
 							→ {wake.conversation_key}
 						</p>
 					{/if}

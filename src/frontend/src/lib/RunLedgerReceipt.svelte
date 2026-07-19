@@ -55,7 +55,7 @@
 		{/if}
 	</div>
 	{#if rows.length === 0}
-		<p class="text-sm text-stone-500">No closed-run receipts yet.</p>
+		<p class="text-sm text-ink-quiet">No closed-run receipts yet.</p>
 	{:else}
 		<div class="grid grid-cols-1 gap-2">
 			{#each grouped as entry (receiptKey(entry.row))}
@@ -82,7 +82,7 @@
 							     red badge = the pin was not respected (the
 							     shell=/core= shadowing failure mode, caught
 							     2026-07-09, must never be silent again). -->
-							<p class="truncate font-mono text-stone-500">
+							<p class="truncate font-mono text-ink-quiet">
 								{runner}
 								{#if row.core_mismatch === false}
 									<span
@@ -108,24 +108,24 @@
 								</p>
 							{/if}
 						</div>
-						<span class="shrink-0 font-mono text-stone-500">{endedLabel(row.ended_at)}</span>
+						<span class="shrink-0 font-mono text-ink-quiet">{endedLabel(row.ended_at)}</span>
 					</div>
 
 					<div
 						class="mt-2 grid grid-cols-2 gap-2 border-t border-stone-800/70 pt-2 font-mono sm:grid-cols-4"
 					>
 						<div>
-							<p class="text-[10px] tracking-wide text-stone-500 uppercase">wall</p>
+							<p class="text-[10px] tracking-wide text-ink-quiet uppercase">wall</p>
 							<p class="font-medium text-stone-200">{durationLabel(row.wall_clock_seconds)}</p>
 						</div>
 						<div>
-							<p class="text-[10px] tracking-wide text-stone-500 uppercase">tokens</p>
+							<p class="text-[10px] tracking-wide text-ink-quiet uppercase">tokens</p>
 							<p class="font-medium text-stone-200">
 								{tokenLabel(row.tokens_input)} / {tokenLabel(row.tokens_output)}
 							</p>
 						</div>
 						<div>
-							<p class="text-[10px] tracking-wide text-stone-500 uppercase">weekly / 5h</p>
+							<p class="text-[10px] tracking-wide text-ink-quiet uppercase">weekly / 5h</p>
 							<p class="font-medium text-stone-200">
 								{signedPercentLabel(row.weekly_pct_delta)} / {signedPercentLabel(
 									row.five_hour_pct_delta
@@ -133,7 +133,7 @@
 							</p>
 						</div>
 						<div>
-							<p class="text-[10px] tracking-wide text-stone-500 uppercase">subscription</p>
+							<p class="text-[10px] tracking-wide text-ink-quiet uppercase">subscription</p>
 							<p class="font-medium text-stone-200">{usdLabel(row.usd_subscription_attributed)}</p>
 						</div>
 					</div>
@@ -155,10 +155,10 @@
 										<span title={kind}>{relicIcon(kind)} {count}</span>
 									{/each}
 								{:else}
-									<span class="text-stone-500">summary only</span>
+									<span class="text-ink-quiet">summary only</span>
 								{/if}
 							</span>
-							<span class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase"
+							<span class="shrink-0 text-[10px] tracking-wide text-ink-quiet uppercase"
 								>{isOpen ? '▲ collapse' : '▼ produce'}</span
 							>
 						</button>
@@ -201,19 +201,19 @@
 													>
 												{/if}
 												{#if familySuffix(fam)}
-													<span class="shrink-0 text-stone-500">{familySuffix(fam)}</span>
+													<span class="shrink-0 text-ink-quiet">{familySuffix(fam)}</span>
 												{/if}
 												{#if fam.head._from_run_id}
-													<span class="shrink-0 text-[10px] text-stone-600"
+													<span class="shrink-0 text-[10px] text-ink-mute"
 														>↳ via {fam.head._from_run_id}</span
 													>
 												{/if}
 											</div>
 											{#each fam.members.filter((m) => m.kind === 'commit') as m, j (j)}
-												<p class="ml-5 truncate text-[11px] text-stone-500">
+												<p class="ml-5 truncate text-[11px] text-ink-quiet">
 													<span use:typeReveal={{ text: relicLabel(m) }}>{relicLabel(m)}</span
 													>{#if m._from_run_id && m._from_run_id !== fam.head._from_run_id}
-														<span class="text-[10px] text-stone-600">
+														<span class="text-[10px] text-ink-mute">
 															↳ via {m._from_run_id}</span
 														>{/if}
 												</p>
