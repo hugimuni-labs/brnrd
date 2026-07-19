@@ -80,9 +80,17 @@ in a form something other than prose can read.
 self-reported PR, **kb pages committed by the knowledge capture**, and your
 **terminal reply** are collected at closeout. Every outbound reply is born
 under `runs/<repo>/<run-id>/messages/NNNNNN-<kind>.md` and reported as a reply
-relic. Delivery changes its frontmatter from `pending` to `delivered` or
-`undeliverable`, stamping the platform receipt when one exists. The message is
-never unlinked, so the run's full edge traffic remains durable.
+relic. Delivery changes its frontmatter from `pending` to one of three terminal
+states, stamping the receipt when one exists: `delivered` (a gate carried it to
+a platform), `collected` (a worker's terminal report, read by the parent run
+along the dispatch edge — no gate owns `spawn`, and none should), or
+`undeliverable` (nothing claims the target; the reason says what). The message
+is never unlinked, so the run's full edge traffic remains durable.
+
+A reply addressed to a dispatch-tree event — `spawn`, `spawn_completed`,
+`dispatch_message`, `schedule` — is recorded `undeliverable` immediately, with
+a notice in `notices`. **Answer the originating user event instead**; a worker
+completion is a signal to fold in, not an address to reply to.
 
 The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `issue`,
 `comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable

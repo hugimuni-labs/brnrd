@@ -262,3 +262,189 @@ def test_run_messages_dir_slug_and_path_shape(tmp_path):
     _repo, home, ctx = _context(tmp_path)
     d = message_store.run_messages_dir(ctx, "Gurio/brr", "run-260718-test-x")
     assert d == Path(home) / "runs" / "Gurio__brr" / "run-260718-test-x" / "messages"
+
+
+def test_reply_to_unowned_source_event_is_undeliverable_not_pending(tmp_path, monkeypatch):
+    """#454: a reply addressed to a dispatch-tree event can never arrive.
+
+    No gate's delivery loop claims ``spawn_completed``, so staging the
+    reply ``pending`` left a record nothing would ever move, plus an
+    orphan partial. It is recorded as impossible at staging time, the
+    partial is not written, and the event is still retired so the inbox
+    stops growing.
+    """
+    repo, _home, ctx = _context(tmp_path)
+    brr_dir = repo / ".brr"
+    responses, inbox = brr_dir / "responses", brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    completion = protocol.create_event(
+        inbox, "spawn_completed", "child finished", conversation_key="telegram:1:",
+    )
+    target_id = protocol._read_event(completion)["id"]
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    source = outbox / "reply.md"
+    source.write_text(f"---\nevent: {target_id}\n---\n\nverdict", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda *_args: None)
+    task = Run(
+        id="run-parent",
+        event_id="evt-current",
+        body="task",
+        meta={"repo_label": "Gurio/brr"},
+    )
+
+    daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "", "evt-current"),
+        task,
+        responses,
+        "evt-current",
+        outbox,
+        inbox,
+        repo_root=repo,
+        account_context=ctx,
+    )
+
+    messages = message_store.list_messages(
+        message_store.run_messages_dir(ctx, "Gurio/brr", task.id),
+    )
+    assert [m["status"] for m in messages] == ["undeliverable"]
+    assert messages[0]["target_gate"] == "spawn_completed"
+    assert "no gate owns spawn_completed" in messages[0]["reason"]
+    assert messages[0]["body"] == "verdict"
+    # No orphan partial, and the event does not linger in the inbox.
+    assert not list(responses.glob("*.partials/*.md"))
+    assert protocol._read_event(completion)["status"] == "done"
+
+
+def test_reply_to_configured_gate_event_stays_pending_when_gate_is_off(tmp_path, monkeypatch):
+    """A switched-off gate is recoverable; it must not read as impossible."""
+    repo, _home, ctx = _context(tmp_path)
+    brr_dir = repo / ".brr"
+    responses, inbox = brr_dir / "responses", brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    (outbox / "reply.md").write_text("---\n---\n\nhello", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda *_args: None)
+    task = Run(
+        id="run-owner",
+        event_id="evt-current",
+        body="task",
+        meta={"repo_label": "Gurio/brr"},
+        source="telegram",
+    )
+
+    daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "", "evt-current"),
+        task,
+        responses,
+        "evt-current",
+        outbox,
+        inbox,
+        repo_root=repo,
+        account_context=ctx,
+    )
+
+    messages = message_store.list_messages(
+        message_store.run_messages_dir(ctx, "Gurio/brr", task.id),
+    )
+    assert [m["status"] for m in messages] == ["pending"]
+
+
+def test_collected_transition_stamps_a_dispatch_edge_receipt(tmp_path):
+    _repo, _home, ctx = _context(tmp_path)
+    path = message_store.stage(
+        ctx,
+        repo_label="Gurio/brr",
+        run_id="run-child",
+        body="report",
+        kind="terminal",
+        target_gate="spawn",
+    )
+
+    assert message_store.transition(
+        path,
+        message_store.COLLECTED,
+        gate="dispatch-edge",
+        platform_message_id="evt-completion",
+    )
+
+    collected = message_store.read(path)
+    assert collected["status"] == "collected"
+    assert collected["platform_gate"] == "dispatch-edge"
+    assert collected["platform_message_id"] == "evt-completion"
+    assert collected["delivered_at"]
+
+
+def test_worker_report_is_collected_when_the_parent_is_notified(tmp_path):
+    """The parent reads the report via the completion event's message_path."""
+    repo, _home, ctx = _context(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    responses = brr_dir / "responses"
+    responses.mkdir(parents=True)
+    protocol.write_response(responses, "evt-child", "worker verdict")
+    resp_path = protocol.response_path(responses, "evt-child")
+    message_path = message_store.stage(
+        ctx,
+        repo_label="Gurio/brr",
+        run_id="run-child",
+        body="worker verdict",
+        kind="terminal",
+        target_event="evt-child",
+        target_gate="spawn",
+    )
+    protocol.attach_message_path(resp_path, message_path)
+    child = Run(
+        id="run-child",
+        event_id="evt-child",
+        body="child task",
+        status="done",
+        meta={
+            "repo_label": "Gurio/brr",
+            "response_path": str(resp_path),
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:1:",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, child)
+
+    record = message_store.read(message_path)
+    assert record["status"] == "collected"
+    assert record["platform_gate"] == "dispatch-edge"
+    assert record["platform_message_id"].startswith("evt-")
+
+
+def test_resolve_stranded_splits_collected_from_undeliverable(tmp_path):
+    _repo, _home, ctx = _context(tmp_path)
+    staged = {}
+    for run_id, kind, gate in (
+        ("run-a", "terminal", "spawn"),
+        ("run-b", "interim", "spawn_completed"),
+        ("run-c", "interim", "telegram"),
+    ):
+        staged[run_id] = message_store.stage(
+            ctx,
+            repo_label="Gurio/brr",
+            run_id=run_id,
+            body=f"{run_id} body",
+            kind=kind,
+            target_gate=gate,
+        )
+
+    counts = message_store.resolve_stranded(
+        ctx, repo_label="Gurio/brr", gate_owned=daemon._gate_owns_source,
+    )
+
+    assert counts == {"collected": 1, "undeliverable": 1}
+    assert message_store.read(staged["run-a"])["status"] == "collected"
+    assert message_store.read(staged["run-b"])["status"] == "undeliverable"
+    assert "resolved by the #454 sweep" in message_store.read(staged["run-b"])["reason"]
+    # A gate-owned record is left alone for its gate to deliver.
+    assert message_store.read(staged["run-c"])["status"] == "pending"
+    # Idempotent: a second sweep finds nothing left to move.
+    assert message_store.resolve_stranded(
+        ctx, repo_label="Gurio/brr", gate_owned=daemon._gate_owns_source,
+    ) == {"collected": 0, "undeliverable": 0}
