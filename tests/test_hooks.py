@@ -1057,3 +1057,56 @@ def test_scm_silent_when_repo_dir_unset(tmp_path):
     _portal(tmp_path, token="t1", pending=0)
     out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
     assert out.get("decision") != "block"
+
+
+class TestStopRunBody:
+    """The run's own body rides the closeout delta (wyrd §5, maintainer 2026-07-19)."""
+
+    def _payload(self, text: str = "") -> dict:
+        return {
+            "run": {"id": "run-1"},
+            "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+            "card": {"active": bool(text), "text": text, "stale": False},
+        }
+
+    def test_stop_hands_back_the_whole_body_not_the_now_projection(self):
+        body = "## Now\n\nLanding it.\n\n## Arc\n\nThe part that fell out of context."
+
+        rendered = hooks.format_delta(self._payload(), stop=True, run_body=body)
+
+        assert "your run body" in rendered
+        assert "The part that fell out of context." in rendered
+        assert "Landing it." in rendered
+
+    def test_the_body_is_a_closeout_capsule_only(self):
+        body = "## Now\n\nMid-flight."
+
+        assert "your run body" not in (hooks.format_delta(self._payload(body)) or "")
+        assert "your run body" not in hooks.format_delta(self._payload(body), seed=True)
+
+    def test_a_fresh_read_beats_the_heartbeat_snapshot(self):
+        """A card rewritten in the run's final action predates no portal write."""
+        rendered = hooks.format_delta(
+            self._payload("stale snapshot"), stop=True, run_body="## Now\n\nwritten last",
+        )
+
+        assert "written last" in rendered
+        assert "stale snapshot" not in rendered
+
+    def test_without_a_fresh_read_the_snapshot_still_serves(self):
+        rendered = hooks.format_delta(self._payload("from the snapshot"), stop=True)
+
+        assert "from the snapshot" in rendered
+
+    def test_a_pathological_card_is_tail_capped_not_dropped(self):
+        body = "x" * (hooks._STOP_BODY_MAX_CHARS + 500) + "THE-LATEST-THINKING"
+
+        rendered = hooks.format_delta(self._payload(), stop=True, run_body=body)
+
+        assert "THE-LATEST-THINKING" in rendered
+        assert len(rendered) < len(body) + 2000
+
+    def test_a_run_that_wrote_no_card_adds_no_body_line(self):
+        assert "your run body" not in hooks.format_delta(
+            self._payload(), stop=True, run_body="   \n",
+        )
