@@ -20,9 +20,17 @@
 		repoSlug: string;
 		runId: string;
 		href: string;
+		/**
+		 * What the live packet and the ledger receipt know that the node's own
+		 * files don't — elapsed, runner, phase, produce counts. This panel is
+		 * the *only* rendering of a selected run now (2026-07-19: "the live run
+		 * kinda duplicates the info"), so those facts fold in here rather than
+		 * arriving as a second card above saying the same thing differently.
+		 */
+		vitals?: string[];
 	}
 
-	let { data, repoSlug, runId, href }: Props = $props();
+	let { data, repoSlug, runId, href, vitals = [] }: Props = $props();
 
 	let expanded = $state(false);
 	let node = $derived(data ? runNodeFromSurface(data, repoSlug, runId) : null);
@@ -64,6 +72,18 @@
 				{digest.status || 'unknown'}{digest.runner ? ` · ${digest.runner}` : ''}
 			</span>
 		</div>
+
+		{#if vitals.length > 0}
+			<!-- The vitals line: one row of live/receipt facts, in the node's own
+			     header, instead of a whole second panel restating the run. -->
+			<div
+				class="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] text-stone-500"
+			>
+				{#each vitals as vital (vital)}
+					<span>{vital}</span>
+				{/each}
+			</div>
+		{/if}
 
 		{#if digest.now}
 			<div class="text-sm text-stone-300">
