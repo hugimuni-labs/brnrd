@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import './layout.css';
+	import { markBooted } from '$lib/boot';
 	import favicon from '$lib/assets/favicon.svg';
 
 	let { children } = $props();
@@ -23,7 +24,11 @@
 
 	onMount(() => {
 		const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-		if (reduced) return;
+		// No curtain under reduced motion, so nothing is waiting on one.
+		if (reduced) {
+			markBooted();
+			return;
+		}
 		booting = true;
 		let i = 0;
 		const step = () => {
@@ -32,6 +37,9 @@
 				flicker = true;
 				setTimeout(() => {
 					booting = false;
+					// The text reveal is held until here: playing it behind an opaque
+					// overlay is the same as not playing it (see `$lib/boot`).
+					markBooted();
 				}, 260);
 				return;
 			}
