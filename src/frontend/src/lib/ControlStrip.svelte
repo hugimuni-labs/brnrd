@@ -3,6 +3,9 @@
 	import { fuelRows, runnerBlocks } from './controlStrip';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
+	import type { RunLedgerRow } from './runLedger';
+	import type { ScheduledWake } from './scheduledWakes';
+	import { readTanks, type TankVerdict } from './tankForecast';
 	import {
 		STATUS_BURNING,
 		STATUS_COOLING,
@@ -17,14 +20,42 @@
 		runnersError?: string | null;
 		runnersNote?: string | null;
 		onTap?: (profileName: string) => void;
+		/** Slice 2 inputs. Both optional: the strip's first two regions must
+		 *  keep working on a page (or a test) that has no ledger or schedule. */
+		ledgerRows?: RunLedgerRow[] | null;
+		scheduledWakes?: ScheduledWake[] | null;
+		now?: number;
 	}
 
-	let { runners, shells, runnersError = null, runnersNote = null, onTap }: Props = $props();
+	let {
+		runners,
+		shells,
+		runnersError = null,
+		runnersNote = null,
+		onTap,
+		ledgerRows = null,
+		scheduledWakes = null,
+		now = Date.now()
+	}: Props = $props();
 	let expanded = $state(false);
 	let blocks = $derived(
 		runnerBlocks(runners?.profiles ?? [], runners?.default ?? null, runners?.wake_request ?? null)
 	);
 	let fuel = $derived(fuelRows(shells ?? []));
+
+	// The tank line: slice 2's whole visible surface. `readTanks` sorts worst
+	// verdict first, and the strip is a glance instrument, so it shows the
+	// leading one — the window about to run dry, not whichever shell the
+	// provider listed first.
+	let tanks = $derived(readTanks(shells ?? [], ledgerRows, scheduledWakes, now));
+	let lead = $derived(tanks[0] ?? null);
+
+	const VERDICT_COLOR: Record<TankVerdict, string> = {
+		exhausting: STATUS_SPENT,
+		tight: STATUS_BURNING,
+		sustainable: STATUS_COOLING,
+		unknown: STATUS_UNKNOWN
+	};
 
 	const LEVEL_COLOR: Record<string, string> = {
 		burning: STATUS_BURNING,
@@ -138,6 +169,48 @@
 			{/if}
 		</div>
 	</div>
+
+	{#if lead}
+		<!-- Slice 2 (design-wyrd §4 band 1). The fuel bars above answer "how
+		     much is left"; this answers "does it last", which is the question
+		     the two bars were already carrying between them and making the
+		     reader compute by eye. Measured from the window's own numbers —
+		     `100 - percent` drawn over the elapsed share of the window — so it
+		     costs no join and cannot disagree with the bar above it.
+
+		     Deliberately one line for the leading window only: this is a glance
+		     strip. The per-window detail is the fuel grid; the verdict is here. -->
+		<div
+			class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px]"
+			aria-label="tank forecast"
+		>
+			<span class="tracking-[0.13em] text-stone-500 uppercase">tank</span>
+			<span class="text-stone-400">{lead.label}</span>
+			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
+			{#if lead.ratePerHour !== null}
+				<span class="text-stone-600" title="measured draw so far this window">
+					{lead.ratePerHour < 1 ? lead.ratePerHour.toFixed(1) : Math.round(lead.ratePerHour)}%/h
+				</span>
+			{/if}
+			{#if lead.committedDraw !== null}
+				<!-- The half the window cannot know: what is already queued to
+				     draw on it. Priced from runs the daemon tagged
+				     `source_system=schedule`, never from a self-reported slug. -->
+				<span class="text-stone-500" title="scheduled wakes queued before this window resets">
+					· {lead.committedWakes} scheduled ≈ {lead.committedDraw < 1
+						? lead.committedDraw.toFixed(1)
+						: Math.round(lead.committedDraw)}%
+				</span>
+			{:else if lead.committedWakes > 0}
+				<!-- Count without a price: the wakes are real, the per-wake cost
+				     is not yet measurable. Saying so beats inventing a number. -->
+				<span class="text-stone-600">· {lead.committedWakes} scheduled, cost unmeasured</span>
+			{/if}
+			{#if lead.stale}
+				<span class="text-stone-600">· stale report</span>
+			{/if}
+		</div>
+	{/if}
 
 	{#if expanded}
 		<div class="border-t border-stone-800/70 p-3">
