@@ -306,6 +306,45 @@ class RunnerWakeRequest(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class RunStopRequest(Base):
+    """#476 wyrd §3 — "stop that run", parked by the account owner.
+
+    Same browser-initiated / daemon-consumed inversion as
+    ``RunnerWakeRequest`` above, and for the same structural reason: a
+    browser cannot reach into a daemon's process table, so the tap becomes a
+    row the daemon picks up on its next sync tick. Delivery rides the
+    live-runs publish (``PUT /v1/daemons/live-runs``) rather than the
+    catalog publish — that is already the tick on which the daemon tells the
+    server which runs are burning, so it is the tick on which the server can
+    answer "stop this one".
+
+    Unlike a wake request these are *per run*, not one-per-account: two runs
+    can burn at once and both may deserve stopping. A second tap on a run
+    that already has a pending request is idempotent (the existing row is
+    returned) rather than superseding — there is nothing to supersede, the
+    intent is identical.
+
+    No ``canceled`` status: a stop is not undoable once the daemon consumes
+    it, and a cancel window measured in one sync tick would be a lie the UI
+    had to keep. The confirmation lives in the client gesture instead.
+    """
+
+    __tablename__ = "run_stop_requests"
+    STATUS_PENDING = "pending"
+    STATUS_CONSUMED = "consumed"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    # The daemon-side run id (`Run.id`) or the spawn event id — whichever
+    # handle the live-runs entry carried. `daemon.py::_find_run_control`
+    # resolves either.
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class Subscription(Base):
     """#53 — local mirror of the account's Stripe subscription.
 

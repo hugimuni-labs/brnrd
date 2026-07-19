@@ -1761,10 +1761,11 @@ def _run_worker(
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
     protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
-    if event.get("spawn_immediate"):
-        # Bind the dispatch-edge control to the run id, so `stop:` can be
-        # addressed by either handle from here on (wyrd §3).
-        _bind_spawn_control_run(eid, task.id)
+    # Bind the stop control to the run id, so a stop can be addressed by
+    # either handle from here on (wyrd §3). Unconditional since #476: a
+    # resident thought is registered too, and the live-runs view a user taps
+    # names runs by run id, not by the event that woke them.
+    _bind_run_control(eid, task.id)
     # Persist the comparison base and the current verdict once, on the run
     # manifest. User-facing readers can then suppress the mechanically-created
     # placeholder branch without paying a git probe on every dashboard tick.
@@ -2216,11 +2217,11 @@ def _run_worker(
     fallback_notice: str | None = None
     while True:
         attempt += 1
-        stop_control = _stopped_spawn_control(eid)
+        stop_control = _stopped_run_control(eid)
         if stop_control is not None:
             # The parent stopped this child before (or between) attempts —
             # never launch a runner for cancelled work.
-            return _finalize_stopped_spawn(
+            return _finalize_stopped_run(
                 emit, task, event, eid, runs_dir, env_backend, env_ctx,
                 branch_plan, cfg, stop_control, attempt, trace_dirs,
             )
@@ -2570,10 +2571,10 @@ def _run_worker(
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
-            should_abort=(
-                (lambda: _stopped_spawn_control(eid) is not None)
-                if event.get("spawn_immediate") else None
-            ),
+            # Every dispatched run is stoppable since #476, not just a
+            # spawned child: the user-side affordance exists precisely for
+            # the resident thought no parent run can reach.
+            should_abort=(lambda: _stopped_run_control(eid) is not None),
         )
         if result.observed_core:
             task.meta["core_observed"] = result.observed_core
@@ -2641,12 +2642,12 @@ def _run_worker(
         )
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
-        stop_control = _stopped_spawn_control(eid)
+        stop_control = _stopped_run_control(eid)
         if stop_control is not None:
             # The runner just died to (or survived past) a parent `stop:` —
             # a deliberate cancellation must not fall into the retry /
             # fallback machinery, which would relaunch the killed work.
-            return _finalize_stopped_spawn(
+            return _finalize_stopped_run(
                 emit, task, event, eid, runs_dir, env_backend, env_ctx,
                 branch_plan, cfg, stop_control, attempt, trace_dirs,
             )
@@ -4189,19 +4190,33 @@ def _read_outbox_notices(outbox_dir: Path | None) -> list[dict[str, str]]:
 
 
 # Live spawn-control registry — the daemon-side half of the wyrd's
-# dispatch-edge ownership rule (`kb/design-wyrd.md` §3): every spawned child
-# records who dispatched it, and only that dispatcher may stop it. Entries
-# are registered at `spawn:` queue time, bound to a run id once the worker
-# thread creates its Run, and retired when the main loop reaps the child's
-# future. In-memory only: a daemon restart kills every live runner anyway,
-# so there is nothing durable to stop.
-_spawn_controls_lock = threading.Lock()
-_spawn_controls: dict[str, dict] = {}
+# The stop registry: one entry per *dispatched run*, the handle every kill
+# in this daemon goes through. Entries are registered at dispatch time
+# (`spawn:` queue time for a child, submit time for the resident thought),
+# bound to a run id once the worker thread creates its Run, and retired when
+# the main loop reaps the future. In-memory only: a daemon restart kills
+# every live runner anyway, so there is nothing durable to stop.
+#
+# ``parent_run_id`` is the dispatch edge, and it is what encodes *authority*,
+# not mere parentage:
+#
+# - a spawned child carries its dispatcher's run id. The dispatch-edge
+#   ownership rule (`kb/design-wyrd.md` §3) reads it so the ``stop:`` verb
+#   can refuse a run reaching sideways to kill a sibling it never started.
+# - a resident thought carries ``None`` — *no run* dispatched it, so no run
+#   may stop it. It is not unowned, though: it is owned by the human whose
+#   account it burns, and the user-side stop path (#476) is scoped to that
+#   account rather than to a dispatch edge. Registering it here rather than
+#   in a second registry is the whole point — one kill path, one place that
+#   knows which processes are live (this repo has shipped two production
+#   bugs from a fact stored twice).
+_run_controls_lock = threading.Lock()
+_run_controls: dict[str, dict] = {}
 
 
-def _register_spawn_control(spawn_event_id: str, parent_run_id: str) -> None:
-    with _spawn_controls_lock:
-        _spawn_controls[spawn_event_id] = {
+def _register_run_control(spawn_event_id: str, parent_run_id: str | None) -> None:
+    with _run_controls_lock:
+        _run_controls[spawn_event_id] = {
             "event_id": spawn_event_id,
             "parent_run_id": parent_run_id,
             "run_id": None,
@@ -4209,36 +4224,36 @@ def _register_spawn_control(spawn_event_id: str, parent_run_id: str) -> None:
         }
 
 
-def _bind_spawn_control_run(spawn_event_id: str, run_id: str) -> None:
-    with _spawn_controls_lock:
-        control = _spawn_controls.get(spawn_event_id)
+def _bind_run_control(spawn_event_id: str, run_id: str) -> None:
+    with _run_controls_lock:
+        control = _run_controls.get(spawn_event_id)
         if control is not None:
             control["run_id"] = run_id
 
 
-def _find_spawn_control(target: str) -> dict | None:
+def _find_run_control(target: str) -> dict | None:
     """Look a control up by spawn event id or child run id (exact match)."""
-    with _spawn_controls_lock:
-        control = _spawn_controls.get(target)
+    with _run_controls_lock:
+        control = _run_controls.get(target)
         if control is not None:
             return control
-        for control in _spawn_controls.values():
+        for control in _run_controls.values():
             if control.get("run_id") == target:
                 return control
     return None
 
 
-def _stopped_spawn_control(spawn_event_id: str) -> dict | None:
-    with _spawn_controls_lock:
-        control = _spawn_controls.get(spawn_event_id)
+def _stopped_run_control(spawn_event_id: str) -> dict | None:
+    with _run_controls_lock:
+        control = _run_controls.get(spawn_event_id)
         if control is not None and control.get("stopped"):
             return control
     return None
 
 
-def _retire_spawn_control(spawn_event_id: str) -> None:
-    with _spawn_controls_lock:
-        _spawn_controls.pop(spawn_event_id, None)
+def _retire_run_control(spawn_event_id: str) -> None:
+    with _run_controls_lock:
+        _run_controls.pop(spawn_event_id, None)
 
 
 def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
@@ -4281,7 +4296,7 @@ def _queue_child_message(
     if not body.strip():
         _record_outbox_notice(outbox_dir, f"message to {target!r} dropped: empty body")
         return False
-    control = _find_spawn_control(target)
+    control = _find_run_control(target)
     if control is None:
         _record_outbox_notice(
             outbox_dir,
@@ -4326,6 +4341,66 @@ def _queue_child_message(
     return True
 
 
+def _apply_run_stop(
+    control: dict,
+    inbox_dir: Path | None,
+    *,
+    stopped_by: str,
+    reason: str = "",
+    conversation_key: str = "",
+) -> str:
+    """Dispatch the kill for an already-authorized stop. Returns the stage.
+
+    **The** kill path — the one both the ``stop:`` outbox verb (a run
+    stopping its own dispatchee) and the user-side stop affordance (#476,
+    the account owner stopping anything burning on their daemon) reach.
+    Authorization is deliberately *not* here: the two callers answer
+    different questions about who may stop what, and answering them in one
+    place would either weaken the dispatch-edge rule or refuse the human.
+    What must not fork is the mechanism below, so it doesn't.
+
+    Two shapes, by whether the run ever started. Already dispatched (or
+    mid-launch): kill its current attempt by invocation-label prefix and let
+    the worker's own loop observe the stopped flag — that covers the sliver
+    where the flag lands before the subprocess registers. Never dispatched:
+    cancel the inbox event so it never starts and post the completion note
+    right here, since no future will ever exist to reap.
+    """
+    with _run_controls_lock:
+        already_stopped = bool(control.get("stopped"))
+        control["stopped"] = True
+        control["stopped_by"] = stopped_by
+        if reason:
+            control["stop_reason"] = reason
+    spawn_event_id = str(control["event_id"])
+    child_run_id = control.get("run_id")
+    if child_run_id is None and inbox_dir is not None:
+        pending = _find_pending_event(inbox_dir, spawn_event_id)
+        if pending is not None:
+            protocol.set_status(pending, "cancelled")
+            _retire_child_messages(inbox_dir, spawn_event_id)
+            if not already_stopped and control.get("parent_run_id"):
+                # Only a dispatched child has a parent thread waiting on a
+                # completion note; a resident thought cancelled before it
+                # started has nobody to notify.
+                try:
+                    protocol.create_event(
+                        inbox_dir,
+                        "spawn_completed",
+                        f"concurrent spawn {spawn_event_id} stopped before "
+                        f"it started (cancelled by {stopped_by})",
+                        conversation_key=conversation_key or f"run:{stopped_by}",
+                        spawned_by_event=spawn_event_id,
+                        spawn_parent_run_id=stopped_by,
+                        spawn_stopped=True,
+                    )
+                except OSError as exc:
+                    print(f"[brnrd] stop notify failed for {spawn_event_id}: {exc}")
+            return "cancelled-before-start"
+    runner.kill_matching(f"{spawn_event_id}-attempt-")
+    return "running"
+
+
 def _queue_stop_request(
     emit: _WorkerEmit,
     task: Run,
@@ -4351,7 +4426,7 @@ def _queue_stop_request(
     if not target:
         _record_outbox_notice(outbox_dir, "stop dropped: no target run/event id")
         return False
-    control = _find_spawn_control(target)
+    control = _find_run_control(target)
     if control is None:
         _record_outbox_notice(
             outbox_dir,
@@ -4367,43 +4442,14 @@ def _queue_stop_request(
         )
         return False
     reason = str(fm.get("reason") or "").strip() or body.strip()
-    already_stopped = False
-    with _spawn_controls_lock:
-        already_stopped = bool(control.get("stopped"))
-        control["stopped"] = True
-        control["stopped_by"] = task.id
-        if reason:
-            control["stop_reason"] = reason
     spawn_event_id = str(control["event_id"])
-    child_run_id = control.get("run_id")
-    stage = "running"
-    if child_run_id is None and inbox_dir is not None:
-        pending = _find_pending_event(inbox_dir, spawn_event_id)
-        if pending is not None:
-            # Never dispatched: cancel the inbox event so it never starts,
-            # and post the completion note ourselves — no future, no reap.
-            protocol.set_status(pending, "cancelled")
-            _retire_child_messages(inbox_dir, spawn_event_id)
-            stage = "cancelled-before-start"
-            if not already_stopped:
-                try:
-                    protocol.create_event(
-                        inbox_dir,
-                        "spawn_completed",
-                        f"concurrent spawn {spawn_event_id} stopped before "
-                        f"it started (cancelled by {task.id})",
-                        conversation_key=task.conversation_key or f"run:{task.id}",
-                        spawned_by_event=spawn_event_id,
-                        spawn_parent_run_id=task.id,
-                        spawn_stopped=True,
-                    )
-                except OSError as exc:
-                    print(f"[brnrd] stop notify failed for {spawn_event_id}: {exc}")
-    else:
-        # Running (or mid-launch): kill the child's current attempt. The
-        # worker's own loop observes the stopped control — this covers the
-        # sliver where the flag lands before the subprocess registers.
-        runner.kill_matching(f"{spawn_event_id}-attempt-")
+    stage = _apply_run_stop(
+        control,
+        inbox_dir,
+        stopped_by=task.id,
+        reason=reason,
+        conversation_key=task.conversation_key or f"run:{task.id}",
+    )
     print(f"[brnrd] outbox: stop {target} ({stage}) by {task.id}")
     emit(
         "spawn_stop_requested",
@@ -4509,7 +4555,7 @@ def _queue_spawn_request(
     # Dispatch-edge ownership (wyrd §3): record who dispatched this child so
     # the `stop:` verb can enforce parent-only control from the first moment
     # the spawn exists — before it has a run id, before it has a process.
-    _register_spawn_control(new_path.stem, task.id)
+    _register_run_control(new_path.stem, task.id)
     print(f"[brnrd] outbox: queued concurrent spawn ({new_path.stem})")
     # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
     # as if it had just fired itself, rather than firing redundantly right
@@ -5427,7 +5473,7 @@ def _notify_spawn_parent_of_crash(
         print(f"[brnrd] spawn-crash notify failed for {spawn_event_id}: {exc}")
 
 
-def _finalize_stopped_spawn(
+def _finalize_stopped_run(
     emit: _WorkerEmit,
     task: Run,
     event: dict,
@@ -5441,14 +5487,17 @@ def _finalize_stopped_spawn(
     attempt: int,
     trace_dirs: list[str],
 ) -> Run:
-    """Close out a concurrent child whose parent issued ``stop:`` (wyrd §3).
+    """Close out a run that was stopped — by its parent (wyrd §3 ``stop:``)
+    or by the account owner from the dashboard (#476).
 
     A deliberate cancellation, not a failure: no retries, no runner
     fallback, no failure notices — those paths would relaunch the very
-    work the parent just killed. Partial work on the child's branch is
-    salvaged exactly like a failed run's (`_capture_worktree`), the run
-    ends as ``stopped``, and the ordinary reap path carries the completion
-    note (``status=stopped``) back to the parent's thread.
+    work someone just killed. Partial work on the run's branch is salvaged
+    exactly like a failed run's (`_capture_worktree`), the run ends as
+    ``stopped``, and — for a spawned child — the ordinary reap path carries
+    the completion note (``status=stopped``) back to the parent's thread.
+    A stopped resident thought simply ends; the user watching the cell it
+    came from is the one who asked.
     """
     stopped_by = str(control.get("stopped_by") or "")
     print(f"[brnrd] worker {eid}: stopped by parent {stopped_by or '?'}")
@@ -7149,6 +7198,9 @@ def start(
         thread_name_prefix="brr-thought",
     )
     current: concurrent.futures.Future | None = None
+    # The event id backing `current`, held so the run's stop control can be
+    # retired when the thought is reaped (#476).
+    current_eid: str | None = None
     # Each entry: {"future", "inbox_dir", "event"}. `event` is captured at
     # submission time so a crashed spawn (which never returns a Run/task
     # object) can still be notified back to its parent — see
@@ -7190,6 +7242,12 @@ def start(
                     # The thought crashed before returning a Run; the
                     # operator sees the traceback in the daemon console.
                     print(f"[brnrd] thought crashed: {exc}")
+                # The thought is over; its stop control retires with it, so a
+                # stop parked against a finished run can never reach a later
+                # one that reuses the handle.
+                if current_eid:
+                    _retire_run_control(current_eid)
+                    current_eid = None
                 current = None
 
             # Reap any concurrent worker-stack children that have finished,
@@ -7220,7 +7278,7 @@ def start(
                         # with it, stoppability) retires with it, as does any
                         # unconsumed parent→child message traffic.
                         spawn_eid = str(spawn["event"].get("id") or "")
-                        _retire_spawn_control(spawn_eid)
+                        _retire_run_control(spawn_eid)
                         _retire_child_messages(spawn["inbox_dir"], spawn_eid)
                 active_spawns = still_running
 
@@ -7450,6 +7508,12 @@ def start(
                             defer_reason=None,
                         )
                         protocol.set_status(event, "processing")
+                        # Register the resident thought's stop control before
+                        # it is airborne (#476). `parent_run_id=None`: no run
+                        # dispatched this, so no run may stop it — only the
+                        # account owner, through the dashboard.
+                        _register_run_control(eid, None)
+                        current_eid = eid
                         current = pool.submit(
                             _run_worker_and_finalize,
                             event,
