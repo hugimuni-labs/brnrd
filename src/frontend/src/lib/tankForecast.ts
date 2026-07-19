@@ -25,7 +25,7 @@
 // *queued* to draw next. That is priced only for scheduled wakes, and only off
 // `source_system`, which the daemon writes and no run can improvise.
 
-import type { QuotaShell, QuotaWindow } from './quota';
+import type { QuotaBurn, QuotaShell, QuotaWindow } from './quota';
 import type { RunLedgerRow } from './runLedger';
 import type { ScheduledWake } from './scheduledWakes';
 
@@ -58,8 +58,18 @@ export interface Tank {
 	/** How far through this window's own clock we are, 0..1. */
 	elapsedFraction: number | null;
 	hoursLeft: number | null;
-	/** Percent of the window drawn per hour so far. Null when unmeasurable. */
+	/** Percent of the window drawn per hour. Null when unmeasurable. */
 	ratePerHour: number | null;
+	/** Where the rate came from. `measured` is the short-horizon burn series
+	 *  (`usage_samples.recent_burn`, sampled readings over the last ~3h);
+	 *  `window` is whole-window arithmetic (used ÷ elapsed), a lifetime
+	 *  average that answers "what has this window drawn" but lags the current
+	 *  pace by hours. The strip says which, because the two can genuinely
+	 *  disagree and a reader deciding whether to dispatch needs the current
+	 *  pace, not the average of a week that mostly already happened. */
+	rateSource: 'measured' | 'window' | null;
+	/** Horizon the measured rate was read over, in minutes. Null for `window`. */
+	rateSpanMinutes: number | null;
 	/** Where this rate lands the window at reset. Can go negative — that *is*
 	 *  the reading, and the caller renders it as a dry-out, not a clamp. */
 	projectedRemainingAtReset: number | null;
@@ -245,7 +255,11 @@ export function readTank(
 	window: QuotaWindow,
 	index: number,
 	nowMs: number,
-	options: { scheduledWakes?: ScheduledWake[]; scheduledCost?: ScheduledCost | null } = {}
+	options: {
+		scheduledWakes?: ScheduledWake[];
+		scheduledCost?: ScheduledCost | null;
+		burn?: QuotaBurn | null;
+	} = {}
 ): Tank | null {
 	const percent = window.percent;
 	if (percent === null || percent === undefined) return null;
@@ -268,13 +282,37 @@ export function readTank(
 	}
 
 	let ratePerHour: number | null = null;
+	let rateSource: 'measured' | 'window' | null = null;
+	let rateSpanMinutes: number | null = null;
 	let projected: number | null = null;
 	let exhaustsInHours: number | null = null;
 	let verdict: TankVerdict = 'unknown';
 
-	if (elapsedFraction !== null && duration && elapsedFraction >= MIN_ELAPSED_FRACTION) {
+	// The measured burn is the preferred rate source (#493: burn was published,
+	// typed, and rendered nowhere while this line derived its own rate from
+	// window arithmetic — two measurements of one quantity). The series is
+	// per-shell and pinned to one window (`burn.window_minutes` names it, the
+	// longest on record for that shell), so it only speaks for the window it
+	// was measured against. `recent_burn` already refuses spans under 30
+	// minutes at the source, so a present burn is a usable one.
+	const burn = options.burn ?? null;
+	if (
+		burn &&
+		duration &&
+		burn.window_minutes * 60 === duration &&
+		burn.span_minutes > 0 &&
+		burn.burned_percent >= 0
+	) {
+		ratePerHour = burn.burned_percent / (burn.span_minutes / 60);
+		rateSource = 'measured';
+		rateSpanMinutes = burn.span_minutes;
+	} else if (elapsedFraction !== null && duration && elapsedFraction >= MIN_ELAPSED_FRACTION) {
 		const elapsedHours = (elapsedFraction * duration) / 3600;
 		ratePerHour = used / elapsedHours;
+		rateSource = 'window';
+	}
+
+	if (ratePerHour !== null) {
 		projected = remaining - ratePerHour * (hoursLeft ?? 0);
 		if (ratePerHour > 0) {
 			const toZero = remaining / ratePerHour;
@@ -309,6 +347,8 @@ export function readTank(
 		elapsedFraction,
 		hoursLeft,
 		ratePerHour,
+		rateSource,
+		rateSpanMinutes,
 		projectedRemainingAtReset: projected,
 		exhaustsInHours,
 		verdict,
@@ -339,7 +379,8 @@ export function readTanks(
 		shell.windows.forEach((window, index) => {
 			const tank = readTank(shell, window, index, nowMs, {
 				scheduledWakes: wakes ?? [],
-				scheduledCost: cost
+				scheduledCost: cost,
+				burn: shell.burn ?? null
 			});
 			if (tank) tanks.push(tank);
 		});

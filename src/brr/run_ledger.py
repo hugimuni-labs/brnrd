@@ -209,10 +209,15 @@ def build_closed_run_row(
     # Falls back to the pre-existing (always-empty in practice, since
     # nothing ever wrote it) ``task.meta["external_refs"]`` path so a task
     # that somehow pre-populated it directly doesn't regress.
+    # Scope resolution handles the host-run case: no assigned branch, so the
+    # commits are measured from the checkout's run-start HEAD instead
+    # (relics.collection_scope) — otherwise a host run that merged its work
+    # into the seed branch books an empty manifest.
+    relic_branch, relic_seed = relics.collection_scope(task.meta, work_dir)
     collected_relics = relics.collect(
         work_dir,
-        branch=_str_or_none(task.meta.get("branch_name")),
-        seed_ref=_str_or_none(task.meta.get("seed_ref")),
+        branch=relic_branch,
+        seed_ref=relic_seed,
         outbox_dir=outbox_dir,
     )
     row = {

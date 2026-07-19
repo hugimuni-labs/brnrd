@@ -3,7 +3,8 @@
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { typeReveal } from './transitions';
-	import { ageSince, liveRunDisplayName, type LiveRun } from './liveRuns';
+	import { ageSince, heartbeatLevel, liveRunDisplayName, type LiveRun } from './liveRuns';
+	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 
 	interface Props {
@@ -73,18 +74,11 @@
 		unknown: 'unknown'
 	};
 
-	// A heartbeat lands roughly every 30s (`daemon.py`'s watch loop); three
-	// missed beats reads as genuinely stalling rather than a single slow
-	// tick. The registry itself only prunes at 300s
-	// (`presence.DEFAULT_STALE_AFTER_S`), so a card can sit in "stalling"
-	// for a while before it's gone — that gap is real and worth seeing.
-	const STALL_AFTER_MS = 90_000;
-
+	// Heartbeat freshness lives in `liveRuns.ts::heartbeatLevel` now, shared
+	// with the inline node panel so two renderings of one run cannot disagree
+	// about whether it is alive.
 	function level(lastSeen: string | null): 'running' | 'stalling' | 'unknown' {
-		if (stale) return 'unknown';
-		const seen = lastSeen ? Date.parse(lastSeen) : NaN;
-		if (Number.isNaN(seen)) return 'unknown';
-		return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
+		return heartbeatLevel(lastSeen, now, stale);
 	}
 
 	// #200's remaining slice: the heartbeat-freshness label above only ever
@@ -264,6 +258,21 @@
 							style={`background-color: ${color}; opacity: ${lvl === 'running' ? 1 : 0.3}`}
 						></div>
 					</div>
+					{#if run.run_id}
+						<!-- Every card gets its own way through to the run's node. The
+						     single-run case auto-focuses the node panel in §2a, but a
+						     page with several live runs renders only this grid — and
+						     a card with no link was exactly the #480 complaint this
+						     grid re-created for the multi-run case. -->
+						<div class="mt-1.5 text-right">
+							<a
+								href={runNodeHref(run.repo_label, run.run_id)}
+								class="font-mono text-[10px] tracking-wide text-amber-300 uppercase hover:text-amber-100"
+							>
+								full node →
+							</a>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>

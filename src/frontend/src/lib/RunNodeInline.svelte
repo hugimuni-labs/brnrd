@@ -6,6 +6,7 @@
 	// vitals, and a count. Everything heavier sits behind one expand, and the
 	// standalone `/runs/...` page stays the addressable deep link.
 	import MarkdownContent from './MarkdownContent.svelte';
+	import type { HeartbeatLevel } from './liveRuns';
 	import {
 		messageInstant,
 		messageTarget,
@@ -13,6 +14,7 @@
 		nodeDigest,
 		runNodeFromSurface
 	} from './runNode';
+	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 	import type { SurfaceResponse } from './surface';
 
 	interface Props {
@@ -28,9 +30,24 @@
 		 * arriving as a second card above saying the same thing differently.
 		 */
 		vitals?: string[];
+		/**
+		 * Heartbeat freshness when the run is live (`liveRuns.heartbeatLevel`),
+		 * `null` for a closed run. The panel absorbed the LiveRuns card as the
+		 * one rendering of a selected run, but it dropped the card's liveness
+		 * language on the floor — the status dot and the scanning bar are how
+		 * this dashboard says "in motion", and a live node without them read as
+		 * off-theme next to every other live surface (maintainer, 2026-07-19).
+		 */
+		liveLevel?: HeartbeatLevel | null;
 	}
 
-	let { data, repoSlug, runId, href, vitals = [] }: Props = $props();
+	let { data, repoSlug, runId, href, vitals = [], liveLevel = null }: Props = $props();
+
+	const LIVE_COLOR: Record<HeartbeatLevel, string> = {
+		running: STATUS_GOOD,
+		stalling: STATUS_WARN,
+		unknown: STATUS_UNKNOWN
+	};
 
 	let expanded = $state(false);
 	let node = $derived(data ? runNodeFromSurface(data, repoSlug, runId) : null);
@@ -66,8 +83,20 @@
 		<div
 			class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-stone-800 pb-2 font-mono text-[10px]"
 		>
-			<span class="min-w-0 truncate tracking-wide text-amber-200 uppercase">
-				run node{digest.stage ? ` · ${digest.stage}` : ''}
+			<span class="flex min-w-0 items-center gap-1.5">
+				{#if liveLevel}
+					<span
+						class="inline-block h-2 w-2 shrink-0 rounded-full"
+						style={statusDotStyle(
+							liveLevel === 'stalling' ? 'cooling' : 'burning',
+							LIVE_COLOR[liveLevel]
+						)}
+						aria-hidden="true"
+					></span>
+				{/if}
+				<span class="min-w-0 truncate tracking-wide text-amber-200 uppercase">
+					run node{digest.stage ? ` · ${digest.stage}` : ''}
+				</span>
 			</span>
 			<span class="shrink-0 text-stone-500">
 				{digest.status || 'unknown'}{digest.runner ? ` · ${digest.runner}` : ''}
@@ -154,6 +183,18 @@
 				full node →
 			</a>
 		</div>
+
+		{#if liveLevel}
+			<!-- The "in motion" tell, same grammar as the LiveRuns grid: an
+			     indeterminate scan while the heartbeat is fresh, a flatlined
+			     full-width low-opacity track when it isn't. -->
+			<div class="mt-2 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
+				<div
+					class={`h-full ${liveLevel === 'running' ? 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]' : 'w-full'}`}
+					style={`background-color: ${LIVE_COLOR[liveLevel]}; opacity: ${liveLevel === 'running' ? 1 : 0.3}`}
+				></div>
+			</div>
+		{/if}
 
 		{#if expanded}
 			<!-- The expand is where following costs something: the rest of the
