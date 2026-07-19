@@ -276,11 +276,17 @@ export function dispatchEdges(
 // ── Message presentation ─────────────────────────────────────────────────
 
 /** The only statuses `message_store` writes, plus a catch-all. */
-export type MessageTone = 'delivered' | 'pending' | 'undeliverable' | 'unknown';
+export type MessageTone =
+	| 'delivered'
+	| 'collected'
+	| 'pending'
+	| 'undeliverable'
+	| 'unknown';
 
 export function messageTone(status: string | null | undefined): MessageTone {
 	switch (status) {
 		case 'delivered':
+		case 'collected':
 		case 'pending':
 		case 'undeliverable':
 			return status;
