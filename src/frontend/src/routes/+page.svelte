@@ -16,7 +16,7 @@
 		requestWake,
 		type RunnersResponse
 	} from '$lib/runners';
-	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
+	import { LiveRunsAuthError, fetchLiveRuns, heartbeatLevel, type LiveRun } from '$lib/liveRuns';
 	import RunNodeInline from '$lib/RunNodeInline.svelte';
 	import { nodeDigest, repoRunSlug, runIdSlug, runNodeFromSurface, runNodeHref } from '$lib/runNode';
 	import { durationLabel } from '$lib/runLedger';
@@ -278,11 +278,31 @@
 	// it collapses into a single vitals line in the node's header. Only when
 	// no node is mirrored (a run that closed before the weld, or one whose
 	// corpus push hasn't landed) do the old cards still answer.
-	let selectedNodeMirrored = $derived.by(() => {
-		if (!selectedNode || !surfaceData) return false;
+	// Three states, not two. "The corpus hasn't loaded yet" and "the corpus has
+	// no node for this run" used to share `false`, which made the frame fall
+	// back to the LiveRuns card for the first seconds of every page load and
+	// then visibly swap to the node panel when the surface fetch landed — the
+	// "two bodies" flash (maintainer, 2026-07-19). Same tensed-absence family
+	// as #480: while loading, the honest render is the node panel's own
+	// "reading the corpus…" placeholder, not a different card that means
+	// something else.
+	let selectedNodeState = $derived.by(() => {
+		if (!selectedNode) return 'none';
+		if (!surfaceData) return 'loading';
 		const node = runNodeFromSurface(surfaceData, selectedNode.repoSlug, selectedNode.runId);
-		return nodeDigest(node).mirrored;
+		return nodeDigest(node).mirrored ? 'mirrored' : 'unmirrored';
 	});
+	let selectedNodeAnswers = $derived(
+		selectedNodeState === 'mirrored' || selectedNodeState === 'loading'
+	);
+	// Liveness for the node panel's dot and scan bar — the same reading the
+	// LiveRuns grid makes, from the same helper, so the one panel that
+	// absorbed that card keeps its language.
+	let selectedLiveLevel = $derived(
+		selectedLiveRuns.length > 0
+			? heartbeatLevel(selectedLiveRuns[0].last_seen, now, liveRunsStale)
+			: null
+	);
 	let selectedVitals = $derived.by(() => {
 		const parts: string[] = [];
 		const live = selectedLiveRuns[0];
@@ -534,12 +554,12 @@
 						: loomSelection === null
 						? focusRunId === null
 							? 'now'
-							: selectedNode && selectedNodeMirrored
+							: selectedNode && selectedNodeAnswers
 								? 'now · node'
 								: 'now'
 						: loomSelection.kind === 'wake'
 							? 'selected wake'
-							: selectedNode && selectedNodeMirrored
+							: selectedNode && selectedNodeAnswers
 								? 'selected run · node'
 								: selectedLiveRuns.length > 0
 									? 'selected run · live'
@@ -586,13 +606,14 @@
 				     costing them their place in the band. One panel, not three —
 				     the node speaks, with the live/receipt vitals folded into its
 				     header and everything heavier behind its own expand. -->
-					{#if selectedNode && selectedNodeMirrored}
+					{#if selectedNode && selectedNodeAnswers}
 						<RunNodeInline
 							data={surfaceData}
 							repoSlug={selectedNode.repoSlug}
 							runId={selectedNode.runId}
 							href={selectedNode.href}
 							vitals={selectedVitals}
+							liveLevel={selectedLiveLevel}
 						/>
 					{:else if selectedLiveRuns.length > 0}
 						<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
