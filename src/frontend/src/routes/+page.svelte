@@ -34,7 +34,7 @@
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
-	import { LENS_ALL, LENS_REVIEW } from '$lib/loomLens';
+	import { LENS_ALL, LENS_REVIEW, applyLens } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
@@ -618,7 +618,17 @@
 			<!-- The instruments read the loom's dial, not a constant of their own
 			     (2026-07-19: "the 24h block is too static/limiting"). One time
 			     scope for the section: step the past label above, and this
-			     heading, the gauge caption, and its rollup all move with it. -->
+			     heading, the gauge caption, and its rollup all move with it.
+			     The lens is the same contract in the other axis — narrow the
+			     shelf to `schedule` and the gauge must count schedule runs, or
+			     it becomes an instrument holding its own constant under a band
+			     that has already moved, which is precisely the defect #486 fixed
+			     for the time axis. -->
+			{#if loomLens !== LENS_ALL && loomLens !== LENS_REVIEW}
+				<p class="mt-1 font-mono text-[10px] text-stone-600">
+					lensed — counting only runs matching the selected lens
+				</p>
+			{/if}
 			<h2
 				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
 				use:typeReveal={{ text: `last ${loomPastWindowLabel(loomPastWindowMs)}`, delay: 1150 }}
@@ -632,7 +642,7 @@
 					<p class="text-sm text-stone-500">Loading…</p>
 				{:else}
 					<ProduceGauge
-						rows={runLedgerRows}
+						rows={applyLens(runLedgerRows, loomLens)}
 						stale={runLedgerStale}
 						{now}
 						windowMs={loomPastWindowMs}
