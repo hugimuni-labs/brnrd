@@ -457,13 +457,13 @@
 				     backed by the /v1/dashboard/repos JSON twin. -->
 				<a
 					href="/repos"
-					class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+					class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 					>manage repos</a
 				>
 				<a
 					href="/logout"
 					rel="external"
-					class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+					class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 					>sign out</a
 				>
 			</div>
@@ -486,7 +486,7 @@
 					next wake · fuel
 				</h2>
 			</div>
-			<p class="font-mono text-[10px] text-stone-500">
+			<p class="font-mono text-[10px] text-ink-quiet">
 				{runnersError ??
 					(shells === null
 						? 'report loading'
@@ -520,7 +520,7 @@
 					? 'text-red-400'
 					: liveRunsStale
 						? 'text-amber-400'
-						: 'text-stone-500'}"
+						: 'text-ink-quiet'}"
 			>
 				{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
 			</p>
@@ -569,7 +569,7 @@
 					<div class="flex shrink-0 items-baseline gap-3">
 						<button
 							type="button"
-							class="cursor-pointer font-mono text-[10px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+							class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 							onclick={() => (loomSelection = null)}
 						>
 							✕ back to now
@@ -587,7 +587,7 @@
 					{#if prReviewQueueError}
 						<p class="text-sm text-red-400">{prReviewQueueError}</p>
 					{:else if prReviewQueue === null}
-						<p class="text-sm text-stone-500">Loading…</p>
+						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else}
 						<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
 					{/if}
@@ -598,7 +598,7 @@
 					{#if selectedWakes.length > 0}
 						<ScheduleLane wakes={selectedWakes} {now} />
 					{:else}
-						<p class="text-sm text-stone-500">that wake left the schedule — it likely fired.</p>
+						<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
 					{/if}
 				{:else if loomSelection?.kind === 'run' || focusRunId !== null}
 					<!-- The loom stays the spine: a selected run fills this frame with
@@ -620,14 +620,14 @@
 					{:else if selectedLedgerRows.length > 0}
 						<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
 					{:else}
-						<p class="text-sm text-stone-500">
+						<p class="text-sm text-ink-quiet">
 							no receipt rows for that run in the current window.
 						</p>
 					{/if}
 				{:else if liveRunsError}
 					<p class="text-sm text-red-400">{liveRunsError}</p>
 				{:else if liveRuns === null}
-					<p class="text-sm text-stone-500">Loading…</p>
+					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
 					<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 				{/if}
@@ -646,7 +646,7 @@
 			     that has already moved, which is precisely the defect #486 fixed
 			     for the time axis. -->
 			{#if loomLens !== LENS_ALL && loomLens !== LENS_REVIEW}
-				<p class="mt-1 font-mono text-[10px] text-stone-600">
+				<p class="mt-1 font-mono text-[10px] text-ink-mute">
 					lensed — counting only runs matching the selected lens
 				</p>
 			{/if}
@@ -660,7 +660,7 @@
 				{#if runLedgerError}
 					<p class="text-sm text-red-400">{runLedgerError}</p>
 				{:else if runLedgerRows === null}
-					<p class="text-sm text-stone-500">Loading…</p>
+					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
 					<ProduceGauge
 						rows={applyLens(runLedgerRows, loomLens)}
@@ -680,7 +680,7 @@
 				{#if liveRunsError}
 					<p class="text-sm text-red-400">{liveRunsError}</p>
 				{:else if liveRuns === null}
-					<p class="text-sm text-stone-500">Loading…</p>
+					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
 					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
 				{/if}
@@ -699,7 +699,7 @@
 				{#if configRequestsError}
 					<p class="text-sm text-red-400">{configRequestsError}</p>
 				{:else if configRequests === null}
-					<p class="text-sm text-stone-500">Loading…</p>
+					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
 					<ConfigRequests requests={configRequests} {now} />
 				{/if}
@@ -721,7 +721,7 @@
 					work surface
 				</h2>
 			</div>
-			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-stone-500'}">
+			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
 				{surfaceError ??
 					(surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}
 			</p>
@@ -733,7 +733,7 @@
 			{#if surfaceError}
 				<p class="text-sm text-red-400">{surfaceError}</p>
 			{:else if surfaceData === null}
-				<p class="text-sm text-stone-500">Loading…</p>
+				<p class="text-sm text-ink-quiet">Loading…</p>
 			{:else}
 				<WorkSurface data={surfaceData} />
 			{/if}

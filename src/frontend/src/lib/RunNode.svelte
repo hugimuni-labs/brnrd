@@ -22,6 +22,7 @@
 		runNodeFromSurface
 	} from './runNode';
 	import type { SurfaceResponse } from './surface';
+	import { typeReveal } from './transitions';
 
 	interface Props {
 		data: SurfaceResponse;
@@ -74,7 +75,7 @@
 		collected: 'text-emerald-400/60',
 		pending: 'text-amber-400',
 		undeliverable: 'text-red-400',
-		unknown: 'text-stone-500'
+		unknown: 'text-ink-quiet'
 	};
 
 	function instantLabel(raw: string): string {
@@ -89,19 +90,25 @@
 		<div class="flex items-baseline justify-between gap-3">
 			<a
 				href="/"
-				class="shrink-0 font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+				class="shrink-0 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 				>← loom</a
 			>
-			<span class="truncate font-mono text-[10px] text-stone-600">{repoLabel}</span>
+			<span class="truncate font-mono text-[10px] text-ink-mute">{repoLabel}</span>
 		</div>
 		<p class="eyebrow mt-5">wyrd · run node</p>
+		<!-- The node page had no motion language at all — the same gap as the
+		     inline panel. Scoped differently here on purpose: this page is a
+		     *document*, and streaming a full run body per character is noise, so
+		     the reveal lands on the identifiers and chrome that name the run,
+		     while the long prose below paints. -->
 		<h1
 			class="mt-1 font-mono text-base font-semibold tracking-tight break-all text-amber-100 sm:text-lg"
+			use:typeReveal={{ text: runId }}
 		>
 			{runId}
 		</h1>
 		{#if data.reported_at}
-			<p class="mt-1 font-mono text-[10px] text-stone-600">
+			<p class="mt-1 font-mono text-[10px] text-ink-mute">
 				corpus mirrored {instantLabel(data.reported_at)}
 			</p>
 		{/if}
@@ -115,15 +122,15 @@
 	<section class="mt-6" aria-labelledby="receipt-heading">
 		<h2 id="receipt-heading" class="sr-only">ledger receipt</h2>
 		{#if ledgerRows === null}
-			<p class="panel p-4 font-mono text-xs text-stone-500">reading the ledger…</p>
+			<p class="panel p-4 font-mono text-xs text-ink-quiet">reading the ledger…</p>
 		{:else if ledgerError}
-			<p class="panel p-4 text-sm text-stone-500">
+			<p class="panel p-4 text-sm text-ink-quiet">
 				Ledger receipt unavailable — {ledgerError}. The mirrored run node remains readable below.
 			</p>
 		{:else if ledgerRows.length > 0}
 			<RunLedgerReceipt rows={ledgerRows} stale={ledgerStale} />
 		{:else}
-			<p class="panel p-4 text-sm text-stone-500">
+			<p class="panel p-4 text-sm text-ink-quiet">
 				No ledger receipt for this run in the reported window — the ledger API reaches back seven
 				days.
 			</p>
@@ -149,7 +156,7 @@
 				<h2 id="frame-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
 					attested frame
 				</h2>
-				<span class="shrink-0 font-mono text-[10px] text-stone-600">daemon-owned</span>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">daemon-owned</span>
 			</div>
 			{#if frame && fields.length > 0}
 				{#if node.state?.truncated}
@@ -160,7 +167,7 @@
 						<div
 							class="flex min-w-0 items-baseline justify-between gap-3 border-b border-stone-900 pb-1"
 						>
-							<dt class="shrink-0 font-mono text-[10px] tracking-wide text-stone-500 uppercase">
+							<dt class="shrink-0 font-mono text-[10px] tracking-wide text-ink-quiet uppercase">
 								{field.label}
 							</dt>
 							<dd class="min-w-0 truncate font-mono text-[11px] text-stone-300" title={field.value}>
@@ -179,7 +186,7 @@
 					</div>
 				{/if}
 			{:else}
-				<p class="mt-3 text-sm text-stone-500">No attested frame was captured for this run.</p>
+				<p class="mt-3 text-sm text-ink-quiet">No attested frame was captured for this run.</p>
 			{/if}
 		</section>
 
@@ -192,7 +199,7 @@
 				<h2 id="produce-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
 					produce
 				</h2>
-				<span class="shrink-0 font-mono text-[10px] text-stone-600">
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">
 					{running ? 'accruing' : 'daemon-attested'}
 				</span>
 			</div>
@@ -201,7 +208,7 @@
 					<MarkdownContent markdown={produce} sourcePath={node.state?.path ?? ''} {knownPaths} />
 				</div>
 			{:else if running}
-				<p class="mt-3 text-sm text-stone-500">
+				<p class="mt-3 text-sm text-ink-quiet">
 					Nothing produced yet — commits, branches, PRs and kb pages appear here as this run makes
 					them.
 				</p>
@@ -209,7 +216,7 @@
 				<!-- Absence here is genuinely ambiguous and must not be flattened:
 				     a run that made nothing and a node written before produce was
 				     recorded on the frame look identical from the corpus. Say both. -->
-				<p class="mt-3 text-sm text-stone-500">
+				<p class="mt-3 text-sm text-ink-quiet">
 					No produce recorded on this node — the run made nothing durable, or it closed before
 					produce was written to the frame. The ledger receipt above is the other witness.
 				</p>
@@ -222,7 +229,7 @@
 				<h2 id="body-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
 					woven body
 				</h2>
-				<span class="shrink-0 font-mono text-[10px] text-stone-600">resident-owned</span>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">resident-owned</span>
 			</div>
 			{#if node.body}
 				{#if node.body.truncated}
@@ -236,11 +243,11 @@
 				     it changes, so an absent body here means the run has not
 				     written one *yet* — a different statement from a closed run
 				     that never wrote one at all. -->
-				<p class="mt-3 text-sm text-stone-500">
+				<p class="mt-3 text-sm text-ink-quiet">
 					This run is still going and has not written its card yet.
 				</p>
 			{:else}
-				<p class="mt-3 text-sm text-stone-500">
+				<p class="mt-3 text-sm text-ink-quiet">
 					No body was captured — the run wrote no card, or it predates the runfile weld.
 				</p>
 			{/if}
@@ -255,10 +262,10 @@
 						{node.messages.length} message{node.messages.length === 1 ? '' : 's'}
 					</h2>
 				</div>
-				<span class="shrink-0 font-mono text-[10px] text-stone-600">write order</span>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">write order</span>
 			</div>
 			{#if node.messages.length === 0}
-				<div class="panel mt-2 p-4 text-sm text-stone-500">
+				<div class="panel mt-2 p-4 text-sm text-ink-quiet">
 					{#if running}
 						Nothing has left this run yet.
 					{:else}
@@ -308,11 +315,11 @@
 				<h2 id="edges-heading" class="font-mono text-xs tracking-wide text-amber-200 uppercase">
 					dispatch edges
 				</h2>
-				<span class="shrink-0 font-mono text-[10px] text-stone-600">wyrd</span>
+				<span class="shrink-0 font-mono text-[10px] text-ink-mute">wyrd</span>
 			</div>
 			<dl class="mt-3 space-y-2 font-mono text-[11px]">
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-					<dt class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase">dispatched by</dt>
+					<dt class="shrink-0 text-[10px] tracking-wide text-ink-quiet uppercase">dispatched by</dt>
 					<dd class="min-w-0 break-all text-stone-300">
 						{#if edges.parent}
 							{#if edges.parent.href}
@@ -320,18 +327,18 @@
 									>{edges.parent.runId}</a
 								>
 							{:else}
-								{edges.parent.runId} <span class="text-stone-600">· not mirrored</span>
+								{edges.parent.runId} <span class="text-ink-mute">· not mirrored</span>
 							{/if}
 						{:else if edges.origin}
 							{edges.origin}
 						{:else}
-							<span class="text-stone-600">unrecorded</span>
+							<span class="text-ink-mute">unrecorded</span>
 						{/if}
 					</dd>
 				</div>
 				{#if edges.children.length > 0}
 					<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-						<dt class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase">dispatched</dt>
+						<dt class="shrink-0 text-[10px] tracking-wide text-ink-quiet uppercase">dispatched</dt>
 						<dd class="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-stone-300">
 							{#each edges.children as child (child.runId)}
 								{#if child.href}
@@ -340,7 +347,7 @@
 									>
 								{:else}
 									<span class="break-all"
-										>{child.runId} <span class="text-stone-600">· not mirrored</span></span
+										>{child.runId} <span class="text-ink-mute">· not mirrored</span></span
 									>
 								{/if}
 							{/each}
