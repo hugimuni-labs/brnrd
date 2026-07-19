@@ -87,6 +87,7 @@ from . import spending_plan
 from . import sync
 from . import transcript
 from . import updates
+from . import usage_samples
 from . import worktree
 from .run import Run, list_runs, run_manifest_path
 
@@ -3418,6 +3419,10 @@ def _collect_levels(
             if refresh else codex_usage.load_snapshot(cache_dir)
         )
         merged = codex_usage.merge_levels(probe, codex_status.load_levels())
+        # Give the point reading a memory: this is the heartbeat cadence, so it
+        # is the series trailing burn is measured from (`usage_samples`). A
+        # side effect of a read that already happened — never its own poll.
+        usage_samples.record(cache_dir, "codex", merged)
         return merged, frozenset(
             codex_usage.COLLECTED_SLOTS | codex_status.COLLECTED_SLOTS
         )
@@ -3429,7 +3434,14 @@ def _collect_levels(
         else:
             usage_levels = claude_usage.load_snapshot(outbox_dir)
         result_levels = claude_status.load_snapshot(outbox_dir)
-        return _merge_level_snapshots(usage_levels, result_levels), frozenset(
+        merged = _merge_level_snapshots(usage_levels, result_levels)
+        # The seam that makes burn shell-agnostic. Claude's `/usage` scrape is a
+        # *point* reading that forgets itself; sampling it here — into the
+        # account-shared dir, not the per-run outbox — is what turns it into the
+        # series `usage_samples.recent_burn` needs, on the Shell that does most
+        # of the spending.
+        usage_samples.record(shared_dir or outbox_dir, "claude", merged)
+        return merged, frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
     return None, False
