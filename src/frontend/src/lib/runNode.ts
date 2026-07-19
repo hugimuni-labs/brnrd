@@ -350,6 +350,28 @@ export function hasSectionsBeyondNow(body: string): boolean {
 	return lines.slice(0, first).join('\n').trim() !== '';
 }
 
+/**
+ * Pull one `## Heading` section out of a Markdown body.
+ *
+ * The run node's produce arrives as ordinary Markdown in `state.md` rather
+ * than as a parallel JSON schema — the daemon already renders relic icons and
+ * links, and the alternative was a third hand-mirrored copy of the relic
+ * vocabulary (`relics._ICONS` → `runLedger.RELIC_ICONS` was already two).
+ * Headings and links are the interchange format; this is the only reader.
+ */
+export function bodySection(body: string, heading: string): string {
+	const lines = body.replace(/\r\n/g, '\n').split('\n');
+	const wanted = `## ${heading}`.toLowerCase();
+	const start = lines.findIndex((line) => line.trim().toLowerCase() === wanted);
+	if (start === -1) return '';
+	const collected: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (line.startsWith('## ')) break;
+		collected.push(line);
+	}
+	return collected.join('\n').trim();
+}
+
 export interface NodeDigest {
 	/** Present only when the node is mirrored at all. */
 	mirrored: boolean;
@@ -358,6 +380,13 @@ export interface NodeDigest {
 	runner: string;
 	/** The `## Now` projection of the body; '' when no body exists yet. */
 	now: string;
+	/**
+	 * The run's own produce manifest, from the attested frame. '' when the
+	 * run has made nothing yet — or when its node predates produce being
+	 * written to `state.md` at all, which is not the same thing and is why
+	 * the renderer must not print "produced nothing" over an empty string.
+	 */
+	produce: string;
 	messageCount: number;
 	/** True when expanding would actually reveal something more. */
 	hasMore: boolean;
@@ -374,6 +403,7 @@ export function nodeDigest(node: RunNode): NodeDigest {
 		stage: frame?.metadata.stage ?? '',
 		runner: frame?.metadata.runner_name ?? '',
 		now,
+		produce: frame ? bodySection(frame.body, 'Produce') : '',
 		messageCount: node.messages.length,
 		// Only offer the expand when it reveals something the reader cannot
 		// already see. Comparing the projection against the raw body is not

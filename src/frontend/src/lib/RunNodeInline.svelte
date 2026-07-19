@@ -95,6 +95,27 @@
 			</p>
 		{/if}
 
+		{#if digest.produce}
+			<!-- Produce, unexpanded. #486 collapsed this panel to be the only
+			     rendering of a selected run and folded relic *counts* into the
+			     vitals line — but a count is not a link, so the manifest
+			     retreated to the shelf row's expansion. The run's own document
+			     carries it now, so it sits where the run's other truth sits, and
+			     it accrues while the run is still working rather than appearing
+			     at stop. Deliberately above the expand: produce is the summary,
+			     not the detail. -->
+			<div class="mt-2 border-t border-stone-800/70 pt-2">
+				<p class="font-mono text-[10px] tracking-wide text-stone-600 uppercase">produce</p>
+				<div class="mt-1 text-sm text-stone-300">
+					<MarkdownContent
+						markdown={digest.produce}
+						sourcePath={node?.state?.path ?? ''}
+						{knownPaths}
+					/>
+				</div>
+			</div>
+		{/if}
+
 		<div class="mt-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 			<div class="flex items-baseline gap-3 font-mono text-[10px]">
 				{#if digest.hasMore}
