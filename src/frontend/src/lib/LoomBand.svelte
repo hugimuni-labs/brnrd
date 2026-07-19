@@ -2,19 +2,26 @@
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
 	import { runNodeHref } from './runNode';
-	import { liveRunDisplayName, type LiveRun } from './liveRuns';
+	import {
+		LiveRunsAuthError,
+		liveRunDisplayName,
+		requestRunStop,
+		type LiveRun
+	} from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
 		LOOM_CENTER_ZONE_PX,
 		LOOM_DUE_SOON_MS,
 		LOOM_PAST_WINDOWS_MS,
 		LOOM_PAST_WINDOW_MS,
+		LOOM_STOP_ARM_WINDOW_MS,
 		loomBarFraction,
 		loomCellClickSelects,
 		loomFutureHorizon,
 		loomFutureStop,
 		loomPastStop,
-		loomPastWindowLabel
+		loomPastWindowLabel,
+		loomStopGesture
 	} from './loomBand';
 	import {
 		STATUS_BURNING,
@@ -35,6 +42,13 @@
 		onPastWindowChange?: (windowMs: number) => void;
 		selectedId?: string | null;
 		/**
+		 * Seam for tests (#476). The band calls the endpoint itself rather than
+		 * routing a stop up through the page: the affordance, its confirmation,
+		 * and its receipt line are one thing, and splitting them across two
+		 * files is how the receipt goes missing.
+		 */
+		stopRun?: (runId: string) => Promise<unknown>;
+		/**
 		 * Open PRs waiting on a review. The one lens whose subject is an
 		 * artifact rather than a run, so its count comes from a different feed
 		 * (see `loomLens.ts` → `LENS_REVIEW`).
@@ -53,10 +67,61 @@
 		onSelect,
 		onPastWindowChange,
 		selectedId = null,
+		stopRun = requestRunStop,
 		reviewCount = 0,
 		lens = LENS_ALL,
 		onLensChange
 	}: Props = $props();
+
+	// #476: the stop affordance's local state. `armedStopId` is the run whose
+	// control is showing "stop?"; `stoppedIds` remembers runs stopped in this
+	// session so the cell flips to "stopping" on the tap rather than waiting a
+	// full poll for the server to agree.
+	let armedStopId = $state<string | null>(null);
+	let armedAt: number | null = null;
+	let stoppedIds = $state<Set<string>>(new Set());
+	let stopNote = $state<string | null>(null);
+
+	async function tapStop(event: MouseEvent, runId: string) {
+		// The cell behind this control selects on click; a stop must not also
+		// be a selection, so the gesture stops here.
+		event.stopPropagation();
+		const gesture = loomStopGesture(event, armedStopId === runId ? armedAt : null, Date.now());
+		if (gesture === 'ignore') return;
+		if (gesture === 'arm') {
+			armedStopId = runId;
+			armedAt = Date.now();
+			stopNote = 'tap again to stop — this does not resume';
+			return;
+		}
+		armedStopId = null;
+		armedAt = null;
+		try {
+			await stopRun(runId);
+			stoppedIds = new Set(stoppedIds).add(runId);
+			// Deliberately not "stopped": the daemon has not consumed it yet.
+			stopNote = 'stopping — ends on the next daemon sync, partial work kept';
+		} catch (e) {
+			// A swallowed stop must be loud (the 2026-07-11 lesson): the user
+			// just tried to kill a burning run and nothing happened.
+			stopNote =
+				e instanceof LiveRunsAuthError
+					? 'session expired — sign in again, then re-tap'
+					: e instanceof Error
+						? e.message
+						: 'stop request failed';
+		}
+	}
+
+	// The arm lapses on its own, so a control left armed by a mis-tap can't be
+	// committed by an unrelated click later. `now` already ticks for the band.
+	$effect(() => {
+		if (armedStopId !== null && armedAt !== null && now - armedAt > LOOM_STOP_ARM_WINDOW_MS) {
+			armedStopId = null;
+			armedAt = null;
+			stopNote = null;
+		}
+	});
 
 	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
 	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
@@ -427,24 +492,64 @@
 			{:else}
 				<div class="absolute inset-1 flex flex-col justify-center gap-1 overflow-hidden">
 					{#each liveRuns.slice(0, 2) as run, index (run.id)}
-						<button
-							type="button"
-							class="min-w-0 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
-							style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
-							title={liveRunDisplayName(run) || run.repo_label || 'live run'}
-							onclick={() => select('run', run.run_id || run.id)}
+						{@const stopId = run.run_id || run.id}
+						{@const stopping = run.stop_requested || stoppedIds.has(stopId)}
+						<div
+							class="flex min-w-0 items-stretch gap-px"
 							in:glitchReveal={{ duration: 260, delay: 35 + index * 38 }}
 						>
-							<span class="block truncate text-[9px]">
-								{liveRunDisplayName(run) || run.repo_label || 'live run'}
-							</span>
-							{#if elapsedLabel(run)}
-								<span class="mt-0.5 block text-[8px] text-amber-500/80">
-									{elapsedLabel(run)}
+							<button
+								type="button"
+								class="min-w-0 flex-1 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
+								style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
+								title={liveRunDisplayName(run) || run.repo_label || 'live run'}
+								onclick={() => select('run', stopId)}
+							>
+								<span class="block truncate text-[9px]">
+									{liveRunDisplayName(run) || run.repo_label || 'live run'}
 								</span>
+								{#if elapsedLabel(run)}
+									<span class="mt-0.5 block text-[8px] text-amber-500/80">
+										{stopping ? 'stopping…' : elapsedLabel(run)}
+									</span>
+								{/if}
+							</button>
+							<!-- The stop affordance (#476 wyrd §3). Its own button beside
+							     the cell, never nested inside it: the selecting click has a
+							     settled grammar and a kill must not ride it. Arm-then-commit
+							     (`loomStopGesture`) because a stopped thought does not
+							     resume. Once parked it stays "stopping" — the daemon
+							     consumes it on its next sync, and the cell must not claim a
+							     terminal state the system has not reached. -->
+							{#if stopping}
+								<span
+									class="flex w-7 shrink-0 items-center justify-center border border-amber-800/40 font-mono text-[8px] text-amber-600/80"
+									title="stop requested — the daemon ends this run on its next sync"
+								>
+									···
+								</span>
+							{:else}
+								<button
+									type="button"
+									class="w-7 shrink-0 cursor-pointer border border-red-900/60 bg-stone-950/90 font-mono text-[8px] text-red-400/90 hover:bg-red-950/40"
+									title={armedStopId === stopId
+										? 'tap again to stop this run — partial work is salvaged, the thought does not resume'
+										: 'stop this run'}
+									aria-label={`stop run ${liveRunDisplayName(run) || stopId}`}
+									onclick={(event) => tapStop(event, stopId)}
+								>
+									{armedStopId === stopId ? 'stop?' : '×'}
+								</button>
 							{/if}
-						</button>
+						</div>
 					{/each}
+					{#if stopNote}
+						<!-- Receipt line: a tap that gets swallowed must never be silent
+						     (found live 2026-07-11 on the spool rack's own taps). -->
+						<span class="truncate text-center font-mono text-[8px] text-amber-400/90">
+							{stopNote}
+						</span>
+					{/if}
 					{#if liveRuns.length > 2}
 						<span class="text-center font-mono text-[8px] text-amber-500/70"
 							>+{liveRuns.length - 2}</span
