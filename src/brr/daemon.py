@@ -2706,12 +2706,21 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
                 terminal_duplicate = _terminal_stream_duplicates_delivered(task, resp_path)
-                schedule_without_gate = event.get("source") == "schedule"
+                # A terminal reply reaches the world one of three ways: a gate
+                # delivers it, the spawning parent collects it along the
+                # dispatch edge, or nothing does. Only the third is a
+                # suppression — and it is a property of the event source, not
+                # of one hardcoded source name.
+                source = str(event.get("source") or "")
+                unowned = bool(source) and not (
+                    task.meta.get("spawn_parent_run_id")
+                    or _gate_owns_source(source)
+                )
                 suppression_reason = (
                     "duplicate of a delivered reply"
                     if terminal_duplicate
-                    else "no gate owns schedule events"
-                    if schedule_without_gate
+                    else f"no gate owns {source or 'unknown'} events"
+                    if unowned
                     else ""
                 )
                 _stage_terminal_response(
@@ -2720,6 +2729,7 @@ def _run_worker(
                     event,
                     resp_path,
                     suppressed_reason=suppression_reason,
+                    undeliverable=unowned and not terminal_duplicate,
                 )
                 if terminal_duplicate:
                     # Static dispatch call: the terminal stream is an exact
@@ -2733,7 +2743,7 @@ def _run_worker(
                         f"[brnrd] worker {eid}: terminal stream suppressed "
                         "(duplicate of a delivered reply)"
                     )
-                elif not schedule_without_gate:
+                elif not unowned:
                     _record_response_artifact(emit, task, resp_path)
             # Keep an in-memory snapshot for closeout consumers; the response
             # carrier now stays on disk too, but synthetic/older gates can
@@ -4121,12 +4131,11 @@ def _stage_terminal_response(
     response_path: Path,
     *,
     suppressed_reason: str = "",
+    undeliverable: bool = False,
 ) -> Path | None:
     body = protocol.read_response(response_path.parent, str(event.get("id") or "")) or ""
     status = (
-        message_store.UNDELIVERABLE
-        if suppressed_reason == "no gate owns schedule events"
-        else message_store.PENDING
+        message_store.UNDELIVERABLE if undeliverable else message_store.PENDING
     )
     path = _stage_outbound(
         task,
@@ -4817,28 +4826,58 @@ def _drain_outbox(
             )
             _retire_outbox_staging(fpath)
             continue
+        target_source = str(
+            (target_event or {}).get("source") or getattr(task, "source", "")
+        )
+        # Interim replies ride the target event's own gate. Dispatch-tree
+        # sources (spawn, spawn_completed, dispatch_message) have no gate and
+        # no collector for interims — only a worker's *terminal* report is
+        # collected — so a partial written here would orphan and the record
+        # would sit pending forever. Say so at staging time instead — but
+        # only about a source we can actually see: an absent one is unknown,
+        # not impossible.
+        deliverable = not target_source or _gate_owns_source(target_source)
         message_path = _stage_outbound(
             task,
             account_context,
             body=body,
             kind="interim",
             target_event=target,
-            target_gate=str(
-                (target_event or {}).get("source") or getattr(task, "source", "")
-            ),
+            target_gate=target_source,
             target_thread=str(
                 (target_event or {}).get("conversation_key")
                 or getattr(task, "conversation_key", "")
             ),
             source_ref=str(fpath),
+            status=(
+                message_store.PENDING if deliverable
+                else message_store.UNDELIVERABLE
+            ),
+            reason=(
+                "" if deliverable else
+                f"no gate owns {target_source or 'unknown'} events — answer the "
+                "originating user event instead"
+            ),
         )
+        if not deliverable:
+            _record_outbox_notice(
+                outbox_dir,
+                f"reply NOT delivered: no gate owns {target_source or 'unknown'} "
+                f"events (target {target}) — address the originating user event "
+                f"instead; the text is kept in the run's message store",
+            )
         ppath = (
             protocol.write_partial(
                 responses_dir, target, body, message_path=message_path,
             )
-            if body else None
+            if body and deliverable else None
         )
         _retire_outbox_staging(fpath)
+        if cross and target_event is not None and not deliverable:
+            # Nothing will deliver this, but the resident *did* answer it:
+            # retire the event so the unowned-source inbox stops growing
+            # (#454), with the text preserved as an undeliverable record.
+            _set_event_status_if_present(target_event, "done")
         if not ppath:
             continue
         promoted += 1
@@ -4903,6 +4942,21 @@ def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
         return False
     is_configured = getattr(mod, "is_configured", None)
     return bool(is_configured) and bool(is_configured(brr_dir))
+
+
+def _gate_owns_source(source: str) -> bool:
+    """True when some gate's delivery loop claims events of *source*.
+
+    Deliberately weaker than :func:`_gate_can_deliver`: this asks whether
+    the source is a gate's at all, not whether that gate is configured on
+    this host. Dispatch-tree sources (``spawn``, ``spawn_completed``,
+    ``dispatch_message``, ``schedule``) are owned by nobody, and a reply
+    addressed to one can never arrive — that is a property of the
+    protocol. A *configured-gate* source with the gate switched off is a
+    different, recoverable condition, and must not be recorded as an
+    impossible delivery.
+    """
+    return _delivery_source_for_gate(source) in _BUILTIN_GATES
 
 
 def _delivery_source_for_gate(gate: str) -> str:
@@ -5396,7 +5450,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
             summary = f"{summary}\n\n{text}"
     try:
-        protocol.create_event(
+        completion = protocol.create_event(
             inbox_dir,
             "spawn_completed",
             summary,
@@ -5406,6 +5460,30 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         )
     except OSError as exc:
         print(f"[brnrd] spawn-completion notify failed for {task.id}: {exc}")
+        return
+    _mark_report_collected(task, completion)
+
+
+def _mark_report_collected(task: Run, completion: Path) -> None:
+    """Stamp a worker's terminal report as collected on the dispatch edge.
+
+    No gate owns ``spawn``, so the report would otherwise sit ``pending``
+    forever in the run's message store — the residue #454 named. It is not
+    undeliverable either: the parent run reads it via the completion event's
+    ``message_path``. That is a real receipt, so it gets stamped like one.
+    """
+    response_path = task.meta.get("response_path")
+    if not response_path:
+        return
+    message_path = message_store.message_path_from_queue(Path(str(response_path)))
+    if message_path is None:
+        return
+    message_store.transition(
+        message_path,
+        message_store.COLLECTED,
+        gate="dispatch-edge",
+        platform_message_id=completion.stem,
+    )
 
 
 def _notify_spawn_parent_of_crash(
@@ -7089,17 +7167,30 @@ def start(
         print(f"[brnrd] dispatch-edge backfill skipped: {exc}")
     for registered in account_context.repos.values():
         try:
+            repo_brr_dir = gitops.shared_brr_dir(registered.root)
             migrated = message_store.migrate_legacy(
                 account_context,
                 repo_root=registered.root,
                 repo_label=registered.label,
-                brr_dir=gitops.shared_brr_dir(registered.root),
+                brr_dir=repo_brr_dir,
             )
             if any(migrated.values()):
                 print(
                     "[brnrd] message store: migrated "
                     f"{migrated['partials']} orphan partials and "
                     f"{migrated['replies']} archived replies for {registered.label}"
+                )
+            resolved = message_store.resolve_stranded(
+                account_context,
+                repo_label=registered.label,
+                gate_owned=_gate_owns_source,
+            )
+            if any(resolved.values()):
+                print(
+                    "[brnrd] message store: resolved "
+                    f"{resolved['collected']} collected and "
+                    f"{resolved['undeliverable']} undeliverable stranded "
+                    f"records for {registered.label}"
                 )
         except Exception as exc:  # noqa: BLE001 - migration must not block boot
             print(f"[brnrd] message-store migration skipped for {registered.label}: {exc}")
