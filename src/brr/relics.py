@@ -83,6 +83,76 @@ def icon(kind: str) -> str:
     return _ICONS.get(kind, "•")
 
 
+def label(record: dict[str, Any]) -> str:
+    """One human line for a single relic. Mirrors ``runLedger.relicLabel``.
+
+    Unknown kinds fall back through the common text-bearing fields and then
+    to the kind name, so a relic vocabulary that grows on the backend still
+    renders as *something* rather than a blank bullet.
+    """
+    kind = str(record.get("kind") or "")
+    if kind == "commit":
+        return f"{str(record.get('sha') or '')[:7]} {record.get('subject') or ''}".strip()
+    if kind == "branch":
+        return str(record.get("name") or "branch")
+    if kind == "pr":
+        return f"PR #{record.get('number') or '?'}"
+    if kind == "issue":
+        action = record.get("action")
+        return f"issue #{record.get('number') or '?'}" + (f" ({action})" if action else "")
+    if kind in {"kb", "file"}:
+        return str(record.get("path") or kind)
+    if kind == "comment":
+        return str(record.get("on") or "comment")
+    if kind == "message":
+        return str(record.get("note") or record.get("channel") or "message")
+    if kind == "reply":
+        return str(record.get("excerpt") or "reply")
+    if kind == "summary":
+        return str(record.get("text") or "")
+    for field in ("text", "path", "note", "name", "on"):
+        value = str(record.get(field) or "").strip()
+        if value:
+            return value
+    return kind or "relic"
+
+
+def render_markdown(records: list[dict[str, Any]]) -> list[str]:
+    """Render a relic list as the run node's ``## Produce`` section.
+
+    Markdown, not a schema: the run document is read by humans in a git diff
+    and by the dashboard's ordinary Markdown renderer, so produce arrives on
+    the node the same way every other section does — headings and links, no
+    second parser to keep in sync. A ``summary`` relic is prose and leads as
+    a paragraph; everything else is one linked bullet.
+    """
+    summaries = [r for r in records if r.get("kind") == "summary"]
+    produce = [r for r in records if r.get("kind") != "summary"]
+    body: list[str] = []
+    summary_text = label(summaries[0]).strip() if summaries else ""
+    if summary_text:
+        body.extend([summary_text, ""])
+    for record in produce:
+        text = label(record).replace("[", "\\[").replace("]", "\\]").strip()
+        if not text:
+            continue
+        url = str(record.get("url") or "").strip()
+        body.append(f"- {icon(str(record.get('kind') or ''))} " + (f"[{text}]({url})" if url else text))
+    if not body:
+        return []
+    return ["", "## Produce", "", *body]
+
+
+def fingerprint(records: list[dict[str, Any]]) -> str:
+    """A stable digest of a relic list, for change detection.
+
+    The run node is rewritten when produce *changes*, never on a timer — a
+    heartbeat-driven rewrite would churn the corpus fingerprint (and its
+    full republish) every 30s for no new fact.
+    """
+    return json.dumps(records, sort_keys=True, default=str)
+
+
 def append(outbox_dir: Path | None, kind: str, **fields: Any) -> None:
     """Append one relic record to the control file. Best-effort, never raises.
 
@@ -361,6 +431,14 @@ def live_summary(
             "latest_commit": latest_commit,
             "branch": branch,
             "pr": pr_number,
+            # The manifest itself, not only its shape. Counts answer "how
+            # much"; a resident checking its own work mid-run is asking
+            # "what" — and at closeout it is writing a receipt *from* this
+            # list (maintainer, 2026-07-19: "make the live accrued relics
+            # useful for you too... inspected as you go to maintain the
+            # focus"). Same records the node's frame renders, so the two
+            # faces of the run cannot drift.
+            "records": records,
         }
     except Exception:
         return {"known": False}
