@@ -95,6 +95,14 @@ function median(values: number[]): number | null {
 	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+/** Shell match for calibration rows. Compared case-insensitively because the
+ *  quota snapshot's `shell` and the ledger's `runner_shell` are written by
+ *  different producers; the strip already lowercases the former for display. */
+function rowIsShell(row: RunLedgerRow, shell: string | undefined): boolean {
+	if (shell === undefined) return true;
+	return (row.runner_shell ?? '').toLowerCase() === shell.toLowerCase();
+}
+
 function rowTokens(row: RunLedgerRow): number | null {
 	const input = row.tokens_input;
 	const output = row.tokens_output;
@@ -105,6 +113,16 @@ function rowTokens(row: RunLedgerRow): number | null {
 /**
  * Tokens per one percent of the weekly window, calibrated from closed runs.
  *
+ * Calibrated **per shell**, because a percent is not a unit. Claude's weekly
+ * window and codex's are different budgets of different size, so a percent of
+ * one buys a different number of tokens than a percent of the other: measured
+ * on this account 2026-07-19, claude reads ~48,330 tokens per weekly percent
+ * against codex's ~30,375, a 1.6× spread across 107 and 17 samples. A blended
+ * median would price whichever window leads the strip with a ratio dominated by
+ * whichever shell simply ran more often. A shell with too few samples yields
+ * null and the caller shows the wake count without a cost — falling back to the
+ * other shell's ratio would be the invented number this module refuses.
+ *
  * Only rows with a strictly positive delta are used. A zero is the
  * quantization floor (the provider reports whole percents, so any run under
  * ~46k tokens books 0 and would divide to infinity), and a negative is a
@@ -113,9 +131,10 @@ function rowTokens(row: RunLedgerRow): number | null {
  * trust them. Median rather than mean for the same reason: one surviving
  * outlier should not move the calibration.
  */
-export function tokensPerWeeklyPercent(rows: RunLedgerRow[]): number | null {
+export function tokensPerWeeklyPercent(rows: RunLedgerRow[], shell?: string): number | null {
 	const ratios: number[] = [];
 	for (const row of rows) {
+		if (!rowIsShell(row, shell)) continue;
 		const delta = row.weekly_pct_delta;
 		if (delta === null || delta === undefined || delta <= 0) continue;
 		const tokens = rowTokens(row);
@@ -146,16 +165,17 @@ export interface ScheduledCost {
  * the *one* slug with a real population (34 rows) precisely because a schedule
  * entry supplies it rather than a resident inventing one at closeout.
  */
-export function scheduledCost(rows: RunLedgerRow[]): ScheduledCost | null {
+export function scheduledCost(rows: RunLedgerRow[], shell?: string): ScheduledCost | null {
 	const tokens: number[] = [];
 	for (const row of rows) {
 		if (row.source_system !== 'schedule') continue;
+		if (!rowIsShell(row, shell)) continue;
 		const t = rowTokens(row);
 		if (t !== null && t > 0) tokens.push(t);
 	}
 	const medianTokens = median(tokens);
 	if (medianTokens === null || tokens.length < 3) return null;
-	const perPercent = tokensPerWeeklyPercent(rows);
+	const perPercent = tokensPerWeeklyPercent(rows, shell);
 	return {
 		samples: tokens.length,
 		medianTokens,
@@ -313,9 +333,10 @@ export function readTanks(
 	wakes: ScheduledWake[] | null,
 	nowMs: number = Date.now()
 ): Tank[] {
-	const cost = rows ? scheduledCost(rows) : null;
 	const tanks: Tank[] = [];
 	for (const shell of shells) {
+		// Priced against this shell's own rows: see `tokensPerWeeklyPercent`.
+		const cost = rows ? scheduledCost(rows, shell.shell) : null;
 		shell.windows.forEach((window, index) => {
 			const tank = readTank(shell, window, index, nowMs, {
 				scheduledWakes: wakes ?? [],
