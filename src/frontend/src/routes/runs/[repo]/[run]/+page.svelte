@@ -65,7 +65,7 @@
 		<div class="panel p-4 text-sm text-red-400">{error}</div>
 	</div>
 {:else if data === null}
-	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-stone-500">reading run node…</div>
+	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">reading run node…</div>
 {:else}
 	<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
 {/if}

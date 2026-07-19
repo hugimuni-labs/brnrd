@@ -83,7 +83,7 @@
 		<p class="eyebrow">brnrd · beta terms</p>
 		<a
 			href="/"
-			class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+			class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 			>dashboard</a
 		>
 	</div>
@@ -184,7 +184,7 @@
 		{#if statusError}
 			<p class="mt-6 text-sm text-red-400">{statusError}</p>
 		{:else if status === null}
-			<p class="mt-6 text-sm text-stone-500">Loading…</p>
+			<p class="mt-6 text-sm text-ink-quiet">Loading…</p>
 		{:else if status.needs_accept}
 			<div class="subpanel mt-6 p-4">
 				<label class="flex items-start gap-3 text-sm text-stone-300">
@@ -202,11 +202,11 @@
 				<div class="mt-4 flex flex-wrap items-center gap-3">
 					<button
 						type="button"
-						class="cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-stone-600"
+						class="cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
 						disabled={posting}
 						onclick={acceptTerms}>{posting ? 'accepting…' : 'accept and continue'}</button
 					>
-					<span class="font-mono text-[11px] text-stone-600">next {nextUrl}</span>
+					<span class="font-mono text-[11px] text-ink-mute">next {nextUrl}</span>
 				</div>
 				{#if result}
 					<p class={`mt-3 text-sm ${result.level === 'error' ? 'text-red-400' : 'text-amber-200'}`}>
@@ -215,7 +215,7 @@
 				{/if}
 			</div>
 		{:else if status.authenticated}
-			<p class="mt-6 text-sm text-stone-500">
+			<p class="mt-6 text-sm text-ink-quiet">
 				{#if status.accepted_at}
 					Accepted {new Date(status.accepted_at).toLocaleString()}.
 				{:else}
