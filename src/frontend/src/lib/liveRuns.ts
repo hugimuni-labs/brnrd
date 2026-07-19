@@ -113,6 +113,28 @@ export async function requestRunStop(
 	return ((await res.json()) as { stop_request: RunStopRequest }).stop_request;
 }
 
+/** Heartbeat freshness → lifecycle temperature. A heartbeat lands roughly
+ * every 30s (`daemon.py`'s watch loop); three missed beats reads as genuinely
+ * stalling rather than one slow tick. The registry itself only prunes at 300s
+ * (`presence.DEFAULT_STALE_AFTER_S`), so a run can sit "stalling" for a while
+ * before it's gone — that gap is real and worth seeing. Shared by the
+ * LiveRuns grid and the inline node panel so the two surfaces cannot disagree
+ * about whether one run is alive. */
+export const STALL_AFTER_MS = 90_000;
+
+export type HeartbeatLevel = 'running' | 'stalling' | 'unknown';
+
+export function heartbeatLevel(
+	lastSeen: string | null,
+	now: number,
+	stale: boolean
+): HeartbeatLevel {
+	if (stale) return 'unknown';
+	const seen = lastSeen ? Date.parse(lastSeen) : NaN;
+	if (Number.isNaN(seen)) return 'unknown';
+	return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
+}
+
 /** "3m ago" / "just now" — a live run's age since it started, ticking off
  * `now` the same way `timeUntil` ticks the quota window's countdown. */
 export function ageSince(startedAt: string | null, now: number): string | null {

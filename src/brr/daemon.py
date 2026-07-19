@@ -1908,6 +1908,15 @@ def _run_worker(
     branch_name = env_ctx.branch_name
     if branch_name:
         task.meta["branch_name"] = branch_name
+    else:
+        # A host run has no assigned branch, so relic derivation cannot
+        # measure "what this run committed" from branch-vs-seed — the usual
+        # host flow merges back into the seed branch, which erases the range.
+        # Pin the checkout's HEAD now; commits that appear beyond this OID
+        # during the run are this run's produce (relics.collection_scope).
+        start_oid = gitops.rev_parse(repo_root, "HEAD")
+        if start_oid:
+            task.meta["host_start_oid"] = start_oid
     branch_setup_notice = task.meta.get("branch_setup_notice") or None
     # Resolve once during run assembly.  ``portal-state.json`` refreshes every
     # heartbeat, so carrying this avoids turning a stable URL into repeated git
@@ -3729,11 +3738,15 @@ def _write_live_portal_state(
             if isinstance(card_written_monotonic, (int, float)) else None
         )
         scm_facet = _scm_facet(work_dir, task.meta.get("branch_name"))
+        live_branch, live_seed = (
+            relics.collection_scope(task.meta, Path(work_dir))
+            if work_dir else (None, None)
+        )
         produce_facet = (
             relics.live_summary(
                 work_dir,
-                branch=task.meta.get("branch_name"),
-                seed_ref=task.meta.get("seed_ref"),
+                branch=live_branch,
+                seed_ref=live_seed,
                 outbox_dir=outbox_dir,
             )
             if work_dir else {"known": False}
@@ -5881,10 +5894,11 @@ def _run_state_produce_changed(
     if work_dir is None:
         return False
     try:
+        branch, seed = relics.collection_scope(task.meta, Path(work_dir))
         records = relics.collect(
             Path(work_dir),
-            branch=task.meta.get("branch_name"),
-            seed_ref=task.meta.get("seed_ref"),
+            branch=branch,
+            seed_ref=seed,
             outbox_dir=outbox_dir,
         )
     except Exception:
@@ -5910,10 +5924,11 @@ def _run_state_produce_lines(
     if work_dir is None:
         return _existing_produce_lines(path)
     try:
+        branch, seed = relics.collection_scope(task.meta, Path(work_dir))
         records = relics.collect(
             Path(work_dir),
-            branch=task.meta.get("branch_name"),
-            seed_ref=task.meta.get("seed_ref"),
+            branch=branch,
+            seed_ref=seed,
             outbox_dir=outbox_dir,
         )
     except Exception:
@@ -6077,24 +6092,16 @@ def _persist_run_state_doc(
             value = task.meta.get(key)
             if value not in (None, ""):
                 lines.append(f"{key}: {value}")
+    # The body used to restate status/stage/repo/source/event/runner as a
+    # bullet list — every fact a verbatim copy of the frontmatter one screen
+    # up, and the node renderer showed both (maintainer, 2026-07-19: the ask
+    # is an information-dense, *non-repetitive* surface). The frontmatter is
+    # the attested record; the body carries only what it alone knows: the
+    # request excerpt and the produce manifest.
     lines.extend([
         "---",
         f"# Run {task.id}",
-        "",
-        f"- status: {status}",
-        f"- stage: {stage}",
-        f"- repo: {repo_label}",
-        f"- source: {task.source or 'unknown'}",
-        f"- event: {task.event_id or 'unknown'}",
     ])
-    runner_name = task.meta.get("runner_name")
-    if runner_name:
-        lines.append(f"- runner: {runner_name}")
-    if branch:
-        lines.append(f"- branch: {branch}")
-    reply_archive = task.meta.get("reply_archive")
-    if reply_archive:
-        lines.append(f"- reply archive: {reply_archive}")
     if task.body:
         summary = " ".join(task.body.split())
         if len(summary) > 240:
