@@ -8,6 +8,7 @@
 	// Each part is rendered as *missing* rather than faked when it is absent —
 	// a run that predates the runfile weld, or died before writing a body, is a
 	// normal shape and the page has to say so plainly.
+	import { setContext } from 'svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
 	import type { RunLedgerRow } from './runLedger';
@@ -22,7 +23,12 @@
 		runNodeFromSurface
 	} from './runNode';
 	import type { SurfaceResponse } from './surface';
-	import { typeReveal } from './transitions';
+	import { REVEAL_LEDGER, revealLedger, typeReveal } from './transitions';
+
+	// One reveal budget for the whole node page. Its sections are separate
+	// documents to the renderer and one page to the reader, and the reader is
+	// who the budget is for.
+	setContext(REVEAL_LEDGER, revealLedger());
 
 	interface Props {
 		data: SurfaceResponse;
@@ -97,10 +103,15 @@
 		</div>
 		<p class="eyebrow mt-5">wyrd · run node</p>
 		<!-- The node page had no motion language at all — the same gap as the
-		     inline panel. Scoped differently here on purpose: this page is a
-		     *document*, and streaming a full run body per character is noise, so
-		     the reveal lands on the identifiers and chrome that name the run,
-		     while the long prose below paints. -->
+		     inline panel. The first cut scoped the reveal to the identifiers and
+		     chrome and let the prose paint, on the theory that streaming a whole
+		     document is noise. The maintainer's verdict was the opposite ("more
+		     on the run view", 2026-07-19), and he was right: the parts of this
+		     page a reader actually came for are the frame prose, the produce
+		     manifest, the woven body and the traffic — chrome that streams over
+		     content that doesn't is the motion landing on the least interesting
+		     half. Every section reveals now, bounded per section by
+		     `revealBudgetMask` rather than by refusing the whole document. -->
 		<h1
 			class="mt-1 font-mono text-base font-semibold tracking-tight break-all text-amber-100 sm:text-lg"
 			use:typeReveal={{ text: runId }}
@@ -182,6 +193,7 @@
 							markdown={frameProse}
 							sourcePath={node.state?.path ?? ''}
 							{knownPaths}
+							reveal
 						/>
 					</div>
 				{/if}
@@ -205,7 +217,12 @@
 			</div>
 			{#if produce}
 				<div class="text-sm text-stone-300">
-					<MarkdownContent markdown={produce} sourcePath={node.state?.path ?? ''} {knownPaths} />
+					<MarkdownContent
+						markdown={produce}
+						sourcePath={node.state?.path ?? ''}
+						{knownPaths}
+						reveal
+					/>
 				</div>
 			{:else if running}
 				<p class="mt-3 text-sm text-ink-quiet">
@@ -236,7 +253,12 @@
 					<p class="mt-3 font-mono text-[10px] text-amber-400">body mirror truncated</p>
 				{/if}
 				<div class="text-sm text-stone-300">
-					<MarkdownContent markdown={node.body.markdown} sourcePath={node.body.path} {knownPaths} />
+					<MarkdownContent
+						markdown={node.body.markdown}
+						sourcePath={node.body.path}
+						{knownPaths}
+						reveal
+					/>
 				</div>
 			{:else if running}
 				<!-- A live node is not an empty one. The daemon mirrors the card as
@@ -301,6 +323,7 @@
 									markdown={message.body}
 									sourcePath={message.file.path}
 									{knownPaths}
+									reveal
 								/>
 							</div>
 						</article>
