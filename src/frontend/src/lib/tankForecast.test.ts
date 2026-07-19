@@ -298,6 +298,95 @@ describe('readTank', () => {
 		assert.equal(readTank(shell([]), window({ percent: null }), 0, NOW), null);
 	});
 
+	it('prefers the measured burn over window arithmetic for its window', () => {
+		// Window average says 16%/h; the recent-burn series says the current
+		// pace is 4%/h over the last 3h. The measured rate wins and the tank
+		// says so (#493: two measurements of one quantity become one).
+		const tank = readTank(
+			shell([]),
+			window({ label: '5h', percent: 60, resets_at: NOW / 1000 + 2.5 * HOUR }),
+			0,
+			NOW,
+			{
+				burn: {
+					window_minutes: 300,
+					hours: 3,
+					span_minutes: 180,
+					samples: 7,
+					from_remaining_percent: 72,
+					to_remaining_percent: 60,
+					burned_percent: 12,
+					projected_remaining_percent: 48,
+					exhausts_at: null,
+					sustainable: true
+				}
+			}
+		);
+		assertClose(tank?.ratePerHour, 4, 5);
+		assert.equal(tank?.rateSource, 'measured');
+		assert.equal(tank?.rateSpanMinutes, 180);
+		assertClose(tank?.projectedRemainingAtReset, 50, 5);
+		assert.equal(tank?.verdict, 'sustainable');
+	});
+
+	it('ignores a burn measured against a different window', () => {
+		// The burn speaks for the window it was measured on (the shell's
+		// longest); pricing a 5h window with a weekly burn would be the mixed-
+		// population mistake again. Window arithmetic answers instead.
+		const tank = readTank(
+			shell([]),
+			window({ label: '5h', percent: 60, resets_at: NOW / 1000 + 2.5 * HOUR }),
+			0,
+			NOW,
+			{
+				burn: {
+					window_minutes: 7 * 24 * 60,
+					hours: 3,
+					span_minutes: 180,
+					samples: 7,
+					from_remaining_percent: 72,
+					to_remaining_percent: 60,
+					burned_percent: 12,
+					projected_remaining_percent: 48,
+					exhausts_at: null,
+					sustainable: true
+				}
+			}
+		);
+		assertClose(tank?.ratePerHour, 16, 5);
+		assert.equal(tank?.rateSource, 'window');
+		assert.equal(tank?.rateSpanMinutes, null);
+	});
+
+	it('projects from a measured burn even when the window barely started', () => {
+		// Window arithmetic refuses the first 4% of a window (division by
+		// ~nothing); the measured burn carries its own evidence floor and can
+		// answer where the window's own clock cannot yet.
+		const tank = readTank(
+			shell([]),
+			window({ label: '5h', percent: 99, resets_at: NOW / 1000 + 4.9 * HOUR }),
+			0,
+			NOW,
+			{
+				burn: {
+					window_minutes: 300,
+					hours: 3,
+					span_minutes: 60,
+					samples: 3,
+					from_remaining_percent: 100,
+					to_remaining_percent: 99,
+					burned_percent: 1,
+					projected_remaining_percent: 96,
+					exhausts_at: null,
+					sustainable: true
+				}
+			}
+		);
+		assert.equal(tank?.rateSource, 'measured');
+		assertClose(tank?.ratePerHour, 1, 5);
+		assert.notEqual(tank?.verdict, 'unknown');
+	});
+
 	it('prices committed scheduled draw against the weekly window only', () => {
 		const cost = { samples: 5, medianTokens: 70000, percentOfWeek: 1.5 };
 		const weekly = readTank(

@@ -224,6 +224,40 @@ def _read_pr_control(outbox_dir: Path | None) -> str | None:
     return forges.parse_pull_request_number(text)
 
 
+def collection_scope(
+    meta: dict[str, Any], work_dir: Path | None,
+) -> tuple[str | None, str | None]:
+    """The ``(branch, seed)`` pair relic derivation should measure against.
+
+    A worktree run pins both at prepare time (``branch_name`` / ``seed_ref``
+    on the task manifest). A **host** run pins neither: ``HostEnv.prepare``
+    assigns no branch, so every host run used to derive zero commit/branch
+    relics — the run could close an issue and merge a PR and its node would
+    still read "made nothing durable" (maintainer, 2026-07-19, on
+    run-260719-1700-rcez). Worse, the usual host flow *merges to the seed
+    branch*, so even naming the current branch wasn't enough: ``main..main``
+    is empty by definition.
+
+    So for a branchless task the scope falls back to the checkout's current
+    branch, measured against the checkout's **HEAD OID captured at run
+    start** (``host_start_oid``, stamped by the daemon at env prepare) — the
+    commits that appeared during this run, regardless of what branch dance
+    produced them. A detached HEAD yields no branch rather than the literal
+    string ``HEAD``.
+    """
+    branch = str(meta.get("branch_name") or "") or None
+    seed = str(meta.get("seed_ref") or "") or None
+    if branch is None and work_dir is not None:
+        try:
+            current = gitops.current_branch(Path(work_dir))
+        except Exception:
+            current = None
+        if current and current != "HEAD":
+            branch = current
+            seed = str(meta.get("host_start_oid") or "") or seed
+    return branch, seed
+
+
 def _commits_since_seed(
     repo_root: Path, branch: str, seed_ref: str | None,
 ) -> list[tuple[str, str]]:

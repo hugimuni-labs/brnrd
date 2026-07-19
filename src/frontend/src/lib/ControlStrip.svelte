@@ -188,8 +188,21 @@
 			<span class="text-stone-400">{lead.label}</span>
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
 			{#if lead.ratePerHour !== null}
-				<span class="text-stone-600" title="measured draw so far this window">
+				<!-- The rate names its source. `measured` is the recent-burn series
+				     (#491/#493) — the current pace, read from sampled levels over
+				     the last few hours; `window avg` is whole-window arithmetic,
+				     which lags the pace by however much of the window already
+				     happened. They answer different questions and the reader
+				     deciding whether to dispatch deserves to know which one is
+				     speaking. -->
+				<span
+					class="text-stone-600"
+					title={lead.rateSource === 'measured'
+						? `current pace, measured over the last ${Math.round((lead.rateSpanMinutes ?? 0) / 60)}h of samples`
+						: 'average draw across this whole window so far'}
+				>
 					{lead.ratePerHour < 1 ? lead.ratePerHour.toFixed(1) : Math.round(lead.ratePerHour)}%/h
+					{lead.rateSource === 'measured' ? '· measured' : '· window avg'}
 				</span>
 			{/if}
 			{#if lead.committedDraw !== null}
