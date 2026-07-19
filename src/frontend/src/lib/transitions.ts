@@ -12,6 +12,12 @@
 // `t` (0→1) onto a small number of discrete frames, so the element appears
 // to assemble in visible steps rather than ease in.
 
+// Explicit extension: the frontend's tests run under node's own runner, which
+// resolves this module's imports for real. Every other cross-module import in
+// `src/lib` is `import type` and therefore erased before resolution, so this is
+// the first one that had to be spelled the way node reads it.
+import { whenBooted } from './boot.ts';
+
 export interface GlitchRevealParams {
 	/** Total transition time in ms. Kept short by design — "quite fast to
 	 * not disturb" — so it reads as a flourish, not a wait. */
@@ -84,6 +90,72 @@ export interface TypeRevealParams {
 	duration?: number;
 	/** Primarily for deterministic composition; siblings otherwise self-stagger. */
 	delay?: number;
+	/**
+	 * This span's character offset within a *shared sweep*, and the sweep's
+	 * total length. Set together (see `revealTimeline`) when one line of prose
+	 * is split across several spans — a paragraph carrying links and bold, say.
+	 *
+	 * Without them each span runs its own curve, so a sentence made of four
+	 * tokens reveals as four simultaneous mini-typewriters rather than one head
+	 * crossing the line. With them every span solves the same global head
+	 * position and takes its own slice, so the reveal is continuous across
+	 * markup it does not own. This is what lets an `<a>` keep its href and
+	 * still stream: `typeReveal` owns a plain span *inside* the link, never the
+	 * link itself.
+	 */
+	offset?: number;
+	total?: number;
+}
+
+/**
+ * Character offsets for a run of sibling spans that should share one sweep.
+ * Returns the per-span `{ offset, total }` params; `total` is identical across
+ * the group, which is what makes the head position agree between them.
+ */
+export function revealTimeline(lengths: readonly number[]): { offset: number; total: number }[] {
+	const total = lengths.reduce((sum, n) => sum + n, 0);
+	let offset = 0;
+	return lengths.map((n) => {
+		const at = offset;
+		offset += n;
+		return { offset: at, total };
+	});
+}
+
+/**
+ * Deterministic per-cell, per-frame noise in [0, 1).
+ *
+ * Deliberately not `Math.random()`: the glitch is a *drawn* property of
+ * (cell, frame), so it is reproducible, testable, and identical across the
+ * spans of one shared sweep. Two adjacent characters in the same frame get
+ * uncorrelated values, which is what makes the frontier read as static rather
+ * than as a moving gradient.
+ */
+export function glitchNoise(index: number, frame: number): number {
+	const mixed = Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(frame + 1, 0x85ebca6b);
+	return ((mixed >>> 8) & 0xffff) / 0x10000;
+}
+
+/**
+ * How far behind the head a settled character can still be re-corrupted, and
+ * how often it happens.
+ *
+ * The original reveal only ever scrambled *ahead* of the head: every cell went
+ * garbage → true exactly once and stayed clean. That is a typewriter, and it
+ * is why the motion read as "streaming" rather than "glitching" (maintainer,
+ * 2026-07-19: "all the text reveal should better glitch"). A glitch is text
+ * that has already landed briefly failing again. So a narrow trailing window
+ * behind the head flickers back to a scramble glyph for single frames — dense
+ * enough to read as instability, sparse enough that the text stays legible and
+ * the line still resolves clean.
+ */
+export const AFTERSHOCK_REACH = 16;
+export const AFTERSHOCK_ODDS = 0.09;
+
+export function isAftershock(index: number, head: number, frame: number): boolean {
+	const behind = head - index;
+	if (behind <= 0 || behind > AFTERSHOCK_REACH) return false;
+	return glitchNoise(index, frame) < AFTERSHOCK_ODDS;
 }
 
 export const TYPE_REVEAL_GLYPHS = ['░', '▒', '·', '—', '/', '∆'] as const;
@@ -123,6 +195,82 @@ export function typeRevealProgress(elapsedRatio: number): number {
  */
 export function frontierWidth(previousVisible: number, visible: number): number {
 	return Math.max(3, visible - previousVisible);
+}
+
+/**
+ * How many characters of a document get the reveal before the rest paints.
+ *
+ * The first cut of the corpus reveal was gated per *page*: "streaming a whole
+ * document per character is noise", so the corpus browser opted out entirely
+ * and only the short live surfaces streamed. The worry was real and the
+ * granularity was wrong — it banned the motion instead of bounding it. A
+ * reader starts at the top of a page, so the sweep only ever needs to cover
+ * the first screenful; beyond that it is animation nobody is looking at,
+ * paying real cost (one rAF loop and a few hundred style writes per block) on
+ * pages that run to thousands of blocks.
+ */
+export const REVEAL_CHAR_BUDGET = 2600;
+
+/** Per-block: does this block reveal, or paint? Order is reading order. */
+export function revealBudgetMask(
+	lengths: readonly number[],
+	budget: number = REVEAL_CHAR_BUDGET
+): boolean[] {
+	let spent = 0;
+	return lengths.map((n) => {
+		if (spent >= budget) return false;
+		spent += n;
+		return true;
+	});
+}
+
+/** Context key for the page-wide ledger. */
+export const REVEAL_LEDGER = Symbol('reveal-ledger');
+
+export interface RevealLedger {
+	/** Reading-order mask for one document's blocks, spending the shared budget. */
+	claim(key: string, lengths: readonly number[]): boolean[];
+	/** Start a fresh page. */
+	reset(): void;
+}
+
+/**
+ * One reveal budget shared across every renderer on a page.
+ *
+ * A per-component budget is the wrong denominator and it was measured wrong:
+ * the run node mounts ten `MarkdownContent`s (frame prose, produce, body, and
+ * one per receipted message), each of which was individually under its own cap
+ * and collectively built 14,500 animating character cells — 1.3s of long tasks
+ * against a 61ms no-reveal baseline. A reader sees one page, so the page is
+ * what has to be bounded. Ten small documents are not ten small pages.
+ *
+ * Claims are memoized on `key` + the document's shape because Svelte re-derives
+ * freely — this dashboard re-renders on every live-runs poll — and a ledger
+ * that charged twice for the same document would silently switch the motion off
+ * a second after arrival. Order of first claim is mount order, which is reading
+ * order, which is what makes "the opening of the page" the part that streams.
+ */
+export function revealLedger(budget: number = REVEAL_CHAR_BUDGET): RevealLedger {
+	let issued = new Map<string, boolean[]>();
+	let spent = 0;
+	return {
+		claim(key, lengths) {
+			const id = `${key}#${lengths.length}#${lengths.reduce((sum, n) => sum + n, 0)}`;
+			const cached = issued.get(id);
+			if (cached) return cached;
+			const mask = lengths.map((n) => {
+				if (spent >= budget) return false;
+				spent += n;
+				return true;
+			});
+			issued.set(id, mask);
+			return mask;
+		},
+		reset() {
+			issued = new Map();
+			spent = 0;
+		}
+	};
 }
 
 interface RevealCell {
@@ -201,6 +349,7 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 	let frame = 0;
 	let timer = 0;
 	let currentText = '';
+	let cancelBootWait: () => void = () => {};
 
 	function settle(text: string) {
 		node.textContent = text;
@@ -214,33 +363,66 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 		clearTimeout(timer);
 		currentText = text;
 
-		if (!text || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+		// `duration: 0` is the explicit opt-out, for a caller that must attach the
+		// action unconditionally (Svelte's `use:` cannot be conditional) but has
+		// decided this particular element should paint — a section heading past
+		// the reveal budget, say. Settling here skips building the per-character
+		// scaffolding at all, rather than building it and tearing it down a frame
+		// later.
+		if (
+			!text ||
+			next.duration === 0 ||
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches
+		) {
 			settle(text);
 			return;
 		}
 
-		const cells = buildRevealCells(node, text);
-		const duration = next.duration ?? typeRevealDuration(cells.length);
+		// Nothing is built until the boot curtain lifts. Building the cells first
+		// and *then* waiting would leave the node holding per-character
+		// scaffolding that no frame has drawn yet — target and scramble spans
+		// both at their default opacity, i.e. the text rendered twice, overlapping
+		// — for however long the wait lasts. Until the reveal can actually run,
+		// the node keeps the plain text Svelte put there.
+		let cells: RevealCell[] = [];
+		const offset = next.offset ?? 0;
 		const delay = next.delay ?? Math.floor(Math.random() * 72);
-		const startedAt = performance.now() + delay;
-		let previousVisible = 0;
+		let total = 0;
+		let duration = 0;
+		let startedAt = 0;
+		let previousHead = 0;
 
 		const draw = (now: number) => {
 			const elapsed = Math.max(0, now - startedAt);
 			const ratio = Math.min(1, elapsed / duration);
-			const visible = Math.floor(typeRevealProgress(ratio) * cells.length);
+			const head = Math.floor(typeRevealProgress(ratio) * total);
 			const scrambleFrame = Math.floor(elapsed / 42);
-			const band = frontierWidth(previousVisible, visible);
-			previousVisible = visible;
+			const band = frontierWidth(previousHead, head);
+			previousHead = head;
 
 			cells.forEach((cell, index) => {
-				const revealed = index < visible || ratio === 1;
-				const frontier = !revealed && index < visible + band;
+				// Positions are global to the sweep; the cell's local index is only
+				// where it sits in this span.
+				const at = index + offset;
+				const settled = at < head;
+				const shocked = ratio < 1 && settled && isAftershock(at, head, scrambleFrame);
+				const revealed = ratio === 1 || (settled && !shocked);
+				const frontier = !revealed && at < head + band;
 				cell.target.style.opacity = revealed ? '1' : '0';
-				cell.scramble.style.opacity = frontier ? '0.72' : '0';
 				if (frontier) {
+					const noise = glitchNoise(at, scrambleFrame);
 					cell.scramble.textContent =
-						TYPE_REVEAL_GLYPHS[(index + scrambleFrame) % TYPE_REVEAL_GLYPHS.length];
+						TYPE_REVEAL_GLYPHS[Math.floor(noise * TYPE_REVEAL_GLYPHS.length)];
+					// Per-cell opacity and sub-pixel offset: the frontier stops
+					// reading as one uniform grey band and starts reading as cells
+					// individually failing. The scramble span is absolutely
+					// positioned, so nudging it never reflows the line.
+					cell.scramble.style.opacity = (shocked ? 0.85 : 0.45 + noise * 0.45).toFixed(2);
+					cell.scramble.style.transform = `translate(${(noise - 0.5).toFixed(2)}px, ${(
+						noise - 0.5
+					).toFixed(2)}px)`;
+				} else {
+					cell.scramble.style.opacity = '0';
 				}
 			});
 
@@ -253,15 +435,28 @@ export function typeReveal(node: HTMLElement, params: TypeRevealParams = {}) {
 			else settle(text);
 		};
 
-		timer = window.setTimeout(() => {
-			frame = requestAnimationFrame(draw);
-		}, delay);
+		// Held until the boot curtain lifts. The clock starts *then*, so a reveal
+		// queued during boot still runs its full sweep rather than arriving
+		// already half-elapsed.
+		cancelBootWait();
+		cancelBootWait = whenBooted(() => {
+			cells = buildRevealCells(node, text);
+			// A shared sweep measures the head against the *group's* length, not
+			// this span's, so every span in the group agrees on where the head is.
+			total = next.total ?? cells.length;
+			duration = next.duration ?? typeRevealDuration(total);
+			startedAt = performance.now() + delay;
+			timer = window.setTimeout(() => {
+				frame = requestAnimationFrame(draw);
+			}, delay);
+		});
 	}
 
 	start(params);
 	return {
 		update: start,
 		destroy() {
+			cancelBootWait();
 			cancelAnimationFrame(frame);
 			clearTimeout(timer);
 		}

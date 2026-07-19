@@ -2,6 +2,8 @@
 	import { fade } from 'svelte/transition';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import MarkdownContent from './MarkdownContent.svelte';
+	import { setContext } from 'svelte';
+	import { REVEAL_LEDGER, revealLedger, typeReveal } from './transitions';
 	import {
 		basename,
 		buildNavTree,
@@ -29,6 +31,12 @@
 	let pendingAnchor = $state<string | null>(null);
 	let selectedPath = $state('');
 
+	// One budget per *page being read*, not per corpus browser: selecting a new
+	// file is a new page and gets the reveal again. Without the reset the second
+	// file a reader opens would paint, having been charged for the first.
+	const ledger = revealLedger();
+	setContext(REVEAL_LEDGER, ledger);
+
 	let knownPaths = $derived(new Set(data.files.map((f) => f.path)));
 	let navTree = $derived(buildNavTree(data.files));
 	let selected = $derived(
@@ -39,6 +47,23 @@
 	);
 	let blocks = $derived(selected ? markdownBlocks(selected.markdown) : []);
 	let sections = $derived(splitIntoSections(blocks));
+	// The outline's own headings are the most visible text in this pane and the
+	// only text in it that does not pass through `MarkdownContent` — they render
+	// as plain spans here because inline markup inside the toggle button would
+	// risk nested interactive elements. They were therefore the one part of the
+	// corpus reader with no reveal even after the renderer got one, which read
+	// as the outline snapping in while its contents streamed. Same budget as a
+	// document: an index of two hundred sections assembles its opening, not all
+	// of it — and it draws on the same page budget as the prose beneath it,
+	// since a second private budget would be the per-component denominator this
+	// ledger exists to replace.
+	let headingReveal = $derived(
+		ledger.claim(
+			'outline',
+			(sections ?? []).map((section) => section.heading?.text.length ?? 0)
+		)
+	);
+
 	// True when every section (including any with empty tail) is open.
 	let allSectionsExpanded = $derived(
 		!!sections && sections.length > 0 && sections.every((_, i) => expandedSections.has(i))
@@ -77,6 +102,7 @@
 		// Reset section state; the $effect above will resolve the anchor once
 		// sections are derived from the new page.
 		expandedSections.clear();
+		ledger.reset();
 		pendingAnchor = anchor ?? null;
 	}
 
@@ -214,10 +240,18 @@
 										>{section.tail.length > 0 ? (expandedSections.has(i) ? '▾' : '▸') : '·'}</span
 									>
 									{#if section.heading.level === 1}
-										<span class="text-lg font-semibold text-amber-100">{section.heading.text}</span>
+										<span
+											class="text-lg font-semibold text-amber-100"
+											use:typeReveal={headingReveal[i]
+												? { text: section.heading.text, delay: Math.min(640, i * 45) }
+												: { text: section.heading.text, duration: 0 }}>{section.heading.text}</span
+										>
 									{:else}
-										<span class="font-mono text-xs tracking-wide text-amber-200 uppercase"
-											>{section.heading.text}</span
+										<span
+											class="font-mono text-xs tracking-wide text-amber-200 uppercase"
+											use:typeReveal={headingReveal[i]
+												? { text: section.heading.text, delay: Math.min(640, i * 45) }
+												: { text: section.heading.text, duration: 0 }}>{section.heading.text}</span
 										>
 									{/if}
 									{#if !expandedSections.has(i) && section.tail.length > 0}
@@ -234,6 +268,7 @@
 										sourcePath={selected?.path ?? ''}
 										{knownPaths}
 										onNavigate={select}
+										reveal
 									/>
 								</div>
 							{/if}
@@ -243,6 +278,7 @@
 									sourcePath={selected?.path ?? ''}
 									{knownPaths}
 									onNavigate={select}
+									reveal
 								/>
 							{/if}
 						</div>
@@ -254,6 +290,7 @@
 						sourcePath={selected?.path ?? ''}
 						{knownPaths}
 						onNavigate={select}
+						reveal
 					/>
 				{/if}
 			</article>
