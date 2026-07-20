@@ -921,7 +921,17 @@ class TestCommandBuilding:
         )
         assert snap["spend"]["summary"] == "$0.0100 this session (estimated)"
 
-    def test_pinned_core_substitution_fails_before_response_capture(self, tmp_path):
+    def test_pinned_core_substitution_delivers_the_work_with_a_provenance_footer(
+        self, tmp_path,
+    ):
+        """A wrong Core annotates the reply; it does not destroy it.
+
+        Until 2026-07-20 a mismatch suppressed the response file and the run
+        was surfaced as "I couldn't complete this run" — false for a run that
+        exited 0 having done the work, and it threw away output the user had
+        already paid quota for. The alarm bit survives on the result (ledger,
+        run node, card read it); only its power to withhold is gone.
+        """
         response_path = tmp_path / "response.md"
         payload = {
             "type": "result",
@@ -945,12 +955,49 @@ class TestCommandBuilding:
 
         result = invoke_runner("claude-fable", invocation, cfg=cfg)
 
-        assert result.ok is False
+        assert result.ok is True
         assert result.core_mismatch is True
         assert result.observed_core == "claude-opus-4-8"
-        assert not response_path.exists()
-        with pytest.raises(RuntimeError, match="Core attestation failed"):
-            result.raise_for_error()
+        # The work ships, and the doubt ships with it — last, so the reader
+        # gets the answer before the caveat.
+        body = response_path.read_text(encoding="utf-8")
+        assert body.startswith("confident but wrong body")
+        assert "claude-opus-4-8" in body
+        assert "claude-fable-5" in body
+        # `raise_for_error` is about the *process*, and this process was fine.
+        result.raise_for_error()
+
+    def test_alias_pin_matching_its_family_member_is_no_mismatch(self, tmp_path):
+        """`opus` pinned, `claude-opus-4-8` observed — a request in the pin
+        vocabulary against an observation in the provider's. #512 closed this
+        for aliases sitting mid-id; pinned here so the next provider rename
+        cannot quietly re-open it."""
+        response_path = tmp_path / "response.md"
+        payload = {
+            "type": "result",
+            "result": "work\n",
+            "modelUsage": {"claude-opus-4-8": {"outputTokens": 4}},
+        }
+        cfg = {
+            "runner_cmd": [
+                sys.executable, "-c",
+                "import json, sys; sys.stdout.write(json.dumps(json.loads(sys.argv[1])))",
+                json.dumps(payload),
+            ],
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="alias", prompt="ignored",
+            cwd=tmp_path, repo_root=tmp_path,
+            response_path=str(response_path),
+            env={"BRR_OUTBOX_DIR": str(tmp_path / "outbox")},
+            expected_core="opus",
+        )
+
+        result = invoke_runner("claude-opus", invocation, cfg=cfg)
+
+        assert result.core_mismatch is False
+        assert result.ok is True
+        assert response_path.read_text(encoding="utf-8").strip() == "work"
 
     def test_build_cmd_runner_cmd_override_substitutes_prompt_only(self):
         cfg = {"runner_cmd": ["mock", "--flag", "{prompt}"]}
