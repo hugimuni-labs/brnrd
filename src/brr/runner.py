@@ -114,6 +114,30 @@ _RUNNER_ENV_CONTAMINANTS: frozenset[str] = frozenset(
 )
 
 
+def _ensure_publishing_token_fresh() -> None:
+    """Top up the managed GitHub token before a runner snapshots it.
+
+    The runner env is a *copy* of the daemon's environment taken once, at
+    dispatch, and held for the life of the run. The cloud gate's own renewal
+    is paced for the daemon — it renews only when the credential is nearly
+    expired — which is correct for a long-lived process that can always ask
+    again, and wrong for a runner that cannot. Without this, a dispatched run
+    inherits between 10 and 60 minutes of token life at random and finds out
+    which by failing to push.
+
+    Deliberately silent and never fatal: no cloud gate, no network, or a
+    brnrd mid-deploy all leave the run with exactly the credential it would
+    have had anyway. A run that cannot push is a bad outcome; a run that
+    cannot *start* is a worse one.
+    """
+    try:
+        from .gates import cloud
+
+        cloud.ensure_publishing_credential_fresh()
+    except Exception:
+        return
+
+
 def clean_runner_environ() -> dict[str, str]:
     """A copy of ``os.environ`` with parent-agent-session leakage removed.
 
@@ -122,6 +146,7 @@ def clean_runner_environ() -> dict[str, str]:
     agent's session identity and, critically, its safe-mode flag — so hooks,
     skills, and plugins behave as they would for a normal top-level run.
     """
+    _ensure_publishing_token_fresh()
     cleaned = {
         k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_CONTAMINANTS
     }

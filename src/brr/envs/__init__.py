@@ -456,6 +456,15 @@ def _resolve_docker_github_token(brr_dir: Path) -> str | None:
     token = os.environ.get("GH_TOKEN")
     if token and token.strip():
         return token.strip()
+    # The container gets a copy of this token for the whole run and cannot
+    # come back for a newer one — top it up before handing it over. Silent
+    # and best-effort; see runner._ensure_publishing_token_fresh.
+    try:
+        from ..gates import cloud
+
+        cloud.ensure_publishing_credential_fresh(brr_dir)
+    except Exception:
+        pass
     token = os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN")
     if token and token.strip():
         return token.strip()
