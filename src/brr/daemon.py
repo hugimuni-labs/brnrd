@@ -1761,6 +1761,52 @@ def _run_worker(
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
     protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
+
+    # Source-trust tiering (#517): an untrusted event that no isolated
+    # environment can hold (solitary unavailable, or trust.untrusted=refuse)
+    # is refused *before* any runner is prepared — fail closed. Visible, not
+    # silent: a structured WARNING audit line (mirroring the gates' #408/#409
+    # drops) plus a neutral refusal recorded on the run state and the event's
+    # response, so the operator can see it without a valid principal being
+    # confirmed to the sender.
+    if task.meta.get("trust_refused"):
+        reason = str(task.meta.get("trust_refused") or "")
+        print(
+            f"[brnrd] trust refuse run={task.id} event={eid} "
+            f"source={event.get('source', '')} "
+            f"tier={task.meta.get('trust_tier', '')} reason={reason}"
+        )
+        task.status = "done"
+        task.meta["publish_status"] = "refused"
+        protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
+        _persist_run_state_doc(
+            account_context, task, repo_label=repo_label,
+            stage="refused", cfg=cfg,
+        )
+        task.save(runs_dir)
+        emit(
+            "run_created", run_id=task.id, event_id=eid,
+            env=task.env, repo_label=repo_label,
+            run_state_path=task.meta.get("run_state_path"),
+            run_state_url=task.meta.get("run_state_url"),
+        )
+        if conv_key:
+            conversations.append_run(
+                brr_dir, conv_key,
+                run_id=task.id, event_id=eid,
+                env=task.env, status=task.status, repo_label=repo_label,
+            )
+        body = _trust_refused_event_body(reason)
+        resp_path = protocol.response_path(responses_dir, eid)
+        task.terminal_reply = body
+        protocol.write_response(responses_dir, eid, body)
+        _stage_terminal_response(task, account_context, event, resp_path)
+        _record_response_artifact(emit, task, resp_path)
+        _set_event_status_if_present(event, "done")
+        emit("finalizing", run_id=task.id, stage="refused")
+        emit("done", run_id=task.id, event_id=eid, publish_status="refused")
+        return task
+
     # Bind the stop control to the run id, so a stop can be addressed by
     # either handle from here on (wyrd §3). Unconditional since #476: a
     # resident thought is registered too, and the live-runs view a user taps
@@ -4029,6 +4075,14 @@ def _queue_respawn_request(
     reason = str(fm.get("reason") or "").strip()
     meta["respawned_from_event"] = event_id
     meta["respawned_by_run"] = task.id
+    # Source-trust tiering (#517): a respawn continues the parent run's
+    # work, so it inherits the parent's tier authoritatively — a respawn
+    # can never escalate an untrusted run into a more-trusted env, and an
+    # owner continuation is never accidentally demoted to untrusted just
+    # because its origin pending event is gone (source alone would fail
+    # closed). The parent tier overrides any tier copied from ``current``.
+    if task.meta.get("trust_tier"):
+        meta["trust_tier"] = task.meta["trust_tier"]
     if reason:
         meta["respawn_reason"] = reason
     if quality_target:
@@ -4551,6 +4605,13 @@ def _queue_spawn_request(
     meta["spawn_immediate"] = True
     meta["spawn_parent_run_id"] = task.id
     meta["spawn_parent_conversation_key"] = task.conversation_key or ""
+    # Source-trust tiering (#517): a spawned child inherits the parent's
+    # tier so an untrusted (isolated) parent cannot escalate work into a
+    # more-trusted env by spawning it. Without this the child's source
+    # ("spawn") would resolve to owner. The forced worktree isolation above
+    # is a concurrency guard, not a trust boundary — the tier still governs.
+    if task.meta.get("trust_tier"):
+        meta["trust_tier"] = task.meta["trust_tier"]
     if reason:
         meta["spawn_reason"] = reason
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
@@ -6716,6 +6777,20 @@ def _deduplicated_event_body() -> str:
     return (
         "I already received this source message on another configured channel. "
         "No second run was started."
+    )
+
+
+def _trust_refused_event_body(reason: str) -> str:
+    # Source-trust tiering (#517): a neutral, non-probing refusal. It states
+    # policy without confirming any valid principal, mirroring the gates'
+    # default-closed "don't help an attacker enumerate" posture.
+    detail = f" ({reason})" if reason else ""
+    return (
+        "This request came from an untrusted source and no isolated "
+        f"environment is available to run it safely{detail}. No run was "
+        "started. An operator can configure `trust.untrusted_env` (e.g. "
+        "`solitary` with a `docker.image`) to enable isolated runs for "
+        "untrusted sources."
     )
 
 

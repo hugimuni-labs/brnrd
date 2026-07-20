@@ -109,6 +109,14 @@ def _create_github_event(
             repo, author, trigger, reason,
         )
         return None
+    # Source-trust tiering (#517): an author who cleared the #408 gate is a
+    # repo collaborator (write/maintain/admin) or an operator-allowlisted
+    # login — a known, but not owner-equivalent, principal. Stamp the tier
+    # onto the event so the manifest-build resolver routes its env
+    # (``trust.collaborator_env``, else the configured default). ``owner``
+    # is deliberately reserved for the local operator's own paths; a repo
+    # admin is still only ``collaborator`` here (fail safe, not by rank).
+    meta = {**meta, "trust_tier": "collaborator"}
     urls = attachments.extract_image_urls(body)
     if not urls:
         return protocol.create_event(inbox_dir, source="github", body=body, **meta)
