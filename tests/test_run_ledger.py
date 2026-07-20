@@ -409,6 +409,28 @@ def test_core_mismatch_matching_rules():
     ) is True
 
 
+def test_core_mismatch_alias_matches_concrete_family_member():
+    """An alias pin verifies against the concrete family member it resolved to.
+
+    #505's alias-fresh rack pins ``sonnet`` ("latest sonnet"); the Shell
+    attests the concrete id it ran (``claude-sonnet-5``). The alias sits
+    mid-id, invisible to both prefix checks — on 2026-07-20 this errored
+    every claude-alias spawn at finalization. The family-token rule accepts
+    the member without loosening the wrong-family alarm.
+    """
+    assert run_ledger.core_mismatch("sonnet", "claude-sonnet-5") is False
+    assert run_ledger.core_mismatch("opus", "claude-opus-4-8") is False
+    assert run_ledger.core_mismatch("fable", "claude-fable-5-20260601") is False
+    # Wrong family still alarms.
+    assert run_ledger.core_mismatch("haiku", "claude-sonnet-5") is True
+    assert run_ledger.core_mismatch("fable", "claude-opus-4-8") is True
+    # Joined multi-id observation: any family member clears the alias pin.
+    assert run_ledger.core_mismatch("sonnet", "claude-haiku-4-5+claude-sonnet-5") is False
+    # Versioned family aliases keep the dot inside one token.
+    assert run_ledger.core_mismatch("gpt-5.6", "openai-gpt-5.6-sol") is False
+    assert run_ledger.core_mismatch("gpt-5.6", "openai-gpt-5.5-sol") is True
+
+
 def test_core_mismatch_fable_billed_as_opus_alarms():
     """A fable pin observed as the opus billing id IS a mismatch.
 
