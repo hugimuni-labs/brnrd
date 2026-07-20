@@ -18,12 +18,12 @@ from brr.run import Run
 # ── tier resolution: source × stamp matrix ──────────────────────────────
 
 
-@pytest.mark.parametrize("source", ["schedule", "cli", "respawn", "spawn", "cloud", ""])
+@pytest.mark.parametrize("source", ["schedule", "cli", "respawn", "spawn", "cloud"])
 def test_owner_only_sources_resolve_owner_without_a_stamp(source):
     assert trust.resolve_tier({"source": source}) == trust.OWNER
 
 
-@pytest.mark.parametrize("source", ["github", "telegram", "slack", "some-future-gate"])
+@pytest.mark.parametrize("source", ["github", "telegram", "slack", "some-future-gate", ""])
 def test_ingress_sources_fail_closed_to_untrusted_without_a_stamp(source):
     # An ingress path that can carry strangers, with no gate authorization
     # stamp, must fail closed rather than inherit a trusted default.
@@ -149,7 +149,7 @@ def test_from_event_marks_refusal():
 
 def test_from_event_owner_paths_unaffected_zero_config():
     # Schedule / CLI / self-wake carry no stamp and must run exactly as today.
-    for source in ("schedule", "cli", ""):
+    for source in ("schedule", "cli", "respawn"):
         task = Run.from_event({"id": "e", "source": source, "body": "x"})
         assert task.meta["trust_tier"] == trust.OWNER
         assert task.env == "worktree"

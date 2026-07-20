@@ -52,9 +52,12 @@ TIERS = (OWNER, COLLABORATOR, UNTRUSTED)
 # paired the account and the brnrd server authorized the sender into a
 # bound room; the relay is the account's own channel (a finer server-side
 # stamp can still override this default per event).
-_OWNER_SOURCES = frozenset(
-    {"schedule", "cli", "respawn", "spawn", "cloud", "fallback:preserve", ""}
-)
+#
+# Deliberately *not* here: the empty source. ``protocol.create_event``
+# requires a source, so a sourceless event is malformed/unattributed —
+# and an allowlist entry for "we don't know where this came from" would
+# be fail-open in the one place this module promises fail-closed.
+_OWNER_SOURCES = frozenset({"schedule", "cli", "respawn", "spawn", "cloud"})
 
 
 @dataclass(frozen=True)
