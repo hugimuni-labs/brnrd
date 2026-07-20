@@ -533,10 +533,10 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert "cmd" not in mini
 
 
-def test_available_runner_catalog_excludes_profiles_missing_auth_env(
+def test_available_runner_catalog_marks_unavailable_auth_env_profiles(
     tmp_path, monkeypatch,
 ):
-    """API-key auth variants without their key are not invokable ⇒ not listed."""
+    """API-key auth variants without their key appear with available=False, not excluded."""
     (tmp_path / ".brr").mkdir()
     monkeypatch.setattr(
         runner_mod,
@@ -566,19 +566,19 @@ def test_available_runner_catalog_excludes_profiles_missing_auth_env(
     )
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    names = {
-        item["name"]
-        for item in runner_mod.available_runner_catalog(tmp_path)
-    }
-    assert "claude" in names
-    assert not any(name.startswith("claude-bare-api-only") for name in names)
+    by_name = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
+    assert "claude" in by_name
+    assert by_name["claude"]["available"] is True
+    # Profile appears but is marked unavailable (not silently dropped).
+    bare_matches = [v for k, v in by_name.items() if k.startswith("claude-bare-api-only")]
+    assert bare_matches, "claude-bare-api-only should appear in catalog (marked unavailable)"
+    assert bare_matches[0]["available"] is False
+    assert bare_matches[0]["availability"] == "auth-env-missing"
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    names = {
-        item["name"]
-        for item in runner_mod.available_runner_catalog(tmp_path)
-    }
-    assert "claude-bare-api-only" in names
+    by_name2 = {item["name"]: item for item in runner_mod.available_runner_catalog(tmp_path)}
+    assert by_name2["claude-bare-api-only"]["available"] is True
+    assert by_name2["claude-bare-api-only"]["availability"] == "available"
 
 
 def test_declared_profile_inherits_registry_metadata_per_field(
@@ -612,7 +612,11 @@ def test_declared_profile_inherits_registry_metadata_per_field(
 
     catalog = runner_mod.available_runner_catalog(tmp_path)
     sonnet = next(item for item in catalog if item["name"] == "claude-sonnet")
-    assert sonnet["model"] == "claude-sonnet-4-6"
+    # Alias-first: the registry twin now carries model="sonnet" (the alias).
+    # A declared profile that pins via cmd but omits model: inherits the
+    # registry alias.  To surface the exact ID in the catalog, declare
+    # model: or pin: explicitly.
+    assert sonnet["model"] == "sonnet"
     assert sonnet["class"] == "balanced"
 
     cmd = _build_cmd("claude-sonnet", "fix it", {}, tmp_path)
@@ -662,8 +666,107 @@ def test_build_cmd_for_generated_claude_core_inserts_model(tmp_path, monkeypatch
 
     cmd = _build_cmd("claude-haiku", "fix it", {}, tmp_path)
 
-    assert cmd[:3] == ["claude", "--model", "claude-haiku-4-5-20251001"]
+    # Alias-first: generated cmd uses alias "haiku", not exact ID.
+    assert cmd[:3] == ["claude", "--model", "haiku"]
     assert "fix it" not in cmd
+
+
+def test_catalog_dedupes_on_shell_model_pair(tmp_path, monkeypatch):
+    """Declared profile wins over generated one with the same (shell, model) pair."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"cmd": "claude --print", "hooks": "claude", "cost_rank": 30},
+            # Declared profile collides with generated claude-sonnet (both shell=claude model=sonnet).
+            "my-sonnet": {
+                "binary": "claude",
+                "shell": "claude",
+                "model": "sonnet",
+                "class": "balanced",
+                "cost_rank": 31,
+                "cmd": "claude --model sonnet --print --custom",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    # Both claude-sonnet (generated) and my-sonnet (declared) share (claude, sonnet).
+    # Declared wins → only one row survives with that pair.
+    sonnet_rows = [r for r in catalog if r.get("shell") == "claude" and r.get("model") == "sonnet"]
+    # The declared profile my-sonnet should win; generated claude-sonnet is dropped.
+    assert len(sonnet_rows) == 1
+    assert sonnet_rows[0]["name"] == "my-sonnet"
+    assert sonnet_rows[0]["generated_core"] is False
+
+
+def test_catalog_includes_unavailable_rows_with_marks(tmp_path, monkeypatch):
+    """Profiles whose shell is not on PATH appear with on_path=False, not omitted."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"cmd": "claude --print", "cost_rank": 30},
+            "gemini": {"cmd": "gemini", "cost_rank": 12},
+        },
+    )
+    # Only claude is on PATH.
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    names = {r["name"] for r in catalog}
+    # Gemini profile present but unavailable.
+    assert "gemini" in names
+    gemini = next(r for r in catalog if r["name"] == "gemini")
+    assert gemini["on_path"] is False
+    assert gemini["available"] is False
+    assert gemini["availability"] == "shell-not-found"
+
+
+def test_catalog_consumers_see_same_row_names(tmp_path, monkeypatch):
+    """CLI, prompt renderer, and dashboard all derive from available_runner_catalog."""
+    from brr import prompts as prompts_mod
+
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex": {
+                "cmd": "codex exec",
+                "class": "balanced",
+                "cost_rank": 25,
+                "quota_source": "codex-local",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    catalog_names = {r["name"] for r in catalog}
+
+    # Prompt renderer uses the same catalog directly.
+    rendered = prompts_mod._render_runner_catalog(catalog)
+    rendered_names = {
+        line.split(":")[0].lstrip("- ✗").replace("selected ", "").strip()
+        for line in rendered
+    }
+    assert catalog_names == rendered_names
 
 
 def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
@@ -750,10 +853,11 @@ class TestCommandBuilding:
 
     def test_build_cmd_generated_claude_bare_api_core_headless(self):
         cmd = _build_cmd("claude-bare-api-only-sonnet", "fix it", {})
+        # Alias-first: generated cmd uses "sonnet" alias, not exact ID.
         assert cmd == [
             "claude",
             "--model",
-            "claude-sonnet-4-6",
+            "sonnet",
             "--print",
             "--output-format",
             "json",

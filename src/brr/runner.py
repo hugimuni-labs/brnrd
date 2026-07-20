@@ -708,27 +708,73 @@ def available_runner_catalog(
     *,
     selected: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Structured catalog of selectable local Runner profiles.
+    """Unified catalog of all known Runner profiles — the one projection.
 
-    This is the control-surface projection over the selector's profile view:
-    declared profiles plus Core-registry-generated profiles, filtered to
-    binaries currently on PATH. It intentionally omits command strings while
-    preserving the fields the resident/user need to reason about a respawn:
-    Shell, Core, class, cost rank, quota source, auth variant, availability,
-    and which profile is active.
+    Returns every profile (declared + Core-registry-generated), including
+    those whose Shell binary is not currently on PATH.  Each row carries:
+
+    - ``on_path`` (bool) — Shell binary found by :func:`shutil.which`
+    - ``available`` (bool) — on_path AND auth_env satisfied
+    - ``availability`` — ``"available"`` | ``"shell-not-found"`` | ``"auth-env-missing"``
+    - ``stale`` (bool) — freshness_date older than 30 days
+    - ``pin`` — exact model ID when set (overrides alias for ``--model``)
+    - ``selected`` — True when this profile matches *selected*
+
+    Unavailable rows are included with marks so callers (CLI, prompt, dashboard)
+    can show them rather than silently omitting them.  The selector continues to
+    operate only on available profiles; the catalog is the user/resident-facing
+    surface, not the invocation path.
+
+    Dedupe: when two rows share the same ``(shell, effective_model)`` pair
+    (where effective_model = pin or model), the declared profile wins over a
+    generated one; if both are the same kind, lower cost_rank wins.
     """
+    from . import runner_cores as _rc
+
     profiles = _selection_profiles(repo_root)
     selected_name = str(selected or "").strip()
-    out: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for name, profile in profiles.items():
-        if not _runner_available(name, profiles):
-            continue
-        record = _catalog_record(name, profile, selected_name)
+        record = _catalog_record(name, profile, selected_name, profiles)
         if record:
-            out.append(record)
+            rows.append(record)
+
+    # Dedupe on (shell, effective_model): declared profile wins over generated.
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        shell_key = str(row.get("shell") or "").lower()
+        model_key = str(row.get("pin") or row.get("model") or "").lower()
+        key = (shell_key, model_key)
+        if not key[0] or not key[1]:
+            # No useful key — always include (e.g. undeclared shell entries)
+            rows_key = ("", str(row.get("name") or ""))
+            deduped.setdefault(rows_key, row)
+            continue
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = row
+            continue
+        # Declared wins over generated.
+        existing_gen = existing.get("generated_core", False)
+        row_gen = row.get("generated_core", False)
+        if existing_gen and not row_gen:
+            deduped[key] = row  # row is declared → replace
+        elif not existing_gen and row_gen:
+            pass  # existing is declared → keep
+        else:
+            # Both same kind: lower cost_rank wins; tie → alphabetical name.
+            ex_rank = existing.get("cost_rank")
+            ro_rank = row.get("cost_rank")
+            if ro_rank is not None and (
+                ex_rank is None or ro_rank < ex_rank
+            ):
+                deduped[key] = row
+
+    result = list(deduped.values())
     return sorted(
-        out,
+        result,
         key=lambda item: (
+            not item.get("available", True),   # available rows first
             item.get("cost_rank") is None,
             item.get("cost_rank") if item.get("cost_rank") is not None else 0,
             str(item.get("name") or ""),
@@ -740,7 +786,11 @@ def _catalog_record(
     name: str,
     profile: dict[str, Any] | None,
     selected: str,
+    profiles: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    import datetime
+
+    from . import runner_cores as _rc
     from . import runner_select
 
     if not isinstance(profile, dict):
@@ -749,6 +799,30 @@ def _catalog_record(
     shell = str(
         profile.get("shell") or profile.get("binary") or runner_profile.profile
     ).strip() or None
+
+    # Availability
+    on_path = shutil.which(str(shell or "").strip()) is not None
+    auth_env = str(profile.get("auth_env") or "").strip()
+    if not on_path:
+        availability = "shell-not-found"
+    elif auth_env and not os.environ.get(auth_env):
+        availability = "auth-env-missing"
+    else:
+        availability = "available"
+    is_available = availability == "available"
+
+    # Staleness: freshness_date older than 30 days.
+    stale = False
+    freshness_date = str(profile.get("freshness_date") or "").strip() or None
+    if freshness_date:
+        try:
+            fd = datetime.date.fromisoformat(freshness_date)
+            stale = (datetime.date.today() - fd).days > 30
+        except ValueError:
+            pass
+
+    pin = str(profile.get("pin") or "").strip() or None
+
     record: dict[str, Any] = {
         "name": name,
         "shell": shell,
@@ -760,15 +834,20 @@ def _catalog_record(
         "quota_source": runner_profile.quota_source,
         "hooks": runner_profile.hooks,
         "auth_variant": str(profile.get("auth_variant") or "").strip() or None,
-        "auth_env": str(profile.get("auth_env") or "").strip() or None,
+        "auth_env": auth_env or None,
         "capability_score": runner_profile.capability_score,
         "capability_source": runner_profile.capability_source,
         "capability_freshness": runner_profile.capability_freshness,
         "generated_core": bool(profile.get("generated_core")),
-        "available": True,
-        "availability": "available",
+        "on_path": on_path,
+        "available": is_available,
+        "availability": availability,
+        "stale": stale,
+        "freshness_date": freshness_date,
         "selected": name == selected or runner_profile.profile == selected,
     }
+    if pin:
+        record["pin"] = pin
     return {key: value for key, value in record.items() if value is not None}
 
 
