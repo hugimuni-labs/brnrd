@@ -2669,14 +2669,14 @@ def _run_worker(
                 "exit_code": result.returncode,
                 "error": detail,
                 "timed_out": timed_out,
-                "failure_kind": (
-                    runner_failures.CORE_MISMATCH
-                    if result.core_mismatch else
-                    runner_failures.classify_failure(
-                        timed_out=timed_out,
-                        exit_code=result.returncode,
-                        detail=detail,
-                    )
+                # A Core mismatch no longer reaches here: it is a provenance
+                # annotation on a run that completed, not a failure. Whatever
+                # raised is the real cause, so classify on that alone rather
+                # than letting the alarm bit shadow it.
+                "failure_kind": runner_failures.classify_failure(
+                    timed_out=timed_out,
+                    exit_code=result.returncode,
+                    detail=detail,
                 ),
             }
         else:
