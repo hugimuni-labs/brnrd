@@ -1207,3 +1207,361 @@ def test_docker_github_token_not_duplicated_when_in_daemon_env(tmp_path, monkeyp
         if arg == "-e" and command[i + 1] == "GITHUB_TOKEN"
     ]
     assert bare_env == ["GITHUB_TOKEN"]
+
+
+# ---------------------------------------------------------------------------
+# solitary — the hardened preset (#508)
+# ---------------------------------------------------------------------------
+
+from brr import runner_select
+
+
+def _claude_profile() -> runner_select.RunnerProfile:
+    return runner_select.RunnerProfile(
+        name="claude", profile="claude", shell="claude",
+    )
+
+
+class _DockerRecorder:
+    """Fake ``subprocess.run`` that records every docker command and
+    answers success, so solitary's network/proxy/run choreography is
+    observable without a docker daemon."""
+
+    def __init__(self):
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command, **_kwargs):
+        self.commands.append(list(command))
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    def runner_argv(self) -> list[str]:
+        for command in self.commands:
+            if command[:2] == ["docker", "run"] and "-d" not in command:
+                return command
+        raise AssertionError(f"no runner docker run in {self.commands}")
+
+    def only(self, *prefix: str) -> list[list[str]]:
+        return [c for c in self.commands if c[: len(prefix)] == list(prefix)]
+
+
+def _solitary_ctx_and_recorder(
+    tmp_path, monkeypatch, cfg=None, task=None,
+):
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    cfg = {"docker.image": "brr/test-runner:latest", **(cfg or {})}
+    task = task or Run(id="task-sol", event_id="evt-sol", body="hardened run")
+    response_path = tmp_path / ".brr" / "responses" / f"{task.event_id}.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    backend = envs.get_env("solitary")
+    ctx = backend.prepare(
+        task, tmp_path, cfg, branch_plan=_plan(), response_path=response_path,
+    )
+    recorder = _DockerRecorder()
+    monkeypatch.setattr(envs.subprocess, "run", recorder)
+    return backend, ctx, recorder, cfg, task, response_path
+
+
+def _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path):
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-sol-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+        selected_runner=_claude_profile(),
+    )
+    return backend.invoke(
+        ctx, "claude", invocation,
+        {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+
+def test_get_env_returns_solitary():
+    assert envs.get_env("solitary").name == "solitary"
+
+
+def test_solitary_prepare_never_resolves_github_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "ghs_stored"}', encoding="utf-8",
+    )
+    task = Run(id="task-sol-tok", event_id="evt-sol-tok", body="x")
+    response_path = tmp_path / ".brr" / "responses" / "evt-sol-tok.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ctx = envs.get_env("solitary").prepare(
+        task, tmp_path, {"docker.image": "img:latest"},
+        branch_plan=_plan(), response_path=response_path,
+    )
+
+    assert "github_token" not in ctx.env_state
+    assert ctx.env_state["solitary_network_mode"] == "isolated"
+    assert task.meta["environment"] == "solitary"
+
+
+def test_solitary_isolated_network_and_proxy_choreography(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+
+    result = _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    assert result.returncode == 0
+    net_creates = recorder.only("docker", "network", "create")
+    assert len(net_creates) == 1
+    assert "--internal" in net_creates[0]
+    network = net_creates[0][-1]
+    assert "solitary" in network
+
+    sidecars = [
+        c for c in recorder.commands
+        if c[:2] == ["docker", "run"] and "-d" in c
+    ]
+    assert len(sidecars) == 1
+    sidecar = sidecars[0]
+    allow = next(
+        v.split("=", 1)[1]
+        for i, a in enumerate(sidecar)
+        if a == "-e" and (v := sidecar[i + 1]).startswith("BRR_SOLITARY_ALLOW=")
+    )
+    assert "api.anthropic.com" in allow.split(",")
+    assert "github.com" not in allow
+
+    connects = recorder.only("docker", "network", "connect")
+    assert connects and connects[0][3] == "bridge"
+
+    command = recorder.runner_argv()
+    assert command[command.index("--network") + 1] == network
+    forwarded = [command[i + 1] for i, a in enumerate(command) if a == "-e"]
+    proxy_env = [v for v in forwarded if v.startswith("HTTPS_PROXY=")]
+    assert proxy_env and proxy_env[0].endswith(":3128")
+    assert not any(v.startswith("GITHUB_TOKEN") for v in forwarded)
+    assert not any(v.startswith("GH_TOKEN") for v in forwarded)
+    # No token → no SSH-to-HTTPS rewrite config either.
+    assert not any("insteadOf" in v for v in forwarded)
+
+
+def test_solitary_network_none_skips_proxy(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch, cfg={"solitary.network": "none"},
+    )
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    assert recorder.only("docker", "network", "create") == []
+    command = recorder.runner_argv()
+    assert command[command.index("--network") + 1] == "none"
+    forwarded = [command[i + 1] for i, a in enumerate(command) if a == "-e"]
+    assert not any(v.startswith("HTTPS_PROXY") for v in forwarded)
+
+
+def test_solitary_rejects_unknown_network_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    task = Run(id="task-sol-bad", event_id="evt-sol-bad", body="x")
+    response_path = tmp_path / ".brr" / "responses" / "evt-sol-bad.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(RuntimeError, match="solitary.network"):
+        envs.get_env("solitary").prepare(
+            task, tmp_path,
+            {"docker.image": "img:latest", "solitary.network": "bridge"},
+            branch_plan=_plan(), response_path=response_path,
+        )
+
+
+def test_solitary_credentials_copy_stages_private_copy(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    (fake_home / ".claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+    (fake_home / ".ssh").mkdir()
+    (fake_home / ".ssh" / "id_ed25519").write_text("key", encoding="utf-8")
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    stage = ctx.env_state["solitary_cred_stage"]
+    assert (envs.Path(stage) / ".claude" / ".credentials.json").exists()
+    command = recorder.runner_argv()
+    mounts = [command[i + 1] for i, a in enumerate(command) if a == "-v"]
+    claude_mounts = [m for m in mounts if "/.claude:" in m or "/.claude.json:" in m]
+    assert claude_mounts, mounts
+    for mount in claude_mounts:
+        assert mount.startswith(stage), "copy mode must mount the staged copy"
+        assert not mount.endswith(":ro")
+    assert not any(".ssh" in m for m in mounts), ".ssh must never be mounted"
+
+
+def test_solitary_credentials_ro_mounts_host_readonly(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch, cfg={"solitary.credentials": "ro"},
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    command = recorder.runner_argv()
+    mounts = [command[i + 1] for i, a in enumerate(command) if a == "-v"]
+    claude_mounts = [m for m in mounts if "/.claude:" in m]
+    assert claude_mounts and all(m.endswith(":ro") for m in claude_mounts)
+    assert "solitary_cred_stage" not in ctx.env_state
+
+
+def test_solitary_credentials_none_mounts_nothing(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch, cfg={"solitary.credentials": "none"},
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    command = recorder.runner_argv()
+    mounts = [command[i + 1] for i, a in enumerate(command) if a == "-v"]
+    assert not any(".claude" in m for m in mounts)
+
+
+def test_solitary_passthrough_keeps_model_keys_drops_github(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_x")
+    monkeypatch.setenv("GH_TOKEN", "ghs_x")
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    command = recorder.runner_argv()
+    forwarded = [command[i + 1] for i, a in enumerate(command) if a == "-e"]
+    assert "ANTHROPIC_API_KEY" in forwarded
+    assert "GITHUB_TOKEN" not in forwarded
+    assert "GH_TOKEN" not in forwarded
+
+
+def test_solitary_finalize_success_removes_network_and_cred_stage(
+    tmp_path, monkeypatch,
+):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+    stage_parent = envs.Path(ctx.env_state["solitary_cred_stage"]).parent
+    assert stage_parent.exists()
+    task.status = "done"
+    monkeypatch.setattr(
+        envs.worktree, "current_branch", lambda _p: ctx.branch_name,
+    )
+    monkeypatch.setattr(
+        envs.worktree, "has_commits_beyond", lambda _p, _s: False,
+    )
+    monkeypatch.setattr(
+        envs.worktree, "has_uncommitted_changes", lambda _p: False,
+    )
+    monkeypatch.setattr(
+        envs.worktree, "remove",
+        lambda *_a, **_k: None,
+    )
+    recorder.commands.clear()
+
+    backend.finalize(ctx, task, tmp_path / ".brr" / "runs")
+
+    assert not stage_parent.exists(), "credential copies must not outlive the run"
+    removed = recorder.only("docker", "rm", "-f")
+    assert any("solitary-proxy" in c[-1] for c in removed)
+    net_rms = recorder.only("docker", "network", "rm")
+    assert net_rms and net_rms[0][-1] == ctx.env_state["solitary_network"]
+
+
+def test_solitary_finalize_failure_stops_proxy_keeps_containers(
+    tmp_path, monkeypatch,
+):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+    stage_parent = envs.Path(ctx.env_state["solitary_cred_stage"]).parent
+    task.status = "error"
+    recorder.commands.clear()
+
+    backend.finalize(ctx, task, tmp_path / ".brr" / "runs")
+
+    assert not stage_parent.exists(), "credential copies must not outlive the run"
+    assert recorder.only("docker", "rm", "-f") == []
+    stops = recorder.only("docker", "stop")
+    assert stops and "solitary-proxy" in stops[0][-1]
+    assert recorder.only("docker", "network", "rm") == []
+
+
+def test_solitary_proxy_start_failure_cleans_up_network(tmp_path, monkeypatch):
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+
+    def failing_run(command, **_kwargs):
+        recorder.commands.append(list(command))
+        if command[:2] == ["docker", "run"] and "-d" in command:
+            return envs.subprocess.CompletedProcess(command, 125, "", "boom")
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", failing_run)
+
+    with pytest.raises(RuntimeError, match="proxy sidecar"):
+        _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    assert recorder.only("docker", "network", "rm"), "network must be torn down"
+    assert "solitary_network" not in ctx.env_state
+
+
+def test_solitary_proxy_allowlist_matcher():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "solitary_proxy", envs._solitary_proxy_script(),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    entries = ["api.anthropic.com", ".chatgpt.com"]
+    assert module.host_allowed("api.anthropic.com", entries)
+    assert module.host_allowed("API.ANTHROPIC.COM.", entries)
+    assert module.host_allowed("chatgpt.com", entries)
+    assert module.host_allowed("ab.chatgpt.com", entries)
+    assert not module.host_allowed("anthropic.com", entries)
+    assert not module.host_allowed("evil-api.anthropic.com.attacker.io", entries)
+    assert not module.host_allowed("github.com", entries)
+    assert not module.host_allowed("", entries)
+
+
+def test_solitary_cred_stage_is_outside_the_repo_mount(tmp_path, monkeypatch):
+    """The repo's .brr rides the bind mount into every container; a stage
+    under it would expose this run's copied tokens to sibling containers."""
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    stage = envs.Path(ctx.env_state["solitary_cred_stage"]).resolve()
+    assert not str(stage).startswith(str(tmp_path.resolve())), (
+        "credential stage must not live under the repo root"
+    )
+    # cleanup: the test bypasses finalize
+    envs.shutil.rmtree(stage.parent, ignore_errors=True)

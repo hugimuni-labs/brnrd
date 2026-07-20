@@ -493,12 +493,15 @@ def _resolve_docker_github_token(brr_dir: Path) -> str | None:
     return None
 
 
-def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
+def _docker_passthrough_env_args(
+    cfg: dict[str, Any],
+    exclude: frozenset[str] = frozenset(),
+) -> list[str]:
     """Build ``-e NAME`` args for env vars that are set on the daemon."""
     seen: set[str] = set()
     args: list[str] = []
     for name in (*_DOCKER_DEFAULT_PASSTHROUGH_ENV, *_docker_extra_env_keys(cfg)):
-        if not name or name in seen:
+        if not name or name in seen or name in exclude:
             continue
         seen.add(name)
         if name == "GITHUB_TOKEN" and (
@@ -696,6 +699,11 @@ class DockerEnv(WorktreeEnv):
         })
         task.meta["docker_image"] = image
 
+        self._resolve_publish_token(ctx, repo_root)
+
+        return ctx
+
+    def _resolve_publish_token(self, ctx: RunContext, repo_root: Path) -> None:
         # Resolve a GitHub token for every docker run, not only the
         # github-source ones. The container has no path to the host's
         # keyring or to the user's gh stored accounts, so without an
@@ -716,7 +724,22 @@ class DockerEnv(WorktreeEnv):
             if os.environ.get("GH_TOKEN") or os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
                 ctx.env_state["github_token_env"] = "GH_TOKEN"
 
-        return ctx
+    def _network_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        network = str(
+            ctx.env_state.get("docker_network")
+            or _docker_cfg(cfg, "network", "bridge")
+        )
+        return ["--network", network]
+
+    def _passthrough_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        return _docker_passthrough_env_args(cfg)
+
+    def _cred_mount_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        return _docker_credential_mount_args(cfg)
+
+    def _extra_env_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        """Additional ``-e`` args a subclass wants in the runner container."""
+        return []
 
     def invoke(
         self,
@@ -728,10 +751,6 @@ class DockerEnv(WorktreeEnv):
         trace: bool = False,
     ) -> runner.RunnerResult:
         image = str(ctx.env_state.get("docker_image") or _docker_cfg(cfg, "image"))
-        network = str(
-            ctx.env_state.get("docker_network")
-            or _docker_cfg(cfg, "network", "bridge")
-        )
         container_name = _docker_container_name(
             str(ctx.env_state.get("run_id", "") or "run"),
             invocation.label,
@@ -749,7 +768,7 @@ class DockerEnv(WorktreeEnv):
         command = [
             "docker", "run",
             "--name", container_name,
-            "--network", network,
+            *self._network_args(ctx, cfg),
             # ``-i`` keeps the container's stdin connected to docker's
             # stdin (which we tie to /dev/null below) so codex sees an
             # immediate EOF instead of an open-but-silent pipe — without
@@ -767,9 +786,10 @@ class DockerEnv(WorktreeEnv):
             # try to launch an editor that isn't in the slim runner image.
             "-e", "GIT_EDITOR=true",
             *_docker_git_config_env_args(bool(_docker_github_token_for_git(ctx))),
-            *_docker_passthrough_env_args(cfg),
+            *self._passthrough_args(ctx, cfg),
             *_docker_brr_source_env_args(ctx.repo_root),
-            *_docker_credential_mount_args(cfg),
+            *self._cred_mount_args(ctx, cfg),
+            *self._extra_env_args(ctx, cfg),
             *[
                 arg
                 for key, value in sorted(invocation.env.items())
@@ -923,9 +943,373 @@ class DockerEnv(WorktreeEnv):
         return task
 
 
+def _solitary_cfg(cfg: dict[str, Any], key: str, default: str = "") -> str:
+    value = cfg.get(f"solitary.{key}", cfg.get(f"solitary_{key}", default))
+    return str(value).strip() if value is not None else ""
+
+
+# Model-provider endpoints each Shell needs to function. This is the one
+# sanctioned hole in solitary's network wall: without it no cloud runner
+# completes a single turn. Entries with a leading dot allow subdomains.
+# Extend per-repo with ``solitary.allow=host1,host2`` — a stale entry here
+# fails *closed* (denied CONNECT, logged by the sidecar), never open.
+_SOLITARY_SHELL_HOSTS: dict[str, tuple[str, ...]] = {
+    "claude": (
+        "api.anthropic.com",
+        "console.anthropic.com",
+        "statsig.anthropic.com",
+        "claude.ai",
+    ),
+    "codex": (
+        "api.openai.com",
+        "auth.openai.com",
+        "chatgpt.com",
+        ".chatgpt.com",
+    ),
+    "gemini": (
+        "generativelanguage.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "oauth2.googleapis.com",
+        "accounts.google.com",
+    ),
+}
+
+# Credential paths per Shell, relative to HOME. Solitary mounts only the
+# selected Shell's own state (plus ``.gitconfig`` for commit identity) —
+# never ``.ssh``, never the other CLIs' tokens.
+_SOLITARY_SHELL_CRED_PATHS: dict[str, tuple[str, ...]] = {
+    "claude": (".claude", ".claude.json"),
+    "codex": (".codex",),
+    "gemini": (".gemini",),
+}
+
+_SOLITARY_PROXY_PORT = 3128
+
+
+def _solitary_proxy_script() -> Path:
+    from .. import data
+
+    return Path(data.__file__).resolve().parent / "solitary_proxy.py"
+
+
+class SolitaryEnv(DockerEnv):
+    """The paranoid preset: docker + provider-only egress + copied creds.
+
+    One config value (``environment=solitary``) composing the isolation
+    posture SECURITY.md's hardening checklist used to spell out by hand —
+    with the physics fixed: a literal ``network=none`` would brick every
+    cloud runner, because the model call itself is network. Instead the
+    runner joins a per-run ``--internal`` docker network whose only exit
+    is a CONNECT-proxy sidecar allowlisting the run's Shell provider
+    hosts (plus ``solitary.allow`` extras). TLS passes through untouched.
+
+    What it protects against: third-party exfiltration, pushes/API calls
+    from inside the run, host CLI-state poisoning (credentials are
+    *copied* per run by default, so an injected agent can't edit
+    ``~/.claude`` hooks into persistence), and credential theft beyond
+    the selected Shell's own token. What it cannot close: content shown
+    to the model provider — the conversation is a channel by design.
+
+    Publish is unchanged: the daemon pushes from the host after
+    finalize. ``github.com`` is not on the allowlist, so "no push from
+    inside" holds structurally rather than by convention.
+
+    Knobs (all optional):
+    - ``solitary.network``     — ``isolated`` (default) | ``none``
+      (zero egress; only for runners that need no provider API).
+    - ``solitary.credentials`` — ``copy`` (default) | ``ro`` | ``none``.
+    - ``solitary.allow``       — extra comma-separated hosts.
+    - ``solitary.proxy_image`` — sidecar image (default: ``docker.image``;
+      must carry ``python3``, which the bundled runner image does).
+    """
+
+    name = "solitary"
+
+    def prepare(
+        self,
+        task: Run,
+        repo_root: Path,
+        cfg: dict[str, Any],
+        *,
+        branch_plan: branching.PublishPlan,
+        response_path: Path,
+        outbox_path: Path | None = None,
+    ) -> RunContext:
+        ctx = super().prepare(
+            task,
+            repo_root,
+            cfg,
+            branch_plan=branch_plan,
+            response_path=response_path,
+            outbox_path=outbox_path,
+        )
+        ctx.name = self.name
+        mode = _solitary_cfg(cfg, "network", "isolated") or "isolated"
+        if mode not in ("isolated", "none"):
+            raise RuntimeError(
+                f"solitary.network must be 'isolated' or 'none', got {mode!r}"
+            )
+        ctx.env_state["solitary_network_mode"] = mode
+        task.meta["environment"] = self.name
+        return ctx
+
+    def _resolve_publish_token(self, ctx: RunContext, repo_root: Path) -> None:
+        """No GitHub credential ever enters a solitary container."""
+
+    def _invocation_shell(
+        self, runner_name: str, invocation: runner.RunnerInvocation,
+    ) -> str:
+        selected = invocation.selected_runner
+        shell = getattr(selected, "shell", "") or ""
+        if shell:
+            return str(shell)
+        return runner_name if runner_name in _SOLITARY_SHELL_HOSTS else ""
+
+    def _allow_hosts(self, cfg: dict[str, Any], shell: str) -> list[str]:
+        hosts = list(_SOLITARY_SHELL_HOSTS.get(shell, ()))
+        extra = _solitary_cfg(cfg, "allow")
+        for entry in extra.split(","):
+            entry = entry.strip()
+            if entry and entry not in hosts:
+                hosts.append(entry)
+        return hosts
+
+    def _run_docker(self, args: list[str], action: str) -> str:
+        result = subprocess.run(
+            ["docker", *args], capture_output=True, text=True, check=False,
+            # Generous: ``docker run -d`` may pull the sidecar image on
+            # first use; everything else here returns in seconds.
+            timeout=300,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"solitary: failed to {action}: {detail}")
+        return (result.stdout or "").strip()
+
+    def _ensure_isolated_network(
+        self, ctx: RunContext, cfg: dict[str, Any], shell: str,
+    ) -> None:
+        if ctx.env_state.get("solitary_proxy_ready"):
+            return
+        run_id = str(ctx.env_state.get("run_id", "") or "run")
+        network = _docker_container_name(run_id, "solitary-net")
+        proxy_name = _docker_container_name(run_id, "solitary-proxy")
+        allow = self._allow_hosts(cfg, shell)
+        if not allow:
+            print(
+                "[brnrd] solitary: no provider hosts known for shell "
+                f"{shell!r} and no solitary.allow configured — the runner "
+                "will have zero egress"
+            )
+        image = (
+            _solitary_cfg(cfg, "proxy_image")
+            or str(ctx.env_state.get("docker_image") or _docker_cfg(cfg, "image"))
+        )
+        script = _solitary_proxy_script()
+        self._run_docker(
+            ["network", "create", "--internal", network],
+            f"create internal network {network}",
+        )
+        ctx.env_state["solitary_network"] = network
+        ctx.env_state["docker_network"] = network
+        try:
+            self._run_docker(
+                [
+                    "run", "-d",
+                    "--name", proxy_name,
+                    "--network", network,
+                    "-e", f"BRR_SOLITARY_ALLOW={','.join(allow)}",
+                    "-e", f"BRR_SOLITARY_PORT={_SOLITARY_PROXY_PORT}",
+                    "-v", f"{script}:/brr-solitary-proxy.py:ro",
+                    image,
+                    "python3", "/brr-solitary-proxy.py",
+                ],
+                f"start proxy sidecar {proxy_name}",
+            )
+            containers = ctx.env_state.setdefault("docker_containers", [])
+            if isinstance(containers, list):
+                containers.append(proxy_name)
+            # Second leg: the bridge, so the sidecar can reach the
+            # allowlisted providers. The runner container never joins it.
+            self._run_docker(
+                ["network", "connect", "bridge", proxy_name],
+                f"connect proxy {proxy_name} to bridge",
+            )
+        except RuntimeError:
+            # Don't orphan the half-built pieces when the sidecar can't
+            # come up — the invoke fails loudly either way.
+            subprocess.run(
+                ["docker", "rm", "-f", proxy_name],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            subprocess.run(
+                ["docker", "network", "rm", network],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            ctx.env_state.pop("solitary_network", None)
+            raise
+        ctx.env_state["solitary_proxy"] = proxy_name
+        ctx.env_state["solitary_proxy_ready"] = True
+
+    def _credential_stage_dir(self, ctx: RunContext) -> Path:
+        # Deliberately *outside* the repo's ``.brr``: that directory rides
+        # the repo bind mount into every container, so a stage under it
+        # would let a concurrent sibling container read this run's copied
+        # tokens. A private tmp dir (0700 via mkdtemp) is bound into only
+        # this run's container and is invisible to every other one.
+        import tempfile
+
+        run_id = str(ctx.env_state.get("run_id", "") or "run")
+        root = tempfile.mkdtemp(prefix=f"brr-solitary-{run_id}-")
+        return Path(root) / "home"
+
+    def _ensure_credential_copies(
+        self, ctx: RunContext, cfg: dict[str, Any], shell: str,
+    ) -> None:
+        if "solitary_cred_stage" in ctx.env_state:
+            return
+        stage = self._credential_stage_dir(ctx)
+        stage.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(stage, 0o700)
+        except OSError:
+            pass
+        home = Path(os.path.expanduser("~"))
+        copied: list[str] = []
+        for rel in (*_SOLITARY_SHELL_CRED_PATHS.get(shell, ()), ".gitconfig"):
+            src = home / rel
+            dst = stage / rel
+            if not src.exists():
+                continue
+            try:
+                if src.is_dir():
+                    shutil.copytree(src, dst, symlinks=True)
+                else:
+                    shutil.copy2(src, dst)
+            except OSError as exc:
+                print(
+                    f"[brnrd] solitary: could not stage credential copy "
+                    f"{rel}: {exc}"
+                )
+                continue
+            copied.append(rel)
+        ctx.env_state["solitary_cred_stage"] = str(stage)
+        ctx.env_state["solitary_cred_paths"] = copied
+
+    def invoke(
+        self,
+        ctx: RunContext,
+        runner_name: str,
+        invocation: runner.RunnerInvocation,
+        cfg: dict[str, Any],
+        *,
+        trace: bool = False,
+    ) -> runner.RunnerResult:
+        shell = self._invocation_shell(runner_name, invocation)
+        ctx.env_state["solitary_shell"] = shell
+        if ctx.env_state.get("solitary_network_mode") != "none":
+            self._ensure_isolated_network(ctx, cfg, shell)
+        cred_mode = _solitary_cfg(cfg, "credentials", "copy") or "copy"
+        if cred_mode not in ("copy", "ro", "none"):
+            raise RuntimeError(
+                "solitary.credentials must be 'copy', 'ro', or 'none', "
+                f"got {cred_mode!r}"
+            )
+        ctx.env_state["solitary_cred_mode"] = cred_mode
+        if cred_mode == "copy":
+            self._ensure_credential_copies(ctx, cfg, shell)
+        return super().invoke(ctx, runner_name, invocation, cfg, trace=trace)
+
+    def _network_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        if ctx.env_state.get("solitary_network_mode") == "none":
+            return ["--network", "none"]
+        return ["--network", str(ctx.env_state["solitary_network"])]
+
+    def _passthrough_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        # Model API keys still pass (API-key auth must work); the GitHub
+        # publishing identity never does.
+        return _docker_passthrough_env_args(
+            cfg, exclude=frozenset({"GITHUB_TOKEN", "GH_TOKEN"}),
+        )
+
+    def _cred_mount_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        mode = str(ctx.env_state.get("solitary_cred_mode", "copy"))
+        if mode == "none":
+            return []
+        shell = str(ctx.env_state.get("solitary_shell", ""))
+        rels = (*_SOLITARY_SHELL_CRED_PATHS.get(shell, ()), ".gitconfig")
+        args: list[str] = []
+        if mode == "copy":
+            stage = Path(str(ctx.env_state.get("solitary_cred_stage", "")))
+            for rel in ctx.env_state.get("solitary_cred_paths", []) or []:
+                args.extend(
+                    ["-v", f"{stage / rel}:{_DOCKER_CONTAINER_HOME}/{rel}"]
+                )
+            return args
+        home = Path(os.path.expanduser("~"))
+        for rel in rels:
+            host = home / rel
+            if host.exists():
+                args.extend(
+                    ["-v", f"{host}:{_DOCKER_CONTAINER_HOME}/{rel}:ro"]
+                )
+        return args
+
+    def _extra_env_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        proxy = ctx.env_state.get("solitary_proxy")
+        if not proxy:
+            return []
+        url = f"http://{proxy}:{_SOLITARY_PROXY_PORT}"
+        args: list[str] = []
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            args.extend(["-e", f"{name}={url}"])
+        for name in ("NO_PROXY", "no_proxy"):
+            args.extend(["-e", f"{name}=localhost,127.0.0.1"])
+        return args
+
+    def finalize(
+        self,
+        ctx: RunContext,
+        task: Run,
+        runs_dir: Path,
+    ) -> Run:
+        # Credential copies hold live tokens — delete them regardless of
+        # outcome, before the container/network bookkeeping.
+        stage_raw = ctx.env_state.get("solitary_cred_stage")
+        if stage_raw:
+            shutil.rmtree(
+                Path(str(stage_raw)).parent, ignore_errors=True,
+            )
+        proxy = ctx.env_state.get("solitary_proxy")
+        if task.status != "done" and proxy:
+            # The runner container is preserved for inspection; stop the
+            # sidecar so a failed run doesn't leave a live proxy attached
+            # to the bridge, but keep it so ``docker logs`` still answers
+            # "what did the run try to reach".
+            subprocess.run(
+                ["docker", "stop", str(proxy)],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        task = super().finalize(ctx, task, runs_dir)
+        network = ctx.env_state.get("solitary_network")
+        if network and task.status == "done":
+            result = subprocess.run(
+                ["docker", "network", "rm", str(network)],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                print(
+                    "[brnrd] warning: failed to remove solitary network "
+                    f"{network}: {detail}"
+                )
+        return task
+
+
 _BUILTINS: dict[str, type[EnvBackend]] = {
     "docker": DockerEnv,
     "host": HostEnv,
+    "solitary": SolitaryEnv,
     "worktree": WorktreeEnv,
 }
 
