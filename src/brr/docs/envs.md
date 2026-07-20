@@ -13,6 +13,7 @@ by dropping a file at `.brr/docs/envs.md`.
 | `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A runs       |
 | `worktree`  | `.brr/worktrees/<run-id>/` (`brr/<run-id>` branch) | Inherited | Working dir + branch | Default for code work |
 | `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes brnrd + common dev tools |
+| `solitary`  | Like `docker`, egress locked to the model provider | Per-run copies of the Shell's own | Container + worktree + network + credentials | The paranoid preset; see below |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
 `kb/design-env-interface.md` if you want to follow that work.
@@ -261,6 +262,77 @@ duplicating that recipe here.
 Same rule as worktrees: clean teardown only on a successful run.
 Failures preserve the container so you can inspect, re-run, or copy
 work out manually.
+
+## `solitary`
+
+The hardened isolation preset as one config value:
+
+```ini
+environment=solitary
+docker.image=ghcr.io/example/your-image:tag
+```
+
+Solitary is `docker` with the paranoid defaults pre-composed. Use it for
+multi-party gates and any ingress where untrusted text can reach the
+agent (see SECURITY.md). What changes relative to `docker`:
+
+- **Network: provider-only egress.** The runner container joins a
+  per-run `--internal` docker network whose only exit is a small
+  CONNECT-proxy sidecar. The proxy tunnels TLS untouched (no MITM) and
+  allows connections **only** to the model provider endpoints for the
+  run's Shell (e.g. `api.anthropic.com` for claude) plus anything in
+  `solitary.allow`. Everything else — `github.com` included — is denied
+  and logged. A literal no-network mode exists (`solitary.network=none`)
+  but is only useful for runners that need no provider API at all;
+  every cloud CLI needs its provider to function.
+- **Credentials: per-run copies.** By default the run gets a private
+  *copy* of the selected Shell's own credential state (`~/.claude` +
+  `~/.claude.json`, or `~/.codex`, or `~/.gemini`) plus `~/.gitconfig`
+  for commit identity. The copy is writable — CLIs that refresh tokens
+  or write session state keep working — and is deleted at finalize,
+  success or failure. The host's real CLI state can never be modified
+  from inside the run, which also closes the persistence trick of an
+  injected agent editing CLI settings/hooks on the host.
+  `.ssh` is never mounted. Other Shells' credentials are never mounted.
+- **No GitHub credential.** No `GITHUB_TOKEN`/`GH_TOKEN` passthrough, no
+  gate-state injection, no git URL rewrite or credential helper. `gh`
+  and any in-container push are dead by design; the daemon still
+  publishes the run's branch from the host after finalize, so commits
+  ship exactly as they do for `worktree` runs.
+- Model API keys (`ANTHROPIC_API_KEY` etc.) still pass through when set
+  on the daemon, so API-key auth works; they are only usable against
+  allowlisted hosts anyway.
+
+What solitary costs: no web research, no package installs from inside,
+no `gh` calls, no push from inside. Delivery happens exclusively through
+the daemon's seams (response file, outbox, host-side publish).
+
+What solitary **cannot** close, stated honestly: content sent to the
+model provider. The conversation with the model is itself a channel —
+network policy bounds third-party exfiltration, not what the provider
+sees. And the repo mount stays read-write: solitary contains the blast
+radius of credentials and network, not of edits (that's `worktree`'s
+branch isolation doing its usual job underneath).
+
+### Knobs
+
+| Key                    | Default    | Purpose                                             |
+| ---------------------- | ---------- | --------------------------------------------------- |
+| `solitary.network`     | `isolated` | `isolated` (proxy allowlist) or `none` (zero egress) |
+| `solitary.credentials` | `copy`     | `copy`, `ro` (bind host dirs read-only), or `none`   |
+| `solitary.allow`       | empty      | Extra comma-separated hosts (leading `.` = subdomains) |
+| `solitary.proxy_image` | `docker.image` | Sidecar image; must have `python3` (bundled image does) |
+
+All `docker.*` keys (image, extra env passthrough) apply underneath,
+except `docker.network` and `docker.mount_credentials`, which solitary
+owns.
+
+### Failure forensics
+
+On a failed run the runner container is preserved as usual, the proxy
+sidecar is stopped but kept, and `docker logs <run>-solitary-proxy`
+answers "what did the run try to reach" — every denied host is logged.
+Credential copies are deleted regardless of outcome.
 
 ## Durability contract
 

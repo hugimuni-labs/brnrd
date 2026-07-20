@@ -100,6 +100,9 @@ Use `environment` for the user-facing execution policy:
 - `environment=auto` — prefer configured Docker isolation, then fall
   back to worktree behavior.
 - `environment=docker` — require Docker and `docker.image`.
+- `environment=solitary` — the hardened preset over docker: provider-only
+  egress via a proxy sidecar, per-run credential copies, no GitHub token.
+  See `brnrd docs envs` → "solitary".
 - `environment=worktree` — run in a separate git worktree.
 - `environment=host` — run directly in the main checkout (no isolation).
 
