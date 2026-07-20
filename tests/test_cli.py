@@ -623,7 +623,7 @@ def test_setup_falls_back_to_auth_then_bind(monkeypatch, tmp_path):
 
 
 def test_runners_list_text_output(monkeypatch, capsys):
-    """Text output shows declared profiles and bundled Core registry."""
+    """Text output shows unified catalog with availability and stale marks."""
     import shutil as _shutil
 
     from brr import runner as runner_mod, runner_cores
@@ -638,56 +638,60 @@ def test_runners_list_text_output(monkeypatch, capsys):
         _shutil, "which",
         lambda name: f"/usr/bin/{name}" if name == "claude" else None,
     )
+    monkeypatch.setattr(
+        runner_mod.shutil, "which",
+        lambda name: f"/usr/bin/{name}" if name == "claude" else None,
+    )
 
     assert main(["runners", "list"]) == 0
     out = capsys.readouterr().out
 
-    # Declared-profiles section header present
-    assert "declared profiles" in out
-    # Bundled Core registry section
-    assert "bundled Core registry" in out
-    # Claude cores appear (Shell is on PATH)
+    # Unified catalog header
+    assert "runner catalog" in out
+    # Claude cores appear (available ✓)
     assert "claude-haiku" in out or "claude-sonnet" in out
-    # codex/gemini cores filtered out (Shell not on PATH)
-    assert "codex-mini" not in out
-    assert "gemini-flash" not in out
+    # Unavailable profiles also shown (with ✗)
+    assert "codex-mini" in out
+    assert "gemini-flash" in out
+    assert "✗" in out
 
 
-def test_runners_list_all_includes_unavailable(monkeypatch, capsys):
-    """--all flag includes Cores whose Shell isn't on PATH."""
+def test_runners_list_all_is_noop(monkeypatch, capsys):
+    """--all is accepted for backwards-compat; unavailable rows appear by default."""
     import shutil as _shutil
 
-    from brr import runner_cores
+    from brr import runner as runner_mod, runner_cores
 
     monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
     monkeypatch.setattr(runner_cores.shutil, "which", lambda name: None)
     monkeypatch.setattr(_shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda name: None)
 
     assert main(["runners", "list", "--all"]) == 0
     out = capsys.readouterr().out
-    # With --all, even unavailable Shells appear in the registry section
+    # Even with no shells on PATH, profiles still shown with ✗ marks
     assert "claude-haiku" in out or "claude-sonnet" in out
 
 
 def test_runners_list_json_output(monkeypatch, capsys):
-    """--json emits machine-readable JSON with declared + bundled sections."""
+    """--json emits machine-readable JSON with unified profiles list."""
     import shutil as _shutil
 
-    from brr import runner_cores
+    from brr import runner as runner_mod, runner_cores
 
     monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
     monkeypatch.setattr(runner_cores.shutil, "which",
                         lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner_mod.shutil, "which",
+                        lambda name: f"/usr/bin/{name}")
 
     assert main(["runners", "list", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert "declared" in payload
-    assert "bundled_cores" in payload
-    assert isinstance(payload["declared"], list)
-    assert isinstance(payload["bundled_cores"], list)
+    assert "profiles" in payload
+    assert isinstance(payload["profiles"], list)
     # All bundled cores visible when all Shells are on PATH
-    names = [r["name"] for r in payload["bundled_cores"]]
+    names = [r["name"] for r in payload["profiles"]]
     assert "claude-haiku" in names
     assert "codex-mini" in names
 
@@ -708,6 +712,7 @@ def test_runners_list_marks_current_runner(monkeypatch, capsys, tmp_path):
         runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}"
     )
     monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
 
     assert main(["runners", "list"]) == 0
     out = capsys.readouterr().out
