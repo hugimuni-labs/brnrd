@@ -24,6 +24,7 @@ for a conservative same-or-cheaper local fallback before surfacing the failure.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,18 +59,45 @@ AUTO_FALLBACK_FAILURES = frozenset(
 )
 
 
+def _model_tokens(model_id: str) -> list[str]:
+    """Split a model id into comparable tokens (``claude-sonnet-5`` →
+    ``["claude", "sonnet", "5"]``). Dots stay inside a token so versioned
+    families (``gpt-5.6``) compare as one unit."""
+    return [t for t in re.split(r"[^a-z0-9.]+", model_id) if t]
+
+
 def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
-    """Return whether a pinned Core and the Shell's attestation disagree."""
+    """Return whether a pinned Core and the Shell's attestation disagree.
+
+    An alias Core names a *family*, not a byte string: the rack pins
+    ``sonnet`` ("latest sonnet", #505's alias-fresh scheme) while the Shell
+    attests the concrete member it actually ran (``claude-sonnet-5``). The
+    prefix checks below cover pin-vs-longer-pin; the token check covers the
+    alias sitting mid-id, which the prefix checks structurally cannot see —
+    the exact miss that errored every claude-alias spawn on 2026-07-20.
+    A genuinely wrong Core still flags: ``haiku`` is no token of
+    ``claude-sonnet-5``.
+    """
     expected_id = (expected or "").strip().lower()
     observed_ids = (observed or "").strip().lower()
     if not expected_id or expected_id == "default" or not observed_ids:
         return None
+    expected_tokens = _model_tokens(expected_id)
     for observed_id in observed_ids.split("+"):
         observed_id = observed_id.strip()
-        if observed_id and (
+        if not observed_id:
+            continue
+        if (
             observed_id == expected_id
             or observed_id.startswith(expected_id)
             or expected_id.startswith(observed_id)
+        ):
+            return False
+        observed_tokens = _model_tokens(observed_id)
+        width = len(expected_tokens)
+        if width and any(
+            observed_tokens[i : i + width] == expected_tokens
+            for i in range(len(observed_tokens) - width + 1)
         ):
             return False
     return True
