@@ -156,12 +156,79 @@ def clean_runner_environ() -> dict[str, str]:
     # operator supplies GH_TOKEN, inherited human credentials must not leak
     # into the child alongside it.
     managed_github_token = cleaned.pop("BRNRD_MANAGED_GITHUB_TOKEN", "")
-    if not cleaned.get("GH_TOKEN") and managed_github_token:
-        cleaned["GH_TOKEN"] = managed_github_token
     if cleaned.get("GH_TOKEN"):
+        # Operator-supplied publishing identity: brnrd never minted it and
+        # cannot date it, so the frozen snapshot is correct — there is no
+        # daemon-side renewal for the runner to chase. Keep today's behaviour.
         cleaned.pop("GITHUB_TOKEN", None)
         _inject_github_git_config(cleaned)
+    elif managed_github_token:
+        pointer_dir = _github_credential_pointer_dir()
+        if pointer_dir is not None:
+            # Hand the runner a *pointer*, not a value (issue #477): gh reads
+            # the current token from the pointer dir's hosts.yml and git's
+            # helper cats the token file at each push, so a daemon-side
+            # renewal reaches a run already in flight. A frozen GH_TOKEN /
+            # GITHUB_TOKEN would *override* the pointer at gh's precedence, so
+            # neither is exported on this path.
+            cleaned.pop("GITHUB_TOKEN", None)
+            _inject_github_credential_pointer(cleaned, pointer_dir)
+        else:
+            # No pointer available in this process (no cloud gate minting it)
+            # — fall back to the legacy frozen snapshot so a run still
+            # authenticates, exactly as before the pointer existed.
+            cleaned["GH_TOKEN"] = managed_github_token
+            cleaned.pop("GITHUB_TOKEN", None)
+            _inject_github_git_config(cleaned)
     return cleaned
+
+
+def _github_credential_pointer_dir() -> Path | None:
+    """The daemon-refreshed GitHub credential pointer dir, if usable here.
+
+    ``None`` unless a cloud gate in this process publishes the pointer *and*
+    its ``token`` file already exists — otherwise there is nothing to point at
+    and callers must fall back to the frozen-token path.
+    """
+    try:
+        from .gates import cloud
+
+        pointer_dir = cloud.github_credentials_dir()
+    except Exception:
+        return None
+    if pointer_dir is None:
+        return None
+    return pointer_dir if (pointer_dir / "token").exists() else None
+
+
+def _inject_github_credential_pointer(env: dict[str, str], pointer_dir: Path) -> None:
+    """Point ``gh`` and Git at the daemon-refreshed credential dir (issue #477).
+
+    ``GH_CONFIG_DIR`` makes ``gh`` read the current token from the pointer's
+    ``hosts.yml`` at each invocation; the git credential helper cats the
+    ``token`` file on each transport call. Both resolve the token at *use*
+    time, so a mid-run renewal is picked up without re-exec.
+    """
+    token_path = pointer_dir / "token"
+    env["GH_CONFIG_DIR"] = str(pointer_dir)
+    try:
+        offset = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        offset = 0
+    pairs = (
+        ("url.https://github.com/.insteadOf", "git@github.com:"),
+        ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
+        (
+            "credential.helper",
+            "!f() { test \"$1\" = get || exit 0; "
+            "echo username=x-access-token; "
+            f"echo \"password=$(cat {shlex.quote(str(token_path))})\"; }}; f",
+        ),
+    )
+    env["GIT_CONFIG_COUNT"] = str(offset + len(pairs))
+    for index, (key, value) in enumerate(pairs, start=offset):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
 
 
 def _inject_github_git_config(env: dict[str, str]) -> None:
