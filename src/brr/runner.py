@@ -321,7 +321,18 @@ class RunnerResult:
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0 and self.core_mismatch is not True
+        """Whether the runner subprocess completed its work.
+
+        Deliberately *not* a provenance verdict. ``core_mismatch`` answers a
+        different question — did the Core we pinned produce this — and folding
+        the two into one bit is what made a completed run report "I couldn't
+        complete this run" beside its own ``done`` note (2026-07-20). A wrong
+        Core makes an answer *suspect*, never *absent*: the work exists, it
+        cost real quota, and the user judges it better holding it than holding
+        nothing. Provenance rides as an alarm bit on the ledger, the run node,
+        and a footer on the delivered reply — it no longer destroys output.
+        """
+        return self.returncode == 0
 
     @property
     def output(self) -> str:
@@ -412,12 +423,6 @@ class RunnerResult:
         return f"…[truncated]{tail}" if len(detail) > limit else tail
 
     def raise_for_error(self) -> None:
-        if self.core_mismatch:
-            raise RuntimeError(
-                "Core attestation failed: requested "
-                f"{self.invocation.expected_core!r}, Shell observed "
-                f"{self.observed_core!r}"
-            )
         if self.ok:
             return
         detail = self.stderr.strip() or self.stdout.strip()
@@ -1268,6 +1273,22 @@ def _prompt_pointer_text(path: Path, byte_len: int) -> str:
     )
 
 
+def _core_provenance_footer(expected: str | None, observed: str | None) -> str:
+    """The line that rides along with a reply of uncertain provenance.
+
+    Short, factual, and last: the reader gets the work first and the caveat
+    where a caveat belongs. It names both vocabularies because that is the
+    whole content of the doubt — a pin is a request, an attestation is an
+    observation, and they are owned by different parties.
+    """
+    return (
+        "— brnrd: this reply was produced by "
+        f"`{observed or 'an unattested Core'}`, but `{expected}` was pinned "
+        "for this run. The work is delivered as-is; judge it knowing which "
+        "Core wrote it."
+    )
+
+
 def _write_response_file(response_path: str, stdout: str) -> None:
     """Persist the runner's stdout as the captured response file.
 
@@ -1500,11 +1521,17 @@ def invoke_runner(
         )
         stderr = (stderr.rstrip() + "\n" if stderr.strip() else "") + attestation_error
 
-    if (
-        invocation.response_path and returncode == 0 and mismatch is not True
-        and stdout and stdout.strip()
-    ):
-        _write_response_file(invocation.response_path, stdout)
+    if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+        body = stdout
+        if mismatch:
+            # The reply is real work and ships; the provenance doubt ships
+            # *with* it rather than in place of it. Withholding the answer
+            # tells the user "nothing happened", which is the one thing that
+            # is definitely false.
+            body = body.rstrip() + "\n\n" + _core_provenance_footer(
+                invocation.expected_core, observed_core,
+            )
+        _write_response_file(invocation.response_path, body)
 
     result = RunnerResult(
         invocation=invocation,
