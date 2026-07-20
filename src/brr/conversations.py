@@ -358,8 +358,13 @@ def _atomic_append_line(path: Path, line: str) -> None:
     """
     payload = (line + "\n").encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        # Conversation history carries full message bodies and sender
+        # identities — owner-only, like the gate tokens (which repair
+        # their mode on every load; this is the same net for a store
+        # that predates the rule and may sit at 0644 on disk).
+        os.fchmod(fd, 0o600)
         os.write(fd, payload)
     finally:
         os.close(fd)
@@ -1017,6 +1022,8 @@ def write_grouped_history_files(
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Untruncated chat history: owner-only, same stance as the base store.
+    output_dir.chmod(0o700)
 
     groups: list[HistoryGroup] = []
     for related in conversation_keys_for_correspondent(
@@ -1031,6 +1038,7 @@ def write_grouped_history_files(
         path = output_dir / filename
         payload = "\n".join(json.dumps(r, sort_keys=True) for r in records)
         path.write_text(payload + "\n", encoding="utf-8")
+        path.chmod(0o600)
         group: HistoryGroup = {
             "id": f"{kind}:{related}",
             "kind": kind,
