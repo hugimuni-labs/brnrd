@@ -648,7 +648,18 @@
 				{:else if liveRuns === null}
 					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
-					<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
+					<!-- Multi-run "now": tapping a card *selects* it, and this same
+					     sheet answers with the node panel — the identical grammar a
+					     loom tap speaks. The card's old inline expansion was a third
+					     rendering of the run (2026-07-20: "3 visual elements for a
+					     run"); it survives only in the fallbacks above, where no
+					     node can answer. -->
+					<LiveRuns
+						runs={liveRuns}
+						stale={liveRunsStale}
+						{now}
+						onSelect={(id) => selectFromLoom('run', id)}
+					/>
 				{/if}
 			</div>
 		</div>
