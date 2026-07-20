@@ -36,6 +36,7 @@
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
 	import { LENS_ALL, LENS_REVIEW, applyLens } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
+	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
 	import {
@@ -61,7 +62,11 @@
 	let shells = $state<QuotaShell[] | null>(null);
 	let generatedAt = $state<string | null>(null);
 	let error = $state<string | null>(null);
-	let unauthenticated = $state(false);
+	// Three states, not two (#480's tensed-absence family): an anonymous
+	// visitor must never see the dashboard scaffolding flash before the
+	// landing swaps in, and a signed-in reader must never glimpse the
+	// landing. 'unknown' renders neither — the boot curtain covers it.
+	let authState = $state<'unknown' | 'authed' | 'anon'>('unknown');
 	let now = $state(Date.now());
 
 	let runnersData = $state<RunnersResponse | null>(null);
@@ -351,13 +356,21 @@
 			shells = data.runner_quotas;
 			generatedAt = data.generated_at;
 			error = null;
-			unauthenticated = false;
+			authState = 'authed';
 		} catch (e) {
 			if (e instanceof QuotaAuthError) {
-				unauthenticated = true;
-			} else {
-				error = e instanceof Error ? e.message : 'quota fetch failed';
+				// Anonymous: this page is the landing (#509). Stop polling —
+				// six more 401s every two seconds serve nobody; signing in
+				// navigates through /login and reloads the page anyway.
+				authState = 'anon';
+				if (pollHandle) clearInterval(pollHandle);
+				return;
 			}
+			// A non-auth failure (backend hiccup, network) is a dashboard
+			// state, not a landing one — render the dashboard with its own
+			// error strings rather than a blank page.
+			authState = 'authed';
+			error = e instanceof Error ? e.message : 'quota fetch failed';
 		}
 		try {
 			const runners = await fetchRunners();
@@ -436,6 +449,12 @@
 	});
 </script>
 
+{#if authState === 'anon'}
+	<!-- The landing (#509): the anonymous face of the same URL. Signed-in
+	     readers never see it; anonymous ones never see the dashboard
+	     scaffolding it replaces. -->
+	<Landing />
+{:else if authState === 'authed'}
 <div class="mx-auto max-w-2xl p-6">
 	<header class="ignite" style="--ignite-delay: 0ms">
 		<div class="flex items-start justify-between gap-4">
@@ -740,3 +759,4 @@
 		</div>
 	</section>
 </div>
+{/if}
