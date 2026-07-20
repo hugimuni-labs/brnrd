@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -493,6 +494,34 @@ def _resolve_docker_github_token(brr_dir: Path) -> str | None:
     return None
 
 
+def _managed_github_pointer_dir(repo_root: Path) -> Path | None:
+    """Daemon-refreshed GitHub pointer dir usable *inside* the container.
+
+    Returns the pointer dir only when brnrd mints the credential (no operator
+    ``GH_TOKEN``), the pointer exists, and it lives under the bind-mounted
+    ``repo_root`` — the container mounts ``repo_root`` at the same absolute
+    path, so a pointer under it (``.brr`` rides the mount) resolves inside to
+    the same inode the daemon rewrites (issue #477). ``None`` otherwise, and
+    the caller falls back to the frozen-token injection.
+    """
+    if os.environ.get("GH_TOKEN"):
+        return None
+    try:
+        from ..gates import cloud
+
+        pointer_dir = cloud.github_credentials_dir()
+    except Exception:
+        return None
+    if pointer_dir is None or not (pointer_dir / "token").exists():
+        return None
+    try:
+        pointer_dir.relative_to(Path(os.path.abspath(repo_root)))
+    except ValueError:
+        # Pointer lives outside the bind mount — invisible in the container.
+        return None
+    return pointer_dir
+
+
 def _docker_passthrough_env_args(
     cfg: dict[str, Any],
     exclude: frozenset[str] = frozenset(),
@@ -573,7 +602,11 @@ def _docker_user_args() -> list[str]:
     return ["-u", f"{getuid()}:{getgid()}"]
 
 
-def _docker_git_config_env_args(github_token_available: bool = False) -> list[str]:
+def _docker_git_config_env_args(
+    github_token_available: bool = False,
+    *,
+    token_file: str | None = None,
+) -> list[str]:
     """Inject git config inside the container via ``GIT_CONFIG_*`` env vars.
 
     The repo is bind-mounted at the same absolute path it has on the
@@ -592,11 +625,28 @@ def _docker_git_config_env_args(github_token_available: bool = False) -> list[st
     ``GITHUB_TOKEN`` alone does not help ``git push git@github.com:...``;
     the rewrite lets PR/rebase tasks push from Docker even when no SSH
     agent is mounted.
+
+    *token_file* switches the helper from a frozen ``$GH_TOKEN`` value to
+    ``cat``-ing a daemon-refreshed pointer file at each push (issue #477).
+    It rides the repo bind mount at the same absolute path, so the container
+    resolves the *current* token even on a run that outlives its token's
+    original life.
     """
     pairs: list[tuple[str, str]] = [
         ("safe.directory", "*"),
     ]
-    if github_token_available:
+    if token_file:
+        pairs.extend([
+            ("url.https://github.com/.insteadOf", "git@github.com:"),
+            ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
+            (
+                "credential.helper",
+                "!f() { test \"$1\" = get || exit 0; "
+                "echo username=x-access-token; "
+                f"echo \"password=$(cat {shlex.quote(token_file)})\"; }}; f",
+            ),
+        ])
+    elif github_token_available:
         pairs.extend([
             ("url.https://github.com/.insteadOf", "git@github.com:"),
             ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
@@ -724,6 +774,18 @@ class DockerEnv(WorktreeEnv):
             if os.environ.get("GH_TOKEN") or os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
                 ctx.env_state["github_token_env"] = "GH_TOKEN"
 
+        # Managed-credential path (issue #477): when the daemon-refreshed
+        # pointer rides the bind mount, the container reads the *current*
+        # token from it — GH_CONFIG_DIR for gh, a token-file git helper for
+        # pushes — instead of the frozen value resolved above. An operator
+        # GH_TOKEN takes the passthrough path and is never replaced.
+        # Living inside ``_resolve_publish_token`` is load-bearing:
+        # ``SolitaryEnv`` overrides this method as a no-op, so no pointer
+        # (and no credential at all) ever reaches a solitary container.
+        pointer_dir = _managed_github_pointer_dir(repo_root)
+        if pointer_dir is not None:
+            ctx.env_state["github_pointer_dir"] = str(pointer_dir)
+
     def _network_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
         network = str(
             ctx.env_state.get("docker_network")
@@ -785,7 +847,19 @@ class DockerEnv(WorktreeEnv):
             # Non-interactive git (rebase --continue, commit, etc.) must not
             # try to launch an editor that isn't in the slim runner image.
             "-e", "GIT_EDITOR=true",
-            *_docker_git_config_env_args(bool(_docker_github_token_for_git(ctx))),
+            *_docker_git_config_env_args(
+                bool(_docker_github_token_for_git(ctx)),
+                token_file=(
+                    f"{ctx.env_state['github_pointer_dir']}/token"
+                    if ctx.env_state.get("github_pointer_dir")
+                    else None
+                ),
+            ),
+            *(
+                ["-e", f"GH_CONFIG_DIR={ctx.env_state['github_pointer_dir']}"]
+                if ctx.env_state.get("github_pointer_dir")
+                else []
+            ),
             *self._passthrough_args(ctx, cfg),
             *_docker_brr_source_env_args(ctx.repo_root),
             *self._cred_mount_args(ctx, cfg),
@@ -805,7 +879,12 @@ class DockerEnv(WorktreeEnv):
                     f"{ctx.env_state.get('github_token_env', 'GITHUB_TOKEN')}="
                     f"{ctx.env_state['github_token']}",
                 ]
+                # On the pointer path the container reads the current token
+                # from GH_CONFIG_DIR / the token file; a frozen GH_TOKEN /
+                # GITHUB_TOKEN env would override that at gh's precedence, so
+                # it is deliberately not injected here (issue #477).
                 if ctx.env_state.get("github_token")
+                and not ctx.env_state.get("github_pointer_dir")
                 and not (
                     ctx.env_state.get("github_token_env", "GITHUB_TOKEN") == "GITHUB_TOKEN"
                     and os.environ.get("GITHUB_TOKEN")

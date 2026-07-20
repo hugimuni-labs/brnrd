@@ -1018,6 +1018,72 @@ def test_docker_github_token_rewrites_ssh_remotes(tmp_path, monkeypatch):
     )
 
 
+def test_docker_managed_credential_uses_pointer_dir(tmp_path, monkeypatch):
+    """Issue #477: on the managed path the container reads the *current* token
+    from the daemon-refreshed pointer dir riding the bind mount — GH_CONFIG_DIR
+    for gh, a token-file git helper for pushes — not a frozen env value."""
+    from brr.gates import cloud
+
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / "token").write_text("app-token\n", encoding="utf-8")
+    monkeypatch.setattr(cloud, "github_credentials_dir", lambda brr_dir=None: pointer_dir)
+
+    task = Run(id="task-managed", event_id="evt-managed", body="push work")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert f"GH_CONFIG_DIR={pointer_dir}" in kv_env
+    # No frozen token env that would override the pointer at gh's precedence.
+    assert not any(v.startswith("GH_TOKEN=") for v in kv_env)
+    assert not any(v.startswith("GITHUB_TOKEN=") for v in kv_env)
+    # git helper cats the pointer's token file rather than echoing a value.
+    assert "GIT_CONFIG_COUNT=4" in kv_env
+    assert any(
+        v.startswith("GIT_CONFIG_VALUE_3=!f()")
+        and f"cat {pointer_dir / 'token'}" in v
+        for v in kv_env
+    )
+
+
+def test_docker_managed_credential_falls_back_when_pointer_outside_mount(tmp_path, monkeypatch):
+    """A pointer that does not ride the repo bind mount is invisible inside the
+    container, so the managed path degrades to the legacy frozen injection."""
+    from brr.gates import cloud
+
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+
+    outside = tmp_path.parent / f"{tmp_path.name}-external" / "github"
+    outside.mkdir(parents=True)
+    (outside / "token").write_text("app-token\n", encoding="utf-8")
+    monkeypatch.setattr(cloud, "github_credentials_dir", lambda brr_dir=None: outside)
+
+    task = Run(id="task-frozen", event_id="evt-frozen", body="push work")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert not any(v.startswith("GH_CONFIG_DIR=") for v in kv_env)
+    assert "GH_TOKEN=app-token" in kv_env
+
+
 def test_docker_gh_token_overrides_gate_and_github_token(tmp_path, monkeypatch):
     """GH_TOKEN selects the runner's publishing identity everywhere.
 
@@ -1304,6 +1370,40 @@ def test_solitary_prepare_never_resolves_github_token(tmp_path, monkeypatch):
     assert "github_token" not in ctx.env_state
     assert ctx.env_state["solitary_network_mode"] == "isolated"
     assert task.meta["environment"] == "solitary"
+
+
+def test_solitary_never_gets_github_credential_pointer(tmp_path, monkeypatch):
+    """The #477 pointer must not undo #518's no-credential guarantee.
+
+    Regression for the exact leak a naive rebase would have shipped: the
+    pointer dir rides the repo bind mount (`.brr` is visible inside every
+    container), so if pointer resolution lived anywhere but
+    ``_resolve_publish_token`` — the seam ``SolitaryEnv`` no-ops — a solitary
+    container would read the managed GitHub token through GH_CONFIG_DIR.
+    Here every pointer precondition holds (managed pointer exists, under the
+    mount, no operator GH_TOKEN) and solitary must still surface nothing.
+    """
+    from brr.gates import cloud
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / "token").write_text("app-token\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cloud, "github_credentials_dir", lambda brr_dir=None: pointer_dir,
+    )
+
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    assert "github_pointer_dir" not in ctx.env_state
+    assert "github_token" not in ctx.env_state
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+    argv = " ".join(recorder.runner_argv())
+    assert "GH_CONFIG_DIR" not in argv
+    assert "credential.helper" not in argv
+    assert "app-token" not in argv
 
 
 def test_solitary_isolated_network_and_proxy_choreography(tmp_path, monkeypatch):

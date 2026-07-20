@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -52,6 +53,16 @@ _PUBLISHING_TOKEN_DISPATCH_MIN_S = 50 * 60
 _publishing_token_expires_at = 0.0
 # Set by run_loop: the brr dir whose cloud state mints the managed token.
 _publishing_state_dir: Path | None = None
+# Where the daemon publishes the managed GitHub credential as a *pointer* the
+# runner reads at use time (issue #477): a runner env is a frozen snapshot and
+# can never see a refreshed token exported into it, so instead of handing it a
+# value we hand it this directory. gh reads the current token from `hosts.yml`
+# via GH_CONFIG_DIR; git's credential helper cats `token` on each push. Every
+# renewal rewrites both files atomically, so a run already in flight picks up
+# the new token without re-exec. Absent when no cloud gate mints a token here.
+_GITHUB_CREDENTIAL_SUBPATH = ("credentials", "github")
+_CREDENTIAL_DIR_MODE = 0o700
+_CREDENTIAL_FILE_MODE = 0o600
 _publishing_token_retry_at = 0.0
 _publishing_token_lock = threading.Lock()
 
@@ -292,7 +303,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # vanished, the restart didn't help, the daemon looked healthy).
         # The poll loop below re-attempts registration once it gets through.
         print(f"[brnrd:cloud] register failed: {e}, will retry")
-    _try_refresh_publishing_credential(state, force=True)
+    _try_refresh_publishing_credential(state, force=True, brr_dir=brr_dir)
     threading.Thread(
         target=_dashboard_publish_loop,
         args=(brr_dir, inbox_dir),
@@ -303,7 +314,7 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     auth_backoff = _AUTH_RETRY_MIN_S
     while True:
         try:
-            _try_refresh_publishing_credential(_load_state(brr_dir))
+            _try_refresh_publishing_credential(_load_state(brr_dir), brr_dir=brr_dir)
             _loop_once(brr_dir, inbox_dir, responses_dir)
             runtime.record_loop_health(brr_dir, "cloud", ok=True)
             backoff = 1
@@ -432,7 +443,7 @@ def ensure_publishing_credential_fresh(
         return publishing_token_seconds_remaining()
     if not state.get("token") or not state.get("brnrd_url"):
         return publishing_token_seconds_remaining()
-    _try_refresh_publishing_credential(state, min_remaining_s=min_remaining_s)
+    _try_refresh_publishing_credential(state, min_remaining_s=min_remaining_s, brr_dir=target)
     return publishing_token_seconds_remaining()
 
 
@@ -442,11 +453,83 @@ def _register(brr_dir: Path, state: dict) -> None:
     _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": caps})
 
 
+def github_credentials_dir(brr_dir: Path | None = None) -> Path | None:
+    """Absolute path of the daemon-refreshed GitHub credential pointer dir.
+
+    ``None`` when no cloud gate state dir is known in this process — nothing
+    mints or refreshes a managed token here, so there is no pointer to read.
+    Callers building a runner env point ``GH_CONFIG_DIR`` and a git credential
+    helper at this directory rather than freezing a token value into the env.
+    """
+    target = brr_dir if brr_dir is not None else _publishing_state_dir
+    if target is None:
+        return None
+    return Path(os.path.abspath(target)).joinpath(*_GITHUB_CREDENTIAL_SUBPATH)
+
+
+def _atomic_write_private(path: Path, content: str) -> None:
+    """Write *content* to *path* atomically with owner-only POSIX mode.
+
+    Same discipline as the gate state store (#499): the temp file is made
+    private *before* it holds the secret, then renamed into place, so a
+    concurrent reader never sees a partial token and a permissive existing
+    mode is repaired on every rewrite.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(path.parent, _CREDENTIAL_DIR_MODE)
+        except OSError:
+            pass
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        if os.name == "posix":
+            os.fchmod(fd, _CREDENTIAL_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = -1
+            stream.write(content)
+        os.replace(tmp_name, path)
+    finally:
+        if fd != -1:
+            os.close(fd)
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def _write_github_credential_pointer(brr_dir: Path | None, token: str) -> None:
+    """Publish the managed token as a gh-shaped pointer dir (issue #477).
+
+    Best-effort: a failure to write the pointer must never break credential
+    renewal itself — the daemon still holds the token in memory for its own
+    pushes even if the runner-facing pointer could not be refreshed.
+    """
+    pointer_dir = github_credentials_dir(brr_dir)
+    if pointer_dir is None:
+        return
+    try:
+        # gh reads `<GH_CONFIG_DIR>/hosts.yml` at each invocation, so writing
+        # the current token here keeps every `gh` call authenticated as the
+        # managed identity without an env snapshot.
+        hosts_yml = (
+            "github.com:\n"
+            f"    oauth_token: {token}\n"
+            "    user: x-access-token\n"
+            "    git_protocol: https\n"
+        )
+        _atomic_write_private(pointer_dir / "token", token + "\n")
+        _atomic_write_private(pointer_dir / "hosts.yml", hosts_yml)
+    except OSError as exc:
+        print(f"[brnrd:cloud] github credential pointer write failed: {exc}")
+
+
 def _refresh_publishing_credential(
     state: dict,
     *,
     force: bool = False,
     min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
+    brr_dir: Path | None = None,
 ) -> None:
     """Keep the managed GitHub App token in memory, never cloud state.
 
@@ -454,6 +537,11 @@ def _refresh_publishing_credential(
     loop asks for the default (renew only when nearly expired); dispatch asks
     for a much larger floor, because it is handing the token to a process that
     cannot come back for a fresh one.
+
+    Every renewal also rewrites the runner-facing pointer dir (issue #477) so
+    a run already in flight — which cannot re-read an exported env value —
+    still resolves the fresh token through ``GH_CONFIG_DIR`` and the git
+    credential helper.
     """
     global _publishing_token_expires_at
     if os.environ.get("GH_TOKEN"):
@@ -470,8 +558,10 @@ def _refresh_publishing_credential(
             timeout=20,
         )
         expires_at = datetime.fromisoformat(str(credential["expires_at"]).replace("Z", "+00:00"))
-        os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = str(credential["token"])
+        token = str(credential["token"])
+        os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] = token
         _publishing_token_expires_at = expires_at.timestamp()
+        _write_github_credential_pointer(brr_dir, token)
         print(
             f"[brnrd:cloud] publishing as {credential.get('login') or 'GitHub App'} "
             f"(credential expires {expires_at.isoformat()})"
@@ -483,6 +573,7 @@ def _try_refresh_publishing_credential(
     *,
     force: bool = False,
     min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
+    brr_dir: Path | None = None,
 ) -> None:
     """Refresh best-effort without letting publishing auth stall chat ingress."""
     global _publishing_token_retry_at
@@ -490,7 +581,9 @@ def _try_refresh_publishing_credential(
     if not force and now < _publishing_token_retry_at:
         return
     try:
-        _refresh_publishing_credential(state, force=force, min_remaining_s=min_remaining_s)
+        _refresh_publishing_credential(
+            state, force=force, min_remaining_s=min_remaining_s, brr_dir=brr_dir
+        )
     except Exception as exc:
         _publishing_token_retry_at = now + 5 * 60
         print(f"[brnrd:cloud] publishing credential unavailable: {exc}")

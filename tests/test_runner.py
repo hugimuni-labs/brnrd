@@ -84,6 +84,78 @@ def test_clean_runner_environ_uses_managed_app_token_without_leaking_marker(monk
     assert "BRNRD_MANAGED_GITHUB_TOKEN" not in cleaned
 
 
+def test_clean_runner_environ_points_managed_path_at_pointer_dir(tmp_path, monkeypatch):
+    """The managed credential is handed as a *pointer*, not a frozen value
+    (issue #477): GH_CONFIG_DIR + a token-file git helper, and no GH_TOKEN /
+    GITHUB_TOKEN that would override the pointer at gh's precedence."""
+    for key in tuple(os.environ):
+        if key == "GIT_CONFIG_COUNT" or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "human-token")
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / "token").write_text("app-token\n", encoding="utf-8")
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: pointer_dir)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert "GH_TOKEN" not in cleaned
+    assert "GITHUB_TOKEN" not in cleaned
+    assert "BRNRD_MANAGED_GITHUB_TOKEN" not in cleaned
+    assert cleaned["GH_CONFIG_DIR"] == str(pointer_dir)
+    assert cleaned["GIT_CONFIG_COUNT"] == "3"
+    assert cleaned["GIT_CONFIG_KEY_0"] == "url.https://github.com/.insteadOf"
+    assert cleaned["GIT_CONFIG_KEY_2"] == "credential.helper"
+    assert f"cat {str(pointer_dir / 'token')}" in cleaned["GIT_CONFIG_VALUE_2"]
+    assert "$GH_TOKEN" not in cleaned["GIT_CONFIG_VALUE_2"]
+
+
+def test_clean_runner_environ_falls_back_when_no_pointer_dir(monkeypatch):
+    """Without a cloud gate publishing the pointer there is nothing to point
+    at, so a managed token still authenticates via the legacy frozen path."""
+    for key in tuple(os.environ):
+        if key == "GIT_CONFIG_COUNT" or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: None)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert cleaned["GH_TOKEN"] == "app-token"
+    assert "GH_CONFIG_DIR" not in cleaned
+    assert "password=$GH_TOKEN" in cleaned["GIT_CONFIG_VALUE_2"]
+
+
+def test_clean_runner_environ_operator_gh_token_ignores_pointer(tmp_path, monkeypatch):
+    """An operator GH_TOKEN is brnrd-independent and must keep today's
+    passthrough behaviour even when a managed pointer exists."""
+    for key in tuple(os.environ):
+        if key == "GIT_CONFIG_COUNT" or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GH_TOKEN", "operator-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "human-token")
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "app-token")
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / "token").write_text("app-token\n", encoding="utf-8")
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: pointer_dir)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert cleaned["GH_TOKEN"] == "operator-token"
+    assert "GH_CONFIG_DIR" not in cleaned
+    assert "password=$GH_TOKEN" in cleaned["GIT_CONFIG_VALUE_2"]
+
+
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
     assert result is None or isinstance(result, str)
