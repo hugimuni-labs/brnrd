@@ -979,3 +979,40 @@ def test_concurrent_appends_for_different_events_dont_lose_records(tmp_path):
     # Merged read across both files returns every record exactly once.
     all_records = conversations.read_records(tmp_path, "k")
     assert len(all_records) == 100
+
+
+def test_conversation_store_is_owner_only(tmp_path):
+    """Chat history carries bodies + identities: 0600, and 0644 heals on append."""
+    import os
+    import stat
+
+    _append_tg_event(tmp_path, "evt-perm-1", 1)
+    key = next(iter(conversations.list_conversations(tmp_path)))
+    files = sorted(conversations.conversation_path(tmp_path, key).glob("*.jsonl"))
+    assert files
+    assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in files)
+
+    # A legacy file sitting at 0644 is repaired by the next append to it.
+    legacy = files[0]
+    os.chmod(legacy, 0o644)
+    conversations.append_event(  # same event id -> same per-event file
+        tmp_path, key, {
+            "id": "evt-perm-1", "source": "telegram", "body": "again",
+            "telegram_chat_id": 10, "telegram_message_id": 1,
+        },
+    )
+    assert stat.S_IMODE(legacy.stat().st_mode) == 0o600
+
+
+def test_grouped_history_files_are_owner_only(tmp_path):
+    import stat
+
+    _append_tg_event(tmp_path, "evt-perm-3", 3)
+    key = next(iter(conversations.list_conversations(tmp_path)))
+    out = tmp_path / "history"
+    conversations.write_grouped_history_files(tmp_path, out, key)
+    assert stat.S_IMODE(out.stat().st_mode) == 0o700
+    jsonl = list(out.glob("*.jsonl"))
+    assert jsonl
+    for f in jsonl:
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600
