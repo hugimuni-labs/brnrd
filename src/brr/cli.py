@@ -320,12 +320,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = runners_sub.add_parser(
         "list",
-        help="list declared runner profiles and the bundled Core registry")
+        help="list runner profiles from the unified catalog projection")
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
     p.add_argument("--all", action="store_true",
-                   help="include bundled Cores whose Shell is not on PATH")
+                   help="include profiles whose Shell is not on PATH (shown by default with ✗)")
     p.set_defaults(func=cmd_runners_list)
+
+    p = runners_sub.add_parser(
+        "doctor",
+        help="check runner catalog health: stale cores, missing shells, auth issues")
+    p.set_defaults(func=cmd_runners_doctor)
 
     # Resident-facing introspection: the boot text tells a wake the spelling
     # (`brnrd prompts show`), so it needs no discovery slot in the operator's
@@ -832,33 +837,24 @@ def _format_portal_state(payload: dict) -> str:
 
 
 def cmd_runners_list(args):
-    """List declared runner profiles and the bundled Core registry.
+    """List the unified runner catalog — the one projection for all consumers.
 
-    Two sections:
+    Uses ``runner.available_runner_catalog()`` as the authoritative source,
+    the same projection the wake prompt and dashboard spool rack consume.
+    Every profile is shown; unavailable ones (Shell not on PATH, or auth env
+    missing) are marked with ✗.  Stale entries (freshness_date > 30 days)
+    are flagged.  A ★ marks the currently resolved runner.
 
-    - **Declared profiles** — what *runners.md* declares (bundled or
-      project-owned). These are the profiles the selector and daemon
-      actually invoke. Shows PATH availability, class, hooks, and
-      cost_rank.
-    - **Bundled Core registry** — the ``runner_cores`` module's registry of
-      known Shell/Core pairs with model IDs, provider, class, and freshness.
-      Filtered to PATH-available Shells by default; ``--all`` shows all.
-      The registry extends the selector when a user pins ``core=`` in
-      ``.brr/config`` without declaring an explicit profile entry.
-
-    A ★ marks the currently resolved runner (the one the daemon would
-    pick for the next run).
+    ``--all`` is accepted for backwards-compat but is now a no-op: unavailable
+    profiles are always included (with marks) by the unified projection.
     """
     import json as _json
-    import shutil
     import sys
 
     from . import runner as runner_mod
-    from . import runner_cores, runner_select
 
     repo_root = _maybe_repo_root()
 
-    # Current runner — best-effort; may fail outside a repo or without a Shell
     current_runner: str | None = None
     current_runner_err: str | None = None
     try:
@@ -867,62 +863,13 @@ def cmd_runners_list(args):
     except Exception as exc:  # noqa: BLE001
         current_runner_err = str(exc)
 
-    # Declared profiles (from runners.md, bundled or project)
-    declared_profiles: dict[str, dict] = {}
-    try:
-        declared_profiles = runner_mod._load_profiles(repo_root) or {}
-    except Exception:
-        declared_profiles = {}
-
-    # Build declared-profile rows
-    declared_rows = []
-    for name, meta in declared_profiles.items():
-        meta = meta or {}
-        binary = str(meta.get("binary") or name).strip()
-        on_path = shutil.which(binary) is not None
-        is_alias = bool(meta.get("binary"))  # alias profiles have an explicit binary
-        declared_rows.append({
-            "name": name,
-            "shell": binary,
-            "model": str(meta.get("model") or "").strip() or None,
-            "class": str(meta.get("class") or "").strip() or None,
-            "provider": str(meta.get("provider") or "").strip() or None,
-            "hooks": str(meta.get("hooks") or "").strip() or None,
-            "cost_rank": meta.get("cost_rank"),
-            "quota_source": str(meta.get("quota_source") or "").strip() or None,
-            "owner": str(meta.get("owner") or "user").strip() or "user",
-            "on_path": on_path,
-            "is_alias": is_alias,
-            "is_current": name == current_runner,
-        })
-
-    # Bundled Core registry rows
-    show_all = getattr(args, "all", False)
-    all_bundled = runner_cores.all_cores()
-    bundled_rows = []
-    for name, entry in all_bundled.items():
-        shell = str(entry.get("shell") or "").strip()
-        on_path = shutil.which(shell) is not None
-        if not show_all and not on_path:
-            continue
-        bundled_rows.append({
-            "name": name,
-            "shell": shell,
-            "model": str(entry.get("model") or "").strip() or None,
-            "class": str(entry.get("class") or "").strip() or None,
-            "provider": str(entry.get("provider") or "").strip() or None,
-            "cost_rank": entry.get("cost_rank"),
-            "freshness_date": str(entry.get("freshness_date") or "").strip() or None,
-            "on_path": on_path,
-            "is_current": name == current_runner,
-        })
+    catalog = runner_mod.available_runner_catalog(repo_root, selected=current_runner)
 
     if getattr(args, "json", False):
         print(_json.dumps({
             "current_runner": current_runner,
             "current_runner_error": current_runner_err,
-            "declared": declared_rows,
-            "bundled_cores": bundled_rows,
+            "profiles": catalog,
         }, indent=2, sort_keys=True))
         return 0
 
@@ -931,60 +878,99 @@ def cmd_runners_list(args):
         print(f"[brnrd runners] note: could not resolve current runner — "
               f"{current_runner_err}", file=sys.stderr)
 
-    def _mark(row: dict) -> str:
-        return "★" if row.get("is_current") else " "
+    available_count = sum(1 for r in catalog if r.get("available"))
+    stale_count = sum(1 for r in catalog if r.get("stale"))
+    stale_note = f", {stale_count} stale" if stale_count else ""
+    print(
+        f"runner catalog — {len(catalog)} profile(s), "
+        f"{available_count} available{stale_note}  "
+        "(★ = selected, ✓ = available, ✗ = unavailable, ⚠ = stale):"
+    )
 
-    def _avail(row: dict) -> str:
-        return "✓" if row.get("on_path") else "✗"
+    if not catalog:
+        print("  (none — install claude, codex, or gemini, or declare runners.md profiles)")
+        return 0
 
-    # Declared profiles
-    print(f"declared profiles — {len(declared_rows)} profile(s), "
-          f"{sum(1 for r in declared_rows if r['on_path'])} on PATH  "
-          "(★ = selected by resolver, ✓ = Shell on PATH):")
-    if not declared_rows:
-        print("  (none)")
-    else:
-        for row in declared_rows:
-            parts = [
-                f"{_mark(row)} {_avail(row)} {row['name']:<28}",
-                f"{row['shell']:<8}",
-                f"{row['class'] or '—':<10}",
-                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
-            ]
-            extras = []
-            if row["model"]:
-                extras.append(f"model={row['model']}")
-            if row["hooks"]:
-                extras.append(f"hooks={row['hooks']}")
-            if row["is_alias"]:
-                extras.append("alias")
-            if not row["on_path"]:
-                extras.append("not found")
-            if extras:
-                parts.append(f"  [{', '.join(extras)}]")
-            print("  " + "  ".join(parts))
+    for row in catalog:
+        is_current = row.get("selected") or row.get("name") == current_runner
+        sel_mark = "★" if is_current else " "
+        avail = "✓" if row.get("available") else "✗"
+        stale_mark = " ⚠" if row.get("stale") else ""
+        name = str(row.get("name") or "")
+        shell = str(row.get("shell") or "")
+        model = str(row.get("model") or "—")
+        if row.get("pin"):
+            model = f"{model} (pin:{row['pin']})"
+        cls = str(row.get("class") or "—")
+        cost = row.get("cost_rank")
+        cost_str = f"rank={cost}" if cost is not None else "rank=—"
+        parts = [
+            f"{sel_mark} {avail} {name:<28}",
+            f"{shell:<8}",
+            f"{model:<28}",
+            f"{cls:<10}",
+            cost_str,
+        ]
+        extras = []
+        if row.get("freshness_date"):
+            extras.append(f"fresh={row['freshness_date']}{stale_mark.strip()}")
+        if row.get("hooks"):
+            extras.append(f"hooks={row['hooks']}")
+        if row.get("quota_source"):
+            extras.append(f"quota={row['quota_source']}")
+        if row.get("availability") not in (None, "available"):
+            extras.append(row["availability"])
+        if extras:
+            parts.append(f"  [{', '.join(extras)}]")
+        print("  " + "  ".join(parts))
 
-    # Bundled Core registry
-    print()
-    all_label = " (all, including unavailable)" if show_all else ""
-    print(f"bundled Core registry{all_label} — {len(bundled_rows)} "
-          f"core(s) shown  (add --all to include unavailable Shells):")
-    if not bundled_rows:
-        print("  (none on PATH — install claude, codex, or gemini)")
-    else:
-        for row in bundled_rows:
-            avail = "✓" if row.get("on_path") else "✗ (not on PATH)"
-            parts = [
-                f"  {_mark(row)} {avail}  {row['name']:<20}",
-                f"{row['shell']:<8}",
-                f"{row['model'] or '—':<30}",
-                f"{row['class'] or '—':<10}",
-                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
-                f"fresh={row['freshness_date'] or '—'}",
-            ]
-            print("  ".join(parts))
+    if stale_count:
+        print(f"\n  ⚠ {stale_count} stale profile(s) — run `brnrd runners doctor` for details")
 
     return 0
+
+
+def cmd_runners_doctor(args):
+    """Check runner catalog health: stale cores, missing shells, auth issues.
+
+    Prints a summary of health issues found in the catalog.  Exit code 0 when
+    clean; 1 when warnings are present.
+    """
+    import sys
+
+    from . import runner as runner_mod
+
+    repo_root = _maybe_repo_root()
+    catalog = runner_mod.available_runner_catalog(repo_root)
+
+    issues: list[str] = []
+
+    stale = [r for r in catalog if r.get("stale")]
+    if stale:
+        issues.append(f"stale cores ({len(stale)}):")
+        for r in stale:
+            issues.append(
+                f"  {r['name']} — fresh={r.get('freshness_date', '?')} "
+                f"(shell={r.get('shell')}, model={r.get('model')})"
+            )
+
+    unavail = [r for r in catalog if not r.get("available")]
+    if unavail:
+        issues.append(f"unavailable profiles ({len(unavail)}):")
+        for r in unavail:
+            issues.append(
+                f"  {r['name']} — {r.get('availability', 'unknown')} "
+                f"(shell={r.get('shell')})"
+            )
+
+    if not issues:
+        print("brnrd runners doctor: catalog is healthy ✓")
+        return 0
+
+    print("brnrd runners doctor: issues found", file=sys.stderr)
+    for line in issues:
+        print(f"  {line}", file=sys.stderr)
+    return 1
 
 
 def cmd_bench_scenarios(args):

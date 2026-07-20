@@ -22,15 +22,29 @@ when it is absent, the capability cache may derive economy/balanced/strong from
 benchmark scores. Empty benchmark scores stay empty rather than inventing a
 capability claim.
 
+**Claude aliases vs. exact IDs:** Claude Code's ``--model`` flag accepts short
+aliases (``haiku``, ``sonnet``, ``opus``, ``fable``) that always resolve to the
+latest model in that family. The bundled Claude entries use these aliases so the
+rack stays fresh without a brr release on every model bump. The ledger attests
+the *actual* Core from the Shell result on every wake, so alias drift is visible
+after the fact even when we do not know the resolved ID at request time.
+
+When reproducibility matters more than freshness, add a ``pin:`` field with an
+exact model ID (e.g. ``"claude-sonnet-4-6"``). When ``pin:`` is set it overrides
+the alias as the ``--model`` flag value; ``model:`` still shows in the catalog as
+the logical tier name. Codex entries use exact IDs (no alias family exists);
+their staleness is handled by :func:`stale_entries`.
+
 **TTL / staleness:** the registry is static within a brr release. Operators
 who need to add a model before the next brr release add an entry to their
 project ``runners.md`` — those profile records override and extend this
-registry. A ``freshness_date`` field in each entry records when it was last
-verified so a future tooling pass can flag stale entries.
+registry. A ``freshness_date`` field records when an entry was last verified;
+:func:`stale_entries` flags entries older than a configurable threshold.
 """
 
 from __future__ import annotations
 
+import datetime
 from functools import lru_cache
 import json
 import os
@@ -56,53 +70,60 @@ _MODEL_TOKEN_RE = re.compile(
 # Format per entry:
 #   "profile_name": {         # becomes RunnerProfile.name / .profile
 #     "shell": "<cli_name>",  # binary that must be on PATH
-#     "model": "<model_id>",  # the Core (exact CLI flag value)
+#     "model": "<alias>",     # the Core — alias for claude, exact ID for codex
+#     "pin": "<exact_id>",    # optional: overrides model as --model flag value
 #     "provider": "...",
 #     "class": "economy"|"balanced"|"strong",
 #     "cost_rank": <int>,     # lower = cheaper (tune freely)
 #     "freshness_date": "YYYY-MM-DD",
 #   }
 #
+# Claude entries use the short alias ("haiku", "sonnet", "opus", "fable") so
+# the rack stays current across model bumps without a brr release.  Add "pin:"
+# with an exact model ID for reproducible pinning.
+#
 # Entries where "class" is omitted stay unclassed (the selector treats them
 # as unknown-cost, sorted after all classed profiles).
 
 _BUNDLED_CORES: dict[str, dict[str, Any]] = {
     # ── Claude (Anthropic) ──────────────────────────────────────────────
-    # Claude Code's --model flag accepts model IDs directly; aliases like
-    # "haiku", "sonnet" also work but IDs are more stable across releases.
+    # Claude Code's --model flag accepts short aliases ("haiku", "sonnet",
+    # "opus", "fable") that always resolve to the latest model in that
+    # family.  We use aliases here so the rack stays fresh by construction;
+    # add a "pin:" field (exact model ID) when reproducibility matters more.
     "claude-haiku": {
         "shell": "claude",
-        "model": "claude-haiku-4-5-20251001",
+        "model": "haiku",
         "provider": "anthropic",
         "class": "economy",
         "cost_rank": 10,
-        "freshness_date": "2026-06-29",
+        "freshness_date": "2026-07-20",
     },
     "claude-sonnet": {
         "shell": "claude",
-        "model": "claude-sonnet-4-6",
+        "model": "sonnet",
         "provider": "anthropic",
         "class": "balanced",
         "cost_rank": 30,
-        "freshness_date": "2026-06-29",
+        "freshness_date": "2026-07-20",
     },
     "claude-opus": {
         "shell": "claude",
-        "model": "claude-opus-4-8",
+        "model": "opus",
         "provider": "anthropic",
         "class": "strong",
         "cost_rank": 50,
-        "freshness_date": "2026-06-29",
+        "freshness_date": "2026-07-20",
     },
     "claude-fable": {
         "shell": "claude",
-        "model": "claude-fable-5",
+        "model": "fable",
         "provider": "anthropic",
         # Priciest core in the rack (maintainer-confirmed 2026-07-11);
         # was mislabeled economy/rank-15 in the 2026-06-29 seed.
         "class": "strong",
         "cost_rank": 55,
-        "freshness_date": "2026-07-11",
+        "freshness_date": "2026-07-20",
     },
     # ── Codex (OpenAI) ──────────────────────────────────────────────────
     # codex exec -m <model> selects the Core. The GPT-5.6 family maps onto
@@ -157,6 +178,54 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
 def all_cores() -> dict[str, dict[str, Any]]:
     """The full bundled Core registry, keyed by profile name."""
     return dict(_BUNDLED_CORES)
+
+
+def stale_entries(
+    registry: dict[str, dict[str, Any]],
+    now: datetime.date | str | None = None,
+    threshold_days: int = 30,
+) -> dict[str, dict[str, Any]]:
+    """Registry entries whose ``freshness_date`` is older than *threshold_days*.
+
+    Returns the subset of *registry* whose entries have a parseable
+    ``freshness_date`` that predates *now* by more than *threshold_days*.
+    Entries with no ``freshness_date`` or an unparseable one are excluded
+    from the result (not flagged as stale — absence of data is not staleness).
+
+    *now* defaults to today's date when omitted; pass a ``datetime.date`` or
+    an ISO-8601 string to compare against a fixed point (useful in tests).
+    """
+    if now is None:
+        today = datetime.date.today()
+    elif isinstance(now, str):
+        today = datetime.date.fromisoformat(now)
+    else:
+        today = now
+    threshold = datetime.timedelta(days=threshold_days)
+    out: dict[str, dict[str, Any]] = {}
+    for name, entry in registry.items():
+        raw = _str(entry.get("freshness_date"))
+        if not raw:
+            continue
+        try:
+            freshness = datetime.date.fromisoformat(raw)
+        except ValueError:
+            continue
+        if today - freshness > threshold:
+            out[name] = entry
+    return out
+
+
+def effective_model(entry: dict[str, Any]) -> str | None:
+    """The ``--model`` flag value for *entry*: ``pin`` when set, else ``model``.
+
+    ``model`` holds the logical tier name (alias for Claude, exact ID for
+    Codex).  ``pin`` is the optional reproducibility override — an exact model
+    ID that takes precedence over the alias when set.  The command builder and
+    any consumer that needs to pass a value to ``--model`` should call this
+    rather than reading ``model`` directly.
+    """
+    return _str(entry.get("pin")) or _str(entry.get("model"))
 
 
 @lru_cache(maxsize=16)
@@ -223,7 +292,8 @@ def available_cores(
         shell = str(entry.get("shell") or name).strip()
         if not shell or shutil.which(shell) is None:
             continue
-        cap_meta = runner_capabilities.metadata_for_model(entry.get("model"))
+        # Look up capability by the effective model (pin overrides alias).
+        cap_meta = runner_capabilities.metadata_for_model(effective_model(entry))
         profile = runner_select.RunnerProfile(
             name=name,
             profile=shell,  # invoke the base Shell; Core is in cmd/model
@@ -312,11 +382,14 @@ def generated_profile_entries(
         bases = _base_profiles_for_shell(declared, shell)
         if not bases:
             continue
+        # ``pin`` overrides the alias as the actual ``--model`` flag value.
+        pin = _str(entry.get("pin"))
+        model_flag = pin or model
         for base_name, base in bases:
             name = _generated_profile_name(core_name, shell, base_name)
             if name in out:
                 continue
-            cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model)
+            cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model_flag)
             generated: dict[str, Any] = {
                 "binary": _str(base.get("binary")) or shell,
                 "cmd": cmd,
@@ -330,6 +403,8 @@ def generated_profile_entries(
                 "freshness_source": _str(entry.get("freshness_source")),
                 "generated_core": True,
             }
+            if pin:
+                generated["pin"] = pin
             generated.update(runner_capabilities.metadata_for_model(model))
             hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
             if hooks:
