@@ -138,10 +138,15 @@
 			{#if stats !== null}
 				<span class="text-amber-100">{stats.accounts}</span> accounts
 			{/if}
-			{#if repo !== null}
+			<!-- A zero counter is anti-proof on a section arguing liveness —
+			     zeros hide themselves (seen live 2026-07-20: "★ 0 stars ·
+			     0 forks" pre-move, pre-announcement). -->
+			{#if repo !== null && repo.stars > 0}
 				{#if stats !== null}·{/if}
-				<span class="text-amber-100">★ {repo.stars}</span> stars ·
-				<span class="text-amber-100">{repo.forks}</span> forks
+				<span class="text-amber-100">★ {repo.stars}</span> stars
+				{#if repo.forks > 0}
+					· <span class="text-amber-100">{repo.forks}</span> forks
+				{/if}
 			{/if}
 			{#if seatsLeft !== null && seatsLeft > 0}
 				· <span class="text-amber-100">{seatsLeft}</span> of

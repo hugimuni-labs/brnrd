@@ -11,9 +11,17 @@
 		runs: LiveRun[];
 		stale: boolean;
 		now: number;
+		/** When provided, a card tap *selects* the run — the page's §2a sheet
+		 *  answers with the node panel, the same grammar a loom tap speaks —
+		 *  instead of expanding detail inline. One run, one panel (2026-07-20:
+		 *  "3 visual elements for a run" — the multi-run grid's inline
+		 *  expansion was the third grammar, and the only one #486's collapse
+		 *  never reached). Without the callback (the unmirrored fallbacks,
+		 *  where no node can answer) the local expansion remains the detail. */
+		onSelect?: (runId: string) => void;
 	}
 
-	let { runs, stale, now }: Props = $props();
+	let { runs, stale, now, onSelect }: Props = $props();
 
 	// Maintainer ask (2026-07-09, same thread as #329/#331): "why don't we
 	// also fix the fact that the active run is unclickable?" — the receipts
@@ -142,9 +150,13 @@
 					<button
 						type="button"
 						class="block w-full cursor-pointer text-left"
-						onclick={() => toggle(run.id)}
-						aria-expanded={isOpen}
-						title={isOpen ? 'collapse' : 'expand run detail'}
+						onclick={() => (onSelect ? onSelect(run.run_id || run.id) : toggle(run.id))}
+						aria-expanded={onSelect ? undefined : isOpen}
+						title={onSelect
+							? 'open run detail below'
+							: isOpen
+								? 'collapse'
+								: 'expand run detail'}
 					>
 						<div class="flex items-center justify-between gap-2">
 							<span class="flex min-w-0 items-center gap-1.5">
@@ -163,7 +175,7 @@
 							</span>
 							<span class="flex shrink-0 items-center gap-1.5 font-mono text-ink-quiet">
 								{ageSince(run.started_at, now) ?? ''}
-								<span class="text-[9px] text-ink-mute">{isOpen ? '▲' : '▼'}</span>
+								<span class="text-[9px] text-ink-mute">{onSelect ? '▸' : isOpen ? '▲' : '▼'}</span>
 							</span>
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
