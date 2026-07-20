@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -1870,3 +1872,131 @@ def test_codex_quota_burn_is_absent_when_the_evidence_is_too_thin(tmp_path, monk
 
     assert shell is not None
     assert shell["burn"] is None
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-time publishing-token freshness
+# ---------------------------------------------------------------------------
+# The runner env snapshots BRNRD_MANAGED_GITHUB_TOKEN once and holds it for the
+# whole run. The poll loop's renewal threshold is a ceiling on staleness for
+# the daemon and a 10-minute floor for whoever is dispatched just before a
+# renewal — so dispatch asks for a floor of its own.
+
+
+def _reset_publishing_globals(monkeypatch, *, expires_in: float, state_dir=None):
+    monkeypatch.setattr(cloud, "_publishing_token_expires_at", time.time() + expires_in)
+    monkeypatch.setattr(cloud, "_publishing_token_retry_at", 0.0)
+    monkeypatch.setattr(cloud, "_publishing_state_dir", state_dir)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("BRNRD_MANAGED_GITHUB_TOKEN", "stale-token")
+
+
+def _record_refreshes(monkeypatch, *, new_life: float = 3600.0):
+    calls = []
+
+    def fake_request(url, method, path, **kw):
+        calls.append(path)
+        expires = datetime.fromtimestamp(time.time() + new_life, tz=timezone.utc)
+        return {"token": "fresh-token", "expires_at": expires.isoformat(), "login": "app"}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    return calls
+
+
+def test_dispatch_refreshes_a_token_the_poll_loop_would_have_left_alone(tmp_path, monkeypatch):
+    """35 minutes left is comfortably outside the poll loop's 10-minute window,
+    so nothing would have renewed it — but it is under the dispatch floor, and
+    a run handed 35 minutes can still die mid-push. This is the exact gap that
+    killed a push 18 minutes into a run on 2026-07-19."""
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=35 * 60, state_dir=brr_dir)
+    monkeypatch.setattr(
+        cloud, "_load_state", lambda d: {"token": "acct", "brnrd_url": "https://brnrd.dev"}
+    )
+    calls = _record_refreshes(monkeypatch)
+
+    remaining = cloud.ensure_publishing_credential_fresh(brr_dir)
+
+    assert calls == ["/v1/daemons/publishing-credential"]
+    assert os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] == "fresh-token"
+    assert remaining > 50 * 60
+
+
+def test_dispatch_leaves_an_already_fresh_token_alone(tmp_path, monkeypatch):
+    """A token minted moments ago must not be re-minted on every dispatch —
+    the check is a floor, not a per-run credential burn."""
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=58 * 60, state_dir=brr_dir)
+    monkeypatch.setattr(
+        cloud, "_load_state", lambda d: {"token": "acct", "brnrd_url": "https://brnrd.dev"}
+    )
+    calls = _record_refreshes(monkeypatch)
+
+    cloud.ensure_publishing_credential_fresh(brr_dir)
+
+    assert calls == []
+    assert os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] == "stale-token"
+
+
+def test_dispatch_never_blocks_a_run_when_the_credential_service_is_down(tmp_path, monkeypatch):
+    """A run that cannot push is bad; a run that cannot start is worse. brnrd
+    mid-deploy, offline, or refusing must leave dispatch exactly where it was."""
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=5 * 60, state_dir=brr_dir)
+    monkeypatch.setattr(
+        cloud, "_load_state", lambda d: {"token": "acct", "brnrd_url": "https://brnrd.dev"}
+    )
+
+    def boom(*a, **kw):
+        raise RuntimeError("502 Bad Gateway")
+
+    monkeypatch.setattr(cloud, "_request", boom)
+
+    remaining = cloud.ensure_publishing_credential_fresh(brr_dir)
+
+    assert os.environ["BRNRD_MANAGED_GITHUB_TOKEN"] == "stale-token"
+    assert remaining < 6 * 60
+
+
+def test_dispatch_is_a_no_op_without_a_cloud_gate(monkeypatch):
+    """Local-only installs mint no managed token; there is nothing to keep
+    fresh and nothing to phone home about."""
+    _reset_publishing_globals(monkeypatch, expires_in=1.0, state_dir=None)
+    calls = _record_refreshes(monkeypatch)
+
+    cloud.ensure_publishing_credential_fresh()
+
+    assert calls == []
+
+
+def test_an_operator_supplied_gh_token_is_never_touched(tmp_path, monkeypatch):
+    """GH_TOKEN is the publishing-identity override: brnrd did not mint it,
+    cannot date it, and must not replace it with one of its own."""
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=1.0, state_dir=brr_dir)
+    monkeypatch.setenv("GH_TOKEN", "operator-owned")
+    calls = _record_refreshes(monkeypatch)
+
+    assert cloud.ensure_publishing_credential_fresh(brr_dir) == float("inf")
+    assert calls == []
+    assert os.environ["GH_TOKEN"] == "operator-owned"
+
+
+def test_run_loop_records_where_the_credential_state_lives(tmp_path, monkeypatch):
+    """Runner env assembly has no brr_dir in hand — the gate has to leave its
+    own address behind, or dispatch silently degrades to a no-op."""
+    monkeypatch.setattr(cloud, "_publishing_state_dir", None)
+    brr_dir = tmp_path / ".brr"
+    monkeypatch.setattr(cloud, "_load_state", lambda d: {"token": "t", "brnrd_url": "u"})
+    monkeypatch.setattr(cloud, "_register", lambda *a, **k: None)
+    monkeypatch.setattr(cloud, "_try_refresh_publishing_credential", lambda *a, **k: None)
+
+    def stop(*a, **kw):
+        raise _StopLoop
+
+    monkeypatch.setattr(cloud.threading, "Thread", lambda **kw: type("T", (), {"start": stop})())
+
+    with pytest.raises(_StopLoop):
+        cloud.run_loop(brr_dir, tmp_path / "inbox", tmp_path / "resp")
+
+    assert cloud._publishing_state_dir == brr_dir
