@@ -39,7 +39,19 @@ _CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 # own short cadence instead — see kb/plan-loom-realtime-build.md slice 0.
 _DASHBOARD_PUBLISH_INTERVAL_S = 3
 _PUBLISHING_TOKEN_REFRESH_S = 10 * 60
+# A runner env *snapshots* BRNRD_MANAGED_GITHUB_TOKEN when it is built and
+# holds that copy for the whole run. The poll-loop threshold above is a
+# ceiling on staleness for the daemon, but it is a floor of only ten minutes
+# for whoever is dispatched just before a renewal — so a runner inherits
+# anywhere from 10 to 60 minutes of token life with no way to tell which, and
+# discovers the short end by failing to push work it has already committed.
+# Observed twice: a push died 18 minutes into a run (2026-07-19), and a run
+# woke to an already-expired token (2026-07-20). Dispatch therefore asks for a
+# *floor* rather than inheriting the poll loop's ceiling.
+_PUBLISHING_TOKEN_DISPATCH_MIN_S = 50 * 60
 _publishing_token_expires_at = 0.0
+# Set by run_loop: the brr dir whose cloud state mints the managed token.
+_publishing_state_dir: Path | None = None
 _publishing_token_retry_at = 0.0
 _publishing_token_lock = threading.Lock()
 
@@ -261,6 +273,11 @@ def bind(brr_dir: Path) -> None:
 
 
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
+    global _publishing_state_dir
+    # Remember where this gate's state lives so dispatch-time freshness checks
+    # can find it. Runner env assembly has no brr_dir in hand (and shouldn't
+    # need one — the credential belongs to the gate, not to the runner).
+    _publishing_state_dir = brr_dir
     state = _load_state(brr_dir)
     registered = False
     try:
@@ -368,20 +385,82 @@ def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
         time.sleep(_DASHBOARD_PUBLISH_INTERVAL_S)
 
 
+def publishing_token_seconds_remaining() -> float:
+    """Seconds of life left on the managed token, or ``0.0`` when there is none.
+
+    Reported rather than inferred: callers that want to *say* how much runway
+    they handed a runner should read it here instead of restating the policy
+    constant, which is the number most likely to drift.
+    """
+    if os.environ.get("GH_TOKEN"):
+        # Operator-supplied identity: brnrd never minted it and cannot date it.
+        return float("inf")
+    if not os.environ.get("BRNRD_MANAGED_GITHUB_TOKEN"):
+        return 0.0
+    return max(0.0, _publishing_token_expires_at - time.time())
+
+
+def ensure_publishing_credential_fresh(
+    brr_dir: Path | None = None,
+    *,
+    min_remaining_s: float = _PUBLISHING_TOKEN_DISPATCH_MIN_S,
+) -> float:
+    """Renew the managed token if it has less than *min_remaining_s* left.
+
+    Called when a runner environment is built. The poll loop's renewal is
+    paced for the daemon's own needs and can legitimately leave a token with
+    ten minutes on it; a dispatched runner holds its snapshot for the whole
+    run and has no way to ask for a newer one, so dispatch forces the check
+    here rather than hoping the loop happened to fire recently.
+
+    Best-effort by construction: a cloud gate that is unconfigured, offline,
+    or mid-deploy must never block a run from starting — the run simply
+    proceeds with whatever credential it already had, exactly as before this
+    check existed. Returns the seconds of token life the caller is handing
+    over, for logging.
+    """
+    if os.environ.get("GH_TOKEN"):
+        return float("inf")
+    target = brr_dir if brr_dir is not None else _publishing_state_dir
+    if target is None:
+        # No cloud gate running in this process — nothing mints a managed
+        # token here, so there is nothing to keep fresh.
+        return publishing_token_seconds_remaining()
+    try:
+        state = _load_state(target)
+    except Exception:
+        return publishing_token_seconds_remaining()
+    if not state.get("token") or not state.get("brnrd_url"):
+        return publishing_token_seconds_remaining()
+    _try_refresh_publishing_credential(state, min_remaining_s=min_remaining_s)
+    return publishing_token_seconds_remaining()
+
+
 def _register(brr_dir: Path, state: dict) -> None:
     caps = dict(state.get("capabilities") or {})
     caps.update(_repo_capabilities(brr_dir))
     _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": caps})
 
 
-def _refresh_publishing_credential(state: dict, *, force: bool = False) -> None:
-    """Keep the managed GitHub App token in memory, never cloud state."""
+def _refresh_publishing_credential(
+    state: dict,
+    *,
+    force: bool = False,
+    min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
+) -> None:
+    """Keep the managed GitHub App token in memory, never cloud state.
+
+    *min_remaining_s* is the amount of token life the caller needs. The poll
+    loop asks for the default (renew only when nearly expired); dispatch asks
+    for a much larger floor, because it is handing the token to a process that
+    cannot come back for a fresh one.
+    """
     global _publishing_token_expires_at
     if os.environ.get("GH_TOKEN"):
         return
     now = time.time()
     with _publishing_token_lock:
-        if not force and _publishing_token_expires_at - now > _PUBLISHING_TOKEN_REFRESH_S:
+        if not force and _publishing_token_expires_at - now > min_remaining_s:
             return
         credential = _request(
             state["brnrd_url"],
@@ -399,14 +478,19 @@ def _refresh_publishing_credential(state: dict, *, force: bool = False) -> None:
         )
 
 
-def _try_refresh_publishing_credential(state: dict, *, force: bool = False) -> None:
+def _try_refresh_publishing_credential(
+    state: dict,
+    *,
+    force: bool = False,
+    min_remaining_s: float = _PUBLISHING_TOKEN_REFRESH_S,
+) -> None:
     """Refresh best-effort without letting publishing auth stall chat ingress."""
     global _publishing_token_retry_at
     now = time.time()
     if not force and now < _publishing_token_retry_at:
         return
     try:
-        _refresh_publishing_credential(state, force=force)
+        _refresh_publishing_credential(state, force=force, min_remaining_s=min_remaining_s)
     except Exception as exc:
         _publishing_token_retry_at = now + 5 * 60
         print(f"[brnrd:cloud] publishing credential unavailable: {exc}")
