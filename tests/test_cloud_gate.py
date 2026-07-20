@@ -1982,6 +1982,71 @@ def test_an_operator_supplied_gh_token_is_never_touched(tmp_path, monkeypatch):
     assert os.environ["GH_TOKEN"] == "operator-owned"
 
 
+# ---------------------------------------------------------------------------
+# Runner-facing credential pointer (issue #477)
+# ---------------------------------------------------------------------------
+# The runner env is a snapshot and can never see a refreshed token exported
+# into it, so every renewal also rewrites a gh-shaped pointer dir the runner
+# reads at *use* time. gh reads hosts.yml via GH_CONFIG_DIR; git's helper cats
+# the token file at each push.
+
+
+def test_refresh_writes_a_gh_shaped_pointer_the_runner_can_read(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=1 * 60, state_dir=brr_dir)
+    monkeypatch.setattr(
+        cloud, "_load_state", lambda d: {"token": "acct", "brnrd_url": "https://brnrd.dev"}
+    )
+    _record_refreshes(monkeypatch)
+
+    cloud.ensure_publishing_credential_fresh(brr_dir)
+
+    pointer_dir = brr_dir / "credentials" / "github"
+    token_file = pointer_dir / "token"
+    hosts_file = pointer_dir / "hosts.yml"
+    assert token_file.read_text(encoding="utf-8") == "fresh-token\n"
+    hosts = hosts_file.read_text(encoding="utf-8")
+    assert "github.com:" in hosts
+    assert "oauth_token: fresh-token" in hosts
+    assert "user: x-access-token" in hosts
+    assert "git_protocol: https" in hosts
+    if os.name == "posix":
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+        assert (hosts_file.stat().st_mode & 0o777) == 0o600
+        assert (pointer_dir.stat().st_mode & 0o777) == 0o700
+
+
+def test_refresh_rewrites_the_pointer_atomically_on_renewal(tmp_path, monkeypatch):
+    """A second renewal must overwrite the pointer with the new token, not
+    leave a stale one behind — that is the whole point of the pointer."""
+    brr_dir = tmp_path / ".brr"
+    _reset_publishing_globals(monkeypatch, expires_in=1 * 60, state_dir=brr_dir)
+    monkeypatch.setattr(
+        cloud, "_load_state", lambda d: {"token": "acct", "brnrd_url": "https://brnrd.dev"}
+    )
+    tokens = iter(["first-token", "second-token"])
+
+    def fake_request(url, method, path, **kw):
+        expires = datetime.fromtimestamp(time.time() + 3600, tz=timezone.utc)
+        return {"token": next(tokens), "expires_at": expires.isoformat(), "login": "app"}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    token_file = brr_dir / "credentials" / "github" / "token"
+
+    cloud.ensure_publishing_credential_fresh(brr_dir)
+    assert token_file.read_text(encoding="utf-8") == "first-token\n"
+
+    # Force the second mint (the first left ~60m, above the dispatch floor).
+    monkeypatch.setattr(cloud, "_publishing_token_expires_at", time.time() + 60)
+    cloud.ensure_publishing_credential_fresh(brr_dir)
+    assert token_file.read_text(encoding="utf-8") == "second-token\n"
+
+
+def test_github_credentials_dir_absent_without_a_gate(monkeypatch):
+    monkeypatch.setattr(cloud, "_publishing_state_dir", None)
+    assert cloud.github_credentials_dir() is None
+
+
 def test_run_loop_records_where_the_credential_state_lives(tmp_path, monkeypatch):
     """Runner env assembly has no brr_dir in hand — the gate has to leave its
     own address behind, or dispatch silently degrades to a no-op."""
