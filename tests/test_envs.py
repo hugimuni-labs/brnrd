@@ -1546,3 +1546,22 @@ def test_solitary_proxy_allowlist_matcher():
     assert not module.host_allowed("evil-api.anthropic.com.attacker.io", entries)
     assert not module.host_allowed("github.com", entries)
     assert not module.host_allowed("", entries)
+
+
+def test_solitary_cred_stage_is_outside_the_repo_mount(tmp_path, monkeypatch):
+    """The repo's .brr rides the bind mount into every container; a stage
+    under it would expose this run's copied tokens to sibling containers."""
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    stage = envs.Path(ctx.env_state["solitary_cred_stage"]).resolve()
+    assert not str(stage).startswith(str(tmp_path.resolve())), (
+        "credential stage must not live under the repo root"
+    )
+    # cleanup: the test bypasses finalize
+    envs.shutil.rmtree(stage.parent, ignore_errors=True)

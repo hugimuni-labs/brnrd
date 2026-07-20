@@ -1077,6 +1077,9 @@ class SolitaryEnv(DockerEnv):
     def _run_docker(self, args: list[str], action: str) -> str:
         result = subprocess.run(
             ["docker", *args], capture_output=True, text=True, check=False,
+            # Generous: ``docker run -d`` may pull the sidecar image on
+            # first use; everything else here returns in seconds.
+            timeout=300,
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
@@ -1149,8 +1152,16 @@ class SolitaryEnv(DockerEnv):
         ctx.env_state["solitary_proxy_ready"] = True
 
     def _credential_stage_dir(self, ctx: RunContext) -> Path:
+        # Deliberately *outside* the repo's ``.brr``: that directory rides
+        # the repo bind mount into every container, so a stage under it
+        # would let a concurrent sibling container read this run's copied
+        # tokens. A private tmp dir (0700 via mkdtemp) is bound into only
+        # this run's container and is invisible to every other one.
+        import tempfile
+
         run_id = str(ctx.env_state.get("run_id", "") or "run")
-        return ctx.runtime_dir / "solitary" / run_id / "home"
+        root = tempfile.mkdtemp(prefix=f"brr-solitary-{run_id}-")
+        return Path(root) / "home"
 
     def _ensure_credential_copies(
         self, ctx: RunContext, cfg: dict[str, Any], shell: str,
@@ -1160,7 +1171,6 @@ class SolitaryEnv(DockerEnv):
         stage = self._credential_stage_dir(ctx)
         stage.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(stage.parent, 0o700)
             os.chmod(stage, 0o700)
         except OSError:
             pass
