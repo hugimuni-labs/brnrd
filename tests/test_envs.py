@@ -1400,10 +1400,20 @@ def test_solitary_never_gets_github_credential_pointer(tmp_path, monkeypatch):
     assert "github_token" not in ctx.env_state
 
     _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
-    argv = " ".join(recorder.runner_argv())
+    argv_list = recorder.runner_argv()
+    argv = " ".join(argv_list)
     assert "GH_CONFIG_DIR" not in argv
     assert "credential.helper" not in argv
     assert "app-token" not in argv
+    # Env-gating alone is not enough: the pointer file rides the repo bind
+    # mount as readable bytes, so solitary shadows `.brr/credentials` with
+    # an empty tmpfs inside the runner container.
+    tmpfs_targets = [
+        argv_list[i + 1]
+        for i, arg in enumerate(argv_list)
+        if arg == "--tmpfs"
+    ]
+    assert str(tmp_path / ".brr" / "credentials") in tmpfs_targets
 
 
 def test_solitary_isolated_network_and_proxy_choreography(tmp_path, monkeypatch):

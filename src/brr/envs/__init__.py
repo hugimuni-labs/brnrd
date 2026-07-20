@@ -1312,12 +1312,22 @@ class SolitaryEnv(DockerEnv):
         )
 
     def _cred_mount_args(self, ctx: RunContext, cfg: dict[str, Any]) -> list[str]:
+        # The daemon publishes the managed GitHub token as a pointer file
+        # under ``.brr/credentials`` (issue #477), which rides the repo bind
+        # mount into every container as the host UID. Not injecting
+        # GH_CONFIG_DIR (the ``_resolve_publish_token`` no-op) keeps solitary
+        # from being *pointed* at it, but the bytes would still be readable —
+        # so shadow the directory with an empty tmpfs. Unconditional: it
+        # masks whatever the daemon may write there later, in every
+        # credential mode including ``none``.
+        args: list[str] = [
+            "--tmpfs", str(Path(os.path.abspath(ctx.repo_root)) / ".brr" / "credentials"),
+        ]
         mode = str(ctx.env_state.get("solitary_cred_mode", "copy"))
         if mode == "none":
-            return []
+            return args
         shell = str(ctx.env_state.get("solitary_shell", ""))
         rels = (*_SOLITARY_SHELL_CRED_PATHS.get(shell, ()), ".gitconfig")
-        args: list[str] = []
         if mode == "copy":
             stage = Path(str(ctx.env_state.get("solitary_cred_stage", "")))
             for rel in ctx.env_state.get("solitary_cred_paths", []) or []:
