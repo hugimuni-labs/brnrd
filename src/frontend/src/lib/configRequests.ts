@@ -1,7 +1,7 @@
 // Loom envelope Phase 2 dashboard surface (kb/design-multi-workstream-
 // concurrency.md "Named forks - round 2"). Types mirror the JSON
 // `GET /v1/dashboard/config-requests` returns
-// (`src/brnrd_web/activity_dashboard.py::dashboard_config_requests_api`),
+// (`src/brnrd/routers/dashboard.py::dashboard_config_requests_api`),
 // a direct read of the `config_change_requests` table the daemon writes via
 // `POST /v1/daemons/config-requests` — unlike live-runs/PR-queue/run-ledger,
 // there's no publish/mirror step and no staleness concept here.

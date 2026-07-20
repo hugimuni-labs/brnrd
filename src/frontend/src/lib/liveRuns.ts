@@ -1,6 +1,6 @@
 // Slice 3 (kb/design-dashboard-live-surface.md "Reconsidered 2026-07-06"):
 // account-scoped live/coexisting-runs view. Types mirror the JSON
-// `GET /v1/dashboard/live-runs` returns (`src/brnrd_web/activity_dashboard.py::
+// `GET /v1/dashboard/live-runs` returns (`src/brnrd/routers/dashboard.py::
 // dashboard_live_runs_api`), sourced from the local presence registry
 // (`src/brr/presence.py`) via the daemon's `PUT /v1/daemons/live-runs` publish.
 

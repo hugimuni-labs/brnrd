@@ -1,19 +1,19 @@
 # brnrd dashboard — next (frontend scaffold)
 
 SvelteKit + Tailwind, picked 2026-07-05 to replace the zero-JS Jinja
-dashboard (`src/brnrd_web/`) — see `kb/design-dashboard-live-surface.md`
+dashboard (`src/brnrd/routers/`) — see `kb/design-dashboard-live-surface.md`
 (main repo) for why and `kb/log.md` §2026-07-06 for the decision record.
 
 **Integration model:** static SPA, not a Node server of its own.
 `vite.config.ts` uses `adapter-static` with `fallback: 'index.html'` and
 project-wide `ssr = false` (`src/routes/+layout.ts`) — `npm run build`
 writes plain HTML/JS/CSS to `build/`, which the existing FastAPI app
-(`src/brnrd_web/`) will mount as static assets. Auth stays FastAPI's
+(`src/brnrd/routers/`) will mount as static assets. Auth stays FastAPI's
 session cookie; this app fetches the same JSON endpoints
 (`dashboard_stats`/`_quota_views` etc.) client-side rather than
 duplicating auth or data access here.
 
-**Status:** scaffold only, not wired into `brnrd_web` yet and not linked
+**Status:** scaffold only, not wired into `brnrd`'s dashboard routes yet and not linked
 from the live dashboard nav. The first real screen (the window-track
 live-quota view, dual time+%-remaining axis) lands as its own reviewable
 PR on top of this.

@@ -13,7 +13,7 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 
-			// Static SPA build: the FastAPI backend (src/brnrd_web/) stays the JSON
+			// Static SPA build: the FastAPI backend (src/brnrd/routers/) stays the JSON
 			// API + session-cookie auth boundary; this build's output is mounted as
 			// static assets behind it, not served by its own Node process. See
 			// frontend/README.md for the integration plan.
