@@ -133,6 +133,38 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkeypatch):
+    """#517: an untrusted event with no isolated env to hold it is refused
+    before any runner is prepared — fail closed, visibly."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-untrusted", source="github",
+                       trust_tier="untrusted")
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+
+    invoked: list[str] = []
+
+    def fail_prepare(*_a, **_k):
+        invoked.append("prepare")
+        raise AssertionError("a refused run must never prepare an environment")
+
+    monkeypatch.setattr(envs.WorktreeEnv, "prepare", fail_prepare, raising=False)
+    monkeypatch.setattr(envs.SolitaryEnv, "prepare", fail_prepare, raising=False)
+
+    # No docker.image in cfg → solitary can't back the run → refuse.
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert invoked == []
+    assert task.status == "done"
+    assert task.meta["trust_tier"] == "untrusted"
+    assert task.meta.get("trust_refused")
+    assert task.meta.get("publish_status") == "refused"
+    # The refusal is recorded on the event's response so the operator sees it.
+    response = (tmp_path / ".brr" / "responses" / "evt-untrusted.md").read_text(encoding="utf-8")
+    assert "untrusted" in response.lower()
+
+
 def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatch):
     """#328 tap-to-request: a mirrored wake request overrides the runner for
     exactly one wake, is spent into the consumed ledger, and stamps the
@@ -3952,12 +3984,12 @@ def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatc
     follow_path = tmp_path / ".brr" / "inbox" / "evt-follow.md"
     lead_path.write_text(
         f"---\nid: evt-lead\nstatus: pending\nsource: telegram\n"
-        f"conversation_key: {conv}\n---\ndoes the voice hold?\n",
+        f"trust_tier: owner\nconversation_key: {conv}\n---\ndoes the voice hold?\n",
         encoding="utf-8",
     )
     follow_path.write_text(
         f"---\nid: evt-follow\nstatus: pending\nsource: telegram\n"
-        f"conversation_key: {conv}\n---\naddress this as changes right away\n",
+        f"trust_tier: owner\nconversation_key: {conv}\n---\naddress this as changes right away\n",
         encoding="utf-8",
     )
     os.utime(lead_path, (now - 1.0, now - 1.0))
@@ -3967,6 +3999,7 @@ def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatc
         "status": "pending",
         "body": "does the voice hold?",
         "source": "telegram",
+        "trust_tier": "owner",
         "conversation_key": conv,
         "_path": lead_path,
     }

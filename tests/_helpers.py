@@ -91,6 +91,7 @@ def make_event(
     eid: str,
     body: str = "raw event body",
     source: str = "telegram",
+    trust_tier: str = "owner",
     **extra: Any,
 ) -> dict[str, Any]:
     """Write an inbox event file and return its in-memory dict.
@@ -98,13 +99,21 @@ def make_event(
     ``extra`` keys are merged into the returned dict but not into the
     on-disk frontmatter — tests that need them in the file should
     write the event themselves.
+
+    ``trust_tier`` defaults to ``owner`` — a real gate stamps the tier
+    on every event it emits (#517), and the common case a daemon test
+    exercises is the bound principal messaging their own daemon. Tests
+    that care about the untrusted routing / refusal pass a different
+    tier (or ``None`` to omit the stamp and exercise the fail-closed
+    default for an unstamped ingress source).
     """
     path = repo_root / ".brr" / "inbox" / f"{eid}.md"
+    tier_line = f"trust_tier: {trust_tier}\n" if trust_tier is not None else ""
     path.write_text(
-        f"---\nid: {eid}\nstatus: pending\nsource: {source}\n---\n{body}\n",
+        f"---\nid: {eid}\nstatus: pending\nsource: {source}\n{tier_line}---\n{body}\n",
         encoding="utf-8",
     )
-    return {
+    event = {
         "id": eid,
         "status": "pending",
         "body": body,
@@ -112,6 +121,9 @@ def make_event(
         "_path": path,
         **extra,
     }
+    if trust_tier is not None:
+        event.setdefault("trust_tier", trust_tier)
+    return event
 
 
 InvokeFn = Callable[..., RunnerResult]

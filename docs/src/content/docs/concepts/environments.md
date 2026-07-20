@@ -44,3 +44,36 @@ approval prompts are bypassed deliberately. `worktree` protects your working
 tree, not your credentials or machine. Docker narrows filesystem visibility but
 is not a credential or containment boundary. Read [Security & privacy](../../security/)
 before accepting tasks from other people.
+
+## Source-trust tiering
+
+The environment isn't only a static config choice — it's also picked per event
+by the **trust of the source**, resolved deterministically when the run
+manifest is built (no LLM in the loop). An untrusted commenter's run no longer
+executes with the same authority as your own. Three tiers:
+
+- **owner** — you: the paired chat, the bound account, and every owner-only
+  path (schedule wakes, self-wakes, CLI). Gets the configured default
+  environment — today's behaviour, unchanged.
+- **collaborator** — a repo write+ collaborator, an allowlisted sender, a
+  member of a configured room. Gets the configured default too, tightenable to
+  a stricter environment with `trust.collaborator_env`.
+- **untrusted** — anything else that still reaches the queue. Routed to
+  `trust.untrusted_env` (default `solitary`, the hardened preset), or
+  **refused** outright — failing closed — when `solitary` can't back it (no
+  `docker.image`) or `trust.untrusted=refuse`.
+
+An event's own `environment` key can never lift an untrusted event out of its
+tier: the tier wins.
+
+Config keys (in `.brr/config`):
+
+```
+trust.collaborator_env=solitary   # optional: tighten the collaborator env
+trust.untrusted_env=solitary      # default: env for untrusted sources
+trust.untrusted=refuse            # or: refuse untrusted runs outright (default: solitary)
+```
+
+At zero config, owner and collaborator behave exactly as before; untrusted
+fails closed. The resolved tier rides the run metadata (`trust_tier`), so
+surfaces can show which trust level a run executed at.

@@ -5,7 +5,12 @@ from brr.run import Run, list_runs
 
 class TestRunFromEvent:
     def test_basic(self):
-        event = {"id": "evt-1", "source": "telegram", "body": "do stuff", "status": "pending"}
+        # A real telegram event carries the gate-stamped trust tier (#517);
+        # the bound principal is the owner, whose env is today's default.
+        event = {
+            "id": "evt-1", "source": "telegram", "body": "do stuff",
+            "status": "pending", "trust_tier": "owner",
+        }
         run = Run.from_event(event)
         assert run.event_id == "evt-1"
         assert run.body == "do stuff"
@@ -13,14 +18,15 @@ class TestRunFromEvent:
         assert run.env == "worktree"
         assert run.status == "pending"
         assert run.id.startswith("run-")
+        assert run.meta["trust_tier"] == "owner"
 
     def test_env_auto_defaults_to_worktree(self):
-        event = {"id": "evt-auto-wt", "body": "anything"}
+        event = {"id": "evt-auto-wt", "source": "cli", "body": "anything"}
         run = Run.from_event(event, {"env": "auto"})
         assert run.env == "worktree"
 
     def test_environment_config_auto_prefers_configured_docker(self):
-        event = {"id": "evt-auto-docker", "body": "change code"}
+        event = {"id": "evt-auto-docker", "source": "cli", "body": "change code"}
         run = Run.from_event(
             event,
             {"environment": "auto", "docker.image": "brr/test-runner:latest"},
@@ -28,13 +34,14 @@ class TestRunFromEvent:
         assert run.env == "docker"
 
     def test_environment_overrides_env_config(self):
-        event = {"id": "evt-env-override", "body": "answer question"}
+        event = {"id": "evt-env-override", "source": "cli", "body": "answer question"}
         run = Run.from_event(event, {"environment": "host", "env": "docker"})
         assert run.env == "host"
 
     def test_event_environment_overrides_config(self):
         event = {
             "id": "evt-event-env",
+            "source": "cli",
             "body": "answer question",
             "environment": "host",
         }
@@ -45,7 +52,7 @@ class TestRunFromEvent:
         assert run.env == "host"
 
     def test_event_env_overrides_config_default(self):
-        event = {"id": "evt-2", "body": "fix bug", "env": "host"}
+        event = {"id": "evt-2", "source": "cli", "body": "fix bug", "env": "host"}
         cfg = {"default_env": "worktree"}
         run = Run.from_event(event, cfg)
         assert run.env == "host"

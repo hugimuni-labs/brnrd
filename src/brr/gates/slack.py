@@ -16,7 +16,7 @@ from typing import Any
 
 import requests
 
-from .. import protocol, run_progress
+from .. import protocol, run_progress, trust
 from ..run import Run, run_manifest_path
 from . import runtime
 
@@ -167,6 +167,16 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # message is itself the start of a conversation, ``thread_ts``
         # is absent and ``slack_ts`` serves the same role downstream.
         thread_ts = msg.get("thread_ts") or ""
+        # Source-trust tiering (#517): the Slack gate has no per-sender
+        # authorization (no #408/#409 equivalent) — membership of the
+        # operator-configured channel is the only trust boundary. Treat
+        # that bounded, operator-chosen room as ``collaborator``: today's
+        # default env at zero config, tightenable via
+        # ``trust.collaborator_env``. It is deliberately not ``owner``
+        # (no bound principal is verified) and not left unstamped (which
+        # would fail closed to ``untrusted`` and route every Slack message
+        # to solitary/refuse — over-reaching past this issue's shipped
+        # prerequisites).
         protocol.create_event(
             inbox_dir,
             source="slack",
@@ -175,6 +185,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             slack_user=user,
             slack_ts=ts,
             slack_thread_ts=thread_ts,
+            trust_tier=trust.COLLABORATOR,
         )
         if ts > oldest_ts:
             oldest_ts = ts

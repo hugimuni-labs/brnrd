@@ -128,14 +128,25 @@ class Run:
         external state. The agent decides any branching at run time
         from inside its env.
         """
+        from . import trust
+
         cfg = cfg or {}
         run_id = _generate_run_id()
-        env_policy = _event_environment_policy(event, cfg)
-        return cls(
+        # Source-trust tiering (#517): the tier is resolved here, at
+        # manifest-build time — deterministically, from the sender facts
+        # the gate stamped — and it, not the event's env key, decides the
+        # execution environment. An untrusted event is routed to an
+        # isolated env or refused; the event's own ``environment`` can
+        # never escalate it out of its tier.
+        decision = trust.resolve_decision(event, cfg)
+        task = cls(
             id=run_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
-            env=resolve_env(env_policy, cfg),
+            # On a refusal there is no runnable env; the daemon short-
+            # circuits on ``trust_refused`` before preparing one, so the
+            # placeholder here is never executed.
+            env=decision.env or "solitary",
             source=event.get("source", ""),
             conversation_key=str(event.get("conversation_key", "") or ""),
             meta={
@@ -143,6 +154,14 @@ class Run:
                 if k not in _EVENT_META_FIELDS
             },
         )
+        # The tier rides the run meta so surfaces render it like ``env``;
+        # the resolved value wins over any stamp carried on the event.
+        task.meta["trust_tier"] = decision.tier
+        if decision.refused:
+            task.meta["trust_refused"] = decision.reason
+        else:
+            task.meta.pop("trust_refused", None)
+        return task
 
     # ── Persistence ─────────────────────────────────────────────────
 
