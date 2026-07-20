@@ -20,7 +20,7 @@ from typing import Any
 
 import requests
 
-from .. import protocol, run_progress
+from .. import protocol, run_progress, trust
 from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
@@ -409,30 +409,42 @@ def _delivery_loop_once(
     )
 
 
-def _authorized_sender(state: dict, user_id: int | None) -> bool:
-    """#409 — default-closed: the verified sender must be the bound
-    principal (``state['paired_user_id']``, set by ``bind``) or listed in
+def _sender_tier(state: dict, user_id: int | None) -> str | None:
+    """#409 / #517 — the verified sender's trust tier, or ``None`` if denied.
+
+    Default-closed: the sender must be the bound principal
+    (``state['paired_user_id']``, set by ``bind``) or listed in
     ``state['allowlist']`` (a JSON array of Telegram user ids, edited
     directly in ``.brr/gates/telegram.json`` — no CLI setter yet). No
     sender id at all (``sender_chat`` / a missing ``from``) is never
     authorized, regardless of either list.
+
+    The bound principal is the operator → ``owner`` tier (configured
+    default env, today's behaviour). An allowlisted-but-not-bound sender
+    is a known collaborator → ``collaborator`` tier, whose env the
+    resolver can tighten via ``trust.collaborator_env`` (#517).
     """
     if user_id is None:
-        return False
+        return None
     paired = state.get("paired_user_id")
     if paired is not None:
         try:
             if int(paired) == int(user_id):
-                return True
+                return trust.OWNER
         except (TypeError, ValueError):
             pass
     for allowed in state.get("allowlist") or []:
         try:
             if int(allowed) == int(user_id):
-                return True
+                return trust.COLLABORATOR
         except (TypeError, ValueError):
             continue
-    return False
+    return None
+
+
+def _authorized_sender(state: dict, user_id: int | None) -> bool:
+    """Back-compat boolean wrapper over :func:`_sender_tier`."""
+    return _sender_tier(state, user_id) is not None
 
 
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
@@ -522,7 +534,8 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # time" only shallowly verified this, didn't yet capture the fix).
         sent_at = msg.get("date")
 
-        if not _authorized_sender(state, user_id):
+        sender_tier = _sender_tier(state, user_id)
+        if sender_tier is None:
             # #409 — default-closed gate audit trail. No reply is sent:
             # telling an unauthorized sender why would let them probe for
             # a valid principal.
@@ -550,6 +563,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             telegram_username=username,
             telegram_message_id=message_id if message_id is not None else "",
             telegram_sent_at=sent_at if sent_at is not None else "",
+            trust_tier=sender_tier,
         )
         if image_tmpdir is not None:
             image_tmpdir.cleanup()

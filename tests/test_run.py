@@ -5,7 +5,12 @@ from brr.run import Run, list_runs
 
 class TestRunFromEvent:
     def test_basic(self):
-        event = {"id": "evt-1", "source": "telegram", "body": "do stuff", "status": "pending"}
+        # A real telegram event carries the gate-stamped trust tier (#517);
+        # the bound principal is the owner, whose env is today's default.
+        event = {
+            "id": "evt-1", "source": "telegram", "body": "do stuff",
+            "status": "pending", "trust_tier": "owner",
+        }
         run = Run.from_event(event)
         assert run.event_id == "evt-1"
         assert run.body == "do stuff"
@@ -13,6 +18,7 @@ class TestRunFromEvent:
         assert run.env == "worktree"
         assert run.status == "pending"
         assert run.id.startswith("run-")
+        assert run.meta["trust_tier"] == "owner"
 
     def test_env_auto_defaults_to_worktree(self):
         event = {"id": "evt-auto-wt", "body": "anything"}

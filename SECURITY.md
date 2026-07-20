@@ -145,7 +145,7 @@ backend relays, it does not run your agent.
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/Gurio/brr/issues/23) |
 | GitHub trigger authorizes mention, not commenter | Critical | [#408](https://github.com/Gurio/brr/issues/408) |
 | Chat gates authorize the room, not the sender | High | [#409](https://github.com/Gurio/brr/issues/409) |
-| Environment not tiered by source trust | High | [#517](https://github.com/Gurio/brr/issues/517) |
+| ~~Environment not tiered by source trust~~ — shipped: ingress trust tier (owner/collaborator/untrusted) routes the env, fails closed to `solitary`/refuse | High | [#517](https://github.com/Gurio/brr/issues/517) |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/Gurio/brr/issues/80) |
 | Full-scope GitHub token handed to the agent | High | filed in this review |
 | Gate tokens stored in cleartext | Medium | filed in this review |
