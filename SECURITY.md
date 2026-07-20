@@ -75,10 +75,18 @@ isolates, and what it does not:
 - **`docker`** — dependency and network isolation, and it narrows which host files
   the agent can see to the repo plus mounted credential dirs. It is **not** a
   credential or containment boundary: the repo is mounted read-write, your
-  credentials cross in, and the network is on by default. Assumes a trusted agent;
-  harden with `docker.network=none`, read-only credential mounts, and (when it ships)
-  the `docker.isolation=clone` no-shared-`.git` sub-mode. See
-  [#80](https://github.com/Gurio/brr/issues/80).
+  credentials cross in, and the network is on by default. Assumes a trusted agent.
+  See [#80](https://github.com/Gurio/brr/issues/80).
+- **`solitary`** — the hardened preset (`environment=solitary`, one value): egress
+  locked to the run's model provider through an allowlisting proxy sidecar (a
+  literal `network=none` would brick every cloud runner — the model call itself is
+  network), per-run *copies* of only the selected Shell's credentials (host CLI
+  state can't be modified from inside; `.ssh` never mounted), and no GitHub
+  credential at all — "no push from inside" holds structurally; the daemon
+  publishes the branch from the host after the run. What it cannot close: content
+  shown to the model provider (the conversation is a channel), and the repo mount
+  stays read-write pending [#80](https://github.com/Gurio/brr/issues/80)'s
+  `isolation=clone`. Details: `brnrd docs envs`.
 
 The environment is chosen by **static configuration, not by the trust level of the
 event source** — an untrusted GitHub commenter's run executes with the same authority
@@ -99,10 +107,14 @@ as the owner's. Source-trust-tiered environments are tracked as release work.
   titles/URLs, quota — to brnrd.dev. Your source code does not leave the machine.
   Diffense review packs transit brnrd.dev in memory only, TTL-bounded, behind an
   unguessable token, and are never persisted.
-- **Credential scope.** The GitHub token handed to the agent is your full-scope PAT
-  (or `gh auth token`), not a per-run least-privilege credential; under prompt
-  injection it can act across all your repositories. Gate and daemon tokens are
-  currently stored in cleartext under `.brr/gates/`.
+- **Credential scope.** On the managed path the GitHub token handed to the agent
+  is a repository-scoped App installation token (1-hour lifetime). Self-hosted
+  setups fall back to whatever you configured — typically a PAT or
+  `gh auth token`, whose scope is as broad as you made it; under prompt injection
+  a broad credential can act across all your repositories
+  ([#415](https://github.com/Gurio/brr/issues/415)). The `solitary` environment
+  injects no GitHub credential at all. Gate and daemon tokens are stored 0600
+  under `.brr/gates/`.
 
 ## Managed backend
 
@@ -116,8 +128,9 @@ backend relays, it does not run your agent.
 - Prefer **private** repositories over public ones for GitHub gates.
 - Prefer the managed one-to-one Telegram path; if you bind a group or channel,
   understand that every member can drive your daemon.
-- For any multi-party gate, run in **`docker` with `docker.network=none`** and
-  read-only credential mounts.
+- For any multi-party gate, run in **`environment=solitary`** — the one-value
+  preset composing provider-only egress, per-run credential copies, and no
+  GitHub credential.
 - Scope the GitHub token you give the agent; prefer a repo-scoped App token over a
   broad PAT where possible.
 - `chmod 0600` your `.brr/gates/*.json`.
@@ -132,7 +145,7 @@ backend relays, it does not run your agent.
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/Gurio/brr/issues/23) |
 | GitHub trigger authorizes mention, not commenter | Critical | [#408](https://github.com/Gurio/brr/issues/408) |
 | Chat gates authorize the room, not the sender | High | [#409](https://github.com/Gurio/brr/issues/409) |
-| Environment not tiered by source trust | High | filed in this review |
+| Environment not tiered by source trust | High | [#517](https://github.com/Gurio/brr/issues/517) |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/Gurio/brr/issues/80) |
 | Full-scope GitHub token handed to the agent | High | filed in this review |
 | Gate tokens stored in cleartext | Medium | filed in this review |

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-ENV_TYPES = ("auto", "host", "worktree", "docker", "devcontainer", "ssh")
+ENV_TYPES = ("auto", "host", "worktree", "docker", "solitary", "devcontainer", "ssh")
 STATUSES = ("pending", "running", "done", "error", "conflict")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
