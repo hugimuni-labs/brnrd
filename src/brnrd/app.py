@@ -13,7 +13,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
-from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, webhooks
+from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, stats, webhooks
 from .routers import dashboard as dashboard_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
@@ -80,6 +80,7 @@ def create_app(
     app.include_router(render.router)
     app.include_router(webhooks.router)
     app.include_router(github_app.router)
+    app.include_router(stats.router)
     if settings.enable_dev_endpoints:
         app.include_router(dev.router)
 
