@@ -149,10 +149,9 @@ backend relays, it does not run your agent.
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/Gurio/brr/issues/80) |
 | Full-scope GitHub token handed to the agent | High | filed in this review |
 | Gate tokens stored in cleartext | Medium | filed in this review |
-| Managed dashboard mirrors derived repo knowledge (document/opt-in) | Medium | filed in this review |
+| Managed dashboard mirrors derived repo knowledge (document/opt-in) | Medium | [#502](https://github.com/Gurio/brr/issues/502) |
 
 ## Found a gap?
 
 If you spot a hole in any of the above, raise it privately rather than in a public
-issue. Until a dedicated address is published, reach the maintainer through the
-repository owner's profile.
+issue. Report it to **security@hugimuni.fr**.
