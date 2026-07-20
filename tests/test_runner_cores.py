@@ -135,8 +135,9 @@ def test_generated_profile_entries_derive_invokable_profiles_from_base_shell():
     assert haiku["binary"] == "claude"
     assert haiku["hooks"] == "claude"
     assert haiku["quota_source"] == "claude-local"
-    assert haiku["model"] == "claude-haiku-4-5-20251001"
-    assert "--model claude-haiku-4-5-20251001" in haiku["cmd"]
+    # Alias-first: model field holds the short alias; --model flag uses alias too.
+    assert haiku["model"] == "haiku"
+    assert "--model haiku" in haiku["cmd"]
 
 
 def test_generated_profile_entries_materialize_auth_variant_from_core_registry():
@@ -156,13 +157,14 @@ def test_generated_profile_entries_materialize_auth_variant_from_core_registry()
     sonnet = profiles["claude-bare-api-only-sonnet"]
     assert sonnet["binary"] == "claude"
     assert sonnet["shell"] == "claude"
-    assert sonnet["model"] == "claude-sonnet-4-6"
+    # Alias-first: model holds the alias; --model uses the alias (no pin set).
+    assert sonnet["model"] == "sonnet"
     assert sonnet["class"] == "balanced"
     assert sonnet["cost_rank"] == 30
     assert sonnet["auth_variant"] == "anthropic-api-key"
     assert sonnet["auth_env"] == "ANTHROPIC_API_KEY"
     assert "--bare" in sonnet["cmd"]
-    assert "--model claude-sonnet-4-6" in sonnet["cmd"]
+    assert "--model sonnet" in sonnet["cmd"]
 
 
 def test_generated_profile_entries_do_not_reintroduce_undeclared_shells():
@@ -185,7 +187,7 @@ def test_generated_profile_entries_emit_twin_for_declared_name():
         }
     )
     twin = profiles["claude-haiku"]
-    assert twin["model"] == "claude-haiku-4-5-20251001"
+    assert twin["model"] == "haiku"  # alias-first
     assert twin["class"] == "economy"
 
 
@@ -322,3 +324,86 @@ def test_generated_profile_entries_keep_hand_set_class(monkeypatch):
     )
 
     assert profiles["claude-preview"]["class"] == "economy"
+
+
+# ── New: alias-first + pin, stale_entries, dedupe ───────────────────────────
+
+
+def test_bundled_claude_entries_use_aliases():
+    """Claude entries in the bundled registry should use short aliases, not exact IDs."""
+    cores = runner_cores.all_cores()
+    claude_aliases = {"haiku", "sonnet", "opus", "fable"}
+    for name, entry in cores.items():
+        if entry.get("shell") == "claude":
+            assert entry["model"] in claude_aliases, (
+                f"{name}: expected a short alias, got {entry['model']!r}"
+            )
+
+
+def test_pin_overrides_alias_in_generated_cmd():
+    """When a bundled entry has a 'pin' field, the --model flag uses the pin, not the alias."""
+    import copy
+
+    cores_with_pin = copy.deepcopy(runner_cores._BUNDLED_CORES)
+    cores_with_pin["claude-sonnet"]["pin"] = "claude-sonnet-4-6"
+
+    import types
+    import brr.runner_cores as rc_mod
+
+    orig = rc_mod._BUNDLED_CORES
+    try:
+        rc_mod._BUNDLED_CORES = cores_with_pin
+        profiles = runner_cores.generated_profile_entries(
+            {"claude": {"cmd": "claude --print"}}
+        )
+    finally:
+        rc_mod._BUNDLED_CORES = orig
+
+    sonnet = profiles["claude-sonnet"]
+    assert sonnet["model"] == "sonnet"              # alias stays in model field
+    assert sonnet["pin"] == "claude-sonnet-4-6"     # pin is preserved
+    assert "--model claude-sonnet-4-6" in sonnet["cmd"]  # pin used for cmd
+
+
+def test_effective_model_returns_pin_when_set():
+    assert runner_cores.effective_model({"model": "sonnet", "pin": "claude-sonnet-4-6"}) == "claude-sonnet-4-6"
+
+
+def test_effective_model_returns_model_when_no_pin():
+    assert runner_cores.effective_model({"model": "haiku"}) == "haiku"
+
+
+def test_stale_entries_flags_old_entries():
+    import datetime
+
+    registry = {
+        "fresh": {"shell": "x", "model": "m", "freshness_date": "2026-07-19"},
+        "stale-one": {"shell": "x", "model": "m2", "freshness_date": "2026-01-01"},
+        "no-date": {"shell": "x", "model": "m3"},
+    }
+    now = datetime.date(2026, 7, 20)
+    result = runner_cores.stale_entries(registry, now=now, threshold_days=30)
+    assert "stale-one" in result
+    assert "fresh" not in result
+    assert "no-date" not in result  # missing date → not flagged as stale
+
+
+def test_stale_entries_accepts_string_date():
+    registry = {"old": {"freshness_date": "2025-01-01"}}
+    result = runner_cores.stale_entries(registry, now="2026-07-20", threshold_days=30)
+    assert "old" in result
+
+
+def test_stale_entries_uses_today_by_default():
+    import datetime
+
+    today = datetime.date.today()
+    long_ago = (today - datetime.timedelta(days=60)).isoformat()
+    recently = (today - datetime.timedelta(days=5)).isoformat()
+    registry = {
+        "old": {"freshness_date": long_ago},
+        "new": {"freshness_date": recently},
+    }
+    result = runner_cores.stale_entries(registry)
+    assert "old" in result
+    assert "new" not in result

@@ -1892,7 +1892,14 @@ RECENT_CONVERSATION_MAX = 8
 def _render_runner_catalog(
     catalog: list[dict[str, Any]] | None,
 ) -> list[str]:
-    """Compact prompt rendering for the selectable Runner/Core mandate."""
+    """Compact prompt rendering for the Runner/Core catalog.
+
+    Includes unavailable profiles (marked with ✗) and stale entries (marked
+    ``stale``).  All three consumers — wake prompt, ``brnrd runners list``,
+    and the dashboard publish — derive their rows from the same
+    ``runner.available_runner_catalog()`` projection; this renderer is the
+    compact form for the wake prompt only.
+    """
     lines: list[str] = []
     for item in catalog or []:
         if not isinstance(item, dict):
@@ -1902,9 +1909,18 @@ def _render_runner_catalog(
             continue
         selected = bool(item.get("selected"))
         prefix = "selected " if selected else ""
+
+        # Availability mark: ✗ when unavailable; omit when available (noise).
+        availability = str(item.get("availability") or "available")
+        unavail_prefix = "✗ " if availability != "available" else ""
+
+        core_label = item.get("model") or "default"
+        if item.get("pin"):
+            core_label = f"{core_label} (pinned: {item['pin']})"
+
         bits = [
             f"shell={item.get('shell') or 'unknown'}",
-            f"core={item.get('model') or 'default'}",
+            f"core={core_label}",
         ]
         if item.get("class"):
             bits.append(f"class={item['class']}")
@@ -1914,13 +1930,13 @@ def _render_runner_catalog(
             bits.append(f"quota={item['quota_source']}")
         if item.get("auth_variant"):
             bits.append(f"auth={item['auth_variant']}")
-        # The catalog is pre-filtered to invokable profiles, so
-        # ``availability=available`` on every line was pure noise; surface
-        # the field only when it says something unusual.
-        availability = str(item.get("availability") or "available")
         if availability != "available":
             bits.append(f"availability={availability}")
-        lines.append(f"- {prefix}{name}: " + ", ".join(str(bit) for bit in bits))
+        if item.get("stale"):
+            bits.append("stale")
+        lines.append(
+            f"- {prefix}{unavail_prefix}{name}: " + ", ".join(str(bit) for bit in bits)
+        )
     return lines
 
 
