@@ -1,6 +1,6 @@
 // #328 spool rack: the runner catalog as the loom's thread inventory.
-// Types mirror `GET /v1/dashboard/runners` (`src/brnrd_web/
-// activity_dashboard.py::dashboard_runners_api`), which merges each
+// Types mirror `GET /v1/dashboard/runners` (`src/brnrd/routers/
+// dashboard.py::dashboard_runners_api`), which merges each
 // connected daemon's locally-discovered catalog (`src/brr/gates/cloud.py::
 // _runners_snapshot`) — what the installed shells actually offer, not a
 // packaged menu that can rot.

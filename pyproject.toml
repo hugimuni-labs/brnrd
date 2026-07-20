@@ -40,7 +40,7 @@ where = ["src"]
 include = ["brr*", "brnrd*"]
 
 [tool.setuptools.package-data]
-brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md", "diffense/*.html", "data/*.json"]
+brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md", "diffense/template.html", "data/*.json"]
 brnrd = ["LICENSE", "static/*.css", "routers/templates/*.html"]
 
 [project.optional-dependencies]

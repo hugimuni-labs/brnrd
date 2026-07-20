@@ -83,7 +83,10 @@ def test_diffense_renderer_template_is_packaged():
         "\n[", 1
     )[0]
 
-    assert '"diffense/*.html"' in package_data
+    # Exact filename, not a `diffense/*.html` wildcard: the wildcard also
+    # swept up diffense/review-pr64.html (an internal review artifact) into
+    # the wheel. render.py only ever loads template.html at runtime.
+    assert '"diffense/template.html"' in package_data
 
 
 def test_create_pack_gist_uses_secret_gist_and_fetches_raw_url(monkeypatch):

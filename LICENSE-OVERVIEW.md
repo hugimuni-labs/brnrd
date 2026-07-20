@@ -11,15 +11,17 @@ Copyright (C) 2026 HugiMuni SAS.
 | repo root `LICENSE` | the daemon core (the installed tool) | MIT |
 | `src/brr/` (`src/brr/LICENSE`) | daemon core — the local runtime substrate | MIT |
 | `src/brnrd/` (`src/brnrd/LICENSE`) | managed backend (`brnrd[backend]` extra) | AGPLv3 |
-| `src/brnrd_web/` (`src/brnrd_web/LICENSE`) | dashboard | AGPLv3 |
+| `src/frontend/` (`src/frontend/LICENSE`) | dashboard | AGPLv3 |
 
 `pyproject.toml` declares this as SPDX `MIT AND AGPL-3.0-only`; that metadata,
 not this table, is what a license scanner reads.
 
 In practice:
 
-- The wheel contains all three import packages. Extras select runtime
-  dependencies, not which licensed source files are present.
+- The wheel contains both Python import packages (`brr`, `brnrd`). Extras
+  select runtime dependencies, not which licensed source files are present.
+  `src/frontend/` is a separate SvelteKit project, built and deployed on its
+  own — it never ships inside the wheel.
 - `pip install brnrd` installs what the MIT daemon core needs. **What you run on
   your own machine is MIT.** Fork it, vendor it, embed it in a proprietary
   toolchain — no obligations beyond attribution.

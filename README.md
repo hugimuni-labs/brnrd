@@ -227,6 +227,6 @@ the next task picks up the new code without a process ritual.
 ## License
 
 The local runtime in `src/brr/` is **MIT**. The managed backend and dashboard in
-`src/brnrd/` and `src/brnrd_web/` are **AGPLv3**. You can run the complete stack
+`src/brnrd/` and `src/frontend/` are **AGPLv3**. You can run the complete stack
 yourself; the split protects the hosted surface without closing the part that lives
 on your machine. See [LICENSE-OVERVIEW.md](LICENSE-OVERVIEW.md).

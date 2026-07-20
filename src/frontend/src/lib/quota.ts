@@ -1,6 +1,6 @@
 // Slice 2: window-track live-quota view (kb/design-dashboard-live-surface.md
 // "A shape for the live-flow surface"). Types mirror the JSON
-// `GET /v1/dashboard/quota` returns (`src/brnrd_web/activity_dashboard.py::
+// `GET /v1/dashboard/quota` returns (`src/brnrd/routers/dashboard.py::
 // dashboard_quota_api`), which is a thin wrapper around `_quota_views` — the
 // same data the (soon to be replaced) Jinja dashboard renders.
 
