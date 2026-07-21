@@ -124,9 +124,10 @@ export interface ShelfGroupable {
  * bar with its workers trailing it rather than scattered wherever their own
  * age would otherwise place them.
  *
- * Single level only, matching `groupWithChildren`: a grandchild whose direct
- * parent is itself a child nests under that parent, not the root, and this
- * function does not walk further than one hop to find it.
+ * Single level only, matching `groupWithChildren`: only children of *root*
+ * rows nest. A grandchild — a child whose direct parent is itself a nested
+ * child — falls back to its own root row, same as an orphan: one hop,
+ * and nothing ever silently vanishes from the shelf.
  */
 export function nestShelfChildren<T extends ShelfGroupable>(
 	items: T[]
@@ -135,13 +136,29 @@ export function nestShelfChildren<T extends ShelfGroupable>(
 	for (const item of items) {
 		if (item.runId) byRunId.set(item.runId, item);
 	}
+	// A row nests only under a parent that will itself render as a root —
+	// a parent that is itself a nested child never gets its children
+	// emitted, so nesting under it would drop the row entirely.
+	const rootMemo = new Map<T, boolean>();
+	function rendersAsRoot(item: T, seen: Set<T> = new Set()): boolean {
+		if (!item.isSubspawn || !item.parentRunId) return true;
+		const memo = rootMemo.get(item);
+		if (memo !== undefined) return memo;
+		if (seen.has(item)) return true; // malformed cycle — fail visible
+		seen.add(item);
+		const parent = byRunId.get(item.parentRunId);
+		const result = !parent ? true : !rendersAsRoot(parent, seen);
+		rootMemo.set(item, result);
+		return result;
+	}
 	const childrenByParent = new Map<string, T[]>();
 	const roots: T[] = [];
 	for (const item of items) {
-		if (item.isSubspawn && item.parentRunId && byRunId.has(item.parentRunId)) {
-			const list = childrenByParent.get(item.parentRunId) ?? [];
+		const parent = item.parentRunId ? byRunId.get(item.parentRunId) : undefined;
+		if (item.isSubspawn && parent && rendersAsRoot(parent)) {
+			const list = childrenByParent.get(item.parentRunId as string) ?? [];
 			list.push(item);
-			childrenByParent.set(item.parentRunId, list);
+			childrenByParent.set(item.parentRunId as string, list);
 		} else {
 			roots.push(item);
 		}

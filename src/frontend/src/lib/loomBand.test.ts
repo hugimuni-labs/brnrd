@@ -131,3 +131,22 @@ test('a run with no run_id at all (event-id-only row) is never mistaken for a ch
 		]
 	);
 });
+
+test('a grandchild falls back to its own root row instead of vanishing', () => {
+	// Review fixup: the emit loop only walks roots' children, so nesting a
+	// grandchild under a nested parent would drop it from the shelf entirely.
+	const items = [
+		{ runId: 'root', parentRunId: null, isSubspawn: false, ageMs: 100 },
+		{ runId: 'child', parentRunId: 'root', isSubspawn: true, ageMs: 110 },
+		{ runId: 'grandchild', parentRunId: 'child', isSubspawn: true, ageMs: 120 }
+	];
+	const nested = nestShelfChildren(items);
+	assert.deepEqual(
+		nested.map((r) => [r.runId, r.depth]),
+		[
+			['root', 0],
+			['child', 1],
+			['grandchild', 0]
+		]
+	);
+});
