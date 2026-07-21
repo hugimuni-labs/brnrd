@@ -18,6 +18,7 @@ from brnrd import ids, oauth
 from brnrd.auth import get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
+    ActivityRecord,
     ChannelRoute,
     ConfigChangeRequest,
     Daemon,
@@ -306,9 +307,24 @@ def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
-    for model in (Daemon, Event, ChannelRoute, TgPairCode, PairRequest, Token):
+    # Every repo-FK table, ordered so nothing is deleted while a surviving row
+    # still references it: ActivityRecord points at tokens/daemons, Daemon at
+    # tokens (#502 — ActivityRecord and ConfigChangeRequest were missing here,
+    # so a disconnect with live activity rows died on the FK).
+    for model in (ActivityRecord, ConfigChangeRequest, Daemon, Event, ChannelRoute, TgPairCode, PairRequest, Token):
         db.execute(delete(model).where(model.repo_id == repo.id))
     db.delete(repo)
+    # #502: the corpus mirror is account-level; when the last repo disconnects
+    # nothing legitimately renders it anymore, so the copy must not outlive
+    # the connection.
+    remaining = db.execute(
+        select(Repo.id).where(Repo.account_id == account_id, Repo.id != repo.id).limit(1)
+    ).scalar_one_or_none()
+    if remaining is None:
+        account = db.get(Account, account_id)
+        if account is not None:
+            account.surface_json = "[]"
+            account.surface_updated_at = datetime.now(timezone.utc)
     db.commit()
     return "repo-disconnected"
 
