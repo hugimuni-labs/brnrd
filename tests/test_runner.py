@@ -939,14 +939,6 @@ class TestCommandBuilding:
             _RUNNER_BASE,
         ]
 
-    def test_build_cmd_gemini_headless_uses_yolo(self):
-        cmd = _build_cmd("gemini", "fix it", {})
-        assert cmd == [
-            "gemini",
-            "-p",
-            "--yolo",
-        ]
-
     def test_invoke_runner_unwraps_claude_json_response(self, tmp_path):
         repo_root = tmp_path
         (repo_root / ".brr").mkdir()
@@ -1419,7 +1411,7 @@ class TestPromptNeverEntersArgv:
     HAZARD = 'pkill -f "bench run --scenario drift"'
 
     def test_prompt_absent_from_argv_on_every_bundled_profile(self, tmp_path):
-        for runner in ("claude", "codex", "gemini", "claude-bare-api-only"):
+        for runner in ("claude", "codex", "claude-bare-api-only"):
             cmd = _build_cmd(runner, self.HAZARD, {}, tmp_path)
             joined = " ".join(cmd)
             assert self.HAZARD not in joined, f"{runner} put the prompt in argv"

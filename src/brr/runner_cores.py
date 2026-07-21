@@ -59,7 +59,7 @@ from . import runner_capabilities, runner_select
 
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
-    r"\b(?:claude|gpt|o\d|gemini|llama|mistral|qwen|deepseek|devstral|grok)"
+    r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
     r"[A-Za-z0-9_.:/+-]*\b",
     re.IGNORECASE,
 )
@@ -155,17 +155,6 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "class": "strong",
         "cost_rank": 45,
         "freshness_date": "2026-07-11",
-    },
-    # ── Gemini (Google) ─────────────────────────────────────────────────
-    # gemini CLI model selection not yet probed; placeholder for when we
-    # have a live Gemini runner test.
-    "gemini-flash": {
-        "shell": "gemini",
-        "model": "gemini-2.0-flash",
-        "provider": "google",
-        "class": "economy",
-        "cost_rank": 12,
-        "freshness_date": "2026-06-29",
     },
 }
 
@@ -568,7 +557,6 @@ def _provider_for_shell(shell: str) -> str | None:
     return {
         "claude": "anthropic",
         "codex": "openai",
-        "gemini": "google",
     }.get(shell)
 
 
