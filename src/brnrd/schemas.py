@@ -179,7 +179,10 @@ class ActivityRecordIn(BaseModel):
 
 
 class ActivityReport(BaseModel):
-    records: list[ActivityRecordIn] = Field(default_factory=list)
+    # Abuse ceiling (limits.py family): a snapshot is a full replacement of
+    # this daemon's live activity — 1000 rows is far beyond any real daemon
+    # and bounds a runaway publisher. 422s with the field named, not silent.
+    records: list[ActivityRecordIn] = Field(default_factory=list, max_length=1000)
 
 
 class ActivityRecordOut(ActivityRecordIn):
