@@ -8,12 +8,38 @@ from brr.daemon_install import linux
 
 
 def test_render_systemd_unit_matches_machine_scoped_template():
-    unit = linux.render_systemd_unit()
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+    )
 
     assert "Description=brnrd daemon (machine-scoped multi-project multiplexer)" in unit
-    assert "ExecStart=/usr/bin/env brnrd daemon up --foreground" in unit
+    assert "ExecStart=/opt/venv/bin/brnrd daemon up --foreground" in unit
     assert "Environment=BRR_INSTALL_MANAGED=1" in unit
+    assert 'Environment="PATH=/opt/venv/bin:/usr/bin"' in unit
     assert "WorkingDirectory" not in unit
+
+
+def test_render_systemd_unit_pins_resolved_binary_and_current_path(monkeypatch):
+    """The user manager's PATH is thin (no venv, no ~/.local/bin, no nvm):
+    the unit must pin the binary that ran the install and freeze the
+    installing shell's PATH so runner Shells stay dispatchable."""
+    monkeypatch.setattr(linux, "resolve_brr_bin", lambda: "/home/ada/.venv/bin/brnrd")
+    monkeypatch.setenv("PATH", "/home/ada/.venv/bin:/home/ada/.local/bin:/usr/bin")
+
+    unit = linux.render_systemd_unit()
+
+    assert "ExecStart=/home/ada/.venv/bin/brnrd daemon up --foreground" in unit
+    assert (
+        'Environment="PATH=/home/ada/.venv/bin:/home/ada/.local/bin:/usr/bin"'
+        in unit
+    )
+
+
+def test_render_systemd_unit_escapes_percent_in_path():
+    unit = linux.render_systemd_unit(
+        "/opt/brnrd", path_env="/odd%dir/bin:/usr/bin",
+    )
+    assert 'Environment="PATH=/odd%%dir/bin:/usr/bin"' in unit
 
 
 def test_install_writes_unit_registry_and_enables_without_starting(
@@ -29,6 +55,7 @@ def test_install_writes_unit_registry_and_enables_without_starting(
     monkeypatch.setattr(linux, "supported", lambda: True)
     monkeypatch.setattr(linux, "linger_enabled", lambda _user: True)
     monkeypatch.setattr(linux, "_run", fake_run)
+    monkeypatch.setattr(linux, "resolve_brr_bin", lambda: "/opt/venv/bin/brnrd")
 
     linux.install(no_start=True, prompt_linger=False)
 
