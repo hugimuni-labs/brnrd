@@ -3704,6 +3704,135 @@ def test_account_dispatch_inbox_routes_message_event_to_registered_repo(tmp_path
     assert targets[0].responses_dir == ctx.responses_dir
 
 
+def test_account_dispatch_inbox_routes_home_label_to_account_home(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "home.path": str(tmp_path / "account-home"),
+    }
+    ctx = daemon.account.resolve_context(repo, cfg)
+    protocol.create_event(
+        ctx.dispatch_inbox,
+        "cli",
+        "work across projects",
+        repo_label="home",
+        trust_tier="owner",
+    )
+
+    targets = daemon._dispatchable_targets(ctx, repo, cfg)
+
+    assert len(targets) == 1
+    assert targets[0].repo_root == ctx.dominion_repo
+    assert targets[0].repo_label == "home"
+    assert targets[0].responses_dir == ctx.responses_dir
+
+
+def test_home_run_uses_host_tree_and_home_run_node(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "home.path": str(tmp_path / "account-home"),
+    }
+    ctx = daemon.account.resolve_context(repo, cfg)
+    event = make_event(
+        repo,
+        eid="evt-home",
+        source="cli",
+        repo_label="home",
+        environment="worktree",
+    )
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(
+        daemon.sync,
+        "refresh_before_run",
+        lambda *_args, **_kwargs: pytest.fail("home run attempted repo sync"),
+    )
+    base_env = envs.get_env("host")
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        seen["cwd"] = ctx.cwd
+        Path(invocation.response_path).write_text("home done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="home done\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event,
+        ctx.dominion_repo,
+        ctx.responses_dir,
+        cfg,
+        0,
+        account_context=ctx,
+        inbox_dir=ctx.dispatch_inbox,
+    )
+
+    assert task.status == "done"
+    assert task.env == "host"
+    assert task.meta["root_kind"] == "home"
+    assert task.meta["forge_lane"] is False
+    assert task.meta["branch_source"] == "home:host"
+    assert "publish_branch" not in task.meta
+    assert seen["cwd"] == ctx.dominion_repo
+    state = daemon._persist_run_state_doc(
+        ctx, task, repo_label="home", stage="finished", cfg=cfg,
+    )
+    assert state == ctx.runs_dir / "home" / task.id / "state.md"
+
+
+def test_home_run_has_no_publish_lane_and_refuses_spawn(tmp_path):
+    task = Run(
+        id="run-home",
+        event_id="evt-home",
+        body="account work",
+        status="done",
+        meta={
+            "repo_label": "home",
+            "root_kind": "home",
+            "publish_branch": "main",
+        },
+    )
+    daemon.publish(tmp_path, task)
+
+    outbox = tmp_path / "outbox"
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(tmp_path, "", "evt-home"),
+        task,
+        tmp_path / "inbox",
+        "evt-home",
+        {"spawn": True},
+        "parallel work",
+        outbox,
+    )
+
+    assert accepted is False
+    notices = daemon._read_outbox_notices(outbox)
+    assert notices and "shared host tree" in notices[0]["text"]
+
+
 def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"

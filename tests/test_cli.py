@@ -254,7 +254,9 @@ def test_add_registers_repo_in_connected_account_home(monkeypatch, tmp_path, cap
 
     ctx = account.resolve_context(current, conf.load_config(current), create=False)
     registry = json.loads((ctx.dominion_repo / "account" / "repos.json").read_text())
-    assert {item["label"] for item in registry["repos"]} == {"current", "target"}
+    assert {item["label"] for item in registry["repos"]} == {
+        "home", "current", "target",
+    }
     assert registry["home_kind"] == "account"
     assert registry["account_id"] == "acct-1"
 
@@ -977,6 +979,9 @@ def test_account_status_json_reports_the_resolved_home(monkeypatch, tmp_path, ca
     assert payload["kind"] in {"project", "account"}
     assert payload["dominion_repo"]
     assert any(r["default"] for r in payload["repos"])
+    home = next(r for r in payload["repos"] if r["label"] == "home")
+    assert home["kind"] == "home"
+    assert home["root"] == payload["dominion_repo"]
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
