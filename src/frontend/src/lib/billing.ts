@@ -94,7 +94,11 @@ export function resumeSubscription(fetchImpl: typeof fetch = fetch): Promise<Sub
 
 /** Mints a Stripe Customer Portal session (card, invoices, cancel). */
 export async function startBillingPortal(fetchImpl: typeof fetch = fetch): Promise<string> {
-	const out = await postJson<{ portal_url: string }>('/v1/accounts/subscription/portal', {}, fetchImpl);
+	const out = await postJson<{ portal_url: string }>(
+		'/v1/accounts/subscription/portal',
+		{},
+		fetchImpl
+	);
 	if (!out.portal_url) throw new Error('portal session came back without a URL');
 	return out.portal_url;
 }
