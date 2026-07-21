@@ -404,6 +404,25 @@ export interface NodeDigest {
 }
 
 /** Everything the selected frame needs, without composing the full page. */
+/**
+ * The run's identity as the LiveRuns card speaks it — one grammar for both
+ * renderings (2026-07-21: "the first card's visual language is better, the
+ * second more readable — best of both"). Composed by the page from whichever
+ * source knows the run (live packet or ledger row) so the node panel can wear
+ * the card's header: colored status word + age, name + spawn chip, repo ·
+ * kind, runner line. Fields are null when the source doesn't know them; the
+ * panel falls back to the node's own digest.
+ */
+export interface NodeIdentity {
+	/** Colored status word — live phase while running, else level/status. */
+	status: string;
+	name: string | null;
+	context: string | null;
+	runner: string | null;
+	spawn: boolean;
+	age: string | null;
+}
+
 export function nodeDigest(node: RunNode): NodeDigest {
 	const frame = node.state ? frontmatterDocument(node.state.markdown) : null;
 	const body = node.body ? node.body.markdown : '';

@@ -13,7 +13,8 @@
 		messageTarget,
 		messageTone,
 		nodeDigest,
-		runNodeFromSurface
+		runNodeFromSurface,
+		type NodeIdentity
 	} from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 	import type { SurfaceResponse } from './surface';
@@ -55,6 +56,14 @@
 		 * affordance that must be readable to be safe.
 		 */
 		stopRun?: (runId: string) => Promise<unknown>;
+		/**
+		 * The run's card-grammar identity (name, spawn chip, repo · kind,
+		 * runner, age, status word) — the LiveRuns card's visual language,
+		 * worn by this panel so the two renderings of a run share one header
+		 * (2026-07-21: the node panel had dropped the run's *name* entirely,
+		 * and flattened runner/phase/elapsed into one 10px vitals string).
+		 */
+		identity?: NodeIdentity | null;
 	}
 
 	let {
@@ -64,7 +73,8 @@
 		href,
 		vitals = [],
 		liveLevel = null,
-		stopRun = requestRunStop
+		stopRun = requestRunStop,
+		identity = null
 	}: Props = $props();
 
 	// Confirm-then-commit, in the repos page's own grammar: an explicit pair of
@@ -113,10 +123,16 @@
 
 	// Composed here rather than inline: `typeReveal` needs the exact string it
 	// is revealing, and a `{@const}` cannot be declared inside a plain element.
-	let heading = $derived(`run node${digest?.stage ? ` · ${digest.stage}` : ''}`);
-	let identity = $derived(
-		`${digest?.status || 'unknown'}${digest?.runner ? ` · ${digest.runner}` : ''}`
-	);
+	// The header speaks the LiveRuns card's grammar: colored status word left,
+	// age + panel marker right, then name/context/runner as their own lines —
+	// each fact falling back to the node's own digest when the page's identity
+	// source doesn't know it.
+	let statusWord = $derived(identity?.status || digest?.status || 'unknown');
+	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
+	let runnerLine = $derived.by(() => {
+		const runner = identity?.runner || digest?.runner || '';
+		return runner ? `runner: ${runner}` : null;
+	});
 	/** The empty-state lines are text that *arrives* too — a run that has just
 	 *  started genuinely transitions through "no card written yet". */
 	let cardEmptyLabel = $derived(
@@ -156,30 +172,55 @@
 	     rather than as a generic disclosure. Kept short — the reveal is a
 	     flourish, not a wait. -->
 	<div class="panel p-3" in:glitchReveal={{ duration: 260 }}>
-		<div
-			class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-stone-800 pb-2 font-mono text-[10px]"
-		>
-			<span class="flex min-w-0 items-center gap-1.5">
-				{#if liveLevel}
+		<div class="border-b border-stone-800 pb-2">
+			<div class="flex items-center justify-between gap-2 font-mono text-[10px]">
+				<span class="flex min-w-0 items-center gap-1.5">
+					{#if liveLevel}
+						<span
+							class="inline-block h-2 w-2 shrink-0 rounded-full"
+							style={statusDotStyle(
+								liveLevel === 'stalling' ? 'cooling' : 'burning',
+								LIVE_COLOR[liveLevel]
+							)}
+							aria-hidden="true"
+						></span>
+					{/if}
 					<span
-						class="inline-block h-2 w-2 shrink-0 rounded-full"
-						style={statusDotStyle(
-							liveLevel === 'stalling' ? 'cooling' : 'burning',
-							LIVE_COLOR[liveLevel]
-						)}
-						aria-hidden="true"
-					></span>
-				{/if}
-				<span
-					class="min-w-0 truncate tracking-wide text-amber-200 uppercase"
-					use:typeReveal={{ text: heading }}
-				>
-					{heading}
+						class="min-w-0 truncate font-medium tracking-wide text-amber-200 uppercase"
+						style={liveLevel ? `color: ${LIVE_COLOR[liveLevel]}` : undefined}
+						use:typeReveal={{ text: statusWord }}
+					>
+						{statusWord}
+					</span>
 				</span>
-			</span>
-			<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: identity }}>
-				{identity}
-			</span>
+				<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: cornerLabel }}>
+					{cornerLabel}
+				</span>
+			</div>
+			{#if identity?.name}
+				<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
+					<span
+						class="truncate text-sm font-medium text-amber-100"
+						use:typeReveal={{ text: identity.name }}>{identity.name}</span
+					>
+					{#if identity.spawn}
+						<span
+							class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
+							>↳ spawn</span
+						>
+					{/if}
+				</p>
+			{/if}
+			{#if identity?.context}
+				<p class="truncate text-xs text-ink-quiet" use:typeReveal={{ text: identity.context }}>
+					{identity.context}
+				</p>
+			{/if}
+			{#if runnerLine}
+				<p class="font-mono text-[10px] text-stone-400" use:typeReveal={{ text: runnerLine }}>
+					{runnerLine}
+				</p>
+			{/if}
 		</div>
 
 		{#if vitals.length > 0}

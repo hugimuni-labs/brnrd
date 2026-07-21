@@ -175,8 +175,9 @@
 							</span>
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
-							<span class="truncate font-medium text-amber-100" use:typeReveal={{ text: primary }}
-								>{primary}</span
+							<span
+								class="truncate text-sm font-medium text-amber-100"
+								use:typeReveal={{ text: primary }}>{primary}</span
 							>
 							{#if run.is_subspawn}
 								<span
@@ -202,7 +203,7 @@
 							     `agent_card_text`) — one truncated line collapsed;
 							     the expanded view below renders it whole. -->
 							<p
-								class="mt-0.5 truncate text-stone-400 italic"
+								class="mt-0.5 line-clamp-2 text-stone-300 italic"
 								title={run.card_text}
 								use:typeReveal={{ text: run.card_text }}
 							>

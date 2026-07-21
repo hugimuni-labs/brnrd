@@ -18,14 +18,22 @@
 		requestWake,
 		type RunnersResponse
 	} from '$lib/runners';
-	import { LiveRunsAuthError, fetchLiveRuns, heartbeatLevel, type LiveRun } from '$lib/liveRuns';
+	import {
+		LiveRunsAuthError,
+		ageSince,
+		fetchLiveRuns,
+		heartbeatLevel,
+		liveRunDisplayName,
+		type LiveRun
+	} from '$lib/liveRuns';
 	import RunNodeInline from '$lib/RunNodeInline.svelte';
 	import {
 		nodeDigest,
 		repoRunSlug,
 		runIdSlug,
 		runNodeFromSurface,
-		runNodeHref
+		runNodeHref,
+		type NodeIdentity
 	} from '$lib/runNode';
 	import { durationLabel } from '$lib/runLedger';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
@@ -314,22 +322,49 @@
 			? heartbeatLevel(selectedLiveRuns[0].last_seen, now, liveRunsStale)
 			: null
 	);
+	// The node panel wears the LiveRuns card's header grammar now (2026-07-21:
+	// "best of both worlds" — the card's visual language, the panel's
+	// readability). Identity facts — name, spawn chip, repo · kind, runner,
+	// age, status word — travel structured instead of flattened into the
+	// vitals string row, from whichever source knows the run: the live packet
+	// while it burns, the ledger row after it closes.
+	let selectedIdentity = $derived.by((): NodeIdentity | null => {
+		const live = selectedLiveRuns[0];
+		if (live) {
+			const lvl = heartbeatLevel(live.last_seen, now, liveRunsStale);
+			return {
+				status: lvl === 'running' && live.phase ? live.phase : lvl,
+				name: liveRunDisplayName(live),
+				context: live.label
+					? `${live.repo_label || 'unknown repo'} · ${live.kind || 'run'}`
+					: live.repo_label || 'unknown repo',
+				runner: [live.runner?.shell, live.runner?.core].filter(Boolean).join(' · ') || null,
+				spawn: Boolean(live.is_subspawn),
+				age: ageSince(live.started_at, now)
+			};
+		}
+		const row = selectedLedgerRows.find((candidate) => candidate.run_id) ?? selectedLedgerRows[0];
+		if (!row) return null;
+		return {
+			// Empty on purpose: the node's own digest speaks for a closed run's
+			// status; the ledger only adds what the node doesn't know.
+			status: '',
+			name: row.name,
+			context: row.repo_label,
+			runner: [row.runner_shell, row.runner_core].filter(Boolean).join(' · ') || null,
+			spawn: Boolean(row.is_subspawn),
+			age: row.wall_clock_seconds ? durationLabel(row.wall_clock_seconds) : null
+		};
+	});
+	// What's left for the vitals row once identity travels structured:
+	// closed-run produce counts. The live branch's elapsed/runner/phase/spawn
+	// all moved into the header grammar above.
 	let selectedVitals = $derived.by(() => {
 		const parts: string[] = [];
 		const live = selectedLiveRuns[0];
-		if (live) {
-			const started = live.started_at ? Date.parse(live.started_at) : Number.NaN;
-			if (Number.isFinite(started)) {
-				parts.push(`${durationLabel(Math.max(0, (now - started) / 1000))} elapsed`);
-			}
-			const runner = [live.runner?.shell, live.runner?.core].filter(Boolean).join(' · ');
-			if (runner) parts.push(runner);
-			if (live.phase) parts.push(live.phase);
-			if (live.is_subspawn) parts.push('↳ spawn');
-		} else {
+		if (!live) {
 			const row = selectedLedgerRows.find((candidate) => candidate.run_id) ?? selectedLedgerRows[0];
 			if (row) {
-				if (row.wall_clock_seconds) parts.push(durationLabel(row.wall_clock_seconds));
 				const relics = row.external_refs ?? [];
 				const prs = relics.filter((relic) => relic.kind === 'pr').length;
 				const commits = relics.filter((relic) => relic.kind === 'commit').length;
@@ -634,6 +669,7 @@
 								href={selectedNode.href}
 								vitals={selectedVitals}
 								liveLevel={selectedLiveLevel}
+								identity={selectedIdentity}
 							/>
 						{:else if selectedLiveRuns.length > 0}
 							<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
