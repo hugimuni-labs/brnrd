@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import BillingPanel from '$lib/BillingPanel.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
@@ -767,6 +768,30 @@
 				{:else}
 					<WorkSurface data={surfaceData} />
 				{/if}
+			</div>
+		</section>
+
+		<section class="ignite mt-10" style="--ignite-delay: 3200ms" aria-labelledby="billing-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§4 · account</p>
+					<h2 id="billing-heading" class="font-mono text-sm font-semibold text-amber-100">
+						subscription
+					</h2>
+				</div>
+				<a
+					href={resolve('/pricing')}
+					class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+					>pricing</a
+				>
+			</div>
+			<!-- The billing surface (#53's dashboard leg): the pricing page's
+			     "sign in to subscribe" lands here. The panel owns its own fetches
+			     (session cookie, same seam as every dashboard call) and the
+			     ?billing= Checkout return notice — no polling; money state
+			     changes ride the Stripe webhook, not this page's 2s cadence. -->
+			<div class="mt-3">
+				<BillingPanel />
 			</div>
 		</section>
 	</div>
