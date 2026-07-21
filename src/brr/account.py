@@ -1252,6 +1252,175 @@ def _relabel_registry(ctx: HomeContext, old_label: str, new_label: str) -> None:
     )
 
 
+# ── Gate identity — the relabel scope that lives with the project ─────
+#
+# Memory scopes are account-side, but a gate's *identity* is project-side:
+# ``.brr/gates/cloud.json`` carries ``repo_full_name`` and ``git_remote``
+# captured at setup time. Leave them behind on a relabel and every cloud
+# event keeps announcing the old address (``event_repo_label`` prefers the
+# event's ``repo_full_name``), so run dirs land back under the old slug —
+# quietly re-splitting the memory the relabel just unified. See issue #546.
+
+
+@dataclass(frozen=True)
+class GateRewrite:
+    """Planned identity rewrite for one gate config file.
+
+    ``fields`` are the (field, old_value, new_value) rewrites this relabel
+    will perform; ``warnings`` are dotted paths of fields that still mention
+    the old label but are *not* rewritten — those must be surfaced loudly,
+    never silently left behind.
+    """
+
+    gate: str
+    path: Path
+    fields: tuple[tuple[str, str, str], ...]
+    warnings: tuple[str, ...]
+
+
+def _rewrite_github_remote(url: str, old_label: str, new_label: str) -> str | None:
+    """Rewrite *url* to *new_label* if it names *old_label*, preserving form.
+
+    Recognizes the two remote shapes github hands out — ``git@github.com:X``
+    and ``https://github.com/X`` — each with or without ``.git``. Anything
+    else returns ``None`` and is the caller's warning to raise.
+    """
+
+    for old, new in (
+        (f"git@github.com:{old_label}.git", f"git@github.com:{new_label}.git"),
+        (f"git@github.com:{old_label}", f"git@github.com:{new_label}"),
+        (f"https://github.com/{old_label}.git", f"https://github.com/{new_label}.git"),
+        (f"https://github.com/{old_label}", f"https://github.com/{new_label}"),
+    ):
+        if url == old:
+            return new
+    return None
+
+
+def _walk_strings(value: Any, prefix: str = "") -> list[tuple[str, str]]:
+    """Every string leaf in a JSON value, as (dotted-path, string)."""
+
+    out: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            out.extend(_walk_strings(item, path))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            out.extend(_walk_strings(item, f"{prefix}[{i}]"))
+    elif isinstance(value, str):
+        out.append((prefix, value))
+    return out
+
+
+def plan_relabel_gates(
+    brr_dir: Path, old_label: str, new_label: str
+) -> list[GateRewrite]:
+    """Return the gate-identity rewrites a relabel would perform. Pure.
+
+    Scans every ``.brr/gates/*.json`` (cloud, github, health files alike):
+    a top-level ``repo_full_name`` equal to *old_label* and a top-level
+    ``git_remote`` in a recognized github form are planned for rewrite; any
+    *other* field anywhere in the file that mentions the old label lands in
+    ``warnings`` — reported, never silently skipped and never guessed at.
+    """
+
+    gates_dir = brr_dir / "gates"
+    if not gates_dir.is_dir():
+        return []
+
+    rewrites: list[GateRewrite] = []
+    for path in sorted(gates_dir.glob("*.json")):
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(state, dict):
+            continue
+
+        fields: list[tuple[str, str, str]] = []
+        rewritten: set[str] = set()
+        if state.get("repo_full_name") == old_label:
+            fields.append(("repo_full_name", old_label, new_label))
+            rewritten.add("repo_full_name")
+        remote = state.get("git_remote")
+        if isinstance(remote, str):
+            new_remote = _rewrite_github_remote(remote, old_label, new_label)
+            if new_remote is not None:
+                fields.append(("git_remote", remote, new_remote))
+                rewritten.add("git_remote")
+
+        warnings = tuple(
+            field
+            for field, text in _walk_strings(state)
+            if old_label in text and field not in rewritten
+        )
+        if fields or warnings:
+            rewrites.append(
+                GateRewrite(
+                    gate=path.stem,
+                    path=path,
+                    fields=tuple(fields),
+                    warnings=warnings,
+                )
+            )
+    return rewrites
+
+
+def relabel_gates(rewrites: list[GateRewrite], old_label: str) -> None:
+    """Apply planned gate-identity rewrites; print every warning loudly.
+
+    Load → targeted field update → dump, matching the gates' own on-disk
+    format (``json.dumps(indent=2)`` + newline, atomic replace, original
+    file mode preserved — gate state may hold tokens). Keys not planned for
+    rewrite are carried through untouched.
+    """
+
+    import tempfile
+
+    for rewrite in rewrites:
+        if rewrite.fields:
+            try:
+                state = json.loads(rewrite.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                print(
+                    f"  ⚠ gate {rewrite.gate}: {rewrite.path} unreadable at "
+                    "apply time — identity not rewritten; fix it by hand."
+                )
+                state = None
+            if isinstance(state, dict):
+                for field, old, new in rewrite.fields:
+                    if state.get(field) == old:
+                        state[field] = new
+                mode = None
+                if os.name == "posix":
+                    try:
+                        mode = rewrite.path.stat().st_mode & 0o777
+                    except OSError:
+                        pass
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=rewrite.path.parent,
+                    prefix=f".{rewrite.path.name}.",
+                    suffix=".tmp",
+                )
+                try:
+                    if mode is not None:
+                        os.fchmod(fd, mode)
+                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        fd = -1
+                        stream.write(json.dumps(state, indent=2) + "\n")
+                    os.replace(tmp_name, rewrite.path)
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+                    try:
+                        os.unlink(tmp_name)
+                    except FileNotFoundError:
+                        pass
+        for field in rewrite.warnings:
+            print(f"  ⚠ gate {rewrite.gate} still says {old_label} in {field}")
+
+
 def detect_relabelled_repo(
     ctx: HomeContext, repo_root: Path, current_label: str
 ) -> str | None:

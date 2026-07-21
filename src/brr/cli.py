@@ -1460,17 +1460,42 @@ def cmd_account_relabel(args):
         print(f"[brnrd account relabel] {exc}")
         return 2
 
-    if not moves:
+    # Gate identity is project-side state (.brr/gates/*.json): a cloud gate
+    # still carrying the old repo_full_name keeps stamping events with the
+    # old label, re-splitting the memory this command just unified (#546).
+    try:
+        brr_dir = gitops.shared_brr_dir(repo_root)
+    except Exception:
+        brr_dir = None
+    gate_rewrites = (
+        account.plan_relabel_gates(brr_dir, args.old_label, args.new_label)
+        if brr_dir is not None
+        else []
+    )
+
+    if not moves and not any(rw.fields for rw in gate_rewrites):
         print(f"[brnrd account relabel] no memory found under {args.old_label!r}.")
         print("  Nothing to move. (Already relabelled? Check `brnrd account status`.)")
+        for rw in gate_rewrites:
+            for field in rw.warnings:
+                print(f"  ⚠ gate {rw.gate} still says {args.old_label} in {field}")
         return 0
 
     print(f"[brnrd account relabel] {args.old_label} → {args.new_label}")
     for move in moves:
         print(f"  {move.scope:<14} {move.src}")
         print(f"  {'':<14}   → {move.dst}")
+    for rw in gate_rewrites:
+        if not rw.fields:
+            continue
+        print(f"  {'gate-config':<14} {rw.path}")
+        for field, old, new in rw.fields:
+            print(f"  {'':<14}   {field}: {old} → {new}")
     print(f"  registry       account/repos.json: rekey entry"
           + (" + default_repo" if ctx.default_repo.label == args.old_label else ""))
+    for rw in gate_rewrites:
+        for field in rw.warnings:
+            print(f"  ⚠ gate {rw.gate} still says {args.old_label} in {field}")
 
     if args.dry_run:
         print("\n  --dry-run: nothing moved.")
@@ -1487,6 +1512,7 @@ def cmd_account_relabel(args):
             return 1
 
     account.relabel_repo(ctx, args.old_label, args.new_label)
+    account.relabel_gates(gate_rewrites, args.old_label)
 
     # Commit both homes. The knowledge dir is a nested repo the dominion
     # gitignores, so it needs its own commit — a relabel that lands in only
@@ -1504,6 +1530,9 @@ def cmd_account_relabel(args):
         else:
             print(f"  ⚠ could not commit {label} ({path}) — commit it by hand.")
 
+    rewritten_gates = sum(1 for rw in gate_rewrites if rw.fields)
+    if rewritten_gates:
+        print(f"  rewrote gate identity in {rewritten_gates} gate config(s).")
     print(f"\n  done. {len(moves)} scope(s) moved; the next wake reads them "
           f"under {args.new_label}.")
     print("  Remaining: point the repo's origin remote at the new address if "
