@@ -13,6 +13,8 @@ const profiles: RunnerProfile[] = [
 const request: WakeRequest = {
 	request_id: 'wake-1',
 	profile: 'codex-full',
+	repo_label: null,
+	environment: null,
 	requested_at: '2026-07-18T12:00:00Z',
 	status: 'pending'
 };

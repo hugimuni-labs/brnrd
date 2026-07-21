@@ -65,6 +65,12 @@ def _login_cookie(client: TestClient) -> None:
 
 _CATALOG_PAYLOAD = {
     "default": "claude-fable",
+    "environment_default": "worktree",
+    "environments": [
+        {"name": "worktree", "available": True},
+        {"name": "docker", "available": False, "reason": "docker.image is not configured"},
+        {"name": "solitary", "available": False, "reason": "docker.image is not configured"},
+    ],
     "profiles": [
         {
             "name": "claude-haiku",
@@ -108,6 +114,15 @@ def test_daemon_runners_snapshot_replaces_catalog():
     # `class` survives the pydantic alias round-trip on the wire.
     assert body["profiles"][0]["class"] == "economy"
     assert body["runners_updated_at"] is not None
+    assert body["environment_default"] == "worktree"
+    assert body["environments"][1]["available"] is False
+
+    _login_cookie(client)
+    repo = client.get("/v1/dashboard/repos").json()["connected_repos"][0]
+    assert repo["repo_full_name"] == "Gurio/brr"
+    assert repo["dispatch_default"] is True
+    assert repo["environment_default"] == "worktree"
+    assert repo["environments"][1]["reason"] == "docker.image is not configured"
 
     # Last-write-wins, same shape as the quota/plans mirrors.
     replaced = client.put(
@@ -170,11 +185,18 @@ def test_wake_request_tap_cancel_lifecycle():
     ).status_code == 422
 
     tapped = client.post(
-        "/v1/dashboard/runners/wake-request", json={"profile": "codex-mini"},
+        "/v1/dashboard/runners/wake-request",
+        json={
+            "profile": "codex-mini",
+            "repo_label": "Gurio/brr",
+            "environment": "worktree",
+        },
     )
     assert tapped.status_code == 200, tapped.text
     wake = tapped.json()["wake_request"]
     assert wake["profile"] == "codex-mini"
+    assert wake["repo_label"] == "Gurio/brr"
+    assert wake["environment"] == "worktree"
     assert wake["status"] == "pending"
 
     # The dashboard view carries the pending tap.
@@ -201,6 +223,26 @@ def test_wake_request_tap_cancel_lifecycle():
     assert client.delete(
         "/v1/dashboard/runners/wake-request/wake_nope",
     ).status_code == 404
+
+
+def test_wake_request_rejects_unknown_repo_and_environment():
+    client = _client()
+    _repo_and_daemon(client)
+    _login_cookie(client)
+
+    bad_repo = client.post(
+        "/v1/dashboard/runners/wake-request",
+        json={"profile": "codex", "repo_label": "other/missing"},
+    )
+    assert bad_repo.status_code == 422
+    assert "repo_label" in bad_repo.json()["detail"]
+
+    bad_env = client.post(
+        "/v1/dashboard/runners/wake-request",
+        json={"profile": "codex", "environment": "moon"},
+    )
+    assert bad_env.status_code == 422
+    assert "environment" in bad_env.json()["detail"]
 
 
 def test_wake_request_rides_daemon_publish_and_consume_ack():

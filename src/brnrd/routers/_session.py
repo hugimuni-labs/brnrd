@@ -135,9 +135,20 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
 
     repo_ids = [r.id for r in repos]
     daemons_by_repo: dict[str, list[Daemon]] = {r.id: [] for r in repos}
+    daemon_rows: list[Daemon] = []
     if repo_ids:
-        for daemon in db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars():
+        daemon_rows = list(
+            db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+        )
+        for daemon in daemon_rows:
             daemons_by_repo.setdefault(daemon.repo_id, []).append(daemon)
+
+    reported_daemons = [daemon for daemon in daemon_rows if _dt(daemon.runners_updated_at)]
+    dispatch_default_repo_id = (
+        max(reported_daemons, key=lambda daemon: _dt(daemon.runners_updated_at)).repo_id
+        if reported_daemons
+        else None
+    )
 
     now = datetime.now(timezone.utc)
     views: list[dict] = []
@@ -163,9 +174,18 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                     gate_health = [row for row in parsed_health if isinstance(row, dict)]
             except (TypeError, ValueError):
                 pass
+        environments: list[dict] = []
+        if latest is not None:
+            try:
+                parsed_environments = json.loads(latest.environments_json or "[]")
+                if isinstance(parsed_environments, list):
+                    environments = [row for row in parsed_environments if isinstance(row, dict)]
+            except (TypeError, ValueError):
+                pass
         views.append(
             {
                 "repo": repo,
+                "dispatch_default": repo.id == dispatch_default_repo_id,
                 "daemon_count": len(daemons),
                 "daemon_status": daemon_status,
                 "daemon_label": daemon_label,
@@ -173,6 +193,8 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_last_seen_at": _dt(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
                 "gates": gate_health,
+                "environment_default": latest.environment_default if latest else None,
+                "environments": environments,
                 "setup_command": f"cd {repo.repo_name}\nbrnrd account connect https://brnrd.dev\nbrnrd up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
