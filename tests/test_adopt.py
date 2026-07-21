@@ -292,3 +292,109 @@ class TestBuildDefaultDockerImage:
             lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", ""),
         )
         assert adopt._build_default_docker_image() is False
+
+
+# ── L0–L2: template split, kb-not-required, shell bridges ────────────
+
+
+_VALID_AGENTS = (
+    "# Project\n\nA repo.\n\n## Stewardship\nBe a good steward and think first.\n\n"
+    "## Knowledge base\nThe kb compounds across sessions and stays current.\n\n"
+    "## Guardrails\nDo not commit secrets; stop after two failed attempts.\n"
+)
+
+
+def _mock_runner_writing(monkeypatch, agents_text=_VALID_AGENTS, capture=None):
+    """Mock a runner that actually writes AGENTS.md, so structure and
+    reachability verification run against a real file."""
+    monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+    monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
+
+    def _invoke(runner_name, invocation, cfg=None):
+        if capture is not None:
+            capture.append(invocation)
+        if agents_text is not None:
+            (invocation.repo_root / "AGENTS.md").write_text(agents_text, encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[
+                adopt.runner.RunnerArtifactRecord(
+                    path=a.path,
+                    label=a.label or str(a.path),
+                    exists=a.path.exists(),
+                    trace_copy=None,
+                )
+                for a in invocation.required_artifacts
+            ],
+        )
+
+    monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+
+def _init_git(repo):
+    repo.mkdir(exist_ok=True)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+
+
+class TestKnowledgeShapeAndArtifacts:
+    def test_kb_is_not_a_hard_required_artifact(self, tmp_path, monkeypatch):
+        # The abandoned architecture: init used to SystemExit(1) when kb/
+        # index.md + log.md were absent. Now only AGENTS.md is required.
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        captured = []
+        _mock_runner_writing(monkeypatch, capture=captured)
+
+        adopt.init_repo()  # must not raise even though no kb/ was created
+
+        labels = {a.label for a in captured[0].required_artifacts}
+        assert labels == {"AGENTS.md"}
+        assert not (repo / "kb").exists()
+
+    def test_empty_agents_fails_install(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner_writing(monkeypatch, agents_text="# too short\n")
+
+        with pytest.raises(SystemExit):
+            adopt.init_repo()
+
+    def test_knowledge_shape_defaults_to_repo_noninteractive(self):
+        assert adopt._resolve_knowledge_shape(interactive=False) == "repo"
+
+
+class TestShellBridges:
+    def test_bridges_written_for_detected_shells(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: ["claude", "codex"])
+        _mock_runner_writing(monkeypatch)
+
+        adopt.init_repo()
+
+        claude = repo / "CLAUDE.md"
+        assert claude.exists()
+        assert "@AGENTS.md" in claude.read_text(encoding="utf-8")
+        # Codex reads AGENTS.md natively — no bridge file.
+        assert not (repo / "CODEX.md").exists()
+        # And the contract is reachable from every detected shell.
+        for shell in ("claude", "codex"):
+            assert adopt.constitution.verify_reachability(repo, shell).reachable
+
+    def test_detect_shells_uses_path(self, monkeypatch):
+        monkeypatch.setattr(
+            adopt.shutil, "which",
+            lambda binary: "/usr/bin/" + binary if binary in ("claude", "gemini") else None,
+        )
+        assert adopt._detect_shells() == ["claude", "gemini"]

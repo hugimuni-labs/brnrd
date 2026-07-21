@@ -24,7 +24,10 @@ from . import account, config as conf, dev_reload, forge_state
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-_AGENTS_PATH = Path(__file__).resolve().parent / "AGENTS.md"
+# The adopter template lives at ``constitution.TEMPLATE_PATH``; brr's own
+# repository contract is the real ``src/brr/AGENTS.md`` (root symlink
+# target). Layer 0 of ``design-init-as-a-wake.md`` split those two jobs
+# apart — ``build_init_prompt`` ships the template, not brr's own playbook.
 
 
 # ── Template I/O ─────────────────────────────────────────────────────
@@ -1604,17 +1607,45 @@ def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
 # ── Top-level builders ───────────────────────────────────────────────
 
 
-def build_init_prompt(repo_root: Path) -> str:
-    """Build the prompt for ``brnrd init`` — setup.md + bundled AGENTS.md.
+def build_init_prompt(repo_root: Path, knowledge_shape: str = "repo") -> str:
+    """Build the prompt for ``brnrd init`` — setup.md + adopter template.
 
-    brr's own ``AGENTS.md`` (bundled inside the package) is the model
-    adopters' setup agent uses. Universal sections copy verbatim;
-    project-specific sections (Project, Build and run, Code guidelines,
+    The setup agent works from ``templates/constitution.md`` — the
+    host-agnostic adopter template, *not* brr's own 667-line internal
+    playbook (Layer 0 split these apart; before it, brr-specific truth
+    leaked into adopter repos because one file served both jobs). The
+    template's universal sections are versioned blocks copied verbatim;
+    the project-specific sections (Project, Build and run, Code guidelines,
     Constraints) get rewritten for the adopter's repo.
+
+    ``knowledge_shape`` (``"repo"`` | ``"home"``) is the adopter's chosen kb
+    architecture — asked, not defaulted (D2). It selects whether the setup
+    agent scaffolds a committed ``kb/`` or leaves knowledge to the brnrd
+    account home; the shell bridges are written by brnrd itself, not the
+    model.
     """
+    from . import constitution
+
     setup = read_prompt("setup.md", repo_root)
-    template = _AGENTS_PATH.read_text(encoding="utf-8") if _AGENTS_PATH.exists() else ""
-    return f"{setup}\n\n{template}"
+    tpl_path = constitution.TEMPLATE_PATH
+    template = tpl_path.read_text(encoding="utf-8") if tpl_path.exists() else ""
+    if knowledge_shape == "home":
+        directive = (
+            "\n\n---\n\n## Knowledge shape for this adopter: **home**\n\n"
+            "This repo is connected to a brnrd account, so its knowledge base "
+            "lives in the account's home knowledge, not a committed `kb/`. Do "
+            "**not** create `kb/index.md` or `kb/log.md`. In the rendered "
+            "`Knowledge base` section, keep the logical contract but drop the "
+            "committed-`kb/` specifics."
+        )
+    else:
+        directive = (
+            "\n\n---\n\n## Knowledge shape for this adopter: **repo**\n\n"
+            "Scaffold a committed `kb/`: create `kb/index.md` and `kb/log.md` "
+            "if absent (seeds below), and add `kb/log.md merge=union` to "
+            "`.gitattributes`."
+        )
+    return f"{setup}\n\n{template}{directive}"
 
 
 def _read_preamble_with_weave(repo_root: Path) -> str:
