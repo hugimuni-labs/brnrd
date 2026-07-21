@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -717,7 +718,16 @@ def _run_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 "kind": "run",
                 "source": task.source,
                 "conversation_key": task.conversation_key,
-                "summary": _summary(task.body) or task.event_id,
+                # #502: task-body excerpts leave the machine only for threads
+                # the managed backend already carries (source == "cloud").
+                # Locally-gated traffic (telegram/slack/github direct) ships
+                # id/kind/status — the body never reached brnrd.dev inbound,
+                # so the activity mirror must not leak it outbound.
+                "summary": (
+                    _summary(task.body) or task.event_id
+                    if task.source == "cloud"
+                    else task.event_id
+                ),
                 "runner": _runner_payload(task.meta),
                 "status": task.status,
                 "phase": str(task.meta.get("publish_status") or ""),
@@ -775,7 +785,10 @@ def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 "kind": "scheduled",
                 "source": "schedule",
                 "conversation_key": entry.conversation_key or f"schedule:{entry.id}",
-                "summary": _summary(entry.body) or f"self-scheduled thought: {entry.id}",
+                # #502: schedule bodies are dominion content (resident-authored
+                # task specs) and never transit the managed backend otherwise —
+                # the mirror carries the entry id, not an excerpt.
+                "summary": f"self-scheduled thought: {entry.id}",
                 "runner": {},
                 "status": status,
                 "phase": entry.kind,
@@ -799,7 +812,12 @@ def _respawn_activity_records(inbox_dir: Path) -> list[dict[str, Any]]:
                 "kind": "respawn",
                 "source": str(event.get("source") or ""),
                 "conversation_key": str(event.get("conversation_key") or ""),
-                "summary": _summary(str(event.get("body") or "")) or parent,
+                # #502: same cloud-only excerpt rule as run records above.
+                "summary": (
+                    _summary(str(event.get("body") or "")) or parent
+                    if str(event.get("source") or "") == "cloud"
+                    else parent
+                ),
                 "runner": _runner_payload(event),
                 "status": "scheduled" if deferred else str(event.get("status") or "pending"),
                 "phase": str(event.get("respawn_reason") or ""),
@@ -844,6 +862,74 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
 # page cannot bloat the payload; a capped file still appears in the listing,
 # marked ``truncated`` rather than silently dropped.
 _CORPUS_FILE_CAP_BYTES = 256 * 1024
+
+# #502 data minimization: the server-side mirror is a bounded *render cache*,
+# never a second system of record — the repo, dominion, and knowledge repos
+# stay the durable copies. Two publish levers bound what leaves the machine:
+#
+# - ``publish.layers`` (``.brr/config``): comma-separated subset of
+#   ``authored,knowledge,runs`` (or ``none``); absent means all three.
+# - ``publish.runs_window_days``: only run nodes younger than this ship
+#   (default 14). ``0`` drops the runs layer, a negative value removes the
+#   bound. The window is derived from the run-directory name
+#   (``run-YYMMDD-…``), so it needs no extra state and slides at publish
+#   time — a run aging out changes the fingerprint and the next publish
+#   trims it from the mirror.
+_RUNS_WINDOW_DAYS_DEFAULT = 14
+_RUN_DIR_RE = re.compile(r"^run-(\d{2})(\d{2})(\d{2})-\d{4}")
+
+
+def _publish_config(brr_dir: Path) -> dict:
+    try:
+        from .. import config as conf
+
+        return conf.load_config(brr_dir.parent)
+    except Exception:
+        return {}
+
+
+def _run_file_date(path: str) -> datetime | None:
+    """The run-dir date encoded in a runs-layer corpus path, if any."""
+    for part in path.split("/"):
+        m = _RUN_DIR_RE.match(part)
+        if m:
+            yy, mm, dd = (int(g) for g in m.groups())
+            try:
+                return datetime(2000 + yy, mm, dd, tzinfo=timezone.utc)
+            except ValueError:
+                return None
+    return None
+
+
+def _publish_selection(files: list, cfg: dict, *, now: datetime | None = None) -> list:
+    """Apply the #502 publish bounds to the discovered corpus."""
+    raw_layers = str(cfg.get("publish.layers") or "").strip()
+    if raw_layers:
+        layers = {part.strip() for part in raw_layers.split(",") if part.strip()}
+    else:
+        layers = {"authored", "knowledge", "runs"}
+    try:
+        window_days = int(cfg.get("publish.runs_window_days", _RUNS_WINDOW_DAYS_DEFAULT))
+    except (TypeError, ValueError):
+        window_days = _RUNS_WINDOW_DAYS_DEFAULT
+    if window_days == 0:
+        layers.discard("runs")
+    cutoff: datetime | None = None
+    if window_days > 0:
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=window_days)
+    selected = []
+    for f in files:
+        if f.layer not in layers:
+            continue
+        if f.layer == "runs" and cutoff is not None:
+            dated = _run_file_date(f.path)
+            # Undated runs-layer files (layer indexes and the like) always
+            # ship; only files inside a dated run dir age out.
+            if dated is not None and dated < cutoff:
+                continue
+        selected.append(f)
+    return selected
+
 
 # Last successfully published corpus fingerprint, keyed by brr_dir. Module-level
 # because a single publisher thread owns this loop (see _dashboard_publish_loop),
@@ -928,6 +1014,9 @@ def _publish_corpus(brr_dir: Path, state: dict) -> None:
     if resolved is None:
         return
     files, knowledge_dir = resolved
+    # #502: bound the mirror *before* fingerprinting so a window slide (a run
+    # aging past the cutoff) reads as a change and triggers the trimming PUT.
+    files = _publish_selection(files, _publish_config(brr_dir))
     fingerprint = _corpus_fingerprint(files, knowledge_dir)
     key = str(brr_dir)
     if _corpus_publish_hash.get(key) == fingerprint:

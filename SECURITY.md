@@ -88,9 +88,10 @@ isolates, and what it does not:
   stays read-write pending [#80](https://github.com/Gurio/brr/issues/80)'s
   `isolation=clone`. Details: `brnrd docs envs`.
 
-The environment is chosen by **static configuration, not by the trust level of the
-event source** — an untrusted GitHub commenter's run executes with the same authority
-as the owner's. Source-trust-tiered environments are tracked as release work.
+The environment is chosen by **the trust tier of the event source** ([#524](https://github.com/Gurio/brr/pull/524)):
+owner-authored events run in the configured environment; unattributed or untrusted
+sources fail closed to `solitary` or are refused outright, and a lower tier can
+never escalate the environment a higher tier configured.
 
 ## Credentials & data flow
 
@@ -101,12 +102,22 @@ as the owner's. Source-trust-tiered environments are tracked as release work.
 - **What stays local.** Your checkout, `.git`, run execution, responses, traces, the
   knowledge base, and the dominion. `.brr/` is gitignored.
 - **What managed mode sees.** The inbound message body (nulled after the reply is
-  delivered), and durable routing metadata (sender id/username, chat id, repo name,
-  comment URL). If you run `brnrd account connect`, dashboard publishing also mirrors
-  **derived** repo knowledge — active plan, decision ledger, run summaries, open-PR
-  titles/URLs, quota — to brnrd.dev. Your source code does not leave the machine.
-  Diffense review packs transit brnrd.dev in memory only, TTL-bounded, behind an
-  unguessable token, and are never persisted.
+  delivered; never-answered bodies are nulled after 14 days and event rows pruned
+  after 90 — the queue is a relay, not an archive), and durable routing metadata
+  (sender id/username, chat id, repo name, comment URL). If you run
+  `brnrd account connect`, dashboard publishing also mirrors a **bounded render
+  cache** of the account corpus to brnrd.dev: the authored work surface, knowledge
+  pages, and run nodes from the last 14 days — run nodes include full run bodies
+  and message text for that window, so "derived summaries only" would be an
+  understatement; the repo, dominion, and knowledge repos remain the durable
+  copies. Bounds are yours to tighten: `publish.runs_window_days` resizes the run
+  window and `publish.layers` opts the mirror down to fewer layers (or `none`).
+  Task-body excerpts in the activity lane are published only for threads the
+  backend already carries (cloud-gated); locally-gated traffic reports status
+  metadata without text. Disconnecting your last repo purges the mirror. Your
+  source code does not leave the machine. Diffense review packs transit brnrd.dev
+  in memory only, TTL-bounded, behind an unguessable token, and are never
+  persisted.
 - **Credential scope.** On the managed path the GitHub token handed to the agent
   is a repository-scoped App installation token (1-hour lifetime). Self-hosted
   setups fall back to whatever you configured — typically a PAT or
@@ -149,7 +160,7 @@ backend relays, it does not run your agent.
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/Gurio/brr/issues/80) |
 | Full-scope GitHub token handed to the agent | High | [#415](https://github.com/Gurio/brr/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/Gurio/brr/pull/498)/[#520](https://github.com/Gurio/brr/pull/520); the self-hosted fallback chain remains |
 | Gate tokens stored in cleartext | Medium | fixed — [#416](https://github.com/Gurio/brr/issues/416) via [#499](https://github.com/Gurio/brr/pull/499) (0600/0700 stores) |
-| Managed dashboard mirrors derived repo knowledge (document/opt-in) | Medium | [#502](https://github.com/Gurio/brr/issues/502) |
+| ~~Managed dashboard mirror unbounded/undocumented~~ — shipped: 14-day run window, cloud-only activity excerpts, disconnect purge, event GC, `publish.layers` opt-down | Medium | [#502](https://github.com/Gurio/brr/issues/502) |
 
 ## Found a gap?
 

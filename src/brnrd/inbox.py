@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import ids
@@ -208,6 +208,52 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     event.body = None
     db.commit()
     return event
+
+
+# ── #502 event GC — the queue is a relay, not an archive ──
+#
+# Responded events already null their body at close (`record_response`); the
+# two leaks this sweep closes are the never-responded body (a dead queued
+# event kept its full text forever) and the row itself (routing metadata
+# accreting without bound). `/v1/stats/public` reads live counts of accounts
+# and subscriptions — nothing derives history from event rows — so pruning
+# needs no rollup.
+_EVENT_BODY_TTL = timedelta(days=14)
+_EVENT_ROW_TTL = timedelta(days=90)
+_GC_INTERVAL_S = 3600.0
+_gc_state = {"at": 0.0}
+
+
+def reset_gc_throttle() -> None:
+    """Test seam: allow the next gc_events call to run."""
+    _gc_state["at"] = 0.0
+
+
+def gc_events(db: Session, *, now: datetime | None = None, force: bool = False) -> None:
+    """Opportunistic sweep, throttled process-wide to once an hour.
+
+    Piggybacks on the activity publish (`PUT /v1/daemons/activity`) the same
+    way the stale-activity delete does — any online daemon keeps the table
+    bounded, and a deployment with no daemons has nothing accreting anyway.
+    Deleting old rows is cursor-safe: `clamp_since` only cares about the
+    per-repo max seq, and rows this old sit far below any live cursor.
+    """
+    tick = time.monotonic()
+    if not force and tick - _gc_state["at"] < _GC_INTERVAL_S:
+        return
+    _gc_state["at"] = tick
+    now = now or datetime.now(timezone.utc)
+    db.execute(delete(Event).where(Event.created_at < now - _EVENT_ROW_TTL))
+    db.execute(
+        update(Event)
+        .where(
+            Event.status == Event.STATUS_QUEUED,
+            Event.created_at < now - _EVENT_BODY_TTL,
+            Event.body.is_not(None),
+        )
+        .values(body=None)
+    )
+    db.commit()
 
 
 def event_to_dict(event: Event) -> dict[str, Any]:

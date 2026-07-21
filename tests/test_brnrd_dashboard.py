@@ -833,3 +833,53 @@ def test_dashboard_can_issue_telegram_pair_link():
     assert body["pairing_code"].startswith("TG-")
     assert body["action_url"].startswith("https://t.me/brnrd_bot?start=TG-")
     assert "Open https://t.me/brnrd_bot?start=TG-" in body["instructions"]
+
+
+def test_dashboard_disconnect_purges_repo_rows_and_last_repo_clears_surface():
+    """#502: disconnect must not 500 on repo-FK rows, and the corpus mirror
+    must not outlive the account's last connection."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import ids
+    from brnrd.models import ActivityRecord, ConfigChangeRequest, Token
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    first = _create_repo(client, token, repo="Gurio/one")
+    second = _create_repo(client, token, repo="Gurio/two")
+    with client.app.state.SessionLocal() as db:
+        account = db.query(Account).filter(Account.github_login == "Gurio").one()
+        account_id = account.id
+        account.surface_json = '[{"path": "surface/index.md"}]'
+        tok = db.query(Token).first()
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        db.add(
+            ActivityRecord(
+                id=ids.activity_id(), repo_id=first, token_id=tok.id, record_id="run:x"
+            )
+        )
+        db.add(
+            ConfigChangeRequest(
+                id="ccr-1",
+                account_id=account_id,
+                repo_id=first,
+                proposal_id="p-1",
+                config_key="spawn.max_concurrent",
+                expires_at=expires,
+            )
+        )
+        db.commit()
+
+    r = client.post(f"/v1/repos/{first}/disconnect")
+    assert r.status_code == 200, r.text
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, first) is None
+        assert db.query(ActivityRecord).count() == 0
+        assert db.query(ConfigChangeRequest).count() == 0
+        # Another repo still connected: the account corpus stays.
+        assert db.get(Account, account_id).surface_json != "[]"
+
+    r = client.post(f"/v1/repos/{second}/disconnect")
+    assert r.status_code == 200, r.text
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Account, account_id).surface_json == "[]"
