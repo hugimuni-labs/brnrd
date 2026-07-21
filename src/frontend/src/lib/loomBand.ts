@@ -96,3 +96,81 @@ export function loomFutureStop(etaMs: number, horizonMs: number): LoomFutureStop
 	if (etaMs <= LOOM_DUE_SOON_MS) return 'amber';
 	return etaMs >= horizonMs * 0.55 ? 'frost-deep' : 'frost';
 }
+
+/** The shelf-row facts `nestShelfChildren` needs to find and order a
+ * dispatch edge — deliberately loose (extends `T`) so the caller's own row
+ * shape passes through untouched save for the added `depth`. */
+export interface ShelfGroupable {
+	runId: string | null;
+	parentRunId: string | null;
+	isSubspawn: boolean;
+	ageMs: number;
+}
+
+/**
+ * Nest a `spawn:`-dispatched child's shelf row under the row of the run
+ * that dispatched it (#539) — the loom's read of the same
+ * `parent_run_id`/`is_subspawn` edge `groupWithChildren` already folds into
+ * the receipt panel's relics. There the join answers "whose produce is
+ * this"; here it answers "whose bar is this", so the shelf can no longer be
+ * a single list sorted by age alone once children exist in it.
+ *
+ * A child is anything `is_subspawn` whose `parent_run_id` names a row
+ * that's actually present in the same set — same "renders standalone
+ * rather than silently vanishing" fallback `groupWithChildren` uses for a
+ * parent that's scrolled out of the window or filtered out by the active
+ * lens. Root rows keep the shelf's existing newest-first order; each root's
+ * children are age-ordered immediately beneath it, so a fleet reads as one
+ * bar with its workers trailing it rather than scattered wherever their own
+ * age would otherwise place them.
+ *
+ * Single level only, matching `groupWithChildren`: only children of *root*
+ * rows nest. A grandchild — a child whose direct parent is itself a nested
+ * child — falls back to its own root row, same as an orphan: one hop,
+ * and nothing ever silently vanishes from the shelf.
+ */
+export function nestShelfChildren<T extends ShelfGroupable>(
+	items: T[]
+): Array<T & { depth: 0 | 1 }> {
+	const byRunId = new Map<string, T>();
+	for (const item of items) {
+		if (item.runId) byRunId.set(item.runId, item);
+	}
+	// A row nests only under a parent that will itself render as a root —
+	// a parent that is itself a nested child never gets its children
+	// emitted, so nesting under it would drop the row entirely.
+	const rootMemo = new Map<T, boolean>();
+	function rendersAsRoot(item: T, seen: Set<T> = new Set()): boolean {
+		if (!item.isSubspawn || !item.parentRunId) return true;
+		const memo = rootMemo.get(item);
+		if (memo !== undefined) return memo;
+		if (seen.has(item)) return true; // malformed cycle — fail visible
+		seen.add(item);
+		const parent = byRunId.get(item.parentRunId);
+		const result = !parent ? true : !rendersAsRoot(parent, seen);
+		rootMemo.set(item, result);
+		return result;
+	}
+	const childrenByParent = new Map<string, T[]>();
+	const roots: T[] = [];
+	for (const item of items) {
+		const parent = item.parentRunId ? byRunId.get(item.parentRunId) : undefined;
+		if (item.isSubspawn && parent && rendersAsRoot(parent)) {
+			const list = childrenByParent.get(item.parentRunId as string) ?? [];
+			list.push(item);
+			childrenByParent.set(item.parentRunId as string, list);
+		} else {
+			roots.push(item);
+		}
+	}
+
+	const out: Array<T & { depth: 0 | 1 }> = [];
+	for (const root of [...roots].sort((a, b) => a.ageMs - b.ageMs)) {
+		out.push({ ...root, depth: 0 });
+		const children = childrenByParent.get(root.runId ?? '') ?? [];
+		for (const child of [...children].sort((a, b) => a.ageMs - b.ageMs)) {
+			out.push({ ...child, depth: 1 });
+		}
+	}
+	return out;
+}
