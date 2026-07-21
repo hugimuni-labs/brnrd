@@ -374,11 +374,11 @@ it. So: edit in `.brnrd-kb/`, commit if you have something to say in the
 message, and **never hand-run a push chain** — if a page seems to need one to
 reach the forge, that's a bug to report, not a ritual to learn.
 
-**This repo dogfoods home knowledge, not a committed `kb/`.** `Gurio/brr`
+**This repo dogfoods home knowledge, not a committed `kb/`.** `hugimuni-labs/brnrd`
 is public, and a committed `kb/` was carrying maintainer-personal and
 pre-decision material in public git history — moved 2026-07-09 to the
 account's private `hugimuni-labs/brnrd-knowledge` repo
-(`repos/Gurio__brr/` inside it). There is no `kb/` directory in this tree
+(`repos/hugimuni-labs__brnrd/` inside it). There is no `kb/` directory in this tree
 to browse; read the kb via `.brnrd-kb/` (once checked out) or `brnrd kb
 <query>`, and edit it there — commits land in the knowledge repo, not this
 one. A fresh adopter repo with no connected account still gets the

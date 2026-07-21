@@ -15,10 +15,10 @@ export default defineConfig({
       },
       favicon: '/brr-avatar.png',
       editLink: {
-        baseUrl: 'https://github.com/Gurio/brr/edit/main/docs/src/content/docs/',
+        baseUrl: 'https://github.com/hugimuni-labs/brnrd/edit/main/docs/src/content/docs/',
       },
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/Gurio/brr' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/hugimuni-labs/brnrd' },
       ],
       customCss: ['./src/styles/brnrd.css'],
       lastUpdated: true,

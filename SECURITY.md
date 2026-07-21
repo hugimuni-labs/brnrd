@@ -45,14 +45,14 @@ This is the most important thing to understand before opening a gate.
 
 **Known blockers (do not use the unsafe configurations until they land):**
 
-- [#408](https://github.com/Gurio/brr/issues/408) — GitHub triggers authorize the
+- [#408](https://github.com/hugimuni-labs/brnrd/issues/408) — GitHub triggers authorize the
   mention syntax, not the commenter. Unsafe on public repositories.
-- [#409](https://github.com/Gurio/brr/issues/409) — paired chats authorize the room,
+- [#409](https://github.com/hugimuni-labs/brnrd/issues/409) — paired chats authorize the room,
   not the sender.
 
 Both are instances of a broader class — untrusted text driving a fully
 approval-bypassed agent with operator authority — tracked as the umbrella issue
-linked from [#23](https://github.com/Gurio/brr/issues/23).
+linked from [#23](https://github.com/hugimuni-labs/brnrd/issues/23).
 
 ## Execution environments — honest isolation matrix
 
@@ -76,7 +76,7 @@ isolates, and what it does not:
   the agent can see to the repo plus mounted credential dirs. It is **not** a
   credential or containment boundary: the repo is mounted read-write, your
   credentials cross in, and the network is on by default. Assumes a trusted agent.
-  See [#80](https://github.com/Gurio/brr/issues/80).
+  See [#80](https://github.com/hugimuni-labs/brnrd/issues/80).
 - **`solitary`** — the hardened preset (`environment=solitary`, one value): egress
   locked to the run's model provider through an allowlisting proxy sidecar (a
   literal `network=none` would brick every cloud runner — the model call itself is
@@ -85,10 +85,10 @@ isolates, and what it does not:
   credential at all — "no push from inside" holds structurally; the daemon
   publishes the branch from the host after the run. What it cannot close: content
   shown to the model provider (the conversation is a channel), and the repo mount
-  stays read-write pending [#80](https://github.com/Gurio/brr/issues/80)'s
+  stays read-write pending [#80](https://github.com/hugimuni-labs/brnrd/issues/80)'s
   `isolation=clone`. Details: `brnrd docs envs`.
 
-The environment is chosen by **the trust tier of the event source** ([#524](https://github.com/Gurio/brr/pull/524)):
+The environment is chosen by **the trust tier of the event source** ([#524](https://github.com/hugimuni-labs/brnrd/pull/524)):
 owner-authored events run in the configured environment; unattributed or untrusted
 sources fail closed to `solitary` or are refused outright, and a lower tier can
 never escalate the environment a higher tier configured.
@@ -123,7 +123,7 @@ never escalate the environment a higher tier configured.
   setups fall back to whatever you configured — typically a PAT or
   `gh auth token`, whose scope is as broad as you made it; under prompt injection
   a broad credential can act across all your repositories
-  ([#415](https://github.com/Gurio/brr/issues/415)). The `solitary` environment
+  ([#415](https://github.com/hugimuni-labs/brnrd/issues/415)). The `solitary` environment
   injects no GitHub credential at all. Gate and daemon tokens are stored 0600
   under `.brr/gates/`.
 
@@ -153,14 +153,14 @@ backend relays, it does not run your agent.
 
 | Gap | Severity | Issue |
 |---|---|---|
-| Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/Gurio/brr/issues/23) |
-| GitHub trigger authorizes mention, not commenter | Critical | fixed — [#408](https://github.com/Gurio/brr/issues/408) |
-| Chat gates authorize the room, not the sender | High | fixed — [#409](https://github.com/Gurio/brr/issues/409) |
-| ~~Environment not tiered by source trust~~ — shipped: ingress trust tier (owner/collaborator/untrusted) routes the env, fails closed to `solitary`/refuse | High | [#517](https://github.com/Gurio/brr/issues/517) |
-| Docker is not a credential/containment boundary | High | [#80](https://github.com/Gurio/brr/issues/80) |
-| Full-scope GitHub token handed to the agent | High | [#415](https://github.com/Gurio/brr/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/Gurio/brr/pull/498)/[#520](https://github.com/Gurio/brr/pull/520); the self-hosted fallback chain remains |
-| Gate tokens stored in cleartext | Medium | fixed — [#416](https://github.com/Gurio/brr/issues/416) via [#499](https://github.com/Gurio/brr/pull/499) (0600/0700 stores) |
-| ~~Managed dashboard mirror unbounded/undocumented~~ — shipped: 14-day run window, cloud-only activity excerpts, disconnect purge, event GC, `publish.layers` opt-down | Medium | [#502](https://github.com/Gurio/brr/issues/502) |
+| Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/hugimuni-labs/brnrd/issues/23) |
+| GitHub trigger authorizes mention, not commenter | Critical | fixed — [#408](https://github.com/hugimuni-labs/brnrd/issues/408) |
+| Chat gates authorize the room, not the sender | High | fixed — [#409](https://github.com/hugimuni-labs/brnrd/issues/409) |
+| ~~Environment not tiered by source trust~~ — shipped: ingress trust tier (owner/collaborator/untrusted) routes the env, fails closed to `solitary`/refuse | High | [#517](https://github.com/hugimuni-labs/brnrd/issues/517) |
+| Docker is not a credential/containment boundary | High | [#80](https://github.com/hugimuni-labs/brnrd/issues/80) |
+| Full-scope GitHub token handed to the agent | High | [#415](https://github.com/hugimuni-labs/brnrd/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/hugimuni-labs/brnrd/pull/498)/[#520](https://github.com/hugimuni-labs/brnrd/pull/520); the self-hosted fallback chain remains |
+| Gate tokens stored in cleartext | Medium | fixed — [#416](https://github.com/hugimuni-labs/brnrd/issues/416) via [#499](https://github.com/hugimuni-labs/brnrd/pull/499) (0600/0700 stores) |
+| ~~Managed dashboard mirror unbounded/undocumented~~ — shipped: 14-day run window, cloud-only activity excerpts, disconnect purge, event GC, `publish.layers` opt-down | Medium | [#502](https://github.com/hugimuni-labs/brnrd/issues/502) |
 
 ## Found a gap?
 
