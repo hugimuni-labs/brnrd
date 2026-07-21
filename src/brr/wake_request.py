@@ -57,7 +57,12 @@ def pending(brr_dir: Path) -> dict[str, Any] | None:
     profile = str(data.get("profile") or "").strip()
     if not request_id or not profile:
         return None
-    return {"request_id": request_id, "profile": profile}
+    out = {"request_id": request_id, "profile": profile}
+    for key in ("repo_label", "environment"):
+        value = str(data.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
 
 
 def store_pending(brr_dir: Path, request: dict[str, Any] | None) -> None:
@@ -79,7 +84,12 @@ def store_pending(brr_dir: Path, request: dict[str, Any] | None) -> None:
     current = pending(brr_dir)
     if current and current["request_id"] == request_id:
         return  # unchanged; don't churn the file every tick
-    _write_json(path, {"request_id": request_id, "profile": profile})
+    payload = {"request_id": request_id, "profile": profile}
+    for key in ("repo_label", "environment"):
+        value = str(request.get(key) or "").strip()
+        if value:
+            payload[key] = value
+    _write_json(path, payload)
 
 
 def consume(brr_dir: Path, request_id: str) -> None:

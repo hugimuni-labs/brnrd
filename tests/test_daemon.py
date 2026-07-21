@@ -3958,6 +3958,45 @@ def test_account_starts_one_cloud_gate_on_default_repo_runtime(
     assert cloud_calls[0][2] == ctx.responses_dir
 
 
+def test_dashboard_dispatch_header_stamps_event_before_repo_routing(tmp_path):
+    from brr import wake_request as wake_request_mod
+
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "home.path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    event = protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
+    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
+    wake_request_mod.store_pending(
+        repo_a / ".brr",
+        {
+            "request_id": "wake_dispatch",
+            "profile": "codex-mini",
+            "repo_label": "Gurio/b",
+            "environment": "solitary",
+        },
+    )
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied.repo_root == repo_b
+    assert applied.repo_label == "Gurio/b"
+    assert applied.event["runner"] == "codex-mini"
+    assert applied.event["repo_label"] == "Gurio/b"
+    assert applied.event["environment"] == "solitary"
+    assert applied.event["dashboard_wake_request_id"] == "wake_dispatch"
+    assert wake_request_mod.pending(repo_a / ".brr") is None
+    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_dispatch"]
+
+
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

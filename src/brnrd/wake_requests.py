@@ -37,6 +37,8 @@ def view(row: RunnerWakeRequest) -> dict:
     return {
         "request_id": row.id,
         "profile": row.profile,
+        "repo_label": row.repo_label,
+        "environment": row.environment,
         "requested_at": created.isoformat() if created else None,
         "status": row.status,
     }
@@ -73,7 +75,14 @@ def pending_for_account(db: Session, account_id: str) -> RunnerWakeRequest | Non
     return newest
 
 
-def create(db: Session, account_id: str, profile: str) -> RunnerWakeRequest:
+def create(
+    db: Session,
+    account_id: str,
+    profile: str,
+    *,
+    repo_label: str | None = None,
+    environment: str | None = None,
+) -> RunnerWakeRequest:
     """Mint a pending request, superseding any earlier pending one."""
     now = datetime.now(timezone.utc)
     existing = (
@@ -93,6 +102,8 @@ def create(db: Session, account_id: str, profile: str) -> RunnerWakeRequest:
         id=ids.runner_wake_request_id(),
         account_id=account_id,
         profile=profile,
+        repo_label=repo_label,
+        environment=environment,
         status=RunnerWakeRequest.STATUS_PENDING,
         expires_at=now + timedelta(seconds=WAKE_REQUEST_TTL_S),
     )

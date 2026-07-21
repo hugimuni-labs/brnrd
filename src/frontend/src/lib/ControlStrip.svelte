@@ -3,6 +3,7 @@
 	import { fuelRows, runnerBlocks } from './controlStrip';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
+	import type { ConnectedRepo, EnvironmentOption } from './repos';
 	import type { RunLedgerRow } from './runLedger';
 	import type { ScheduledWake } from './scheduledWakes';
 	import { readTanks, type TankVerdict } from './tankForecast';
@@ -19,7 +20,8 @@
 		shells: QuotaShell[] | null;
 		runnersError?: string | null;
 		runnersNote?: string | null;
-		onTap?: (profileName: string) => void;
+		onTap?: (profileName: string, repoLabel: string | null, environment: string | null) => void;
+		repos?: ConnectedRepo[] | null;
 		/** Slice 2 inputs. Both optional: the strip's first two regions must
 		 *  keep working on a page (or a test) that has no ledger or schedule. */
 		ledgerRows?: RunLedgerRow[] | null;
@@ -33,11 +35,28 @@
 		runnersError = null,
 		runnersNote = null,
 		onTap,
+		repos = null,
 		ledgerRows = null,
 		scheduledWakes = null,
 		now = Date.now()
 	}: Props = $props();
 	let expanded = $state(false);
+	let repoSelection = $state<string | null>(null);
+	let environmentSelection = $state<string | null>(null);
+	let selectedRepo = $derived(
+		(repos ?? []).find(
+			(repo) => repo.repo_full_name === (repoSelection ?? runners?.wake_request?.repo_label)
+		) ??
+			(repos ?? []).find((repo) => repo.dispatch_default) ??
+			(repos ?? [])[0]
+	);
+	let environmentOptions = $derived<EnvironmentOption[]>(selectedRepo?.environments ?? []);
+	let environmentLabel = $derived(
+		environmentSelection ??
+			(selectedRepo?.environment_default
+				? `repo policy → ${selectedRepo.environment_default}`
+				: 'repo policy')
+	);
 	let blocks = $derived(
 		runnerBlocks(runners?.profiles ?? [], runners?.default ?? null, runners?.wake_request ?? null)
 	);
@@ -68,6 +87,15 @@
 		const profile = runners?.profiles.find((candidate) => candidate.name === name);
 		return profile ? `${profile.shell ?? '?'} · ${profile.model ?? 'default'}` : name;
 	}
+
+	function selectRepo(repo: ConnectedRepo) {
+		repoSelection = repo.repo_full_name;
+		environmentSelection = null;
+	}
+
+	function tapRunner(profileName: string) {
+		onTap?.(profileName, selectedRepo?.repo_full_name ?? null, environmentSelection);
+	}
 </script>
 
 <div class="panel mt-4">
@@ -81,7 +109,7 @@
 			<div
 				class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 			>
-				<span>next-wake runner</span>
+				<span>dispatch · project · environment · runner</span>
 				<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
 					>{expanded ? '▾' : '▸'} rack</span
 				>
@@ -91,6 +119,9 @@
 			{:else if blocks.length === 0}
 				<div class="font-mono text-xs text-ink-quiet">next wake · unavailable</div>
 			{:else}
+				<div class="mb-1 truncate font-mono text-[10px] text-stone-400">
+					{selectedRepo?.repo_full_name ?? 'no project'} · {environmentLabel}
+				</div>
 				<div class="flex min-w-0 items-stretch gap-1.5">
 					{#each blocks as block (block.kind)}
 						<span
@@ -238,12 +269,108 @@
 					<p class="text-sm text-ink-quiet">Loading…</p>
 				{/if}
 			{:else}
+				<div class="mb-3 grid gap-3 lg:grid-cols-2">
+					<div class="panel p-4">
+						<div class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase">
+							project
+						</div>
+						{#if repos === null}
+							<p class="font-mono text-xs text-ink-quiet">Loading account projects…</p>
+						{:else if repos.length === 0}
+							<p class="font-mono text-xs text-ink-quiet">No connected projects.</p>
+						{:else}
+							<div class="space-y-1.5">
+								{#each repos as repo (repo.id)}
+									{@const selected = selectedRepo?.id === repo.id}
+									<button
+										type="button"
+										onclick={() => selectRepo(repo)}
+										class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {selected
+											? 'border-amber-700/70 bg-amber-950/30'
+											: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
+									>
+										<span
+											class="truncate font-mono text-xs {selected
+												? 'text-amber-200'
+												: 'text-stone-300'}"
+										>
+											{repo.repo_full_name}
+										</span>
+										<span
+											class="flex shrink-0 items-baseline gap-2 font-mono text-[10px] uppercase"
+										>
+											{#if repo.dispatch_default}<span class="text-sky-300">default</span>{/if}
+											<span
+												class={repo.daemon_status === 'online' ? 'text-stone-400' : 'text-ink-mute'}
+											>
+												{repo.daemon_status}
+											</span>
+										</span>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<div class="panel p-4">
+						<div class="mb-3 font-mono text-sm font-medium tracking-wide text-amber-200 uppercase">
+							environment
+						</div>
+						<div class="space-y-1.5">
+							<button
+								type="button"
+								onclick={() => (environmentSelection = null)}
+								class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {environmentSelection ===
+								null
+									? 'border-amber-700/70 bg-amber-950/30'
+									: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
+							>
+								<span class="font-mono text-xs text-amber-200">repo policy</span>
+								<span class="font-mono text-[10px] text-sky-300 uppercase">
+									default{selectedRepo?.environment_default
+										? ` · ${selectedRepo.environment_default}`
+										: ''}
+								</span>
+							</button>
+							{#each environmentOptions as option (option.name)}
+								<button
+									type="button"
+									disabled={!option.available}
+									title={option.reason ?? `next wake in ${option.name}`}
+									onclick={() => (environmentSelection = option.name)}
+									class="flex w-full items-baseline justify-between gap-3 border px-2 py-1.5 text-left transition-colors {option.available
+										? environmentSelection === option.name
+											? 'border-amber-700/70 bg-amber-950/30'
+											: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
+										: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45'}"
+								>
+									<span
+										class="font-mono text-xs {option.available
+											? 'text-stone-300'
+											: 'text-ink-mute'}"
+									>
+										{option.available ? '' : '✗ '}{option.name}
+									</span>
+									{#if !option.available}
+										<span class="truncate font-mono text-[10px] text-ink-mute">{option.reason}</span
+										>
+									{/if}
+								</button>
+							{/each}
+							{#if environmentOptions.length === 0}
+								<p class="px-2 font-mono text-[10px] text-ink-mute">
+									No daemon availability report.
+								</p>
+							{/if}
+						</div>
+					</div>
+				</div>
 				<SpoolRack
 					profiles={runners.profiles}
 					defaultProfile={runners.default}
 					stale={runners.stale}
 					wakeRequest={runners.wake_request ?? null}
-					{onTap}
+					onTap={tapRunner}
 				/>
 			{/if}
 		</div>

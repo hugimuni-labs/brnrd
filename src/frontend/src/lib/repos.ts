@@ -8,6 +8,7 @@ export interface RepoAccount {
 
 export interface ConnectedRepo {
 	id: string;
+	dispatch_default: boolean;
 	repo_full_name: string;
 	forge: string;
 	forge_repo_id: string | null;
@@ -27,6 +28,14 @@ export interface ConnectedRepo {
 	gates: GateHealth[];
 	setup_command: string;
 	telegram_pair_enabled: boolean;
+	environment_default: string | null;
+	environments: EnvironmentOption[];
+}
+
+export interface EnvironmentOption {
+	name: string;
+	available: boolean;
+	reason?: string | null;
 }
 
 export interface GateHealth {

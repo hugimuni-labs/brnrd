@@ -51,10 +51,16 @@
 	}
 
 	function handleTap(profile: RunnerProfile) {
+		if (profile.available === false) return;
 		if (onTap) onTap(profile.name);
 	}
 
 	function rowTitle(profile: RunnerProfile): string {
+		if (profile.available === false) {
+			return profile.availability === 'shell-not-found'
+				? `${profile.shell ?? profile.name} is not installed on this daemon`
+				: `${profile.name} is unavailable: ${profile.availability ?? 'daemon policy'}`;
+		}
 		if (isRequested(profile)) {
 			return 'already requested — tap the default row to cancel';
 		}
@@ -83,21 +89,27 @@
 				{@const pinned = isPinned(profile)}
 				{@const requested = isRequested(profile)}
 				{@const nextWake = isNextWake(profile)}
+				{@const available = profile.available !== false}
 				<button
 					type="button"
+					disabled={!available}
 					onclick={() => handleTap(profile)}
 					title={rowTitle(profile)}
-					class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {requested
-						? 'border-amber-600/80 bg-amber-950/40'
-						: pinned
-							? 'border-amber-800/70 bg-amber-950/20'
-							: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
+					class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {available
+						? requested
+							? 'border-amber-600/80 bg-amber-950/40'
+							: pinned
+								? 'border-amber-800/70 bg-amber-950/20'
+								: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'
+						: 'cursor-not-allowed border-stone-900/60 bg-stone-950/30 opacity-45'}"
 				>
 					<div class="flex items-baseline gap-3">
 						<span
 							class="font-mono text-xs font-medium tracking-wide {nextWake
 								? 'text-amber-200'
-								: 'text-stone-300'}">{profile.name}</span
+								: available
+									? 'text-stone-300'
+									: 'text-ink-mute'}">{available ? '' : '✗ '}{profile.name}</span
 						>
 						<span class="font-mono text-[11px] text-ink-quiet"
 							>{profile.shell ?? '?'} · {coreLabel(profile)}</span

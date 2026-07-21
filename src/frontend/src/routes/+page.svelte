@@ -52,6 +52,7 @@
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
 	import { LENS_ALL, LENS_REVIEW, applyLens } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
+	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { typeReveal } from '$lib/transitions';
@@ -90,6 +91,7 @@
 	// so a parked/canceled request is never a silent state change
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
+	let connectedRepos = $state<ConnectedRepo[] | null>(null);
 
 	// #328 tap-to-request: optimistic-free — each action re-fetches the
 	// catalog so the chip always reflects the server's row, not a guess.
@@ -98,7 +100,11 @@
 	// request is parked restores the default (= cancels the request);
 	// re-tapping the requested row is a no-op with a receipt, never a
 	// silent toggle-off (which ate a live tap on 2026-07-11).
-	async function tapWakeRunner(profileName: string) {
+	async function tapWakeRunner(
+		profileName: string,
+		repoLabel: string | null,
+		environment: string | null
+	) {
 		const parked = runnersData?.wake_request ?? null;
 		if (parked && profileName === parked.profile) {
 			runnersNote = `${profileName} is already requested — tap the default row to cancel`;
@@ -113,10 +119,13 @@
 			return;
 		}
 		try {
-			const wake = await requestWake(profileName);
+			const wake = await requestWake(profileName, {
+				repo_label: repoLabel,
+				environment
+			});
 			if (runnersData) runnersData = { ...runnersData, wake_request: wake };
 			runnersError = null;
-			runnersNote = `next wake runs on ${profileName} — no approval needed; tap the default row to cancel`;
+			runnersNote = `next wake · ${repoLabel ?? 'default project'} · ${environment ?? 'repo policy'} · ${profileName} — tap the default runner to cancel`;
 		} catch (e) {
 			// An auth failure on a *tap* must be loud: the passive fetch may
 			// stay quiet for anonymous viewers, but here the user just acted
@@ -418,6 +427,15 @@
 				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
+		if (connectedRepos === null) {
+			try {
+				connectedRepos = (await fetchRepos()).connected_repos;
+			} catch (e) {
+				if (!(e instanceof ReposAuthError)) {
+					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
+				}
+			}
+		}
 		try {
 			const live = await fetchLiveRuns();
 			liveRuns = live.runs;
@@ -550,6 +568,7 @@
 			</div>
 			<ControlStrip
 				runners={runnersData}
+				repos={connectedRepos}
 				{shells}
 				{runnersError}
 				{runnersNote}
