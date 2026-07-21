@@ -77,6 +77,20 @@ applications:
         set -eux
         pip install --upgrade pip
         pip install ".[backend,postgres]"
+        # Stamp the installed package with the build identity so
+        # /v1/stats/version can answer "is my merge live?" honestly
+        # (src/brnrd/version_info.py). sha when the build tree has .git,
+        # else the Upsun tree id; second line is the UTC build stamp.
+        python - << 'PY'
+        import pathlib, subprocess, os, datetime, brnrd
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+        ).stdout.strip() or os.environ.get("PLATFORM_TREE_ID", "")
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        path = pathlib.Path(brnrd.__file__).parent / "build_info.txt"
+        path.write_text(f"{sha}\n{stamp}\n", encoding="utf-8")
+        print("build_info:", path, sha, stamp)
+        PY
         cd src/frontend
         # `npm ci` demands byte-exact lock/registry agreement; several
         # frontend deps (rolldown/tailwindcss oxide) ship optional
