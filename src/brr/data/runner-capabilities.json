@@ -42,12 +42,6 @@
       "freshness_date": "2026-06-29",
       "swe_bench_verified": null,
       "terminal_bench": 44.3
-    },
-    "gemini-2.0-flash": {
-      "source": "no exact trusted score found in Vals SWE-bench Verified or Terminal-Bench 2.0",
-      "freshness_date": "2026-06-29",
-      "swe_bench_verified": null,
-      "terminal_bench": null
     }
   }
 }

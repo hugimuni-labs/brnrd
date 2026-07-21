@@ -25,18 +25,11 @@ codex:
   class: balanced
   cost_rank: 25
   quota_source: codex-local
-gemini:
-  cmd: gemini -p --yolo
-  hooks: gemini
-  provider: google
-  owner: user
-  class: economy
-  cost_rank: 10
 ---
 Bundled runner profiles for brnrd.
 
 Each profile names a **Shell** (the CLI invocation on PATH: `claude`,
-`codex`, `gemini`) and, optionally, a **Core** (the model and its
+`codex`) and, optionally, a **Core** (the model and its
 cost/quota metadata). A profile with both Shell and Core pinned is one
 selectable Runner. The **resident** inhabits whichever Runner this wake
 was given; `prompts/runners.md` (this file) catalogs what's available.
@@ -99,10 +92,6 @@ fields. The *config-install mechanism* is runner-specific:
     the profile cmd. Codex exposes `PostToolUse` / `Stop` / `SessionStart` (no
     `PostToolBatch`) and accepts the same `hookSpecificOutput` injection
     envelope. **Fire-verified** `PostToolUse` + injection on codex-cli 0.141.0.
-  - **gemini** — `hooks: gemini` as *intent*. brnrd can render native hook config
-    once an emitter exists and a runtime precheck gates activation; firing is
-    unverified until a live test (the precheck asserts prerequisites, not
-    firing).
 
 brnrd only installs hook config for a profile that explicitly declares `hooks:`.
 It never infers hooks from the runner name; a profile with no `hooks:` field
@@ -131,7 +120,7 @@ Shell+Core execution config, not prompt templates. For a one-off command,
 
 Each frontmatter key is a runner name. During detection brnrd checks
 whether the profile's CLI is on PATH — either the key itself (`claude`,
-`codex`, `gemini`) or an explicit `binary` field for alias profiles such
+`codex`) or an explicit `binary` field for alias profiles such
 as `claude-bare-api-only`.
 
 The profile captures the headless invocation: non-interactive mode plus
@@ -208,8 +197,8 @@ When the resident chooses a plain current-thread stdout reply, brnrd reads it
 from stdout and writes it to the event's response file automatically;
 runners do not need a per-CLI flag for that. Other delivery shapes ride the
 outbox / gate / commit / noop portals named in the run prompt. Progress,
-traces, and tool output should go to stderr (which is the convention for all
-three runners above).
+traces, and tool output should go to stderr (which is the convention for
+both runners above).
 
 Users can override `cmd` per-repo by setting `runner_cmd` in
 `.brr/config`. The same stdout capture rules apply, and `{prompt}` is
