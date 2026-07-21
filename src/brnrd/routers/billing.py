@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import billing, schemas, stripe_api
-from ..auth import Principal, get_db, require_account
+from ..auth import Principal, get_db, require_account_or_session
 from ..models import Account, BillingLedgerEntry, Subscription
 
 router = APIRouter(prefix="/v1/accounts", tags=["billing"])
@@ -66,7 +66,7 @@ def _subscription_out(subscription: Subscription | None, tier: str) -> schemas.S
 
 
 @router.get("/subscription", response_model=schemas.SubscriptionOut)
-def get_subscription(principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
+def get_subscription(principal: Principal = Depends(require_account_or_session), db: Session = Depends(get_db)):
     account = _account(db, principal)
     return _subscription_out(_live_subscription(db, account.id), account.tier)
 
@@ -75,7 +75,7 @@ def get_subscription(principal: Principal = Depends(require_account), db: Sessio
 def subscription_checkout(
     payload: schemas.SubscriptionCheckoutIn,
     request: Request,
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     settings = _settings(request)
@@ -103,7 +103,7 @@ def subscription_checkout(
 @router.post("/subscription/cancel", response_model=schemas.SubscriptionOut)
 def cancel_subscription(
     request: Request,
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     return _set_cancel(request, principal, db, cancel=True)
@@ -112,7 +112,7 @@ def cancel_subscription(
 @router.post("/subscription/resume", response_model=schemas.SubscriptionOut)
 def resume_subscription(
     request: Request,
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     return _set_cancel(request, principal, db, cancel=False)
@@ -139,7 +139,7 @@ def _set_cancel(request: Request, principal: Principal, db: Session, *, cancel: 
 @router.post("/subscription/portal", response_model=schemas.PortalOut)
 def customer_portal(
     request: Request,
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     settings = _settings(request)
@@ -158,7 +158,7 @@ def customer_portal(
 
 
 @router.get("/wallet", response_model=schemas.WalletOut)
-def get_wallet(principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
+def get_wallet(principal: Principal = Depends(require_account_or_session), db: Session = Depends(get_db)):
     account = _account(db, principal)
     snapshot = billing.wallet_balances(db, account.id)
     return schemas.WalletOut(
@@ -172,7 +172,7 @@ def get_wallet(principal: Principal = Depends(require_account), db: Session = De
 def wallet_checkout(
     payload: schemas.TopupCheckoutIn,
     request: Request,
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     settings = _settings(request)
@@ -201,7 +201,7 @@ def wallet_checkout(
 def wallet_ledger(
     limit: int = Query(default=50, ge=1, le=500),
     before_seq: int | None = Query(default=None),
-    principal: Principal = Depends(require_account),
+    principal: Principal = Depends(require_account_or_session),
     db: Session = Depends(get_db),
 ):
     query = select(BillingLedgerEntry).where(BillingLedgerEntry.account_id == principal.account_id)

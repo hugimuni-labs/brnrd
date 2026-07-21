@@ -6,9 +6,11 @@
 	// Pricing (#509): one click off the landing, never on it. Numbers are
 	// the accepted pricing decision (decision-pricing-shape, 2026-07):
 	// supporter $5/mo · $50/yr for the first cohort, then public $7/mo ·
-	// $70/yr; 300 credits monthly on either; top-ups at 1¢/credit. Stripe
-	// Price objects stay authoritative at checkout — this page is the
-	// offer, not the invoice.
+	// $70/yr. Stripe Price objects stay authoritative at checkout — this
+	// page is the offer, not the invoice. Credits/top-up framing dropped
+	// (maintainer steer 2026-07-21): the subscription is patronage that
+	// removes the free tier's headroom limits — no credit product exists
+	// yet, so the page doesn't promise one.
 	let stats = $state<PublicStats | null>(null);
 
 	onMount(async () => {
@@ -105,8 +107,7 @@
 			{/if}
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">
 				<li>everything in hosted free</li>
-				<li>300 credits granted monthly</li>
-				<li>credit top-ups at 1¢/credit when you need more</li>
+				<li>removes the free tier's headroom limits</li>
 				<li>keeps the lights on for the open-source engine</li>
 			</ul>
 			<a
@@ -123,7 +124,7 @@
 	<section class="mt-8 max-w-2xl" aria-label="contributor bundle">
 		<p class="eyebrow">premium contributor bundle</p>
 		<p class="mt-2 text-sm leading-relaxed text-stone-400">
-			A lifetime package at $500+: subscriber for life, a line on the contributors page — nickname
+			A lifetime package at $500+: lifetime headroom-free access, a line on the contributors page — nickname
 			and pledge each optionally redacted — and a permanent place on the leaderboard. No self-serve
 			checkout yet: open an issue or reach the maintainers
 			<a

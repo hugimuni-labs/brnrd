@@ -327,3 +327,50 @@ def test_topup_checkout_validates_bounds(monkeypatch):
     out = client.post("/v1/accounts/wallet/checkout", json={"amount_usd": 20}, headers=headers)
     assert out.status_code == 200
     assert seen["credits"] == 2000
+
+
+# --- session-cookie auth seam (dashboard billing surface) --------------------
+
+
+def test_billing_api_accepts_session_cookie():
+    # The SPA authenticates with the brnrd_session cookie, never a bearer —
+    # require_account_or_session lets that same Token row through for billing.
+    client = _client()
+    headers = _account(client)
+    raw = headers["Authorization"].removeprefix("Bearer ")
+    client.cookies.set(client.app.state.settings.session_cookie, raw)
+
+    sub = client.get("/v1/accounts/subscription")
+    assert sub.status_code == 200
+    assert sub.json()["tier"] == "free"
+    wallet = client.get("/v1/accounts/wallet")
+    assert wallet.status_code == 200
+    assert wallet.json()["total_credits"] == 0
+
+
+def test_billing_api_cookie_posts_work_and_bearer_still_wins(monkeypatch):
+    client = _client()
+    headers = _account(client)
+    raw = headers["Authorization"].removeprefix("Bearer ")
+    client.cookies.set(client.app.state.settings.session_cookie, raw)
+
+    def fake_checkout(settings, **kwargs):
+        return {"url": "https://checkout.stripe.example/s"}
+
+    monkeypatch.setattr("brnrd.routers.billing.stripe_api.create_customer", lambda *a, **k: {"id": "cus_c"})
+    monkeypatch.setattr("brnrd.routers.billing.stripe_api.create_subscription_checkout", fake_checkout)
+    out = client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"})
+    assert out.status_code == 200
+    assert out.json()["checkout_url"] == "https://checkout.stripe.example/s"
+
+    # An explicit (bad) bearer is never rescued by the cookie: the header
+    # keeps its exact contract, the cookie is only a fallback.
+    denied = client.get("/v1/accounts/subscription", headers={"Authorization": "Bearer nope"})
+    assert denied.status_code == 401
+
+
+def test_billing_api_still_401s_with_no_credentials():
+    client = _client()
+    assert client.get("/v1/accounts/subscription").status_code == 401
+    assert client.get("/v1/accounts/wallet").status_code == 401
+    assert client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"}).status_code == 401
