@@ -106,13 +106,28 @@ def reply_to_of(event: Event) -> dict[str, Any]:
     return _loads(event.reply_to)
 
 
-def enqueue(db: Session, *, repo_id: str, body: str, source: str = "dev", reply_to: dict[str, Any] | None = None) -> Event:
+def _loads_list(blob: str | None) -> list[dict[str, Any]]:
+    if not blob:
+        return []
+    try:
+        value = json.loads(blob)
+    except json.JSONDecodeError:
+        return []
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def attachments_of(event: Event) -> list[dict[str, Any]]:
+    return _loads_list(event.attachments_json)
+
+
+def enqueue(db: Session, *, repo_id: str, body: str, source: str = "dev", reply_to: dict[str, Any] | None = None, attachments: list[dict[str, Any]] | None = None) -> Event:
     event = Event(
         event_id=ids.event_id(),
         repo_id=repo_id,
         source=source,
         body=body,
         reply_to=json.dumps(reply_to or {}),
+        attachments_json=json.dumps(attachments or []),
         status=Event.STATUS_QUEUED,
     )
     db.add(event)
@@ -231,6 +246,9 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     event.responded_at = now
     event.status = Event.STATUS_RESPONDED
     event.body = None
+    # #525 — attachment pointers die with the body: nothing serves a closed
+    # event's media, and the mirror stays bounded (#543).
+    event.attachments_json = "[]"
     db.commit()
     return event
 
@@ -276,7 +294,7 @@ def gc_events(db: Session, *, now: datetime | None = None, force: bool = False) 
             Event.created_at < now - _EVENT_BODY_TTL,
             Event.body.is_not(None),
         )
-        .values(body=None)
+        .values(body=None, attachments_json="[]")
     )
     db.commit()
 
@@ -288,5 +306,6 @@ def event_to_dict(event: Event) -> dict[str, Any]:
         "source": event.source,
         "body": event.body,
         "reply_to": _loads(event.reply_to),
+        "attachments": _loads_list(event.attachments_json),
         "created_at": event.created_at,
     }
