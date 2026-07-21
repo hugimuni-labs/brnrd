@@ -149,6 +149,35 @@ def test_write_bridges_is_idempotent_and_nondestructive(tmp_path):
     assert C.write_bridges(tmp_path, ["claude"]) == []
 
 
+def test_write_bridges_prepends_import_to_hand_authored_file(tmp_path):
+    """A user's own CLAUDE.md is repaired, never clobbered (#529 review flag)."""
+    (tmp_path / "AGENTS.md").write_text("contract", encoding="utf-8")
+    hand_authored = "# My workflow\n\nUse linear via MCP for ticket triage.\n"
+    (tmp_path / "CLAUDE.md").write_text(hand_authored, encoding="utf-8")
+
+    written = C.write_bridges(tmp_path, ["claude"])
+
+    assert written == ["claude"]
+    text = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert text.startswith("@AGENTS.md\n")
+    assert hand_authored in text  # user content survives, verbatim
+    assert C.verify_reachability(tmp_path, "claude").reachable
+    # And the repair is once-only: the file now points at the contract.
+    assert C.write_bridges(tmp_path, ["claude"]) == []
+
+
+def test_write_bridges_leaves_foreign_symlink_alone(tmp_path):
+    """A symlink routed elsewhere is not rewritten through (target is not ours)."""
+    (tmp_path / "AGENTS.md").write_text("contract", encoding="utf-8")
+    other = tmp_path / "OTHER.md"
+    other.write_text("something else entirely", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").symlink_to("OTHER.md")
+
+    assert C.write_bridges(tmp_path, ["claude"]) == []
+    assert other.read_text(encoding="utf-8") == "something else entirely"
+    assert not C.verify_reachability(tmp_path, "claude").reachable
+
+
 def test_reachability_true_when_bridge_points_at_contract(tmp_path):
     (tmp_path / "AGENTS.md").write_text("contract", encoding="utf-8")
     C.write_bridges(tmp_path, ["claude"])
