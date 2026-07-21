@@ -160,7 +160,11 @@ def clean_runner_environ() -> dict[str, str]:
         # Operator-supplied publishing identity: brnrd never minted it and
         # cannot date it, so the frozen snapshot is correct — there is no
         # daemon-side renewal for the runner to chase. Keep today's behaviour.
+        # An ambient GH_CONFIG_DIR (the daemon exports one for its own gh
+        # wiring) must not ride along: it would point gh at the managed
+        # pointer while the operator's token owns this run's identity.
         cleaned.pop("GITHUB_TOKEN", None)
+        cleaned.pop("GH_CONFIG_DIR", None)
         _inject_github_git_config(cleaned)
     elif managed_github_token:
         pointer_dir = _github_credential_pointer_dir()
@@ -176,9 +180,12 @@ def clean_runner_environ() -> dict[str, str]:
         else:
             # No pointer available in this process (no cloud gate minting it)
             # — fall back to the legacy frozen snapshot so a run still
-            # authenticates, exactly as before the pointer existed.
+            # authenticates, exactly as before the pointer existed. A stale
+            # inherited GH_CONFIG_DIR would contradict the frozen-token
+            # choice this branch just made, so it is stripped too.
             cleaned["GH_TOKEN"] = managed_github_token
             cleaned.pop("GITHUB_TOKEN", None)
+            cleaned.pop("GH_CONFIG_DIR", None)
             _inject_github_git_config(cleaned)
     return cleaned
 
