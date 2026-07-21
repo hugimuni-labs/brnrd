@@ -629,7 +629,7 @@ def test_runners_list_text_output(monkeypatch, capsys):
     from brr import runner as runner_mod, runner_cores
 
     monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
-    # Pretend claude is on PATH, codex and gemini are not
+    # Pretend claude is on PATH, codex is not
     monkeypatch.setattr(
         runner_cores.shutil, "which",
         lambda name: f"/usr/bin/{name}" if name == "claude" else None,
@@ -652,7 +652,6 @@ def test_runners_list_text_output(monkeypatch, capsys):
     assert "claude-haiku" in out or "claude-sonnet" in out
     # Unavailable profiles also shown (with ✗)
     assert "codex-mini" in out
-    assert "gemini-flash" in out
     assert "✗" in out
 
 

@@ -1109,7 +1109,7 @@ def resolve_runner_profile(
         return chosen
 
     raise RuntimeError(
-        "No AI runner found. Install claude, codex, or gemini, "
+        "No AI runner found. Install claude or codex, "
         "or set shell= (or core=) in .brr/config."
     )
 
