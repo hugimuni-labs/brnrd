@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
@@ -438,6 +439,50 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"card not editable: {e}") from e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"card relay failed: {e}") from e
+
+
+@router.get("/events/{event_id}/attachments/{index}")
+def event_attachment(event_id: str, index: int, request: Request, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """#525 — read-through proxy for a queued event's image attachment.
+
+    The server holds only *pointers* (models.Event.attachments_json); this
+    endpoint resolves the Telegram ``file_id`` fresh via ``getFile`` on every
+    request and streams the bytes through memory — nothing lands at rest
+    server-side (#543 bounded mirror, #542 pointer-not-copy). Same daemon
+    credential as the inbox pull, scoped to the token's repo. Telegram file
+    links can expire: failures surface as honest HTTP errors (502/413) for
+    the daemon to annotate, never fabricated or silently empty bytes.
+    """
+    settings = request.app.state.settings
+    event = db.execute(select(Event).where(Event.event_id == event_id, Event.repo_id == principal.repo_id)).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found for this repo")
+    pointers = inbox_service.attachments_of(event)
+    if not 0 <= index < len(pointers):
+        # Also the shape a closed/aged-out event answers with — pointers are
+        # cleared alongside the body, so "no such attachment" is honest.
+        raise HTTPException(status_code=404, detail="no such attachment")
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="telegram is not configured")
+    pointer = pointers[index]
+    max_bytes = max(1, int(settings.telegram_media_max_mb)) * 1024 * 1024
+    from ..platforms import telegram as tg
+    try:
+        info = tg.resolve_file(settings.telegram_bot_token, str(pointer.get("file_id") or ""))
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"telegram file unavailable: {e}") from e
+    declared = info.get("file_size")
+    if isinstance(declared, int) and declared > max_bytes:
+        raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap")
+    try:
+        content = tg.fetch_file_bytes(settings.telegram_bot_token, str(info.get("file_path") or ""), max_bytes=max_bytes)
+    except tg.FileTooLarge as e:
+        raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap") from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"telegram file unavailable: {e}") from e
+    _touch_daemon(db, principal)
+    media_type = mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream"
+    return Response(content=content, media_type=media_type)
 
 
 _MAX_PACK_BYTES = 4 * 1024 * 1024

@@ -618,13 +618,100 @@ def _origin_meta(reply_to: dict) -> dict:
     return meta
 
 
+# #525 — attachment ingestion through the server's read-through proxy.
+# Same hard ceiling as the local telegram gate's download path; the server
+# additionally enforces its own (config-able, default smaller) cap.
+_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def _download_attachment(base_url: str, token: str, event_id: str, index: int, dest: Path) -> bool:
+    """Fetch one attachment via the proxy into *dest*. Returns success.
+
+    Best-effort by design, like the local gate's ``_download_telegram_file``:
+    any failure (expired telegram file link → 502, over-cap → 413, network
+    hiccup) returns ``False`` so ingestion degrades to an annotated event
+    rather than dropping the message. Not ``_request`` — that seam is JSON;
+    this one streams bytes.
+    """
+    url = base_url.rstrip("/") + f"/v1/daemons/events/{event_id}/attachments/{index}"
+    try:
+        resp = _SESSION.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=_HTTP_TIMEOUT_S, stream=True)
+        if not 200 <= resp.status_code < 300:
+            print(f"[brnrd:cloud] attachment {event_id}[{index}] -> {resp.status_code}: {resp.text[:120]}")
+            return False
+        size = 0
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(65536):
+                size += len(chunk)
+                if size > _MAX_ATTACHMENT_BYTES:
+                    return False
+                fh.write(chunk)
+    except requests.RequestException as exc:
+        print(f"[brnrd:cloud] attachment {event_id}[{index}] fetch failed: {exc}")
+        return False
+    return True
+
+
+def _safe_attachment_name(pointer: dict, index: int) -> str:
+    """Filename for a pointer — basename only, never a smuggled path."""
+    raw = str(pointer.get("filename") or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if raw in ("", ".", ".."):
+        raw = f"attachment-{index:02d}"
+    return raw[:128]
+
+
+def _ingest_event_attachments(state: dict, ev: dict, workdir: Path) -> tuple[list[Path], list[str]]:
+    """Pull *ev*'s attachment pointers down into local files under *workdir*.
+
+    Returns ``(downloaded_paths, failed_names)``. Downloaded files land in
+    the exact ``attachment_files`` shape the telegram and github gates
+    produce (one convention, three gates — see
+    ``gates/github/attachments.py``); failures come back by name for an
+    honest #553-style annotation in the event body.
+    """
+    files: list[Path] = []
+    failed: list[str] = []
+    pointers = [p for p in (ev.get("attachments") or []) if isinstance(p, dict)]
+    for i, pointer in enumerate(pointers):
+        name = _safe_attachment_name(pointer, i)
+        dest = workdir / f"{i:02d}-{name}" if len(pointers) > 1 else workdir / name
+        if _download_attachment(state["brnrd_url"], state["token"], str(ev.get("event_id") or ""), i, dest):
+            files.append(dest)
+        else:
+            failed.append(name)
+    return files, failed
+
+
+def _annotate_failures(body: str, failed: list[str]) -> str:
+    if not failed:
+        return body
+    notes = "\n".join(
+        f"[attachment \"{name}\" could not be fetched — the telegram file link may have "
+        "expired or the file exceeds the size cap; ask the sender to re-send it]"
+        for name in failed
+    )
+    return f"{body}\n\n{notes}" if body else notes
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
     result = _request(state["brnrd_url"], "GET", "/v1/daemons/inbox", token=state["token"], params={"since": since, "wait": _POLL_WAIT_S})
     events = result.get("events", [])
     for ev in events:
-        protocol.create_event(inbox_dir, source="cloud", body=ev.get("body") or "", cloud_event_id=ev["event_id"], **_origin_meta(ev.get("reply_to") or {}))
+        # #525 — pointers become local files *now*, at ingestion time: the
+        # server holds no bytes, telegram links expire, and the wake's Read
+        # tool wants a plain local path (``attachment_files`` convention).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            attachment_files, failed = _ingest_event_attachments(state, ev, Path(tmpdir))
+            protocol.create_event(
+                inbox_dir,
+                source="cloud",
+                body=_annotate_failures(ev.get("body") or "", failed),
+                attachment_files=attachment_files or None,
+                cloud_event_id=ev["event_id"],
+                **_origin_meta(ev.get("reply_to") or {}),
+            )
     cursor = result.get("cursor", since)
     if cursor != since:
         # Trust the server's cursor in both directions: it moves up as

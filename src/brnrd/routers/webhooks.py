@@ -100,7 +100,7 @@ def _repo_list_text(repos: list[Repo], current_id: str | None) -> str:
 
 
 def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: str, body: str) -> None:
-    inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username})
+    inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username}, attachments=parsed.attachments or None)
 
 
 def _github_mention_candidates(settings) -> list[str]:
@@ -357,14 +357,18 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         if not _authorized(settings, parsed, route):
             _audit_reject(parsed, reason="not_authorized")
             return {"ok": True}
-        if not parsed.text:
-            # Media with no caption: nothing brnrd can ingest yet. Say so —
-            # a silent drop reads as "the agent ignored me" (2026-07-21).
+        if not parsed.text and not parsed.attachments:
+            # Non-image media with no caption: nothing brnrd can ingest.
+            # Say so — a silent drop reads as "the agent ignored me"
+            # (2026-07-21). A captionless *image* does enqueue below: the
+            # image carries the content, same as the local gate.
             _audit_reject(parsed, reason="media_without_text")
             _reply(settings, parsed, "I can't see attached media yet — that message had no text I can read. Add a caption or send it as words.")
             return {"ok": True}
         body = parsed.text
-        if parsed.has_media:
+        if parsed.has_media and not parsed.attachments:
+            # #525 — images now ride as pointers; only non-image media
+            # (video, voice, non-image documents) stays annotated-not-fetched.
             body += "\n\n[attached media not ingested — brnrd received the text only]"
         _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=body)
     return {"ok": True}
