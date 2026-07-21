@@ -106,11 +106,24 @@ export interface QuotaResponse {
 
 export class QuotaAuthError extends Error {}
 
+/** How long the auth-gate fetch may hang before the page must decide without
+ * it. During an upsun deploy cutover, `/v1/*` requests hang ~30s+ before the
+ * edge gives up with a 502 — and this fetch is the dashboard's entry gate:
+ * the page renders *nothing* until it settles. Unbounded, a mid-deploy visit
+ * was a permanent black screen (2026-07-21 incident). A healthy endpoint
+ * answers in ~0.2s; 8s is generous slack, not a tuning knob. */
+export const QUOTA_GATE_TIMEOUT_MS = 8_000;
+
 /** Fetches the live per-shell quota snapshot. Throws `QuotaAuthError` on a
  * 401 (no session cookie) so the caller can point the user at `/login`
- * instead of rendering an empty track. */
+ * instead of rendering an empty track. Any other failure — including the
+ * gate timeout above — is an ordinary Error: the caller treats it as a
+ * backend hiccup and renders the dashboard's own error strings. */
 export async function fetchQuota(fetchImpl: typeof fetch = fetch): Promise<QuotaResponse> {
-	const res = await fetchImpl('/v1/dashboard/quota', { credentials: 'include' });
+	const res = await fetchImpl('/v1/dashboard/quota', {
+		credentials: 'include',
+		signal: AbortSignal.timeout(QUOTA_GATE_TIMEOUT_MS)
+	});
 	if (res.status === 401) {
 		throw new QuotaAuthError('not signed in');
 	}
