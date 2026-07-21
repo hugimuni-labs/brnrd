@@ -205,6 +205,58 @@ def test_interim_responses_forward_without_closing_the_event(env):
     assert len(forwarder.items) == 3
 
 
+def test_continuation_messages_forward_after_the_event_closed(env):
+    """A respawn continuation inherits its parent's cloud event id, so its
+    messages arrive after the parent's terminal ``done`` closed the event.
+    They must still forward — only a byte-identical retry of the last
+    forwarded body is quietly ACKed (regression 2026-07-21: the hard
+    responded-guard 200-ACKed and dropped an entire continuation run's
+    output, interims and final reply alike)."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    # Parent run closes the event.
+    client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "parent done", "status": "done"},
+        headers=dmn,
+    )
+
+    # Continuation run speaks into the closed event: interims and terminal.
+    for body, status in (
+        ("child interim", "processing"),
+        ("child final", "done"),
+    ):
+        r = client.post(
+            "/v1/daemons/responses",
+            json={"event_id": event_id, "body_markdown": body, "status": status},
+            headers=dmn,
+        )
+        assert r.status_code == 200, r.text
+    assert [item.body for item in forwarder.items] == [
+        "parent done", "child interim", "child final",
+    ]
+
+    # Exact retry of the last forwarded body: quiet ACK, no double post.
+    r = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "child final", "status": "done"},
+        headers=dmn,
+    )
+    assert r.status_code == 200
+    assert len(forwarder.items) == 3
+
+    # The event stays closed throughout.
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+
+
 def test_long_poll_times_out_empty(env):
     _, client, _ = env
     acc = _account(client)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -166,31 +167,54 @@ def long_poll(session_factory: sessionmaker, repo_id: str, since: int, *, max_wa
         time.sleep(interval_s)
 
 
+def _body_sha(body_markdown: str) -> str:
+    return hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
+
+
 def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder) -> Event | None:
     """Forward one daemon message for *event_id*; close the event on ``done``.
 
     The streaming protocol posts interim messages with a non-``done`` status
     (``processing``): those forward to the platform but leave the event open,
     so the terminal reply still owns the close. Only ``status="done"`` marks
-    the event responded. The responded guard stays first: a closed event
-    accepts no further forwards (idempotent terminal retries return quietly
-    instead of double-posting).
+    the event responded.
 
-    Regression this shape guards (2026-07-18): every post used to carry
-    ``done``, so the first interim closed the event server-side and each
-    later forward — including the run's final reply — was silently skipped
-    while still ACKed 200, which the daemon took as delivered and cleaned up.
+    A *responded* event still forwards — it dedupes instead of dropping.
+    A respawn continuation run inherits its parent's ``cloud_event_id`` (that
+    reuse is what keeps its replies in the same chat thread), so the parent's
+    terminal ``done`` must not mute the child. The only post a closed event
+    swallows is a byte-identical retry of the last forwarded body — the
+    daemon-crashed-before-marking-delivered window — matched via
+    ``response_sha``.
+
+    History, both directions of the overshoot: every post used to carry
+    ``done``, so the first interim closed the event and silently swallowed
+    the final reply while ACKing 200 (2026-07-18). The fix was a hard
+    responded-guard — which then swallowed an entire continuation run's
+    output the same way: parent closed the shared event, every child post
+    got 200-ACKed and dropped (2026-07-21, the mega-run loss). ACK-without-
+    forward is only ever safe for an exact duplicate.
     """
     event = db.execute(select(Event).where(Event.event_id == event_id, Event.repo_id == repo_id)).scalar_one_or_none()
     if event is None:
         return None
-    if event.status == Event.STATUS_RESPONDED:
+    sha = _body_sha(body_markdown)
+    if event.status == Event.STATUS_RESPONDED and sha == event.response_sha:
+        # Idempotent retry of the last forwarded message: quiet ACK.
         return event
 
     try:
         forwarder(ForwardItem(event_id=event_id, reply_to=_loads(event.reply_to), body=body_markdown, status=status))
     except Exception as e:
         raise DeliveryError(str(e)) from e
+
+    if event.status == Event.STATUS_RESPONDED:
+        # Continuation speech into an already-closed event: forwarded above,
+        # event stays closed; remember the body for retry dedupe.
+        event.response_sha = sha
+        event.response_len = len(body_markdown)
+        db.commit()
+        return event
 
     if status != "done":
         # Interim: forwarded, event stays open for the terminal close.
@@ -203,6 +227,7 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     event.response_status = status
     event.response_len = len(body_markdown)
     event.response_ms = int((now - created).total_seconds() * 1000)
+    event.response_sha = sha
     event.responded_at = now
     event.status = Event.STATUS_RESPONDED
     event.body = None
