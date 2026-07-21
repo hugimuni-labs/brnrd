@@ -120,6 +120,22 @@ class Settings:
     topup_min_usd: int = _env_int("BRNRD_TOPUP_MIN_USD", 5)
     topup_max_usd: int = _env_int("BRNRD_TOPUP_MAX_USD", 500)
 
+    # Free-tier headroom limits + abuse ceilings (#501 repo-cap half; account
+    # decision ledger 2026-07-21). ``limit_free_*`` rows bind only accounts
+    # whose ``billing.entitlements`` has no live subscription — the supporter
+    # tier's one entitlement is lifting exactly these. ``limit_abuse_*`` and
+    # ``limit_max_*`` rows bind every tier and sit far above real use:
+    # protection, not product. Enforcement lives in ``limits.py``; nothing
+    # outside this block carries a limit numeral.
+    limit_free_repos: int = _env_int("BRNRD_LIMIT_FREE_REPOS", 3)
+    limit_free_events_per_minute: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_MINUTE", 6)
+    limit_free_events_per_day: int = _env_int("BRNRD_LIMIT_FREE_EVENTS_PER_DAY", 200)
+    limit_abuse_repos: int = _env_int("BRNRD_LIMIT_ABUSE_REPOS", 100)
+    limit_abuse_events_per_minute: int = _env_int("BRNRD_LIMIT_ABUSE_EVENTS_PER_MINUTE", 60)
+    limit_abuse_events_per_day: int = _env_int("BRNRD_LIMIT_ABUSE_EVENTS_PER_DAY", 5000)
+    limit_max_event_body_bytes: int = _env_int("BRNRD_LIMIT_MAX_EVENT_BODY_BYTES", 100_000)
+    limit_max_event_attachments: int = _env_int("BRNRD_LIMIT_MAX_EVENT_ATTACHMENTS", 10)
+
     oauth_state_cookie: str = os.environ.get("BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state")
     oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
     oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
