@@ -358,6 +358,65 @@ def derive_auto(
     return out
 
 
+def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
+    """The dedup key for a relic, or ``None`` when the kind has no stable
+    identity (``summary``, ``comment``, ``message``, ``reply``, unknown kinds
+    — those never merge; two comments are two comments).
+
+    Commits key on the 7-char sha prefix so a reported full sha and an
+    auto-derived ``git log --format=%h`` short sha still meet.
+    """
+    kind = str(record.get("kind") or "")
+    if kind in {"pr", "issue"}:
+        number = record.get("number")
+        return (kind, str(number)) if number else None
+    if kind == "commit":
+        sha = str(record.get("sha") or "")
+        return ("commit", sha[:7]) if sha else None
+    if kind == "branch":
+        name = str(record.get("name") or "")
+        return ("branch", name) if name else None
+    if kind in {"kb", "file"}:
+        path = str(record.get("path") or "")
+        return (kind, path) if path else None
+    return None
+
+
+def dedupe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse records that name the same relic into one row.
+
+    The observed failure (run-260721-0922-pfqd): the ``.pr`` control file
+    auto-derived ``{"kind": "pr", "number": 532, "url": ...}`` while the
+    resident also reported ``{"kind": "pr", "number": 532, "action":
+    "opened"}`` — and the renderer showed two PR rows, one link-less.
+    Same relic, two producers, zero dedup.
+
+    Rows merge on :func:`_identity`; first occurrence keeps its position.
+    The URL-bearing row wins field conflicts (a link beats its absence),
+    and fields only one row carries (``action``, ``subject``) survive the
+    merge, so preferring the auto row never erases resident annotations.
+    """
+    out: list[dict[str, Any]] = []
+    index: dict[tuple[str, str], int] = {}
+    for record in records:
+        key = _identity(record)
+        if key is None:
+            out.append(record)
+            continue
+        slot = index.get(key)
+        if slot is None:
+            index[key] = len(out)
+            out.append(record)
+            continue
+        kept = out[slot]
+        if record.get("url") and not kept.get("url"):
+            preferred, other = record, kept
+        else:
+            preferred, other = kept, record
+        out[slot] = {**other, **preferred}
+    return out
+
+
 def collect(
     repo_root: Path | None,
     *,
@@ -390,7 +449,7 @@ def collect(
             if url:
                 record["url"] = url
     auto = derive_auto(repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir)
-    return summary + auto + rest_reported
+    return dedupe(summary + auto + rest_reported)
 
 
 def counts_by_kind(relics: list[dict[str, Any]]) -> dict[str, int]:
@@ -425,9 +484,12 @@ def live_summary(
         root = Path(repo_root)
         if not root.is_dir():
             return {"known": False}
-        records = derive_auto(
-            root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-        ) + read_reported(outbox_dir)
+        records = dedupe(
+            derive_auto(
+                root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
+            )
+            + read_reported(outbox_dir)
+        )
 
         # A .pr number is useful live even when forge URL derivation cannot
         # inspect a remote.  derive_auto includes it in the normal case; add
