@@ -944,6 +944,39 @@ class TestPromptBuilding:
         assert "prior ask" in prompt
         assert "prior answer" in prompt
 
+    def test_daemon_prompt_history_group_truncation_stays_truthful(self, tmp_path):
+        # #500: a bounded per-run history copy must say so — the pointer
+        # can't claim "untruncated" once older records were dropped, and
+        # it must name where the rest of the thread actually lives.
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "follow up",
+            "evt-2",
+            "/tmp/resp.md",
+            tmp_path,
+            communication_snapshot={
+                "current_thread": "telegram:77:",
+                "history_groups": [
+                    {
+                        "label": "telegram thread telegram:77:",
+                        "path": "/repo/.brr/runs/task/history/gate.jsonl",
+                        "record_count": 400,
+                        "total_record_count": 4321,
+                        "truncated": True,
+                        "store_path": "/repo/.brr/conversations/telegram__77__",
+                    },
+                ],
+            },
+        )
+
+        assert "latest 400 of 4321 records" in prompt
+        assert "/repo/.brr/conversations/telegram__77__" in prompt
+        assert "untruncated" not in prompt
+        assert "truncated to the latest" in prompt
+
     def test_daemon_prompt_renders_reader_model_from_snapshot(self, tmp_path):
         # #217 v1: `user_commitment` in the communication snapshot renders a
         # Reader model line — `full` licenses weave-density replies; other

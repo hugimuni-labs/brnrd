@@ -444,7 +444,16 @@ def _render_history_groups(groups: Any) -> str:
         if not label or not path:
             continue
         count = group.get("record_count", 0)
-        bullets.append(f"  - {label}: {path} ({count} records)")
+        if group.get("truncated"):
+            total = group.get("total_record_count", count)
+            store_path = str(group.get("store_path") or "").strip()
+            where = f" — full history: {store_path}" if store_path else ""
+            bullets.append(
+                f"  - {label}: {path} (latest {count} of {total} "
+                f"records{where})"
+            )
+        else:
+            bullets.append(f"  - {label}: {path} ({count} records)")
     return "\n".join(bullets)
 
 
