@@ -383,7 +383,15 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     ctx = account.resolve_context(repo_root, cfg)
     home_knowledge = account.knowledge_path(ctx)
     home_knowledge.mkdir(parents=True, exist_ok=True)
-    _init_git_repo(home_knowledge)
+    if _init_git_repo(home_knowledge):
+        # Born just now — seed and *commit* the deed README (the founding
+        # commit, named). Committed rather than left in the worktree because
+        # this repo receives pushes from the checkout (`updateInstead`): an
+        # untracked README a later push wants to write would wedge every
+        # kb push after it.
+        from . import repo_deed
+
+        repo_deed.ensure_deed(home_knowledge, "knowledge")
     _allow_push_to_checkout(home_knowledge)
 
     checkout = repo_root / CHECKOUT_DIRNAME
@@ -811,10 +819,12 @@ def _iter_docs(root: Path) -> Iterable[Path]:
         yield from sorted(p for p in root.rglob(suffix) if p.is_file())
 
 
-def _init_git_repo(path: Path) -> None:
+def _init_git_repo(path: Path) -> bool:
+    """Init a git repo at *path* iff absent. Returns True on a fresh init —
+    the birth signal ``ensure_checkout`` uses to seed the deed exactly once."""
     if (path / ".git").exists():
-        return
-    subprocess.run(
+        return False
+    result = subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=path,
         stdout=subprocess.PIPE,
@@ -822,6 +832,7 @@ def _init_git_repo(path: Path) -> None:
         text=True,
         check=False,
     )
+    return result.returncode == 0
 
 
 def _exclude_from_project_git(repo_root: Path, pattern: str) -> None:
