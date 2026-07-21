@@ -34,4 +34,4 @@ uvx brnrd            # zero-install run, if you have uv
 The launcher's version *is* the payload's version: `npx brnrd@0.1.0` installs
 brnrd 0.1.0.
 
-Source and docs: https://github.com/Gurio/brr
+Source and docs: https://github.com/hugimuni-labs/brnrd

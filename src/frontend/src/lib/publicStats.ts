@@ -5,7 +5,7 @@
 
 // Repo the star counter points at. Single constant on purpose: the
 // Gurio/brr → hugimuni-labs/brnrd transfer rewrites exactly this line.
-export const GITHUB_REPO = 'Gurio/brr';
+export const GITHUB_REPO = 'hugimuni-labs/brnrd';
 
 export interface PublicStats {
 	accounts: number;

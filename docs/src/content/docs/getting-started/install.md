@@ -28,8 +28,8 @@ brnrd --help
 ## Development install
 
 ```bash
-git clone https://github.com/Gurio/brr
-cd brr
+git clone https://github.com/hugimuni-labs/brnrd
+cd brnrd
 pip install -e ".[dev]"
 pytest
 ```

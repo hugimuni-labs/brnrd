@@ -16,8 +16,8 @@ hostile tasks.
 Authorization currently keys on a channel or trigger, not each sender.
 GitHub mentions on a connected repo can be used by any commenter; a bound chat
 can be used by any member of that room. Per-commenter GitHub authorization is
-tracked in [#408](https://github.com/Gurio/brr/issues/408), and per-sender chat
-authorization in [#409](https://github.com/Gurio/brr/issues/409).
+tracked in [#408](https://github.com/hugimuni-labs/brnrd/issues/408), and per-sender chat
+authorization in [#409](https://github.com/hugimuni-labs/brnrd/issues/409).
 
 Until those release blockers land, use private repositories only and prefer
 managed one-to-one Telegram. Do not connect a public-repo gate or trust a group
@@ -55,4 +55,4 @@ leave the machine through that mirror.
 - Keep gate state private on disk.
 
 The full threat model and isolation matrix live in the repository's
-[SECURITY.md](https://github.com/Gurio/brr/blob/main/SECURITY.md).
+[SECURITY.md](https://github.com/hugimuni-labs/brnrd/blob/main/SECURITY.md).
