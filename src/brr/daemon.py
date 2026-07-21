@@ -6702,6 +6702,23 @@ def _post_delivery_attend(
     next_heartbeat = started + _HEARTBEAT_INTERVAL
     while True:
         if _pending_events_for_agent(inbox_dir, event_id):
+            # #351 interim guarantee: a follow-up that lands *during* the
+            # attendance dwell must reach the normal dispatch path — never be
+            # polled here and then silently dropped (the loss the maintainer
+            # hit live: a same-thread message eaten on the one channel he
+            # watches). The runner process has already exited, so this event
+            # cannot fold into the current thought; it becomes the next run.
+            #
+            # The subtle seam this closes: ``create_event`` sets the inbox
+            # wake when the follow-up arrives, but the main loop clears that
+            # wake at the top of every iteration (protocol.inbox_wake()), and
+            # while the attending run is still the in-flight ``current`` the
+            # loop can't dispatch it (single-flight). By the time attendance
+            # ends the wake can already be consumed, so nothing guarantees the
+            # follow-up is re-scanned promptly. Re-arm it here so detecting the
+            # event during attendance *is* its enqueue: the loop rescans and
+            # dispatches on the next tick rather than waiting out the poll.
+            protocol.inbox_wake().set()
             return "pending"
         now = time.monotonic()
         if now >= deadline:
