@@ -111,6 +111,42 @@ def _migrate_github_installed_repos(conn: Connection) -> None:
 
 
 def _migrate_daemons(conn: Connection) -> None:
+    # Account-scoped daemon identity. Existing rows inherit the owning account
+    # from their compatibility/default repo; repo_id stops being identifying.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS account_id VARCHAR(64)"))
+    conn.execute(text(
+        "UPDATE daemons SET account_id = repos.account_id FROM repos "
+        "WHERE daemons.repo_id = repos.id AND daemons.account_id IS NULL"
+    ))
+    conn.execute(text("ALTER TABLE daemons ALTER COLUMN repo_id DROP NOT NULL"))
+    # Dedup before the unique index: daemon_name defaults to the constant
+    # "daemon", so an account with two repos connected from one host holds two
+    # rows per (account_id, daemon_name) — the index would refuse to build and
+    # brick the deploy. Keep the most recently seen row per key; detach and
+    # drop the rest (activity keeps its rows, daemon_id is nullable).
+    conn.execute(text(
+        "UPDATE activity_records SET daemon_id = NULL WHERE daemon_id IN ("
+        " SELECT id FROM ("
+        "  SELECT id, ROW_NUMBER() OVER ("
+        "   PARTITION BY account_id, daemon_name"
+        "   ORDER BY last_seen_at DESC NULLS LAST, id DESC"
+        "  ) AS rn FROM daemons"
+        " ) ranked WHERE ranked.rn > 1)"
+    ))
+    conn.execute(text(
+        "DELETE FROM daemons WHERE id IN ("
+        " SELECT id FROM ("
+        "  SELECT id, ROW_NUMBER() OVER ("
+        "   PARTITION BY account_id, daemon_name"
+        "   ORDER BY last_seen_at DESC NULLS LAST, id DESC"
+        "  ) AS rn FROM daemons"
+        " ) ranked WHERE ranked.rn > 1)"
+    ))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_daemon_account_name "
+        "ON daemons (account_id, daemon_name)"
+    ))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daemons_account_id ON daemons (account_id)"))
     # Runner-quota snapshot mirror (#237) — see models.Daemon.quota_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_updated_at TIMESTAMP"))

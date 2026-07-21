@@ -24,7 +24,7 @@ router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 def _touch_daemon(db: Session, principal: Principal) -> None:
     daemon = db.execute(
         select(Daemon).where(
-            Daemon.repo_id == principal.repo_id,
+            Daemon.account_id == principal.account_id,
             Daemon.token_id == principal.token.id,
         )
     ).scalar_one_or_none()
@@ -38,8 +38,29 @@ def _touch_daemon(db: Session, principal: Principal) -> None:
 def _current_daemon(db: Session, principal: Principal) -> Daemon | None:
     return db.execute(
         select(Daemon).where(
-            Daemon.repo_id == principal.repo_id,
+            Daemon.account_id == principal.account_id,
             Daemon.token_id == principal.token.id,
+        )
+    ).scalar_one_or_none()
+
+
+def _account_repos(db: Session, principal: Principal) -> list[Repo]:
+    return list(
+        db.execute(
+            select(Repo).where(Repo.account_id == principal.account_id)
+        ).scalars()
+    )
+
+
+def _account_event(
+    db: Session, principal: Principal, event_id: str,
+) -> Event | None:
+    return db.execute(
+        select(Event)
+        .join(Repo, Repo.id == Event.repo_id)
+        .where(
+            Event.event_id == event_id,
+            Repo.account_id == principal.account_id,
         )
     ).scalar_one_or_none()
 
@@ -78,15 +99,21 @@ def _activity_out(row: ActivityRecord) -> schemas.ActivityRecordOut:
 def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     repo_id = principal.repo_id
     caps = json.dumps(payload.capabilities)
-    existing = db.execute(select(Daemon).where(Daemon.repo_id == repo_id, Daemon.daemon_name == payload.daemon_name)).scalar_one_or_none()
+    existing = db.execute(
+        select(Daemon).where(
+            Daemon.account_id == principal.account_id,
+            Daemon.daemon_name == payload.daemon_name,
+        )
+    ).scalar_one_or_none()
     if existing is not None:
         existing.online = True
         existing.last_seen_at = datetime.now(timezone.utc)
         existing.capabilities = caps
         existing.token_id = principal.token.id
+        existing.repo_id = repo_id
         db.commit()
         return schemas.DaemonRegistered(daemon_id=existing.id, repo_id=repo_id)
-    daemon = Daemon(id=ids.daemon_id(), repo_id=repo_id, token_id=principal.token.id, daemon_name=payload.daemon_name, capabilities=caps, online=True)
+    daemon = Daemon(id=ids.daemon_id(), account_id=principal.account_id, repo_id=repo_id, token_id=principal.token.id, daemon_name=payload.daemon_name, capabilities=caps, online=True)
     db.add(daemon)
     db.commit()
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
@@ -389,26 +416,41 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
     since_seq = since if since is not None else 0
-    if since_seq > 0:
-        # Reset a cursor from an older DB epoch — see inbox_service.clamp_since.
-        with request.app.state.SessionLocal() as db:
-            since_seq = inbox_service.clamp_since(db, principal.repo_id, since_seq)
+    with request.app.state.SessionLocal() as db:
+        repos = _account_repos(db, principal)
+        repo_ids = {repo.id for repo in repos}
+        repo_labels = {repo.id: repo.repo_full_name for repo in repos}
+        if since_seq > 0:
+            since_seq = inbox_service.clamp_since_many(db, repo_ids, since_seq)
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
-    events = inbox_service.long_poll(request.app.state.SessionLocal, principal.repo_id, since_seq, max_wait_s=max_wait, interval_s=settings.inbox_poll_interval_s)
+    events = inbox_service.long_poll_many(request.app.state.SessionLocal, repo_ids, since_seq, max_wait_s=max_wait, interval_s=settings.inbox_poll_interval_s)
     cursor = max((e.seq for e in events), default=since_seq)
     with request.app.state.SessionLocal() as db:
         _touch_daemon(db, principal)
-    return schemas.InboxResponse(events=[schemas.EventOut(**inbox_service.event_to_dict(e)) for e in events], cursor=cursor)
+    return schemas.InboxResponse(
+        events=[
+            schemas.EventOut(
+                **inbox_service.event_to_dict(
+                    event, repo_label=repo_labels.get(event.repo_id),
+                )
+            )
+            for event in events
+        ],
+        cursor=cursor,
+    )
 
 
 @router.post("/responses", response_model=schemas.ResponseAck)
 def post_response(request: Request, payload: schemas.ResponsePost, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    owned_event = _account_event(db, principal, payload.event_id)
+    if owned_event is None:
+        raise HTTPException(status_code=404, detail="event not found for this account")
     try:
-        event = inbox_service.record_response(db, repo_id=principal.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder)
+        event = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder)
     except inbox_service.DeliveryError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"forward to platform failed: {e}") from e
     if event is None:
-        raise HTTPException(status_code=404, detail="event not found for this repo")
+        raise HTTPException(status_code=404, detail="event not found for this account")
     _touch_daemon(db, principal)
     return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
 
@@ -416,9 +458,9 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
 @router.post("/card", response_model=schemas.CardAck)
 def post_card(request: Request, payload: schemas.CardPost, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     settings = request.app.state.settings
-    event = db.execute(select(Event).where(Event.event_id == payload.event_id, Event.repo_id == principal.repo_id)).scalar_one_or_none()
+    event = _account_event(db, principal, payload.event_id)
     if event is None:
-        raise HTTPException(status_code=404, detail="event not found for this repo")
+        raise HTTPException(status_code=404, detail="event not found for this account")
     # Deliberately no responded-guard here: a respawn continuation run rides
     # its parent's event, so cards must keep flowing after the parent's
     # terminal close (2026-07-21 — the mega run whose status card vanished).
@@ -454,7 +496,7 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     the daemon to annotate, never fabricated or silently empty bytes.
     """
     settings = request.app.state.settings
-    event = db.execute(select(Event).where(Event.event_id == event_id, Event.repo_id == principal.repo_id)).scalar_one_or_none()
+    event = _account_event(db, principal, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this repo")
     pointers = inbox_service.attachments_of(event)
@@ -500,7 +542,12 @@ def post_pack(request: Request, payload: schemas.PackRelayPost, principal: Princ
 
 @router.post("/deregister")
 def deregister(payload: schemas.DaemonDeregister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    daemon = db.execute(select(Daemon).where(Daemon.repo_id == principal.repo_id, Daemon.daemon_name == payload.daemon_name)).scalar_one_or_none()
+    daemon = db.execute(
+        select(Daemon).where(
+            Daemon.account_id == principal.account_id,
+            Daemon.daemon_name == payload.daemon_name,
+        )
+    ).scalar_one_or_none()
     if daemon is not None:
         daemon.online = False
         daemon.last_seen_at = datetime.now(timezone.utc)
