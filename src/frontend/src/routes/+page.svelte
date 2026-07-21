@@ -398,7 +398,23 @@
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
+	// During a deploy cutover every `/v1` request hangs for ~30s before the
+	// edge 502s, while the 2s poll keeps firing — without a guard each tick
+	// stacks another refresh pass onto the same hung sockets. One pass in
+	// flight at a time; the next interval tick picks up naturally.
+	let refreshInFlight = false;
+
 	async function refresh() {
+		if (refreshInFlight) return;
+		refreshInFlight = true;
+		try {
+			await refreshOnce();
+		} finally {
+			refreshInFlight = false;
+		}
+	}
+
+	async function refreshOnce() {
 		try {
 			const data = await fetchQuota();
 			shells = data.runner_quotas;
@@ -503,12 +519,21 @@
 	});
 </script>
 
-{#if authState === 'anon'}
+{#if authState === 'unknown'}
+	<!-- The gate is still deciding (auth fetch in flight, bounded by
+	     QUOTA_GATE_TIMEOUT_MS). Rendering *nothing* here was the 2026-07-21
+	     black screen: a hung deploy-window request left the page in this
+	     branch with an empty body. A holding line costs one element and
+	     makes the wait legible; the boot curtain plays over it regardless. -->
+	<main class="flex min-h-screen items-center justify-center">
+		<p class="eyebrow">reaching brnrd&hellip;</p>
+	</main>
+{:else if authState === 'anon'}
 	<!-- The landing (#509): the anonymous face of the same URL. Signed-in
 	     readers never see it; anonymous ones never see the dashboard
 	     scaffolding it replaces. -->
 	<Landing />
-{:else if authState === 'authed'}
+{:else}
 	<div class="mx-auto max-w-2xl p-6">
 		<header class="ignite" style="--ignite-delay: 0ms">
 			<div class="flex items-start justify-between gap-4">
