@@ -587,7 +587,7 @@ source manifest:
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · Your last run (node frame + Now + shape)        resident     memory             0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,487  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,463  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
@@ -595,10 +595,10 @@ cost ledger:
   contract       13,274 B  41.4%
   substrate       9,051 B  28.2%
   identity        5,449 B  17.0%
-  runtime         4,136 B  12.9%
+  runtime         4,112 B  12.8%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     32,071 B
+  wake total     32,047 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
