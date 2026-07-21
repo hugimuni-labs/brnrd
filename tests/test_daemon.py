@@ -4293,6 +4293,13 @@ def test_worker_boot_prompt_excludes_foreign_pending_events(
 
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
+    # Pin runner resolution: every sibling test does this, and without it the
+    # test silently depends on a claude/codex CLI being on PATH (absent on CI).
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
 
     def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
         Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
