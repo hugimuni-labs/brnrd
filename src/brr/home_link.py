@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from . import account, gitops
+from . import account, gitops, repo_deed
 
 DEFAULT_DOMINION_NAME = "brnrd-home"
 DEFAULT_KNOWLEDGE_NAME = "brnrd-knowledge"
@@ -144,16 +144,18 @@ def _repo_create(owner: str, name: str) -> str:
 # ── local git plumbing ─────────────────────────────────────────────────
 
 
-def _ensure_git_repo(path: Path) -> None:
+def _ensure_git_repo(path: Path) -> bool:
+    """Init a git repo at *path* iff absent. Returns True on a fresh init."""
     if (path / ".git").exists():
-        return
-    subprocess.run(
+        return False
+    result = subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=path,
         capture_output=True,
         text=True,
         check=False,
     )
+    return result.returncode == 0
 
 
 def _current_or_symbolic_branch(repo_path: Path) -> str:
@@ -199,9 +201,9 @@ def _ensure_has_commit(repo_path: Path, message: str) -> None:
     )
 
 
-def _push_current(repo_path: Path, remote: str) -> tuple[bool, str]:
+def _push_current(repo_path: Path, remote: str, *, founding_message: str) -> tuple[bool, str]:
     branch = _current_or_symbolic_branch(repo_path)
-    _ensure_has_commit(repo_path, f"brnrd: seed {repo_path.name}")
+    _ensure_has_commit(repo_path, founding_message)
     result = subprocess.run(
         ["git", "push", "-u", remote, f"HEAD:refs/heads/{branch}"],
         cwd=repo_path,
@@ -253,7 +255,18 @@ def _link_one(*, slot: str, repo_path: Path, owner: str, name: str) -> RepoLinkR
             f"({add.stderr.strip() or 'git remote add failed'})"
         )
 
-    ok, detail = _push_current(repo_path, "origin")
+    # The link seam is where this repo lands on the user's own GitHub
+    # profile — the deed README is what renders there, so seed (and commit)
+    # it before the push. Write-if-absent: an owner's existing README wins.
+    # On an unborn HEAD the deed commit *is* the founding commit; the
+    # `_ensure_has_commit` fallback below keeps the same named message for
+    # the deed-write-failed edge.
+    repo_deed.ensure_deed(repo_path, slot)
+
+    ok, detail = _push_current(
+        repo_path, "origin",
+        founding_message=repo_deed.founding_commit_message(slot),
+    )
     if not ok:
         raise HomeLinkError(
             f"{slot}: origin set to {url} but the initial push failed ({detail}) — "
@@ -301,7 +314,11 @@ def link_home(
 
     knowledge_root = account.knowledge_path(ctx)
     knowledge_root.mkdir(parents=True, exist_ok=True)
-    _ensure_git_repo(knowledge_root)
+    if _ensure_git_repo(knowledge_root):
+        # Born just now — deed at birth, so even the already-linked early
+        # return below (which never reaches ``_link_one``) leaves a founded,
+        # self-explaining repo behind.
+        repo_deed.ensure_deed(knowledge_root, "knowledge")
 
     plan = [
         ("dominion", ctx.dominion_repo, dominion_name),
