@@ -522,6 +522,42 @@ def _build_runner_policy_block(repo_root: Path) -> str:
     )
 
 
+def _build_web_capability_block(runner_shell: str | None) -> str:
+    """Declare this wake's native web-research capability (issue #411 L0).
+
+    Renders 1–2 ``- Web research:`` lines for the bundle's Mode section —
+    the one place both resident and worker wakes read runner facts (the
+    resident-only injected-block stack is skipped for workers, and a worker
+    needs this fact just as much).  The declaration itself lives in the
+    packaged capabilities data (:mod:`brr.runner_capabilities`), keyed by
+    Shell: whether a wake can verify a changing fact is a property of the
+    CLI's tool surface, not of the Core inside it.
+
+    Declared Shell → name the native tools and that search executes
+    server-side (rides the model API, so it survives the solitary egress
+    boundary).  Unknown/custom Shell → say web verification is undeclared
+    and to verify from repo/local sources or state the limit — never guess.
+    """
+    from .runner_capabilities import web_research_for_shell
+
+    cap = web_research_for_shell(runner_shell)
+    if cap is None:
+        return (
+            "- Web research: not declared for this Shell — verify changing "
+            "facts from repo/local sources, or state the limit in your "
+            "reply rather than guessing."
+        )
+    tools = "/".join(cap.tools)
+    execution = cap.execution or "server-side"
+    default_note = ", default-on" if cap.default_on else ""
+    return (
+        f"- Web research: native via {tools}{default_note} — search executes "
+        f"{execution} (rides the model API, so it is available even under "
+        "the solitary egress boundary); use it to verify changing facts "
+        "before asserting them."
+    )
+
+
 def _build_kb_health_block(repo_root: Path) -> str:
     """Render the deterministic kb-health preflight as a wake-time block.
 
@@ -1822,6 +1858,7 @@ def build_daemon_prompt(
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
         runner_quota=runner_quota,
+        runner_shell=runner_shell,
         runner_catalog=runner_catalog,
         repo_root=repo_root,
         run_id=run_id,
@@ -1979,6 +2016,7 @@ def _build_run_context_bundle(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    runner_shell: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     repo_root: Path,
     run_id: str | None,
@@ -2038,6 +2076,10 @@ def _build_run_context_bundle(
         )
         if runner_quota:
             sections.append(f"- Quota: {runner_quota}")
+    # Native web-research declaration (issue #411 L0): always present, so a
+    # waking resident never has to guess whether its Shell can verify a
+    # changing fact — a missing declaration is itself the "undeclared" answer.
+    sections.append(_build_web_capability_block(runner_shell))
     sections.append(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
