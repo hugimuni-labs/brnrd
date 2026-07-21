@@ -29,6 +29,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_daemons(conn)
         if _table_exists(conn, "channel_routes"):
             _migrate_channel_routes(conn)
+        if _table_exists(conn, "events"):
+            _migrate_events(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -137,6 +139,12 @@ def _migrate_channel_routes(conn: Connection) -> None:
     # existing rows land NULL (no principal), which is deliberately
     # unauthorized until the chat is re-paired via /start.
     conn.execute(text("ALTER TABLE channel_routes ADD COLUMN IF NOT EXISTS paired_user_id INTEGER"))
+
+
+def _migrate_events(conn: Connection) -> None:
+    # Retry-dedupe handle for responded events that keep forwarding
+    # continuation messages (the respawn-continuation mute, 2026-07-21).
+    conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS response_sha VARCHAR(64)"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

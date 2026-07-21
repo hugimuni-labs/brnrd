@@ -418,8 +418,10 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
     event = db.execute(select(Event).where(Event.event_id == payload.event_id, Event.repo_id == principal.repo_id)).scalar_one_or_none()
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this repo")
-    if event.status == Event.STATUS_RESPONDED:
-        return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
+    # Deliberately no responded-guard here: a respawn continuation run rides
+    # its parent's event, so cards must keep flowing after the parent's
+    # terminal close (2026-07-21 — the mega run whose status card vanished).
+    # Card sends/edits are already idempotent via message_id.
     reply_to = inbox_service.reply_to_of(event)
     if reply_to.get("platform") != "telegram" or not settings.telegram_bot_token:
         return schemas.CardAck(event_id=payload.event_id, message_id=None)
