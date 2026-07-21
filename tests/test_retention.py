@@ -194,6 +194,33 @@ def test_ledger_rewrite_drops_old_keeps_fresh_and_malformed(tmp_path):
     assert "{malformed json row" in kept  # GC never invents data loss
 
 
+def test_ledger_rewrite_survives_append_between_plan_and_execute(tmp_path):
+    """The appender is lock-free; a row landing after plan must survive."""
+    repo = _repo(tmp_path)
+    ledger = gitops.shared_brr_dir(repo) / "run-ledger.jsonl"
+    rows = [
+        json.dumps({"run_id": "old", "ended_at": _iso(400)}),
+        json.dumps({"run_id": "fresh", "ended_at": _iso(10)}),
+    ]
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    plan = retention.build_plan(repo, None, _windows(ledger=365), now=NOW)
+    assert [a.store for a in plan.actions] == ["ledger"]
+
+    # Daemon closes a run between plan and execute: lock-free append.
+    raced = json.dumps({"run_id": "raced", "ended_at": _iso(0)})
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(raced + "\n")
+
+    reports = retention.execute_plan(repo, plan)
+    kept = ledger.read_text(encoding="utf-8").splitlines()
+    assert reports["ledger"].items == 1
+    assert raced in kept  # the appended row survives the rewrite
+    assert len(kept) == 2
+    assert not any('"old"' in line for line in kept)
+
+
 # ── message store ───────────────────────────────────────────────────
 
 

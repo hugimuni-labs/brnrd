@@ -138,6 +138,10 @@ class Action:
     items: int = 1
     #: LEDGER only: the raw lines the rewrite keeps, in order.
     keep_lines: tuple[str, ...] = ()
+    #: LEDGER only: the raw lines the rewrite drops. The executor re-reads
+    #: the ledger and subtracts *these* from the fresh content, so a row
+    #: appended between plan and execute survives (see ``_rewrite_ledger``).
+    drop_lines: tuple[str, ...] = ()
     #: WORKTREE only: the run id, for ``git worktree remove``.
     run_id: str = ""
 
@@ -322,7 +326,7 @@ def _plan_ledger(
     except OSError:
         return
     keep: list[str] = []
-    dropped = 0
+    drop: list[str] = []
     dropped_bytes = 0
     for line in raw_lines:
         if not line.strip():
@@ -334,15 +338,15 @@ def _plan_ledger(
         except (ValueError, AttributeError):
             stamp = None  # malformed row: keep — GC never invents data loss
         if stamp is not None and stamp < cutoff:
-            dropped += 1
+            drop.append(line)
             dropped_bytes += len(line.encode("utf-8")) + 1
         else:
             keep.append(line)
-    if dropped:
+    if drop:
         actions.append(Action(
             store="ledger", kind=LEDGER,
-            path=path, bytes=dropped_bytes, items=dropped,
-            keep_lines=tuple(keep),
+            path=path, bytes=dropped_bytes, items=len(drop),
+            keep_lines=tuple(keep), drop_lines=tuple(drop),
         ))
 
 
@@ -492,11 +496,28 @@ def _remove_worktree(repo_root: Path, action: Action) -> None:
 
 
 def _rewrite_ledger(action: Action) -> None:
+    """Re-derive the cut from a fresh read; never replay a stale snapshot.
+
+    The appender (``run_ledger.append_closed_run``) is lock-free — a plain
+    ``open("a")`` write, no lock file, no rename — so a row can land between
+    plan and execute. Writing the plan-time ``keep_lines`` snapshot would
+    silently erase it. Instead: re-read now, keep every line that is not in
+    the *planned drop set* (so appended rows survive by construction), and
+    only replace if the file is still byte-identical to what we just read —
+    otherwise retry once with the newer content. The remaining read→replace
+    window is microseconds, down from the daily plan→execute gap.
+    """
+    dropped = set(action.drop_lines)
     tmp = action.path.with_suffix(action.path.suffix + ".tmp")
-    body = "\n".join(action.keep_lines)
-    if body:
-        body += "\n"
-    tmp.write_text(body, encoding="utf-8")
+    for _attempt in range(2):
+        raw = action.path.read_text(encoding="utf-8")
+        keep = [l for l in raw.splitlines() if l.strip() and l not in dropped]
+        body = "\n".join(keep)
+        if body:
+            body += "\n"
+        tmp.write_text(body, encoding="utf-8")
+        if action.path.read_text(encoding="utf-8") == raw:
+            break  # no append raced this pass
     tmp.replace(action.path)
 
 
