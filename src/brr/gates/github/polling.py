@@ -1,6 +1,6 @@
 """Trigger pollers — turn new GitHub activity into inbox events.
 
-Four triggers:
+Five triggers:
 
 - ``label`` — labelled open issues become events (PRs excluded; they
   almost always carry ongoing back-and-forth that label-once doesn't
@@ -11,6 +11,10 @@ Four triggers:
   gets fetched on its own cursor.
 - ``opened`` — newly opened issues and PRs become events without also
   subscribing to every comment. This is the low-volume maintainer inbox.
+- ``assignee`` — issues/PRs assigned to the configured login (the
+  brnrd-bot machine user, once invited as a triage collaborator) become
+  events. Assignment is the summon; the *assigner* is the trust
+  principal for the authorization gate.
 - ``any`` — every new issue, PR, and comment fires an event. Overrides
   opened, label, and mention; off by default because it's token-expensive.
 
@@ -30,6 +34,7 @@ from ... import protocol
 from . import attachments, cache, client, parse
 from .constants import _SEEN_CAP
 from .paths import (
+    issue_events as _issue_events_path,
     pull as _pull_path,
     pull_review as _pull_review_path,
     repo_issue_comments,
@@ -332,6 +337,129 @@ def _poll_opened_trigger(
     )
     cursor["opened_since"] = latest_seen
     cursor["seen_opened_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
+
+
+# ── assignee trigger ───────────────────────────────────────────────
+
+
+def _fetch_last_assigner(
+    token: str, repo: str, number: int, assignee: str,
+) -> str | None:
+    """The login that most recently assigned *assignee* to issue ``#n``.
+
+    Read from the issue's event timeline. Best-effort: any API failure or
+    an empty timeline yields ``None`` and the caller falls back to the
+    issue author for the authorization check.
+    """
+    events = client._api_get(
+        token, _issue_events_path(repo, number), params={"per_page": 100},
+    )
+    if not isinstance(events, list):
+        return None
+    assigner: str | None = None
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") != "assigned":
+            continue
+        target = ((event.get("assignee") or {}).get("login") or "").casefold()
+        if target != assignee.casefold():
+            continue
+        actor = (event.get("actor") or {}).get("login") or ""
+        if actor:
+            assigner = actor  # keep the latest matching assignment
+    return assigner
+
+
+def _poll_assignee_trigger(
+    token: str,
+    repo: str,
+    assignee: str,
+    cursor: dict,
+    inbox_dir: Path,
+    *,
+    allowlist: frozenset[str],
+    permission_cache: dict[tuple[str, str], str | None],
+) -> None:
+    """Fire an event when an issue or PR is assigned to *assignee*.
+
+    Assignment is the explicit summon gesture (#brnrd-bot flow,
+    2026-07-21): a collaborator picks the bot from the assignee picker
+    and brnrd wakes on it. Fires once per issue number (like the label
+    trigger); re-assignment after unassign does not re-fire.
+
+    The trust principal is the **assigner**, not the issue author — only
+    triage+ collaborators can assign on GitHub, and the author of a
+    triaged drive-by issue shouldn't need to clear the #408 gate for the
+    maintainer's own assignment to count. The assigner is read from the
+    issue event timeline; when unavailable the issue author is checked
+    instead (default-closed either way).
+    """
+    since = cursor.get("assigned_since") or cache._initial_since()
+    seen = set(cursor.get("seen_assigned_numbers") or [])
+    etags = cursor.setdefault("etags", {})
+    issues = client._api_get(
+        token, repo_issues(repo),
+        params={
+            "state": "open",
+            "assignee": assignee,
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+        etag_store=etags,
+    ) or []
+
+    latest_seen = since
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        number = issue.get("number")
+        if not isinstance(number, int):
+            continue
+        ts = issue.get("updated_at") or issue.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+        if number in seen:
+            continue
+
+        title = str(issue.get("title") or "").strip()
+        body = str(issue.get("body") or "").strip()
+        author = (issue.get("user") or {}).get("login") or ""
+        assigner = _fetch_last_assigner(token, repo, number, assignee)
+        is_pr = "pull_request" in issue
+
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_issue_number": number,
+            # The authorization gate judges github_author; for this
+            # trigger that is the assigner when the timeline names one.
+            "github_author": assigner or author,
+            "github_issue_author": author,
+            "github_html_url": issue.get("html_url") or "",
+            "github_trigger": "assignee",
+            "github_assignee": assignee,
+        }
+        if is_pr:
+            meta["github_kind"] = "pr"
+            meta["github_pr_number"] = number
+            branch = _fetch_pr_head_branch(token, repo, number)
+            if branch:
+                meta["branch_target"] = branch
+        else:
+            meta["github_kind"] = "issue"
+        _create_github_event(
+            token, inbox_dir, parse._format_event_body(title, body),
+            title=title,
+            allowlist=allowlist,
+            permission_cache=permission_cache,
+            **meta,
+        )
+        seen.add(number)
+
+    cursor["assigned_since"] = latest_seen
+    cursor["seen_assigned_numbers"] = sorted(seen)[-_SEEN_CAP:]
 
 
 # ── mention trigger ───────────────────────────────────────────────

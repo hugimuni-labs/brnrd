@@ -1591,8 +1591,8 @@ def test_bind_enter_accepts_label_and_mention_defaults(tmp_path, monkeypatch):
     state._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     # Inputs: repo, any-prompt (Enter=skip), opened (Enter=off),
-    # label (Enter=brnrd), mention (Enter=@brnrd-bot)
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "", ""))
+    # label (Enter=brnrd), mention (Enter=@brnrd-bot), assignee (Enter=off)
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "", "", ""))
 
     github.bind(brr_dir)
 
@@ -1605,8 +1605,8 @@ def test_bind_off_disables_label(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "b", "triggers": {"label": "brr"}})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    # repo, any-skip, opened-skip, label=off, mention=Enter
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "off", ""))
+    # repo, any-skip, opened-skip, label=off, mention=Enter, assignee=Enter
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "off", "", ""))
 
     github.bind(brr_dir)
 
@@ -1620,7 +1620,7 @@ def test_bind_typed_value_overrides_default(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "my-label", "off"))
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "my-label", "off", "off"))
 
     github.bind(brr_dir)
 
@@ -1648,10 +1648,10 @@ def test_bind_opened_trigger_saves_with_label_and_mention_off(tmp_path, monkeypa
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    # repo, any=off, opened=on, label=off, mention=off
+    # repo, any=off, opened=on, label=off, mention=off, assignee=off
     monkeypatch.setattr(
         "builtins.input",
-        _make_inputs("owner/repo", "", "on", "off", "off"),
+        _make_inputs("owner/repo", "", "on", "off", "off", "off"),
     )
 
     github.bind(brr_dir)
@@ -2438,3 +2438,216 @@ def test_mention_trigger_editing_seen_comment_does_not_double_fire(tmp_path, mon
 
     loop._loop_once(brr_dir, inbox, responses)
     assert len(protocol.list_pending(inbox)) == 1
+
+
+# ── assignee trigger (brnrd-bot flow, 2026-07-21) ────────────────────
+
+
+def test_assignee_trigger_creates_event_with_assigner_as_principal(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"assignee": "brnrd-bot"},
+    })
+
+    api_calls = []
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        api_calls.append((path, params))
+        if path == "/repos/owner/name/issues":
+            assert params["assignee"] == "brnrd-bot"
+            return [
+                {
+                    "number": 99,
+                    "title": "triage this",
+                    "body": "drive-by report",
+                    "user": {"login": "stranger"},
+                    "html_url": "https://github.com/owner/name/issues/99",
+                    "updated_at": "2026-07-21T10:00:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/issues/99/events":
+            return [
+                {
+                    "event": "assigned",
+                    "assignee": {"login": "brnrd-bot"},
+                    "actor": {"login": "maintainer"},
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["github_trigger"] == "assignee"
+    assert ev["github_assignee"] == "brnrd-bot"
+    assert ev["github_kind"] == "issue"
+    assert ev["github_issue_number"] == 99
+    # The assigner, not the drive-by issue author, is the authz principal.
+    assert ev["github_author"] == "maintainer"
+    assert ev["github_issue_author"] == "stranger"
+    assert "triage this" in ev["body"]
+
+    # Fires once: a second poll does not re-create.
+    loop._loop_once(brr_dir, inbox, responses)
+    assert len(protocol.list_pending(inbox)) == 1
+
+
+def test_assignee_trigger_falls_back_to_issue_author_without_timeline(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"assignee": "brnrd-bot"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/o/r/issues":
+            return [
+                {
+                    "number": 5,
+                    "title": "assigned work",
+                    "body": "",
+                    "user": {"login": "octocat"},
+                    "html_url": "https://github.com/o/r/issues/5",
+                    "updated_at": "2026-07-21T10:00:00Z",
+                },
+            ]
+        return None  # timeline unavailable
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert events[0]["github_author"] == "octocat"
+
+
+def test_assignee_trigger_attaches_branch_target_for_prs(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"assignee": "brnrd-bot"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/o/r/issues":
+            return [
+                {
+                    "number": 12,
+                    "title": "review my PR",
+                    "body": "",
+                    "user": {"login": "octocat"},
+                    "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/12"},
+                    "html_url": "https://github.com/o/r/pull/12",
+                    "updated_at": "2026-07-21T10:00:00Z",
+                },
+            ]
+        if path == "/repos/o/r/issues/12/events":
+            return [
+                {
+                    "event": "assigned",
+                    "assignee": {"login": "brnrd-bot"},
+                    "actor": {"login": "maintainer"},
+                },
+            ]
+        if path == "/repos/o/r/pulls/12":
+            return {"head": {"ref": "feature/x"}}
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["github_kind"] == "pr"
+    assert ev["github_pr_number"] == 12
+    assert ev["branch_target"] == "feature/x"
+
+
+def test_assignee_trigger_rejects_unauthorized_assigner(tmp_path, monkeypatch):
+    """Default-closed: an assignment attributed to a read-only login does
+    not enqueue a run (the #408 gate judges the assigner)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"assignee": "brnrd-bot"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/o/r/issues":
+            return [
+                {
+                    "number": 8,
+                    "title": "sneaky",
+                    "body": "",
+                    "user": {"login": "rando"},
+                    "html_url": "https://github.com/o/r/issues/8",
+                    "updated_at": "2026-07-21T10:00:00Z",
+                },
+            ]
+        if path == "/repos/o/r/issues/8/events":
+            return [
+                {
+                    "event": "assigned",
+                    "assignee": {"login": "brnrd-bot"},
+                    "actor": {"login": "rando"},
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+    monkeypatch.setattr(
+        client, "get_collaborator_permission",
+        lambda repo, username, token: "read",
+    )
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert protocol.list_pending(inbox) == []
+
+
+def test_bind_assignee_trigger_saves_and_prints_ceremony_hint(
+    tmp_path, monkeypatch, capsys,
+):
+    """Typing a login enables the assignee trigger (stripped of any '@')
+    and prints the triage-invite ceremony hint."""
+    brr_dir = tmp_path / ".brr"
+    state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
+    # repo, any=off, opened=off, label=off, mention=Enter, assignee=@brnrd-bot
+    monkeypatch.setattr(
+        "builtins.input",
+        _make_inputs("owner/repo", "", "", "off", "", "@brnrd-bot"),
+    )
+
+    github.bind(brr_dir)
+
+    saved = state._load_state(brr_dir)
+    assert saved["triggers"]["assignee"] == "brnrd-bot"
+    out = capsys.readouterr().out
+    assert "triage" in out
+    assert "brnrd-bot" in out
