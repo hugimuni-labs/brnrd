@@ -469,3 +469,91 @@ def test_stale_cursor_with_no_backlog_heals_to_max_seq(env):
     ).json()
     assert empty["events"] == []
     assert empty["cursor"] == 0
+
+
+def test_gc_events_nulls_dead_bodies_and_prunes_old_rows(env):
+    """#502: the queue is a relay, not an archive — dead bodies null at 14d,
+    rows prune at 90d, live traffic is untouched."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+
+    app, client, forwarder = env
+    headers = _account(client)
+    repo_id = _repo(client, headers)
+    now = datetime.now(timezone.utc)
+    with app.state.SessionLocal() as db:
+        db.add(
+            Event(
+                event_id="evt-ancient",
+                repo_id=repo_id,
+                source="dev",
+                body=None,
+                reply_to="{}",
+                status=Event.STATUS_RESPONDED,
+                created_at=now - timedelta(days=120),
+            )
+        )
+        db.add(
+            Event(
+                event_id="evt-dead-queued",
+                repo_id=repo_id,
+                source="dev",
+                body="never answered",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(days=30),
+            )
+        )
+        db.add(
+            Event(
+                event_id="evt-fresh",
+                repo_id=repo_id,
+                source="dev",
+                body="fresh",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now,
+            )
+        )
+        db.commit()
+
+    with app.state.SessionLocal() as db:
+        inbox_service.gc_events(db, force=True)
+
+    with app.state.SessionLocal() as db:
+        remaining = {e.event_id: e for e in db.execute(select(Event)).scalars()}
+        assert "evt-ancient" not in remaining
+        assert remaining["evt-dead-queued"].body is None
+        assert remaining["evt-dead-queued"].status == Event.STATUS_QUEUED
+        assert remaining["evt-fresh"].body == "fresh"
+
+
+def test_gc_events_hourly_throttle(env):
+    """The opportunistic sweep runs at most once per interval per process."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd import inbox as inbox_service
+
+    app, client, forwarder = env
+    headers = _account(client)
+    repo_id = _repo(client, headers)
+    now = datetime.now(timezone.utc)
+    inbox_service.reset_gc_throttle()
+    with app.state.SessionLocal() as db:
+        inbox_service.gc_events(db)  # arms the throttle
+        db.add(
+            Event(
+                event_id="evt-late-arrival",
+                repo_id=repo_id,
+                source="dev",
+                body="old",
+                reply_to="{}",
+                status=Event.STATUS_QUEUED,
+                created_at=now - timedelta(days=200),
+            )
+        )
+        db.commit()
+        inbox_service.gc_events(db)  # throttled: must not touch the new row
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.event_id == "evt-late-arrival")).scalar_one().body == "old"
