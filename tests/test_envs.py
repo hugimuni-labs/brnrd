@@ -488,6 +488,53 @@ def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
     assert "-i" in captured["command"]
 
 
+def test_docker_invoke_pipes_prompt_on_default_path(tmp_path, monkeypatch):
+    """Without a pinned ``runner_cmd`` the prompt travels on stdin (the
+    2026-07-14 migration) — the docker path must pipe it like the host
+    path does. Regression: DockerEnv.invoke kept ``stdin=DEVNULL``
+    unconditionally, so every docker/solitary runner booted with an
+    empty prompt and died ("Input must be provided either through stdin
+    or as a prompt argument"). Found live by the #515 solitary probe,
+    2026-07-21 (run-260721-1716-n44d)."""
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    captured: dict = {}
+
+    def _fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["stdin"] = kwargs.get("stdin")
+        captured["input"] = kwargs.get("input")
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    response_path = tmp_path / ".brr" / "responses" / "evt-pipe.md"
+    response_path.parent.mkdir(parents=True)
+    task = Run(id="task-pipe", event_id="evt-pipe", body="hi")
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, {"docker.image": "img:latest"},
+        branch_plan=_plan(), response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-pipe-1",
+        prompt="the whole assembled wake",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation,
+        {"docker.image": "img:latest"},
+    )
+
+    # The prompt is piped (prompt, then EOF via input=), never in argv.
+    assert captured["input"] == "the whole assembled wake"
+    assert captured["stdin"] is None
+    assert "the whole assembled wake" not in captured["command"]
+    assert "-i" in captured["command"]
+
+
 def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
     """The default runner timeout is 7200s — the historic 600s default
     was killing live work mid-run for xhigh-reasoning models, and the
