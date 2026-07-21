@@ -349,6 +349,42 @@ def test_probe_doc_drift_identical_is_clean(tmp_path, monkeypatch):
     assert findings == []
 
 
+def test_probe_doc_drift_block_aware(tmp_path, monkeypatch):
+    """L1: tailoring per-repo prose is not drift; a lagging universal block is."""
+    from brr import constitution
+
+    template = constitution.stamp(
+        "# Project\n\ntemplate prose\n\n"
+        "<!-- brnrd:block id=stewardship v=2 hash=PENDING -->\n"
+        "## Stewardship\nsteward with judgement\n"
+        "<!-- /brnrd:block -->\n"
+    )
+    bundled = tmp_path / "constitution.md"
+    bundled.write_text(template, encoding="utf-8")
+    monkeypatch.setattr(probes, "_BUNDLED_AGENTS_MD", bundled)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # Adopter kept the block verbatim but tailored the project prose heavily.
+    tailored = template.replace("template prose", "a completely different project blurb")
+    (repo / "AGENTS.md").write_text(tailored, encoding="utf-8")
+    ctx = probes.ProbeContext(
+        task=_task(), repo_root=repo, brr_dir=tmp_path, cfg={}, ctx=_ctx())
+    assert probes.probe_doc_drift(ctx) == []
+
+    # Now the adopter's block lags an older version and body.
+    stale = constitution.stamp(
+        "# Project\n\na completely different project blurb\n\n"
+        "<!-- brnrd:block id=stewardship v=1 hash=PENDING -->\n"
+        "## Stewardship\nold stewardship text\n"
+        "<!-- /brnrd:block -->\n"
+    )
+    (repo / "AGENTS.md").write_text(stale, encoding="utf-8")
+    findings = probes.probe_doc_drift(ctx)
+    assert findings and findings[0].issue == "drifted_bundled_docs"
+    assert "stewardship" in findings[0].detail["stale_blocks"]
+
+
 # ── orchestration ───────────────────────────────────────────────────
 
 
