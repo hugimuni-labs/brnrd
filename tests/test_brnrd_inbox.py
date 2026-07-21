@@ -323,7 +323,7 @@ def test_cursor_is_idempotent_on_repoll(env):
     assert rest["events"] == []
 
 
-def test_project_isolation(env):
+def test_account_daemons_receive_events_for_every_repo(env):
     _, client, _ = env
     acc = _account(client)
     rid_a = _repo(client, acc, name="a")
@@ -340,7 +340,9 @@ def test_project_isolation(env):
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn_b
     ).json()
     assert [e["body"] for e in a_sees["events"]] == ["for-a"]
-    assert b_sees["events"] == []
+    assert [e["body"] for e in b_sees["events"]] == ["for-a"]
+    assert a_sees["events"][0]["repo_label"] == "Gurio/a"
+    assert b_sees["events"][0]["repo_label"] == "Gurio/a"
 
 
 def test_auth_scoping(env):

@@ -102,6 +102,6 @@ def require_daemon(
     db: Session = Depends(get_db),
 ) -> Principal:
     token = _resolve(db, _bearer(authorization))
-    if token.kind != Token.KIND_DAEMON or not token.repo_id:
+    if token.kind != Token.KIND_DAEMON:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="daemon token required")
     return Principal(token=token)

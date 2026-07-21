@@ -1264,7 +1264,12 @@ class TestInvocationTracing:
         calls = []
 
         def _fake_popen(*_args, **kwargs):
-            calls.append(kwargs)
+            # Other daemon publisher threads can still be alive during the
+            # full suite and share the process-wide subprocess module. Scope
+            # this assertion to the invocation under test, whose cwd is the
+            # isolated tmp repo.
+            if kwargs.get("cwd") == tmp_path:
+                calls.append(kwargs)
             return _fake_proc(kwargs, out="ok\n")
 
         monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
