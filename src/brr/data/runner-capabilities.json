@@ -6,6 +6,28 @@
     "https://www.vals.ai/benchmarks/swebench",
     "https://www.tbench.ai/leaderboard/terminal-bench/2.0"
   ],
+  "shells": {
+    "claude": {
+      "web_research": {
+        "native": true,
+        "tools": ["WebSearch", "WebFetch"],
+        "execution": "server-side",
+        "default_on": true,
+        "source": "claude CLI ships WebSearch/WebFetch headless; search executes server-side over the model API",
+        "freshness_date": "2026-07-21"
+      }
+    },
+    "codex": {
+      "web_research": {
+        "native": true,
+        "tools": ["web.run"],
+        "execution": "server-side",
+        "default_on": true,
+        "source": "codex web.run on by default since ~0.128; verified live 2026-07-21 with codex-cli 0.144.1 (issue #411)",
+        "freshness_date": "2026-07-21"
+      }
+    }
+  },
   "models": {
     "claude-haiku-4-5-20251001": {
       "source": "Terminal-Bench 2.0 verified row: Claude Code / Claude Haiku 4.5; no exact non-thinking Vals SWE-bench row found",
