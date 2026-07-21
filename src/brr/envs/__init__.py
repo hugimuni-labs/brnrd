@@ -827,15 +827,24 @@ class DockerEnv(WorktreeEnv):
             invocation.prompt,
             cfg,
         )
+        # Same contract as the host path (``invoke_runner``): since the
+        # 2026-07-14 stdin migration the prompt is NOT in ``inner_cmd`` —
+        # it must be piped. ``None`` only when a pinned ``runner_cmd``
+        # owns its argv (``{prompt}`` placement). Forgetting this pipe
+        # starved every docker/solitary runner of its prompt for a week:
+        # claude died with "Input must be provided either through stdin
+        # or as a prompt argument" (found by the #515 probe, 2026-07-21).
+        prompt_stdin = runner._prompt_stdin(cfg, invocation.prompt)
         command = [
             "docker", "run",
             "--name", container_name,
             *self._network_args(ctx, cfg),
             # ``-i`` keeps the container's stdin connected to docker's
-            # stdin (which we tie to /dev/null below) so codex sees an
-            # immediate EOF instead of an open-but-silent pipe — without
-            # this, codex 0.128+'s "Reading additional input from stdin"
-            # path can block until our timeout fires.
+            # stdin. On the default path that stdin carries the prompt,
+            # then EOF; on the pinned ``runner_cmd`` path it is /dev/null,
+            # so codex sees an immediate EOF instead of an open-but-silent
+            # pipe — without this, codex 0.128+'s "Reading additional
+            # input from stdin" path can block until our timeout fires.
             "-i",
             # Run as the host user so writes inside the bind-mounted
             # repo (``.git/objects/`` chief among them) are owned by the
@@ -918,10 +927,17 @@ class DockerEnv(WorktreeEnv):
         try:
             completed = subprocess.run(
                 command,
-                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                # ``input=`` writes the prompt and closes the pipe (prompt,
+                # then EOF — the muted-fd invariant, preserved); DEVNULL
+                # only when the pinned command already carries the prompt.
+                **(
+                    {"input": prompt_stdin}
+                    if prompt_stdin is not None
+                    else {"stdin": subprocess.DEVNULL}
+                ),
             )
             stdout = completed.stdout
             stderr = completed.stderr
