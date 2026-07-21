@@ -51,3 +51,15 @@ def public_stats(request: Request, db: Session = Depends(get_db)) -> dict[str, A
     }
     _cache.update(at=now, payload=payload)
     return payload
+
+
+@router.get("/version")
+def deployed_version() -> dict[str, Any]:
+    """The deployed build's identity — "is my merge live?" as one curl.
+
+    Public and unauthenticated on purpose: it names a commit already public
+    on the forge and a timestamp; no accounts, no per-account facts.
+    """
+    from ..version_info import build_info
+
+    return build_info()

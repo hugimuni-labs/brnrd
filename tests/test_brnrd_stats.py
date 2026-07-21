@@ -60,3 +60,31 @@ def test_public_stats_caches_between_calls():
     assert client.get("/v1/stats/public").json()["accounts"] == 0
     stats_router._reset_cache()
     assert client.get("/v1/stats/public").json()["accounts"] == 1
+
+
+def test_deployed_version_is_public_and_never_fabricates(tmp_path, monkeypatch):
+    """/v1/stats/version answers "is my merge live?" — and degrades to None
+    (not a guess) when no build_info.txt was stamped (local/dev installs)."""
+    from brnrd import version_info
+
+    client = _client()
+    monkeypatch.setattr(
+        version_info, "_BUILD_INFO_PATH", tmp_path / "absent.txt",
+    )
+    monkeypatch.delenv("PLATFORM_TREE_ID", raising=False)
+    resp = client.get("/v1/stats/version")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["commit"] is None
+    assert payload["built_at"] is None
+    assert payload["tree_id"] is None
+    assert payload["started_at"]  # process start is always known
+
+    stamped = tmp_path / "build_info.txt"
+    stamped.write_text("abc1234\n2026-07-21T18:00:00+00:00\n", encoding="utf-8")
+    monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
+    monkeypatch.setenv("PLATFORM_TREE_ID", "tree-xyz")
+    payload = client.get("/v1/stats/version").json()
+    assert payload["commit"] == "abc1234"
+    assert payload["built_at"] == "2026-07-21T18:00:00+00:00"
+    assert payload["tree_id"] == "tree-xyz"
