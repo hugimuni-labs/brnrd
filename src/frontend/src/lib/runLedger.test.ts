@@ -4,7 +4,10 @@ import test from 'node:test';
 import { relicIcon, relicLabel } from './runLedger.ts';
 
 test('unknown relics use the first non-empty descriptive field', () => {
-	assert.equal(relicLabel({ kind: 'artifact', text: '', path: 'report.md', note: 'later' }), 'report.md');
+	assert.equal(
+		relicLabel({ kind: 'artifact', text: '', path: 'report.md', note: 'later' }),
+		'report.md'
+	);
 	assert.equal(relicLabel({ kind: 'artifact', note: 'deployed' }), 'deployed');
 	assert.equal(relicLabel({ kind: 'artifact' }), 'artifact');
 	assert.equal(relicIcon('artifact'), '•');

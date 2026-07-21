@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
@@ -18,7 +19,13 @@
 	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, heartbeatLevel, type LiveRun } from '$lib/liveRuns';
 	import RunNodeInline from '$lib/RunNodeInline.svelte';
-	import { nodeDigest, repoRunSlug, runIdSlug, runNodeFromSurface, runNodeHref } from '$lib/runNode';
+	import {
+		nodeDigest,
+		repoRunSlug,
+		runIdSlug,
+		runNodeFromSurface,
+		runNodeHref
+	} from '$lib/runNode';
 	import { durationLabel } from '$lib/runLedger';
 	import ScheduleLane from '$lib/ScheduleLane.svelte';
 	import {
@@ -60,8 +67,6 @@
 	const TICK_MS = 1_000;
 
 	let shells = $state<QuotaShell[] | null>(null);
-	let generatedAt = $state<string | null>(null);
-	let error = $state<string | null>(null);
 	// Three states, not two (#480's tensed-absence family): an anonymous
 	// visitor must never see the dashboard scaffolding flash before the
 	// landing swaps in, and a signed-in reader must never glimpse the
@@ -244,7 +249,7 @@
 		if (loomSelection?.kind === 'run') return loomSelection.id;
 		if (loomSelection !== null) return null;
 		const live = liveRuns ?? [];
-		return live.length === 1 ? (live[0].run_id || live[0].id) : null;
+		return live.length === 1 ? live[0].run_id || live[0].id : null;
 	});
 	let selectedLiveRuns = $derived(
 		focusRunId === null
@@ -327,9 +332,7 @@
 				const relics = row.external_refs ?? [];
 				const prs = relics.filter((relic) => relic.kind === 'pr').length;
 				const commits = relics.filter((relic) => relic.kind === 'commit').length;
-				const kb = relics.filter(
-					(relic) => relic.kind === 'kb' || relic.kind === 'kb_page'
-				).length;
+				const kb = relics.filter((relic) => relic.kind === 'kb' || relic.kind === 'kb_page').length;
 				const produce = [
 					prs > 0 ? `${prs}pr` : '',
 					commits > 0 ? `${commits}c` : '',
@@ -354,8 +357,6 @@
 		try {
 			const data = await fetchQuota();
 			shells = data.runner_quotas;
-			generatedAt = data.generated_at;
-			error = null;
 			authState = 'authed';
 		} catch (e) {
 			if (e instanceof QuotaAuthError) {
@@ -370,7 +371,6 @@
 			// state, not a landing one — render the dashboard with its own
 			// error strings rather than a blank page.
 			authState = 'authed';
-			error = e instanceof Error ? e.message : 'quota fetch failed';
 		}
 		try {
 			const runners = await fetchRunners();
@@ -455,16 +455,16 @@
 	     scaffolding it replaces. -->
 	<Landing />
 {:else if authState === 'authed'}
-<div class="mx-auto max-w-2xl p-6">
-	<header class="ignite" style="--ignite-delay: 0ms">
-		<div class="flex items-start justify-between gap-4">
-			<p class="eyebrow">brnrd · resident dashboard</p>
-			<!-- Named directly as a real gap (2026-07-08): no way to end a
+	<div class="mx-auto max-w-2xl p-6">
+		<header class="ignite" style="--ignite-delay: 0ms">
+			<div class="flex items-start justify-between gap-4">
+				<p class="eyebrow">brnrd · resident dashboard</p>
+				<!-- Named directly as a real gap (2026-07-08): no way to end a
 			     session short of clearing cookies by hand. Small on purpose
 			     ("a small one somewhere") — a plain link, not a nav bar this
 			     single-page dashboard doesn't otherwise have. -->
-			<div class="flex items-center gap-4">
-				<!-- /activity retired 2026-07-19. Its honest content — open runs,
+				<div class="flex items-center gap-4">
+					<!-- /activity retired 2026-07-19. Its honest content — open runs,
 				     queued wakes, parked respawns — is the loom's NOW seam and
 				     future shelf, and its one real affordance over them (filter
 				     and scroll back through history) is the lens rail plus the
@@ -472,201 +472,201 @@
 				     because it was reporting 279 phantom running runs; once #486
 				     reaped those it rendered about three rows. Folded, not
 				     re-fitted. -->
-				<!-- #327: repo management now lives in this same SPA at /repos,
+					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
-				<a
-					href="/repos"
-					class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-					>manage repos</a
-				>
-				<a
-					href="/logout"
-					rel="external"
-					class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-					>sign out</a
-				>
+					<a
+						href={resolve('/repos')}
+						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>manage repos</a
+					>
+					<a
+						href="/logout"
+						rel="external"
+						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>sign out</a
+					>
+				</div>
 			</div>
-		</div>
-		<!-- Masthead compressed in the promote composition: the band is the
+			<!-- Masthead compressed in the promote composition: the band is the
 		     opening statement now, the title is a label, not a hero. -->
-		<h1
-			class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'brnrd dashboard — next', delay: 120 }}
-		>
-			brnrd dashboard — next
-		</h1>
-	</header>
-
-	<section class="ignite mt-4" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
-		<div class="flex items-baseline justify-between gap-3">
-			<div>
-				<p class="eyebrow">§1 · capacity + dispatch</p>
-				<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">
-					next wake · fuel
-				</h2>
-			</div>
-			<p class="font-mono text-[10px] text-ink-quiet">
-				{runnersError ??
-					(shells === null
-						? 'report loading'
-						: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
-			</p>
-		</div>
-		<ControlStrip
-			runners={runnersData}
-			{shells}
-			{runnersError}
-			{runnersNote}
-			onTap={tapWakeRunner}
-			ledgerRows={runLedgerRows}
-			{scheduledWakes}
-			{now}
-		/>
-	</section>
-
-	<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
-		<div class="flex items-baseline justify-between gap-3">
-			<div>
-				<p class="eyebrow">§2 · loom</p>
-				<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">
-					{liveRuns === null
-						? 'reading the run field'
-						: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
-				</h2>
-			</div>
-			<p
-				class="font-mono text-[10px] {liveRunsError
-					? 'text-red-400'
-					: liveRunsStale
-						? 'text-amber-400'
-						: 'text-ink-quiet'}"
+			<h1
+				class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100"
+				use:typeReveal={{ text: 'brnrd dashboard — next', delay: 120 }}
 			>
-				{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
-			</p>
-		</div>
-		<div class="mt-2">
-			<LoomBand
+				brnrd dashboard — next
+			</h1>
+		</header>
+
+		<section class="ignite mt-4" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§1 · capacity + dispatch</p>
+					<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">
+						next wake · fuel
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] text-ink-quiet">
+					{runnersError ??
+						(shells === null
+							? 'report loading'
+							: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
+				</p>
+			</div>
+			<ControlStrip
+				runners={runnersData}
+				{shells}
+				{runnersError}
+				{runnersNote}
+				onTap={tapWakeRunner}
 				ledgerRows={runLedgerRows}
-				{liveRuns}
 				{scheduledWakes}
 				{now}
-				onSelect={selectFromLoom}
-				onPastWindowChange={changeLoomPastWindow}
-				selectedId={loomSelection?.id ?? null}
-				reviewCount={prReviewQueue?.length ?? 0}
-				lens={loomLens}
-				onLensChange={changeLoomLens}
 			/>
-		</div>
+		</section>
 
-		<!-- The detail sheet: the band's other half. Everything the dissolved
-	     live-runs / scheduled-wakes / run-receipts sections used to say is
-	     said here, for the selected thread of time only. -->
-		<div class="ignite" style="--ignite-delay: 600ms">
-			<div class="mt-4 flex items-baseline justify-between gap-3">
-				<!-- The label names the panel that actually renders. It used to say
-				     "· receipt" for any closed run, which stopped being true the
-				     moment the node became the single answer. -->
-				<p class="eyebrow">
-					§2a · {loomLens === LENS_REVIEW
-						? 'needs review'
-						: loomSelection === null
-						? focusRunId === null
-							? 'now'
-							: selectedNode && selectedNodeAnswers
-								? 'now · node'
-								: 'now'
-						: loomSelection.kind === 'wake'
-							? 'selected wake'
-							: selectedNode && selectedNodeAnswers
-								? 'selected run · node'
-								: selectedLiveRuns.length > 0
-									? 'selected run · live'
-									: 'selected run · receipt'}
+		<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§2 · loom</p>
+					<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">
+						{liveRuns === null
+							? 'reading the run field'
+							: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
+					</h2>
+				</div>
+				<p
+					class="font-mono text-[10px] {liveRunsError
+						? 'text-red-400'
+						: liveRunsStale
+							? 'text-amber-400'
+							: 'text-ink-quiet'}"
+				>
+					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
 				</p>
-				{#if loomSelection !== null}
-					<div class="flex shrink-0 items-baseline gap-3">
-						<button
-							type="button"
-							class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-							onclick={() => (loomSelection = null)}
-						>
-							✕ back to now
-						</button>
-					</div>
-				{/if}
 			</div>
 			<div class="mt-2">
-				{#if loomLens === LENS_REVIEW}
-					<!-- The review lens answers here rather than in a standing section
+				<LoomBand
+					ledgerRows={runLedgerRows}
+					{liveRuns}
+					{scheduledWakes}
+					{now}
+					onSelect={selectFromLoom}
+					onPastWindowChange={changeLoomPastWindow}
+					selectedId={loomSelection?.id ?? null}
+					reviewCount={prReviewQueue?.length ?? 0}
+					lens={loomLens}
+					onLensChange={changeLoomLens}
+				/>
+			</div>
+
+			<!-- The detail sheet: the band's other half. Everything the dissolved
+	     live-runs / scheduled-wakes / run-receipts sections used to say is
+	     said here, for the selected thread of time only. -->
+			<div class="ignite" style="--ignite-delay: 600ms">
+				<div class="mt-4 flex items-baseline justify-between gap-3">
+					<!-- The label names the panel that actually renders. It used to say
+				     "· receipt" for any closed run, which stopped being true the
+				     moment the node became the single answer. -->
+					<p class="eyebrow">
+						§2a · {loomLens === LENS_REVIEW
+							? 'needs review'
+							: loomSelection === null
+								? focusRunId === null
+									? 'now'
+									: selectedNode && selectedNodeAnswers
+										? 'now · node'
+										: 'now'
+								: loomSelection.kind === 'wake'
+									? 'selected wake'
+									: selectedNode && selectedNodeAnswers
+										? 'selected run · node'
+										: selectedLiveRuns.length > 0
+											? 'selected run · live'
+											: 'selected run · receipt'}
+					</p>
+					{#if loomSelection !== null}
+						<div class="flex shrink-0 items-baseline gap-3">
+							<button
+								type="button"
+								class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+								onclick={() => (loomSelection = null)}
+							>
+								✕ back to now
+							</button>
+						</div>
+					{/if}
+				</div>
+				<div class="mt-2">
+					{#if loomLens === LENS_REVIEW}
+						<!-- The review lens answers here rather than in a standing section
 					     of its own. §2d used to occupy the page permanently to say
 					     "0 PRs" most of the time; as a lens it is one chip that only
 					     exists when something is actually waiting, and it borrows the
 					     frame the loom already has. Same component, no new fetch. -->
-					{#if prReviewQueueError}
-						<p class="text-sm text-red-400">{prReviewQueueError}</p>
-					{:else if prReviewQueue === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else}
-						<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
-					{/if}
-				{:else if loomSelection?.kind === 'wake'}
-					{#if scheduledWakesError}
-						<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
-					{/if}
-					{#if selectedWakes.length > 0}
-						<ScheduleLane wakes={selectedWakes} {now} />
-					{:else}
-						<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
-					{/if}
-				{:else if loomSelection?.kind === 'run' || focusRunId !== null}
-					<!-- The loom stays the spine: a selected run fills this frame with
+						{#if prReviewQueueError}
+							<p class="text-sm text-red-400">{prReviewQueueError}</p>
+						{:else if prReviewQueue === null}
+							<p class="text-sm text-ink-quiet">Loading…</p>
+						{:else}
+							<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+						{/if}
+					{:else if loomSelection?.kind === 'wake'}
+						{#if scheduledWakesError}
+							<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
+						{/if}
+						{#if selectedWakes.length > 0}
+							<ScheduleLane wakes={selectedWakes} {now} />
+						{:else}
+							<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
+						{/if}
+					{:else if loomSelection?.kind === 'run' || focusRunId !== null}
+						<!-- The loom stays the spine: a selected run fills this frame with
 				     its own node instead of sending the reader to a page and
 				     costing them their place in the band. One panel, not three —
 				     the node speaks, with the live/receipt vitals folded into its
 				     header and everything heavier behind its own expand. -->
-					{#if selectedNode && selectedNodeAnswers}
-						<RunNodeInline
-							data={surfaceData}
-							repoSlug={selectedNode.repoSlug}
-							runId={selectedNode.runId}
-							href={selectedNode.href}
-							vitals={selectedVitals}
-							liveLevel={selectedLiveLevel}
-						/>
-					{:else if selectedLiveRuns.length > 0}
-						<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
-					{:else if selectedLedgerRows.length > 0}
-						<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+						{#if selectedNode && selectedNodeAnswers}
+							<RunNodeInline
+								data={surfaceData}
+								repoSlug={selectedNode.repoSlug}
+								runId={selectedNode.runId}
+								href={selectedNode.href}
+								vitals={selectedVitals}
+								liveLevel={selectedLiveLevel}
+							/>
+						{:else if selectedLiveRuns.length > 0}
+							<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
+						{:else if selectedLedgerRows.length > 0}
+							<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+						{:else}
+							<p class="text-sm text-ink-quiet">
+								no receipt rows for that run in the current window.
+							</p>
+						{/if}
+					{:else if liveRunsError}
+						<p class="text-sm text-red-400">{liveRunsError}</p>
+					{:else if liveRuns === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else}
-						<p class="text-sm text-ink-quiet">
-							no receipt rows for that run in the current window.
-						</p>
-					{/if}
-				{:else if liveRunsError}
-					<p class="text-sm text-red-400">{liveRunsError}</p>
-				{:else if liveRuns === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<!-- Multi-run "now": tapping a card *selects* it, and this same
+						<!-- Multi-run "now": tapping a card *selects* it, and this same
 					     sheet answers with the node panel — the identical grammar a
 					     loom tap speaks. The card's old inline expansion was a third
 					     rendering of the run (2026-07-20: "3 visual elements for a
 					     run"); it survives only in the fallbacks above, where no
 					     node can answer. -->
-					<LiveRuns
-						runs={liveRuns}
-						stale={liveRunsStale}
-						{now}
-						onSelect={(id) => selectFromLoom('run', id)}
-					/>
-				{/if}
+						<LiveRuns
+							runs={liveRuns}
+							stale={liveRunsStale}
+							{now}
+							onSelect={(id) => selectFromLoom('run', id)}
+						/>
+					{/if}
+				</div>
 			</div>
-		</div>
 
-		<div class="ignite" style="--ignite-delay: 1000ms">
-			<p class="eyebrow mt-6">§2b · instruments</p>
-			<!-- The instruments read the loom's dial, not a constant of their own
+			<div class="ignite" style="--ignite-delay: 1000ms">
+				<p class="eyebrow mt-6">§2b · instruments</p>
+				<!-- The instruments read the loom's dial, not a constant of their own
 			     (2026-07-19: "the 24h block is too static/limiting"). One time
 			     scope for the section: step the past label above, and this
 			     heading, the gauge caption, and its rollup all move with it.
@@ -675,99 +675,99 @@
 			     it becomes an instrument holding its own constant under a band
 			     that has already moved, which is precisely the defect #486 fixed
 			     for the time axis. -->
-			{#if loomLens !== LENS_ALL && loomLens !== LENS_REVIEW}
-				<p class="mt-1 font-mono text-[10px] text-ink-mute">
-					lensed — counting only runs matching the selected lens
-				</p>
-			{/if}
-			<h2
-				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: `last ${loomPastWindowLabel(loomPastWindowMs)}`, delay: 1150 }}
-			>
-				last {loomPastWindowLabel(loomPastWindowMs)}
-			</h2>
-			<div class="mt-3">
-				{#if runLedgerError}
-					<p class="text-sm text-red-400">{runLedgerError}</p>
-				{:else if runLedgerRows === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<ProduceGauge
-						rows={applyLens(runLedgerRows, loomLens)}
-						stale={runLedgerStale}
-						{now}
-						windowMs={loomPastWindowMs}
-					/>
+				{#if loomLens !== LENS_ALL && loomLens !== LENS_REVIEW}
+					<p class="mt-1 font-mono text-[10px] text-ink-mute">
+						lensed — counting only runs matching the selected lens
+					</p>
 				{/if}
-			</div>
+				<h2
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+					use:typeReveal={{ text: `last ${loomPastWindowLabel(loomPastWindowMs)}`, delay: 1150 }}
+				>
+					last {loomPastWindowLabel(loomPastWindowMs)}
+				</h2>
+				<div class="mt-3">
+					{#if runLedgerError}
+						<p class="text-sm text-red-400">{runLedgerError}</p>
+					{:else if runLedgerRows === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
+					{:else}
+						<ProduceGauge
+							rows={applyLens(runLedgerRows, loomLens)}
+							stale={runLedgerStale}
+							{now}
+							windowMs={loomPastWindowMs}
+						/>
+					{/if}
+				</div>
 
-			<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
+				<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
 		     fuel lives in the §1 capacity strip's compact bars now — one
 		     surface per fact (loom-viewport §10 dedup). WindowTrack itself
 		     is gone with them; its palette conventions live on in
 		     statusPalette.ts and the comments that cite it. -->
-			<div class="mt-4">
-				{#if liveRunsError}
-					<p class="text-sm text-red-400">{liveRunsError}</p>
-				{:else if liveRuns === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
-				{/if}
+				<div class="mt-4">
+					{#if liveRunsError}
+						<p class="text-sm text-red-400">{liveRunsError}</p>
+					{:else if liveRuns === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
+					{:else}
+						<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
+					{/if}
+				</div>
 			</div>
-		</div>
 
-		<div class="ignite" style="--ignite-delay: 1900ms">
-			<p class="eyebrow mt-8">§2c · config-change requests</p>
-			<h2
-				class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
-			>
-				pending settings requests
-			</h2>
-			<div class="mt-3">
-				{#if configRequestsError}
-					<p class="text-sm text-red-400">{configRequestsError}</p>
-				{:else if configRequests === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<ConfigRequests requests={configRequests} {now} />
-				{/if}
+			<div class="ignite" style="--ignite-delay: 1900ms">
+				<p class="eyebrow mt-8">§2c · config-change requests</p>
+				<h2
+					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
+					use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
+				>
+					pending settings requests
+				</h2>
+				<div class="mt-3">
+					{#if configRequestsError}
+						<p class="text-sm text-red-400">{configRequestsError}</p>
+					{:else if configRequests === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
+					{:else}
+						<ConfigRequests requests={configRequests} {now} />
+					{/if}
+				</div>
 			</div>
-		</div>
 
-		<!-- §2d (the standing PR review queue) retired 2026-07-19: it is a lens
+			<!-- §2d (the standing PR review queue) retired 2026-07-19: it is a lens
 		     now, rendered in §2a when selected. A panel that reads "no PRs
 		     waiting" for most of a day is a panel spending permanent page space
 		     on an intermittent fact — wyrd §4 band 2 called it a lens over
 		     artifact edges from the start, and this is that. -->
-	</section>
+		</section>
 
-	<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
-		<div class="flex items-baseline justify-between gap-3">
-			<div>
-				<p class="eyebrow">§3 · corpus</p>
-				<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">
-					work surface
-				</h2>
+		<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§3 · corpus</p>
+					<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">
+						work surface
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
+					{surfaceError ??
+						(surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}
+				</p>
 			</div>
-			<p class="font-mono text-[10px] {surfaceError ? 'text-red-400' : 'text-ink-quiet'}">
-				{surfaceError ??
-					(surfaceData === null ? 'index loading' : `${surfaceData.files.length} pages`)}
+			<p class="mt-1 text-sm text-stone-400">
+				The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
 			</p>
-		</div>
-		<p class="mt-1 text-sm text-stone-400">
-			The shared authored corpus — discovered Markdown, not a list of pages chosen in code.
-		</p>
-		<div class="mt-3">
-			{#if surfaceError}
-				<p class="text-sm text-red-400">{surfaceError}</p>
-			{:else if surfaceData === null}
-				<p class="text-sm text-ink-quiet">Loading…</p>
-			{:else}
-				<WorkSurface data={surfaceData} />
-			{/if}
-		</div>
-	</section>
-</div>
+			<div class="mt-3">
+				{#if surfaceError}
+					<p class="text-sm text-red-400">{surfaceError}</p>
+				{:else if surfaceData === null}
+					<p class="text-sm text-ink-quiet">Loading…</p>
+				{:else}
+					<WorkSurface data={surfaceData} />
+				{/if}
+			</div>
+		</section>
+	</div>
 {/if}
