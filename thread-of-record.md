@@ -357,3 +357,17 @@ runner-tier behavior, wide-blast, entangled with the rewrite fork = surface-and-
 Standing-portal candidate this names: an injected **"open forks / awaiting-your-call"
 capsule** — he keeps asking "what's still open?"; the answer lives in this prose
 file he can't see, not a live surface.
+
+## 2026-07-21 — Release-push dispatch cadence (schedule:release-push-dispatch-tick)
+
+Maintainer grant: hourly co-maintainer dispatch (up to 2 bounded issues per
+tick, review-before-merge load-bearing, direct local bot-authored merges while
+the gh credential lane is dishonest). Tick 23:13 dispatched #546 (relabel gate
+identity) + #538 (kb produce OID-window).
+
+- #546 merged to main `a7be1eb2` (run oc0s, 23:2x): whole-diff reviewed clean,
+  suite 2016✓ locally (2 pre-existing env failures also on main tip: missing
+  fastapi + linger prompt — this host only; spawn env 2286✓ full). Announced
+  standalone on telegram.
+- #538 spawn (run 5z27) still in flight at that point; reviews on its
+  completion event.
