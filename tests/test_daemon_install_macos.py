@@ -15,7 +15,10 @@ def _ok(cmd, **_kwargs):
 
 
 def test_render_plist_matches_launchagent_shape(tmp_path):
-    text = macos.render_plist("/usr/local/bin/brnrd", home=tmp_path)
+    text = macos.render_plist(
+        "/usr/local/bin/brnrd", home=tmp_path,
+        path_env="/usr/local/bin:/usr/bin",
+    )
     data = plistlib.loads(text.encode("utf-8"))
 
     assert data["Label"] == "dev.brnrd.brr"
@@ -29,8 +32,22 @@ def test_render_plist_matches_launchagent_shape(tmp_path):
     assert data["KeepAlive"] == {"SuccessfulExit": False}
     assert data["StandardOutPath"] == str(tmp_path / "Library" / "Logs" / "brr" / "brr.out.log")
     assert data["StandardErrorPath"] == str(tmp_path / "Library" / "Logs" / "brr" / "brr.err.log")
-    assert data["EnvironmentVariables"] == {"BRR_INSTALL_MANAGED": "1"}
+    assert data["EnvironmentVariables"] == {
+        "BRR_INSTALL_MANAGED": "1",
+        "PATH": "/usr/local/bin:/usr/bin",
+    }
     assert "WorkingDirectory" not in data
+
+
+def test_render_plist_freezes_installing_path_by_default(tmp_path, monkeypatch):
+    """launchd's default PATH cannot resolve the runner Shells; the agent
+    freezes the installing shell's PATH (re-running install refreshes it)."""
+    monkeypatch.setenv("PATH", "/Users/ada/.local/bin:/opt/homebrew/bin:/usr/bin")
+    text = macos.render_plist("/opt/homebrew/bin/brnrd", home=tmp_path)
+    data = plistlib.loads(text.encode("utf-8"))
+    assert data["EnvironmentVariables"]["PATH"] == (
+        "/Users/ada/.local/bin:/opt/homebrew/bin:/usr/bin"
+    )
 
 
 def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
