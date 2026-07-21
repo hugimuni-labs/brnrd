@@ -2127,6 +2127,13 @@ def _run_worker(
     # heartbeat, so carrying this avoids turning a stable URL into repeated git
     # archaeology on a hot path.
     task.meta["kb_base_url"] = knowledge.kb_base_url(run_root, cfg)
+    # Stamp the knowledge repo's HEAD for this run (#538). Residents commit
+    # kb pages themselves mid-run — the majority path — and closeout's
+    # dirty-vs-HEAD capture diff cannot see an already-committed page. The
+    # ``start..HEAD`` window derived from this OID can.
+    kb_start_oid = knowledge.head_oid(repo_root, cfg)
+    if kb_start_oid:
+        task.meta["kb_start_oid"] = kb_start_oid
 
     # Deterministic ergonomics probes run once the env is prepared (so
     # the resolved image/token/worktree state is visible). Routing is
@@ -5877,6 +5884,17 @@ def _capture_knowledge(
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
+    # Union in pages the resident committed mid-run (#538): everything the
+    # knowledge repo took between the run-start stamp and now, scoped to
+    # this repo's pages. The capture commit above lands inside the window
+    # too, so dedupe against the dirty-diff manifest before appending.
+    seen_pages = set(captured_pages)
+    for page in knowledge.committed_pages_in_window(
+        repo_root, str(task.meta.get("kb_start_oid") or "") or None, cfg=cfg,
+    ):
+        if page not in seen_pages:
+            captured_pages.append(page)
+            seen_pages.add(page)
     reported_kb_paths = {
         str(record.get("path") or "").removeprefix("kb/")
         for record in relics.read_reported(outbox_dir)

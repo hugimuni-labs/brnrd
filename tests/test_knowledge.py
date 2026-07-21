@@ -435,6 +435,58 @@ def test_capture_page_manifest_excludes_reply_archives(tmp_path):
     assert captured_pages == ["decision.md"]
 
 
+def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
+    """#538: a page the resident *commits* mid-run is invisible to the
+    dirty-vs-HEAD capture diff; the run-start OID window still sees it."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    start = knowledge.head_oid(repo, cfg)
+    assert start
+
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mid-run.md"
+    page.write_text("committed mid-run\n", encoding="utf-8")
+    other = knowledge_repo / "repos" / "Other__repo" / "not-ours.md"
+    other.parent.mkdir(parents=True)
+    other.write_text("another repo's page\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
+
+    assert knowledge.committed_pages_in_window(repo, start, cfg=cfg) == [
+        "mid-run.md",
+    ]
+
+
+def test_committed_pages_in_window_falls_back_on_bad_or_rewritten_oid(tmp_path):
+    """No stamp, an unresolvable OID, or a rewritten history each degrade to
+    today's behavior (an empty window), never an error."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mid-run.md"
+    page.write_text("committed mid-run\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
+
+    assert knowledge.committed_pages_in_window(repo, None, cfg=cfg) == []
+    assert knowledge.committed_pages_in_window(repo, "", cfg=cfg) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "deadbeef" * 5, cfg=cfg,
+    ) == []
+    # An OID that resolves but is no ancestor of HEAD (rebase/gc rewrote
+    # the window) — the ancestry guard refuses to diff across it.
+    orphan = _git(
+        knowledge_repo, "commit-tree", "HEAD^{tree}", "-m", "orphan",
+    ).stdout.strip()
+    assert knowledge.committed_pages_in_window(repo, orphan, cfg=cfg) == []
+
+
+def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+
+    assert knowledge.head_oid(repo, {}) is None
+    assert knowledge.committed_pages_in_window(repo, "deadbeef" * 5, cfg={}) == []
+
+
 def test_capture_reconciles_a_stray_account_write_against_a_checkout_write(tmp_path):
     """Both trees dirty at once — the account tree's stray commit would make
     the checkout's push non-fast-forward; capture rebases instead of bouncing."""

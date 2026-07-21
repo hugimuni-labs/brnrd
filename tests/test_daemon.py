@@ -432,6 +432,50 @@ def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypa
     ]
 
 
+def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
+    tmp_path, monkeypatch,
+):
+    """#538: pages committed mid-run surface via the run-start OID window,
+    unioned with the dirty-diff manifest and deduped against both it and
+    resident self-reports — no page appears twice."""
+    task = Run(
+        id="run-kb-window",
+        event_id="evt-kb-window",
+        body="answer",
+        meta={"kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+    daemon.relics.append(outbox, "kb", path="kb/self-reported.md")
+
+    def fake_capture(*_args, captured_pages, **_kwargs):
+        captured_pages.append("dirty.md")
+        return True
+
+    window_calls: list[str | None] = []
+
+    def fake_window(_root, start_oid, *, cfg=None):
+        window_calls.append(start_oid)
+        return ["dirty.md", "windowed.md", "self-reported.md"]
+
+    monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window", fake_window,
+    )
+    monkeypatch.setattr(
+        daemon.knowledge, "kb_page_url", lambda _root, _page, _cfg: None,
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert window_calls == ["a" * 40]
+    assert daemon.relics.read_reported(outbox) == [
+        {"kind": "kb", "path": "kb/self-reported.md"},
+        {"kind": "kb", "path": "dirty.md"},
+        {"kind": "kb", "path": "windowed.md"},
+    ]
+
+
 def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     tmp_path, monkeypatch,
 ):
