@@ -1257,6 +1257,33 @@ def cmd_add(args):
     print(f"[brnrd] added {label} to account home {ctx.dominion_repo}")
 
 
+def _print_link_ceremony(owner: str, dominion_name: str, knowledge_name: str) -> None:
+    """Name the moment `home link` is: two repos, founded for the user.
+
+    Everything printed here is a fact `link_home` acts on anyway — the
+    resolved owner, the names, the private-only invariant, what each slot
+    pushes. The ceremony is saying them *before* acting, at the one seam
+    where the user is standing (design-repo-birth-ceremony.md)."""
+    print()
+    print("[brnrd] home link — putting your resident's two repos in your hands:")
+    print()
+    print(f"  memory     {owner}/{dominion_name}")
+    print("             the dominion: the agent's working memory — notes, plans,")
+    print("             run records; the daemon commits here after every thought")
+    print(f"  knowledge  {owner}/{knowledge_name}")
+    print("             the pages your projects taught it — designs, decisions,")
+    print("             pitfalls")
+    print()
+    print("  · created under your GitHub login, with your credentials —")
+    print("    brnrd's App owns nothing here")
+    print("  · always private: an existing public repo with one of these names")
+    print("    is refused, never pushed to")
+    print("  · these names are brnrd's defaults, not yours — rename with")
+    print("    --dominion-name / --knowledge-name")
+    print("  · each repo carries a README deed: what it is, who writes it,")
+    print("    where it lives, and how to leave (plain git)")
+
+
 def cmd_home_link(args):
     import sys
 
@@ -1265,6 +1292,19 @@ def cmd_home_link(args):
 
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
+    dominion_name = args.dominion_name or home_link.DEFAULT_DOMINION_NAME
+    knowledge_name = args.knowledge_name or home_link.DEFAULT_KNOWLEDGE_NAME
+
+    # Best-effort owner resolution for the ceremony text only — link_home
+    # re-resolves lazily for the actual work, so a failure here degrades the
+    # display, never the link.
+    owner = args.owner or ""
+    if not owner and home_link.gh_available():
+        try:
+            owner = home_link.resolve_owner(None)
+        except home_link.HomeLinkError:
+            owner = ""
+    _print_link_ceremony(owner or "<your GitHub login>", dominion_name, knowledge_name)
 
     if not args.yes:
         if not sys.stdin.isatty():
@@ -1290,8 +1330,8 @@ def cmd_home_link(args):
             repo_root,
             cfg,
             owner=args.owner,
-            dominion_name=args.dominion_name or home_link.DEFAULT_DOMINION_NAME,
-            knowledge_name=args.knowledge_name or home_link.DEFAULT_KNOWLEDGE_NAME,
+            dominion_name=dominion_name,
+            knowledge_name=knowledge_name,
             on_result=_report,
         )
     except home_link.HomeLinkError as exc:
