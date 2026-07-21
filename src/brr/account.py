@@ -24,6 +24,7 @@ from . import gitops
 DEFAULT_REPO_LABEL = "local/default"
 DEFAULT_STATE_NAMESPACE = "brnrd"
 REGISTRY_PATH = "account/repos.json"
+ACCOUNT_GATES_PATH = "account/gates"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
 RESPONSES_PATH = "dispatch/responses"
 RUNS_PATH = "runs"
@@ -307,7 +308,12 @@ def _configured_repos(
 
 
 def _connected_account_id(repo_root: Path) -> str | None:
-    """Return a connected brnrd account id from repo-local cloud state."""
+    """Return the connected account id for a repo.
+
+    The legacy source is the repo-local cloud gate file. Once that file has
+    migrated into the account home, the live repo registry is the durable
+    reverse lookup.
+    """
 
     try:
         brr_dir = gitops.shared_brr_dir(repo_root)
@@ -317,11 +323,79 @@ def _connected_account_id(repo_root: Path) -> str | None:
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
-    if not (state.get("token") and state.get("brnrd_url") and state.get("repo_id")):
-        return None
-    value = str(state.get("account_id") or state.get("account") or "").strip()
-    return value or "connected"
+        state = {}
+    if state.get("token") and state.get("brnrd_url"):
+        value = str(state.get("account_id") or state.get("account") or "").strip()
+        if value:
+            return value
+
+    candidates: list[Path] = []
+    explicit_home = _expand_path(os.environ.get("BRNRD_HOME"))
+    if explicit_home is not None:
+        candidates.append(explicit_home)
+    accounts_root = _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "accounts"
+    try:
+        candidates.extend(sorted(path / "home" for path in accounts_root.iterdir()))
+    except OSError:
+        pass
+    try:
+        resolved_repo = repo_root.resolve()
+    except OSError:
+        resolved_repo = repo_root.absolute()
+    for home_root in candidates:
+        registry_path = home_root / REGISTRY_PATH
+        try:
+            raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for item in raw.get("repos", []):
+            if not isinstance(item, dict):
+                continue
+            registered = _expand_path(item.get("path"))
+            if registered is None:
+                continue
+            try:
+                matches = registered.resolve() == resolved_repo
+            except OSError:
+                matches = registered.absolute() == resolved_repo
+            if matches:
+                value = str(raw.get("account_id") or raw.get("home_id") or "").strip()
+                if value:
+                    return value
+    return None
+
+
+def cloud_gate_state_path(ctx: HomeContext) -> Path:
+    """Account-owned location for the managed cloud connection."""
+
+    return context_home_root(ctx) / ACCOUNT_GATES_PATH / "cloud.json"
+
+
+def migrate_cloud_gate_state(ctx: HomeContext, repo_root: Path) -> bool:
+    """Move a legacy repo-local cloud identity into its account home once."""
+
+    if ctx.kind != "account":
+        return False
+    try:
+        legacy = gitops.shared_brr_dir(repo_root) / "gates" / "cloud.json"
+    except Exception:
+        return False
+    destination = cloud_gate_state_path(ctx)
+    if not legacy.exists():
+        return False
+    if destination.exists():
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        legacy.replace(destination)
+        print(f"[brnrd] cloud gate state moved to account home: {destination}")
+        return True
+    except OSError:
+        return False
 
 
 def _explicit_home(cfg: dict[str, Any]) -> Path | None:
@@ -403,6 +477,21 @@ def resolve_context(
         _migrate_legacy_run_state(home_root)
         _migrate_legacy_work_surface(home_root)
         _seed_work_surface(home_root, current_label)
+
+    if kind == "account" and create:
+        migration_ctx = HomeContext(
+            account_id=account_id,
+            dominion_repo=home_root,
+            dispatch_inbox=home_root / DISPATCH_INBOX_PATH,
+            responses_dir=home_root / RESPONSES_PATH,
+            runs_dir=home_root / RUNS_PATH,
+            repos=repos,
+            default_repo=default_repo,
+            kind=kind,
+            home_id=home_id,
+            home_root=home_root,
+        )
+        migrate_cloud_gate_state(migration_ctx, repo_root)
 
     return HomeContext(
         account_id=account_id,
