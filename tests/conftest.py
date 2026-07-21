@@ -9,6 +9,36 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_git_env(tmp_path_factory, monkeypatch):
+    """Pin git's ambient environment so the suite is machine-independent.
+
+    CI runners have no git identity at all (``git commit`` fails, which
+    surfaces downstream as a misleading "src refspec HEAD does not match
+    any" push error in code that commits, e.g. ``home_link``), while a
+    developer's global config can carry commit signing, ``core.hooksPath``,
+    or a non-``main`` ``init.defaultBranch`` — any of which changes test
+    behavior invisibly. Point ``GIT_CONFIG_GLOBAL`` at a known minimal
+    config and drop the system config entirely. Repo-local config written
+    by ``_helpers.init_git_repo`` still wins where tests set it.
+    """
+    cfg = tmp_path_factory.getbasetemp() / "gitconfig-hermetic"
+    if not cfg.exists():
+        cfg.write_text(
+            "[user]\n"
+            "\tname = brr tests\n"
+            "\temail = tests@brr.invalid\n"
+            "[init]\n"
+            "\tdefaultBranch = main\n"
+            "[commit]\n"
+            "\tgpgsign = false\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_account_state(tmp_path_factory, monkeypatch):
     """Redirect ``XDG_STATE_HOME`` at a per-test temp dir.
 
