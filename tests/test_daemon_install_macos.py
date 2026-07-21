@@ -7,6 +7,8 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from brr.daemon_install import macos
 
 
@@ -18,6 +20,7 @@ def test_render_plist_matches_launchagent_shape(tmp_path):
     text = macos.render_plist(
         "/usr/local/bin/brnrd", home=tmp_path,
         path_env="/usr/local/bin:/usr/bin",
+        workdir="/Users/ada/src/proj",
     )
     data = plistlib.loads(text.encode("utf-8"))
 
@@ -30,30 +33,48 @@ def test_render_plist_matches_launchagent_shape(tmp_path):
     ]
     assert data["RunAtLoad"] is True
     assert data["KeepAlive"] == {"SuccessfulExit": False}
+    assert data["WorkingDirectory"] == "/Users/ada/src/proj"
     assert data["StandardOutPath"] == str(tmp_path / "Library" / "Logs" / "brr" / "brr.out.log")
     assert data["StandardErrorPath"] == str(tmp_path / "Library" / "Logs" / "brr" / "brr.err.log")
     assert data["EnvironmentVariables"] == {
         "BRR_INSTALL_MANAGED": "1",
         "PATH": "/usr/local/bin:/usr/bin",
     }
-    assert "WorkingDirectory" not in data
 
 
 def test_render_plist_freezes_installing_path_by_default(tmp_path, monkeypatch):
     """launchd's default PATH cannot resolve the runner Shells; the agent
     freezes the installing shell's PATH (re-running install refreshes it)."""
     monkeypatch.setenv("PATH", "/Users/ada/.local/bin:/opt/homebrew/bin:/usr/bin")
-    text = macos.render_plist("/opt/homebrew/bin/brnrd", home=tmp_path)
+    text = macos.render_plist(
+        "/opt/homebrew/bin/brnrd", home=tmp_path, workdir="/Users/ada/src/proj",
+    )
     data = plistlib.loads(text.encode("utf-8"))
     assert data["EnvironmentVariables"]["PATH"] == (
         "/Users/ada/.local/bin:/opt/homebrew/bin:/usr/bin"
     )
 
 
-def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
+def test_render_plist_resolves_workdir_from_installing_repo(tmp_path, monkeypatch):
+    """launchd starts agents from ``/``; the plist must pin the repo the
+    install ran from or ``daemon up`` crash-loops on "Not a Git repository"."""
+    monkeypatch.setattr(
+        macos, "resolve_workdir", lambda: Path("/Users/ada/src/resolved"),
+    )
+    text = macos.render_plist("/opt/homebrew/bin/brnrd", home=tmp_path)
+    data = plistlib.loads(text.encode("utf-8"))
+    assert data["WorkingDirectory"] == "/Users/ada/src/resolved"
+
+
+def test_resolve_workdir_refuses_non_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="must run from inside the project"):
+        macos.resolve_workdir()
+
+
+def test_install_writes_plist_and_launchctl_commands(tmp_path):
     calls = []
     home = tmp_path / "home"
-    config_home = tmp_path / "config"
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs))
@@ -62,14 +83,13 @@ def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
     result = macos.install(
         brr_path="/opt/homebrew/bin/brnrd",
         home=home,
-        config_home=config_home,
+        workdir="/Users/ada/src/proj",
         run=fake_run,
     )
 
     assert result.started is True
     assert result.plist_path == home / "Library" / "LaunchAgents" / "dev.brnrd.brr.plist"
     assert result.plist_path.exists()
-    assert (config_home / "brr" / "projects.toml").exists()
     assert result.log_dir == home / "Library" / "Logs" / "brr"
     assert result.log_dir.exists()
 
@@ -80,7 +100,7 @@ def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
         "up",
         "--foreground",
     ]
-    assert "WorkingDirectory" not in data
+    assert data["WorkingDirectory"] == "/Users/ada/src/proj"
 
     service = f"gui/{os.getuid()}/dev.brnrd.brr"
     assert calls == [
@@ -106,7 +126,7 @@ def test_install_no_start_skips_launchctl(tmp_path):
         no_start=True,
         brr_path="/usr/local/bin/brnrd",
         home=tmp_path / "home",
-        config_home=tmp_path / "config",
+        workdir="/Users/ada/src/proj",
         run=lambda cmd, **kwargs: calls.append((cmd, kwargs)) or _ok(cmd),
     )
 
@@ -150,32 +170,4 @@ def test_logs_tails_launchagent_stdout_and_stderr(tmp_path):
             ["tail", "-n", "42", "-F", str(out_log), str(err_log)],
             {"check": False},
         )
-    ]
-
-
-def test_enabled_projects_reads_registry_when_tomllib_is_available(tmp_path):
-    if macos.tomllib is None:
-        return
-    config_home = tmp_path / "config"
-    path = macos.project_registry_path(config_home=config_home)
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        """
-[[projects]]
-path = "/tmp/enabled"
-enabled = true
-
-[[projects]]
-path = "/tmp/default-enabled"
-
-[[projects]]
-path = "/tmp/disabled"
-enabled = false
-""".strip(),
-        encoding="utf-8",
-    )
-
-    assert macos.enabled_projects(config_home=config_home) == [
-        Path("/tmp/enabled"),
-        Path("/tmp/default-enabled"),
     ]

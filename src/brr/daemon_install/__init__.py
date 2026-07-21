@@ -28,7 +28,6 @@ def install(
             print("[brnrd] launchd service loaded and kickstarted")
         else:
             print("[brnrd] launchd service written; it will load at next login")
-        _print_projects(result.enabled_projects)
         print(
             "[brnrd] next: `brnrd daemon status`, `brnrd daemon logs`, "
             "`brnrd daemon uninstall`",
@@ -55,7 +54,6 @@ def uninstall(
             print(f"[brnrd] removed LaunchAgent: {result.plist_path}")
         else:
             print(f"[brnrd] LaunchAgent already absent: {result.plist_path}")
-        print("[brnrd] project registry and account binding were left in place")
         return None
     _unsupported("uninstall")
 
@@ -87,7 +85,6 @@ def status(*, direct_brr_dir: Path | None = None) -> int:
             if service.detail:
                 print(f"[brnrd] launchd detail: {service.detail}")
         print(f"[brnrd] logs: {service.log_dir}")
-        _print_projects(service.enabled_projects)
         direct_code = _print_direct_status(direct_brr_dir)
         _print_gate_health(direct_brr_dir)
         if service.loaded is True:
@@ -149,15 +146,6 @@ def _is_macos() -> bool:
 def _unsupported(action: str) -> None:
     system = platform.system() or "this platform"
     raise SystemExit(f"[brnrd] daemon {action} on {system} is not implemented yet")
-
-
-def _print_projects(projects: list[Path]) -> None:
-    if projects:
-        print("[brnrd] registered projects:")
-        for project in projects:
-            print(f"  - {project}")
-    else:
-        print("[brnrd] no projects registered yet - run `brnrd init` in a repo to add one")
 
 
 def _print_direct_status(direct_brr_dir: Path | None) -> int:

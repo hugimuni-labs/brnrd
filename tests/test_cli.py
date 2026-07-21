@@ -823,6 +823,30 @@ def test_up_and_daemon_up_are_the_same_implementation():
     assert top_up is daemon_up is cmd_daemon_up
 
 
+def test_daemon_up_with_dev_reload_never_delegates_to_the_service(monkeypatch):
+    # `--dev-reload` is a foreground concept the installed service cannot
+    # carry; delegating would silently drop it (and lie "service started"
+    # while the caller's flag did nothing).
+    import argparse
+    from pathlib import Path
+
+    from brr.cli import cmd_daemon_up
+
+    delegated = []
+    monkeypatch.setattr(
+        "brr.daemon_install.start_service", lambda: delegated.append(True) or 0,
+    )
+    started = []
+    monkeypatch.setattr("brr.daemon.start", lambda root, dev_reload: started.append(dev_reload))
+    monkeypatch.setattr("brr.cli._repo_root", lambda: Path("/tmp/repo"))
+
+    args = argparse.Namespace(foreground=False, dev_reload=True)
+    cmd_daemon_up(args)
+
+    assert delegated == []
+    assert started == [True]
+
+
 def test_down_and_daemon_down_are_the_same_implementation():
     from brr.cli import cmd_daemon_down
 
