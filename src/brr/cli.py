@@ -1526,7 +1526,7 @@ def cmd_account_status(args):
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
     ctx = account.resolve_context(repo_root, cfg, create=False)
-    repos = sorted(ctx.repos.values(), key=lambda r: r.label)
+    roots = account.selectable_roots(ctx)
 
     if getattr(args, "json", False):
         print(_json.dumps({
@@ -1537,9 +1537,13 @@ def cmd_account_status(args):
             "enabled": ctx.enabled,
             "default_repo": ctx.default_repo.label,
             "repos": [
-                {"label": r.label, "root": str(r.root), "default":
-                 r.label == ctx.default_repo.label}
-                for r in repos
+                {
+                    "label": root.label,
+                    "root": str(root.root),
+                    "kind": root.kind,
+                    "default": root.default,
+                }
+                for root in roots
             ],
         }, indent=2, sort_keys=True))
         return 0
@@ -1549,10 +1553,11 @@ def cmd_account_status(args):
         print(f"  account id   : {ctx.account_id}")
     print(f"  home         : {ctx.dominion_repo}")
     print(f"  enabled      : {'yes' if ctx.enabled else 'no'}")
-    print(f"  repos        : {len(repos)}")
-    for r in repos:
-        star = "★" if r.label == ctx.default_repo.label else " "
-        print(f"    {star} {r.label:<24} {r.root}")
+    print(f"  roots        : {len(roots)}")
+    for root in roots:
+        star = "★" if root.default else " "
+        kind = f"[{root.kind}]"
+        print(f"    {star} {root.label:<24} {kind:<8} {root.root}")
     if ctx.kind != "account":
         print("\n  this is a project home — `brnrd account connect` links it to brnrd.")
     return 0

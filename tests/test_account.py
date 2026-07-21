@@ -39,11 +39,16 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
     assert registry["home_kind"] == "account"
     assert registry["home_id"] == "acct-1"
     assert registry["default_repo"] == "Gurio/b"
-    assert {item["label"] for item in registry["repos"]} == {"Gurio/a", "Gurio/b"}
+    assert {item["label"] for item in registry["repos"]} == {
+        "home", "Gurio/a", "Gurio/b",
+    }
+    home_row = next(item for item in registry["repos"] if item["label"] == "home")
+    assert home_row == {"kind": "home", "label": "home", "path": str(home)}
     assert (home / ".gitignore").read_text(encoding="utf-8").splitlines() == [
         "/dispatch/inbox/",
         "/dispatch/responses/",
         "/knowledge/",
+        "/.brr/",
         "*.tmp",
     ]
 
@@ -283,6 +288,29 @@ def test_event_repo_label_accepts_repo_label_metadata():
     assert account.event_repo_label({"repo_label": "Gurio/brr"}) == "Gurio/brr"
 
 
+def test_home_label_is_reserved_for_the_account_root(tmp_path):
+    ctx = account.HomeContext(
+        account_id="acct",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        runs_dir=tmp_path / "home" / "runs",
+        repos={"repo": account.AccountRepo("repo", tmp_path / "repo")},
+        default_repo=account.AccountRepo("repo", tmp_path / "repo"),
+        home_root=tmp_path / "home",
+    )
+
+    home = ctx.root_for_label("HOME")
+    assert home is not None
+    assert (home.label, home.kind, home.root) == ("home", "home", tmp_path / "home")
+    try:
+        account.register_repo(ctx, tmp_path / "other", label="home")
+    except ValueError as exc:
+        assert "reserved" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected the reserved label to be rejected")
+
+
 def test_run_state_blob_url_none_for_local_only_dominion(tmp_path):
     """A purely-local account dominion (no remote) yields no web URL, so callers
     fall back to a non-path label rather than leaking a host path."""
@@ -514,7 +542,7 @@ def test_relabel_moves_every_scope_and_rekeys_the_registry(tmp_path):
         (account.context_home_root(ctx) / account.REGISTRY_PATH).read_text()
     )
     labels = [entry["label"] for entry in registry["repos"]]
-    assert labels == ["hugimuni-labs/brnrd"]
+    assert labels == ["home", "hugimuni-labs/brnrd"]
     assert registry["default_repo"] == "hugimuni-labs/brnrd"
     index = (account.work_surface_path(ctx) / "index.md").read_text(encoding="utf-8")
     assert "plans/hugimuni-labs__brnrd/active.md" in index
@@ -557,7 +585,7 @@ def test_relabel_preserves_a_non_default_repos_registry_entry(tmp_path):
 
     registry = json.loads(registry_path.read_text())
     labels = sorted(entry["label"] for entry in registry["repos"])
-    assert labels == ["hugimuni-labs/brnrd", "other/keeper"]
+    assert labels == ["home", "hugimuni-labs/brnrd", "other/keeper"]
     assert registry["default_repo"] == "other/keeper"
 
 

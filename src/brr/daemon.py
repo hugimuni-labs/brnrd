@@ -405,6 +405,10 @@ def publish(
     the ``conflict`` packet so gates render the delivery failure
     rather than reporting success.
     """
+    if task.meta.get("root_kind") == "home":
+        # Home is committed and pushed by the account-home capture net. It has
+        # no per-run forge lane, even if stale metadata names a branch.
+        return
     push_branch = task.meta.get("publish_branch")
     if not push_branch:
         return
@@ -1432,6 +1436,8 @@ def _repo_for_event(
     """
     explicit_label = account.event_repo_label(event)
     if explicit_label:
+        if account.is_home_label(explicit_label):
+            return account.context_home_root(account_context), account.HOME_ROOT_LABEL
         repo = account_context.repo_for_label(explicit_label)
         if repo is not None:
             return repo.root, repo.label
@@ -1628,6 +1634,12 @@ def _run_worker(
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
     repo_label = _repo_label(repo_root, event, cfg)
+    is_home_root = account.is_home_label(repo_label)
+    if is_home_root:
+        # Home is one shared, capture-net-owned checkout. It cannot sprout a
+        # per-run worktree, and environment overrides must not route it through
+        # repository isolation machinery.
+        event["environment"] = "host"
     runner_overrides = {
         key: event.get(key)
         for key in ("shell", "core", "runner", "runner_policy")
@@ -1704,6 +1716,9 @@ def _run_worker(
 
     if duplicate_event:
         task = Run.from_event(event, cfg)
+        if is_home_root:
+            task.meta["root_kind"] = "home"
+            task.meta["forge_lane"] = False
         task.conversation_key = conv_key
         task.status = "done"
         if correspondent_key:
@@ -1752,14 +1767,30 @@ def _run_worker(
     # off the raw event (rather than the resolved plan) avoids a chicken-
     # and-egg loop and lets a future github-gate event for a PR comment
     # name its head branch via ``branch_target`` for free.
-    sync_targets = _branches_to_refresh(repo_root, event)
-    sync_result = sync.refresh_before_run(
-        repo_root, target_branches=sync_targets, cfg=cfg,
-    )
-
-    branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
+    if is_home_root:
+        sync_result = sync.SyncResult()
+        host_branch = gitops.current_branch(repo_root)
+        branch_plan = branching.PublishPlan(
+            seed_ref=host_branch if host_branch != "HEAD" else "HEAD",
+            target_branch=None,
+            source="home:host",
+            host_context_branch=host_branch if host_branch != "HEAD" else None,
+        )
+    else:
+        sync_targets = _branches_to_refresh(repo_root, event)
+        sync_result = sync.refresh_before_run(
+            repo_root, target_branches=sync_targets, cfg=cfg,
+        )
+        branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
 
     task = Run.from_event(event, cfg)
+    if is_home_root:
+        task.meta["root_kind"] = "home"
+        task.meta["forge_lane"] = False
+        if task.meta.get("trust_tier") != "owner" and not task.meta.get("trust_refused"):
+            task.meta["trust_refused"] = (
+                "the account home requires an owner-trusted event"
+            )
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
@@ -2038,12 +2069,14 @@ def _run_worker(
         # Forge-state facet (co-maintainer §5, #113): the resident's
         # in-flight worktrees/branches and the issues/PRs in play, built
         # network-free from local git + conversation keys.
-        forge_facet = forge_state.build_forge_state(
-            repo_root,
-            related_threads=communication_snapshot.get("related_threads"),
-            current_thread=conv_key,
-            current_run_id=task.id,
-            current_event_meta=event,
+        forge_facet = (
+            None if is_home_root else forge_state.build_forge_state(
+                repo_root,
+                related_threads=communication_snapshot.get("related_threads"),
+                current_thread=conv_key,
+                current_run_id=task.id,
+                current_event_meta=event,
+            )
         )
         if forge_facet:
             communication_snapshot["forge"] = forge_facet
@@ -2172,7 +2205,7 @@ def _run_worker(
             # daemon publishes, so the same block would nag about work that will
             # leave the machine on its own. (Missing-PR is deliberately NOT part
             # of this block — see `hooks._scm_closeout_clause`.)
-            if task.env == "host":
+            if task.env == "host" and task.meta.get("root_kind") != "home":
                 obligations.append("scm")
                 env["BRR_REPO_DIR"] = str(run_root)
                 if env_ctx.branch_plan is not None:
@@ -3931,6 +3964,18 @@ def _write_live_portal_state(
                 coexisting=coexisting_snapshot,
             ),
         }
+        if task.meta.get("root_kind") == "home":
+            remote_scm = payload["resources"]["remote_scm"]
+            remote_scm.update(
+                {
+                    "status": "absent",
+                    "branch": None,
+                    "pr_number": None,
+                    "pr_state": "none",
+                    "summary": None,
+                    "note": "account-home runs have no forge lane",
+                }
+            )
         # Spawn ownership is only actionable when the resident can see pool
         # headroom. Presence already tells us which siblings are sub-spawns;
         # expose that count beside the coexisting-runs facet rather than
@@ -4553,6 +4598,13 @@ def _queue_spawn_request(
     never part of the slice-1 shape (cap=1, one level), and a worker has
     no business creating further daemon-dispatched work anyway.
     """
+    if task.meta.get("root_kind") == "home":
+        _record_outbox_notice(
+            outbox_dir,
+            "spawn refused: the account home is a shared host tree and cannot "
+            "provide concurrent worktree isolation.",
+        )
+        return False
     if bool(task.meta.get("worker")):
         _record_outbox_notice(
             outbox_dir,
@@ -5807,6 +5859,10 @@ def _capture_worktree(
     HEAD or unreadable tree is skipped. Runs before finalize so the
     publish_branch it sets survives finalize's ``task.save``.
     """
+    if task.meta.get("root_kind") == "home":
+        # Account-home capture owns commit and push after the run. Worktree
+        # salvage would invent a second, forge-shaped publish lane here.
+        return
     if not bool(cfg.get("salvage.enabled", cfg.get("salvage_enabled", True))):
         return
     run_root = getattr(ctx, "cwd", None)

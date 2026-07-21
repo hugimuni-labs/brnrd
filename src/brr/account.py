@@ -22,6 +22,7 @@ from typing import Any
 from . import gitops
 
 DEFAULT_REPO_LABEL = "local/default"
+HOME_ROOT_LABEL = "home"
 DEFAULT_STATE_NAMESPACE = "brnrd"
 REGISTRY_PATH = "account/repos.json"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
@@ -64,6 +65,7 @@ GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
 /knowledge/
+/.brr/
 *.tmp
 """
 
@@ -74,6 +76,16 @@ class AccountRepo:
 
     label: str
     root: Path
+
+
+@dataclass(frozen=True)
+class AccountRoot:
+    """One selectable execution root in an account home."""
+
+    label: str
+    root: Path
+    kind: str
+    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,8 +109,33 @@ class HomeContext:
             return None
         return self.repos.get(label)
 
+    def root_for_label(self, label: str | None) -> AccountRoot | None:
+        """Resolve a selectable root without pretending home is a repo."""
+
+        if is_home_label(label):
+            return AccountRoot(
+                label=HOME_ROOT_LABEL,
+                root=context_home_root(self),
+                kind="home",
+            )
+        repo = self.repo_for_label(label)
+        if repo is None:
+            return None
+        return AccountRoot(
+            label=repo.label,
+            root=repo.root,
+            kind="repo",
+            default=repo.label == self.default_repo.label,
+        )
+
 
 AccountContext = HomeContext
+
+
+def is_home_label(label: object) -> bool:
+    """Return whether *label* names the reserved account-home root."""
+
+    return str(label or "").strip().casefold() == HOME_ROOT_LABEL
 
 
 def _truthy(value: object, default: bool = True) -> bool:
@@ -225,9 +262,22 @@ def _load_registry(path: Path) -> tuple[dict[str, AccountRepo], str | None]:
             continue
         label = str(item.get("label") or "").strip()
         root = _expand_path(item.get("path"))
+        if is_home_label(label) or str(item.get("kind") or "").casefold() == "home":
+            if label and str(item.get("kind") or "").casefold() != "home":
+                print(
+                    f"[brnrd] warning: ignoring registered repo label {label!r}; "
+                    f"{HOME_ROOT_LABEL!r} is reserved for the account home"
+                )
+            continue
         if label and root is not None:
             repos[label] = AccountRepo(label=label, root=root)
     default_repo = str(raw.get("default_repo") or "").strip() or None
+    if is_home_label(default_repo):
+        print(
+            f"[brnrd] warning: ignoring default repo {default_repo!r}; "
+            f"{HOME_ROOT_LABEL!r} is the home root, not a repository"
+        )
+        default_repo = None
     return repos, default_repo
 
 
@@ -247,8 +297,16 @@ def _write_registry(
         "home_id": home_id or account_id,
         "home_kind": home_kind,
         "repos": [
-            {"label": label, "path": str(repo.root)}
-            for label, repo in sorted(repos.items())
+            {
+                "label": HOME_ROOT_LABEL,
+                "path": str(path.parent.parent),
+                "kind": "home",
+            },
+            *[
+                {"label": label, "path": str(repo.root), "kind": "repo"}
+                for label, repo in sorted(repos.items())
+                if not is_home_label(label)
+            ],
         ],
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -301,6 +359,12 @@ def _configured_repos(
             continue
         label = key[len(prefix):].strip()
         root = _expand_path(value, base=base)
+        if is_home_label(label):
+            print(
+                f"[brnrd] warning: ignoring configured repo label {label!r}; "
+                f"{HOME_ROOT_LABEL!r} is reserved for the account home"
+            )
+            continue
         if label and root is not None:
             repos[label] = AccountRepo(label=label, root=root)
     return repos
@@ -378,6 +442,10 @@ def resolve_context(
     repos.update(_configured_repos(cfg, base=repo_root))
 
     current_label = repo_label(repo_root, cfg)
+    if is_home_label(current_label):
+        raise ValueError(
+            f"repo label {current_label!r} is reserved for the account home"
+        )
     repos.setdefault(current_label, AccountRepo(label=current_label, root=repo_root))
     default_label = str(
         cfg.get("account.default_repo")
@@ -385,6 +453,10 @@ def resolve_context(
         or registry_default
         or current_label
     ).strip()
+    if is_home_label(default_label):
+        raise ValueError(
+            f"default repo label {default_label!r} is reserved for the account home"
+        )
     if default_label not in repos:
         repos[default_label] = AccountRepo(label=default_label, root=repo_root)
     default_repo = repos[default_label]
@@ -429,6 +501,28 @@ def context_home_root(ctx: HomeContext) -> Path:
     """Return the brnrd home root for *ctx*."""
 
     return ctx.home_root or ctx.dominion_repo
+
+
+def selectable_roots(ctx: HomeContext) -> list[AccountRoot]:
+    """Return home plus registered repositories for project selectors."""
+
+    roots = [
+        AccountRoot(
+            label=HOME_ROOT_LABEL,
+            root=context_home_root(ctx),
+            kind="home",
+        )
+    ]
+    roots.extend(
+        AccountRoot(
+            label=repo.label,
+            root=repo.root,
+            kind="repo",
+            default=repo.label == ctx.default_repo.label,
+        )
+        for repo in sorted(ctx.repos.values(), key=lambda item: item.label)
+    )
+    return roots
 
 
 def run_dir(ctx: HomeContext, repo_label: str, run_id: str) -> Path:
@@ -523,6 +617,10 @@ def register_repo(
     """Register *repo_root* in the resolved home registry."""
 
     repo_label_value = label or repo_label(repo_root)
+    if is_home_label(repo_label_value):
+        raise ValueError(
+            f"repo label {repo_label_value!r} is reserved for the account home"
+        )
     repos = dict(ctx.repos)
     repo = AccountRepo(label=repo_label_value, root=repo_root)
     repos[repo_label_value] = repo
@@ -954,6 +1052,11 @@ def plan_relabel(ctx: HomeContext, old_label: str, new_label: str) -> list[Relab
     new_label = (new_label or "").strip()
     if not old_label or not new_label:
         raise RelabelError("both the old and the new repo label are required")
+    if is_home_label(old_label) or is_home_label(new_label):
+        raise RelabelError(
+            f"{HOME_ROOT_LABEL!r} is reserved for the account home and cannot "
+            "be used as a repo label"
+        )
     if old_label == new_label:
         raise RelabelError(f"{old_label!r} is already the label; nothing to do")
 
