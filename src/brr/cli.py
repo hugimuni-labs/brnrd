@@ -36,7 +36,7 @@ PUBLIC_COMMANDS = (
     "init", "run", "review", "up", "down",
     "daemon", "gate", "account", "home",
     "kb", "docs", "portal", "runners", "bench", "agent", "ergonomics",
-    "completions",
+    "completions", "gc",
 )
 
 #: Verbs that parse but are hidden from ``--help``.
@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run a task through the runner")
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser(
+        "gc", help="prune daemon-accumulated state per retention windows")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print what would be deleted (counts + bytes per store) without deleting")
+    p.set_defaults(func=cmd_gc)
 
     # Omitting `help=` is what hides a subparser: argparse only adds it to the
     # help listing when the kwarg is present (`help=argparse.SUPPRESS` renders a
@@ -480,6 +486,34 @@ def _maybe_repo_root() -> Path | None:
 def cmd_init(args):
     from . import adopt
     adopt.init_repo(args.url, interactive=args.interactive)
+
+
+def cmd_gc(args):
+    """``brnrd gc [--dry-run]`` — retention sweep over daemon state (#501).
+
+    Same code path the daemon's periodic pass uses, so the dry run prints
+    exactly the counts and bytes a real run deletes.
+    """
+    from . import account as account_mod
+    from . import config as conf
+    from . import retention
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    windows = retention.Windows.from_config(cfg)
+    if windows.all_disabled():
+        print(
+            "[brnrd] gc: no retention windows configured "
+            "(retention.*_days in .brr/config) — keeping everything"
+        )
+        return
+    try:
+        ctx = account_mod.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        ctx = None
+    _plan, reports = retention.gc(
+        repo_root, ctx, windows, dry_run=bool(args.dry_run))
+    print(retention.render_report(reports, windows, dry_run=bool(args.dry_run)))
 
 
 def cmd_run(args):

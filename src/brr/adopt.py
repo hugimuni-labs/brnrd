@@ -361,6 +361,8 @@ def _setup_brr_dir(repo_root: Path) -> None:
 
     config_path = brr / "config"
     if not config_path.exists():
+        from . import retention
+
         conf.write_config(repo_root, {
             "runner": "auto",
             "environment": "auto",
@@ -369,6 +371,10 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "dominion.branch": dominion.DEFAULT_BRANCH,
             "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
             "schedule.enabled": True,
+            # Retention windows (#501): fresh installs get finite windows;
+            # a pre-existing config is never touched, so existing installs
+            # keep today's keep-forever behavior until they opt in.
+            **retention.FRESH_INSTALL_DEFAULTS,
             # Co-development aid (off by default): when on, every wake
             # invites the agent to inspect the shape of its own injected
             # context and raise improvements with you. See
