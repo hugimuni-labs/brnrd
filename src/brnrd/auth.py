@@ -68,6 +68,35 @@ def require_account(
     return Principal(token=token)
 
 
+def require_account_or_session(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> Principal:
+    """`require_account`, extended to the browser session cookie.
+
+    Bearer wins when present (API clients keep their exact contract). With no
+    Authorization header, the ``brnrd_session`` cookie — the same ``Token`` row
+    ``routers/_session.py`` resolves for the dashboard — yields the account
+    principal, so the SPA can call the billing surface through the seam it
+    already authenticates with.
+
+    CSRF posture, deliberate: the session cookie is issued ``HttpOnly`` +
+    ``SameSite=Lax`` (routers/web_auth.py) and the app registers no CORS
+    middleware, so a cross-site page can neither read responses nor attach the
+    cookie to a POST. Only session-kind tokens ride this path — an API-key
+    token in a cookie is refused rather than silently honored.
+    """
+    if authorization is None:
+        cookie = request.cookies.get(request.app.state.settings.session_cookie)
+        if cookie:
+            token = _resolve(db, cookie)
+            if token.kind != Token.KIND_SESSION:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="session credential required")
+            return Principal(token=token)
+    return require_account(authorization=authorization, db=db)
+
+
 def require_daemon(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
