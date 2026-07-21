@@ -702,31 +702,38 @@ def test_card_relay_sends_then_edits(env, monkeypatch):
     assert cards[1]["text"] == "<b>running</b>"
 
 
-def test_card_relay_is_noop_after_responded(env, monkeypatch):
+def test_card_relay_continues_after_responded(env, monkeypatch):
+    """A responded event still relays cards: a respawn continuation run
+    rides its parent's event, and the parent's terminal close must not
+    mute the child's live card (2026-07-21 — the mega run whose status
+    card never appeared)."""
     app, client, _ = env
     cards: list = []
     monkeypatch.setattr(
         "brnrd.platforms.telegram.send_card",
-        lambda *a, **k: cards.append(a) or 1,
+        lambda *a, **k: cards.append(("send", a)) or 1,
     )
     monkeypatch.setattr(
-        "brnrd.platforms.telegram.edit_card", lambda *a, **k: cards.append(a)
+        "brnrd.platforms.telegram.edit_card",
+        lambda *a, **k: cards.append(("edit", a)),
     )
 
     acc, rid, event_id = _bound_telegram_event(app, client)
     dmn = _daemon_headers(client, acc, rid)
 
-    # Deliver the final answer first; the card lifecycle is then over.
+    # Parent run delivers its final answer; the event closes.
     client.post(
         "/v1/daemons/responses",
         json={"event_id": event_id, "body_markdown": "done", "status": "done"},
         headers=dmn,
     )
+    # A continuation run's card still reaches the platform.
     r = client.post(
-        "/v1/daemons/card", json={"event_id": event_id, "text": "late"}, headers=dmn
+        "/v1/daemons/card", json={"event_id": event_id, "text": "child card"}, headers=dmn
     )
     assert r.status_code == 200
-    assert cards == []  # no platform call after the answer went out
+    assert r.json()["message_id"] == 1
+    assert [op for op, _ in cards] == ["send"]
 
 
 def test_card_relay_unknown_event_is_404(env, monkeypatch):

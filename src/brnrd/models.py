@@ -162,6 +162,10 @@ class Event(Base):
     response_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # sha256 of the last forwarded response body — the retry-dedupe handle
+    # that lets a responded event keep forwarding continuation messages
+    # while still ACKing an exact terminal-retry duplicate quietly.
+    response_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ChannelRoute(Base):
