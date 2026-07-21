@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +20,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+WorkingDirectory={workdir}
 ExecStart={exec_start} daemon up --foreground
 Restart=on-failure
 RestartSec=5s
@@ -48,10 +50,6 @@ def unit_path() -> Path:
     return xdg_config_home() / "systemd" / "user" / SERVICE_UNIT
 
 
-def projects_registry_path() -> Path:
-    return xdg_config_home() / "brr" / "projects.toml"
-
-
 def linger_marker_path() -> Path:
     return xdg_state_home() / "brr" / "systemd-linger-enabled-by-brr"
 
@@ -75,6 +73,28 @@ def resolve_brr_bin() -> str:
     )
 
 
+def resolve_workdir() -> Path:
+    """The repository root the service should run the daemon from.
+
+    ``daemon up --foreground`` resolves its project from the current
+    directory; the systemd user manager starts services from ``$HOME``, so a
+    unit with no ``WorkingDirectory=`` installs a daemon that crash-loops on
+    "Not a Git repository" — however correct its binary and PATH.  Freeze the
+    repo the install ran from, the same install-time-snapshot contract as the
+    binary and PATH pins; re-running ``brnrd daemon install`` refreshes it.
+    """
+    from brr import gitops
+
+    try:
+        return gitops.ensure_git_repo()
+    except RuntimeError:
+        raise SystemExit(
+            "[brnrd] `brnrd daemon install` must run from inside the project "
+            "repository — the service is pinned to the repo it is installed "
+            "from"
+        )
+
+
 def _systemd_escape(value: str) -> str:
     """Escape a value for a quoted systemd ``Environment=`` assignment.
 
@@ -90,9 +110,10 @@ def render_systemd_unit(
     brr_path: str | Path | None = None,
     *,
     path_env: str | None = None,
+    workdir: str | Path | None = None,
 ) -> str:
-    """Render the unit with the resolved entrypoint and the installing
-    shell's PATH frozen in.
+    """Render the unit with the resolved entrypoint, the installing shell's
+    PATH, and the installing repo's root frozen in.
 
     The daemon dispatches runner Shells (``claude``, ``codex``, …) by PATH
     lookup, and its environment snapshot is what every run inherits — under
@@ -103,9 +124,11 @@ def render_systemd_unit(
     """
     exec_start = str(brr_path) if brr_path else resolve_brr_bin()
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
+    workdir_value = str(workdir) if workdir else str(resolve_workdir())
     return SYSTEMD_UNIT.format(
         exec_start=_systemd_escape(exec_start),
         path_env=_systemd_escape(path_value),
+        workdir=_systemd_escape(workdir_value),
     )
 
 
@@ -117,14 +140,6 @@ def write_unit_file() -> Path:
     path = unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_systemd_unit(), encoding="utf-8")
-    return path
-
-
-def ensure_projects_registry() -> Path:
-    path = projects_registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text("", encoding="utf-8")
     return path
 
 
@@ -258,7 +273,6 @@ def install(
         raise SystemExit("[brnrd] daemon install on this platform is not implemented yet")
 
     service_path = write_unit_file()
-    registry_path = ensure_projects_registry()
     print(f"[brnrd] wrote {service_path}")
 
     maybe_enable_linger(prompt=prompt_linger, assume_yes=assume_yes_linger)
@@ -267,11 +281,8 @@ def install(
     _run(["systemctl", "--user", "enable", SERVICE_UNIT])
     if not no_start:
         _run(["systemctl", "--user", "start", SERVICE_UNIT])
+        verify_started()
 
-    if "[[projects]]" in registry_path.read_text(encoding="utf-8"):
-        print(f"[brnrd] project registry: {registry_path}")
-    else:
-        print("[brnrd] no projects registered yet — run `brnrd init` in a repo to add one")
     print("[brnrd] next: `brnrd daemon status`, `brnrd daemon logs`, `brnrd daemon uninstall`")
 
 
@@ -294,8 +305,37 @@ def uninstall(
     print("[brnrd] daemon service uninstalled")
 
 
+def verify_started(
+    *,
+    delay: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Confirm the just-started service is still alive a beat later.
+
+    ``systemctl start`` on a ``Type=simple`` unit returns 0 the moment the
+    process forks — a daemon that crashes 200ms in still reports a clean
+    start, and the failure is only visible in the journal.  One short sleep
+    and an ``is-active`` probe turns that silent crash-loop into an
+    immediate, pointed message.
+    """
+    sleep(delay)
+    result = _capture(
+        ["systemctl", "--user", "is-active", SERVICE_UNIT],
+    )
+    state = (result.stdout or "").strip()
+    if result.returncode == 0 and state == "active":
+        return True
+    print(
+        f"[brnrd] warning: the service started but is not running "
+        f"(state: {state or 'unknown'}) — check `brnrd daemon logs`"
+    )
+    return False
+
+
 def start_service() -> int:
     result = _run(["systemctl", "--user", "start", SERVICE_UNIT], check=False)
+    if result.returncode == 0 and not verify_started():
+        return 1
     return result.returncode
 
 

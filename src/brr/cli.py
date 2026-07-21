@@ -1578,7 +1578,17 @@ def cmd_up(args):
     ``cmd_daemon_up``, which both ``brnrd up`` and ``brnrd daemon up`` reach.
     """
     from . import daemon as daemon_mod
-    root = _repo_root()
+    try:
+        root = _repo_root()
+    except RuntimeError:
+        # Under an installed service this cwd comes from the unit's
+        # WorkingDirectory pin; a raw traceback in the journal helps nobody.
+        raise SystemExit(
+            "[brnrd] `daemon up` must run from inside a project repository "
+            f"(cwd: {Path.cwd()}) — under a service, re-run "
+            "`brnrd daemon install` from the repo to refresh the pinned "
+            "working directory"
+        )
     daemon_mod.start(root, dev_reload=args.dev_reload)
 
 
@@ -1597,9 +1607,11 @@ def cmd_daemon_up(args):
 
     Prefers the installed user service; falls back to a direct foreground start
     when no service is installed (``start_service`` returns ``None``), or when
-    ``--foreground`` asks for one explicitly.
+    ``--foreground`` or ``--dev-reload`` asks for one explicitly —
+    ``--dev-reload`` is a foreground concept the service cannot carry, and
+    delegating would silently drop it.
     """
-    if not args.foreground:
+    if not args.foreground and args.dev_reload is None:
         from . import daemon_install
         code = daemon_install.start_service()
         if code is not None:

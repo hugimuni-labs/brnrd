@@ -10,12 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-try:  # Python 3.11+. brr still supports 3.10, so this stays optional.
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
-    tomllib = None  # type: ignore[assignment]
-
-
 LABEL = "dev.brnrd.brr"
 PLIST_NAME = f"{LABEL}.plist"
 
@@ -27,7 +21,6 @@ class InstallResult:
     plist_path: Path
     log_dir: Path
     started: bool
-    enabled_projects: list[Path]
 
 
 @dataclass(frozen=True)
@@ -44,7 +37,6 @@ class ServiceStatus:
     installed: bool
     loaded: bool | None
     detail: str
-    enabled_projects: list[Path]
 
 
 def launch_agents_dir(*, home: Path | None = None) -> Path:
@@ -64,43 +56,25 @@ def log_paths(*, home: Path | None = None) -> tuple[Path, Path]:
     return logs / "brr.out.log", logs / "brr.err.log"
 
 
-def project_registry_path(*, config_home: Path | None = None) -> Path:
-    base = config_home
-    if base is None:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "brr" / "projects.toml"
+def resolve_workdir() -> Path:
+    """The repository root the agent should run the daemon from.
 
+    ``daemon up --foreground`` resolves its project from the current
+    directory, and launchd starts agents from ``/`` — a plist with no
+    ``WorkingDirectory`` installs a daemon that crash-loops on "Not a Git
+    repository".  Freeze the repo the install ran from, the same
+    install-time-snapshot contract as the binary and PATH pins.
+    """
+    from brr import gitops
 
-def ensure_project_registry(*, config_home: Path | None = None) -> Path:
-    path = project_registry_path(config_home=config_home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text("", encoding="utf-8")
-    return path
-
-
-def enabled_projects(*, config_home: Path | None = None) -> list[Path]:
-    path = project_registry_path(config_home=config_home)
-    if not path.exists() or tomllib is None:
-        return []
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError:
-        return []
-    projects = data.get("projects", [])
-    if not isinstance(projects, list):
-        return []
-
-    enabled: list[Path] = []
-    for project in projects:
-        if not isinstance(project, dict):
-            continue
-        if project.get("enabled", True) is not True:
-            continue
-        raw_path = project.get("path")
-        if isinstance(raw_path, str) and raw_path:
-            enabled.append(Path(raw_path))
-    return enabled
+        return gitops.ensure_git_repo()
+    except RuntimeError:
+        raise SystemExit(
+            "[brnrd] `brnrd daemon install` must run from inside the project "
+            "repository — the service is pinned to the repo it is installed "
+            "from"
+        )
 
 
 def render_plist(
@@ -108,13 +82,17 @@ def render_plist(
     *,
     home: Path | None = None,
     path_env: str | None = None,
+    workdir: str | Path | None = None,
 ) -> str:
     """launchd's default PATH is ``/usr/bin:/bin:…`` — the daemon starts but
     cannot find the runner Shells (``claude``, ``codex``) its runs dispatch
     by PATH lookup. Freeze the installing shell's PATH into the agent, same
-    contract as the Linux unit; re-running install refreshes it."""
+    contract as the Linux unit; re-running install refreshes it. The working
+    directory is frozen the same way: launchd's default cwd is ``/``, which
+    is not the project repo ``daemon up`` requires."""
     out_log, err_log = log_paths(home=home)
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
+    workdir_value = str(workdir) if workdir else str(resolve_workdir())
     payload: dict[str, Any] = {
         "Label": LABEL,
         "ProgramArguments": [
@@ -127,6 +105,7 @@ def render_plist(
         "KeepAlive": {
             "SuccessfulExit": False,
         },
+        "WorkingDirectory": workdir_value,
         "StandardOutPath": str(out_log),
         "StandardErrorPath": str(err_log),
         "EnvironmentVariables": {
@@ -142,20 +121,21 @@ def install(
     no_start: bool = False,
     brr_path: str | Path | None = None,
     home: Path | None = None,
-    config_home: Path | None = None,
+    workdir: str | Path | None = None,
     run: RunFn = subprocess.run,
 ) -> InstallResult:
     brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
         raise SystemExit("[brnrd] cannot find `brnrd` on PATH; install the CLI before registering launchd")
 
-    ensure_project_registry(config_home=config_home)
     launch_agents_dir(home=home).mkdir(parents=True, exist_ok=True)
     logs = log_dir(home=home)
     logs.mkdir(parents=True, exist_ok=True)
 
     path = plist_path(home=home)
-    path.write_text(render_plist(brr_bin, home=home), encoding="utf-8")
+    path.write_text(
+        render_plist(brr_bin, home=home, workdir=workdir), encoding="utf-8"
+    )
 
     started = False
     if not no_start:
@@ -168,7 +148,6 @@ def install(
         plist_path=path,
         log_dir=logs,
         started=started,
-        enabled_projects=enabled_projects(config_home=config_home),
     )
 
 
@@ -187,7 +166,6 @@ def uninstall(
 def status(
     *,
     home: Path | None = None,
-    config_home: Path | None = None,
     run: RunFn = subprocess.run,
 ) -> ServiceStatus:
     path = plist_path(home=home)
@@ -211,7 +189,6 @@ def status(
         installed=path.exists(),
         loaded=loaded,
         detail=detail,
-        enabled_projects=enabled_projects(config_home=config_home),
     )
 
 
