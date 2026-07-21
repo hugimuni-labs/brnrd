@@ -132,6 +132,10 @@ _RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
 # ``_sweep_zombie_runs``: boot-only made a data repair the user had to
 # schedule by restarting.
 _ZOMBIE_SWEEP_INTERVAL_SECONDS = 30 * 60.0
+# First retention sweep after boot waits this long, so a daemon restarted in
+# a tight loop never GCs on every boot; steady-state cadence comes from
+# ``retention.sweep_interval_hours`` (default daily, 0 disables).
+_RETENTION_FIRST_SWEEP_DELAY_SECONDS = 60 * 60.0
 # How far back the exact-duplicate scan looks. A genuine re-delivery (one
 # external message fanned to two configured channels) is near-simultaneous;
 # anything older sharing an origin key is a coincidental id collision, not a
@@ -6309,6 +6313,48 @@ def _reaped_run_state_text(text: str, *, reaped_at: str, reason: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _retention_sweep(
+    repo_root: Path,
+    account_context: account.AccountContext | None,
+) -> float:
+    """Run one retention GC pass (#501); returns the configured cadence.
+
+    Shares :mod:`brr.retention` with ``brnrd gc`` so the daemon never
+    deletes anything the CLI's dry run would not have named. Config is
+    read fresh each pass — window and cadence edits apply without a
+    daemon restart. Returns the sweep interval in seconds (0 when the
+    periodic pass is disabled); the caller re-arms with its own floor.
+    Never raises: a janitor must not take the daemon down.
+    """
+    from . import retention
+
+    try:
+        cfg = conf.load_config(repo_root)
+        interval_h = float(
+            cfg.get(retention.SWEEP_INTERVAL_KEY,
+                    retention.SWEEP_INTERVAL_DEFAULT_HOURS))
+    except Exception:
+        return 0.0
+    if interval_h <= 0:
+        return 0.0
+    try:
+        windows = retention.Windows.from_config(cfg)
+        if windows.all_disabled():
+            return interval_h * 3600.0
+        _plan, reports = retention.gc(
+            repo_root, account_context, windows, dry_run=False)
+        items = sum(r.items for r in reports.values())
+        size = sum(r.bytes for r in reports.values())
+        if items:
+            print(
+                f"[brnrd] retention sweep: deleted {items} item(s), "
+                f"{retention.format_bytes(size)}"
+            )
+    except Exception as exc:  # noqa: BLE001 - janitor must never block the daemon
+        print(f"[brnrd] retention sweep skipped: {exc}")
+    return interval_h * 3600.0
+
+
 def _sweep_zombie_runs(
     account_context: account.AccountContext | None,
 ) -> dict[str, int]:
@@ -7400,6 +7446,10 @@ def start(
     # never urgent — the cost of noticing it an hour late is nil, the cost of
     # rescanning both stores every tick is not.
     next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
+    # Retention GC (#501): the same code path as `brnrd gc`, on a slow clock.
+    # Config is re-read at each sweep so window edits apply without a
+    # restart; with no windows configured the sweep is a cheap no-op.
+    next_retention_sweep = time.monotonic() + _RETENTION_FIRST_SWEEP_DELAY_SECONDS
 
     wake = protocol.inbox_wake()
     try:
@@ -7407,6 +7457,10 @@ def start(
             if time.monotonic() >= next_zombie_sweep:
                 next_zombie_sweep = time.monotonic() + _ZOMBIE_SWEEP_INTERVAL_SECONDS
                 _sweep_zombie_runs(account_context)
+            if time.monotonic() >= next_retention_sweep:
+                interval_s = _retention_sweep(repo_root, account_context)
+                next_retention_sweep = time.monotonic() + max(
+                    interval_s, _RETENTION_FIRST_SWEEP_DELAY_SECONDS)
             # Consume any pending wake signal up front, before we read the
             # inbox below: a set that lands after this clear (a gate
             # enqueuing mid-iteration) keeps the flag set, so the wait at

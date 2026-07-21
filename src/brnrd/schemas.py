@@ -126,6 +126,9 @@ class EventOut(BaseModel):
     source: str
     body: str | None
     reply_to: dict[str, Any] = Field(default_factory=dict)
+    # #525 — image-attachment pointers ({file_id, filename, kind[, file_size]});
+    # the daemon fetches bytes through the attachment proxy at ingestion time.
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -525,6 +528,8 @@ class DevEnqueue(BaseModel):
     body: str
     source: str = "dev"
     reply_to: dict[str, Any] = Field(default_factory=dict)
+    # #525 — attachment pointers, same shape the telegram webhook captures.
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DevEnqueued(BaseModel):

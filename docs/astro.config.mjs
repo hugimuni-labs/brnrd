@@ -21,6 +21,17 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/hugimuni-labs/brnrd' },
       ],
       customCss: ['./src/styles/brnrd.css'],
+      head: [
+        {
+          // Dark is the product's native mode: make it the default for
+          // first-time visitors instead of following the OS preference.
+          // Runs before Starlight's ThemeProvider reads localStorage; a
+          // visitor's explicit choice (once made) is never overridden.
+          tag: 'script',
+          content:
+            "if(!localStorage.getItem('starlight-theme')){localStorage.setItem('starlight-theme','dark');document.documentElement.dataset.theme='dark';}",
+        },
+      ],
       lastUpdated: true,
       credits: true,
       sidebar: [
