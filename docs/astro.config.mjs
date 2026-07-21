@@ -2,8 +2,8 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://gurio.github.io',
-  base: '/brr',
+  site: 'https://hugimuni-labs.github.io',
+  base: '/brnrd',
   trailingSlash: 'always',
   integrations: [
     starlight({
