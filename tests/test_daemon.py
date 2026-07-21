@@ -3231,6 +3231,70 @@ def test_post_delivery_attend_emits_phase_and_yields_on_pending_event(
     assert records[0]["reason"] == "watching for follow-up after delivery"
 
 
+def test_post_delivery_attend_enqueues_follow_up_that_lands_during_dwell(
+    tmp_path, monkeypatch,
+):
+    """#351 interim guarantee: a follow-up arriving during the attendance
+    dwell must reach the normal dispatch path — never be polled-and-dropped.
+
+    Pins the failure mode, not the implementation: after the dwell yields on
+    the pending follow-up, the event must still be *dispatchable* (it becomes
+    the next enqueued run, not a silent drop) and the inbox wake must be
+    re-armed so the single-flight loop rescans promptly instead of the
+    follow-up being eaten. Models the live loss the maintainer hit: a
+    same-thread message sent during the post-run window vanished.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    follow_up_path = protocol.create_event(
+        inbox,
+        "telegram",
+        "oh wait, also Y",
+        conversation_key="telegram:42:",
+    )
+    follow_up = protocol._read_event(follow_up_path)
+    event = {"id": "evt-a", "source": "telegram", "status": "done"}
+    task = Run(
+        id="run-a",
+        event_id="evt-a",
+        body="answer",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: True)
+    monkeypatch.setattr(
+        daemon.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+    )
+    # The main loop clears the wake at the top of every iteration; while the
+    # attending run is still the in-flight `current` it cannot dispatch the
+    # follow-up (single-flight). Simulate that consumed signal so the test
+    # exercises the seam where the follow-up would otherwise be missed.
+    protocol.inbox_wake().clear()
+
+    result = daemon._post_delivery_attend(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        task,
+        event,
+        inbox,
+        {"delivery.post_delivery_attend_seconds": 30},
+        signal="current_reply",
+        attempt=1,
+    )
+
+    assert result == "pending"
+    # The follow-up was not consumed by attendance: it is still on the normal
+    # dispatch path and will become an enqueued run.
+    dispatchable_ids = {
+        ev.get("id") for ev in protocol.list_dispatchable(inbox)
+    }
+    assert follow_up["id"] in dispatchable_ids
+    # And the loop is woken to pick it up on the next tick rather than waiting
+    # out the poll — detecting it during attendance *is* its enqueue.
+    assert protocol.inbox_wake().is_set()
+
+
 def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     """The daemon persists the assembled prompt in .brr/runs/<run-id>/prompt.md.
 
