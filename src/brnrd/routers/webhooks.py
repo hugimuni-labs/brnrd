@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from brr.gates.github import parse as gh_parse
 
-from .. import billing, ids, inbox as inbox_service, stripe_api
-from ..models import ChannelRoute, Repo, StripeEvent, TgPairCode
+from .. import billing, ids, inbox as inbox_service, limits, stripe_api
+from ..models import Account, ChannelRoute, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
 
@@ -216,6 +216,19 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
     if repo is None:
         _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT)
         return
+    # Free-tier headroom throttle + abuse ceilings (limits.py): a webhook
+    # can't 429 GitHub, so this is the platform-appropriate polite drop —
+    # logged reason + one-line reply naming the limit, never silent.
+    decision = limits.check_event_admission(
+        db, settings, db.get(Account, repo.account_id), body=body
+    )
+    if not decision.allowed:
+        logger.warning(
+            "github limit reject repo=%s author=%s reason=%s",
+            repo_name, author, decision.reason,
+        )
+        _github_reply(settings, reply_to, decision.message)
+        return
     if is_pr:
         reply_to["pr_number"] = issue_number
         branch = _maybe_pr_branch(settings, repo_name, issue_number)
@@ -370,6 +383,20 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             # #525 — images now ride as pointers; only non-image media
             # (video, voice, non-image documents) stays annotated-not-fetched.
             body += "\n\n[attached media not ingested — brnrd received the text only]"
+        # Free-tier headroom throttle + abuse ceilings (limits.py): polite
+        # drop with a logged reason + one-line reply naming the limit —
+        # never a silent loss, never a crash.
+        decision = limits.check_event_admission(
+            db,
+            settings,
+            db.get(Account, route.account_id),
+            body=body,
+            attachment_count=len(parsed.attachments or []),
+        )
+        if not decision.allowed:
+            _audit_reject(parsed, reason=f"limit:{decision.reason}")
+            _reply(settings, parsed, decision.message)
+            return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=body)
     return {"ok": True}
 
