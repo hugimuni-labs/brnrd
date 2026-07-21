@@ -46,6 +46,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -159,15 +161,28 @@ def _schema_version() -> str:
 
 
 @pytest.fixture
-def empty_repo(tmp_path):
-    """A minimal git repo without any dominion or kb, for reproducible output."""
+def empty_repo():
+    """A minimal git repo without any dominion or kb, for reproducible output.
+
+    Deliberately *not* under pytest's ``tmp_path``: the manifest phase
+    measures block byte sizes on the rendered (un-normalized) content, so
+    the repo path's **length** is part of the snapshot. ``tmp_path`` length
+    varies with the username and pytest's run counter (``pytest-of-<user>/
+    pytest-<n>``) and differs again on CI — a one-character difference
+    shows up as a one-byte manifest mismatch. ``mkdtemp``'s suffix is
+    always 8 characters, so this path has the same length on every machine.
+    """
     from _helpers import init_git_repo
-    repo = tmp_path / "repo"
-    init_git_repo(repo)
-    # Ensure no .brr/config that could pull in home knowledge or dominion
-    (repo / ".brr").mkdir()
-    (repo / ".brr" / "config").write_text("", encoding="utf-8")
-    return repo
+    root = Path(tempfile.mkdtemp(prefix="brr-boot-replay-", dir="/tmp"))
+    try:
+        repo = root / "repo"
+        init_git_repo(repo)
+        # Ensure no .brr/config that could pull in home knowledge or dominion
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text("", encoding="utf-8")
+        yield repo
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 # ── Snapshot tests ────────────────────────────────────────────────────────────
