@@ -294,8 +294,13 @@ def write_bridges(repo_root: Path, shells: list[str]) -> list[str]:
     """Write a pointer stub for each *shell* that needs one.
 
     Idempotent and non-destructive: a bridge already pointing at the
-    contract (stub *or* symlink) is left untouched; only a missing or
-    non-pointing file is (re)written. Returns the shells whose bridge this
+    contract (stub *or* symlink) is left untouched; a missing file gets the
+    stub; a **hand-authored** bridge file (exists, but no ``@AGENTS.md``
+    import) is *repaired by prepending* the import — the user's own
+    workflow prose is exactly what the bridge must never clobber. A symlink
+    routed somewhere other than the contract is left alone entirely
+    (rewriting through it would edit an unrelated file); reachability
+    verification reports it instead. Returns the shells whose bridge this
     call created or repaired.
     """
     written: list[str] = []
@@ -308,7 +313,14 @@ def write_bridges(repo_root: Path, shells: list[str]) -> list[str]:
         target = repo_root / fname
         if _points_at_contract(target):
             continue
-        target.write_text(content, encoding="utf-8")
+        if target.is_symlink():
+            # Routed elsewhere on purpose; not ours to rewrite through.
+            continue
+        if target.is_file():
+            existing = target.read_text(encoding="utf-8")
+            target.write_text(f"{content}\n{existing}", encoding="utf-8")
+        else:
+            target.write_text(content, encoding="utf-8")
         written.append(shell)
     return written
 
