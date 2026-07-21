@@ -152,11 +152,7 @@
 						class="block w-full cursor-pointer text-left"
 						onclick={() => (onSelect ? onSelect(run.run_id || run.id) : toggle(run.id))}
 						aria-expanded={onSelect ? undefined : isOpen}
-						title={onSelect
-							? 'open run detail below'
-							: isOpen
-								? 'collapse'
-								: 'expand run detail'}
+						title={onSelect ? 'open run detail below' : isOpen ? 'collapse' : 'expand run detail'}
 					>
 						<div class="flex items-center justify-between gap-2">
 							<span class="flex min-w-0 items-center gap-1.5">

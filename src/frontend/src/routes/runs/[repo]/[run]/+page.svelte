@@ -6,6 +6,7 @@
 	// snapshot, and the ledger is the same windowed feed the loom reads, so
 	// this page adds no endpoint and no schema.
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import RunNode from '$lib/RunNode.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
@@ -57,7 +58,8 @@
 {#if unauthenticated}
 	<div class="mx-auto max-w-xl p-6">
 		<div class="panel p-4 text-sm text-stone-300">
-			Session expired. <a class="text-amber-300 underline" href="/login">Sign in</a> to read this run.
+			Session expired. <a class="text-amber-300 underline" href={resolve('/login')}>Sign in</a> to read
+			this run.
 		</div>
 	</div>
 {:else if error}

@@ -142,7 +142,9 @@ test('fuelRows derives countdown and window-elapsed fraction from resets_at', ()
 	assert.equal(rows[0].resetShort, '2h30m');
 	assert.ok(Math.abs((rows[0].timeFraction ?? 0) - 0.5) < 0.001);
 	assert.equal(rows[1].resetShort, '4d2h');
-	assert.ok(Math.abs((rows[1].timeFraction ?? 0) - (1 - (4 * 86400 + 2 * 3600) / (7 * 86400))) < 0.001);
+	assert.ok(
+		Math.abs((rows[1].timeFraction ?? 0) - (1 - (4 * 86400 + 2 * 3600) / (7 * 86400))) < 0.001
+	);
 	assert.equal(rows[2].resetShort, null);
 	assert.equal(rows[2].timeFraction, null);
 });

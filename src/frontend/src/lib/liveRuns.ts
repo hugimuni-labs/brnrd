@@ -108,7 +108,9 @@ export async function requestRunStop(
 		throw new LiveRunsAuthError('not signed in');
 	}
 	if (!res.ok) {
-		throw new Error(res.status === 404 ? 'that run is no longer live' : `stop failed: ${res.status}`);
+		throw new Error(
+			res.status === 404 ? 'that run is no longer live' : `stop failed: ${res.status}`
+		);
 	}
 	return ((await res.json()) as { stop_request: RunStopRequest }).stop_request;
 }
