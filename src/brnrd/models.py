@@ -116,6 +116,8 @@ class Daemon(Base):
     runners_json: Mapped[str] = mapped_column(Text, default="[]")
     runners_default: Mapped[str | None] = mapped_column(String(64), nullable=True)
     runners_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    environment_default: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    environments_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class ActivityRecord(Base):
@@ -313,6 +315,8 @@ class RunnerWakeRequest(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     # Profile name as published in the rack (`RunnerProfileIn.name`).
     profile: Mapped[str] = mapped_column(String(64))
+    repo_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    environment: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

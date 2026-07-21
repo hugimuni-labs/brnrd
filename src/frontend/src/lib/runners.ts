@@ -19,6 +19,7 @@ export interface RunnerProfile {
 	capability_freshness?: string | null;
 	generated_core?: boolean | null;
 	availability?: string | null;
+	available?: boolean | null;
 	/** True on the profile the daemon resolved as its current selection. */
 	selected?: boolean | null;
 }
@@ -29,6 +30,8 @@ export interface RunnerProfile {
 export interface WakeRequest {
 	request_id: string;
 	profile: string;
+	repo_label: string | null;
+	environment: string | null;
 	requested_at: string | null;
 	status: string;
 }
@@ -66,13 +69,18 @@ export async function fetchRunners(fetchImpl: typeof fetch = fetch): Promise<Run
 /** Tap a rack row: park a one-shot "next wake on this profile" request. */
 export async function requestWake(
 	profile: string,
+	dispatch: { repo_label?: string | null; environment?: string | null } = {},
 	fetchImpl: typeof fetch = fetch
 ): Promise<WakeRequest> {
 	const res = await fetchImpl('/v1/dashboard/runners/wake-request', {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ profile })
+		body: JSON.stringify({
+			profile,
+			repo_label: dispatch.repo_label ?? null,
+			environment: dispatch.environment ?? null
+		})
 	});
 	if (res.status === 401) {
 		throw new RunnersAuthError('not signed in');

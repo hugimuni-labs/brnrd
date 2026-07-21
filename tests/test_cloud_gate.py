@@ -1270,7 +1270,12 @@ def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
         runner_mod, "available_runner_catalog", lambda root, selected=None: catalog
     )
     snapshot = cloud._runners_snapshot(brr_dir)
-    assert snapshot == {"profiles": catalog, "default": "claude-fable"}
+    assert snapshot["profiles"] == catalog
+    assert snapshot["default"] == "claude-fable"
+    assert snapshot["environment_default"] == "worktree"
+    assert [row["name"] for row in snapshot["environments"]] == [
+        "worktree", "docker", "solitary",
+    ]
 
     def _boom(root, overrides=None):
         raise RuntimeError("no profile")

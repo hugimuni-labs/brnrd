@@ -320,9 +320,19 @@ class RunnerProfileIn(BaseModel):
     capability_freshness: str | None = Field(default=None, max_length=64)
     generated_core: bool | None = None
     availability: str | None = Field(default=None, max_length=32)
+    available: bool | None = None
+    on_path: bool | None = None
+    stale: bool | None = None
+    pin: str | None = Field(default=None, max_length=128)
     selected: bool | None = None
 
     model_config = {"populate_by_name": True}
+
+
+class EnvironmentOptionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+    available: bool = True
+    reason: str | None = Field(default=None, max_length=255)
 
 
 class RunnersReport(BaseModel):
@@ -336,6 +346,8 @@ class RunnersReport(BaseModel):
 
     profiles: list[RunnerProfileIn] = Field(default_factory=list)
     default: str | None = Field(default=None, max_length=64)
+    environment_default: str | None = Field(default=None, max_length=32)
+    environments: list[EnvironmentOptionIn] = Field(default_factory=list)
     # Wake-request ids this daemon has consumed since its last publish
     # (#328 tap-to-request): a dispatched wake ran on the requested profile,
     # so the server should retire the row (and with it the rack chip).
@@ -347,6 +359,8 @@ class RunnerWakeRequestOut(BaseModel):
 
     request_id: str
     profile: str
+    repo_label: str | None = None
+    environment: str | None = None
     requested_at: datetime | None = None
     status: str
 
@@ -354,6 +368,8 @@ class RunnerWakeRequestOut(BaseModel):
 class RunnersOut(BaseModel):
     profiles: list[RunnerProfileIn]
     default: str | None = None
+    environment_default: str | None = None
+    environments: list[EnvironmentOptionIn] = Field(default_factory=list)
     runners_updated_at: datetime | None = None
     # Piggyback channel: the account's pending wake request, if any, rides
     # back on the daemon's own catalog publish tick — no extra polling loop.

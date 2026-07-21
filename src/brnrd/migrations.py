@@ -27,6 +27,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_github_installed_repos(conn)
         if _table_exists(conn, "daemons"):
             _migrate_daemons(conn)
+        if _table_exists(conn, "runner_wake_requests"):
+            _migrate_runner_wake_requests(conn)
         if _table_exists(conn, "channel_routes"):
             _migrate_channel_routes(conn)
         if _table_exists(conn, "events"):
@@ -168,6 +170,13 @@ def _migrate_daemons(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_default VARCHAR(64)"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_updated_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS environment_default VARCHAR(32)"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS environments_json TEXT DEFAULT '[]'"))
+
+
+def _migrate_runner_wake_requests(conn: Connection) -> None:
+    conn.execute(text("ALTER TABLE runner_wake_requests ADD COLUMN IF NOT EXISTS repo_label VARCHAR(255)"))
+    conn.execute(text("ALTER TABLE runner_wake_requests ADD COLUMN IF NOT EXISTS environment VARCHAR(32)"))
 
 
 def _migrate_channel_routes(conn: Connection) -> None:

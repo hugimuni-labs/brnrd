@@ -45,6 +45,7 @@ _SCHEDULED_STATUSES = {"scheduled", "deferred", "sleeping"}
 _FAILED_STATUSES = {"failed", "error", "errored", "cancelled", "canceled"}
 _COMPLETED_STATUSES = {"complete", "completed", "done", "responded", "success", "succeeded"}
 _PARKED_STATUSES = {"parked", "respawn", "respawned"}
+_DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
 
 
 def _duration_label(start: datetime | None, end: datetime | None = None) -> str:
@@ -638,6 +639,7 @@ def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
     repo: Repo = row["repo"]
     return {
         "id": repo.id,
+        "dispatch_default": bool(row.get("dispatch_default")),
         "repo_full_name": repo.repo_full_name,
         "forge": repo.forge,
         "forge_repo_id": repo.forge_repo_id,
@@ -655,6 +657,8 @@ def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
         "daemon_last_seen_at": _iso(row.get("daemon_last_seen_at")),
         "latest_daemon_name": row["latest_daemon_name"],
         "gates": row["gates"],
+        "environment_default": row.get("environment_default"),
+        "environments": row.get("environments", []),
         "setup_command": row["setup_command"],
         "telegram_pair_enabled": True,
     }
@@ -789,7 +793,26 @@ async def dashboard_runners_wake_request(
     profile = str((payload or {}).get("profile") or "").strip()
     if not profile or len(profile) > 64:
         return JSONResponse({"detail": "profile name required"}, status_code=422)
-    row = wake_requests.create(db, account_id, profile)
+    repo_label = str((payload or {}).get("repo_label") or "").strip() or None
+    environment = str((payload or {}).get("environment") or "").strip() or None
+    if repo_label is not None:
+        repo = db.execute(
+            select(Repo).where(
+                Repo.account_id == account_id,
+                Repo.repo_full_name == repo_label,
+            )
+        ).scalar_one_or_none()
+        if repo is None:
+            return JSONResponse({"detail": "repo_label is not connected to this account"}, status_code=422)
+    if environment is not None and environment not in _DISPATCH_ENVIRONMENTS:
+        return JSONResponse({"detail": "unknown dispatch environment"}, status_code=422)
+    row = wake_requests.create(
+        db,
+        account_id,
+        profile,
+        repo_label=repo_label,
+        environment=environment,
+    )
     return JSONResponse({"wake_request": wake_requests.view(row)})
 
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -1526,7 +1527,8 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
     packaged registry alone) is deliberate: installed shells update on
     their own clock, and a hardcoded menu rots silently (#343).
     """
-    from .. import runner
+    from .. import config as _config, runner
+    from ..run import _cfg_environment_policy, _docker_configured, resolve_env
 
     repo_root = brr_dir.parent
     default: str | None
@@ -1539,7 +1541,28 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
     except Exception as e:
         print(f"[brnrd:cloud] runner catalog read failed: {e}")
         profiles = []
-    return {"profiles": profiles, "default": default}
+    cfg = _config.load_config(repo_root)
+    policy = _cfg_environment_policy(cfg)
+    try:
+        environment_default = resolve_env(policy, cfg)
+    except ValueError:
+        environment_default = policy or None
+    docker_reason: str | None = None
+    if not _docker_configured(cfg):
+        docker_reason = "docker.image is not configured"
+    elif shutil.which("docker") is None:
+        docker_reason = "Docker CLI is not on PATH"
+    environments = [
+        {"name": "worktree", "available": True},
+        {"name": "docker", "available": docker_reason is None, "reason": docker_reason},
+        {"name": "solitary", "available": docker_reason is None, "reason": docker_reason},
+    ]
+    return {
+        "profiles": profiles,
+        "default": default,
+        "environment_default": environment_default,
+        "environments": environments,
+    }
 
 
 def _publish_runners(brr_dir: Path, state: dict) -> None:

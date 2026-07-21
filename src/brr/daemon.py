@@ -1570,6 +1570,64 @@ def _dispatchable_targets(
     return sorted(targets, key=lambda target: _event_mtime(target.event))
 
 
+def _apply_dashboard_wake_request(
+    target: _DispatchTarget,
+    account_context: account.AccountContext,
+    default_repo_root: Path,
+) -> _DispatchTarget:
+    """Bind a parked dispatch-header choice to the lead event atomically.
+
+    The request lives beside the account daemon's default repo. Applying it
+    here, before dispatch, is what lets ``repo_label`` choose a different
+    registered execution root; ``_run_worker`` is too late because its root
+    has already been selected. An event-level runner pin keeps outranking the
+    one-shot dashboard choice, preserving the rack's existing semantics.
+    """
+    if any(target.event.get(key) for key in ("shell", "core", "runner")):
+        return target
+    original_target = target
+    brr_dir = gitops.shared_brr_dir(default_repo_root)
+    request = wake_request_mod.pending(brr_dir)
+    if request is None:
+        return target
+
+    repo_label = str(request.get("repo_label") or "").strip()
+    if repo_label:
+        repo = account_context.repo_for_label(repo_label)
+        if repo is None:
+            return target
+        target = _DispatchTarget(
+            event=target.event,
+            repo_root=repo.root,
+            inbox_dir=target.inbox_dir,
+            responses_dir=target.responses_dir,
+            repo_label=repo.label,
+        )
+
+    requested_profile = request["profile"]
+    if runner.profile_metadata(requested_profile, target.repo_root) is None:
+        print(
+            f"[brnrd] wake request {request['request_id']} names unknown "
+            f"profile '{requested_profile}' for {target.repo_label}; dropping it"
+        )
+        wake_request_mod.consume(brr_dir, request["request_id"])
+        return original_target
+
+    updates: dict[str, object] = {
+        "runner": requested_profile,
+        "dashboard_wake_request_id": request["request_id"],
+    }
+    if repo_label:
+        updates["repo_label"] = repo_label
+    environment = str(request.get("environment") or "").strip()
+    if environment:
+        updates["environment"] = environment
+    protocol.update_event_meta(target.event, **updates)
+    target.event.update(updates)
+    wake_request_mod.consume(brr_dir, request["request_id"])
+    return target
+
+
 def _start_account_gates(
     account_context: account.AccountContext,
     default_repo_root: Path,
@@ -1713,7 +1771,11 @@ def _run_worker(
     # event-level pin (respawn shell:/core:, quality: escalate) is a
     # deliberate per-run choice and wins — the tap then stays pending for
     # the next unpinned wake rather than being silently swallowed.
-    runner_wake_note: str | None = None
+    runner_wake_note: str | None = (
+        "requested from the dashboard dispatch header"
+        if event.get("dashboard_wake_request_id")
+        else None
+    )
     wake_req = wake_request_mod.pending(brr_dir)
     if wake_req and not any(
         runner_overrides.get(key) for key in ("shell", "core", "runner")
@@ -7850,7 +7912,9 @@ def start(
                         # whole settled burst and folds the rest in (the
                         # multi-response ``event:`` path), so a burst becomes
                         # one thought, not one spawn per fragment.
-                        target = pending[0]
+                        target = _apply_dashboard_wake_request(
+                            pending[0], account_context, repo_root,
+                        )
                         event = target.event
                         eid = event["id"]
                         extra = len(pending) - 1
