@@ -9,12 +9,13 @@ runner responses). Tests monkeypatch ``send_message``.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
 
 _API = "https://api.telegram.org/bot{token}/{method}"
+_FILE_API = "https://api.telegram.org/file/bot{token}/{file_path}"
 _START_RE = re.compile(r"^/start(?:@\w+)?\s+(\S+)")
 
 # Telegram rejects messages over 4096 chars with HTTP 400; stay under
@@ -38,9 +39,18 @@ class ParsedMessage:
     # anything (pairing, commands, or an enqueue) — see webhooks.telegram_webhook.
     is_edit: bool = False
     # True when the message carried an attachment (photo, document, voice, …).
-    # brnrd doesn't ingest media; the flag lets the webhook annotate a caption
+    # brnrd stores *pointers* for image attachments (see ``attachments``); the
+    # flag still covers everything else so the webhook can annotate a caption
     # or answer a media-only message instead of dropping it in silence.
     has_media: bool = False
+    # #525 — image-attachment pointers: ``{"file_id", "filename", "kind"}``
+    # dicts (kind ``photo`` | ``document``), plus ``file_size`` when Telegram
+    # reported one. Pointers only — the server never stores media bytes at
+    # rest (#543 data minimization); a daemon fetches bytes through the
+    # authenticated read-through proxy at ingestion time. Qualification
+    # mirrors the local gate (``brr/gates/telegram.py::_pick_image_file_id``):
+    # largest PhotoSize for a photo, documents only with an image/* MIME.
+    attachments: list[dict] = field(default_factory=list)
 
 
 def parse_update(payload: dict) -> ParsedMessage | None:
@@ -76,6 +86,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     )
     if chat_id is None or (not text and not has_media):
         return None
+    attachments = extract_attachments(msg)
     raw_date = msg.get("date")
     try:
         message_date = datetime.fromtimestamp(int(raw_date), timezone.utc)
@@ -96,7 +107,117 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         username=sender.get("username") or "",
         is_edit=is_edit,
         has_media=has_media,
+        attachments=attachments,
     )
+
+
+def _safe_filename(name: str, fallback: str) -> str:
+    """Bare basename, path-separator-free, bounded — the pointer's filename
+    later becomes a local file the daemon writes, so it must never smuggle
+    a path."""
+    cleaned = str(name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if cleaned in ("", ".", ".."):
+        cleaned = fallback
+    return cleaned[:128]
+
+
+def extract_attachments(msg: dict) -> list[dict]:
+    """Image-attachment pointers for *msg* — #525.
+
+    Same qualification rules as the local polling gate
+    (``brr/gates/telegram.py::_pick_image_file_id``): a ``photo`` is an
+    ascending-resolution ``PhotoSize`` array with no filename of its own
+    (Telegram transcodes photos to JPEG), so the largest size is taken and
+    named generically; a ``document`` keeps its filename but qualifies only
+    with an image/* MIME. Everything else (voice, video, sticker, non-image
+    documents) is annotated-not-fetched — this is image support, not a
+    general attachment pipeline.
+    """
+    photo = msg.get("photo")
+    if isinstance(photo, list) and photo:
+        largest = photo[-1]
+        if isinstance(largest, dict) and largest.get("file_id"):
+            pointer: dict = {
+                "file_id": str(largest["file_id"]),
+                "filename": "photo.jpg",
+                "kind": "photo",
+            }
+            if isinstance(largest.get("file_size"), int):
+                pointer["file_size"] = largest["file_size"]
+            return [pointer]
+    document = msg.get("document")
+    if isinstance(document, dict):
+        mime = str(document.get("mime_type") or "")
+        if mime.startswith("image/") and document.get("file_id"):
+            pointer = {
+                "file_id": str(document["file_id"]),
+                "filename": _safe_filename(str(document.get("file_name") or ""), "image"),
+                "kind": "document",
+            }
+            if isinstance(document.get("file_size"), int):
+                pointer["file_size"] = document["file_size"]
+            return [pointer]
+    return []
+
+
+class FileTooLarge(RuntimeError):
+    """A Telegram file exceeds the configured proxy size cap."""
+
+
+def resolve_file(token: str, file_id: str, *, timeout: float = 30.0) -> dict:
+    """Resolve *file_id* via ``getFile`` — fresh per request, never cached.
+
+    Returns Telegram's ``File`` object (``file_path``, usually
+    ``file_size``). Raises ``RuntimeError`` on any failure (expired file id,
+    API error) so the proxy endpoint can answer with an honest upstream
+    error instead of fabricating bytes.
+    """
+    resp = httpx.post(
+        _API.format(token=token, method="getFile"),
+        json={"file_id": file_id},
+        timeout=timeout,
+    )
+    payload = {}
+    try:
+        payload = resp.json() if resp.content else {}
+    except ValueError:
+        pass
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if resp.status_code != 200 or not isinstance(result, dict) or not result.get("file_path"):
+        detail = str((payload or {}).get("description") or f"HTTP {resp.status_code}")
+        raise RuntimeError(f"telegram getFile failed: {detail}")
+    return result
+
+
+def fetch_file_bytes(
+    token: str,
+    file_path: str,
+    *,
+    max_bytes: int,
+    timeout: float = 60.0,
+) -> bytes:
+    """Stream a resolved Telegram file through, capped at *max_bytes*.
+
+    The bytes pass through memory only — nothing is written at rest
+    server-side (#543 bounded-mirror constraint). Raises ``FileTooLarge``
+    past the cap, ``RuntimeError`` on transport failure.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        with httpx.stream(
+            "GET", _FILE_API.format(token=token, file_path=file_path), timeout=timeout
+        ) as resp:
+            if resp.status_code != 200:
+                raise RuntimeError(f"telegram file fetch failed: HTTP {resp.status_code}")
+            for chunk in resp.iter_bytes(65536):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise FileTooLarge(f"file exceeds {max_bytes} bytes")
+                chunks.append(chunk)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"telegram file fetch failed: {exc}") from exc
+    return b"".join(chunks)
 
 
 def parse_migration(payload: dict) -> tuple[str, str] | None:

@@ -70,6 +70,10 @@ class Settings:
     # (ChannelRoute.paired_user_id) is always trusted; this allowlist adds
     # extra trusted user ids (e.g. teammates) on top of that principal.
     telegram_authz_allowlist: tuple[int, ...] = _env_int_tuple("BRNRD_TELEGRAM_AUTHZ_ALLOWLIST")
+    # #525 — per-file size cap for the attachment read-through proxy
+    # (GET /v1/daemons/events/{id}/attachments/{i}); bytes stream through
+    # memory only, so the cap bounds transient buffering, not storage.
+    telegram_media_max_mb: int = _env_int("BRNRD_TELEGRAM_MEDIA_MAX_MB", 10)
 
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 
