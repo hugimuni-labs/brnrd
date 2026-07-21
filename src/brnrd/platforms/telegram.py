@@ -37,6 +37,10 @@ class ParsedMessage:
     # #409 — True for an ``edited_message`` update. An edit never triggers
     # anything (pairing, commands, or an enqueue) — see webhooks.telegram_webhook.
     is_edit: bool = False
+    # True when the message carried an attachment (photo, document, voice, …).
+    # brnrd doesn't ingest media; the flag lets the webhook annotate a caption
+    # or answer a media-only message instead of dropping it in silence.
+    has_media: bool = False
 
 
 def parse_update(payload: dict) -> ParsedMessage | None:
@@ -58,8 +62,19 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         return None
     chat = msg.get("chat") or {}
     chat_id = chat.get("id")
-    text = (msg.get("text") or "").strip()
-    if chat_id is None or not text:
+    # A media message carries its text as ``caption``, not ``text`` — a
+    # screenshot with a question under it used to fall through the ``not
+    # text`` gate and vanish without an audit record (found live
+    # 2026-07-21: the maintainer's "grouping question" screenshot).
+    text = (msg.get("text") or "").strip() or (msg.get("caption") or "").strip()
+    has_media = any(
+        msg.get(key)
+        for key in (
+            "photo", "document", "video", "video_note", "voice", "audio",
+            "animation", "sticker",
+        )
+    )
+    if chat_id is None or (not text and not has_media):
         return None
     raw_date = msg.get("date")
     try:
@@ -80,6 +95,7 @@ def parse_update(payload: dict) -> ParsedMessage | None:
         user_id=user_id,
         username=sender.get("username") or "",
         is_edit=is_edit,
+        has_media=has_media,
     )
 
 

@@ -357,7 +357,16 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
         if not _authorized(settings, parsed, route):
             _audit_reject(parsed, reason="not_authorized")
             return {"ok": True}
-        _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=parsed.text)
+        if not parsed.text:
+            # Media with no caption: nothing brnrd can ingest yet. Say so —
+            # a silent drop reads as "the agent ignored me" (2026-07-21).
+            _audit_reject(parsed, reason="media_without_text")
+            _reply(settings, parsed, "I can't see attached media yet — that message had no text I can read. Add a caption or send it as words.")
+            return {"ok": True}
+        body = parsed.text
+        if parsed.has_media:
+            body += "\n\n[attached media not ingested — brnrd received the text only]"
+        _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=body)
     return {"ok": True}
 
 

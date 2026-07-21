@@ -185,6 +185,58 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
     }
 
 
+def test_photo_caption_enqueues_with_media_note(env):
+    """A media message carries its text as ``caption``; it must enqueue
+    (annotated), not vanish (2026-07-21: a screenshot question was dropped
+    with no audit record)."""
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    update = _message(555, "why are the rows grouped like this?", message_id=43)
+    msg = update["message"]
+    del msg["text"]
+    msg["caption"] = "why are the rows grouped like this?"
+    msg["photo"] = [{"file_id": "f1", "width": 90, "height": 60}]
+    r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.body == (
+            "why are the rows grouped like this?"
+            "\n\n[attached media not ingested — brnrd received the text only]"
+        )
+
+
+def test_media_without_text_replies_instead_of_silent_drop(env, monkeypatch):
+    """A captionless photo can't enqueue anything — but the sender must be
+    told, not ghosted."""
+    app, client, _ = env
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_message",
+        lambda token, chat_id, text, **kw: sent.append(text) or 1,
+    )
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    update = _message(555, "", message_id=44)
+    msg = update["message"]
+    del msg["text"]
+    msg["photo"] = [{"file_id": "f2", "width": 90, "height": 60}]
+    r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.source == "telegram")).scalar_one_or_none() is None
+    assert any("can't see attached media" in t for t in sent)
+
+
 # ── #409 default-closed authorization gate ───────────────────────────
 
 
