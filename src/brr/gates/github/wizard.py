@@ -145,10 +145,33 @@ def bind(brr_dir: Path) -> None:
     else:
         triggers["mention"] = mention
 
+    # Assignee trigger: issues/PRs assigned to this login fire events.
+    # Default derives from the mention handle — the brnrd-bot flow uses
+    # one summon identity for both gestures. Needs a real account:
+    # @-autocomplete and the assignee picker only offer collaborators,
+    # so the ceremony is (1) create the machine account, (2) invite it
+    # with the *triage* role — assignable, zero code push — (3) accept
+    # the invite from that account.
+    # Opt-in (default off): it only works once the login exists and holds
+    # the repo invite, so enabling it silently would poll for a ghost.
+    assignee = _prompt_trigger(
+        "Assignee login to watch (issues assigned to this login)",
+        str(triggers.get("assignee") or "off"),
+    )
+    if assignee is None or assignee == "off":
+        triggers.pop("assignee", None)
+    else:
+        triggers["assignee"] = assignee.lstrip("@")
+        print(
+            "[brnrd] Assignee trigger needs the login to be a repo collaborator:\n"
+            f"        invite '{triggers['assignee']}' with the 'triage' role and accept\n"
+            "        the invite from that account — that also lights up @-autocomplete.",
+        )
+
     if not triggers:
         print(
-            "[brnrd] No triggers configured — at least one of opened / label / mention "
-            "required.",
+            "[brnrd] No triggers configured — at least one of opened / label / "
+            "mention / assignee required.",
         )
         return
     state_dict["triggers"] = triggers
