@@ -16,10 +16,20 @@ def test_pending_roundtrip_and_removal(tmp_path):
     brr_dir = _brr(tmp_path)
     assert wake_request.pending(brr_dir) is None
 
-    wake_request.store_pending(brr_dir, {"request_id": "wake_1", "profile": "codex-mini"})
+    wake_request.store_pending(
+        brr_dir,
+        {
+            "request_id": "wake_1",
+            "profile": "codex-mini",
+            "repo_label": "Gurio/brr",
+            "environment": "solitary",
+        },
+    )
     assert wake_request.pending(brr_dir) == {
         "request_id": "wake_1",
         "profile": "codex-mini",
+        "repo_label": "Gurio/brr",
+        "environment": "solitary",
     }
 
     # Server reports nothing pending (canceled or superseded) → mirror clears.
@@ -77,6 +87,8 @@ def test_publish_runners_roundtrips_wake_request(tmp_path, monkeypatch):
             "pending_wake_request": {
                 "request_id": "wake_new",
                 "profile": "claude-haiku",
+                "repo_label": "Gurio/brr",
+                "environment": "docker",
                 "status": "pending",
             },
         }
@@ -92,6 +104,8 @@ def test_publish_runners_roundtrips_wake_request(tmp_path, monkeypatch):
     assert wake_request.pending(brr_dir) == {
         "request_id": "wake_new",
         "profile": "claude-haiku",
+        "repo_label": "Gurio/brr",
+        "environment": "docker",
     }
 
 
