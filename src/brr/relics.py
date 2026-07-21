@@ -40,6 +40,7 @@ module sits alongside.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -52,8 +53,17 @@ from . import knowledge
 CONTROL_NAME = ".relics.jsonl"
 
 _LIVE_KINDS = {
-    "commit", "branch", "pr", "kb", "issue", "comment", "message", "file",
+    "commit", "branch", "pr", "merge", "kb", "issue", "comment", "message",
+    "file",
 }
+
+# Subjects that attest a merge the run performed. GitHub's own generated
+# forms: a true merge commit ("Merge pull request #N from owner/branch"),
+# a local branch merge ("Merge branch 'name'"), and a squash-merge landing
+# as a single-parent commit suffixed "(#N)".
+_MERGE_PR_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b")
+_MERGE_BRANCH_SUBJECT = re.compile(r"^Merge branch '([^']+)'")
+_SQUASH_PR_SUFFIX = re.compile(r"\(#(\d+)\)$")
 
 # A run that appends more than this is almost certainly looping, not
 # reporting produce; cap rather than let one bad run blow up every reader
@@ -70,6 +80,7 @@ _ICONS: dict[str, str] = {
     "commit": "🔨",
     "branch": "🌿",
     "pr": "🔀",
+    "merge": "⤵️",
     "issue": "🎫",
     "comment": "💬",
     "kb": "📚",
@@ -97,6 +108,13 @@ def label(record: dict[str, Any]) -> str:
         return str(record.get("name") or "branch")
     if kind == "pr":
         return f"PR #{record.get('number') or '?'}"
+    if kind == "merge":
+        if record.get("pr"):
+            return f"merged PR #{record.get('pr')}"
+        if record.get("branch"):
+            return f"merged {record.get('branch')}"
+        subject = str(record.get("subject") or "").strip()
+        return subject or f"merge {str(record.get('sha') or '')[:7]}".strip()
     if kind == "issue":
         action = record.get("action")
         return f"issue #{record.get('number') or '?'}" + (f" ({action})" if action else "")
@@ -260,11 +278,13 @@ def collection_scope(
 
 def _commits_since_seed(
     repo_root: Path, branch: str, seed_ref: str | None,
-) -> list[tuple[str, str]]:
-    """Return ``[(short_sha, subject), ...]`` for commits on *branch* not on
-    the seed ref, newest first (``git log``'s own default order — matches
-    ``daemon.py``'s existing ``_commits_between``). Read-only ``git`` calls;
-    any failure (no repo, unknown ref, timeout) degrades to ``[]``.
+) -> list[tuple[str, str, int, str]]:
+    """Return ``[(short_sha, subject, parent_count, committer_email), ...]``
+    for commits on *branch* not on the seed ref, newest first (``git log``'s
+    own default order — matches ``daemon.py``'s existing ``_commits_between``).
+    Parent count and committer identify merges (see :func:`derive_auto`).
+    Read-only ``git`` calls; any failure (no repo, unknown ref, timeout)
+    degrades to ``[]``.
     """
     if not branch:
         return []
@@ -276,20 +296,23 @@ def _commits_since_seed(
         )
         base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else seed
         result = subprocess.run(
-            ["git", "log", f"{base_ref}..{branch}", "--format=%h\x1f%s", "--no-color"],
+            ["git", "log", f"{base_ref}..{branch}", "--format=%h\x1f%P\x1f%ce\x1f%s", "--no-color"],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0:
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, int, str]] = []
     for row in result.stdout.splitlines():
         if "\x1f" not in row:
             continue
-        sha, _, subject = row.partition("\x1f")
+        parts = row.split("\x1f", 3)
+        if len(parts) != 4:
+            continue
+        sha, parents, committer, subject = parts
         if sha:
-            out.append((sha, subject))
+            out.append((sha, subject, len(parents.split()), committer.strip()))
     return out
 
 
@@ -300,12 +323,32 @@ def derive_auto(
     seed_ref: str | None,
     outbox_dir: Path | None,
 ) -> list[dict[str, Any]]:
-    """Zero-resident-effort relics: commits, the pushed branch, and the PR.
+    """Zero-resident-effort relics: commits, merges, the pushed branch, and
+    the PR.
 
-    All three are already knowable — ``git log`` for commits, the existing
-    ``.pr`` control file for the PR — so this asks nothing new of the
-    resident, matching #317's own recommended shape ("no new collection
-    mechanism needed").
+    Commits and merges come from ``git log``; the PR from the existing
+    ``.pr`` control file — nothing new is asked of the resident, matching
+    #317's own recommended shape ("no new collection mechanism needed").
+
+    **Merges are a separate block from PRs made** (maintainer, 2026-07-21,
+    on run-260721-2122-x5ju's receipt): ``pr`` stays "a PR this run
+    created"; a merge the run *performed* is promoted from its commit row
+    to a ``merge`` relic instead of hiding among ordinary commits. Three
+    attested forms:
+
+    - a merge commit (≥2 parents) whose subject is GitHub's
+      "Merge pull request #N …" → ``{"kind": "merge", "pr": N, ...}``
+      linking the PR;
+    - any other merge commit ("Merge branch 'x'", octopus, hand-written)
+      → ``{"kind": "merge", "branch": x?, ...}`` linking the commit;
+    - a squash-merge landing (single parent, subject suffixed "(#N)")
+      **only when committed by GitHub itself** (``noreply@github.com``) —
+      the committer check keeps a hand-written "fix retention race (#501)"
+      issue reference from being misread as a merged PR.
+
+    Merges the run performed purely on the remote (``gh pr merge`` without
+    pulling the result into the local checkout) leave no local commit and
+    stay self-reportable — the one case git archaeology cannot attest.
     """
     if repo_root is None:
         return []
@@ -324,17 +367,52 @@ def derive_auto(
     override_kind = cfg.get("forge.kind") or None
     override_base = cfg.get("forge.url_base") or None
 
+    def _pr_url(number: str | int) -> str | None:
+        if not remote_url:
+            return None
+        parsed = forges.parse_remote(remote_url)
+        if parsed is None:
+            return None
+        _, owner, repo = parsed
+        return forges.pull_request_url(
+            remote_url, f"{owner}/{repo}", str(number),
+            override_kind=override_kind, override_url_base=override_base,
+        )
+
     if branch:
         commits = _commits_since_seed(repo_root, branch, seed_ref)
-        for sha, subject in commits[:_MAX_RECORDS]:
-            url = (
+        for sha, subject, parent_count, committer in commits[:_MAX_RECORDS]:
+            commit_url = (
                 forges.commit_url(
                     remote_url, sha,
                     override_kind=override_kind, override_url_base=override_base,
                 )
                 if remote_url else None
             )
-            out.append({"kind": "commit", "sha": sha, "subject": subject, "url": url})
+            merge: dict[str, Any] | None = None
+            if parent_count >= 2:
+                merge = {"kind": "merge", "sha": sha, "subject": subject}
+                pr_match = _MERGE_PR_SUBJECT.match(subject)
+                branch_match = _MERGE_BRANCH_SUBJECT.match(subject)
+                if pr_match:
+                    merge["pr"] = int(pr_match.group(1))
+                    merge["url"] = _pr_url(pr_match.group(1)) or commit_url
+                else:
+                    if branch_match:
+                        merge["branch"] = branch_match.group(1)
+                    merge["url"] = commit_url
+            elif committer == "noreply@github.com":
+                squash_match = _SQUASH_PR_SUFFIX.search(subject)
+                if squash_match:
+                    merge = {
+                        "kind": "merge", "sha": sha, "subject": subject,
+                        "pr": int(squash_match.group(1)),
+                        "url": _pr_url(squash_match.group(1)) or commit_url,
+                    }
+            if merge is not None:
+                out.append(merge)
+            else:
+                out.append({"kind": "commit", "sha": sha, "subject": subject, "url": commit_url})
         if commits:
             branch_url = (
                 forges.view_branch_url(
@@ -346,14 +424,9 @@ def derive_auto(
             out.append({"kind": "branch", "name": branch, "url": branch_url})
 
     pr_number = _read_pr_control(outbox_dir)
-    if pr_number and remote_url:
-        parsed = forges.parse_remote(remote_url)
-        if parsed is not None:
-            _, owner, repo = parsed
-            url = forges.pull_request_url(
-                remote_url, f"{owner}/{repo}", pr_number,
-                override_kind=override_kind, override_url_base=override_base,
-            )
+    if pr_number:
+        url = _pr_url(pr_number)
+        if url:
             out.append({"kind": "pr", "number": int(pr_number), "url": url})
     return out
 
@@ -373,6 +446,13 @@ def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
     if kind == "commit":
         sha = str(record.get("sha") or "")
         return ("commit", sha[:7]) if sha else None
+    if kind == "merge":
+        # A merge keys on its commit sha but in its own namespace: the
+        # maintainer's explicit ask (2026-07-21) is that merges performed
+        # are a separate block from PRs made, so a merge relic never
+        # collapses into a ``pr`` relic for the same number.
+        sha = str(record.get("sha") or "")
+        return ("merge", sha[:7]) if sha else None
     if kind == "branch":
         name = str(record.get("name") or "")
         return ("branch", name) if name else None
