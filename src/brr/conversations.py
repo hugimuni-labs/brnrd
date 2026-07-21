@@ -281,7 +281,15 @@ _ORPHAN_BASENAME = "_orphan"
 
 
 class HistoryGroup(TypedDict, total=False):
-    """Agent-facing descriptor for one grouped deep-history jsonl file."""
+    """Agent-facing descriptor for one grouped deep-history jsonl file.
+
+    ``record_count`` is how many records actually landed in ``path``
+    (bounded by ``HISTORY_GROUP_TAIL_LIMIT``); ``total_record_count`` is
+    the thread's true size. When ``truncated`` is set, older records
+    were dropped from this per-run copy — they still live permanently
+    under ``store_path`` (the base conversation directory), which is
+    never bounded or copied.
+    """
 
     id: str
     kind: str
@@ -290,6 +298,9 @@ class HistoryGroup(TypedDict, total=False):
     label: str
     path: str
     record_count: int
+    total_record_count: int
+    truncated: bool
+    store_path: str
     dialogue_count: int
     latest_ts: str
 
@@ -965,9 +976,12 @@ def build_communication_snapshot(
 
     The snapshot is prompt-facing: it shows which thread is active,
     sibling channels for the same correspondent, and recent dialogue
-    turns woven across those channels. The full untruncated history stays
-    behind separate JSONL files produced by
-    :func:`write_grouped_history_files`.
+    turns woven across those channels. A bounded recent-tail copy of
+    deeper history lives in separate JSONL files produced by
+    :func:`write_grouped_history_files`; the full, permanent history for
+    every thread stays in the base conversation store
+    (:func:`conversation_path`), named in each group's ``store_path``
+    when its tail copy was truncated.
     """
     records_by_key: dict[str, list[dict[str, Any]]] = {}
     related_keys = conversation_keys_for_correspondent(
@@ -1005,24 +1019,43 @@ def build_communication_snapshot(
     return snapshot
 
 
+# Cap on records written per grouped-history file (#500). The base
+# conversation store under conversations/<key>/ already retains every
+# record permanently and cheaply (~15 MB across a live deployment); the
+# per-run copy this function writes is a wake-time convenience, not the
+# store of record, so it only needs a bounded recent tail. Before this
+# cap, one run's copy of a single long-lived thread ran to thousands of
+# records (one observed file: 7,868 records / 5.3 MB), multiplied by
+# every non-worker wake on that thread — 847 run dirs, 1.7 GB, most of
+# it the same records copied over and over.
+HISTORY_GROUP_TAIL_LIMIT = 400
+
+
 def write_grouped_history_files(
     brr_dir: Path,
     output_dir: Path,
     key: str,
     correspondent_key: str | None = None,
 ) -> list[HistoryGroup]:
-    """Write untruncated per-thread JSONL history files for a wake.
+    """Write bounded per-thread JSONL history files for a wake.
 
     Each file groups records by the input thread that produced them:
     native gate threads (Telegram / Slack / cloud relay channels) or
-    forge threads (GitHub issue / PR conversations). A manifest JSON is
-    written beside the JSONL files for machine consumers, while callers
-    use the returned group descriptors for prompt/context rendering.
+    forge threads (GitHub issue / PR conversations). Each file holds at
+    most the latest ``HISTORY_GROUP_TAIL_LIMIT`` records for its thread
+    (oldest-first, same order as before) — the full, permanent history
+    for every thread stays in the base conversation store
+    (``conversation_path``); it is never bounded or copied. A truncated
+    group's descriptor carries ``total_record_count``, ``truncated``,
+    and ``store_path`` so a reader whose snapshot is too thin can find
+    what a bounded per-run copy dropped. A manifest JSON is written
+    beside the JSONL files for machine consumers, while callers use the
+    returned group descriptors for prompt/context rendering.
     """
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Untruncated chat history: owner-only, same stance as the base store.
+    # Deep-history tail: owner-only, same stance as the base store.
     output_dir.chmod(0o700)
 
     groups: list[HistoryGroup] = []
@@ -1032,11 +1065,17 @@ def write_grouped_history_files(
         records = [_tag_record(r, related) for r in read_records(brr_dir, related)]
         if not records:
             continue
+        total = len(records)
+        tail = (
+            records[-HISTORY_GROUP_TAIL_LIMIT:]
+            if total > HISTORY_GROUP_TAIL_LIMIT
+            else records
+        )
         source = _conversation_source_from_key(related)
         kind = _history_group_kind(source)
         filename = f"{kind}-{safe_dir_name(related)}.jsonl"
         path = output_dir / filename
-        payload = "\n".join(json.dumps(r, sort_keys=True) for r in records)
+        payload = "\n".join(json.dumps(r, sort_keys=True) for r in tail)
         path.write_text(payload + "\n", encoding="utf-8")
         path.chmod(0o600)
         group: HistoryGroup = {
@@ -1046,10 +1085,14 @@ def write_grouped_history_files(
             "conversation_key": related,
             "label": _history_group_label(source, related),
             "path": str(path),
-            "record_count": len(records),
-            "dialogue_count": sum(1 for r in records if _is_dialogue_record(r)),
-            "latest_ts": _ts_key(records[-1]),
+            "record_count": len(tail),
+            "total_record_count": total,
+            "store_path": str(conversation_path(brr_dir, related)),
+            "dialogue_count": sum(1 for r in tail if _is_dialogue_record(r)),
+            "latest_ts": _ts_key(tail[-1]),
         }
+        if total > len(tail):
+            group["truncated"] = True
         groups.append(group)
 
     manifest = output_dir / "manifest.json"

@@ -2325,8 +2325,10 @@ def _format_communication_snapshot(
     """Render the curated cross-channel wake snapshot.
 
     This is the prompt-facing tier in the co-maintainer continuity model:
-    compact enough to ride every wake, with untruncated grouped history
-    one file read away when the resident needs more.
+    compact enough to ride every wake, with a bounded recent-tail of
+    grouped history one file read away when the resident needs more, and
+    a pointer to the permanent, untruncated base store for anything a
+    truncated tail dropped.
     """
     if not snapshot:
         return ""
@@ -2380,6 +2382,7 @@ def _format_communication_snapshot(
     groups = snapshot.get("history_groups")
     if isinstance(groups, list) and groups:
         lines.append("- On-demand grouped history:")
+        any_truncated = False
         for group in groups:
             if not isinstance(group, dict):
                 continue
@@ -2388,12 +2391,27 @@ def _format_communication_snapshot(
             if not label or not path:
                 continue
             count = group.get("record_count", 0)
-            lines.append(f"  - {label}: `{path}` ({count} records)")
-        lines.append(
+            if group.get("truncated"):
+                any_truncated = True
+                total = group.get("total_record_count", count)
+                store_path = str(group.get("store_path") or "").strip()
+                where = f" — full history: `{store_path}`" if store_path else ""
+                lines.append(
+                    f"  - {label}: `{path}` (latest {count} of {total} "
+                    f"records{where})"
+                )
+            else:
+                lines.append(f"  - {label}: `{path}` ({count} records)")
+        note = (
             "  Read these JSONL files only when the snapshot is too thin; "
-            "they are untruncated runtime records grouped by gate/forge "
-            "thread."
+            "they are runtime records grouped by gate/forge thread"
         )
+        note += (
+            ", truncated to the latest per group where noted above — the "
+            "full history for a truncated thread lives at its store path."
+            if any_truncated else "."
+        )
+        lines.append(note)
 
     forge_block = _format_forge_state(snapshot.get("forge"))
     if forge_block:

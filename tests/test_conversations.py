@@ -753,7 +753,7 @@ def test_build_communication_snapshot_no_failure_on_clean_thread(tmp_path):
     assert "prior_failure" not in snapshot
 
 
-def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
+def test_write_grouped_history_files_writes_small_thread_jsonl_untruncated(tmp_path):
     event = {
         "id": "evt-1",
         "source": "github",
@@ -779,6 +779,10 @@ def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
     group = groups[0]
     assert group["kind"] == "forge_thread"
     assert group["conversation_key"] == key
+    assert group["record_count"] == 2
+    assert group["total_record_count"] == 2
+    assert "truncated" not in group
+    assert group["store_path"] == str(conversations.conversation_path(tmp_path, key))
     records = [
         json.loads(line)
         for line in (tmp_path / group["path"]).read_text(encoding="utf-8").splitlines()
@@ -787,6 +791,45 @@ def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
     assert records[0]["conversation_key"] == key
     manifest = tmp_path / "runs" / "run-1" / "history" / "manifest.json"
     assert manifest.exists()
+
+
+def test_write_grouped_history_files_bounds_long_thread_to_tail(tmp_path):
+    """#500: a thread with far more records than the cap only copies the
+    tail into the per-run history file — the full-copy-per-wake behavior
+    that grew live `.brr/runs/` to 1.7 GB across 847 run dirs (base
+    conversation store on that deployment: 15 MB)."""
+    key = "telegram:1:"
+    over_by = 37
+    total_records = conversations.HISTORY_GROUP_TAIL_LIMIT + over_by
+    for i in range(total_records):
+        conversations.append_event(
+            tmp_path, key,
+            {"id": f"evt-{i}", "source": "telegram", "body": f"msg {i}"},
+        )
+
+    groups = conversations.write_grouped_history_files(
+        tmp_path, tmp_path / "runs" / "run-1" / "history", key,
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group["record_count"] == conversations.HISTORY_GROUP_TAIL_LIMIT
+    assert group["total_record_count"] == total_records
+    assert group["truncated"] is True
+    assert group["store_path"] == str(conversations.conversation_path(tmp_path, key))
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / group["path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == conversations.HISTORY_GROUP_TAIL_LIMIT
+    # Oldest-first order preserved; the tail keeps the *latest* records.
+    assert records[0]["event_id"] == f"evt-{over_by}"
+    assert records[-1]["event_id"] == f"evt-{total_records - 1}"
+
+    # The full history is never bounded or copied away: it's still all
+    # there in the base conversation store this group points at.
+    assert len(conversations.read_records(tmp_path, key)) == total_records
 
 
 def test_read_recent_prefers_dialogue_over_lifecycle_noise(tmp_path):
