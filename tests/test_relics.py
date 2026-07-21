@@ -471,3 +471,117 @@ def test_collection_scope_detached_head_yields_no_branch(tmp_path: Path):
 
 def test_collection_scope_without_work_dir_is_meta_only():
     assert relics.collection_scope({}, None) == (None, None)
+
+
+# ── merge relics: merges performed are their own block (2026-07-21) ──
+
+
+def _merge_repo(tmp_path: Path) -> Path:
+    """A repo on main with one feature branch merged via merge commit."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+                    cwd=repo, check=True)
+    return repo
+
+
+def test_derive_auto_promotes_pr_merge_commit_to_merge_relic(tmp_path: Path):
+    repo = _merge_repo(tmp_path)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "checkout", "-b", "brr/feature"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="add b")
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "merge", "--no-ff", "brr/feature",
+         "-m", "Merge pull request #532 from Gurio/brr/feature"],
+        cwd=repo, check=True,
+    )
+
+    out = relics.derive_auto(repo, branch="main", seed_ref=start, outbox_dir=None)
+    kinds = [r["kind"] for r in out]
+    assert kinds == ["merge", "commit", "branch"]
+    merge = out[0]
+    assert merge["pr"] == 532
+    assert merge["url"] == "https://github.com/Gurio/brr/pull/532"
+    assert merge["subject"].startswith("Merge pull request #532")
+    # The underlying feature commit still rides as an ordinary commit.
+    assert out[1]["subject"] == "add b"
+
+
+def test_derive_auto_promotes_branch_merge_commit_to_merge_relic(tmp_path: Path):
+    repo = _merge_repo(tmp_path)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "checkout", "-b", "brr/home-as-root"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="add b")
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "merge", "--no-ff", "brr/home-as-root"], cwd=repo, check=True)
+
+    out = relics.derive_auto(repo, branch="main", seed_ref=start, outbox_dir=None)
+    merge = out[0]
+    assert merge["kind"] == "merge"
+    assert merge["branch"] == "brr/home-as-root"
+    assert "pr" not in merge
+    assert merge["url"].startswith("https://github.com/Gurio/brr/commit/")
+    assert relics.label(merge) == "merged brr/home-as-root"
+
+
+def test_derive_auto_squash_merge_requires_github_committer(tmp_path: Path):
+    repo = _merge_repo(tmp_path)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    # Hand-written issue reference: stays an ordinary commit.
+    commit_files(repo, {"b.txt": "2"}, message="fix retention race (#501)")
+    # GitHub-committed squash landing: promoted to a merge relic.
+    (repo / "c.txt").write_text("3", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=GitHub", "-c", "user.email=noreply@github.com",
+         "commit", "-m", "cloud media ingest (#525)"],
+        cwd=repo, check=True,
+    )
+
+    out = relics.derive_auto(repo, branch="main", seed_ref=start, outbox_dir=None)
+    kinds = [r["kind"] for r in out]
+    assert kinds == ["merge", "commit", "branch"]
+    assert out[0]["pr"] == 525
+    assert out[0]["url"] == "https://github.com/Gurio/brr/pull/525"
+    assert out[1]["subject"] == "fix retention race (#501)"
+
+
+def test_merge_relic_never_collapses_into_pr_relic(tmp_path: Path):
+    # A run that created PR #532 (.pr) and merged it locally shows both
+    # blocks: the PR made and the merge performed. Separate, per the
+    # maintainer's 2026-07-21 steer.
+    repo = _merge_repo(tmp_path)
+    start = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                           capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "checkout", "-b", "brr/feature"], cwd=repo, check=True)
+    commit_files(repo, {"b.txt": "2"}, message="add b")
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "merge", "--no-ff", "brr/feature",
+         "-m", "Merge pull request #532 from Gurio/brr/feature"],
+        cwd=repo, check=True,
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("532\n", encoding="utf-8")
+
+    out = relics.collect(repo, branch="main", seed_ref=start, outbox_dir=outbox)
+    kinds = [r["kind"] for r in out]
+    assert kinds.count("merge") == 1
+    assert kinds.count("pr") == 1
+    counts = relics.counts_by_kind(out)
+    assert counts["merge"] == 1
+    assert counts["pr"] == 1
+
+
+def test_merge_label_and_icon():
+    assert relics.label({"kind": "merge", "pr": 532}) == "merged PR #532"
+    assert relics.label({"kind": "merge", "branch": "brr/x"}) == "merged brr/x"
+    assert relics.label({"kind": "merge", "sha": "abc1234def",
+                         "subject": ""}) == "merge abc1234"
+    assert relics.icon("merge") == "⤵️"
