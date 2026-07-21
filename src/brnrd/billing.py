@@ -14,6 +14,7 @@ Implements the kb design-billing.md contract on the brnrd side:
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -45,6 +46,52 @@ def _naive_utc(dt: datetime) -> datetime:
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
+
+
+# --- entitlements (#501 seam; decision ledger 2026-07-21) --------------------
+
+
+@dataclass(frozen=True)
+class Entitlements:
+    """What an account's subscription state entitles it to, resolved once.
+
+    The single enablement seam every limit-enforcement point calls
+    (``limits.py``); free vs supporter is decided *here*, never at the
+    enforcement site. ``headroom_lifted`` is the supporter tier's one
+    concrete entitlement: the free tier's headroom limits stop binding.
+    Contributor/grandfathered accounts get it the same way — their Stripe
+    subscription flips ``Account.tier`` like any other; nothing keys on
+    account ids.
+
+    ``degraded`` marks subscription state as unreadable (billing outage):
+    headroom fails open (lifted) so paying users' ingress never bricks on
+    a billing read; abuse ceilings are billing-independent and still bind.
+    """
+
+    tier: str  # "free" | "supporter" | "unknown"
+    headroom_lifted: bool
+    degraded: bool = False
+
+
+FREE_ENTITLEMENTS = Entitlements(tier="free", headroom_lifted=False)
+DEGRADED_ENTITLEMENTS = Entitlements(tier="unknown", headroom_lifted=True, degraded=True)
+
+
+def entitlements(db: Session, account: Account | str | None) -> Entitlements:
+    """Resolve ``Entitlements`` for an account (row or id).
+
+    Reads ``Account.tier``, which only Stripe webhook state transitions
+    flip (`_refresh_tier`): tier == subscribed ⇔ a non-canceled
+    ``Subscription`` row exists, whatever its cohort or price.
+    """
+    try:
+        row = db.get(Account, account) if isinstance(account, str) else account
+        if row is None:
+            return FREE_ENTITLEMENTS
+        lifted = row.tier == Account.TIER_SUBSCRIBED
+    except Exception:
+        return DEGRADED_ENTITLEMENTS
+    return Entitlements(tier="supporter" if lifted else "free", headroom_lifted=lifted)
 
 
 # --- ledger -----------------------------------------------------------------
