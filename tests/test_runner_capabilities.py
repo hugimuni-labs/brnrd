@@ -54,3 +54,31 @@ def test_metadata_for_model_reads_populated_score():
     assert meta["capability_score"] == 0.443
     assert "Terminal-Bench 2.0 verified row" in meta["capability_source"]
     assert meta["capability_freshness"] == "2026-06-29"
+
+
+def test_web_research_declared_for_claude_shell():
+    cap = caps.web_research_for_shell("claude")
+    assert cap is not None
+    assert cap.native is True
+    assert cap.tools == ("WebSearch", "WebFetch")
+    assert cap.execution == "server-side"
+
+
+def test_web_research_declared_for_codex_shell():
+    cap = caps.web_research_for_shell("codex")
+    assert cap is not None
+    assert cap.native is True
+    assert cap.tools == ("web.run",)
+    assert cap.default_on is True
+    assert cap.execution == "server-side"
+
+
+def test_web_research_undeclared_for_unknown_or_missing_shell():
+    assert caps.web_research_for_shell("gemini") is None
+    assert caps.web_research_for_shell("my-custom-cli") is None
+    assert caps.web_research_for_shell(None) is None
+    assert caps.web_research_for_shell("  ") is None
+
+
+def test_web_research_shell_lookup_is_case_insensitive():
+    assert caps.web_research_for_shell("Claude") is not None
