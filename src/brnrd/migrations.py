@@ -145,6 +145,9 @@ def _migrate_events(conn: Connection) -> None:
     # Retry-dedupe handle for responded events that keep forwarding
     # continuation messages (the respawn-continuation mute, 2026-07-21).
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS response_sha VARCHAR(64)"))
+    # #525 — telegram image-attachment pointers (never bytes; see
+    # models.Event.attachments_json).
+    conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS attachments_json TEXT DEFAULT '[]'"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

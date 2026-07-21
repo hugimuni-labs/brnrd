@@ -18,5 +18,5 @@ def enqueue(payload: schemas.DevEnqueue, principal: Principal = Depends(require_
     repo = db.execute(select(Repo).where(Repo.id == payload.repo_id, Repo.account_id == principal.account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
-    event = inbox_service.enqueue(db, repo_id=repo.id, body=payload.body, source=payload.source, reply_to=payload.reply_to)
+    event = inbox_service.enqueue(db, repo_id=repo.id, body=payload.body, source=payload.source, reply_to=payload.reply_to, attachments=payload.attachments or None)
     return schemas.DevEnqueued(event_id=event.event_id, seq=event.seq)
