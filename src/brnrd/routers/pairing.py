@@ -55,6 +55,8 @@ def approve_core(db: Session, account_id: str, code: str, repo_id: str) -> str:
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
     raw = ids.daemon_token()
+    # repo_id remains the initial/default routing repo for compatibility with
+    # the one-repo connect UI. The token principal itself is account-scoped.
     db.add(Token(id=ids.token_id(), account_id=account_id, repo_id=repo.id, kind=Token.KIND_DAEMON, token_hash=hash_token(raw), label="daemon (paired)"))
     pair.status = PairRequest.STATUS_APPROVED
     pair.account_id = account_id

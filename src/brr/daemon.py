@@ -348,9 +348,17 @@ def stop(brr_dir: Path) -> bool:
 # ── Gate threads ─────────────────────────────────────────────────────
 
 
-def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[threading.Thread]:
+def _start_gates(
+    brr_dir: Path,
+    inbox_dir: Path,
+    responses_dir: Path,
+    excluded: frozenset[str] = frozenset(),
+    included: frozenset[str] | None = None,
+) -> list[threading.Thread]:
     threads = []
     for name in _BUILTIN_GATES:
+        if name in excluded or (included is not None and name not in included):
+            continue
         try:
             from .gates import import_gate
             mod = import_gate(name)
@@ -1437,6 +1445,35 @@ def _repo_for_event(
             return repo.root, repo.label
         return fallback_repo_root, explicit_label
 
+    # Managed ingress is account-wide. A follow-up with no selector stays on
+    # the repo most recently used by this gate thread, even when the account
+    # default points elsewhere.
+    if str(event.get("source") or "") == "cloud":
+        conversation_key = conversations.conversation_key_for_event(event)
+        if conversation_key:
+            latest: tuple[str, account.AccountRepo] | None = None
+            for registered in account_context.repos.values():
+                brr_dir = gitops.shared_brr_dir(registered.root)
+                records = conversations.read_recent(
+                    brr_dir,
+                    conversation_key,
+                    limit=50,
+                    include_lifecycle=True,
+                )
+                for record in reversed(records):
+                    if record.get("kind") != "run":
+                        continue
+                    label = str(record.get("repo_label") or "").strip()
+                    repo = account_context.repo_for_label(label)
+                    if repo is None:
+                        continue
+                    candidate = (str(record.get("ts") or ""), repo)
+                    if latest is None or candidate[0] > latest[0]:
+                        latest = candidate
+                    break
+            if latest is not None:
+                return latest[1].root, latest[1].label
+
     path = event.get("_path")
     if isinstance(path, Path):
         for repo in account_context.repos.values():
@@ -1536,7 +1573,12 @@ def _start_account_gates(
     threads: list[threading.Thread] = []
     seen: set[Path] = set()
 
-    def start_for(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
+    def start_for(
+        brr_dir: Path,
+        inbox_dir: Path,
+        responses_dir: Path,
+        excluded: frozenset[str] = frozenset(),
+    ) -> None:
         try:
             key = brr_dir.resolve()
         except OSError:
@@ -1544,17 +1586,37 @@ def _start_account_gates(
         if key in seen:
             return
         seen.add(key)
-        threads.extend(_start_gates(brr_dir, inbox_dir, responses_dir))
+        threads.extend(_start_gates(brr_dir, inbox_dir, responses_dir, excluded))
 
     if account_context.enabled:
         start_for(
             account_context.dominion_repo,
             account_context.dispatch_inbox,
             account_context.responses_dir,
+            frozenset({"cloud"}),
         )
         for repo in account_context.repos.values():
             brr_dir = gitops.shared_brr_dir(repo.root)
-            start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")
+            start_for(
+                brr_dir,
+                brr_dir / "inbox",
+                brr_dir / "responses",
+                frozenset({"cloud"}),
+            )
+        # The cloud connection is account-owned and drains all account repos,
+        # but its collectors still need a real repo runtime as their local
+        # execution anchor. Run exactly one cloud loop from the default repo
+        # and land its inbound files in the account dispatch inbox.
+        default_brr_dir = gitops.shared_brr_dir(account_context.default_repo.root)
+        threads.extend(
+            _start_gates(
+                default_brr_dir,
+                account_context.dispatch_inbox,
+                account_context.responses_dir,
+                frozenset(),
+                frozenset({"cloud"}),
+            )
+        )
     else:
         brr_dir = gitops.shared_brr_dir(default_repo_root)
         start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")

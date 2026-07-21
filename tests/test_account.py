@@ -283,6 +283,39 @@ def test_event_repo_label_accepts_repo_label_metadata():
     assert account.event_repo_label({"repo_label": "Gurio/brr"}) == "Gurio/brr"
 
 
+def test_cloud_gate_state_migrates_to_account_home(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    legacy = repo / ".brr" / "gates" / "cloud.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "account_id": "acct-1",
+                "repo_id": "repo-old",
+                "token": "secret",
+                "brnrd_url": "https://brnrd.example",
+            }
+        ),
+        encoding="utf-8",
+    )
+    home = tmp_path / "account-home"
+
+    ctx = account.resolve_context(
+        repo,
+        {
+            "home.kind": "account",
+            "home.path": str(home),
+            "account.id": "acct-1",
+        },
+    )
+
+    destination = account.cloud_gate_state_path(ctx)
+    assert json.loads(destination.read_text(encoding="utf-8"))["token"] == "secret"
+    assert not legacy.exists()
+
+
 def test_run_state_blob_url_none_for_local_only_dominion(tmp_path):
     """A purely-local account dominion (no remote) yields no web URL, so callers
     fall back to a non-path label rather than leaking a host path."""

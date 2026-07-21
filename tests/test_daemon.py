@@ -3730,6 +3730,105 @@ def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
     assert targets[0].event["repo_label"] == "Gurio/b"
 
 
+def test_cloud_dispatch_uses_explicit_then_thread_sticky_then_default(tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "home.path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    thread = "cloud:telegram:42:"
+
+    explicit = {
+        "source": "cloud",
+        "repo": "Gurio/b",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 42,
+    }
+    assert daemon._repo_for_event(
+        ctx,
+        explicit,
+        fallback_repo_root=repo_a,
+        fallback_label="Gurio/a",
+    ) == (repo_b, "Gurio/b")
+
+    daemon.conversations.append_run(
+        repo_b / ".brr",
+        thread,
+        run_id="run-b",
+        event_id="evt-b",
+        env="worktree",
+        status="finished",
+        repo_label="Gurio/b",
+    )
+    follow_up = {
+        "source": "cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 42,
+    }
+    assert daemon._repo_for_event(
+        ctx,
+        follow_up,
+        fallback_repo_root=repo_a,
+        fallback_label="Gurio/a",
+    ) == (repo_b, "Gurio/b")
+
+    fresh_thread = {
+        "source": "cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 99,
+    }
+    assert daemon._repo_for_event(
+        ctx,
+        fresh_thread,
+        fallback_repo_root=repo_a,
+        fallback_label="Gurio/a",
+    ) == (repo_a, "Gurio/a")
+
+
+def test_account_starts_one_cloud_gate_on_default_repo_runtime(
+    tmp_path, monkeypatch,
+):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    ctx = daemon.account.resolve_context(
+        repo_a,
+        {
+            "repo.label": "Gurio/a",
+            "home.path": str(tmp_path / "account-home"),
+            "account.repo.Gurio/b": str(repo_b),
+        },
+    )
+    calls = []
+
+    def capture(*args):
+        calls.append(args)
+        return []
+
+    monkeypatch.setattr(daemon, "_start_gates", capture)
+
+    daemon._start_account_gates(ctx, repo_a)
+
+    cloud_calls = [
+        call for call in calls
+        if len(call) >= 5 and call[4] == frozenset({"cloud"})
+    ]
+    assert len(cloud_calls) == 1
+    assert cloud_calls[0][0] == repo_a / ".brr"
+    assert cloud_calls[0][1] == ctx.dispatch_inbox
+    assert cloud_calls[0][2] == ctx.responses_dir
+
+
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

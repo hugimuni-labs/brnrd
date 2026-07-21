@@ -111,6 +111,19 @@ def _migrate_github_installed_repos(conn: Connection) -> None:
 
 
 def _migrate_daemons(conn: Connection) -> None:
+    # Account-scoped daemon identity. Existing rows inherit the owning account
+    # from their compatibility/default repo; repo_id stops being identifying.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS account_id VARCHAR(64)"))
+    conn.execute(text(
+        "UPDATE daemons SET account_id = repos.account_id FROM repos "
+        "WHERE daemons.repo_id = repos.id AND daemons.account_id IS NULL"
+    ))
+    conn.execute(text("ALTER TABLE daemons ALTER COLUMN repo_id DROP NOT NULL"))
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_daemon_account_name "
+        "ON daemons (account_id, daemon_name)"
+    ))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daemons_account_id ON daemons (account_id)"))
     # Runner-quota snapshot mirror (#237) — see models.Daemon.quota_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_updated_at TIMESTAMP"))
