@@ -8,7 +8,8 @@ import {
 	loomFutureHorizon,
 	loomFutureStop,
 	loomPastStop,
-	loomPastWindowLabel
+	loomPastWindowLabel,
+	nestShelfChildren
 } from './loomBand.ts';
 
 const NOW = Date.parse('2026-07-16T18:00:00Z');
@@ -75,5 +76,58 @@ test('a plain left click selects; every modified click still follows the link', 
 		loomCellClickSelects({ button: 0, defaultPrevented: true }),
 		false,
 		'something upstream already handled it'
+	);
+});
+
+// #539: a spawned child's shelf row follows the row of the run that
+// dispatched it, rather than sorting purely by its own age.
+test('a spawned child nests right after its parent, both age-ordered among peers', () => {
+	const items = [
+		{ runId: 'parent-a', parentRunId: null, isSubspawn: false, ageMs: 500 },
+		{ runId: 'child-a-2', parentRunId: 'parent-a', isSubspawn: true, ageMs: 520 },
+		{ runId: 'child-a-1', parentRunId: 'parent-a', isSubspawn: true, ageMs: 510 },
+		{ runId: 'parent-b', parentRunId: null, isSubspawn: false, ageMs: 100 }
+	];
+	const nested = nestShelfChildren(items);
+	assert.deepEqual(
+		nested.map((r) => [r.runId, r.depth]),
+		[
+			['parent-b', 0],
+			['parent-a', 0],
+			['child-a-1', 1],
+			['child-a-2', 1]
+		]
+	);
+});
+
+test('a child whose parent is not on the shelf renders as its own root', () => {
+	const items = [
+		{ runId: 'orphan-child', parentRunId: 'scrolled-off-parent', isSubspawn: true, ageMs: 10 },
+		{ runId: 'plain-root', parentRunId: null, isSubspawn: false, ageMs: 20 }
+	];
+	const nested = nestShelfChildren(items);
+	assert.deepEqual(
+		nested.map((r) => [r.runId, r.depth]),
+		[
+			['orphan-child', 0],
+			['plain-root', 0]
+		]
+	);
+});
+
+test('a run with no run_id at all (event-id-only row) is never mistaken for a child', () => {
+	const items = [
+		{ runId: null, parentRunId: null, isSubspawn: false, ageMs: 5 },
+		{ runId: 'parent-a', parentRunId: null, isSubspawn: false, ageMs: 50 },
+		{ runId: 'child-a', parentRunId: 'parent-a', isSubspawn: true, ageMs: 40 }
+	];
+	const nested = nestShelfChildren(items);
+	assert.deepEqual(
+		nested.map((r) => [r.runId, r.depth]),
+		[
+			[null, 0],
+			['parent-a', 0],
+			['child-a', 1]
+		]
 	);
 });
