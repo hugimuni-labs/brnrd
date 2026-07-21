@@ -76,6 +76,11 @@ own every pending event. Small/related work folds into this wake; bounded
 independent work dispatches through `spawn:` while capacity + quota are
 healthy; defer only for an explicit resource, priority, dependency, or
 authority reason.
+Folding an event's *content* does not clear the event — only an
+`event:`-addressed outbox reply retires it. File that reply (even one
+line: "folded into X; full answer after review") in the same batch you
+fold; prose in the thread never clears the queue, and an event left
+pending costs a whole re-wake just for bookkeeping.
 
 ## Reading economically
 
