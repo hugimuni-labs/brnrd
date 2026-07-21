@@ -89,6 +89,11 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
                     cursor, inbox_dir,
                     allowlist=allowlist, permission_cache=permission_cache,
                 )
+            if "assignee" in triggers:
+                polling._poll_assignee_trigger(
+                    token, repo, triggers["assignee"], cursor, inbox_dir,
+                    allowlist=allowlist, permission_cache=permission_cache,
+                )
 
     state_dict["cursor"] = cursor
     state._save_state(brr_dir, state_dict)

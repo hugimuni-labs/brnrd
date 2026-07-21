@@ -70,6 +70,15 @@ def pull_comment_replies(repo: str, pr_number: int, comment_id: int) -> str:
     return f"/repos/{repo}/pulls/{pr_number}/comments/{comment_id}/replies"
 
 
+def issue_events(repo: str, number: int) -> str:
+    """``GET /repos/{repo}/issues/{n}/events`` — the issue's event
+    timeline (labeled/assigned/closed/…). The assignee trigger reads it
+    to learn *who performed* the assignment: the assigner, not the issue
+    author, is the trust principal the #408 authorization gate should
+    judge."""
+    return f"/repos/{repo}/issues/{number}/events"
+
+
 def collaborator_permission(repo: str, username: str) -> str:
     """``GET /repos/{repo}/collaborators/{username}/permission`` — the
     permission level (``admin``/``write``/``maintain``/``read``/``none``)
