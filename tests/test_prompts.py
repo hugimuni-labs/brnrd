@@ -336,6 +336,58 @@ class TestPromptBuilding:
         )
         assert "- Requested Runner: codex" in prompt
 
+    def test_daemon_prompt_declares_web_research_for_claude_shell(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            runner_shell="claude",
+        )
+        assert "- Web research: native via WebSearch/WebFetch" in prompt
+        assert "server-side" in prompt
+        assert "solitary egress boundary" in prompt
+
+    def test_daemon_prompt_declares_web_research_for_codex_shell(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            runner_shell="codex",
+        )
+        assert "- Web research: native via web.run, default-on" in prompt
+        assert "server-side" in prompt
+
+    def test_daemon_prompt_marks_web_research_undeclared_for_unknown_shell(
+        self, tmp_path
+    ):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            runner_shell="my-custom-cli",
+        )
+        assert "- Web research: not declared for this Shell" in prompt
+        assert "rather than guessing" in prompt
+
+    def test_daemon_prompt_marks_web_research_undeclared_without_shell(
+        self, tmp_path
+    ):
+        # No attested Shell at all is the same epistemic state as a custom
+        # one: the wake must not assume it can verify a changing fact.
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+        )
+        assert "- Web research: not declared for this Shell" in prompt
+
+    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
+        # Workers skip the resident inject stack but still get the bundle —
+        # the capability declaration must survive that path.
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            worker=True,
+            runner_shell="codex",
+        )
+        assert "- Web research: native via web.run" in prompt
+
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,

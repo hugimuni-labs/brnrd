@@ -513,6 +513,7 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Environment: worktree
 - Requested Runner: claude-sonnet (requested from the dashboard spool rack) — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
 - Quota: session 72% left (resets 10:30pm); week 57% left
+- Web research: native via WebSearch/WebFetch, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them.
 - Delivery: situational outputs captured by brr (see Delivery contract below)
 - Budget: ~120m of wall-clock runtime before brr kills this thought to reclaim the single-flight slot. Bound uncertain long-running commands yourself (own timeout, or background + poll); extend the deadline if you genuinely need longer (see Delivery contract).
 - Runtime recovery: /tmp/brr-fixture-runtime/runs/run-fixture-0001/context.md (open only if a detail you need isn't in this bundle)
@@ -587,18 +588,18 @@ source manifest:
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · Your last run (node frame + Now + shape)        resident     memory             0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,463  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,691  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  41.4%
-  substrate       9,051 B  28.2%
-  identity        5,449 B  17.0%
-  runtime         4,112 B  12.8%
+  contract       13,274 B  41.1%
+  substrate       9,051 B  28.0%
+  identity        5,449 B  16.9%
+  runtime         4,340 B  13.4%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     32,047 B
+  wake total     32,275 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
