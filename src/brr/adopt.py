@@ -161,6 +161,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
 
     if interactive and sys.stdin.isatty():
+        _narrate_home_repos(repo_root)
         _offer_home_link(repo_root)
 
 
@@ -258,6 +259,35 @@ def _configure_environment() -> dict:
                 )
 
     return overrides
+
+
+def _narrate_home_repos(repo_root: Path) -> None:
+    """Name the two repos init just brought into being, and where.
+
+    Runs *before* — and independently of — the home-link question, so the
+    user hears the facts even when linking is declined or ``gh`` is
+    missing (design-repo-birth-ceremony.md: the ceremony decorates seams
+    the user is already standing at; it never becomes a consent gate).
+    Best-effort: narration must never fail init.
+    """
+    from . import account
+
+    try:
+        ctx = account.resolve_context(repo_root, conf.load_config(repo_root))
+        knowledge_root = account.knowledge_path(ctx)
+    except Exception:  # noqa: BLE001 — narration is decoration, never a failure
+        return
+
+    print()
+    print("[brnrd] two repos now hold what this resident is — both yours:")
+    print(f"  memory    → {ctx.dominion_repo}")
+    print("              the dominion: the agent's working memory; it commits")
+    print("              here after every thought")
+    suffix = "" if knowledge_root.exists() else "  (created on first use)"
+    print(f"  knowledge → {knowledge_root}{suffix}")
+    print("              the pages your projects teach it")
+    print("  Plain git repos on this machine; each carries a README deed —")
+    print("  what it is, who writes it, where it lives, and how to leave.")
 
 
 def _offer_home_link(repo_root: Path) -> None:
@@ -361,6 +391,8 @@ def _setup_brr_dir(repo_root: Path) -> None:
 
     config_path = brr / "config"
     if not config_path.exists():
+        from . import retention
+
         conf.write_config(repo_root, {
             "runner": "auto",
             "environment": "auto",
@@ -369,6 +401,10 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "dominion.branch": dominion.DEFAULT_BRANCH,
             "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
             "schedule.enabled": True,
+            # Retention windows (#501): fresh installs get finite windows;
+            # a pre-existing config is never touched, so existing installs
+            # keep today's keep-forever behavior until they opt in.
+            **retention.FRESH_INSTALL_DEFAULTS,
             # Co-development aid (off by default): when on, every wake
             # invites the agent to inspect the shape of its own injected
             # context and raise improvements with you. See
