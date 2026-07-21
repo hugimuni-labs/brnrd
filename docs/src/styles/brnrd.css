@@ -1,74 +1,152 @@
+/* brnrd docs theme — the dashboard's control-room identity, applied as
+   paint over Starlight's furniture.
+
+   Tokens are extracted from the product, not invented:
+   - src/frontend/src/routes/layout.css   (canvas, ink ramp, panel chrome,
+     scanlines, hearth glow, edge rim, boot-glitch grammar)
+   - src/frontend/src/lib/statusPalette.ts (thermal scale; red is absent —
+     reserved for a broken contract)
+
+   Register: warm void + parchment text, amber (burning) primary accent,
+   frost (cooling) secondary, instrument-panel chrome with bracket corners,
+   mono for everything that is chrome. Long-form body text stays on the
+   sans stack — the dashboard is an instrument read in glances, the docs
+   are read in paragraphs; the identity rides on canvas, accents, and
+   chrome, not on forcing prose into 9px mono. */
+
 :root {
   --sl-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --sl-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  /* The product's mono stack, verbatim (layout.css --font-mono). */
+  --sl-font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --sl-content-width: 52rem;
-  --sl-text-h1: clamp(2.3rem, 6vw, 4.5rem);
-  --brnrd-amber: #e8b34a;
-  --brnrd-frost: #a8cbdb;
+  --sl-text-h1: clamp(2.3rem, 6vw, 4.2rem);
+
+  /* Product tokens */
   --brnrd-void: #0c0906;
+  --brnrd-parchment: #f3e8d8;
+  --brnrd-amber: #e8b34a;        /* STATUS_BURNING */
+  --brnrd-amber-deep: #d9a441;   /* panel corner ticks, hearth glow */
+  --brnrd-frost: #a8cbdb;        /* STATUS_COOLING */
+  --brnrd-frost-rim: #c6e0eb;    /* viewport edge rim */
+  --brnrd-ink-quiet: #a8a29e;    /* 7.88:1 on void */
+  --brnrd-ink-mute: #8a827a;     /* 5.25:1 on void — lowest legible tier */
+  --brnrd-eyebrow: #a89878;      /* 7.02:1 */
+  --brnrd-eyebrow-mark: #9a8a6a; /* 5.88:1 — the `//` */
+  --brnrd-pale-warm: #c9b98f;    /* thermal: pale-warm */
+  --brnrd-ember-ash: #b29274;    /* thermal: ember-ash */
+  --brnrd-panel-border: rgba(120, 95, 55, 0.28);
+  --brnrd-panel-bg: rgba(21, 16, 10, 0.6);
+  --brnrd-subpanel-bg: rgba(41, 32, 20, 0.4);
 }
+
+/* ------------------------------------------------------------------ */
+/* Starlight palette binding — dark is the product's native mode.      */
+/* ------------------------------------------------------------------ */
 
 :root[data-theme='dark'] {
   --sl-color-accent-low: #35260d;
   --sl-color-accent: #e8b34a;
-  --sl-color-accent-high: #fff1ce;
-  --sl-color-white: #fffaf1;
-  --sl-color-gray-1: #f3ece0;
-  --sl-color-gray-2: #d8cec0;
-  --sl-color-gray-3: #a8a29e;
-  --sl-color-gray-4: #6f6250;
-  --sl-color-gray-5: #33281d;
-  --sl-color-gray-6: #1c140d;
-  --sl-color-black: #0c0906;
+  --sl-color-accent-high: #f5d89a;
+  --sl-color-white: #f7efe2;
+  --sl-color-gray-1: #f3e8d8;   /* parchment — the product's text color */
+  --sl-color-gray-2: #d8cec0;   /* body text, 10.9:1 on void */
+  --sl-color-gray-3: #a8a29e;   /* ink-quiet, 7.88:1 */
+  --sl-color-gray-4: #8a827a;   /* ink-mute, 5.25:1 — nothing dimmer speaks */
+  --sl-color-gray-5: #33281d;   /* hairlines/borders only, never text */
+  --sl-color-gray-6: #16100a;   /* raised surfaces (code, cards) */
+  --sl-color-black: #0c0906;    /* the void */
+  --sl-color-text-accent: var(--brnrd-amber);
 }
 
+/* Parchment-paper light mode: same warm family, inverted. Secondary,
+   but kept honest. */
 :root[data-theme='light'] {
   --sl-color-accent-low: #f7e8c6;
-  --sl-color-accent: #8a5b0f;
+  --sl-color-accent: #7d5209;   /* 5.9:1 on the paper white */
   --sl-color-accent-high: #3f2700;
   --sl-color-white: #171009;
-  --sl-color-gray-1: #33281d;
-  --sl-color-gray-2: #544636;
-  --sl-color-gray-3: #776a59;
-  --sl-color-gray-4: #a99c89;
+  --sl-color-gray-1: #23180d;
+  --sl-color-gray-2: #43372a;   /* 9.5:1 on paper */
+  --sl-color-gray-3: #6b5e4d;   /* 5.6:1 */
+  --sl-color-gray-4: #857763;   /* 4.0:1 — large/bold text only */
   --sl-color-gray-5: #dfd5c5;
-  --sl-color-gray-6: #eee6d8;
+  --sl-color-gray-6: #f2ebdf;
   --sl-color-gray-7: #f8f2e8;
   --sl-color-black: #fffaf1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Canvas — warm void with hearth glow (dark mode only).               */
+/* ------------------------------------------------------------------ */
+
 body {
-  background:
-    radial-gradient(circle at 82% 3%, color-mix(in srgb, var(--brnrd-amber) 12%, transparent), transparent 29rem),
-    radial-gradient(circle at 10% 12%, color-mix(in srgb, var(--brnrd-frost) 8%, transparent), transparent 24rem),
-    var(--sl-color-black);
+  background-color: var(--sl-color-black);
 }
 
-body::before {
+:root[data-theme='dark'] body {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(217, 164, 65, 0.08), transparent 60%),
+    radial-gradient(ellipse at 50% 100%, rgba(217, 164, 65, 0.035), transparent 65%),
+    var(--brnrd-void);
+  background-attachment: fixed;
+}
+
+/* The glass: scanline field + the "accretion disk in negative" edge —
+   a hairline frost rim right at the viewport boundary, closing inward
+   to a soft void vignette. Fixed to the viewport so it reads as a
+   property of the screen, not the page. Values verbatim from the
+   dashboard (layout.css body::before). */
+:root[data-theme='dark'] body::before {
+  content: '';
   position: fixed;
-  z-index: -1;
   inset: 0;
   pointer-events: none;
-  content: '';
+  z-index: 50;
   background-image:
-    repeating-linear-gradient(rgba(243, 232, 216, 0.018) 0 1px, transparent 1px 3px),
-    linear-gradient(rgba(168, 203, 219, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(168, 203, 219, 0.02) 1px, transparent 1px);
-  background-size: auto, 28px 28px, 28px 28px;
-  mask-image: linear-gradient(180deg, #000, transparent 90%);
+    repeating-linear-gradient(rgba(243, 232, 216, 0.018) 0 1px, transparent 1px 3px);
+  box-shadow:
+    inset 0 0 0 1px rgba(198, 224, 235, 0.12),
+    inset 0 0 60px 8px rgba(4, 3, 2, 0.5);
 }
+
+/* ------------------------------------------------------------------ */
+/* Header — instrument top bar.                                        */
+/* ------------------------------------------------------------------ */
 
 header.header {
-  border-bottom-color: color-mix(in srgb, var(--brnrd-frost) 24%, transparent);
-  background: color-mix(in srgb, var(--sl-color-black) 90%, transparent);
-  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--brnrd-panel-border);
+  background: color-mix(in srgb, var(--sl-color-black) 88%, transparent);
+  backdrop-filter: blur(14px);
 }
 
+:root[data-theme='light'] header.header {
+  border-bottom-color: color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+}
+
+/* Site title: the boot-glitch mascot at rest — mono, spaced, resting
+   phosphor glow, blinking cursor (the `_` the boot sequence resolves
+   around). */
 .site-title {
   font-family: var(--sl-font-mono);
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: 0.08em;
-  text-shadow: 0 0 18px color-mix(in srgb, var(--brnrd-amber) 35%, transparent);
+}
+
+:root[data-theme='dark'] .site-title {
+  color: var(--brnrd-parchment);
+  text-shadow: 0 0 18px rgba(217, 164, 65, 0.35);
+}
+
+/* Cursor rides the title text span, not the flex row — ::after on the
+   flex anchor itself becomes a detached flex item with a gap. */
+.site-title span::after {
+  content: '_';
+  color: var(--brnrd-amber);
+  animation: brnrd-cursor 1.1s steps(2, jump-none) infinite;
+}
+
+@keyframes brnrd-cursor {
+  50% { opacity: 0; }
 }
 
 .site-title img {
@@ -78,60 +156,297 @@ header.header {
   object-fit: cover;
 }
 
+/* ------------------------------------------------------------------ */
+/* Sidebar — schematic nav.                                            */
+/* ------------------------------------------------------------------ */
+
 .sidebar-pane {
-  border-inline-end-color: color-mix(in srgb, var(--brnrd-frost) 20%, transparent);
+  border-inline-end: 1px solid var(--brnrd-panel-border);
   background: color-mix(in srgb, var(--sl-color-black) 92%, transparent);
+}
+
+#starlight__sidebar .top-level > li > a,
+.sidebar-content a {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-sm);
 }
 
 .sidebar-content a[aria-current='page'] {
   border-inline-start: 2px solid var(--brnrd-amber);
   background: color-mix(in srgb, var(--brnrd-amber) 10%, transparent);
-  font-weight: 750;
+  border-radius: 0;
+  color: var(--sl-color-white);
+  font-weight: 700;
 }
 
+/* Group labels as eyebrow annotations — the `//` schematic mark from
+   the dashboard's .eyebrow. */
 .group-label,
 .right-sidebar-panel h2 {
-  color: var(--sl-color-gray-3);
   font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.09em;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
-.sl-markdown-content :is(h1, h2, h3) {
+:root[data-theme='dark'] :is(.group-label, .right-sidebar-panel h2) {
+  color: var(--brnrd-eyebrow);
+}
+
+:is(.group-label, .right-sidebar-panel h2)::before {
+  content: '// ';
+}
+
+:root[data-theme='dark'] :is(.group-label, .right-sidebar-panel h2)::before {
+  color: var(--brnrd-eyebrow-mark);
+}
+
+/* TOC current-item marker in amber, sharp. */
+.right-sidebar-panel a[aria-current='true'],
+starlight-toc a[aria-current='true'] {
+  color: var(--brnrd-amber);
+}
+
+:root[data-theme='light'] .right-sidebar-panel a[aria-current='true'],
+:root[data-theme='light'] starlight-toc a[aria-current='true'] {
+  color: var(--sl-color-accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Content typography.                                                 */
+/* ------------------------------------------------------------------ */
+
+.sl-markdown-content :is(h1, h2, h3, h4) {
   font-family: var(--sl-font-mono);
-  letter-spacing: -0.045em;
+  letter-spacing: -0.03em;
+}
+
+/* The landing page's h1 (and every page h1) carries the identity
+   strongest: resting phosphor glow, boot-glitch grammar. */
+:root[data-theme='dark'] h1[id='_top'] {
+  color: var(--brnrd-parchment);
+  text-shadow: 0 0 18px rgba(217, 164, 65, 0.35);
+}
+
+h1[id='_top']::after {
+  content: '_';
+  color: var(--brnrd-amber);
+  animation: brnrd-cursor 1.1s steps(2, jump-none) infinite;
 }
 
 .sl-markdown-content h2 {
-  border-top: 1px solid color-mix(in srgb, var(--brnrd-frost) 18%, transparent);
+  border-top: 1px solid var(--brnrd-panel-border);
   padding-top: 1.4rem;
 }
 
+/* Section h2s get the eyebrow's schematic `//` in the margin tone. */
+.sl-markdown-content h2::before {
+  content: '// ';
+  color: var(--brnrd-eyebrow-mark);
+}
+
+:root[data-theme='light'] .sl-markdown-content h2::before {
+  color: var(--sl-color-gray-3);
+}
+
 .sl-markdown-content a:not([class]) {
+  color: var(--sl-color-text-accent);
   text-decoration-color: color-mix(in srgb, var(--brnrd-amber) 52%, transparent);
   text-underline-offset: 0.2em;
 }
 
+:root[data-theme='light'] .sl-markdown-content a:not([class]) {
+  text-decoration-color: color-mix(in srgb, var(--sl-color-accent) 52%, transparent);
+}
+
+/* Inline code: frost-tinted chip, sharp corners. */
 .sl-markdown-content :not(pre) > code {
   border: 1px solid color-mix(in srgb, var(--brnrd-frost) 18%, transparent);
   border-radius: 0;
   background: color-mix(in srgb, var(--brnrd-frost) 7%, transparent);
 }
 
-.expressive-code,
-.card,
-.starlight-aside {
-  --ec-brdRad: 0;
-  border-radius: 0;
+:root[data-theme='light'] .sl-markdown-content :not(pre) > code {
+  border-color: color-mix(in srgb, var(--sl-color-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
 }
+
+/* ------------------------------------------------------------------ */
+/* Instrument-panel chrome: bracket corners on raised surfaces.        */
+/* Ported from the dashboard's .panel — four corner ticks drawn as     */
+/* eight background gradients, sharp rectangle underneath.             */
+/* ------------------------------------------------------------------ */
 
 .card,
 .starlight-aside {
-  border-color: color-mix(in srgb, var(--brnrd-frost) 24%, transparent);
-  background: color-mix(in srgb, var(--sl-color-gray-6) 58%, transparent);
+  --corner: 11px;
+  --corner-w: 1.5px;
+  --corner-color: rgba(217, 164, 65, 0.55);
+  position: relative;
+  border: 1px solid var(--brnrd-panel-border);
+  border-radius: 0;
+  background-color: var(--brnrd-panel-bg);
+  box-shadow:
+    0 0 14px 0 rgba(217, 164, 65, 0.05),
+    inset 0 0 24px 0 rgba(217, 164, 65, 0.025);
+  background-image:
+    linear-gradient(to right, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to bottom, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to left, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to bottom, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to right, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to top, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to left, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+    linear-gradient(to top, var(--corner-color) var(--corner-w), transparent var(--corner-w));
+  background-repeat: no-repeat;
+  background-size:
+    var(--corner) var(--corner), var(--corner) var(--corner),
+    var(--corner) var(--corner), var(--corner) var(--corner),
+    var(--corner) var(--corner), var(--corner) var(--corner),
+    var(--corner) var(--corner), var(--corner) var(--corner);
+  background-position:
+    top left, top left, top right, top right,
+    bottom left, bottom left, bottom right, bottom right;
 }
+
+:root[data-theme='light'] .card,
+:root[data-theme='light'] .starlight-aside {
+  --corner-color: color-mix(in srgb, var(--sl-color-accent) 60%, transparent);
+  background-color: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
+  border-color: color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+  box-shadow: none;
+}
+
+.card .title {
+  font-family: var(--sl-font-mono);
+}
+
+/* Asides tinted by the thermal scale — never red (red is reserved for
+   a broken contract; the docs have none to report). */
+.starlight-aside--note    { --corner-color: color-mix(in srgb, var(--brnrd-frost) 65%, transparent); border-color: color-mix(in srgb, var(--brnrd-frost) 30%, transparent); }
+.starlight-aside--tip     { --corner-color: rgba(217, 164, 65, 0.55); }
+.starlight-aside--caution { --corner-color: color-mix(in srgb, var(--brnrd-pale-warm) 70%, transparent); }
+.starlight-aside--danger  { --corner-color: color-mix(in srgb, var(--brnrd-ember-ash) 80%, transparent); border-color: color-mix(in srgb, var(--brnrd-ember-ash) 40%, transparent); }
+
+.starlight-aside__title {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+:root[data-theme='dark'] .starlight-aside {
+  color: var(--sl-color-gray-2);
+}
+
+:root[data-theme='dark'] .starlight-aside--note .starlight-aside__title    { color: var(--brnrd-frost); }
+:root[data-theme='dark'] .starlight-aside--tip .starlight-aside__title     { color: var(--brnrd-amber); }
+:root[data-theme='dark'] .starlight-aside--caution .starlight-aside__title { color: var(--brnrd-pale-warm); }
+:root[data-theme='dark'] .starlight-aside--danger .starlight-aside__title  { color: var(--brnrd-ember-ash); }
+
+/* Code blocks: warm-void surface, sharp corners, hairline panel border. */
+.expressive-code {
+  --ec-brdRad: 0;
+  --ec-brdCol: var(--brnrd-panel-border);
+  --ec-frm-edBg: #15100a;
+  --ec-frm-trmBg: #15100a;
+  --ec-frm-edActTabBg: #15100a;
+  --ec-codeBg: #15100a;
+}
+
+:root[data-theme='light'] .expressive-code {
+  --ec-frm-edBg: var(--sl-color-gray-6);
+  --ec-frm-trmBg: var(--sl-color-gray-6);
+  --ec-frm-edActTabBg: var(--sl-color-gray-6);
+  --ec-codeBg: var(--sl-color-gray-6);
+  --ec-brdCol: var(--sl-color-gray-5);
+}
+
+/* ------------------------------------------------------------------ */
+/* Furniture details, kept sharp.                                      */
+/* ------------------------------------------------------------------ */
+
+/* Pagination (prev/next): subpanel chrome. */
+.pagination-links a {
+  border: 1px solid var(--brnrd-panel-border);
+  border-radius: 0;
+  background: var(--brnrd-subpanel-bg);
+  box-shadow: none;
+}
+
+:root[data-theme='light'] .pagination-links a {
+  border-color: color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
+}
+
+.pagination-links a:hover {
+  border-color: color-mix(in srgb, var(--brnrd-amber) 50%, transparent);
+}
+
+.pagination-links .link-title {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-lg);
+}
+
+/* Search button: instrument input. */
+button[data-open-modal] {
+  border: 1px solid var(--brnrd-panel-border);
+  border-radius: 0;
+  background: var(--brnrd-subpanel-bg);
+  font-family: var(--sl-font-mono);
+}
+
+:root[data-theme='light'] button[data-open-modal] {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
+  border-color: color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+}
+
+/* Theme select + small chrome in mono. */
+starlight-theme-select select,
+.sl-markdown-content .sl-anchor-link {
+  font-family: var(--sl-font-mono);
+}
+
+/* Selection: amber over void, parchment ink. */
+::selection {
+  background: color-mix(in srgb, var(--brnrd-amber) 30%, transparent);
+}
+
+/* Tables: schematic rules. */
+.sl-markdown-content table {
+  border-collapse: collapse;
+}
+
+.sl-markdown-content :is(th, td) {
+  border: 1px solid var(--brnrd-panel-border);
+}
+
+.sl-markdown-content th {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--brnrd-subpanel-bg);
+}
+
+:root[data-theme='light'] .sl-markdown-content :is(th, td) {
+  border-color: var(--sl-color-gray-5);
+}
+
+:root[data-theme='light'] .sl-markdown-content th {
+  background: var(--sl-color-gray-6);
+}
+
+/* Scrollbars, where the UA listens: thin and quiet. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sl-color-gray-5) transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion discipline.                                                  */
+/* ------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -141,5 +456,10 @@ header.header {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .site-title span::after,
+  h1[id='_top']::after {
+    animation: none;
   }
 }
