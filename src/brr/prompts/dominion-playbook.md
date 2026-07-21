@@ -152,6 +152,25 @@ test / lint / hook / code (cannot recur silently).
 A stronger guard exists ⇒ slash the pitfall. A warning the environment
 already prevents is orientation tax on every future wake.
 
+## Identity and delivery — two seams that fail politely
+
+Before any `gh pr create`, `gh issue create`, or merge-button action from a
+host-environment run, verify whose hands you are wearing: `gh api user -q
+.login`. A run whose environment carries neither the operator's `GH_TOKEN`
+nor the managed credential pointer falls through to the host keyring — and
+every forge action is then authored as the *operator*, silently. Commits
+stay safe (git config names the resident); it is the gh-mediated actions
+that leak. When the probe returns the operator's login, stop: merge locally
+and push, or hand the PR to the `gate: forge` outbox verb.
+
+An `event:` reply can only be *delivered* to events owned by the run's own
+originating gate. A reply addressed to another gate's event is accepted,
+staged as a response partial, and never posts — the record shows no
+delivery status at all. Until the daemon routes cross-gate replies live,
+put the content on your own gate's channel (where delivery is proven) and
+still file the `event:` address to retire the queue entry; just never count
+that write as the user having been told.
+
 ## Keep this place useful
 
 Short enough to actually read, rich enough to reconstruct you. Invariants
