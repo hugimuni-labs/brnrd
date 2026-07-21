@@ -296,6 +296,109 @@ def test_collect_drops_unverified_reported_kb_url(tmp_path: Path, monkeypatch):
     assert out == [{"kind": "kb", "path": "new.md"}]
 
 
+# ── dedupe ───────────────────────────────────────────────────────────
+
+
+def test_collect_dedupes_auto_and_reported_pr(tmp_path: Path):
+    """Regression: run-260721-0922-pfqd rendered PR #532 twice — the auto
+    row (from ``.pr``, with URL) and the resident-reported row (no URL)."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("532\n", encoding="utf-8")
+    relics.append(outbox, "pr", number=532, action="opened")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    prs = [r for r in out if r["kind"] == "pr"]
+    assert prs == [{
+        "kind": "pr", "number": 532, "action": "opened",
+        "url": "https://github.com/Gurio/brr/pull/532",
+    }]
+
+
+def test_dedupe_prefers_url_bearing_row_and_merges_fields():
+    out = relics.dedupe([
+        {"kind": "pr", "number": 532, "action": "opened"},
+        {"kind": "pr", "number": 532, "url": "https://x/pull/532"},
+    ])
+    assert out == [{
+        "kind": "pr", "number": 532, "action": "opened",
+        "url": "https://x/pull/532",
+    }]
+    # First occurrence keeps its position even when the later row wins fields.
+    out = relics.dedupe([
+        {"kind": "issue", "number": 7},
+        {"kind": "commit", "sha": "abc1234"},
+        {"kind": "issue", "number": 7, "url": "https://x/issues/7"},
+    ])
+    assert [r["kind"] for r in out] == ["issue", "commit"]
+    assert out[0]["url"] == "https://x/issues/7"
+
+
+def test_dedupe_keeps_distinct_identities_apart():
+    records = [
+        {"kind": "pr", "number": 1},
+        {"kind": "pr", "number": 2},
+        {"kind": "issue", "number": 1},
+        {"kind": "kb", "path": "a.md"},
+        {"kind": "kb", "path": "b.md"},
+        {"kind": "file", "path": "a.md"},
+    ]
+    assert relics.dedupe(records) == records
+
+
+def test_dedupe_never_merges_identityless_kinds():
+    records = [
+        {"kind": "comment", "on": "issue #5"},
+        {"kind": "comment", "on": "issue #5"},
+        {"kind": "summary", "text": "x"},
+        {"kind": "summary", "text": "x"},
+        {"kind": "pr"},  # numberless: no identity, passes through
+        {"kind": "pr"},
+    ]
+    assert relics.dedupe(records) == records
+
+
+def test_dedupe_matches_short_and_full_commit_sha():
+    out = relics.dedupe([
+        {"kind": "commit", "sha": "abc1234", "subject": "s", "url": "https://x/c"},
+        {"kind": "commit", "sha": "abc1234def5678900000"},
+    ])
+    assert out == [{
+        "kind": "commit", "sha": "abc1234", "subject": "s", "url": "https://x/c",
+    }]
+
+
+def test_live_summary_counts_deduped_pr_once(tmp_path: Path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".pr").write_text("532\n", encoding="utf-8")
+    relics.append(outbox, "pr", number=532, action="opened")
+
+    summary = relics.live_summary(
+        repo, branch=None, seed_ref=None, outbox_dir=outbox,
+    )
+    assert summary["counts"] == {"pr": 1}
+    assert summary["pr"] == 532
+    prs = [r for r in summary["records"] if r["kind"] == "pr"]
+    assert len(prs) == 1 and prs[0]["url"]
+
+
 def test_counts_by_kind_excludes_summary():
     relic_list = [
         {"kind": "summary", "text": "x"},
