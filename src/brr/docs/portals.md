@@ -76,9 +76,17 @@ One JSON object per line, append-only, via `brr.relics.append(outbox_dir,
 kind, **fields)` or by appending the line directly. It is what the run made,
 in a form something other than prose can read.
 
-**Auto-derived — write nothing for these.** Commits, the pushed branch, a
-self-reported PR, **kb pages committed by the knowledge capture**, and your
-**terminal reply** are collected at closeout. Every outbound reply is born
+**Auto-derived — write nothing for these.** Commits, **merges you
+performed**, the pushed branch, a self-reported PR, **kb pages committed by
+the knowledge capture**, and your **terminal reply** are collected at
+closeout. Merges are their own block, separate from PRs made: a merge
+commit in the run's scope is promoted to a `merge` relic (`Merge pull
+request #N` subjects link the PR; `Merge branch 'x'` names the branch), and
+a GitHub-committed squash landing (`… (#N)`, committer
+`noreply@github.com`) counts too. The one merge git archaeology cannot see
+is a pure-remote `gh pr merge` whose result never reaches the local
+checkout — report that one yourself:
+`{"kind": "merge", "pr": N, "url": "…"}`. Every outbound reply is born
 under `runs/<repo>/<run-id>/messages/NNNNNN-<kind>.md` and reported as a reply
 relic. Delivery changes its frontmatter from `pending` to one of three terminal
 states, stamping the receipt when one exists: `delivered` (a gate carried it to
@@ -92,8 +100,8 @@ A reply addressed to a dispatch-tree event — `spawn`, `spawn_completed`,
 a notice in `notices`. **Answer the originating user event instead**; a worker
 completion is a signal to fold in, not an address to reply to.
 
-The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `issue`,
-`comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable
+The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `merge`,
+`issue`, `comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable
 through their first descriptive field, but use a built-in kind when it fits.
 
 **Worth a line of your own:**

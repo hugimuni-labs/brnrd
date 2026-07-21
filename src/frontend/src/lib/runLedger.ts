@@ -23,6 +23,7 @@ export const RELIC_ICONS: Record<string, string> = {
 	commit: '🔨',
 	branch: '🌿',
 	pr: '🔀',
+	merge: '⤵️',
 	issue: '🎫',
 	comment: '💬',
 	kb: '📚',
@@ -112,6 +113,14 @@ export function relicLabel(r: RelicRecord): string {
 			return String(r.name ?? 'branch');
 		case 'pr':
 			return `PR #${r.number ?? '?'}`;
+		case 'merge': {
+			// Mirrors `brr.relics.label`: merges performed are their own
+			// block, never rendered as "PR #N" (that reads as a PR made).
+			if (r.pr) return `merged PR #${r.pr}`;
+			if (r.branch) return `merged ${r.branch}`;
+			const subject = String(r.subject ?? '').trim();
+			return subject || `merge ${String(r.sha ?? '').slice(0, 7)}`.trim();
+		}
 		case 'issue':
 			return `issue #${r.number ?? '?'}${r.action ? ` (${r.action})` : ''}`;
 		case 'kb':
