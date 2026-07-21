@@ -124,9 +124,9 @@
 	<section class="mt-8 max-w-2xl" aria-label="contributor bundle">
 		<p class="eyebrow">premium contributor bundle</p>
 		<p class="mt-2 text-sm leading-relaxed text-stone-400">
-			A lifetime package at $500+: lifetime headroom-free access, a line on the contributors page — nickname
-			and pledge each optionally redacted — and a permanent place on the leaderboard. No self-serve
-			checkout yet: open an issue or reach the maintainers
+			A lifetime package at $500+: lifetime headroom-free access, a line on the contributors page —
+			nickname and pledge each optionally redacted — and a permanent place on the leaderboard. No
+			self-serve checkout yet: open an issue or reach the maintainers
 			<a
 				class="text-sky-400 underline"
 				href={`https://github.com/${GITHUB_REPO}/issues`}

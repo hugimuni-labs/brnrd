@@ -290,6 +290,11 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
         separators=(",", ":"),
     )
     daemon.runners_default = payload.default
+    daemon.environment_default = payload.environment_default
+    daemon.environments_json = json.dumps(
+        [option.model_dump(exclude_none=True) for option in payload.environments],
+        separators=(",", ":"),
+    )
     daemon.runners_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
@@ -304,6 +309,8 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     return schemas.RunnersOut(
         profiles=payload.profiles,
         default=payload.default,
+        environment_default=payload.environment_default,
+        environments=payload.environments,
         runners_updated_at=now,
         pending_wake_request=(
             schemas.RunnerWakeRequestOut(**wake_requests.view(pending))
