@@ -671,6 +671,113 @@ def test_relabel_skips_scopes_that_do_not_exist(tmp_path):
     }
 
 
+# ── Gate identity rides the relabel (#546) ────────────────────────────
+
+
+def _gates_dir(tmp_path):
+    gates = tmp_path / "brr-dir" / "gates"
+    gates.mkdir(parents=True)
+    return gates
+
+
+def _write_gate(gates_dir, name, state):
+    path = gates_dir / f"{name}.json"
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def test_relabel_gates_rewrites_cloud_identity_in_every_remote_form(tmp_path):
+    """repo_full_name and git_remote (ssh + https, with and without .git)
+    are rewritten form-preservingly; every other key survives byte-identical.
+    """
+    gates = _gates_dir(tmp_path)
+    remotes = {
+        "ssh": ("git@github.com:Gurio/brr.git", "git@github.com:hugimuni-labs/brnrd.git"),
+        "https": ("https://github.com/Gurio/brr", "https://github.com/hugimuni-labs/brnrd"),
+        "https-git": (
+            "https://github.com/Gurio/brr.git",
+            "https://github.com/hugimuni-labs/brnrd.git",
+        ),
+    }
+    for name, (old_remote, _new) in remotes.items():
+        _write_gate(gates, name, {
+            "token": "secret-token",
+            "brnrd_url": "https://brnrd.dev",
+            "repo_full_name": "Gurio/brr",
+            "git_remote": old_remote,
+        })
+
+    rewrites = account.plan_relabel_gates(
+        gates.parent, "Gurio/brr", "hugimuni-labs/brnrd"
+    )
+
+    assert {rw.gate for rw in rewrites} == set(remotes)
+    assert all(not rw.warnings for rw in rewrites)
+    account.relabel_gates(rewrites, "Gurio/brr")
+
+    for name, (_old, new_remote) in remotes.items():
+        state = json.loads((gates / f"{name}.json").read_text(encoding="utf-8"))
+        assert state["repo_full_name"] == "hugimuni-labs/brnrd"
+        assert state["git_remote"] == new_remote
+        # Untouched keys carried through, order and values intact.
+        assert state["token"] == "secret-token"
+        assert state["brnrd_url"] == "https://brnrd.dev"
+        assert list(state) == ["token", "brnrd_url", "repo_full_name", "git_remote"]
+
+
+def test_relabel_gates_warns_on_a_field_it_does_not_rewrite(tmp_path, capsys):
+    """The old label hiding in an unknown field is reported loudly, never
+    silently left to keep re-splitting memory.
+    """
+    gates = _gates_dir(tmp_path)
+    _write_gate(gates, "cloud", {
+        "repo_full_name": "Gurio/brr",
+        "webhook_note": "installed for Gurio/brr by hand",
+        "nested": {"origin": "ssh://git@github.com/Gurio/brr"},
+    })
+
+    rewrites = account.plan_relabel_gates(
+        gates.parent, "Gurio/brr", "hugimuni-labs/brnrd"
+    )
+
+    assert len(rewrites) == 1
+    assert set(rewrites[0].warnings) == {"webhook_note", "nested.origin"}
+
+    account.relabel_gates(rewrites, "Gurio/brr")
+    out = capsys.readouterr().out
+    assert "gate cloud still says Gurio/brr in webhook_note" in out
+    assert "gate cloud still says Gurio/brr in nested.origin" in out
+    # The known field was still rewritten despite the warnings.
+    state = json.loads((gates / "cloud.json").read_text(encoding="utf-8"))
+    assert state["repo_full_name"] == "hugimuni-labs/brnrd"
+    assert state["webhook_note"] == "installed for Gurio/brr by hand"
+
+
+def test_relabel_gates_leaves_an_unrelated_gate_untouched(tmp_path):
+    """A gate config that never mentions the old label is not planned,
+    not rewritten, and not even re-serialized.
+    """
+    gates = _gates_dir(tmp_path)
+    path = _write_gate(gates, "telegram", {
+        "token": "tg-secret",
+        "chat_id": 12345,
+    })
+    before = path.read_bytes()
+
+    rewrites = account.plan_relabel_gates(
+        gates.parent, "Gurio/brr", "hugimuni-labs/brnrd"
+    )
+    assert rewrites == []
+    account.relabel_gates(rewrites, "Gurio/brr")
+    assert path.read_bytes() == before
+
+
+def test_relabel_gates_handles_a_missing_gates_dir(tmp_path):
+    assert account.plan_relabel_gates(
+        tmp_path / "no-brr-dir", "Gurio/brr", "hugimuni-labs/brnrd"
+    ) == []
+
+
 # ── Detecting a repo that moved without a relabel ─────────────────────
 
 
