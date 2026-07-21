@@ -118,7 +118,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     available = runner.detect_all_runners(repo_root)
     if not available:
         raise SystemExit(
-            "[brnrd] no runner found on PATH (claude, codex, gemini).\n"
+            "[brnrd] no runner found on PATH (claude, codex).\n"
             "       Install one and re-run `brnrd init`."
         )
 

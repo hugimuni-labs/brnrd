@@ -888,7 +888,7 @@ def cmd_runners_list(args):
     )
 
     if not catalog:
-        print("  (none — install claude, codex, or gemini, or declare runners.md profiles)")
+        print("  (none — install claude or codex, or declare runners.md profiles)")
         return 0
 
     for row in catalog:
