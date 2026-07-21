@@ -1227,6 +1227,62 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     assert schedule_mod.load_signals(brr_dir).get("spawn") is not None
 
 
+def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
+    """`environment:` in spawn frontmatter may opt down, never up (#515).
+
+    `solitary`/`docker` are WorktreeEnv subclasses — the child keeps its
+    own worktree, so the 2026-07-07 cwd-collision guard holds while
+    isolation only increases. `host` (or anything unknown) is refused
+    with a notice rather than silently rewritten to the worktree floor.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "task", status="processing")
+    event_id = path.stem
+    task = Run(
+        id="run-parent", event_id=event_id, body="task", source="telegram",
+    )
+
+    (outbox / "spawn-solitary.md").write_text(
+        "---\nspawn: true\nshell: claude\nenvironment: solitary\n---\n"
+        "isolated probe child\n",
+        encoding="utf-8",
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ]
+    assert len(spawned) == 1
+    assert spawned[0]["environment"] == "solitary"
+    assert spawned[0]["worker"] is True
+
+    # `host` — an opt *up* — is refused, leaves a notice, queues nothing.
+    (outbox / "spawn-host.md").write_text(
+        "---\nspawn: true\nshell: claude\nenvironment: host\n---\n"
+        "child asking to share the parent's cwd\n",
+        encoding="utf-8",
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+    assert promoted == 0
+    assert len([
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ]) == 1  # still only the solitary one
+    notices = daemon._read_outbox_notices(outbox)
+    assert any("not spawnable" in str(n.get("text", "")) for n in notices)
+
+
 def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
     """A worker-stack run must not itself spawn a further child (no nesting)."""
     brr_dir = tmp_path / ".brr"
