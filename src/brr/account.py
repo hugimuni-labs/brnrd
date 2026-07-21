@@ -167,10 +167,16 @@ def _is_git_worktree(repo_root: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
-def _init_git_repo(path: Path) -> None:
+def _init_git_repo(path: Path) -> bool:
+    """Init a git repo at *path* iff absent. Returns True on a fresh init.
+
+    The return value is the birth signal ``resolve_context`` uses to seed
+    the deed README exactly once — at true birth — so an owner who later
+    deletes their deed stays deleted.
+    """
     if (path / ".git").exists():
-        return
-    subprocess.run(
+        return False
+    result = subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=path,
         stdout=subprocess.PIPE,
@@ -178,6 +184,7 @@ def _init_git_repo(path: Path) -> None:
         text=True,
         check=False,
     )
+    return result.returncode == 0
 
 
 def _write_gitignore(path: Path) -> None:
@@ -356,7 +363,14 @@ def resolve_context(
     )
     if should_create:
         home_root.mkdir(parents=True, exist_ok=True)
-        _init_git_repo(home_root)
+        if _init_git_repo(home_root):
+            # Born just now, and silently (no terminal seam here) — the deed
+            # README is the ceremony's artifact: it says what this repo is,
+            # who writes it, and how to leave, and its commit founds the
+            # repo by name instead of leaving an anonymous birth.
+            from . import repo_deed
+
+            repo_deed.ensure_deed(home_root, "dominion")
         _write_gitignore(home_root)
 
     registry_path = home_root / REGISTRY_PATH

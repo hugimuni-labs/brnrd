@@ -185,10 +185,10 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
     }
 
 
-def test_photo_caption_enqueues_with_media_note(env):
-    """A media message carries its text as ``caption``; it must enqueue
-    (annotated), not vanish (2026-07-21: a screenshot question was dropped
-    with no audit record)."""
+def test_photo_caption_enqueues_with_attachment_pointer(env):
+    """#525 — a captioned photo enqueues with an attachment *pointer*
+    (largest PhotoSize; no bytes server-side) and no not-ingested note.
+    Previously (#553) it enqueued annotated-only."""
     app, client, _ = env
     acc = _account(client)
     rid = _repo(client, acc)
@@ -199,21 +199,25 @@ def test_photo_caption_enqueues_with_media_note(env):
     msg = update["message"]
     del msg["text"]
     msg["caption"] = "why are the rows grouped like this?"
-    msg["photo"] = [{"file_id": "f1", "width": 90, "height": 60}]
+    msg["photo"] = [
+        {"file_id": "f1-small", "width": 90, "height": 60, "file_size": 1000},
+        {"file_id": "f1-big", "width": 900, "height": 600, "file_size": 90000},
+    ]
     r = client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
         event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
-        assert event.body == (
-            "why are the rows grouped like this?"
-            "\n\n[attached media not ingested — brnrd received the text only]"
-        )
+        assert event.body == "why are the rows grouped like this?"
+        from brnrd import inbox as inbox_service
+        assert inbox_service.attachments_of(event) == [
+            {"file_id": "f1-big", "filename": "photo.jpg", "kind": "photo", "file_size": 90000}
+        ]
 
 
-def test_media_without_text_replies_instead_of_silent_drop(env, monkeypatch):
-    """A captionless photo can't enqueue anything — but the sender must be
-    told, not ghosted."""
+def test_captionless_photo_enqueues_pointer_with_empty_body(env, monkeypatch):
+    """#525 — a captionless *image* is a valid message now (the image carries
+    the content, matching the local gate); no more "can't see media" reply."""
     app, client, _ = env
     sent: list[str] = []
     monkeypatch.setattr(
@@ -233,7 +237,70 @@ def test_media_without_text_replies_instead_of_silent_drop(env, monkeypatch):
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
-        assert db.execute(select(Event).where(Event.source == "telegram")).scalar_one_or_none() is None
+        from brnrd import inbox as inbox_service
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.body == ""
+        assert inbox_service.attachments_of(event) == [
+            {"file_id": "f2", "filename": "photo.jpg", "kind": "photo"}
+        ]
+    assert not any("can't see attached media" in t for t in sent)
+
+
+def test_image_document_pointer_keeps_filename(env):
+    """#525 — a drag-and-drop image document keeps its own filename; the
+    filename is sanitized to a bare basename."""
+    app, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    update = _message(555, "see attached", message_id=45)
+    update["message"]["document"] = {
+        "file_id": "d1", "file_name": "../evil/shot.png", "mime_type": "image/png",
+    }
+    client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+
+    with app.state.SessionLocal() as db:
+        from brnrd import inbox as inbox_service
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert inbox_service.attachments_of(event) == [
+            {"file_id": "d1", "filename": "shot.png", "kind": "document"}
+        ]
+
+
+def test_non_image_media_keeps_annotation_and_captionless_still_replies(env, monkeypatch):
+    """Non-image media stays annotated-not-fetched (#553 behavior)."""
+    app, client, _ = env
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_message",
+        lambda token, chat_id, text, **kw: sent.append(text) or 1,
+    )
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+
+    # Voice note with a caption → enqueue annotated, no pointer.
+    update = _message(555, "listen to this", message_id=46)
+    msg = update["message"]
+    del msg["text"]
+    msg["caption"] = "listen to this"
+    msg["voice"] = {"file_id": "v1", "duration": 3}
+    client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+    with app.state.SessionLocal() as db:
+        from brnrd import inbox as inbox_service
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert "[attached media not ingested" in (event.body or "")
+        assert inbox_service.attachments_of(event) == []
+
+    # Captionless video → still the honest "can't see media" reply.
+    update2 = _message(555, "", message_id=47)
+    msg2 = update2["message"]
+    del msg2["text"]
+    msg2["video"] = {"file_id": "vid1"}
+    client.post("/v1/webhooks/telegram", json=update2, headers=_HDR)
     assert any("can't see attached media" in t for t in sent)
 
 
@@ -799,4 +866,133 @@ def test_card_relay_unknown_event_is_404(env, monkeypatch):
     r = client.post(
         "/v1/daemons/card", json={"event_id": "evt-nope", "text": "x"}, headers=dmn
     )
+    assert r.status_code == 404
+
+
+# ── #525 attachment read-through proxy ───────────────────────────────
+
+
+def _bound_photo_event(app, client, *, message_id=88, caption="see this"):
+    """Pair a chat, deliver a photo webhook, return (acc, rid, event dict
+    as the daemon inbox pull sees it)."""
+    acc = _account(client)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    update = _message(555, "", message_id=message_id)
+    msg = update["message"]
+    del msg["text"]
+    if caption:
+        msg["caption"] = caption
+    msg["photo"] = [{"file_id": "photo-big", "width": 900, "height": 600}]
+    client.post("/v1/webhooks/telegram", json=update, headers=_HDR)
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    return acc, rid, dmn, drained["events"][0]
+
+
+def test_inbox_pull_carries_attachment_pointers(env):
+    app, client, _ = env
+    _, _, _, event = _bound_photo_event(app, client)
+    assert event["attachments"] == [
+        {"file_id": "photo-big", "filename": "photo.jpg", "kind": "photo"}
+    ]
+
+
+def test_attachment_proxy_streams_bytes_fresh_per_request(env, monkeypatch):
+    app, client, _ = env
+    resolved: list[str] = []
+
+    def fake_resolve(token, file_id, **kw):
+        resolved.append(file_id)
+        return {"file_path": "photos/x.jpg", "file_size": 5}
+
+    monkeypatch.setattr("brnrd.platforms.telegram.resolve_file", fake_resolve)
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.fetch_file_bytes",
+        lambda token, file_path, *, max_bytes, timeout=60.0: b"JPEG!",
+    )
+    _, _, dmn, event = _bound_photo_event(app, client)
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert r.status_code == 200
+    assert r.content == b"JPEG!"
+    assert r.headers["content-type"].startswith("image/jpeg")
+    # getFile resolved fresh on each request — never cached server-side.
+    client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert resolved == ["photo-big", "photo-big"]
+
+
+def test_attachment_proxy_requires_daemon_credential(env, monkeypatch):
+    app, client, _ = env
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.resolve_file",
+        lambda *a, **k: {"file_path": "p", "file_size": 1},
+    )
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.fetch_file_bytes", lambda *a, **k: b"x"
+    )
+    acc, rid, dmn, event = _bound_photo_event(app, client)
+    url = f"/v1/daemons/events/{event['event_id']}/attachments/0"
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=acc).status_code == 403
+    # A daemon paired to a *different* repo must not see this event.
+    other_rid = _repo(client, acc, name="other")
+    other_dmn = _daemon_headers(client, acc, other_rid)
+    assert client.get(url, headers=other_dmn).status_code == 404
+
+
+def test_attachment_proxy_expired_file_is_502(env, monkeypatch):
+    app, client, _ = env
+
+    def gone(token, file_id, **kw):
+        raise RuntimeError("telegram getFile failed: file is too old")
+
+    monkeypatch.setattr("brnrd.platforms.telegram.resolve_file", gone)
+    _, _, dmn, event = _bound_photo_event(app, client)
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert r.status_code == 502
+    assert "telegram file unavailable" in r.json()["detail"]
+
+
+def test_attachment_proxy_over_cap_is_413(env, monkeypatch):
+    app, client, _ = env
+    fetched: list[str] = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.resolve_file",
+        lambda token, file_id, **kw: {"file_path": "p", "file_size": 11 * 1024 * 1024},
+    )
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.fetch_file_bytes",
+        lambda *a, **k: fetched.append("x") or b"x",
+    )
+    _, _, dmn, event = _bound_photo_event(app, client)
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
+    assert r.status_code == 413
+    assert fetched == []  # declared size rejected before any bytes moved
+
+
+def test_attachment_proxy_unknown_index_is_404(env):
+    app, client, _ = env
+    _, _, dmn, event = _bound_photo_event(app, client)
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/5", headers=dmn)
+    assert r.status_code == 404
+
+
+def test_responded_event_clears_pointers_and_proxy_404s(env):
+    app, client, _ = env
+    _, _, dmn, event = _bound_photo_event(app, client)
+    client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event["event_id"], "body_markdown": "done", "status": "done"},
+        headers=dmn,
+    )
+    with app.state.SessionLocal() as db:
+        from brnrd import inbox as inbox_service
+        row = db.execute(
+            select(Event).where(Event.event_id == event["event_id"])
+        ).scalar_one()
+        assert inbox_service.attachments_of(row) == []
+    r = client.get(f"/v1/daemons/events/{event['event_id']}/attachments/0", headers=dmn)
     assert r.status_code == 404

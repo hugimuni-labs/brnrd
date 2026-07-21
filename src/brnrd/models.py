@@ -166,6 +166,12 @@ class Event(Base):
     # that lets a responded event keep forwarding continuation messages
     # while still ACKing an exact terminal-retry duplicate quietly.
     response_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # #525 — image-attachment *pointers* (JSON list of {file_id, filename,
+    # kind[, file_size]}), never bytes: the server is a bounded mirror (#543
+    # data minimization, #542 pointer-not-copy). A daemon streams the actual
+    # bytes through GET /v1/daemons/events/{event_id}/attachments/{index}.
+    # Cleared alongside ``body`` when the event closes or its body ages out.
+    attachments_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class ChannelRoute(Base):

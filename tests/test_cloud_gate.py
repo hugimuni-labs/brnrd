@@ -2133,3 +2133,112 @@ def test_activity_excerpts_ship_only_for_cloud_threads(tmp_path):
     rows = {r["id"]: r for r in cloud._run_activity_records(brr_dir)}
     assert rows["run:run-managed"]["summary"] == "the cloud thread body"
     assert rows["run:run-local"]["summary"] == "evt-l"
+
+
+def test_drain_downloads_attachment_pointers_into_local_files(tmp_path, monkeypatch):
+    """#525 — an event carrying attachment pointers lands locally with the
+    bytes already fetched through the server's read-through proxy, in the
+    same ``attachment_files`` shape the telegram/github gates produce."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    # The proxy needs a configured bot token to talk to Telegram.
+    import dataclasses
+    client.app.state.settings = dataclasses.replace(
+        client.app.state.settings, telegram_bot_token="bot:TOKEN"
+    )
+    # The server proxy resolves getFile fresh and streams bytes through.
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.resolve_file",
+        lambda tok, file_id, **kw: {"file_path": "photos/x.jpg", "file_size": 5},
+    )
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.fetch_file_bytes",
+        lambda tok, file_path, *, max_bytes, timeout=60.0: b"JPEG!",
+    )
+
+    def fake_download(base_url, token, event_id, index, dest):
+        resp = client.get(
+            f"/v1/daemons/events/{event_id}/attachments/{index}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code != 200:
+            return False
+        dest.write_bytes(resp.content)
+        return True
+
+    monkeypatch.setattr(cloud, "_download_attachment", fake_download)
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid,
+            "body": "look at this screenshot",
+            "source": "telegram",
+            "reply_to": {"platform": "telegram", "chat_id": "555"},
+            "attachments": [
+                {"file_id": "photo-big", "filename": "photo.jpg", "kind": "photo"}
+            ],
+        },
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    (event,) = protocol.list_pending(inbox_dir)
+    assert event["body"] == "look at this screenshot"
+    paths = protocol.event_attachment_paths(event)
+    assert [p.name for p in paths] == ["photo.jpg"]
+    assert paths[0].read_bytes() == b"JPEG!"
+
+
+def test_attachment_fetch_failure_annotates_body(tmp_path, monkeypatch):
+    """#525 — a stale telegram file link degrades to an honest annotation
+    (#553-style): never silent, never fabricated bytes."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(
+        cloud, "_download_attachment", lambda *a, **k: False
+    )
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid,
+            "body": "the dashboard bug",
+            "source": "telegram",
+            "attachments": [
+                {"file_id": "gone", "filename": "shot.png", "kind": "document"}
+            ],
+        },
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    (event,) = protocol.list_pending(inbox_dir)
+    assert event["body"].startswith("the dashboard bug")
+    assert 'attachment "shot.png" could not be fetched' in event["body"]
+    assert protocol.event_attachment_paths(event) == []
+
+
+def test_attachment_filename_is_sanitized_locally(tmp_path, monkeypatch):
+    """#525 — a hostile pointer filename can't escape the attachments dir;
+    the daemon re-sanitizes independently of the server."""
+    assert cloud._safe_attachment_name({"filename": "../../etc/passwd"}, 0) == "passwd"
+    assert cloud._safe_attachment_name({"filename": "..\\..\\x.png"}, 0) == "x.png"
+    assert cloud._safe_attachment_name({"filename": ""}, 3) == "attachment-03"
+    assert cloud._safe_attachment_name({"filename": ".."}, 1) == "attachment-01"
