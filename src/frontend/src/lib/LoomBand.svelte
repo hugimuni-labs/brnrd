@@ -15,7 +15,8 @@
 		loomFutureHorizon,
 		loomFutureStop,
 		loomPastStop,
-		loomPastWindowLabel
+		loomPastWindowLabel,
+		nestShelfChildren
 	} from './loomBand';
 	import {
 		STATUS_BURNING,
@@ -89,6 +90,9 @@
 		legend: string;
 		/** A run that closed without produce still happened — faint row. */
 		bare: boolean;
+		/** 0 = its own root row; 1 = nested under the parent that spawned it
+		 *  (`nestShelfChildren`, #539). Only ever one hop deep. */
+		depth: 0 | 1;
 	}
 
 	function isKb(relic: RelicRecord): boolean {
@@ -125,6 +129,8 @@
 			endedAt: number;
 			wallSeconds: number;
 			relics: RelicRecord[];
+			parentRunId: string | null;
+			isSubspawn: boolean;
 		}> = [];
 		for (const row of rows) {
 			const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
@@ -139,6 +145,8 @@
 				current.endedAt = Math.max(current.endedAt, endedAt);
 				current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
 				current.relics.push(...(row.external_refs ?? []));
+				current.parentRunId ??= row.parent_run_id;
+				current.isSubspawn ||= Boolean(row.is_subspawn);
 			} else {
 				grouped.push({
 					id,
@@ -146,28 +154,33 @@
 					repoLabel: row.repo_label,
 					endedAt,
 					wallSeconds: row.wall_clock_seconds ?? 0,
-					relics: [...(row.external_refs ?? [])]
+					relics: [...(row.external_refs ?? [])],
+					parentRunId: row.parent_run_id,
+					isSubspawn: Boolean(row.is_subspawn)
 				});
 			}
 		}
 
-		return grouped
-			.map((group) => {
-				const ageMs = timestamp - group.endedAt;
-				const produce = produceLegend(group.relics);
-				return {
-					id: group.id,
-					href: group.runId ? runNodeHref(group.repoLabel, group.runId) : null,
-					ageMs,
-					wallSeconds: group.wallSeconds,
-					color: THERMAL_STOPS[loomPastStop(ageMs)],
-					legend: produce
-						? `${produce} · ${durationLabel(group.wallSeconds)}`
-						: durationLabel(group.wallSeconds),
-					bare: !produce
-				};
-			})
-			.sort((a, b) => a.ageMs - b.ageMs);
+		// A dispatched child's row nests under the row of the run that spawned
+		// it (#539) rather than sorting purely by its own age — same edge
+		// `groupWithChildren` folds into the receipt panel, read here for the
+		// shelf's position instead of its relics.
+		const withAge = grouped.map((group) => ({ ...group, ageMs: timestamp - group.endedAt }));
+		return nestShelfChildren(withAge).map((group) => {
+			const produce = produceLegend(group.relics);
+			return {
+				id: group.id,
+				href: group.runId ? runNodeHref(group.repoLabel, group.runId) : null,
+				ageMs: group.ageMs,
+				wallSeconds: group.wallSeconds,
+				color: THERMAL_STOPS[loomPastStop(group.ageMs)],
+				legend: produce
+					? `${produce} · ${durationLabel(group.wallSeconds)}`
+					: durationLabel(group.wallSeconds),
+				bare: !produce,
+				depth: group.depth
+			};
+		});
 	}
 
 	// The lens vocabulary is derived from the rows on screen, so it moves with
@@ -264,7 +277,21 @@
 		'flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5';
 
 	function shelfRowStyle(run: ShelfRun): string {
-		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`;
+		// A nested child recedes from the NOW-seam edge its parent's bar
+		// touches (#539) — the shelf reads right-to-left, anchored at that
+		// edge, so "indented" here means held back from it rather than
+		// pushed in from the far side, which a plain margin-left would do
+		// nothing visible to (the row is already `justify-end`).
+		const indent = run.depth > 0 ? ' margin-right: 10px;' : '';
+		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}${indent}`;
+	}
+
+	/** Shared prefix for a shelf row's title/tooltip — the one place both the
+	 * link and select-only branches source the "spawned by" tell from, so a
+	 * nested row reads the same regardless of which branch rendered it. */
+	function shelfRowTitle(run: ShelfRun): string {
+		const nested = run.depth > 0 ? 'spawned · ' : '';
+		return `${nested}${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`;
 	}
 </script>
 
@@ -273,7 +300,7 @@
 		class="truncate font-mono text-[9px] leading-none whitespace-nowrap"
 		class:opacity-50={run.bare}
 	>
-		{run.legend}
+		{#if run.depth > 0}<span class="text-ink-mute" aria-hidden="true">↳ </span>{/if}{run.legend}
 	</span>
 	<span
 		class="h-[7px] shrink-0 rounded-l-[1px]"
@@ -379,7 +406,7 @@
 						href={run.href}
 						class={SHELF_ROW_CLASS}
 						style={shelfRowStyle(run)}
-						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)} — click to open below, ctrl/⌘-click for the full node`}
+						title={`${shelfRowTitle(run)} — click to open below, ctrl/⌘-click for the full node`}
 						onclick={(event) => selectFromCell(event, run.id)}
 						in:glitchReveal={{ duration: 240, delay: index * 24 }}
 					>
@@ -390,7 +417,7 @@
 						type="button"
 						class={SHELF_ROW_CLASS}
 						style={shelfRowStyle(run)}
-						title={`${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`}
+						title={shelfRowTitle(run)}
 						onclick={() => select('run', run.id)}
 						in:glitchReveal={{ duration: 240, delay: index * 24 }}
 					>
