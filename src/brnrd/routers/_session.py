@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from brnrd import ids, oauth
+from brnrd import ids, limits, oauth
 from brnrd.auth import get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
@@ -288,8 +288,15 @@ def _repo_action_response(notice: str, *, ok: bool = True, status_code: int = 20
 
 
 def _repo_error_response(exc: HTTPException):
-    detail = str(exc.detail or "request failed")
-    return _repo_action_response(detail, ok=False, status_code=exc.status_code)
+    detail = exc.detail
+    if isinstance(detail, dict):
+        # limits.raise_if_denied carries {"reason", "message"} — keep the
+        # machine-readable reason in the JSON body, show the message.
+        text = str(detail.get("message") or detail.get("reason") or "request failed")
+        return _repo_action_response(
+            text, ok=False, status_code=exc.status_code, reason=detail.get("reason")
+        )
+    return _repo_action_response(str(detail or "request failed"), ok=False, status_code=exc.status_code)
 
 
 def _repo_parts(repo_full_name: str) -> tuple[str, str]:
@@ -312,6 +319,10 @@ def _connect_repo_core(
     owner, name = _repo_parts(repo_full_name)
     repo = db.execute(select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)).scalar_one_or_none()
     if repo is None:
+        # #501 repo cap — new connections only; reconnects stay idempotent.
+        limits.raise_if_denied(
+            limits.check_repo_connect(db, request.app.state.settings, account)
+        )
         repo = Repo(id=ids.repo_id(), account_id=account.id, forge="github", repo_full_name=repo_full_name, repo_owner=owner, repo_name=name)
         db.add(repo)
     repo.forge_repo_id = forge_repo_id or repo.forge_repo_id

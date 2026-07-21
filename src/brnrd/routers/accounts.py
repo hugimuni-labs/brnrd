@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import ids, schemas
+from .. import ids, limits, schemas
 from ..activity_records import dedupe_activity_records, fresh_activity_records
 from ..auth import Principal, get_db, require_account
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
@@ -104,7 +104,7 @@ def issue_session_token(db: Session, account: Account) -> str:
 
 
 @router.post("/repos", status_code=status.HTTP_201_CREATED, response_model=schemas.RepoOut)
-def create_repo(payload: schemas.RepoCreate, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
+def create_repo(payload: schemas.RepoCreate, request: Request, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
     repo_full_name = payload.repo_full_name.strip()
     owner, name = _repo_parts(repo_full_name)
     existing = db.execute(
@@ -112,6 +112,12 @@ def create_repo(payload: schemas.RepoCreate, principal: Principal = Depends(requ
     ).scalar_one_or_none()
     if existing is not None:
         return repo_out(existing)
+    # #501 repo cap — headroom-limited on the free tier, abuse-capped on all.
+    limits.raise_if_denied(
+        limits.check_repo_connect(
+            db, request.app.state.settings, db.get(Account, principal.account_id)
+        )
+    )
     repo = Repo(
         id=ids.repo_id(),
         account_id=principal.account_id,
