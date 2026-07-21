@@ -1,13 +1,18 @@
 """Repository adoption — ``brnrd init``.
 
-Sets up the ``.brr/`` runtime directory, detects a runner, and
-delegates AGENTS.md + kb/ creation to the runner itself. The runner
-receives ``setup.md`` plus brr's own ``AGENTS.md`` (the model) as a
-prompt and decides what work (if any) is needed based on the repo's
-current state.
+Sets up the ``.brr/`` runtime directory, detects a runner, and delegates
+the repository contract to the runner itself. The runner receives
+``setup.md`` plus the host-agnostic adopter template
+(``templates/constitution.md``, *not* brr's own playbook) and tailors it
+to the repo. brnrd then writes shell bridges (``CLAUDE.md`` / ``GEMINI.md``)
+for every detected shell and verifies the contract is structurally sound
+and reachable from each — see ``constitution`` for both mechanics.
+
+The adopter's knowledge shape (committed ``kb/`` vs account home) is asked,
+not defaulted, and asked before the contract is authored.
 
 This module is intentionally thin — the intelligence lives in the
-prompt files, not here.
+prompt files and ``constitution``, not here.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 from . import config as conf
+from . import constitution
 from . import dominion
 from . import gitops
 from . import prompts
@@ -135,11 +141,65 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
         cfg.update(cfg_overrides)
         conf.write_config(repo_root, cfg)
 
-    _run_setup(runner_name, repo_root)
-    _verify(repo_root)
+    # D2: the adopter's knowledge shape is *asked*, not defaulted — and it is
+    # asked *before* the contract is written, so setup authors the shape the
+    # user actually chose instead of committing repo-`kb/` and discovering the
+    # mismatch only when home-linking is offered afterwards.
+    knowledge_shape = _resolve_knowledge_shape(interactive)
+
+    _run_setup(runner_name, repo_root, knowledge_shape=knowledge_shape)
+
+    # L2: every *detected* shell gets a bridge to the contract, not only the
+    # configured runner — the drop-in audience switches tools, and a bare
+    # Claude/Gemini session in an adopted repo is otherwise never told
+    # AGENTS.md exists.
+    shells = _detect_shells()
+    written = constitution.write_bridges(repo_root, shells)
+    if written:
+        print(f"[brnrd] shell bridges written: {', '.join(sorted(written))}")
+
+    _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
 
     if interactive and sys.stdin.isatty():
         _offer_home_link(repo_root)
+
+
+# shell -> the CLI binary that reveals it on PATH. Bridges are written for
+# whichever of these are present, independent of the runner brnrd itself
+# uses. Cursor and Codex read ``AGENTS.md`` natively (no bridge file), but
+# detecting them still drives the reachability report.
+_SHELL_BINARIES: dict[str, str] = {
+    "claude": "claude",
+    "codex": "codex",
+    "gemini": "gemini",
+    "cursor": "cursor-agent",
+}
+
+
+def _detect_shells() -> list[str]:
+    """Shells whose CLI is on PATH, in a stable order."""
+    return [s for s, binary in _SHELL_BINARIES.items() if shutil.which(binary)]
+
+
+def _resolve_knowledge_shape(interactive: bool) -> str:
+    """Resolve the adopter's kb architecture — ``"repo"`` or ``"home"``.
+
+    Asked in an interactive TTY session (D2); a non-interactive install can't
+    ask, so it takes the portable committed-``kb/`` shape as its
+    backward-compatible default. Either way the answer is no longer *implied*
+    by which artifacts init happens to hard-require.
+    """
+    if interactive and sys.stdin.isatty():
+        choice = _pick_option(
+            "Where should this repo's knowledge base live?",
+            [
+                "repo — a committed kb/ directory, portable and git-native",
+                "home — private brnrd account knowledge (needs a connected account)",
+            ],
+            "repo — a committed kb/ directory, portable and git-native",
+        )
+        return "home" if choice.startswith("home") else "repo"
+    return "repo"
 
 
 def _interactive_configure(available: list[str]) -> tuple[str, dict]:
@@ -349,9 +409,19 @@ def _bootstrap_dominion(repo_root: Path) -> None:
         print(f"[brnrd] dominion setup skipped: {exc}")
 
 
-def _run_setup(runner_name: str, repo_root: Path) -> None:
-    """Call the runner with the init prompt to create AGENTS.md + kb/."""
-    prompt = prompts.build_init_prompt(repo_root)
+def _run_setup(
+    runner_name: str, repo_root: Path, *, knowledge_shape: str = "repo"
+) -> None:
+    """Call the runner with the init prompt to author the contract.
+
+    The one hard required artifact is ``AGENTS.md`` — the repository
+    contract every shell rests on. The committed ``kb/`` files are **not**
+    hard-required: they only apply to the committed-``kb/`` knowledge shape,
+    and gating the whole install on an architecture the adopter may have
+    declined (or that a connected account replaces) is the very failure this
+    layer removes. Their presence is a soft check in :func:`_verify`.
+    """
+    prompt = prompts.build_init_prompt(repo_root, knowledge_shape=knowledge_shape)
     cfg = conf.load_config(repo_root)
     invocation = runner.RunnerInvocation(
         kind="init",
@@ -361,8 +431,6 @@ def _run_setup(runner_name: str, repo_root: Path) -> None:
         repo_root=repo_root,
         required_artifacts=[
             runner.RunnerArtifactSpec(repo_root / "AGENTS.md", "AGENTS.md"),
-            runner.RunnerArtifactSpec(repo_root / "kb" / "index.md", "kb/index.md"),
-            runner.RunnerArtifactSpec(repo_root / "kb" / "log.md", "kb/log.md"),
         ],
     )
 
@@ -379,22 +447,95 @@ def _run_setup(runner_name: str, repo_root: Path) -> None:
         print(f"[brnrd] setup failed: missing required output(s): {missing}")
         print("[brnrd] re-run `brnrd init` to retry")
         raise SystemExit(1)
+
+    # Structure, not mere existence: an AGENTS.md the runner wrote but left
+    # empty (or without the universal sections) passes the file-exists gate
+    # yet is not a usable contract. Only checked when a real file landed —
+    # a mocked runner that asserts the artifact without writing it is a test
+    # fixture, not a production path.
+    agents = repo_root / "AGENTS.md"
+    if agents.exists():
+        problems = _agents_structure_problems(agents)
+        if problems:
+            print(
+                "[brnrd] setup failed: AGENTS.md is present but incomplete "
+                f"({'; '.join(problems)})"
+            )
+            print("[brnrd] re-run `brnrd init` to retry")
+            raise SystemExit(1)
+
     if result.output.strip():
         print(result.output)
 
 
-def _verify(repo_root: Path) -> None:
-    """Check that the runner created the expected files."""
+# Universal section anchors an authored AGENTS.md must carry to count as a
+# usable contract. Matched leniently (heading text or a block id) so a
+# repo that renamed a heading slightly still passes, but an empty or
+# truncated file does not.
+_REQUIRED_SECTIONS: tuple[tuple[str, ...], ...] = (
+    ("## Stewardship", "id=stewardship"),
+    ("## Knowledge base", "id=knowledge"),
+    ("## Guardrails", "id=guardrails"),
+)
+
+
+def _agents_structure_problems(path: Path) -> list[str]:
+    """Return human-readable reasons *path* is not a usable contract, or []."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"unreadable ({exc})"]
+    problems: list[str] = []
+    if len(text.strip()) < 200:
+        problems.append("file is essentially empty")
+    for anchors in _REQUIRED_SECTIONS:
+        if not any(a in text for a in anchors):
+            problems.append(f"missing the {anchors[0]!r} section")
+    return problems
+
+
+def _verify(
+    repo_root: Path,
+    *,
+    knowledge_shape: str = "repo",
+    shells: list[str] | None = None,
+) -> None:
+    """Report the installed contract's health — structure + reachability.
+
+    Existence checks alone let an empty AGENTS.md and an unbridged Claude
+    session pass. This verifies the contract is structurally usable, that
+    each detected shell can actually *reach* it, and that the chosen
+    knowledge shape's files are present (a soft note for committed-``kb/``,
+    never a hard gate).
+    """
+    shells = shells or []
     agents = repo_root / "AGENTS.md"
-    kb_index = repo_root / "kb" / "index.md"
-    kb_log = repo_root / "kb" / "log.md"
 
     ok = True
-    for path, label in [(agents, "AGENTS.md"), (kb_index, "kb/index.md"), (kb_log, "kb/log.md")]:
-        if path.exists():
-            print(f"[brnrd] ✓ {label}")
+    if agents.exists():
+        problems = _agents_structure_problems(agents)
+        if problems:
+            print(f"[brnrd] ⚠ AGENTS.md incomplete: {'; '.join(problems)}")
+            ok = False
         else:
-            print(f"[brnrd] ✗ {label} missing — the runner may not have created it")
+            print("[brnrd] ✓ AGENTS.md")
+    else:
+        print("[brnrd] ✗ AGENTS.md missing — the runner may not have created it")
+        ok = False
+
+    if knowledge_shape == "repo":
+        for label in ("kb/index.md", "kb/log.md"):
+            if (repo_root / label).exists():
+                print(f"[brnrd] ✓ {label}")
+            else:
+                print(f"[brnrd] · {label} not created (optional)")
+
+    for shell in shells:
+        reach = constitution.verify_reachability(repo_root, shell)
+        if reach.reachable:
+            print(f"[brnrd] ✓ {shell}: {reach.detail}")
+        else:
+            print(f"[brnrd] ✗ {shell}: {reach.detail}")
             ok = False
 
     if ok:

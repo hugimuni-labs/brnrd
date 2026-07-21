@@ -46,10 +46,13 @@ from .proxy import ErgoProxy, NullErgoProxy, resolve_proxy
 
 # brr's installed package root (``src/brr``): probes.py lives at
 # ``src/brr/ergonomics/probes.py``, so two parents up is the package dir
-# that carries the bundled Dockerfile and AGENTS.md template.
+# that carries the bundled Dockerfile and the adopter template.
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 _BUNDLED_DOCKERFILE = _PKG_ROOT / "Dockerfile"
-_BUNDLED_AGENTS_MD = _PKG_ROOT / "AGENTS.md"
+# The adopter template (Layer 0). An installed ``AGENTS.md`` is a tailored
+# render of this; drift is measured block-by-block (Layer 1), never by
+# whole-file equality — see ``probe_doc_drift``.
+_BUNDLED_AGENTS_MD = _PKG_ROOT / "templates" / "constitution.md"
 
 
 @dataclass
@@ -205,11 +208,17 @@ def probe_disk(p: ProbeContext) -> list[Finding]:
 
 
 def probe_doc_drift(p: ProbeContext) -> list[Finding]:
-    """The adopter's ``AGENTS.md`` is a copy ``brnrd init`` wrote; the
-    bundled template ships with the installed brr. After ``pip install
-    -U brr`` the two can diverge, leaving agents on stale guidance.
-    Compare and nudge a re-sync. In brr's own repo the repo file is a
-    symlink to the bundled one, so this never false-fires there.
+    """The adopter's ``AGENTS.md`` is a tailored render of the bundled
+    adopter template. After ``pip install -U brr`` the shipped universals
+    can move ahead of the installed copy, leaving agents on stale guidance.
+
+    When both files carry versioned blocks (Layer 1) the comparison is
+    **block-by-block**: only universal blocks whose version or content hash
+    lags the template count as drift, so per-repo tailoring never
+    false-fires and a stale universal can no longer hide inside a
+    legitimately-diverged file. When neither side has blocks (a pre-L1
+    install), it falls back to a whole-file compare. In brr's own repo the
+    repo file is a symlink to the bundled one, so this never fires there.
     """
     if not _BUNDLED_AGENTS_MD.exists():
         return []
@@ -222,6 +231,35 @@ def probe_doc_drift(p: ProbeContext) -> list[Finding]:
         bundled_text = _BUNDLED_AGENTS_MD.read_text(encoding="utf-8")
         repo_text = repo_doc.read_text(encoding="utf-8")
     except OSError:
+        return []
+
+    from .. import constitution
+
+    drift = constitution.block_drift(repo_text, bundled_text)
+    if drift:
+        stale = ", ".join(
+            f"{d.id} (v{d.installed_version}→v{d.template_version})" for d in drift
+        )
+        return [
+            Finding(
+                "drifted_bundled_docs",
+                "info",
+                {
+                    "doc": "AGENTS.md",
+                    "stale_blocks": stale,
+                    "block_count": len(drift),
+                    "hint": (
+                        f"{len(drift)} universal block(s) in this repo's "
+                        f"AGENTS.md lag the template bundled with the installed "
+                        f"brr ({stale}). Re-sync those blocks so agents read "
+                        "current guidance; per-repo sections are untouched."
+                    ),
+                },
+            )
+        ]
+
+    # Pre-L1 fallback: no blocks on either side ⇒ whole-file compare.
+    if constitution.block_map(bundled_text) or constitution.block_map(repo_text):
         return []
     if bundled_text == repo_text:
         return []
