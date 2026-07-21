@@ -4584,11 +4584,32 @@ def _queue_spawn_request(
     # (run-260707-1321-auhp, kb/design-director-loop.md §"Concurrent
     # sub-spawns" addendum) a spawned child's `git checkout -b` executed
     # in the same cwd as the parent's own mid-edit shell, flipping the
-    # parent's branch out from under it. Force worktree isolation
-    # unconditionally, regardless of the repo's own env policy — an
-    # event's own `environment` key outranks the repo config default
+    # parent's branch out from under it. Worktree isolation is therefore
+    # the *floor*, regardless of the repo's own env policy — an event's
+    # own `environment` key outranks the repo config default
     # (`run.py::_event_environment_policy`).
-    meta["environment"] = "worktree"
+    #
+    # The frontmatter may opt *down* into a more-isolated env (#515):
+    # `docker` and `solitary` are WorktreeEnv subclasses, so the child
+    # still gets its own worktree and the collision guard holds by
+    # construction — isolation only increases. Anything else (`host`
+    # above all) is refused outright rather than silently rewritten:
+    # a parent that asked for less isolation should hear "no", and a
+    # parent that asked for *more* (say, solitary on a repo with no
+    # docker.image) must never be quietly downgraded — the env backend
+    # fails that run loudly instead (`docker env requires docker.image`).
+    requested_env = str(fm.get("environment") or fm.get("env") or "").strip().casefold()
+    if requested_env in ("docker", "solitary"):
+        meta["environment"] = requested_env
+    elif requested_env and requested_env != "worktree":
+        _record_outbox_notice(
+            outbox_dir,
+            f"spawn refused: environment {requested_env!r} is not spawnable — "
+            "worktree is the floor; opt-down to docker/solitary only.",
+        )
+        return False
+    else:
+        meta["environment"] = "worktree"
     if proposed:
         meta["shell"] = proposed
     if core:
