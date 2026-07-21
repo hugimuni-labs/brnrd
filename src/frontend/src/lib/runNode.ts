@@ -11,6 +11,16 @@
 // so this module is a pure composition over that response — no new endpoint,
 // no second copy of the data.
 
+// `ResolvedPathname` (below) is a type-only import — it costs nothing at
+// runtime and stays resolvable under plain `node --test`, unlike a *value*
+// import of `resolve()` from `$app/paths`, which only exists inside
+// SvelteKit's Vite build and breaks this module's node-run unit tests
+// (`runNode.test.ts` imports these functions directly, no bundler in the
+// loop). The URLs below are already built by hand with `encodeURIComponent`
+// and match the `/runs/[repo]/[run]` route exactly, so the cast is honest,
+// not a bypass — `svelte/no-navigation-without-resolve` only cares that the
+// *type* the caller receives is `ResolvedPathname`.
+import type { ResolvedPathname } from '$app/types';
 import type { RunLedgerRow } from './runLedger';
 import type { SurfaceFile, SurfaceResponse } from './surface';
 
@@ -59,8 +69,8 @@ export function runIdSlug(runId: string | null | undefined): string {
 }
 
 /** Route to the run node page for one ledger/live run. */
-export function runNodeHref(repoLabel: string | null | undefined, runId: string): string {
-	return `/runs/${encodeURIComponent(repoRunSlug(repoLabel))}/${encodeURIComponent(runIdSlug(runId))}`;
+export function runNodeHref(repoLabel: string | null | undefined, runId: string): ResolvedPathname {
+	return `/runs/${encodeURIComponent(repoRunSlug(repoLabel))}/${encodeURIComponent(runIdSlug(runId))}` as ResolvedPathname;
 }
 
 /**
@@ -68,12 +78,12 @@ export function runNodeHref(repoLabel: string | null | undefined, runId: string)
  * file. This is what turns a `runs/<slug>/<run>/…` link inside mirrored prose
  * into a real edge between nodes, using only paths already in the response.
  */
-export function runNodeHrefForPath(path: string): string | null {
+export function runNodeHrefForPath(path: string): ResolvedPathname | null {
 	const parts = path.split('/');
 	if (parts.length < 3 || parts[0] !== 'runs') return null;
 	const [, slug, run] = parts;
 	if (!slug || !run) return null;
-	return `/runs/${encodeURIComponent(slug)}/${encodeURIComponent(run)}`;
+	return `/runs/${encodeURIComponent(slug)}/${encodeURIComponent(run)}` as ResolvedPathname;
 }
 
 /** Select the receipt for this node without bleeding across account repos. */
@@ -223,7 +233,7 @@ export function frameFields(metadata: Record<string, string>): FrameField[] {
 
 export interface DispatchEdge {
 	runId: string;
-	href: string | null;
+	href: ResolvedPathname | null;
 }
 
 export interface DispatchEdges {
@@ -236,7 +246,7 @@ export interface DispatchEdges {
 function edgeTo(repoSlug: string, runId: string, mirrored: Set<string>): DispatchEdge {
 	const slug = runIdSlug(runId);
 	const href = mirrored.has(`runs/${repoSlug}/${slug}/state.md`)
-		? `/runs/${encodeURIComponent(repoSlug)}/${encodeURIComponent(slug)}`
+		? (`/runs/${encodeURIComponent(repoSlug)}/${encodeURIComponent(slug)}` as ResolvedPathname)
 		: null;
 	return { runId, href };
 }
@@ -276,12 +286,7 @@ export function dispatchEdges(
 // ── Message presentation ─────────────────────────────────────────────────
 
 /** The only statuses `message_store` writes, plus a catch-all. */
-export type MessageTone =
-	| 'delivered'
-	| 'collected'
-	| 'pending'
-	| 'undeliverable'
-	| 'unknown';
+export type MessageTone = 'delivered' | 'collected' | 'pending' | 'undeliverable' | 'unknown';
 
 export function messageTone(status: string | null | undefined): MessageTone {
 	switch (status) {

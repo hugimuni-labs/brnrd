@@ -1,10 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		GITHUB_REPO,
-		fetchPublicStats,
-		type PublicStats
-	} from '$lib/publicStats';
+	import { resolve } from '$app/paths';
+	import { GITHUB_REPO, fetchPublicStats, type PublicStats } from '$lib/publicStats';
 
 	// Pricing (#509): one click off the landing, never on it. Numbers are
 	// the accepted pricing decision (decision-pricing-shape, 2026-07):
@@ -19,9 +16,7 @@
 	});
 
 	let seatsLeft = $derived(
-		stats === null
-			? null
-			: Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken)
+		stats === null ? null : Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken)
 	);
 	let supporterOpen = $derived(seatsLeft === null || seatsLeft > 0);
 </script>
@@ -31,17 +26,19 @@
 <div class="mx-auto max-w-4xl p-6">
 	<header class="flex items-start justify-between gap-4">
 		<div>
-			<a href="/" class="font-mono text-3xl font-semibold tracking-tight text-amber-100">brnrd</a>
+			<a href={resolve('/')} class="font-mono text-3xl font-semibold tracking-tight text-amber-100"
+				>brnrd</a
+			>
 			<p class="mt-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">pricing</p>
 		</div>
 		<nav class="flex items-center gap-4 pt-2">
 			<a
-				href="/"
+				href={resolve('/')}
 				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 				>home</a
 			>
 			<a
-				href="/login"
+				href={resolve('/login')}
 				class="border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
 				>sign in</a
 			>
@@ -49,9 +46,9 @@
 	</header>
 
 	<p class="mt-8 max-w-2xl text-sm leading-relaxed text-stone-400">
-		In every tier the agent runs on your hardware with your model subscriptions. Paying for
-		brnrd pays for the hosted control plane — ingress, dashboard, managed GitHub identity —
-		and for the project existing at all.
+		In every tier the agent runs on your hardware with your model subscriptions. Paying for brnrd
+		pays for the hosted control plane — ingress, dashboard, managed GitHub identity — and for the
+		project existing at all.
 	</p>
 
 	<div class="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -82,7 +79,7 @@
 			</ul>
 			<a
 				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-				href="/login">start free</a
+				href={resolve('/login')}>start free</a
 			>
 		</section>
 
@@ -93,8 +90,8 @@
 					$5<span class="text-sm text-ink-quiet">/mo</span>
 				</p>
 				<p class="font-mono text-[11px] text-ink-quiet">
-					or $50/yr · first {stats?.supporter_seats_total ?? 200} accounts, price kept for
-					the life of the subscription
+					or $50/yr · first {stats?.supporter_seats_total ?? 200} accounts, price kept for the life of
+					the subscription
 					{#if seatsLeft !== null}
 						· {seatsLeft} left
 					{/if}
@@ -114,11 +111,11 @@
 			</ul>
 			<a
 				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
-				href="/login">sign in to subscribe</a
+				href={resolve('/login')}>sign in to subscribe</a
 			>
 			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-				Early access: checkout is Stripe-hosted and live; paid entitlements are still
-				landing incrementally, so today a subscription is mostly patronage — priced like it.
+				Early access: checkout is Stripe-hosted and live; paid entitlements are still landing
+				incrementally, so today a subscription is mostly patronage — priced like it.
 			</p>
 		</section>
 	</div>
@@ -126,11 +123,13 @@
 	<section class="mt-8 max-w-2xl" aria-label="contributor bundle">
 		<p class="eyebrow">premium contributor bundle</p>
 		<p class="mt-2 text-sm leading-relaxed text-stone-400">
-			A lifetime package at $500+: subscriber for life, a line on the contributors page —
-			nickname and pledge each optionally redacted — and a permanent place on the
-			leaderboard. No self-serve checkout yet: open an issue or reach the maintainers
-			<a class="text-sky-400 underline" href={`https://github.com/${GITHUB_REPO}/issues`} rel="external"
-				>on GitHub</a
+			A lifetime package at $500+: subscriber for life, a line on the contributors page — nickname
+			and pledge each optionally redacted — and a permanent place on the leaderboard. No self-serve
+			checkout yet: open an issue or reach the maintainers
+			<a
+				class="text-sky-400 underline"
+				href={`https://github.com/${GITHUB_REPO}/issues`}
+				rel="external">on GitHub</a
 			> and it will be arranged by hand, which at this stage is the honest interface.
 		</p>
 	</section>
@@ -138,7 +137,7 @@
 	<footer class="mt-14 border-t border-stone-800 pt-4">
 		<p class="font-mono text-[10px] text-ink-mute">
 			prices at checkout are set by Stripe and shown before you pay ·
-			<a class="hover:text-stone-300" href="/terms">terms</a>
+			<a class="hover:text-stone-300" href={resolve('/terms')}>terms</a>
 		</p>
 	</footer>
 </div>
