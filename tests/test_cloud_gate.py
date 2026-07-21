@@ -19,7 +19,7 @@ from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brr import protocol  # noqa: E402
 from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import brnrd_account_headers, init_git_repo  # noqa: E402
 
 
 class _StopLoop(BaseException):
@@ -165,6 +165,7 @@ def test_explicit_gh_token_skips_managed_credential(monkeypatch):
 
 
 def test_connect_persists_token(tmp_path, monkeypatch):
+    init_git_repo(tmp_path)
     brr_dir = tmp_path / ".brr"
     scripted = iter(
         [
@@ -204,7 +205,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert state["account_id"] == "acct_x"
     assert state["repo_id"] == "proj_x"
     assert state["daemon_name"] == "laptop"
-    # Persisted to .brr/gates/cloud.json and reports configured.
+    # Persisted in the account home and reports configured.
     assert cloud._load_state(brr_dir)["token"] == "bd_tok"
     assert cloud.is_configured(brr_dir)
     assert ("POST", "/v1/accounts/pair") in [call[:2] for call in seen]
@@ -214,7 +215,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert register[2]["json"]["daemon_name"] == "laptop"
     assert output == [
         "[brnrd] Approve this daemon at: u",
-        "[brnrd] Connected to brnrd repo proj_x.",
+        "[brnrd] Connected to brnrd account acct_x.",
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
         "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]

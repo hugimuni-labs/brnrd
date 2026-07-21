@@ -69,9 +69,12 @@ class Token(Base):
 
 class Daemon(Base):
     __tablename__ = "daemons"
-    __table_args__ = (UniqueConstraint("repo_id", "daemon_name", name="uq_daemon_name"),)
+    __table_args__ = (UniqueConstraint("account_id", "daemon_name", name="uq_daemon_account_name"),)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    # Compatibility/default routing metadata for tokens minted by the
+    # repo-picker pairing UI. Connection identity is account_id.
+    repo_id: Mapped[str | None] = mapped_column(ForeignKey("repos.id"), nullable=True, index=True)
     token_id: Mapped[str] = mapped_column(ForeignKey("tokens.id"))
     daemon_name: Mapped[str] = mapped_column(String(128))
     capabilities: Mapped[str] = mapped_column(Text, default="")

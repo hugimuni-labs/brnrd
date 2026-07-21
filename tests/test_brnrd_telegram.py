@@ -937,10 +937,11 @@ def test_attachment_proxy_requires_daemon_credential(env, monkeypatch):
     url = f"/v1/daemons/events/{event['event_id']}/attachments/0"
     assert client.get(url).status_code == 401
     assert client.get(url, headers=acc).status_code == 403
-    # A daemon paired to a *different* repo must not see this event.
+    # Daemon credentials are account-scoped: a token paired through another
+    # repo in the same account can fetch the account event.
     other_rid = _repo(client, acc, name="other")
     other_dmn = _daemon_headers(client, acc, other_rid)
-    assert client.get(url, headers=other_dmn).status_code == 404
+    assert client.get(url, headers=other_dmn).status_code == 200
 
 
 def test_attachment_proxy_expired_file_is_502(env, monkeypatch):

@@ -107,7 +107,7 @@ class DaemonRegister(BaseModel):
 
 class DaemonRegistered(BaseModel):
     daemon_id: str
-    repo_id: str
+    repo_id: str | None = None
 
 
 class PublishingCredential(BaseModel):
@@ -124,6 +124,7 @@ class EventOut(BaseModel):
     event_id: str
     seq: int
     source: str
+    repo_label: str | None = None
     body: str | None
     reply_to: dict[str, Any] = Field(default_factory=dict)
     # #525 — image-attachment pointers ({file_id, filename, kind[, file_size]});

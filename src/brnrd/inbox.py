@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Collection
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -182,6 +182,61 @@ def long_poll(session_factory: sessionmaker, repo_id: str, since: int, *, max_wa
         time.sleep(interval_s)
 
 
+def clamp_since_many(db: Session, repo_ids: Collection[str], since: int) -> int:
+    """Account-scoped variant of clamp_since over one global event cursor."""
+
+    ids_set = set(repo_ids)
+    if not ids_set:
+        return 0
+    ceiling = int(
+        db.execute(select(func.max(Event.seq)).where(Event.repo_id.in_(ids_set))).scalar()
+        or 0
+    )
+    if since <= ceiling:
+        return since
+    oldest_queued = db.execute(
+        select(func.min(Event.seq)).where(
+            Event.repo_id.in_(ids_set),
+            Event.status == Event.STATUS_QUEUED,
+        )
+    ).scalar()
+    return int(oldest_queued) - 1 if oldest_queued is not None else ceiling
+
+
+def fetch_since_many(
+    db: Session, repo_ids: Collection[str], since: int,
+) -> list[Event]:
+    ids_set = set(repo_ids)
+    if not ids_set:
+        return []
+    return list(
+        db.execute(
+            select(Event)
+            .where(Event.repo_id.in_(ids_set), Event.seq > since)
+            .order_by(Event.seq)
+        ).scalars()
+    )
+
+
+def long_poll_many(
+    session_factory: sessionmaker,
+    repo_ids: Collection[str],
+    since: int,
+    *,
+    max_wait_s: float,
+    interval_s: float,
+) -> list[Event]:
+    deadline = time.monotonic() + max(0.0, max_wait_s)
+    while True:
+        with session_factory() as db:
+            events = fetch_since_many(db, repo_ids, since)
+            for event in events:
+                db.expunge(event)
+        if events or time.monotonic() >= deadline:
+            return events
+        time.sleep(interval_s)
+
+
 def _body_sha(body_markdown: str) -> str:
     return hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
 
@@ -299,8 +354,8 @@ def gc_events(db: Session, *, now: datetime | None = None, force: bool = False) 
     db.commit()
 
 
-def event_to_dict(event: Event) -> dict[str, Any]:
-    return {
+def event_to_dict(event: Event, *, repo_label: str | None = None) -> dict[str, Any]:
+    payload = {
         "event_id": event.event_id,
         "seq": event.seq,
         "source": event.source,
@@ -309,3 +364,6 @@ def event_to_dict(event: Event) -> dict[str, Any]:
         "attachments": _loads_list(event.attachments_json),
         "created_at": event.created_at,
     }
+    if repo_label:
+        payload["repo_label"] = repo_label
+    return payload

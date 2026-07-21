@@ -109,12 +109,48 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
     return resp.json() if resp.content else {}
 
 
+def _state_dir(
+    brr_dir: Path,
+    *,
+    account_id: str | None = None,
+    create: bool = False,
+) -> Path:
+    """Resolve the account-owned gate-state directory."""
+
+    from .. import account as account_mod, config as conf
+
+    # Account gate startup passes the home itself as its runtime root.
+    if (brr_dir / "account" / "gates" / "cloud.json").exists():
+        return brr_dir / "account"
+
+    repo_root = brr_dir.parent
+    cfg = conf.load_config(repo_root)
+    if account_id:
+        cfg = {**cfg, "account.id": account_id, "home.kind": "account"}
+    try:
+        ctx = account_mod.resolve_context(repo_root, cfg, create=create)
+    except Exception:
+        return brr_dir
+    if ctx.kind != "account":
+        return brr_dir
+    return account_mod.context_home_root(ctx) / "account"
+
+
 def _load_state(brr_dir: Path) -> dict:
-    return runtime.load_state(brr_dir, "cloud")
+    return runtime.load_state(_state_dir(brr_dir), "cloud")
 
 
-def _save_state(brr_dir: Path, state: dict) -> None:
-    runtime.save_state(brr_dir, "cloud", state)
+def _save_state(
+    brr_dir: Path,
+    state: dict,
+    *,
+    account_id: str | None = None,
+) -> None:
+    runtime.save_state(
+        _state_dir(brr_dir, account_id=account_id, create=bool(account_id)),
+        "cloud",
+        state,
+    )
 
 
 def _repo_capabilities(brr_dir: Path) -> dict:
@@ -140,7 +176,11 @@ def _repo_capabilities(brr_dir: Path) -> dict:
 
 def is_configured(brr_dir: Path) -> bool:
     state = _load_state(brr_dir)
-    return bool(state.get("token") and state.get("brnrd_url") and state.get("repo_id"))
+    return bool(
+        state.get("token")
+        and state.get("brnrd_url")
+        and (state.get("account_id") or state.get("repo_id"))
+    )
 
 
 def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | None:
@@ -250,14 +290,14 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         "capabilities": capabilities,
         "since": state.get("since", 0),
     })
-    _save_state(brr_dir, state)
+    _save_state(brr_dir, state, account_id=str(status.get("account_id") or "") or None)
     # Pairing mints a daemon token, but the publish endpoints bind that token
     # to a concrete Daemon row created by /register.  Do this in the process
     # that owns the handshake instead of waiting for `brnrd up` to restart:
     # an already-running gate registered its previous token and otherwise
     # keeps publishing the new identity into 404s indefinitely.
     _register(brr_dir, state)
-    out(f"[brnrd] Connected to brnrd repo {status['repo_id']}.")
+    out(f"[brnrd] Connected to brnrd account {status.get('account_id')}.")
     pair = status.get("telegram_pair") or {}
     if isinstance(pair, dict):
         deep_link = str(pair.get("deep_link") or "").strip()
@@ -710,6 +750,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
                 body=_annotate_failures(ev.get("body") or "", failed),
                 attachment_files=attachment_files or None,
                 cloud_event_id=ev["event_id"],
+                repo_label=ev.get("repo_label") or "",
                 **_origin_meta(ev.get("reply_to") or {}),
             )
     cursor = result.get("cursor", since)
