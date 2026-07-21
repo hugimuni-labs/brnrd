@@ -5,6 +5,7 @@
 	// already on this page — but a *targeted* read: the run's `## Now`, its
 	// vitals, and a count. Everything heavier sits behind one expand, and the
 	// standalone `/runs/...` page stays the addressable deep link.
+	import type { ResolvedPathname } from '$app/types';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { LiveRunsAuthError, requestRunStop, type HeartbeatLevel } from './liveRuns';
 	import {
@@ -22,7 +23,7 @@
 		data: SurfaceResponse | null;
 		repoSlug: string;
 		runId: string;
-		href: string;
+		href: ResolvedPathname;
 		/**
 		 * What the live packet and the ledger receipt know that the node's own
 		 * files don't — elapsed, runner, phase, produce counts. This panel is

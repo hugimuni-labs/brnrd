@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import {
 		ReposAuthError,
 		connectRepo,
@@ -146,7 +147,7 @@
 	<div class="flex items-start justify-between gap-4">
 		<p class="eyebrow">brnrd · repos</p>
 		<a
-			href="/"
+			href={resolve('/')}
 			class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 			>dashboard</a
 		>

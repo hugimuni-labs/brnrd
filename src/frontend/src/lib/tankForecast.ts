@@ -271,8 +271,7 @@ export function readTank(
 
 	const duration = WINDOW_DURATION_S[compact.window];
 	const resetsAt = window.resets_at;
-	const secondsLeft =
-		resetsAt === null || resetsAt === undefined ? null : resetsAt - nowMs / 1000;
+	const secondsLeft = resetsAt === null || resetsAt === undefined ? null : resetsAt - nowMs / 1000;
 
 	let elapsedFraction: number | null = null;
 	let hoursLeft: number | null = null;

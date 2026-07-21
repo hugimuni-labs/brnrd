@@ -4,11 +4,17 @@ import test from 'node:test';
 import { LiveRunsAuthError, liveRunDisplayName, requestRunStop } from './liveRuns.ts';
 
 test('live run display prefers the resident-authored name', () => {
-	assert.equal(liveRunDisplayName({ name: 'run naming', label: 'waking message', kind: 'daemon' }), 'run naming');
+	assert.equal(
+		liveRunDisplayName({ name: 'run naming', label: 'waking message', kind: 'daemon' }),
+		'run naming'
+	);
 });
 
 test('live run display falls back to the waking-message excerpt', () => {
-	assert.equal(liveRunDisplayName({ name: '', label: 'waking message', kind: 'daemon' }), 'waking message');
+	assert.equal(
+		liveRunDisplayName({ name: '', label: 'waking message', kind: 'daemon' }),
+		'waking message'
+	);
 });
 
 // #476: a tap that gets swallowed must never be silent — the caller can only
@@ -44,10 +50,7 @@ test('an expired session is typed, so the cell can say "sign in again"', async (
 });
 
 test('a run that ended first says so rather than failing anonymously', async () => {
-	await assert.rejects(
-		() => requestRunStop('run-b', stubFetch(404)),
-		/no longer live/
-	);
+	await assert.rejects(() => requestRunStop('run-b', stubFetch(404)), /no longer live/);
 });
 
 test('the run id is encoded, not interpolated raw', async () => {

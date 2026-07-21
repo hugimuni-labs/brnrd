@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ResolvedPathname } from '$app/types';
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
 	import { runNodeHref } from './runNode';
@@ -81,7 +82,7 @@
 		 * which names no durable node — those rows keep the select-only
 		 * behaviour instead of linking somewhere that can never resolve).
 		 */
-		href: string | null;
+		href: ResolvedPathname | null;
 		ageMs: number;
 		wallSeconds: number;
 		color: string;

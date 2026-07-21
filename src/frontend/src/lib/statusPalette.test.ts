@@ -243,7 +243,10 @@ test('boot waiters run once, in order, and can be cancelled', async () => {
 	whenBooted(() => ran.push('b'));
 	cancel();
 	assert.equal(isBooted(), false);
-	assert.deepEqual(ran, [], 'nothing may run before the curtain lifts');
+	// `deepEqual` under 'node:assert/strict' is `deepStrictEqual<T>(actual, expected: T): asserts actual is T` —
+	// an untyped `[]` here infers T as `never[]` and narrows `ran` to `never[]` for the rest of the test,
+	// which is what broke the later `ran.push('late')`. Typing the empty array keeps the narrowing honest.
+	assert.deepEqual(ran, [] as string[], 'nothing may run before the curtain lifts');
 
 	markBooted();
 	assert.deepEqual(ran, ['a', 'b']);

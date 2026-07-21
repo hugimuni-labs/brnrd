@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 
 	interface TermsStatus {
 		authenticated: boolean;
@@ -57,9 +58,7 @@
 				result = {
 					level: 'error',
 					message:
-						typeof body.notice === 'string'
-							? body.notice
-							: `terms acceptance failed: ${res.status}`
+						typeof body.notice === 'string' ? body.notice : `terms acceptance failed: ${res.status}`
 				};
 				return;
 			}
@@ -82,7 +81,7 @@
 	<div class="flex items-start justify-between gap-4">
 		<p class="eyebrow">brnrd · beta terms</p>
 		<a
-			href="/"
+			href={resolve('/')}
 			class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 			>dashboard</a
 		>
@@ -93,8 +92,8 @@
 
 	<section class="panel mt-6 p-5">
 		<p class="text-sm text-stone-400">
-			Version {status?.terms_version ?? '2026-07-08'}. These beta terms apply when HugiMuni
-			SAS operates brnrd-hosted compute for your account.
+			Version {status?.terms_version ?? '2026-07-08'}. These beta terms apply when HugiMuni SAS
+			operates brnrd-hosted compute for your account.
 		</p>
 
 		<div class="mt-6 space-y-5 text-sm leading-6 text-stone-300">
@@ -103,15 +102,15 @@
 					1. Hosted agent execution
 				</h2>
 				<p class="mt-2">
-					brnrd may run your selected agent, runner, or automation on compute operated by
-					HugiMuni SAS. Hosted execution can include shell commands, file writes, dependency
-					installation, network requests, Git operations, and other tool use needed to work on
-					the repositories or services you connect.
+					brnrd may run your selected agent, runner, or automation on compute operated by HugiMuni
+					SAS. Hosted execution can include shell commands, file writes, dependency installation,
+					network requests, Git operations, and other tool use needed to work on the repositories or
+					services you connect.
 				</p>
 				<p class="mt-2">
-					Some hosted runs may use yolo-exec or equivalent unattended execution modes. You
-					authorize brnrd to perform those actions for the connected account, repository,
-					branch, and task you provide.
+					Some hosted runs may use yolo-exec or equivalent unattended execution modes. You authorize
+					brnrd to perform those actions for the connected account, repository, branch, and task you
+					provide.
 				</p>
 			</section>
 
@@ -120,14 +119,13 @@
 					2. Beta status and your risk
 				</h2>
 				<p class="mt-2">
-					Hosted execution is a beta feature. You use it at your own risk. Agentic code
-					execution can make incorrect changes, expose secrets already available to the run,
-					call external services, consume quota, or run code supplied by your project or its
-					dependencies.
+					Hosted execution is a beta feature. You use it at your own risk. Agentic code execution
+					can make incorrect changes, expose secrets already available to the run, call external
+					services, consume quota, or run code supplied by your project or its dependencies.
 				</p>
 				<p class="mt-2">
-					You are responsible for deciding which repositories, credentials, branches, data,
-					prompts, dependencies, and approvals are safe to give to hosted brnrd runs.
+					You are responsible for deciding which repositories, credentials, branches, data, prompts,
+					dependencies, and approvals are safe to give to hosted brnrd runs.
 				</p>
 			</section>
 
@@ -136,11 +134,10 @@
 					3. No execution-sandbox guarantee
 				</h2>
 				<p class="mt-2">
-					brnrd will apply the execution defaults and controls stated in its product
-					documentation or configuration, but HugiMuni SAS does not promise that hosted
-					execution is a security sandbox, a containment boundary, or a guarantee against
-					prompt injection, malicious code, supply-chain compromise, data loss, or unauthorized
-					behavior by tools your run can reach.
+					brnrd will apply the execution defaults and controls stated in its product documentation
+					or configuration, but HugiMuni SAS does not promise that hosted execution is a security
+					sandbox, a containment boundary, or a guarantee against prompt injection, malicious code,
+					supply-chain compromise, data loss, or unauthorized behavior by tools your run can reach.
 				</p>
 			</section>
 
@@ -149,9 +146,9 @@
 					4. Availability and changes
 				</h2>
 				<p class="mt-2">
-					The beta service may change, pause, reject, throttle, or stop hosted execution at
-					any time to protect the service, HugiMuni SAS-operated infrastructure, other users,
-					or connected third-party services.
+					The beta service may change, pause, reject, throttle, or stop hosted execution at any time
+					to protect the service, HugiMuni SAS-operated infrastructure, other users, or connected
+					third-party services.
 				</p>
 			</section>
 
@@ -165,9 +162,9 @@
 					punitive, or lost-profit damages arising from hosted execution.
 				</p>
 				<p class="mt-2">
-					Any liability that cannot be excluded is limited to the maximum extent allowed by
-					law. Nothing in these beta terms limits rights or remedies that cannot be waived
-					under French law or European Union consumer protection law.
+					Any liability that cannot be excluded is limited to the maximum extent allowed by law.
+					Nothing in these beta terms limits rights or remedies that cannot be waived under French
+					law or European Union consumer protection law.
 				</p>
 			</section>
 
@@ -175,8 +172,8 @@
 				<h2 class="font-mono text-sm font-semibold tracking-wide text-amber-100">6. Company</h2>
 				<p class="mt-2">
 					brnrd is operated by HugiMuni SAS, France. These terms are intended as a beta
-					hosted-execution disclaimer and do not replace a full customer agreement where one
-					is separately agreed.
+					hosted-execution disclaimer and do not replace a full customer agreement where one is
+					separately agreed.
 				</p>
 			</section>
 		</div>
@@ -195,8 +192,8 @@
 						aria-describedby="accept-copy"
 					/>
 					<span id="accept-copy">
-						I have read and accept the brnrd beta hosted-execution terms, including the
-						yolo-exec risk and no-sandbox disclaimer.
+						I have read and accept the brnrd beta hosted-execution terms, including the yolo-exec
+						risk and no-sandbox disclaimer.
 					</span>
 				</label>
 				<div class="mt-4 flex flex-wrap items-center gap-3">

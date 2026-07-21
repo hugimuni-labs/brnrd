@@ -448,11 +448,14 @@ describe('readTanks', () => {
 			])
 		];
 		const tanks = readTanks(shells, [], [], NOW);
-		assert.deepEqual(tanks.map((t) => t.verdict), ['exhausting', 'sustainable']);
+		assert.deepEqual(
+			tanks.map((t) => t.verdict),
+			['exhausting', 'sustainable']
+		);
 	});
 
 	it('drops windows with no percent instead of rendering an empty track', () => {
 		const shells: QuotaShell[] = [shell([window({ percent: null }), window({ percent: 50 })])];
-		assert.equal((readTanks(shells, [], [], NOW)).length, 1);
+		assert.equal(readTanks(shells, [], [], NOW).length, 1);
 	});
 });
