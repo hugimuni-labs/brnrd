@@ -48,16 +48,88 @@ class CapabilityHint:
         return sum(values) / len(values)
 
 
+@dataclass(frozen=True)
+class WebResearchCapability:
+    """One Shell's declared native web-research capability.
+
+    Declared per *Shell* (the CLI), not per Core: whether a wake can verify
+    a changing fact is a property of the tool surface the CLI exposes, and
+    both launch-proven Shells run search server-side over the model API —
+    so a declared capability survives even the solitary egress boundary.
+    An undeclared Shell gets ``None`` from the lookup, never a guess.
+    """
+
+    shell: str
+    native: bool = False
+    tools: tuple[str, ...] = ()
+    execution: str | None = None
+    default_on: bool = False
+    source: str | None = None
+    freshness_date: str | None = None
+
+
 @lru_cache(maxsize=1)
-def load_capabilities() -> dict[str, CapabilityHint]:
-    """Load the packaged benchmark cache, keyed by model id."""
+def load_shell_capabilities() -> dict[str, WebResearchCapability]:
+    """Load per-Shell capability declarations from the packaged cache.
+
+    Keyed by Shell name (``claude``, ``codex``). Only shells with a
+    well-formed ``web_research`` entry appear; malformed or missing data
+    degrades to an empty table, which every consumer must read as
+    *undeclared*, not *absent capability*.
+    """
+    raw = _load_raw()
+    shells = raw.get("shells") if isinstance(raw, dict) else {}
+    if not isinstance(shells, dict):
+        return {}
+    out: dict[str, WebResearchCapability] = {}
+    for shell, entry in shells.items():
+        if not isinstance(entry, dict):
+            continue
+        web = entry.get("web_research")
+        if not isinstance(web, dict):
+            continue
+        tools = web.get("tools")
+        out[str(shell)] = WebResearchCapability(
+            shell=str(shell),
+            native=bool(web.get("native")),
+            tools=tuple(str(t) for t in tools) if isinstance(tools, list) else (),
+            execution=_str(web.get("execution")),
+            default_on=bool(web.get("default_on")),
+            source=_str(web.get("source")),
+            freshness_date=_str(web.get("freshness_date")),
+        )
+    return out
+
+
+def web_research_for_shell(shell: str | None) -> WebResearchCapability | None:
+    """Return the declared web-research capability for *shell*, or ``None``.
+
+    ``None`` means undeclared — an unknown or custom Shell is not assumed
+    to lack web access; it is assumed to be unverifiable from here.
+    """
+    needle = _str(shell)
+    if not needle:
+        return None
+    cap = load_shell_capabilities().get(needle.lower())
+    if cap and cap.native and cap.tools:
+        return cap
+    return None
+
+
+def _load_raw() -> Any:
     try:
         text = resources.files(_DATA_PACKAGE).joinpath(_DATA_FILE).read_text(
             encoding="utf-8"
         )
-        raw = json.loads(text)
+        return json.loads(text)
     except (FileNotFoundError, json.JSONDecodeError, ModuleNotFoundError):
         return {}
+
+
+@lru_cache(maxsize=1)
+def load_capabilities() -> dict[str, CapabilityHint]:
+    """Load the packaged benchmark cache, keyed by model id."""
+    raw = _load_raw()
     models = raw.get("models") if isinstance(raw, dict) else {}
     if not isinstance(models, dict):
         return {}
