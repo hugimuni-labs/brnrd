@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 
 const root = new URL('../dist/', import.meta.url);
-const site = new URL('https://gurio.github.io/brr/');
+const site = new URL('https://hugimuni-labs.github.io/brnrd/');
 
 function walk(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -13,13 +13,13 @@ function walk(directory) {
 
 function routeFor(file) {
   const path = relative(root.pathname, file).split(sep).join('/');
-  if (path === 'index.html') return '/brr/';
-  if (path.endsWith('/index.html')) return `/brr/${path.slice(0, -10)}`;
-  return `/brr/${path}`;
+  if (path === 'index.html') return '/brnrd/';
+  if (path.endsWith('/index.html')) return `/brnrd/${path.slice(0, -10)}`;
+  return `/brnrd/${path}`;
 }
 
 function targetExists(pathname) {
-  const relativePath = decodeURIComponent(pathname.slice('/brr/'.length));
+  const relativePath = decodeURIComponent(pathname.slice('/brnrd/'.length));
   const target = join(root.pathname, relativePath);
   if (existsSync(target)) return true;
   if (!extname(target) && existsSync(join(target, 'index.html'))) return true;
@@ -40,7 +40,7 @@ for (const file of htmlFiles) {
   for (const href of hrefs) {
     if (href.startsWith('#')) continue;
     const target = new URL(href, new URL(sourceRoute, site));
-    if (target.origin !== site.origin || !target.pathname.startsWith('/brr/')) continue;
+    if (target.origin !== site.origin || !target.pathname.startsWith('/brnrd/')) continue;
     if (!targetExists(target.pathname)) failures.push(`${sourceRoute} → ${href}`);
   }
 }

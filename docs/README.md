@@ -13,7 +13,7 @@ npm run dev
 
 `npm run check` runs Astro diagnostics, a production build, and the generated
 site's internal-link check. The GitHub Pages deployment serves `docs/dist/` at
-`https://gurio.github.io/brr/`.
+`https://hugimuni-labs.github.io/brnrd/`.
 
 Documentation changes ride in the same pull request as the code change that
 caused them.
