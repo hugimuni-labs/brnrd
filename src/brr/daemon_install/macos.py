@@ -107,8 +107,14 @@ def render_plist(
     brr_path: str | Path,
     *,
     home: Path | None = None,
+    path_env: str | None = None,
 ) -> str:
+    """launchd's default PATH is ``/usr/bin:/bin:…`` — the daemon starts but
+    cannot find the runner Shells (``claude``, ``codex``) its runs dispatch
+    by PATH lookup. Freeze the installing shell's PATH into the agent, same
+    contract as the Linux unit; re-running install refreshes it."""
     out_log, err_log = log_paths(home=home)
+    path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     payload: dict[str, Any] = {
         "Label": LABEL,
         "ProgramArguments": [
@@ -125,6 +131,7 @@ def render_plist(
         "StandardErrorPath": str(err_log),
         "EnvironmentVariables": {
             "BRR_INSTALL_MANAGED": "1",
+            **({"PATH": path_value} if path_value else {}),
         },
     }
     return plistlib.dumps(payload, sort_keys=False).decode("utf-8")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,10 +19,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env brnrd daemon up --foreground
+ExecStart={exec_start} daemon up --foreground
 Restart=on-failure
 RestartSec=5s
 Environment=BRR_INSTALL_MANAGED=1
+Environment="PATH={path_env}"
 
 [Install]
 WantedBy=default.target
@@ -54,8 +56,57 @@ def linger_marker_path() -> Path:
     return xdg_state_home() / "brr" / "systemd-linger-enabled-by-brr"
 
 
-def render_systemd_unit() -> str:
-    return SYSTEMD_UNIT
+def resolve_brr_bin() -> str:
+    """The absolute path of the ``brnrd`` entrypoint the service should run.
+
+    The systemd user manager's PATH is minimal (often not even
+    ``~/.local/bin``, never a venv or nvm), so a template that says
+    ``/usr/bin/env brnrd`` installs a service that cannot start on the very
+    host where ``brnrd daemon install`` just succeeded.  Pin the binary that
+    is running the install instead — the same contract the macOS installer
+    has always used.
+    """
+    found = shutil.which("brnrd")
+    if found:
+        return str(Path(found).resolve())
+    raise SystemExit(
+        "[brnrd] cannot find `brnrd` on PATH; install the CLI before "
+        "registering the systemd service"
+    )
+
+
+def _systemd_escape(value: str) -> str:
+    """Escape a value for a quoted systemd ``Environment=`` assignment.
+
+    ``%`` is a unit-file specifier and doubles; backslash and double quote
+    follow systemd's quoted-string rules.
+    """
+    return (
+        value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    )
+
+
+def render_systemd_unit(
+    brr_path: str | Path | None = None,
+    *,
+    path_env: str | None = None,
+) -> str:
+    """Render the unit with the resolved entrypoint and the installing
+    shell's PATH frozen in.
+
+    The daemon dispatches runner Shells (``claude``, ``codex``, …) by PATH
+    lookup, and its environment snapshot is what every run inherits — under
+    the user manager's thin default PATH those CLIs vanish even when the
+    daemon itself starts.  Freezing the install-time PATH hands the service
+    exactly the environment the install was verified in; re-running
+    ``brnrd daemon install`` refreshes it.
+    """
+    exec_start = str(brr_path) if brr_path else resolve_brr_bin()
+    path_value = path_env if path_env is not None else os.environ.get("PATH", "")
+    return SYSTEMD_UNIT.format(
+        exec_start=_systemd_escape(exec_start),
+        path_env=_systemd_escape(path_value),
+    )
 
 
 def service_installed() -> bool:
