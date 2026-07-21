@@ -31,4 +31,4 @@ brnrd run "summarize the test layout; do not change files"
 ```
 
 The first recorded end-to-end demo is tracked in
-[Gurio/brr#28](https://github.com/Gurio/brr/issues/28).
+[hugimuni-labs/brnrd#28](https://github.com/hugimuni-labs/brnrd/issues/28).

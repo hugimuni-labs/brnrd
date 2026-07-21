@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/python-3.10+-3776ab" alt="python 3.10+">
   <a href="LICENSE-OVERVIEW.md"><img src="https://img.shields.io/badge/license-MIT%20%2F%20AGPLv3-2ea44f" alt="license: MIT / AGPLv3"></a>
   <a href="https://brnrd.dev"><img src="https://img.shields.io/badge/managed-brnrd.dev-6d28d9" alt="brnrd.dev"></a>
-  <a href="https://github.com/Gurio/brr/issues/23"><img src="https://img.shields.io/badge/release-tracked%20%2323-0969da" alt="release #23"></a>
+  <a href="https://github.com/hugimuni-labs/brnrd/issues/23"><img src="https://img.shields.io/badge/release-tracked%20%2323-0969da" alt="release #23"></a>
 </p>
 
 ---
@@ -113,7 +113,7 @@ review PR #84 for the auth regression; show me the risky bit before changing it
 ```
 
 > The first end-to-end demo is being recorded against the real product, not
-> mocked into a terminal — follow [#28](https://github.com/Gurio/brr/issues/28).
+> mocked into a terminal — follow [#28](https://github.com/hugimuni-labs/brnrd/issues/28).
 
 <details>
 <summary><code>npx brnrd</code> is not a JavaScript port</summary>
@@ -154,7 +154,7 @@ isolate — none of them is a cage for a hostile agent (see [Trust & privacy](#-
 | `worktree` | A separate worktree and branch, so your working tree stays clean. Shares your `.git`, credentials, network, and filesystem — **not a security boundary.** | you want runs off your working tree without container overhead. |
 | `docker` | Dependencies and network, and it narrows the agent's host-filesystem view to the repo plus mounted credential dirs. **Not** a credential or containment boundary: the repo is mounted read-write, your model/GitHub/SSH credentials cross in, and the network is on by default. | you want a clean toolchain or network control (`docker.network=none`) — defense-in-depth over a trusted agent, not a sandbox. |
 
-Full isolation matrix: [SECURITY.md](SECURITY.md) · semantics: [Environments](src/brr/docs/envs.md) · scope tracked in [#80](https://github.com/Gurio/brr/issues/80).
+Full isolation matrix: [SECURITY.md](SECURITY.md) · semantics: [Environments](src/brr/docs/envs.md) · scope tracked in [#80](https://github.com/hugimuni-labs/brnrd/issues/80).
 
 ## ✦ Trust & privacy
 
@@ -167,9 +167,9 @@ approval prompts bypassed, on purpose. So the honest posture *is* the product:
   chat message — becomes instruction the agent may act on. Treat every gate you open
   as a door into your shell.
 - **Gates authorize the channel, not the person.** A connected GitHub repo runs on
-  the *mention*, not the commenter ([#408](https://github.com/Gurio/brr/issues/408));
+  the *mention*, not the commenter ([#408](https://github.com/hugimuni-labs/brnrd/issues/408));
   a bound chat runs on the *room*, not the sender
-  ([#409](https://github.com/Gurio/brr/issues/409)). Both are explicit release
+  ([#409](https://github.com/hugimuni-labs/brnrd/issues/409)). Both are explicit release
   blockers. Until they land: keep to private repos, and the managed one-to-one
   Telegram path is the dogfooded, safe route — do not connect a public-repo gate or
   trust a group chat.
@@ -182,7 +182,7 @@ approval prompts bypassed, on purpose. So the honest posture *is* the product:
 
 The full threat model, the per-gate authorization table, and the honest environment
 isolation matrix live in **[SECURITY.md](SECURITY.md)**. The review is tracked under
-[#23](https://github.com/Gurio/brr/issues/23); execution and environment contracts
+[#23](https://github.com/hugimuni-labs/brnrd/issues/23); execution and environment contracts
 are inspectable in [the execution map](src/brr/docs/execution-map.md) and
 [environment guide](src/brr/docs/envs.md).
 
@@ -213,8 +213,8 @@ remote door — and you are willing to report the sharp edges — welcome in.
 Python 3.10+ and git are required.
 
 ```bash
-git clone https://github.com/Gurio/brr
-cd brr
+git clone https://github.com/hugimuni-labs/brnrd
+cd brnrd
 pip install -e ".[dev]"
 pytest
 ```

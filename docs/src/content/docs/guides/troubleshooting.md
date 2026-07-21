@@ -62,4 +62,4 @@ it earlier. The command has explicit `--yes-disable-linger` and
 `--no-disable-linger` choices for non-interactive use.
 
 If the problem persists, report the command, output, operating system, and
-`brnrd --version` at [Gurio/brr/issues](https://github.com/Gurio/brr/issues).
+`brnrd --version` at [hugimuni-labs/brnrd/issues](https://github.com/hugimuni-labs/brnrd/issues).

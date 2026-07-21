@@ -23,8 +23,8 @@ not the person**.
 | Self-hosted Slack | Any member of the polled channel. |
 | GitHub | Any commenter who uses the trigger on a connected repo. On a public repo, that means anyone. |
 
-[Gurio/brr#408](https://github.com/Gurio/brr/issues/408) tracks per-commenter
-GitHub authorization. [Gurio/brr#409](https://github.com/Gurio/brr/issues/409)
+[hugimuni-labs/brnrd#408](https://github.com/hugimuni-labs/brnrd/issues/408) tracks per-commenter
+GitHub authorization. [hugimuni-labs/brnrd#409](https://github.com/hugimuni-labs/brnrd/issues/409)
 tracks per-sender chat authorization. Both are release blockers.
 
 Until they land:

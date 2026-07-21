@@ -56,5 +56,5 @@ are still release work.
 If you want a quiet appliance, wait. If you want a local agent coworker with a
 remote door and are willing to report sharp edges, start with the install.
 
-Source: [Gurio/brr](https://github.com/Gurio/brr). Managed service information:
+Source: [hugimuni-labs/brnrd](https://github.com/hugimuni-labs/brnrd). Managed service information:
 [brnrd.dev](https://brnrd.dev).

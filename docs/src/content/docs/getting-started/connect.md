@@ -34,8 +34,8 @@ The CLI also recognizes `slack`, `github`, and `cloud` gate names. Use
 
 :::caution[Know who can ring the doorbell]
 Gates currently authorize a channel or trigger, not each sender. Until
-[#408](https://github.com/Gurio/brr/issues/408) and
-[#409](https://github.com/Gurio/brr/issues/409) land, use private repos
+[#408](https://github.com/hugimuni-labs/brnrd/issues/408) and
+[#409](https://github.com/hugimuni-labs/brnrd/issues/409) land, use private repos
 only and prefer the managed one-to-one Telegram path. Do not connect a
 public-repo GitHub gate or trust a group chat.
 :::
