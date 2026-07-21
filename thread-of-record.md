@@ -371,3 +371,7 @@ identity) + #538 (kb produce OID-window).
   standalone on telegram.
 - #538 spawn (run 5z27) still in flight at that point; reviews on its
   completion event.
+- Update (same wake, run oc0s): #538 completion event arrived in the inbox
+  pre-closeout and was folded in — reviewed clean, combined suite on the
+  real two-branch merge 2020✓, merged `593a2777`. Both 23:13 dispatches now
+  reviewed + merged; origin push is the daemon's (solitary egress).
