@@ -5,7 +5,7 @@ description: Pin, select, escalate, and downshift local Shell and Core profiles.
 
 brnrd separates the CLI process from the model it runs:
 
-- **Shell**: the CLI on `PATH` — `claude`, `codex`, or `gemini`.
+- **Shell**: the CLI on `PATH` — `claude` or `codex`.
 - **Core**: the model and its cost, capability, and quota metadata.
 
 Together they form the Runner for one wake. The resident remains the same when

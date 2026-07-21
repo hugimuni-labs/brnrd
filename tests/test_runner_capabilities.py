@@ -34,8 +34,17 @@ def test_missing_scores_do_not_invent_class():
     assert caps.derived_cost_class("unknown", table=table) is None
 
 
-def test_metadata_for_model_omits_empty_score_but_keeps_provenance():
-    meta = caps.metadata_for_model("gemini-2.0-flash")
+def test_metadata_for_model_omits_empty_score_but_keeps_provenance(monkeypatch):
+    monkeypatch.setattr(
+        caps,
+        "load_capabilities",
+        lambda: {
+            "no-score-model": caps.CapabilityHint(
+                "no-score-model", source="test fixture", freshness_date="2026-06-29",
+            ),
+        },
+    )
+    meta = caps.metadata_for_model("no-score-model")
     assert "capability_score" not in meta
     assert meta["capability_freshness"] == "2026-06-29"
 

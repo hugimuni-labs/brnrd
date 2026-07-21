@@ -4,8 +4,8 @@ description: Install brnrd and verify a local coding-agent Runner.
 ---
 
 brnrd needs Python 3.10 or newer, git, and at least one supported coding-agent
-CLI on `PATH`: Claude Code (`claude`), Codex (`codex`), or Gemini CLI
-(`gemini`). Authenticate that CLI with your own subscription or API key first.
+CLI on `PATH`: Claude Code (`claude`) or Codex (`codex`). Authenticate that
+CLI with your own subscription or API key first.
 
 Install brnrd with the tool manager you already use:
 

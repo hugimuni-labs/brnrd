@@ -36,7 +36,7 @@ brnrd runners list
 brnrd runners list --all
 ```
 
-Authenticate the selected Claude Code, Codex, or Gemini CLI outside brnrd, then
+Authenticate the selected Claude Code or Codex CLI outside brnrd, then
 retry.
 
 ## Update
