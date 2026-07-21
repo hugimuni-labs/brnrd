@@ -9,6 +9,7 @@
 	// a run that predates the runfile weld, or died before writing a body, is a
 	// normal shape and the page has to say so plainly.
 	import { setContext } from 'svelte';
+	import { resolve } from '$app/paths';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import RunLedgerReceipt from './RunLedgerReceipt.svelte';
 	import type { RunLedgerRow } from './runLedger';
@@ -95,7 +96,7 @@
 	<header class="ignite">
 		<div class="flex items-baseline justify-between gap-3">
 			<a
-				href="/"
+				href={resolve('/')}
 				class="shrink-0 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 				>← loom</a
 			>
