@@ -147,6 +147,9 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
     loser rolls back and defers to the winner instead of 500ing.
     """
     daemon = _current_daemon(db, principal)
+    # #502: the event queue's hourly GC rides this publish tick — same
+    # piggyback economics as the stale-activity delete below.
+    inbox_service.gc_events(db)
     now = datetime.now(timezone.utc)
     db.execute(
         delete(ActivityRecord).where(

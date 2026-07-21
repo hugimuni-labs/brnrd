@@ -2065,3 +2065,71 @@ def test_run_loop_records_where_the_credential_state_lives(tmp_path, monkeypatch
         cloud.run_loop(brr_dir, tmp_path / "inbox", tmp_path / "resp")
 
     assert cloud._publishing_state_dir == brr_dir
+
+
+def test_publish_selection_windows_runs_and_honors_layers(tmp_path):
+    """#502: the mirror is a bounded render cache — runs age out, layers opt down."""
+    from datetime import timedelta
+
+    from brr.account import CorpusFile
+
+    dummy = tmp_path / "x.md"
+
+    def f(layer, path):
+        return CorpusFile(layer=layer, path=path, abspath=dummy)
+
+    files = [
+        f("authored", "surface/index.md"),
+        f("knowledge", "knowledge/repos/slug/index.md"),
+        f("runs", "runs/slug/run-260720-1000-aaaa/state.md"),
+        f("runs", "runs/slug/run-260601-1000-bbbb/messages/000001-terminal.md"),
+        f("runs", "runs/slug/index.md"),
+    ]
+    now = datetime(2026, 7, 21, tzinfo=timezone.utc)
+
+    kept = {x.path for x in cloud._publish_selection(files, {}, now=now)}
+    assert "runs/slug/run-260720-1000-aaaa/state.md" in kept  # inside 14d
+    assert "runs/slug/run-260601-1000-bbbb/messages/000001-terminal.md" not in kept
+    assert "runs/slug/index.md" in kept  # undated runs-layer files always ship
+    assert "surface/index.md" in kept and "knowledge/repos/slug/index.md" in kept
+
+    kept = cloud._publish_selection(files, {"publish.layers": "authored,knowledge"}, now=now)
+    assert {x.layer for x in kept} == {"authored", "knowledge"}
+    assert cloud._publish_selection(files, {"publish.layers": "none"}, now=now) == []
+
+    kept = cloud._publish_selection(files, {"publish.runs_window_days": 0}, now=now)
+    assert {x.layer for x in kept} == {"authored", "knowledge"}
+    kept = {x.path for x in cloud._publish_selection(files, {"publish.runs_window_days": -1}, now=now)}
+    assert "runs/slug/run-260601-1000-bbbb/messages/000001-terminal.md" in kept
+
+    # The window slides at publish time: the same corpus trims further later.
+    later = now + timedelta(days=30)
+    kept = {x.path for x in cloud._publish_selection(files, {}, now=later)}
+    assert "runs/slug/run-260720-1000-aaaa/state.md" not in kept
+
+
+def test_activity_excerpts_ship_only_for_cloud_threads(tmp_path):
+    """#502: locally-gated task bodies never leave the machine as excerpts."""
+    from brr.run import Run
+
+    brr_dir = tmp_path / ".brr"
+    Run(
+        id="run-managed",
+        event_id="evt-c",
+        body="the cloud thread body",
+        status="running",
+        source="cloud",
+        conversation_key="cloud:telegram:1:",
+    ).save(brr_dir / "runs")
+    Run(
+        id="run-local",
+        event_id="evt-l",
+        body="locally gated text the backend never saw inbound",
+        status="running",
+        source="telegram",
+        conversation_key="telegram:1:",
+    ).save(brr_dir / "runs")
+
+    rows = {r["id"]: r for r in cloud._run_activity_records(brr_dir)}
+    assert rows["run:run-managed"]["summary"] == "the cloud thread body"
+    assert rows["run:run-local"]["summary"] == "evt-l"
