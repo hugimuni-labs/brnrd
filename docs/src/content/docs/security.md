@@ -13,15 +13,18 @@ hostile tasks.
 
 ## Who can trigger work
 
-Authorization currently keys on a channel or trigger, not each sender.
-GitHub mentions on a connected repo can be used by any commenter; a bound chat
-can be used by any member of that room. Per-commenter GitHub authorization is
-tracked in [#408](https://github.com/hugimuni-labs/brnrd/issues/408), and per-sender chat
-authorization in [#409](https://github.com/hugimuni-labs/brnrd/issues/409).
+GitHub and Telegram authorize the individual sender before enqueue. The
+self-hosted GitHub gate verifies `write`, `maintain`, or `admin` permission; the
+managed webhook requires GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR`
+association; both also accept explicitly allowlisted logins. Telegram accepts the
+paired user plus explicitly allowlisted user ids. Anonymous admins, channel posts,
+public commenters, read-only self-hosted GitHub users, and other group members are
+denied by default. Slack remains channel-scoped, so every member of its configured
+channel can submit work.
 
-Until those release blockers land, use private repositories only and prefer
-managed one-to-one Telegram. Do not connect a public-repo gate or trust a group
-chat with your daemon.
+Authorization says who may instruct the agent; it does not make their text safe.
+Keep principal lists narrow. For people who may submit work but should not inherit
+your normal runtime authority, set `trust.collaborator_env=solitary`.
 
 ## Execution authority
 
@@ -30,9 +33,12 @@ chat with your daemon.
 | `host` | No isolation; equivalent to running the CLI yourself. |
 | `worktree` | Separates the working tree and branch. Shares credentials, network, filesystem, and `.git`; not a security boundary. |
 | `docker` | Narrows host-file visibility and can control network. The repo is read-write, model/GitHub/SSH credentials cross in, and network is on by default; not a credential or containment boundary. |
+| `solitary` | Provider-only egress, per-run copies of the selected Shell's credentials, and no GitHub credential. The repo is still read-write. |
 
-The configured environment does not currently change with the trust level of
-the incoming source.
+Ingress carries an `owner`, `collaborator`, or `untrusted` tier. Owners use the
+configured environment; collaborators can be tightened with
+`trust.collaborator_env`; untrusted or unattributed ingress defaults to
+`solitary` and is refused when that environment is unavailable.
 
 ## Local stays local — with one honest caveat
 
@@ -50,8 +56,9 @@ leave the machine through that mirror.
 - Never paste credentials into a task; configure them through the runner or
   gate.
 - Scope GitHub credentials as narrowly as your workflow allows.
-- Treat every gate as a door into your shell.
-- Use `docker.network=none` when a task does not need network access.
+- Treat every authorized principal as someone who can instruct your agent.
+- Use `trust.collaborator_env=solitary` for collaborators who should not inherit
+  your normal runtime authority.
 - Keep gate state private on disk.
 
 The full threat model and isolation matrix live in the repository's

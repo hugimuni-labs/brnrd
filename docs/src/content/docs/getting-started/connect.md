@@ -33,11 +33,16 @@ The CLI also recognizes `slack`, `github`, and `cloud` gate names. Use
 `brnrd gate list` to inspect the gates configured for the current repo.
 
 :::caution[Know who can ring the doorbell]
-Gates currently authorize a channel or trigger, not each sender. Until
-[#408](https://github.com/hugimuni-labs/brnrd/issues/408) and
-[#409](https://github.com/hugimuni-labs/brnrd/issues/409) land, use private repos
-only and prefer the managed one-to-one Telegram path. Do not connect a
-public-repo GitHub gate or trust a group chat.
+GitHub and Telegram are default-closed per sender. The self-hosted GitHub gate
+verifies `write`, `maintain`, or `admin` permission; the managed webhook requires
+GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` association; both also accept
+explicitly allowlisted logins. Telegram accepts the paired user plus explicitly
+allowlisted user ids. A public commenter or another group member cannot trigger a
+run merely by reaching the channel.
+Slack is still channel-scoped: every member of the configured channel can submit
+work. Authorization is permission to instruct an approval-bypassed agent, so keep
+principal lists narrow and use `trust.collaborator_env=solitary` when collaborators
+should not inherit your normal runtime authority.
 :::
 
 ## Keep it in the foreground

@@ -166,13 +166,16 @@ approval prompts bypassed, on purpose. So the honest posture *is* the product:
   launching the CLI yourself. Any text brnrd ingests — an issue body, a PR comment, a
   chat message — becomes instruction the agent may act on. Treat every gate you open
   as a door into your shell.
-- **Gates authorize the channel, not the person.** A connected GitHub repo runs on
-  the *mention*, not the commenter ([#408](https://github.com/hugimuni-labs/brnrd/issues/408));
-  a bound chat runs on the *room*, not the sender
-  ([#409](https://github.com/hugimuni-labs/brnrd/issues/409)). Both are explicit release
-  blockers. Until they land: keep to private repos, and the managed one-to-one
-  Telegram path is the dogfooded, safe route — do not connect a public-repo gate or
-  trust a group chat.
+- **Gates authorize senders before enqueue.** GitHub is default-closed: the
+  self-hosted gate verifies `write`, `maintain`, or `admin` permission; the managed
+  webhook accepts GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` association;
+  both also support an explicit login allowlist.
+  Telegram accepts the paired user plus explicitly allowlisted user ids; anonymous
+  admins and channel posts are denied. Slack remains channel-scoped, so every member
+  of a configured Slack channel can submit work. Authorization decides who may speak
+  to the agent, not whether their text is safe — keep allowlists tight and route
+  collaborators through `trust.collaborator_env=solitary` when they should not inherit
+  your normal execution authority.
 - **Local stays local — with one honest caveat.** Your checkout, `.git`, and run
   execution never leave the machine. Remote messages travel through the transport you
   choose (and, in managed mode, transit brnrd.dev on the way to your daemon). If you
