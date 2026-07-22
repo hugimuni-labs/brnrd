@@ -1780,3 +1780,155 @@ class TestKillActive:
         assert RunnerInvocation(
             kind="daemon-run", label="x", prompt="p", repo_root=None,
         ).timeout_seconds is None
+
+
+class TestPromptPlaceholderInDeclaredCmd:
+    """#503: `{prompt}` in a declared profile cmd moves delivery to argv.
+
+    Whole-argument substitution only. An element that *is* `{prompt}`
+    becomes the prompt and stdin stays closed; an element that merely
+    embeds it is rejected loudly. The legacy `runner_cmd` override keeps
+    its historical embedded `str.replace` semantics.
+    """
+
+    def test_whole_argument_placeholder_substituted(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            runner_mod,
+            "_profiles_cache",
+            {"local-agent": {"cmd": "local-agent --run {prompt}"}},
+        )
+        cmd = _build_cmd("local-agent", "fix the bug", {}, tmp_path)
+        assert cmd == ["local-agent", "--run", "fix the bug"]
+
+    def test_embedded_placeholder_rejected_loudly(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            runner_mod,
+            "_profiles_cache",
+            {"local-agent": {"cmd": "local-agent --prompt={prompt}"}},
+        )
+        with pytest.raises(ValueError, match="whole-argument"):
+            _build_cmd("local-agent", "fix the bug", {}, tmp_path)
+
+    def test_runner_cmd_override_keeps_embedded_substitution(self):
+        # Legacy contract, unchanged: a pinned runner_cmd replaces embedded
+        # occurrences too.
+        cfg = {"runner_cmd": ["mock", "--prompt={prompt}"]}
+        cmd = _build_cmd("mock", "do work", cfg)
+        assert cmd == ["mock", "--prompt=do work"]
+
+    def test_prompt_stdin_none_when_template_has_placeholder(self):
+        from brr.runner import _prompt_stdin
+
+        template = ["local-agent", "--run", "{prompt}"]
+        assert _prompt_stdin({}, "fix it", template) is None
+
+    def test_prompt_stdin_delivers_without_placeholder(self):
+        from brr.runner import _prompt_stdin
+
+        assert _prompt_stdin({}, "fix it", ["local-agent", "--run"]) == "fix it"
+
+    def test_bundled_profile_argv_unchanged_and_stdin_kept(self, tmp_path):
+        # No-behavior-change guard for bundled shells: same argv as before,
+        # prompt still on stdin.
+        from brr.runner import _cmd_template, _prompt_stdin
+
+        template = _cmd_template("claude", {}, tmp_path)
+        assert _build_cmd("claude", "fix it", {}, tmp_path) == template
+        assert "fix it" not in template
+        assert _prompt_stdin({}, "fix it", template) == "fix it"
+
+
+class TestDeclaredCmdOnlyRunnerEndToEnd:
+    """#503: a cmd-only declared runner, dispatched for real.
+
+    The 2026-07-14 stdin regression shipped because nothing covered a
+    declared cmd-only runner end-to-end: profile file on disk ->
+    `_selection_profiles` -> `invoke_runner` -> a real subprocess ->
+    finalization. These tests run a tiny real script both ways.
+    """
+
+    def _declare(self, repo_root, monkeypatch, cmd):
+        import shlex as _shlex
+
+        brr_dir = repo_root / ".brr"
+        brr_dir.mkdir(exist_ok=True)
+        quoted = " ".join(_shlex.quote(part) for part in cmd)
+        (brr_dir / "runners.md").write_text(
+            f"---\nscript-runner:\n  cmd: '{quoted}'\n---\n",
+            encoding="utf-8",
+        )
+        # Force a reload from this repo's runners.md (monkeypatch restores
+        # the original cache afterwards).
+        monkeypatch.setattr(runner_mod, "_profiles_cache", None)
+        monkeypatch.setattr(runner_mod, "_profiles_cache_key", None)
+
+    def test_stdin_variant_receives_prompt_and_finalizes(self, tmp_path, monkeypatch):
+        out_file = tmp_path / "received.txt"
+        script = tmp_path / "runner_script.py"
+        script.write_text(
+            "import sys\n"
+            "data = sys.stdin.read()\n"
+            "open(sys.argv[1], 'w').write(data)\n"
+            "sys.stdout.write('script reply\\n')\n",
+            encoding="utf-8",
+        )
+        self._declare(
+            tmp_path, monkeypatch, [sys.executable, str(script), str(out_file)]
+        )
+        response_path = tmp_path / ".brr" / "responses" / "evt-e2e-stdin.md"
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="e2e-stdin",
+            prompt="the assembled prompt",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+            response_path=str(response_path),
+        )
+
+        result = invoke_runner("script-runner", invocation, cfg={})
+
+        assert result.ok
+        assert result.returncode == 0
+        assert out_file.read_text(encoding="utf-8") == "the assembled prompt"
+        assert result.has_response
+        assert response_path.read_text(encoding="utf-8") == "script reply\n"
+
+    def test_prompt_argv_variant_receives_prompt_without_stdin(
+        self, tmp_path, monkeypatch
+    ):
+        out_file = tmp_path / "received.txt"
+        script = tmp_path / "runner_script.py"
+        script.write_text(
+            "import sys\n"
+            "stdin_data = sys.stdin.read()\n"
+            "open(sys.argv[1], 'w').write(\n"
+            "    'ARGV:' + sys.argv[2] + '\\nSTDIN:' + stdin_data)\n"
+            "sys.stdout.write('script reply\\n')\n",
+            encoding="utf-8",
+        )
+        self._declare(
+            tmp_path,
+            monkeypatch,
+            [sys.executable, str(script), str(out_file), "{prompt}"],
+        )
+        response_path = tmp_path / ".brr" / "responses" / "evt-e2e-argv.md"
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="e2e-argv",
+            prompt="the assembled prompt",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+            response_path=str(response_path),
+        )
+
+        result = invoke_runner("script-runner", invocation, cfg={})
+
+        assert result.ok
+        assert result.returncode == 0
+        # Prompt landed in argv, whole; stdin was /dev/null (immediate EOF,
+        # zero bytes) — never both channels.
+        assert out_file.read_text(encoding="utf-8") == (
+            "ARGV:the assembled prompt\nSTDIN:"
+        )
+        assert result.has_response
+        assert response_path.read_text(encoding="utf-8") == "script reply\n"

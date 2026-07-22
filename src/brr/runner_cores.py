@@ -57,6 +57,17 @@ from typing import Any
 
 from . import runner_capabilities, runner_select
 
+# Shells brnrd ships first-class knowledge for. No single prior definition
+# existed in code (closest anchors: the `_BUNDLED_CORES` shells below, the
+# hook flavours `hooks.render_native` knows, and `runner_quota._provider_key`'s
+# prefix list — all agree on these three, and all must move in lockstep with
+# this set). Model probing / Core fabrication (`_probed_core_entries`) is
+# restricted to these shells: splicing a probed `--model X` into a *custom*
+# declared cmd fabricates `<name>-<model>` variants that auto-selection then
+# prefers over the profile the user actually declared. Custom profiles opt in
+# per-profile with `probe_models: true`.
+BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex", "gemini"})
+
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
@@ -357,11 +368,18 @@ def generated_profile_entries(
     in the active ``runners.md`` source. That keeps a project-owned
     ``.brr/runners.md`` from unexpectedly reintroducing bundled Shells it chose
     not to declare.
+
+    CLI-help model probing (and the ``<name>-<model>`` profiles it
+    fabricates) runs only for bundled Shells (:data:`BUNDLED_SHELLS`) and
+    for custom declared profiles that set ``probe_models: true`` — see
+    :func:`_probe_eligible_shells`.
     """
     declared = declared_profiles or {}
     registry = dict(_BUNDLED_CORES)
     if probe:
-        registry.update(_probed_core_entries(_declared_shells(declared), registry))
+        registry.update(
+            _probed_core_entries(_probe_eligible_shells(declared), registry)
+        )
     out: dict[str, dict[str, Any]] = {}
     for core_name, entry in registry.items():
         shell = _str(entry.get("shell"))
@@ -452,12 +470,33 @@ def _registry_shells(registry: dict[str, dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(shells))
 
 
-def _declared_shells(declared_profiles: dict[str, dict[str, Any]]) -> set[str]:
+def _flag(value: Any) -> bool:
+    """A frontmatter boolean: real bool, or a truthy string spelling."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"true", "yes", "on", "1"}
+
+
+def _probe_eligible_shells(
+    declared_profiles: dict[str, dict[str, Any]],
+) -> set[str]:
+    """Declared shells that model probing may fabricate Core variants for.
+
+    Bundled shells (:data:`BUNDLED_SHELLS`) are always eligible — brnrd owns
+    their probe semantics. A custom/declared shell is eligible only when at
+    least one of its profiles sets ``probe_models: true``; without that
+    opt-in, a declared profile is exactly what the user wrote — no
+    fabricated ``<name>-<model>`` siblings for auto-selection to prefer.
+    """
     shells: set[str] = set()
     for name, profile in declared_profiles.items():
-        profile = profile or {}
+        profile = profile if isinstance(profile, dict) else {}
         shell = _str(profile.get("shell")) or _str(profile.get("binary")) or name
-        if shell:
+        if not shell:
+            continue
+        if shell in BUNDLED_SHELLS or _flag(profile.get("probe_models")):
             shells.add(shell)
     return shells
 
