@@ -1,4 +1,4 @@
-"""Retention windows and GC over daemon-accumulated state (#501, #500).
+"""Retention windows and GC over daemon-accumulated state (#501, #500, #320).
 
 Everything brnrd accumulates on its own — conversation event logs, the
 per-run message store, dispatch inbox/response archives, run bundles'
@@ -15,8 +15,10 @@ knowledge repos, repo checkouts. The stores live under two roots:
 
 * the repo's shared ``.brr`` dir — ``conversations/``, ``runs/<id>/history``,
   ``worktrees/``, ``run-ledger.jsonl``;
-* the brnrd home — ``runs/<repo>/<id>/messages``, ``dispatch/inbox``,
-  ``dispatch/responses``.
+* the brnrd home — ``runs/<repo>/<id>/messages``, ``state.md`` run-state
+  documents, ``dispatch/inbox``, ``dispatch/responses``;
+* the one obsolete literal ``accounts/connected`` account directory, when it
+  is not the currently resolved home.
 
 Windows are days in ``.brr/config``; ``0`` or absent = keep forever, which
 is exactly today's behavior — an existing install changes nothing until it
@@ -25,10 +27,10 @@ opts in. Fresh installs get :data:`FRESH_INSTALL_DEFAULTS` seeded by
 
 Live-run protection: anything belonging to a run that the presence
 registry reports as live — its run bundle, its worktree, its message
-store — is skipped regardless of age. Conversation event logs are only
-deleted past their window measured by mtime, and a live pipeline's log is
-by definition freshly written; the copies a wake actually reads live in
-its own run bundle, which the live-run skip protects.
+store, its run-state document — is skipped regardless of age. Conversation
+event logs are only deleted past their window measured by mtime, and a live
+pipeline's log is by definition freshly written; the copies a wake actually
+reads live in its own run bundle, which the live-run skip protects.
 """
 
 from __future__ import annotations
@@ -52,14 +54,16 @@ from . import run_ledger
 # ── Config keys and defaults ─────────────────────────────────────────
 
 #: Days per store; seeded into fresh-install config by ``brnrd init``.
-#: Conservative on purpose: conversations and messages carry the account's
-#: correspondence (90d), run-bundle history copies are pure duplication of
-#: the conversation store (30d), worktrees past 30d are abandoned bodies,
-#: and the ledger is the cost record — kept a full year.
+#: Conservative on purpose: conversations, messages, inbox events, and run
+#: state carry the account's correspondence and outcomes (90d); run-bundle
+#: history copies are pure duplication of the conversation store (30d),
+#: worktrees past 30d are abandoned bodies, and the ledger is the cost record
+#: — kept a full year.
 FRESH_INSTALL_DEFAULTS: dict[str, float] = {
     "retention.conversations_days": 90,
     "retention.messages_days": 90,
     "retention.inbox_days": 90,
+    "retention.run_state_days": 90,
     "retention.run_history_days": 30,
     "retention.worktrees_days": 30,
     "retention.ledger_days": 365,
@@ -93,6 +97,7 @@ class Windows:
     conversations: float | None = None
     messages: float | None = None
     inbox: float | None = None
+    run_state: float | None = None
     run_history: float | None = None
     worktrees: float | None = None
     ledger: float | None = None
@@ -103,6 +108,7 @@ class Windows:
             conversations=_window_seconds(cfg, "retention.conversations_days"),
             messages=_window_seconds(cfg, "retention.messages_days"),
             inbox=_window_seconds(cfg, "retention.inbox_days"),
+            run_state=_window_seconds(cfg, "retention.run_state_days"),
             run_history=_window_seconds(cfg, "retention.run_history_days"),
             worktrees=_window_seconds(cfg, "retention.worktrees_days"),
             ledger=_window_seconds(cfg, "retention.ledger_days"),
@@ -112,7 +118,7 @@ class Windows:
         return all(
             getattr(self, name) is None
             for name in (
-                "conversations", "messages", "inbox",
+                "conversations", "messages", "inbox", "run_state",
                 "run_history", "worktrees", "ledger",
             )
         )
@@ -445,6 +451,70 @@ def _plan_inbox(
                 ))
 
 
+def _plan_run_state(
+    ctx: account.HomeContext, window: float, now: float,
+    live: frozenset[str], actions: list[Action],
+) -> None:
+    """Run-state snapshots past the window; all other run-node files stay.
+
+    Current homes keep the snapshot at ``runs/<repo>/<run>/state.md``. The
+    legacy ``run-state/<repo>/<run>.md`` path is included because ``brnrd gc``
+    resolves homes without creating them, and therefore may run before the
+    normal account-home migration has folded those documents into ``runs/``.
+    """
+    cutoff = now - window
+    home_root = account.context_home_root(ctx)
+    candidates = (
+        ((path, path.parent.name) for path in ctx.runs_dir.glob("*/*/state.md")),
+        ((path, path.stem) for path in (home_root / "run-state").glob("*/*.md")),
+    )
+    for paths in candidates:
+        for path, run_id in sorted(paths):
+            if run_id in live:
+                continue
+            mtime = _mtime(path)
+            if mtime is not None and mtime < cutoff:
+                actions.append(Action(
+                    store="run-state", kind=FILE,
+                    path=path, bytes=_size(path),
+                ))
+
+
+def _plan_stale_connected(
+    ctx: account.HomeContext, actions: list[Action],
+) -> None:
+    """Collect only the superseded literal ``accounts/connected`` home.
+
+    There is intentionally no general orphan-account scan here. A disconnected
+    account may still own irreplaceable knowledge and dominion memory. The
+    path shape checks also make an explicit/custom home fail closed rather
+    than guessing where its account siblings live.
+    """
+    home_root = account.context_home_root(ctx)
+    current_account_dir = home_root.parent
+    accounts_root = current_account_dir.parent
+    if home_root.name != "home" or accounts_root.name != "accounts":
+        return
+    candidate = accounts_root / "connected"
+    if (
+        candidate.name != "connected"
+        or candidate.is_symlink()
+        or not candidate.is_dir()
+    ):
+        return
+    try:
+        if candidate.resolve() == current_account_dir.resolve():
+            return
+    except OSError:
+        if candidate.absolute() == current_account_dir.absolute():
+            return
+    _files, size, _newest = _tree_stats(candidate)
+    actions.append(Action(
+        store="connected", kind=TREE,
+        path=candidate, bytes=size, items=1,
+    ))
+
+
 def build_plan(
     repo_root: Path,
     ctx: account.HomeContext | None,
@@ -471,6 +541,9 @@ def build_plan(
             _plan_messages(ctx, windows.messages, now, live, actions)
         if windows.inbox is not None:
             _plan_inbox(ctx, windows.inbox, now, actions)
+        if windows.run_state is not None:
+            _plan_run_state(ctx, windows.run_state, now, live, actions)
+        _plan_stale_connected(ctx, actions)
 
     return Plan(actions=actions, live_run_ids=live)
 
@@ -594,6 +667,7 @@ def render_report(
         ("conversations", windows.conversations),
         ("messages", windows.messages),
         ("inbox", windows.inbox),
+        ("run-state", windows.run_state),
         ("run-history", windows.run_history),
         ("worktrees", windows.worktrees),
         ("ledger", windows.ledger),
@@ -615,5 +689,15 @@ def render_report(
         lines.append(
             f"  {store:<14} {items:>6} item(s)  {format_bytes(size):>10}{suffix}"
         )
+    rep = reports.get("connected")
+    items = rep.items if rep else 0
+    size = rep.bytes if rep else 0
+    total_items += items
+    total_bytes += size
+    suffix = f"  ({rep.errors} failed)" if rep and rep.errors else ""
+    lines.append(
+        f"  {'connected':<14} {items:>6} item(s)  "
+        f"{format_bytes(size):>10}{suffix}"
+    )
     lines.append(f"  {'total':<14} {total_items:>6} item(s)  {format_bytes(total_bytes):>10}")
     return f"[brnrd] gc: {header}\n" + "\n".join(lines)
