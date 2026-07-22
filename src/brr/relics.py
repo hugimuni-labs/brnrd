@@ -532,6 +532,108 @@ def collect(
     return dedupe(summary + auto + rest_reported)
 
 
+# A relic kind that may travel into markup and publish payloads unescaped.
+_SAFE_KIND = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+
+# Mirrors ``daemon._LIVE_PORTAL_STATE_NAME``; defined locally because the
+# daemon imports this module (importing back would be a cycle). The file
+# layout (``.brr/outbox/<event>/portal-state.json``) is the daemon's live
+# per-run capsule, refreshed on its heartbeat — see ``daemon.py::
+# _write_live_portal_state``.
+_PORTAL_STATE_NAME = "portal-state.json"
+
+
+def live_portal_counts(brr_dir: Path, event_id: str | None) -> dict[str, int] | None:
+    """Relics-so-far counts for a *live* run, read from its portal capsule.
+
+    The daemon already runs :func:`live_summary` (git derivation +
+    ``.relics.jsonl``) once per heartbeat and persists the result as the
+    ``produce`` facet of ``outbox/<event>/portal-state.json`` — so a
+    display surface that republishes every few seconds (the live-runs
+    snapshot, a chat card re-render) reads that file instead of paying the
+    git work again per tick (#342). Freshness is the heartbeat's (~30s),
+    which is what the facet already promises its own reader.
+
+    ``None`` when nothing attested is available: no event, no capsule on
+    disk, or the facet itself reported ``known: false``. ``{}`` when the
+    facet is known and the run has produced nothing yet. Never raises; a
+    torn or half-written JSON read degrades to ``None``.
+    """
+    if not event_id:
+        return None
+    try:
+        payload = json.loads(
+            (brr_dir / "outbox" / event_id / _PORTAL_STATE_NAME)
+            .read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    produce = payload.get("produce") if isinstance(payload, dict) else None
+    if not isinstance(produce, dict) or not produce.get("known"):
+        return None
+    counts = produce.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    out: dict[str, int] = {}
+    for kind, value in counts.items():
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            continue
+        # Kind names flow into chat-gate markup (Telegram HTML) and the
+        # publish payload verbatim; a reported record's ``kind`` is
+        # resident-authored free text, so gate unknown vocabulary on a
+        # conservative identifier shape rather than escaping downstream.
+        if count > 0 and _SAFE_KIND.fullmatch(str(kind)):
+            out[str(kind)] = count
+    return out
+
+
+# Compact-tail vocabulary: singular/plural noun per kind, in render order.
+# ``branch`` is deliberately absent — mid-flight every commit-bearing run
+# has exactly one branch (derive_auto appends it whenever commits exist),
+# so a "1 branch" chip restates what the commits chip already implies
+# (#329's family logic makes the same call on the receipt side; the
+# issue's own example tail — "relics: 2 commits · 1 page" — omits it too).
+# ``summary`` is prose, not produce (counts_by_kind already excludes it).
+_TAIL_NOUNS: list[tuple[str, str, str]] = [
+    ("commit", "commit", "commits"),
+    ("merge", "merge", "merges"),
+    ("pr", "PR", "PRs"),
+    ("issue", "issue", "issues"),
+    ("kb", "page", "pages"),
+    ("file", "file", "files"),
+    ("comment", "comment", "comments"),
+    ("message", "message", "messages"),
+    ("reply", "reply", "replies"),
+]
+
+
+def counts_phrase(counts: dict[str, int] | None) -> str:
+    """``"2 commits · 1 page"`` — the compact relics tail for chat cards.
+
+    Empty/None counts → empty string, so callers can drop the line
+    entirely (zero relics must render as *no* line, not "relics: —").
+    Unknown kinds render as ``N <kind>`` so a grown backend vocabulary
+    still counts for something rather than silently vanishing.
+    """
+    if not counts:
+        return ""
+    parts: list[str] = []
+    named = {kind for kind, _, _ in _TAIL_NOUNS}
+    for kind, singular, plural in _TAIL_NOUNS:
+        count = counts.get(kind, 0)
+        if count > 0:
+            parts.append(f"{count} {singular if count == 1 else plural}")
+    for kind in sorted(counts):
+        if kind in named or kind in {"branch", "summary"}:
+            continue
+        count = counts.get(kind, 0)
+        if count > 0:
+            parts.append(f"{count} {kind}")
+    return " · ".join(parts)
+
+
 def counts_by_kind(relics: list[dict[str, Any]]) -> dict[str, int]:
     """Collapsed-receipt counts, e.g. ``{"commit": 3, "pr": 1}`` — the
     "3 commits, 1 pr, 1 issue modified" summary the maintainer asked for.
