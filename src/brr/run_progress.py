@@ -888,6 +888,7 @@ def _attempt_status_label(entry: AttemptEntry) -> str:
             "provider_error": "provider failed",
             "runner_error": "runner failed",
             "no_output": "no reply",
+            "host_interrupted": "interrupted",
         }.get(entry.failure_kind, "failed")
     return "failed"
 
@@ -1005,6 +1006,11 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool,
             "provider_error": "provider failed",
             "runner_error": "runner failed",
             "no_output": "no reply",
+            # Boot-time interrupted-run marker (#316): the daemon died
+            # mid-run (host suspend/crash); the card's terminal line
+            # reads "interrupted" and the detail line carries the retry
+            # story instead of freezing on stale running text.
+            "host_interrupted": "interrupted",
         }.get(view.failure_kind, entry.name)
     return entry.name
 
