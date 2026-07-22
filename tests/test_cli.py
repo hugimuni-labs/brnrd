@@ -849,6 +849,23 @@ def test_daemon_up_with_dev_reload_never_delegates_to_the_service(monkeypatch):
     assert started == [True]
 
 
+def test_daemon_up_service_path_reports_available_update(monkeypatch, capsys):
+    import argparse
+
+    from brr import release_availability
+    from brr.cli import cmd_daemon_up
+
+    monkeypatch.setattr("brr.daemon_install.start_service", lambda: 0)
+    monkeypatch.setattr(
+        release_availability,
+        "refresh_if_stale",
+        lambda _root: release_availability.Availability("0.1.0", "0.2.0"),
+    )
+
+    assert cmd_daemon_up(argparse.Namespace(foreground=False, dev_reload=None)) == 0
+    assert "[brnrd] update available: 0.1.0 → 0.2.0" in capsys.readouterr().out
+
+
 def test_down_and_daemon_down_are_the_same_implementation():
     from brr.cli import cmd_daemon_down
 

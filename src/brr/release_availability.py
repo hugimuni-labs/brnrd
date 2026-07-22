@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from packaging.version import InvalidVersion, Version
 
-from . import __version__, gitops
+from . import __version__, account
 
 PACKAGE_NAME = "brnrd"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
@@ -46,8 +46,9 @@ class Availability:
 
 
 def cache_path(repo_root: Path) -> Path:
-    """The shared daemon runtime, never a tracked project file."""
-    return gitops.shared_brr_dir(repo_root) / CACHE_NAME
+    """The machine-scoped daemon cache, outside every project mount."""
+    del repo_root  # one installed brnrd version is shared across all projects
+    return account._xdg_state_home() / account.DEFAULT_STATE_NAMESPACE / CACHE_NAME
 
 
 def load(repo_root: Path) -> dict[str, Any] | None:
@@ -67,7 +68,7 @@ def observation(repo_root: Path, *, installed: str = __version__) -> Availabilit
 
 
 def _checked_at(payload: dict[str, Any] | None) -> float | None:
-    value = payload.get("checked_at") if payload else None
+    value = payload.get("attempted_at", payload.get("checked_at")) if payload else None
     return float(value) if isinstance(value, (int, float)) else None
 
 
@@ -129,12 +130,14 @@ def refresh_if_stale(
     cached = load(repo_root)
     if not _fresh(cached, now=current_time, ttl=ttl):
         latest = _fetch_latest(timeout=timeout)
+        updated = dict(cached or {})
+        updated.update({"schema": SCHEMA, "attempted_at": current_time})
         if latest is not None:
-            _write(repo_root, {
-                "schema": SCHEMA,
-                "checked_at": current_time,
-                "latest": latest,
-            })
+            updated.update({"checked_at": current_time, "latest": latest})
+        # A failed endpoint is still an attempt. Recording it prevents the
+        # daemon's fast main loop from turning one outage into a request storm,
+        # while retaining any last known-good ``latest`` observation.
+        _write(repo_root, updated)
     return observation(repo_root)
 
 
