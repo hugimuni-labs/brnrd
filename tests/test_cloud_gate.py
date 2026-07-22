@@ -993,10 +993,30 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     updates.emit(
         brr_dir,
         updates.UpdatePacket(
+            type="run_created",
+            conversation_key="telegram:155783668:",
+            payload={"run_id": "run-live-test", "event_id": "evt-live",
+                     "env": "worktree"},
+        ),
+    )
+    updates.emit(
+        brr_dir,
+        updates.UpdatePacket(
             type="attempt_started",
             conversation_key="telegram:155783668:",
             payload={"run_id": "run-live-test", "attempt": 1},
         ),
+    )
+    # #342 relics-so-far: the daemon's heartbeat has already compiled the
+    # run's produce into its portal capsule; the publish tick reads that
+    # (via the projection) rather than re-deriving from git.
+    capsule_dir = brr_dir / "outbox" / "evt-live"
+    capsule_dir.mkdir(parents=True)
+    (capsule_dir / "portal-state.json").write_text(
+        json_mod.dumps(
+            {"produce": {"known": True, "counts": {"commit": 2, "kb": 1}}},
+        ),
+        encoding="utf-8",
     )
     updates.emit(
         brr_dir,
@@ -1043,6 +1063,9 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     assert resident["phase"] == "running"
     assert resident["card_text"] == "scoping the remaining #200 slice"
     assert resident["card_updated_at"] is not None
+    # #342: relics-so-far counts survive the publish round-trip through
+    # the server-side LiveRunIn schema.
+    assert resident["relics_counts"] == {"commit": 2, "kb": 1}
     spawn = by_run_id["run-live-spawn"]
     assert spawn["is_subspawn"] is True
     assert spawn["parent_run_id"] == "run-live-test"
@@ -1052,6 +1075,9 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     # resident's phase/card leaking across run_ids.
     assert spawn["phase"] == "queued"
     assert spawn["card_text"] is None
+    # No conversation records for the spawn's run_id → no event id → no
+    # capsule to read: nothing attested reads as None, not `{}`.
+    assert spawn["relics_counts"] is None
 
 
 def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):

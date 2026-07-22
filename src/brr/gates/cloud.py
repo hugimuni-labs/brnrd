@@ -1676,6 +1676,13 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "phase": (view.phase if view is not None else None) or None,
                 "card_text": (view.agent_card_text if view is not None else None) or None,
                 "card_updated_at": (view.agent_card_updated_at if view is not None else None) or None,
+                # #342: relics-so-far. Joined by ``project_run`` from the
+                # daemon-refreshed portal capsule (``relics.live_portal_counts``)
+                # — the git derivation ran once on the daemon heartbeat, so
+                # this publish tick pays one small JSON read per run, never
+                # per-tick git work. ``None`` = nothing attested (ad-hoc
+                # session, no capsule yet); ``{}`` = known, no produce yet.
+                "relics_counts": (view.relics_counts if view is not None else None),
             }
         )
     return out
