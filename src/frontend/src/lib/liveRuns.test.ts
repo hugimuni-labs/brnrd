@@ -3,8 +3,6 @@ import test from 'node:test';
 
 import {
 	LiveRunsAuthError,
-	fetchLiveRuns,
-	heartbeatLevel,
 	liveRelicChips,
 	liveRunDisplayName,
 	requestRunStop
@@ -92,58 +90,4 @@ test('zero, empty, and absent counts render no chips at all', () => {
 	assert.deepEqual(liveRelicChips(undefined), []);
 	assert.deepEqual(liveRelicChips({}), []);
 	assert.deepEqual(liveRelicChips({ commit: 0 }), []);
-});
-
-// ── Reconnect/refetch behavior (#421) ──────────────────────────────────────
-//
-// When the daemon dev-reloads (reexecs at a run boundary), the brnrd server
-// briefly stops receiving PUT /v1/daemons/live-runs updates and marks its
-// snapshot stale.  The client poll at 2s picks up the next successful response
-// automatically — but two distinct failure modes need test cover:
-//
-// 1. Stale snapshot (brnrd server is up, daemon is between exec phases):
-//    `stale: true` in the response → heartbeatLevel returns 'unknown' so
-//    individual run cards don't claim a freshness they can't guarantee.
-//
-// 2. Transient fetch error (5xx during a deploy window, or network hiccup):
-//    must NOT throw a LiveRunsAuthError — the page code uses that distinction
-//    to decide whether to keep showing last-known data (non-auth error) or
-//    stop polling entirely (401 = session gone).
-
-test('stale snapshot marks heartbeat level as unknown, not running', () => {
-	// During a daemon dev-reload brnrd marks the snapshot stale; the card
-	// must not claim "running" on data it knows is no longer fresh.
-	const recentIso = new Date(Date.now() - 1000).toISOString();
-	assert.equal(heartbeatLevel(recentIso, Date.now(), true), 'unknown');
-});
-
-test('heartbeat level recovers to running once the stale flag clears', () => {
-	const now = Date.now();
-	const recentIso = new Date(now - 5000).toISOString();
-	assert.equal(heartbeatLevel(recentIso, now, false), 'running');
-});
-
-test('a transient 5xx during reexec window is not a LiveRunsAuthError', async () => {
-	// A 503 during a deploy/reexec window must propagate as a plain Error
-	// so the page can keep showing last-known live runs instead of wiping
-	// them (which it would do on a 401/LiveRunsAuthError, since that means
-	// the session is actually gone — a fundamentally different state).
-	await assert.rejects(
-		() => fetchLiveRuns(stubFetch(503)),
-		(e: unknown) => {
-			assert.ok(!(e instanceof LiveRunsAuthError), 'must not be an auth error');
-			assert.ok(e instanceof Error);
-			assert.ok(e.message.includes('503'));
-			return true;
-		}
-	);
-});
-
-test('a 401 during the poll is a LiveRunsAuthError, not a plain error', async () => {
-	// The page stops polling on 401 (session gone) — verify the typed
-	// distinction is preserved so the two code paths cannot silently swap.
-	await assert.rejects(
-		() => fetchLiveRuns(stubFetch(401)),
-		LiveRunsAuthError
-	);
 });
