@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import conversations as conversations_mod
+from . import relics as relics_mod
 
 
 # ── States and phases ───────────────────────────────────────────────
@@ -173,6 +174,13 @@ class RunProgressView:
     # distinctly from a hypothetical agent partial. Values:
     # timed_out | runner_error | no_output. None until a ``failed`` packet.
     failure_kind: str | None = None
+    # Relics-so-far (#342): counts of the run's attested produce, read
+    # from the daemon-refreshed portal capsule (``relics.live_portal_counts``)
+    # at projection time — not from conversation records, which never carry
+    # produce. ``None`` when nothing attested is available (no event id,
+    # no capsule, facet unknown); ``{}`` when the facet is known and the
+    # run simply has no produce yet. Renderers treat both as "no line".
+    relics_counts: dict[str, int] | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -201,7 +209,8 @@ def project_run(
     records = conversations_mod.read_records(brr_dir, conversation_key)
     if not records:
         return None
-    return _project(records, conversation_key=conversation_key, run_id=run_id)
+    view = _project(records, conversation_key=conversation_key, run_id=run_id)
+    return _enrich_with_live_relics(brr_dir, view)
 
 
 def project_conversation_latest(
@@ -219,9 +228,29 @@ def project_conversation_latest(
     latest_run_id = _latest_run_id(records)
     if latest_run_id is None:
         return None
-    return _project(
+    view = _project(
         records, conversation_key=conversation_key, run_id=latest_run_id,
     )
+    return _enrich_with_live_relics(brr_dir, view)
+
+
+def _enrich_with_live_relics(
+    brr_dir: Path, view: RunProgressView | None,
+) -> RunProgressView | None:
+    """Fold relics-so-far counts into a freshly projected view (#342).
+
+    Conversation records never carry produce; the daemon's portal capsule
+    does (already derived once per heartbeat — see
+    ``relics.live_portal_counts``). Joining here, at the one seam every
+    consumer of a projection passes through, means the chat gates and the
+    live-runs publish surface identical counts without each re-reading
+    the capsule.
+    """
+    if view is not None and view.event_id:
+        view.relics_counts = relics_mod.live_portal_counts(
+            brr_dir, view.event_id,
+        )
+    return view
 
 
 def _latest_run_id(records: list[dict[str, Any]]) -> str | None:
@@ -823,6 +852,13 @@ def _render_compact(
     note = _format_agent_note(view.agent_card_text)
     if note:
         lines.append(note)
+
+    # #342: compact relics tail — what the run has produced so far, from
+    # the same accounting closeout uses (via the portal capsule). Zero
+    # relics → no line at all, so an idle card gains no noise.
+    relics_tail = relics_mod.counts_phrase(view.relics_counts)
+    if relics_tail:
+        lines.append(f"relics: {relics_tail}")
 
     return "\n".join(lines).rstrip() + "\n"
 

@@ -44,6 +44,12 @@ export interface LiveRun {
 	phase: string | null;
 	card_text: string | null;
 	card_updated_at: string | null;
+	// #342 relics-so-far: counts of the run's attested produce mid-flight
+	// (`{commit: 2, kb: 1}`), from the daemon's heartbeat-refreshed portal
+	// capsule via `cloud.py::_live_runs_snapshot`. `null`/absent = nothing
+	// attested (ad-hoc session, pre-upgrade daemon); `{}` = known, no
+	// produce yet. Render via `liveRelicChips` below.
+	relics_counts?: Record<string, number> | null;
 	// #476 wyrd §3: a stop the account owner has parked for this run, not yet
 	// consumed by the daemon. Server-side (rather than a fact the client holds
 	// in memory) so the cell keeps saying "stopping" across a reload — and so
@@ -67,6 +73,50 @@ export interface LiveRunsResponse {
 /** Resident-authored name wins; the waking-message excerpt remains a fallback. */
 export function liveRunDisplayName(run: Pick<LiveRun, 'name' | 'label' | 'kind'>): string {
 	return run.name || run.label || run.kind || 'run';
+}
+
+// Render order for relics-so-far chips — produce first, chatter last.
+// Mirrors `brr.relics._TAIL_NOUNS` order (hand-mirrored, same precedent as
+// RELIC_ICONS in runLedger.ts). `branch` is deliberately absent: mid-flight
+// every commit-bearing run has exactly one branch, so a branch chip only
+// restates the commits chip (#329's family logic makes the same call on
+// receipts). `summary` is prose, not produce.
+const RELIC_CHIP_ORDER = [
+	'commit',
+	'merge',
+	'pr',
+	'issue',
+	'kb',
+	'file',
+	'comment',
+	'message',
+	'reply'
+];
+const RELIC_CHIP_EXCLUDE = new Set(['branch', 'summary']);
+
+export interface LiveRelicChip {
+	kind: string;
+	count: number;
+}
+
+/** Relics-so-far counts → ordered chips for the expanded live-run card
+ * (#342). Zero/absent counts → `[]`, so the card renders no relics row at
+ * all. Unknown kinds trail in alphabetical order rather than vanishing —
+ * the backend's relic vocabulary is meant to grow without a frontend
+ * round trip (same posture as `RelicRecord`). */
+export function liveRelicChips(counts: Record<string, number> | null | undefined): LiveRelicChip[] {
+	if (!counts) return [];
+	const chips: LiveRelicChip[] = [];
+	for (const kind of RELIC_CHIP_ORDER) {
+		const count = counts[kind] ?? 0;
+		if (count > 0) chips.push({ kind, count });
+	}
+	for (const kind of Object.keys(counts).sort()) {
+		if (RELIC_CHIP_ORDER.includes(kind) || RELIC_CHIP_EXCLUDE.has(kind)) continue;
+		const count = counts[kind] ?? 0;
+		if (count > 0) chips.push({ kind, count });
+	}
+	return chips;
 }
 
 export class LiveRunsAuthError extends Error {}
