@@ -1,6 +1,33 @@
 """Tests for cached runner capability hints."""
 
+import json
+
+import pytest
+
 from brr import runner_capabilities as caps
+
+
+def _clear_caches():
+    # getattr-guard: a test may have monkeypatched a loader with a plain
+    # function, and teardown runs before monkeypatch undo.
+    for fn in (caps._load_raw, caps.load_capabilities, caps.load_shell_capabilities):
+        clear = getattr(fn, "cache_clear", None)
+        if clear:
+            clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_root(tmp_path, monkeypatch):
+    """Point the loader at an empty tmp state root and reset all caches.
+
+    Keeps every test hermetic: a real overlay on the host machine must never
+    leak into packaged-floor assertions.
+    """
+    state_root = tmp_path / "state" / "brnrd"
+    monkeypatch.setattr(caps, "_state_root", lambda: state_root)
+    _clear_caches()
+    yield state_root
+    _clear_caches()
 
 
 def test_load_capabilities_reads_packaged_cache():
@@ -82,3 +109,119 @@ def test_web_research_undeclared_for_unknown_or_missing_shell():
 
 def test_web_research_shell_lookup_is_case_insensitive():
     assert caps.web_research_for_shell("Claude") is not None
+
+
+# --- state-root overlay (#535) -------------------------------------------
+
+
+def _write_overlay(state_root, payload):
+    state_root.mkdir(parents=True, exist_ok=True)
+    path = state_root / "runner-capabilities.json"
+    path.write_text(
+        payload if isinstance(payload, str) else json.dumps(payload),
+        encoding="utf-8",
+    )
+    _clear_caches()
+    return path
+
+
+def test_overlay_overrides_packaged_model_entry(_isolated_state_root):
+    packaged = caps.capability_for_model("gpt-5-codex")
+    assert packaged is not None and packaged.score < 0.75
+    _write_overlay(
+        _isolated_state_root,
+        {
+            "source": "overlay fixture",
+            "freshness_date": "2026-07-22",
+            "models": {"gpt-5-codex": {"swe_bench_verified": 90.0}},
+        },
+    )
+    hint = caps.capability_for_model("gpt-5-codex")
+    assert hint is not None
+    assert hint.score == 0.9
+    assert caps.derived_cost_class("gpt-5-codex") == "strong"
+    # Entry-level override: the packaged entry is replaced wholly, so its
+    # terminal_bench and per-entry provenance do not bleed through.
+    assert hint.terminal_bench is None
+    assert hint.source == "overlay fixture"
+    assert hint.freshness_date == "2026-07-22"
+
+
+def test_overlay_adds_model_unknown_to_packaged_data(_isolated_state_root):
+    assert caps.capability_for_model("brand-new-model") is None
+    _write_overlay(
+        _isolated_state_root,
+        {"models": {"brand-new-model": {"terminal_bench": 0.5}}},
+    )
+    hint = caps.capability_for_model("brand-new-model")
+    assert hint is not None
+    assert hint.score == 0.5
+    # Packaged entries without an overlay counterpart survive untouched.
+    assert caps.capability_for_model("gpt-5-codex") is not None
+
+
+def test_absent_overlay_yields_packaged_floor_exactly():
+    assert caps._load_raw() == caps._load_packaged()
+    assert set(caps.load_capabilities()) == set(
+        (caps._load_packaged().get("models") or {})
+    )
+
+
+def test_malformed_overlay_warns_and_uses_packaged_floor(
+    _isolated_state_root, capsys
+):
+    _write_overlay(_isolated_state_root, "{not json")
+    table = caps.load_capabilities()
+    err = capsys.readouterr().err
+    assert "warning" in err and "overlay" in err
+    assert err.count("\n") == 1  # one warning line, not one per loader
+    assert set(table) == set(caps._load_packaged().get("models") or {})
+    # Never partial-apply: shells fall back to the packaged floor too.
+    assert caps.web_research_for_shell("claude") is not None
+
+
+def test_non_object_overlay_warns_and_uses_packaged_floor(
+    _isolated_state_root, capsys
+):
+    _write_overlay(_isolated_state_root, ["not", "a", "mapping"])
+    assert caps._load_raw() == caps._load_packaged()
+    assert "warning" in capsys.readouterr().err
+
+
+def test_repo_dot_brr_overlay_is_never_consulted(tmp_path, monkeypatch):
+    # #533 trust split: a repo-writable .brr/ file must not steer the daemon's
+    # view of its Shells, no matter what the current working directory is.
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".brr" / "runner-capabilities.json").write_text(
+        json.dumps({"models": {"gpt-5-codex": {"swe_bench_verified": 99.0}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    _clear_caches()
+    assert ".brr" not in str(caps._overlay_path())
+    hint = caps.capability_for_model("gpt-5-codex")
+    assert hint is not None
+    assert hint.score != 0.99  # packaged floor, not the planted file
+
+
+def test_overlay_overrides_shell_entry(_isolated_state_root):
+    _write_overlay(
+        _isolated_state_root,
+        {
+            "shells": {
+                "gemini": {
+                    "web_research": {
+                        "native": True,
+                        "tools": ["google_web_search"],
+                        "execution": "server-side",
+                    }
+                }
+            }
+        },
+    )
+    cap = caps.web_research_for_shell("gemini")
+    assert cap is not None
+    assert cap.tools == ("google_web_search",)
+    # Packaged shells survive alongside the overlay-added one.
+    assert caps.web_research_for_shell("claude") is not None
