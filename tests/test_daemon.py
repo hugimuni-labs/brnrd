@@ -3027,7 +3027,7 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
     order: list[str] = []
 
     class FakeWatcher:
-        last_changed: list = []
+        last_changed = ["package/daemon.py"]
 
         def changed(self):
             order.append("watch")
@@ -3043,6 +3043,11 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
         classmethod(lambda cls, _repo_root: order.append("watcher") or FakeWatcher()),
     )
     monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
+    monkeypatch.setattr(
+        daemon.reload_mod,
+        "format_dev_reload_breadcrumb",
+        lambda paths: order.append(f"breadcrumb:{paths}") or "dev-reload: re-exec",
+    )
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
     monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
@@ -3058,7 +3063,10 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
     with pytest.raises(StopIteration):
         daemon.start(tmp_path)
 
-    assert order == ["write-pid", "watcher", "watch", "reexec", "clear-pid"]
+    assert order == [
+        "write-pid", "watcher", "watch",
+        "breadcrumb:['package/daemon.py']", "reexec", "clear-pid",
+    ]
 
 
 def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):

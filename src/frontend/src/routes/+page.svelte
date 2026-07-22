@@ -724,20 +724,17 @@
 								no receipt rows for that run in the current window.
 							</p>
 						{/if}
+					{:else if liveRunsError}
+						<p class="text-sm text-red-400">{liveRunsError}</p>
 					{:else if liveRuns === null}
-						<!-- First load: no prior data to fall back to yet. -->
-						{#if liveRunsError}
-							<p class="text-sm text-red-400">{liveRunsError}</p>
-						{:else}
-							<p class="text-sm text-ink-quiet">Loading…</p>
-						{/if}
+						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else}
-						<!-- Have prior data: keep showing it even when the latest poll
-						     hit a transient error (daemon dev-reload, deploy window).
-						     The error surfaces in the §2 header already; replacing the
-						     grid with a red string is the "disappeared live view" #421
-						     named — a 1-2s reexec window reads as a blank page with no
-						     hint of what was running. -->
+						<!-- Multi-run "now": tapping a card *selects* it, and this same
+					     sheet answers with the node panel — the identical grammar a
+					     loom tap speaks. The card's old inline expansion was a third
+					     rendering of the run (2026-07-20: "3 visual elements for a
+					     run"); it survives only in the fallbacks above, where no
+					     node can answer. -->
 						<LiveRuns
 							runs={liveRuns}
 							stale={liveRunsStale}
@@ -791,16 +788,10 @@
 		     is gone with them; its palette conventions live on in
 		     statusPalette.ts and the comments that cite it. -->
 				<div class="mt-4">
-					<!-- Instruments derived from `liveRuns`: show them whenever we
-					     have data, including after a transient fetch error (#421).
-					     `activeSpawns` counts from the last successful fetch, which
-					     is the honest number to show during a reexec window. -->
-					{#if liveRuns === null}
-						{#if liveRunsError}
-							<p class="text-sm text-red-400">{liveRunsError}</p>
-						{:else}
-							<p class="text-sm text-ink-quiet">Loading…</p>
-						{/if}
+					{#if liveRunsError}
+						<p class="text-sm text-red-400">{liveRunsError}</p>
+					{:else if liveRuns === null}
+						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else}
 						<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
 					{/if}

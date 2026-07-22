@@ -213,7 +213,7 @@ def reexec() -> None:
 # Cap the number of file paths shown in the pre-exec breadcrumb.  In normal
 # dev practice only one or two files change per save; a large edit session can
 # accumulate many, but listing them all would flood the terminal and bury the
-# the signal.  The "+N more" tail keeps the output honest without being noisy.
+# signal.  The "+N more" tail keeps the output honest without being noisy.
 _MAX_BREADCRUMB_FILES = 5
 
 
@@ -247,6 +247,8 @@ def format_dev_reload_breadcrumb(changed_files: list[str]) -> str:
     - Appends "+N more" when there are more files than the cap.
     """
     unique = sorted({_breadcrumb_display_key(f) for f in changed_files})
+    if not unique:
+        return "dev-reload: reexecing — package files changed"
     shown = unique[:_MAX_BREADCRUMB_FILES]
     rest = len(unique) - len(shown)
     tail = f", +{rest} more" if rest else ""
