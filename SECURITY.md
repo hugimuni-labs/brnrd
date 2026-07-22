@@ -16,9 +16,11 @@ brnrd runs coding agents that execute commands with **your** authority against y
 launched with their approval prompts deliberately bypassed
 (`claude --dangerously-skip-permissions`, `codex exec --dangerously-bypass-…`,
 `gemini --yolo`). The base assumption is that **whoever can reach a configured gate
-is you** — the trusted operator. Everything below is defense-in-depth over that
-base. None of it is a cage for a hostile agent or a hostile message. If you connect
-a gate that untrusted people can reach, you have handed them a door into your shell.
+has been authorized to instruct the agent**. GitHub and Telegram authorize the
+individual sender before enqueue; Slack still authorizes at channel membership.
+Everything below is defense-in-depth over that base. None of it is a cage for a
+hostile agent or a hostile message. Authorizing a person gives their text a path to
+your runner, so grant that right as carefully as shell access.
 
 ## The trusted-agent base
 
@@ -29,30 +31,26 @@ a gate that untrusted people can reach, you have handed them a door into your sh
   case. It is mitigated by *who you let trigger runs* and *how much authority the
   environment grants* — not by sandboxing the agent.
 - The mitigation strategy is **trust-tiering the ingress and the environment**, plus
-  operator hygiene. Today the trust-tiering is partial; see the gaps below.
+  operator hygiene. GitHub and Telegram stamp an authorized principal's tier on the
+  event; unattributed ingress fails closed to `untrusted`, which runs in `solitary`
+  when available or is refused. Slack remains channel-authorized; see the gaps below.
 
 ## Who can trigger a run
 
-Authorization currently keys on the **channel or trigger syntax, not the sender.**
-This is the most important thing to understand before opening a gate.
+Authorization is checked before an event reaches the runner. The policy differs by
+gate, so the configured principal or channel is the important boundary.
 
 | Gate | Who can trigger a run today | Notes |
 |---|---|---|
-| Telegram (self-hosted) | **Unbound: any chat that can reach the bot.** Bound: any member of the bound chat. | The inbound chat filter is unset by default; `bind` scopes to a chat, not a person. |
-| Slack (self-hosted) | Any member of the polled channel. | Poll-based; no per-sender check. |
-| GitHub (self-hosted & managed) | **Any commenter** who uses the trigger on a connected repo. On a **public** repo, that is anyone. | The only author check skips the bot's own login to avoid self-loops. |
-| Managed one-to-one Telegram | The paired user. | The dogfooded, safe path. |
+| Telegram (self-hosted & managed) | The paired user, plus explicitly allowlisted user ids. | Default-closed per sender. Anonymous admins, channel posts, and unattributed senders are denied; a group is safe by default because membership alone grants nothing. |
+| Slack (self-hosted) | Any member of the configured channel. | Channel-scoped; no per-sender allowlist yet. |
+| GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. | Permission is verified through GitHub before enqueue. Public commenters and read-only users are denied even when they use the configured trigger. |
+| GitHub (managed) | GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, plus explicitly allowlisted logins. | Default-closed per webhook author; the signed payload is the authorization source. |
 
-**Known blockers (do not use the unsafe configurations until they land):**
-
-- [#408](https://github.com/hugimuni-labs/brnrd/issues/408) — GitHub triggers authorize the
-  mention syntax, not the commenter. Unsafe on public repositories.
-- [#409](https://github.com/hugimuni-labs/brnrd/issues/409) — paired chats authorize the room,
-  not the sender.
-
-Both are instances of a broader class — untrusted text driving a fully
-approval-bypassed agent with operator authority — tracked as the umbrella issue
-linked from [#23](https://github.com/hugimuni-labs/brnrd/issues/23).
+Passing authorization does not make inbound text benign. A compromised collaborator
+or an intentionally hostile instruction can still drive an approval-bypassed agent.
+Keep the principal lists narrow and use a tighter collaborator environment when the
+sender should not inherit the operator's normal runtime authority.
 
 ## Execution environments — honest isolation matrix
 
@@ -137,11 +135,12 @@ backend relays, it does not run your agent.
 ## Hardening checklist for operators
 
 - Prefer **private** repositories over public ones for GitHub gates.
-- Prefer the managed one-to-one Telegram path; if you bind a group or channel,
-  understand that every member can drive your daemon.
-- For any multi-party gate, run in **`environment=solitary`** — the one-value
-  preset composing provider-only egress, per-run credential copies, and no
-  GitHub credential.
+- Prefer the managed one-to-one Telegram path. A group remains default-closed to the
+  paired user; add other user ids only when they should be able to drive the daemon.
+- For authorized collaborators, set **`trust.collaborator_env=solitary`** — the
+  one-value preset composing provider-only egress, per-run credential copies, and no
+  GitHub credential. Unattributed/untrusted ingress already defaults to `solitary`
+  (or refusal when it is unavailable).
 - Scope the GitHub token you give the agent; prefer a repo-scoped App token over a
   broad PAT where possible.
 - `chmod 0600` your `.brr/gates/*.json`.
@@ -151,16 +150,12 @@ backend relays, it does not run your agent.
 
 ## Known gaps being tracked
 
-| Gap | Severity | Issue |
+| Gap | Severity | Tracking / mitigation |
 |---|---|---|
 | Untrusted text → approval-bypassed agent with operator authority (umbrella) | Critical | via [#23](https://github.com/hugimuni-labs/brnrd/issues/23) |
-| GitHub trigger authorizes mention, not commenter | Critical | fixed — [#408](https://github.com/hugimuni-labs/brnrd/issues/408) |
-| Chat gates authorize the room, not the sender | High | fixed — [#409](https://github.com/hugimuni-labs/brnrd/issues/409) |
-| ~~Environment not tiered by source trust~~ — shipped: ingress trust tier (owner/collaborator/untrusted) routes the env, fails closed to `solitary`/refuse | High | [#517](https://github.com/hugimuni-labs/brnrd/issues/517) |
+| Slack authorizes the configured channel, not individual senders | High | Use only with a channel whose full membership may drive the daemon |
 | Docker is not a credential/containment boundary | High | [#80](https://github.com/hugimuni-labs/brnrd/issues/80) |
 | Full-scope GitHub token handed to the agent | High | [#415](https://github.com/hugimuni-labs/brnrd/issues/415) — managed path is a repo-scoped App token since [#498](https://github.com/hugimuni-labs/brnrd/pull/498)/[#520](https://github.com/hugimuni-labs/brnrd/pull/520); the self-hosted fallback chain remains |
-| Gate tokens stored in cleartext | Medium | fixed — [#416](https://github.com/hugimuni-labs/brnrd/issues/416) via [#499](https://github.com/hugimuni-labs/brnrd/pull/499) (0600/0700 stores) |
-| ~~Managed dashboard mirror unbounded/undocumented~~ — shipped: 14-day run window, cloud-only activity excerpts, disconnect purge, event GC, `publish.layers` opt-down | Medium | [#502](https://github.com/hugimuni-labs/brnrd/issues/502) |
 
 ## Found a gap?
 
