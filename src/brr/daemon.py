@@ -3048,9 +3048,10 @@ def _run_worker(
                 # suppression — and it is a property of the event source, not
                 # of one hardcoded source name.
                 source = str(event.get("source") or "")
-                unowned = bool(source) and not (
-                    task.meta.get("spawn_parent_run_id")
-                    or _gate_owns_source(source)
+                unowned = bool(source) and not _terminal_reply_lands(
+                    source,
+                    spawn_parent_run_id=str(
+                        task.meta.get("spawn_parent_run_id") or ""),
                 )
                 suppression_reason = (
                     "duplicate of a delivered reply"
@@ -4172,6 +4173,16 @@ def _write_live_portal_state(
             "notices": _read_outbox_notices(outbox_dir),
             "inbound": {
                 "current_event": current_event_id,
+                # Mechanical fact, not a hint: can a reply addressed to the
+                # waking event actually be delivered? Same predicate the
+                # dispatch path uses to decide terminal-stream suppression,
+                # so the Stop-hook delivery warning cannot nag about a
+                # reply the router would refuse (#562).
+                "current_event_replyable": _terminal_reply_lands(
+                    str(getattr(task, "source", "") or ""),
+                    spawn_parent_run_id=str(
+                        task.meta.get("spawn_parent_run_id") or ""),
+                ),
                 "events": events,
             },
             "outbound": {
@@ -4529,6 +4540,13 @@ def _stage_terminal_response(
     suppressed_reason: str = "",
     undeliverable: bool = False,
 ) -> Path | None:
+    # The terminal stream is always *captured* here, deliverability aside.
+    # When *undeliverable* (no gate owns the source — a ``schedule`` wake
+    # with no spawning parent), the capture is the whole story: the text is
+    # kept as the run's body / message-store record and is dispatched
+    # nowhere. That is deliberate — there is no fallback gate to invent one
+    # for (#562). A schedule-woken run with something to say must route it
+    # to a configured user gate itself (`gate: telegram`).
     body = protocol.read_response(response_path.parent, str(event.get("id") or "")) or ""
     status = (
         message_store.UNDELIVERABLE if undeliverable else message_store.PENDING
@@ -5388,6 +5406,31 @@ def _gate_owns_source(source: str) -> bool:
     impossible delivery.
     """
     return _delivery_source_for_gate(source) in _BUILTIN_GATES
+
+
+def _terminal_reply_lands(
+    source: str, *, spawn_parent_run_id: str = "",
+) -> bool:
+    """True when a run's terminal reply has somewhere to arrive.
+
+    Exactly two things carry a terminal stream out of the run: a gate that
+    owns *source* (:func:`_gate_owns_source`), or a spawning parent that
+    collects the child's report along the dispatch edge. Anything else —
+    a ``schedule`` wake most of all — leaves the final stdout captured to
+    the response path as the run's own body/message store and nowhere
+    else, and a reply addressed at that event can never be delivered.
+
+    An *absent* source is unknown, not impossible: treated as landing, so
+    a missing field never manufactures a false "nobody will see this".
+
+    Shared by the dispatch path (terminal-stream suppression) and the
+    portal state (``inbound.current_event_replyable``, which the Stop-hook
+    delivery warning reads) so both speak from one fact rather than from
+    a source-name string match.
+    """
+    if not source:
+        return True
+    return bool(spawn_parent_run_id) or _gate_owns_source(source)
 
 
 def _delivery_source_for_gate(gate: str) -> str:
