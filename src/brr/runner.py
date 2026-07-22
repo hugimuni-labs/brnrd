@@ -111,14 +111,24 @@ def _kill_procs(procs: list[subprocess.Popen]) -> bool:
     for proc in procs:
         if proc.poll() is not None:
             continue
-        try:
-            cleanup = getattr(proc, "_brr_on_kill", None)
-            if cleanup is not None:
+        handled = False
+        cleanup = getattr(proc, "_brr_on_kill", None)
+        if cleanup is not None:
+            try:
                 cleanup()
+                handled = True
+            except Exception:
+                # Resource cleanup is best-effort. A broken Docker CLI must
+                # not prevent the foreground client itself being reclaimed.
+                pass
+        try:
             proc.kill()
+            handled = True
         except OSError:
-            continue
-        killed = True
+            # Cleanup may have made the client exit before this signal. That
+            # is still a successful kill path, not a reason to report idle.
+            pass
+        killed = killed or handled
     return killed
 
 
