@@ -118,28 +118,32 @@ def test_daemon_cannot_mint_off_allowlist_key():
     assert resp.status_code == 422
 
 
-def test_config_approve_page_requires_login():
+def test_config_approve_context_requires_login_and_spa_handoff_is_compatible():
     client = _client()
     _session, _account_headers, daemon_headers, _repo_id = _repo_and_daemon(client)
     minted = _mint(client, daemon_headers)
 
-    r = client.get(f"/config-approve/{minted['request_id']}", follow_redirects=False)
+    r = client.get(f"/v1/config-approve/{minted['request_id']}")
 
-    assert r.status_code == 303
-    assert "/login" in r.headers["location"]
+    assert r.status_code == 401
+    assert r.json() == {"detail": "unauthenticated"}
+    handoff = client.get(f"/config-approve/{minted['request_id']}", follow_redirects=False)
+    assert handoff.status_code == 308
+    assert handoff.headers["location"] == "/"
 
 
-def test_config_approve_page_shows_details():
+def test_config_approve_context_shows_account_owned_details():
     client = _client()
     session_token, _account_headers, daemon_headers, _repo_id = _repo_and_daemon(client)
     minted = _mint(client, daemon_headers)
     client.cookies.set("brnrd_session", session_token)
 
-    r = client.get(f"/config-approve/{minted['request_id']}")
+    r = client.get(f"/v1/config-approve/{minted['request_id']}")
 
     assert r.status_code == 200
-    assert "spawn.max_concurrent" in r.text
-    assert "need headroom for a four-way fan-out" in r.text
+    assert r.json()["config_key"] == "spawn.max_concurrent"
+    assert r.json()["reason"] == "need headroom for a four-way fan-out"
+    assert r.json()["status"] == ConfigChangeRequest.STATUS_PENDING
 
 
 def test_config_approve_submit_approve_enqueues_inbox_event():
@@ -149,12 +153,14 @@ def test_config_approve_submit_approve_enqueues_inbox_event():
     client.cookies.set("brnrd_session", session_token)
 
     r = client.post(
-        f"/config-approve/{minted['request_id']}",
-        data={"decision": "approve"},
+        f"/v1/config-approve/{minted['request_id']}",
+        json={"decision": "approve"},
     )
 
     assert r.status_code == 200
-    assert "Approved" in r.text
+    assert r.json()["ok"] is True
+    assert r.json()["request"]["status"] == ConfigChangeRequest.STATUS_APPROVED
+    assert "Approved" in r.json()["notice"]
 
     with client.app.state.SessionLocal() as db:
         row = db.get(ConfigChangeRequest, minted["request_id"])
@@ -167,8 +173,9 @@ def test_config_approve_submit_approve_enqueues_inbox_event():
     # A second decision on an already-decided request is a no-op, not a
     # second inbox event (the daemon side only ever expects one outcome
     # per proposal id).
-    again = client.post(f"/config-approve/{minted['request_id']}", data={"decision": "reject"})
+    again = client.post(f"/v1/config-approve/{minted['request_id']}", json={"decision": "reject"})
     assert again.status_code == 200
+    assert again.json()["request"]["status"] == ConfigChangeRequest.STATUS_APPROVED
     with client.app.state.SessionLocal() as db:
         events = list(db.execute(select(Event).where(Event.repo_id == repo_id)).scalars())
         assert len(events) == 1
@@ -181,12 +188,14 @@ def test_config_approve_submit_reject_enqueues_reject_event():
     client.cookies.set("brnrd_session", session_token)
 
     r = client.post(
-        f"/config-approve/{minted['request_id']}",
-        data={"decision": "reject"},
+        f"/v1/config-approve/{minted['request_id']}",
+        json={"decision": "reject"},
     )
 
     assert r.status_code == 200
-    assert "Rejected" in r.text
+    assert r.json()["ok"] is True
+    assert r.json()["request"]["status"] == ConfigChangeRequest.STATUS_REJECTED
+    assert "Rejected" in r.json()["notice"]
     with client.app.state.SessionLocal() as db:
         events = list(db.execute(select(Event).where(Event.repo_id == repo_id)).scalars())
         assert len(events) == 1
@@ -202,11 +211,37 @@ def test_config_approve_rejects_other_accounts_request():
     other_session = other_headers["Authorization"].split(" ", 1)[1]
     client.cookies.set("brnrd_session", other_session)
 
-    r = client.get(f"/config-approve/{minted['request_id']}")
+    r = client.get(f"/v1/config-approve/{minted['request_id']}")
     assert r.status_code == 404
 
-    submit = client.post(f"/config-approve/{minted['request_id']}", data={"decision": "approve"})
+    submit = client.post(f"/v1/config-approve/{minted['request_id']}", json={"decision": "approve"})
     assert submit.status_code == 403
+    assert submit.json()["notice"] == "not your config-change request"
+
+
+def test_config_approve_expired_request_reports_without_enqueuing():
+    from datetime import datetime, timedelta, timezone
+
+    client = _client()
+    session_token, _account_headers, daemon_headers, repo_id = _repo_and_daemon(client)
+    minted = _mint(client, daemon_headers)
+    client.cookies.set("brnrd_session", session_token)
+    with client.app.state.SessionLocal() as db:
+        row = db.get(ConfigChangeRequest, minted["request_id"])
+        assert row is not None
+        row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+
+    context = client.get(f"/v1/config-approve/{minted['request_id']}")
+    assert context.status_code == 200
+    assert context.json()["status"] == ConfigChangeRequest.STATUS_PENDING
+    decided = client.post(f"/v1/config-approve/{minted['request_id']}", json={"decision": "approve"})
+    assert decided.status_code == 200
+    assert decided.json()["request"]["status"] == ConfigChangeRequest.STATUS_EXPIRED
+    assert "expired before a decision" in decided.json()["notice"]
+    with client.app.state.SessionLocal() as db:
+        assert db.get(ConfigChangeRequest, minted["request_id"]).status == ConfigChangeRequest.STATUS_EXPIRED
+        assert list(db.execute(select(Event).where(Event.repo_id == repo_id)).scalars()) == []
 
 
 def test_allowlist_lockstep_with_daemon():

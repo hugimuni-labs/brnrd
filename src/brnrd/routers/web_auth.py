@@ -6,9 +6,9 @@ semantics are byte-compatible with the previous module.
 
 ``message.html`` (Jinja) is replaced by the inline ``_message_response``
 helper below — no Jinja dependency for error/outcome pages.  The
-``config_approve.html`` form page retains its Jinja template (in
-``src/brnrd/routers/templates/``); ``connect.html`` was ported to the
-SvelteKit ``/connect/[code]`` route (#327).
+The final Jinja content page, ``config_approve.html``, is ported to the
+SvelteKit ``/config-approve/[request_id]`` route (#327), following the
+earlier ``/connect/[code]`` port.
 """
 
 from __future__ import annotations
@@ -19,9 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, Form, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from brnrd import oauth
@@ -46,9 +45,6 @@ from ._session import (
 
 router = APIRouter(tags=["web"])
 
-_TEMPLATES_DIR = Path(__file__).with_name("templates")
-_TEMPLATES = Jinja2Templates(directory=_TEMPLATES_DIR)
-
 # Static files live at src/brnrd/static/ (one package level up from routers/).
 _STATIC_DIR = Path(__file__).parent.parent / "static"
 
@@ -70,14 +66,6 @@ def _compute_asset_version() -> str:
 
 
 _ASSET_VERSION = _compute_asset_version()
-
-
-def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
-    """Render a Jinja template with the standard brnrd context."""
-    data = {"request": request, "asset_version": _ASSET_VERSION}
-    if context:
-        data.update(context)
-    return _TEMPLATES.TemplateResponse(request=request, name=template, context=data, status_code=status_code)
 
 
 def _esc(value: str) -> str:
@@ -368,80 +356,71 @@ def _config_change_request_view(db: Session, request_id: str) -> ConfigChangeReq
     return db.get(ConfigChangeRequest, request_id)
 
 
-@router.get("/config-approve/{request_id}", response_class=HTMLResponse)
-def config_approve_page(request_id: str, request: Request, db: Session = Depends(get_db)):
-    """Loom-envelope Phase 2 approve/confirm URL."""
+def _config_change_response(row: ConfigChangeRequest, repo: Repo | None) -> dict[str, object]:
+    """The shared SPA view of an account-owned config-change request."""
+    return {
+        "id": row.id,
+        "repo_label": repo.repo_full_name if repo else row.repo_id,
+        "config_key": row.config_key,
+        "current_value": row.current_value,
+        "requested_value": row.requested_value,
+        "reason": row.reason,
+        "status": row.status,
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+    }
+
+
+def _config_change_notice(row: ConfigChangeRequest, repo: Repo | None) -> str:
+    repo_label = repo.repo_full_name if repo else row.repo_id
+    if row.status == ConfigChangeRequest.STATUS_EXPIRED:
+        return f"This request to change `{row.config_key}` on {repo_label} expired before a decision was made. No change applied."
+    if row.status == ConfigChangeRequest.STATUS_APPROVED:
+        return f"Approved. Your daemon will set `{row.config_key}` to `{row.requested_value}` on {repo_label} the next time it checks in."
+    return f"Rejected. `{row.config_key}` on {repo_label} stays at `{row.current_value}`."
+
+
+@router.get("/v1/config-approve/{request_id}")
+def config_approve_context_api(request_id: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Session-scoped context for the SPA config-approval page.
+
+    The 404 deliberately covers both absent and cross-account rows, as the
+    Jinja flow did, so a signed-in account cannot learn another account's
+    request details. The SPA supplies the safe ``next=`` path on a 401.
+    """
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     row = _config_change_request_view(db, request_id)
     if row is None or row.account_id != account_id:
-        return _message_response(
-            title="Not found",
-            eyebrow="Config-change request",
-            heading="Request not found",
-            message="This config-change link is unknown or belongs to a different account.",
-            severity="error",
-            status_code=404,
-        )
+        return JSONResponse({"detail": "unknown config-change request"}, status_code=404)
     repo = db.get(Repo, row.repo_id)
-    if row.status != ConfigChangeRequest.STATUS_PENDING:
-        return _message_response(
-            title="Already decided",
-            eyebrow="Config-change request",
-            heading=f"Already {row.status}",
-            message=f"`{row.config_key}` on {repo.repo_full_name if repo else row.repo_id} was already {row.status}. No further action needed.",
-            severity="neutral",
-        )
-    return _render(
-        request,
-        "config_approve.html",
-        {
-            "title": "Approve config change",
-            "request_id": row.id,
-            "repo_full_name": repo.repo_full_name if repo else row.repo_id,
-            "config_key": row.config_key,
-            "current_value": row.current_value,
-            "requested_value": row.requested_value,
-            "reason": row.reason,
-        },
-    )
+    return JSONResponse(_config_change_response(row, repo))
 
 
-@router.post("/config-approve/{request_id}", response_class=HTMLResponse)
-def config_approve_submit(request_id: str, request: Request, decision: str = Form(...), db: Session = Depends(get_db)):
+@router.post("/v1/config-approve/{request_id}")
+def config_approve_decide_api(
+    request_id: str,
+    request: Request,
+    payload: dict[str, object] | None = Body(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """JSON transport for the SPA; ``decide_core`` retains all decisions."""
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
-    approve = decision.strip().lower() == "approve"
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    approve = str((payload or {}).get("decision") or "").strip().lower() == "approve"
     from fastapi import HTTPException
 
     try:
         row = decide_config_change(db, account_id, request_id, approve=approve)
     except HTTPException as exc:
-        return _message_response(
-            title="Could not decide",
-            eyebrow="Config-change request",
-            heading="Could not record a decision",
-            message=str(exc.detail),
-            severity="error",
-            status_code=exc.status_code,
-        )
+        return JSONResponse({"ok": False, "notice": str(exc.detail)}, status_code=exc.status_code)
     repo = db.get(Repo, row.repo_id)
-    repo_label = repo.repo_full_name if repo else row.repo_id
-    if row.status == ConfigChangeRequest.STATUS_EXPIRED:
-        message = f"This request to change `{row.config_key}` on {repo_label} expired before a decision was made. No change applied."
-        severity = "warning"
-    elif row.status == ConfigChangeRequest.STATUS_APPROVED:
-        message = f"Approved. Your daemon will set `{row.config_key}` to `{row.requested_value}` on {repo_label} the next time it checks in."
-        severity = "success"
-    else:
-        message = f"Rejected. `{row.config_key}` on {repo_label} stays at `{row.current_value}`."
-        severity = "neutral"
-    return _message_response(
-        title="Config change",
-        eyebrow="Config-change request",
-        heading=row.status.capitalize(),
-        message=message,
-        severity=severity,
-    )
+    return JSONResponse({"ok": True, "notice": _config_change_notice(row, repo), "request": _config_change_response(row, repo)})
+
+
+@router.get("/config-approve/{request_id}")
+def config_approve_redirect(request_id: str) -> RedirectResponse:
+    # The production frontend owns this route; bare backend servers preserve
+    # the same SPA handoff shape as the other retired Jinja pages.
+    return RedirectResponse(url="/", status_code=308)
