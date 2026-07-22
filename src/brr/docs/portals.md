@@ -113,6 +113,14 @@ through their first descriptive field, but use a built-in kind when it fits.
 {"kind": "summary", "text": "…"}
 ```
 
+**Links are derived, not reported.** The daemon knows the run's forge and
+`owner/repo`, so an `issue` / `pr` / `commit` / `branch` relic gets its forge
+URL filled in at collection time from its `number` / `sha` / `name` alone —
+write the bare record. Add `"url"` only to point somewhere the daemon cannot
+derive (another forge, a comment permalink), or `"repo": "owner/name"` for a
+thread in a different project. When the forge is unknown the relic renders
+unlinked; the daemon never fabricates a URL.
+
 At most one `summary`, and it heads the receipt. The manifest feeds the
 dashboard's collapsed run receipt; the chat card does not render it yet (a
 named gap, not a bug in your run).
