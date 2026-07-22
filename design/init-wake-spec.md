@@ -1,5 +1,13 @@
 # Init as a wake — build spec (Layer 3)
 
+> **Deviation (maintainer decision, 2026-07-22, post-merge):** the `--auto`
+> flag was cut before implementation. `brnrd init` is one verb; the
+> mechanical path is reached only by automatic degradation (no TTY, no
+> playbook, `BRR_NO_INIT_WAKE` for CI/tests), announced with one warning
+> line. Every `--auto` mention below reads as "the automatic mechanical
+> fallback", not a user-facing flag. Implemented in #507's runtime half.
+
+
 Status: **spec, no build** — #507's own sequencing ("spec before build").
 Scope: Layer 3 of the design in kb `design-init-as-a-wake.md`. Layers 0–2
 (artifact split, versioned blocks, shell bridges) and D2(a) (knowledge shape

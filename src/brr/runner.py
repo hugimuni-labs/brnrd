@@ -956,6 +956,9 @@ class ShellHelp:
     install_hint: str
 
 
+#: Gemini deliberately absent (#519): it was cut from first-class Shell
+#: selection, and the product's first-impression surface must not recommend
+#: installing an integration the catalog no longer treats as first-class.
 SHELL_HELP: dict[str, ShellHelp] = {
     "claude": ShellHelp(
         shell="claude",
@@ -970,13 +973,6 @@ SHELL_HELP: dict[str, ShellHelp] = {
         blurb="OpenAI's terminal agent; needs a ChatGPT plan with Codex or an API key.",
         docs_url="https://developers.openai.com/codex/cli/",
         install_hint="npm install -g @openai/codex",
-    ),
-    "gemini": ShellHelp(
-        shell="gemini",
-        label="Gemini CLI",
-        blurb="Google's terminal agent; free tier available with a Google account.",
-        docs_url="https://github.com/google-gemini/gemini-cli",
-        install_hint="npm install -g @google/gemini-cli",
     ),
 }
 
