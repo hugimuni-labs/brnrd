@@ -217,12 +217,14 @@
 	}
 
 	function wakeColor(wake: ScheduledWake): string {
+		if (wake.status === 'quota-paused') return THERMAL_STOPS.ash;
 		const eta = wakeEta(wake);
 		if (eta < 0) return THERMAL_STOPS.ash;
 		return THERMAL_STOPS[loomFutureStop(eta, futureHorizon)];
 	}
 
 	function wakeUrgency(wake: ScheduledWake): GlowUrgency {
+		if (wake.status === 'quota-paused') return 'calm';
 		const eta = wakeEta(wake);
 		if (eta < 0) return 'alarm';
 		return eta <= LOOM_DUE_SOON_MS ? 'attention' : 'calm';
@@ -246,6 +248,8 @@
 	function wakeLegend(wake: ScheduledWake): string {
 		const eta = wakeEta(wake);
 		const summary = (wake.summary || wake.conversation_key || 'wake').trim();
+		if (wake.status === 'quota-paused') return `quota-paused · ${summary}`;
+		if (wake.status === 'quota-paced') return `${etaLabel(eta)} · quota-paced · ${summary}`;
 		return `${etaLabel(eta)} · ${summary}`;
 	}
 
@@ -517,7 +521,7 @@
 					type="button"
 					class="flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-start gap-1.5"
 					style={`color: ${color};${selectedId === wake.id ? ' filter: brightness(1.6);' : ''}`}
-					title={`${wake.summary} · ${etaLabel(eta)}`}
+					title={wakeLegend(wake)}
 					onclick={() => select('wake', wake.id)}
 					in:glitchReveal={{ duration: 240, delay: 70 + index * 26 }}
 				>

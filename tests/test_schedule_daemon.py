@@ -189,6 +189,10 @@ def test_fire_due_pauses_every_entries_under_critical_quota_floor(tmp_path):
 
     fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
     assert fired == {"followup"}  # every: paused; at: is a deadline, still fires
+    assert schedule.load_state(brr_dir)["_pacing"] == {
+        "mode": "quota-paused",
+        "remaining_pct": 5.0,
+    }
 
 
 def test_fire_due_stretches_every_interval_under_low_quota_floor(tmp_path):
@@ -208,6 +212,11 @@ def test_fire_due_stretches_every_interval_under_low_quota_floor(tmp_path):
     daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
 
     assert protocol.list_pending(inbox) == []
+    assert schedule.load_state(brr_dir)["_pacing"] == {
+        "mode": "quota-paced",
+        "factor": 3.0,
+        "remaining_pct": 15.0,
+    }
 
 
 def test_fire_due_ignores_quota_pacing_without_resolvable_runner(tmp_path):

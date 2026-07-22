@@ -10,7 +10,7 @@ export interface ScheduledWake {
 	id: string;
 	kind: string;
 	source: string;
-	status: string | null; // "recurring" | "scheduled"
+	status: string | null; // "recurring" | "scheduled" | quota pacing verdict
 	phase: string | null; // "every" | "at" — the trigger kind
 	bucket: string;
 	summary: string;
@@ -66,4 +66,24 @@ export function untilText(scheduledFor: string | null, now: number): string | nu
 	if (hours < 24) return `in ${hours}h ${minutes % 60}m`;
 	const days = Math.floor(hours / 24);
 	return `in ${days}d ${hours % 24}h`;
+}
+
+/** The scheduler's verdict takes precedence over naive timestamp arithmetic.
+ * A quota-paused wake has no honest recovery ETA; a quota-paced wake carries
+ * its effective (stretched) next-fire instant from the daemon. */
+export function wakeTimingText(wake: ScheduledWake, now: number): string | null {
+	if (wake.status === 'quota-paused') return 'quota-paused';
+	const due = untilText(wake.scheduled_for, now);
+	if (wake.status === 'quota-paced' && due) return `quota-paced · ${due}`;
+	return due;
+}
+
+export function wakeTimingExplanation(wake: ScheduledWake): string | null {
+	if (wake.status === 'quota-paused') {
+		return 'Waiting for quota to recover; reevaluated on every scheduler tick.';
+	}
+	if (wake.status === 'quota-paced') {
+		return 'Cadence is stretched while quota is low; this is the effective next fire.';
+	}
+	return null;
 }

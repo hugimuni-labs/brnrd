@@ -17,6 +17,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brr import protocol  # noqa: E402
+from brr import schedule  # noqa: E402
 from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
 from _helpers import brnrd_account_headers, init_git_repo  # noqa: E402
@@ -29,6 +30,66 @@ class _StopLoop(BaseException):
     the point of it), so a RuntimeError sentinel would be swallowed and retried
     forever — a hang, not a test.
     """
+
+
+def test_schedule_activity_uses_scheduler_pacing_verdict(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr_dir = repo / ".brr"
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    (dom / "schedule.md").write_text(
+        "## Upkeep\nevery: 100s\nkeep going\n", encoding="utf-8"
+    )
+    schedule.save_state(
+        brr_dir,
+        {
+            "upkeep": {"kind": "every", "last_fired": 1_000.0},
+            "_pacing": {"mode": "quota-paced", "factor": 3.0},
+        },
+    )
+    monkeypatch.setattr(
+        cloud.dominion,
+        "resident_dominion_candidates",
+        lambda *_args, **_kwargs: [type("Candidate", (), {"path": dom})()],
+    )
+
+    record = cloud._schedule_activity_records(brr_dir)[0]
+
+    assert record["status"] == "quota-paced"
+    assert record["scheduled_for"] == "1970-01-01T00:21:40+00:00"
+
+
+def test_schedule_activity_exposes_quota_pause_without_fabricating_recovery(
+    tmp_path, monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr_dir = repo / ".brr"
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    (dom / "schedule.md").write_text(
+        "## Upkeep\nevery: 100s\nkeep going\n", encoding="utf-8"
+    )
+    schedule.save_state(
+        brr_dir,
+        {
+            "upkeep": {"kind": "every", "last_fired": 1_000.0},
+            "_pacing": {"mode": "quota-paused", "remaining_pct": 5.0},
+        },
+    )
+    monkeypatch.setattr(
+        cloud.dominion,
+        "resident_dominion_candidates",
+        lambda *_args, **_kwargs: [type("Candidate", (), {"path": dom})()],
+    )
+
+    record = cloud._schedule_activity_records(brr_dir)[0]
+
+    assert record["status"] == "quota-paused"
+    # Authored eligibility remains available for ordering; the status tells
+    # clients not to mislabel it overdue or invent a quota-recovery ETA.
+    assert record["scheduled_for"] == "1970-01-01T00:18:20+00:00"
 
 
 def _make_brnrd():

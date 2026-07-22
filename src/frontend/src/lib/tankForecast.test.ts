@@ -225,6 +225,12 @@ describe('wakesBefore', () => {
 		];
 		assert.equal(wakesBefore(wakes, NOW, NOW + 10800_000), 2);
 	});
+
+	it('does not price a quota-paused wake as committed draw', () => {
+		const paused = wake(new Date(NOW + 3600_000).toISOString());
+		paused.status = 'quota-paused';
+		assert.equal(wakesBefore([paused], NOW, NOW + 2 * 3600_000), 0);
+	});
 });
 
 describe('readTank', () => {
