@@ -181,7 +181,17 @@ def _drift(brr_dir: Path | None, dominion_repo: Path | None) -> tuple[str, ...]:
 
 #: Daemon-owned bookkeeping inside the dominion repo.  Not resident memory, and
 #: never evidence of a dropped capture.
-_DAEMON_OWNED_RUN_STATE = re.compile(r"^runs/[^/]+/[^/]+/state\.md$")
+#:
+#: ``state.md`` is written at run start and committed at run *end* — always
+#: untracked mid-wake.  ``messages/*`` are delivery records the pipeline
+#: mutates *after* the capture commit (``status: pending → delivered``,
+#: ``platform_message_id``, ``delivered_at`` land once the platform acks), so
+#: a delivered reply left the prior run's message files modified on every
+#: wake — the same permanent-lie shape ``state.md`` was exempted for, one
+#: seam later in the run's life.
+_DAEMON_OWNED_RUN_STATE = re.compile(
+    r"^runs/[^/]+/[^/]+/(?:state\.md|messages/[^/]+)$"
+)
 
 
 def _is_resident_memory(porcelain_line: str) -> bool:
