@@ -6,10 +6,13 @@ Required setup:
 - Create a Slack app with ``channels:history``, ``channels:read``,
   ``chat:write`` scopes.
 - Run ``brnrd gate setup slack`` to save the bot token and choose the channel.
+- Mention the app in that channel to start a run. Ordinary channel messages
+  stay ordinary Slack conversation.
 """
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -82,12 +85,16 @@ def auth(brr_dir: Path) -> None:
         print("[brnrd] No token provided.")
         return
     try:
-        _slack_api(token, "auth.test")
+        identity = _slack_api(token, "auth.test")
+        bot_user_id = str(identity.get("user_id") or "").strip()
+        if not bot_user_id:
+            raise RuntimeError("auth.test did not identify the app user")
         print("[brnrd] Token validated.")
     except Exception as e:
         print(f"[brnrd] Auth failed: {e}")
         return
     state["token"] = token
+    state["bot_user_id"] = bot_user_id
     _save_state(brr_dir, state)
     print("[brnrd] Token saved")
 
@@ -123,7 +130,7 @@ def setup(brr_dir: Path) -> None:
 
 def is_configured(brr_dir: Path) -> bool:
     state = _load_state(brr_dir)
-    return "token" in state and "channel" in state
+    return all(state.get(key) for key in ("token", "channel", "bot_user_id"))
 
 
 # ── Gate loop ────────────────────────────────────────────────────────
@@ -143,6 +150,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = state["token"]
     channel = state["channel"]
+    bot_user_id = state["bot_user_id"]
     oldest_ts = state.get("oldest_ts", str(time.time()))
 
     data = _slack_api(token, "conversations.history", {
@@ -153,12 +161,22 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
 
     messages = data.get("messages", [])
     for msg in reversed(messages):
+        ts = str(msg.get("ts") or "")
+        # Consuming the channel cursor is independent of accepting a message.
+        # Otherwise every ignored ambient message is fetched on every poll.
+        if ts > oldest_ts:
+            oldest_ts = ts
         if msg.get("subtype"):
             continue
         text = msg.get("text", "").strip()
         if not text:
             continue
-        ts = msg.get("ts", "")
+        mention = re.compile(rf"<@{re.escape(bot_user_id)}>")
+        if not mention.search(text):
+            continue
+        text = mention.sub("", text).strip()
+        if not text:
+            continue
         user = msg.get("user", "?")
         # ``thread_ts`` is the parent message's ts when this message is
         # itself a reply inside an existing thread. Capturing it lets
@@ -167,13 +185,12 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # message is itself the start of a conversation, ``thread_ts``
         # is absent and ``slack_ts`` serves the same role downstream.
         thread_ts = msg.get("thread_ts") or ""
-        # Source-trust tiering (#517): the Slack gate has no per-sender
-        # authorization (no #408/#409 equivalent) — membership of the
-        # operator-configured channel is the only trust boundary. Treat
-        # that bounded, operator-chosen room as ``collaborator``: today's
-        # default env at zero config, tightenable via
+        # Source-trust tiering (#517): Slack's workspace-admin app install,
+        # scoped bot token, operator-selected channel, and explicit mention
+        # form the ingress boundary. Treat an invoking room member as
+        # ``collaborator``: today's default env at zero config, tightenable via
         # ``trust.collaborator_env``. It is deliberately not ``owner``
-        # (no bound principal is verified) and not left unstamped (which
+        # (the installer is not necessarily the sender) and not left unstamped (which
         # would fail closed to ``untrusted`` and route every Slack message
         # to solitary/refuse — over-reaching past this issue's shipped
         # prerequisites).
@@ -187,9 +204,6 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             slack_thread_ts=thread_ts,
             trust_tier=trust.COLLABORATOR,
         )
-        if ts > oldest_ts:
-            oldest_ts = ts
-
     if oldest_ts != state.get("oldest_ts"):
         state["oldest_ts"] = oldest_ts
         _save_state(brr_dir, state)

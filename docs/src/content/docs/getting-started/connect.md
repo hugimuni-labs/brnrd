@@ -39,10 +39,11 @@ GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` association; both also acce
 explicitly allowlisted logins. Telegram accepts the paired user plus explicitly
 allowlisted user ids. A public commenter or another group member cannot trigger a
 run merely by reaching the channel.
-Slack is still channel-scoped: every member of the configured channel can submit
-work. Authorization is permission to instruct an approval-bypassed agent, so keep
-principal lists narrow and use `trust.collaborator_env=solitary` when collaborators
-should not inherit your normal runtime authority.
+Slack uses its admin-installed app and the configured channel as the boundary:
+ordinary conversation is ignored, and a channel member must explicitly mention
+the app to submit work. Slack senders run as collaborators, never as the owner;
+use a deliberately chosen channel and set `trust.collaborator_env=solitary` when
+those members should not inherit your normal runtime authority.
 :::
 
 ## Keep it in the foreground
