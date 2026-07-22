@@ -424,22 +424,48 @@ def format_delta(
     # re-deliver through the outbox what its final message already carries —
     # that ask is what produced double-posts.
     #
-    # Gated on ``inbound.current_event`` because the warning names a fact
-    # about the waking thread. A scheduled wake has no current event to reply
-    # to, so on those runs the sentence is not merely noisy — it is false. A
-    # guard may only assert something the run can be proven wrong about; the
-    # moment it nags about a chore that does not apply, it teaches the reader
-    # to skip the channel, and it is gone the one night it is right.
+    # Two gates, and the second one is the whole point (#562).
+    #
+    # ``inbound.current_event`` — the warning names a fact about the waking
+    # thread, so a run with no waking event has nothing here to be wrong
+    # about.
+    #
+    # ``inbound.current_event_replyable`` — the daemon's mechanical answer to
+    # "can a reply addressed to this event actually be delivered?", computed
+    # from the same ownership predicate the router uses. A schedule wake DOES
+    # carry a current event (the schedule evt id), so the first gate passes;
+    # but no gate owns ``schedule`` events, the router refuses ``event:``
+    # replies to them, and ``replied_current`` therefore stays 0 for the life
+    # of the run. Gating only on the first check made the reply nag
+    # un-clearable — it re-fired at every boundary, hardest at the runs that
+    # had already delivered on telegram. A guard may only assert something
+    # the run can be proven wrong about; the moment it nags about a chore
+    # that cannot be done, it teaches the reader to skip the channel, and it
+    # is gone the one night it is right.
     if stop and inbound.get("current_event"):
+        replyable = inbound.get("current_event_replyable")
+        # Absent key ⇒ an older/partial portal state: keep the historical
+        # addressed-run behavior rather than inventing a gate-less run.
+        gate_less = replyable is False
         if not any_delivery:
             lines.append(
+                "- delivery: nothing communicated on any thread yet — no "
+                "gate owns this waking event, so nothing dispatches your "
+                "final message: it is captured to the response path as this "
+                "run's body/message store only. Report on a configured user "
+                "gate (`gate: telegram`) if this run has something to say. A "
+                "run that ends silent everywhere is surfaced as a failure."
+                if gate_less else
                 "- delivery: nothing communicated on any thread yet — the "
                 "daemon dispatches your final message to the waking thread "
                 "when this run ends, so end on the reply itself (no outbox "
                 "re-delivery needed). A run that ends silent everywhere is "
                 "surfaced as a failure."
             )
-        elif not replied_current:
+        elif not replied_current and not gate_less:
+            # Gate-less runs can never clear this: the router refuses
+            # ``event:`` replies to an unowned source, so silence is the
+            # success state once anything was delivered anywhere.
             lines.append(
                 "- delivery: the waking thread itself has no reply yet — "
                 "your final message will be dispatched there by the daemon; "

@@ -728,6 +728,56 @@ def test_live_portal_state_flags_stale_card(tmp_path):
     assert payload["card"]["stale"] is False
 
 
+def test_terminal_reply_lands_predicate():
+    # #562: the one fact the Stop-hook delivery warning and the dispatch
+    # path's terminal-stream suppression must agree on. Dispatch-tree
+    # sources are owned by nobody — a reply addressed to one can never
+    # arrive; that is a property of the protocol, not of a source name the
+    # hook happens to string-match.
+    assert daemon._terminal_reply_lands("telegram") is True
+    assert daemon._terminal_reply_lands("slack") is True
+    assert daemon._terminal_reply_lands("github") is True
+    assert daemon._terminal_reply_lands("schedule") is False
+    assert daemon._terminal_reply_lands("spawn") is False
+    assert daemon._terminal_reply_lands("dispatch_message") is False
+    # A spawning parent collects the child's terminal report along the
+    # dispatch edge, so a spawn child's reply does land.
+    assert daemon._terminal_reply_lands(
+        "spawn", spawn_parent_run_id="run-parent") is True
+    # Absent source is unknown, not impossible — never manufacture a false
+    # "nobody will see this" out of a missing field.
+    assert daemon._terminal_reply_lands("") is True
+
+
+def test_portal_state_marks_schedule_event_not_replyable(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-sched"
+    inbox.mkdir(parents=True)
+    outbox.mkdir(parents=True)
+    protocol.create_event(inbox, source="schedule", body="upkeep")
+    event_id = str(protocol.list_pending(inbox)[0]["id"])
+    task = Run(
+        id="run-sched", event_id=event_id, body="upkeep",
+        status="running", env="host", source="schedule",
+    )
+    path = daemon._write_live_portal_state(
+        outbox, inbox, event_id, task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    # The event exists — that was exactly the trap: ``current_event`` alone
+    # cannot tell a schedule wake from an addressed one.
+    assert payload["inbound"]["current_event"] == event_id
+    assert payload["inbound"]["current_event_replyable"] is False
+
+    task.source = "telegram"
+    path = daemon._write_live_portal_state(
+        outbox, inbox, event_id, task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["inbound"]["current_event_replyable"] is True
+
+
 def test_interim_response_packet_updates_card(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:1:"

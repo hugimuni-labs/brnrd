@@ -12,19 +12,28 @@ from brr import hooks
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
-            name=None, current_event="evt-1"):
+            name=None, current_event="evt-1", current_event_replyable=True):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
     # fixture must be able to express both, or a guard that depends on the
     # distinction can be "green" against a portal state that cannot occur.
+    #
+    # ``current_event_replyable`` is the daemon's mechanical gate-ownership
+    # fact (#562): a schedule wake carries a current event that no gate owns,
+    # so ``current_event`` alone cannot express that shape. Pass False to
+    # model it.
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
             "pending_event_count": pending,
             "pending_outbox_file_count": 0,
         },
-        "inbound": {"current_event": current_event, "events": events or []},
+        "inbound": {
+            "current_event": current_event,
+            "current_event_replyable": current_event_replyable,
+            "events": events or [],
+        },
         "outbound": outbound or {
             "replies_current": 0,
             "replies_other": 0,
@@ -544,6 +553,75 @@ def test_stop_informs_when_only_other_threads_answered(tmp_path):
     assert "delivery so far" in ctx
     assert "waking thread itself has no reply yet" in ctx
     assert "nothing communicated on any thread" not in ctx
+
+
+def test_stop_silent_when_gate_less_event_delivered_elsewhere(tmp_path):
+    # #562: a schedule wake DOES carry a current event, so the old
+    # ``current_event``-only gate passed and the reply nag fired — but the
+    # router refuses ``event:`` replies to a source no gate owns, so
+    # ``replies_current`` can never leave 0. The nag was un-clearable, and it
+    # hit hardest the runs that had already reported on telegram. Once
+    # anything was delivered anywhere, silence is the success state.
+    _portal(
+        tmp_path, token="t1", pending=0, current_event_replyable=False,
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 1},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "waking thread itself has no reply yet" not in ctx
+    assert "nothing communicated on any thread" not in ctx
+
+
+def test_stop_gate_less_and_silent_names_body_only_stdout(tmp_path):
+    # Nothing communicated anywhere is still worth surfacing on a gate-less
+    # run — but with the true mechanic, not the addressed-run one: nobody
+    # dispatches the final message, it is kept as the run's body only, and
+    # the fix is a user gate rather than "end on the reply".
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=False)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "nothing communicated on any thread yet" in ctx
+    assert "no gate owns this waking event" in ctx
+    assert "body/message store only" in ctx
+    assert "gate: telegram" in ctx
+    # The addressed-run promise must not leak into the gate-less wording.
+    assert "dispatches your final message to the waking thread" not in ctx
+
+
+def test_stop_gate_owned_event_keeps_addressed_wording(tmp_path):
+    # Regression fence for #562: gate-owned events keep both branches
+    # byte-for-byte. Silent run → the dispatch promise; delivered-elsewhere
+    # run → the waking-thread nag.
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=True)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "nothing communicated on any thread yet" in ctx
+    assert "dispatches your final message to the waking thread" in ctx
+    assert "no gate owns this waking event" not in ctx
+
+    _portal(
+        tmp_path, token="t2", pending=0, current_event_replyable=True,
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 1},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "waking thread itself has no reply yet" in ctx
+
+
+def test_stop_missing_replyable_key_keeps_addressed_behavior(tmp_path):
+    # An older or partial portal state has no ``current_event_replyable``.
+    # Absent is not False: fall back to the historical addressed-run shape
+    # rather than inventing a gate-less run out of a missing key.
+    path = _portal(tmp_path, token="t1", pending=0)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["inbound"]["current_event_replyable"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "dispatches your final message to the waking thread" in ctx
+    assert "no gate owns this waking event" not in ctx
 
 
 def test_long_running_surfaced_when_over_soft_budget(tmp_path):
