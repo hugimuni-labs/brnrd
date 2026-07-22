@@ -126,13 +126,27 @@ export function buildNavTree(files: SurfaceFile[]): NavLayer[] {
 	});
 }
 
+/**
+ * One list item: its own leading prose, plus whatever it *contains* —
+ * continuation lines, nested lists, an indented code block. Authored corpus
+ * pages wrap their ranked-move items across lines and nest sub-bullets under
+ * them; before items carried children, every such line ended the list, so a
+ * ten-item ranking parsed as ten one-item lists (each `<ol>` restarting at 1)
+ * with the wrapped remainder orphaned as a top-level paragraph.
+ */
+export interface ListItem {
+	text: string;
+	children?: MarkdownBlock[];
+}
 export type MarkdownBlock =
 	| { kind: 'heading'; level: number; text: string }
 	| { kind: 'paragraph' | 'quote'; text: string }
-	| { kind: 'list'; ordered: boolean; items: string[] }
+	// `start` carries the authored first number, so a list that begins at 3 —
+	// or one a reader's fold ever has to render in pieces — numbers honestly.
+	| { kind: 'list'; ordered: boolean; start?: number; items: ListItem[] }
 	| { kind: 'code'; text: string };
 export type InlineToken =
-	| { kind: 'text' | 'strong'; text: string }
+	| { kind: 'text' | 'strong' | 'code'; text: string }
 	| {
 			kind: 'link';
 			text: string;
@@ -141,6 +155,15 @@ export type InlineToken =
 			// Fragment from the original href, for section auto-expansion on navigation.
 			anchor: string | null;
 	  };
+
+// One grammar for a list marker, shared by the list scanner and the paragraph
+// terminator so the two cannot disagree about what opens a list.
+const ITEM_RE = /^(\s*)([-*+]|(\d+)[.)])(\s+)(.*)$/;
+const BLOCK_OPENER_RE = /^(#{1,6})\s|^```|^>\s?/;
+
+function indentOf(line: string): number {
+	return line.length - line.trimStart().length;
+}
 
 export function markdownBlocks(markdown: string): MarkdownBlock[] {
 	const lines = markdown.replace(/\r\n/g, '\n').split('\n');
@@ -165,17 +188,58 @@ export function markdownBlocks(markdown: string): MarkdownBlock[] {
 			i += 1;
 			continue;
 		}
-		const item = /^(\s*)([-*]|\d+\.)\s+(.*)$/.exec(line);
+		const item = ITEM_RE.exec(line);
 		if (item) {
-			const ordered = /\d+\./.test(item[2]);
-			const items: string[] = [];
+			const ordered = item[3] !== undefined;
+			const baseIndent = item[1].length;
+			const start = ordered ? Number(item[3]) : undefined;
+			const items: ListItem[] = [];
 			while (i < lines.length) {
-				const next = /^(\s*)([-*]|\d+\.)\s+(.*)$/.exec(lines[i]);
-				if (!next || /\d+\./.test(next[2]) !== ordered) break;
-				items.push(next[3].trim());
-				i += 1;
+				// A blank line between items keeps the list whole (a loose list) as
+				// long as the next non-blank line is still a marker at this level.
+				let probe = i;
+				while (probe < lines.length && !lines[probe].trim()) probe += 1;
+				const next = probe < lines.length ? ITEM_RE.exec(lines[probe]) : null;
+				if (!next || next[1].length !== baseIndent || (next[3] !== undefined) !== ordered) break;
+				i = probe + 1;
+				// Everything more-indented than this marker belongs to *this* item —
+				// continuation prose, nested lists, indented code. Lazy continuation
+				// (an unindented wrapped line) counts too, as CommonMark allows.
+				const raw: string[] = [];
+				while (i < lines.length) {
+					const cur = lines[i];
+					if (!cur.trim()) {
+						let ahead = i;
+						while (ahead < lines.length && !lines[ahead].trim()) ahead += 1;
+						if (ahead >= lines.length || indentOf(lines[ahead]) <= baseIndent) break;
+						for (let b = i; b < ahead; b += 1) raw.push('');
+						i = ahead;
+						continue;
+					}
+					if (indentOf(cur) > baseIndent) {
+						raw.push(cur);
+						i += 1;
+						continue;
+					}
+					if (ITEM_RE.test(cur) || BLOCK_OPENER_RE.test(cur)) break;
+					raw.push(cur.trim());
+					i += 1;
+				}
+				// Dedent by the shallowest continuation line so relative nesting
+				// survives, then reparse: the item's own prose is the leading
+				// paragraph, anything after it is a child block.
+				const filled = raw.filter((l) => l.trim());
+				const dedent = filled.length ? Math.min(...filled.map(indentOf)) : 0;
+				const body = [next[5], ...raw.map((l) => (l.trim() ? l.slice(dedent) : ''))];
+				const sub = markdownBlocks(body.join('\n'));
+				const leads = sub[0]?.kind === 'paragraph';
+				const text = leads ? (sub[0] as { text: string }).text : '';
+				const children = leads ? sub.slice(1) : sub;
+				items.push(children.length ? { text, children } : { text });
 			}
-			blocks.push({ kind: 'list', ordered, items });
+			blocks.push(
+				ordered ? { kind: 'list', ordered, start, items } : { kind: 'list', ordered, items }
+			);
 			continue;
 		}
 		if (/^>\s?/.test(line)) {
@@ -189,7 +253,8 @@ export function markdownBlocks(markdown: string): MarkdownBlock[] {
 		while (
 			i < lines.length &&
 			lines[i].trim() &&
-			!/^(#{1,6})\s|^```|^>\s?|^(\s*)([-*]|\d+\.)\s+/.test(lines[i])
+			!BLOCK_OPENER_RE.test(lines[i]) &&
+			!ITEM_RE.test(lines[i])
 		) {
 			body.push(lines[i].trim());
 			i += 1;
@@ -236,11 +301,14 @@ export function inlineTokens(
 	knownPaths: Set<string>
 ): InlineToken[] {
 	const tokens: InlineToken[] = [];
-	const pattern = /\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*([^*]+)\*\*/g;
+	// Inline code last in the alternation: a span inside a link's text stays
+	// part of the link rather than shadowing it.
+	const pattern = /\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*([^*]+)\*\*|`([^`]+)`/g;
 	let cursor = 0;
 	for (const match of text.matchAll(pattern)) {
 		if (match.index! > cursor) tokens.push({ kind: 'text', text: text.slice(cursor, match.index) });
 		if (match[3] !== undefined) tokens.push({ kind: 'strong', text: match[3] });
+		else if (match[4] !== undefined) tokens.push({ kind: 'code', text: match[4] });
 		else {
 			const rawHref = match[2];
 			const isExternal = /^(https?:|mailto:)/i.test(rawHref);
@@ -268,6 +336,20 @@ export function inlineTokens(
 // burying the user under a wall of scroll.
 export const SECTION_THRESHOLD = 14;
 
+/**
+ * How much page a block is worth for that threshold. A list counts its items,
+ * not itself: the threshold was calibrated when a ten-item ranking parsed as
+ * ten blocks, and measuring blocks alone would now hand the reader a wall of
+ * un-foldable prose the moment a page's bulk sits inside its lists.
+ */
+function blockWeight(block: MarkdownBlock): number {
+	if (block.kind !== 'list') return 1;
+	return block.items.reduce(
+		(sum, item) => sum + 1 + (item.children ?? []).reduce((s, c) => s + blockWeight(c), 0),
+		0
+	);
+}
+
 export interface PageSection {
 	// The h2 (or h3) heading that opens this section; null for pre-heading preamble.
 	heading: { kind: 'heading'; level: number; text: string } | null;
@@ -284,7 +366,8 @@ export interface PageSection {
  * Splits on h2; falls back to h3 if the page has no h2 at all.
  */
 export function splitIntoSections(blocks: MarkdownBlock[]): PageSection[] | null {
-	if (blocks.length <= SECTION_THRESHOLD) return null;
+	const weight = blocks.reduce((sum, b) => sum + blockWeight(b), 0);
+	if (weight <= SECTION_THRESHOLD) return null;
 	const hasH2 = blocks.some((b) => b.kind === 'heading' && b.level === 2);
 	const splitLevel = hasH2 ? 2 : 3;
 	const sections: PageSection[] = [];
@@ -308,6 +391,30 @@ function makeSection(blocks: MarkdownBlock[]): PageSection {
 	const heading = isHeading ? (first as { kind: 'heading'; level: number; text: string }) : null;
 	const body = isHeading ? blocks.slice(1) : blocks;
 	return { heading, preview: body[0] ?? null, tail: body.slice(1) };
+}
+
+// How many items of a list preview a *collapsed* section shows. A collapsed
+// section used to clamp its preview with CSS (`line-clamp-2`), which cut a list
+// mid-item and mid-marker; clamping by item instead means the fold always shows
+// whole items, numbered from the list's own start.
+export const PREVIEW_ITEMS = 2;
+
+/**
+ * The preview block as a collapsed section should render it: lists lose their
+ * tail items, everything else is untouched. Expanding restores the full block,
+ * so nothing is reachable only through the clamp.
+ */
+export function previewBlock(block: MarkdownBlock, collapsed: boolean): MarkdownBlock {
+	if (!collapsed || block.kind !== 'list' || block.items.length <= PREVIEW_ITEMS) return block;
+	return { ...block, items: block.items.slice(0, PREVIEW_ITEMS) };
+}
+
+/** What a collapsed section is hiding: tail blocks plus any clamped list items. */
+export function hiddenCount(section: PageSection): number {
+	const preview = section.preview;
+	const clamped =
+		preview && preview.kind === 'list' ? Math.max(0, preview.items.length - PREVIEW_ITEMS) : 0;
+	return section.tail.length + clamped;
 }
 
 // GitHub-style heading anchor slug: lowercase, strip non-word/space/hyphen, spaces→hyphens.
