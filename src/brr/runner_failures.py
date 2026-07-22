@@ -13,6 +13,12 @@ RUNNER_ERROR = "runner_error"
 NO_OUTPUT = "no_output"
 CORE_MISMATCH = "core_mismatch"
 INTERRUPTED = "interrupted"
+# The host (not the runner) died mid-run: daemon process killed by a
+# suspend/crash/OOM while the run was in flight. Never produced by
+# ``classify_failure`` — stamped only by the daemon's boot-time
+# interrupted-run marker (#316), after proving the dispatching process
+# is gone.
+HOST_INTERRUPTED = "host_interrupted"
 
 
 _QUOTA_PATTERNS = (
@@ -88,6 +94,9 @@ def reason_prefix(kind: str) -> str:
         NO_OUTPUT: "runner produced no reply",
         CORE_MISMATCH: "runner Core attestation failed",
         INTERRUPTED: "runner was interrupted (external kill or shell interrupt)",
+        HOST_INTERRUPTED: (
+            "run was interrupted by a host/daemon restart mid-flight"
+        ),
     }.get(kind, "runner failed")
 
 
