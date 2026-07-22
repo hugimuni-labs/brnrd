@@ -413,7 +413,7 @@ def test_stale_entries_uses_today_by_default():
 
 
 def test_bundled_shells_set():
-    assert runner_cores.BUNDLED_SHELLS == frozenset({"claude", "codex", "gemini"})
+    assert runner_cores.BUNDLED_SHELLS == frozenset({"claude", "codex"})
 
 
 def test_probe_fabrication_skipped_for_declared_custom_shell(monkeypatch):
@@ -485,6 +485,17 @@ def test_probe_eligible_shells_mixed_catalog():
     }
     assert runner_cores._probe_eligible_shells(declared) == {
         "claude",
-        "gemini",
         "othercli",
     }
+
+
+def test_declared_gemini_profile_remains_custom_without_implicit_probing(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores, "probe_shell_models", lambda shell: ("gemini-private",)
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"gemini": {"cmd": "gemini --private"}}
+    )
+
+    assert not any(name.startswith("gemini") for name in profiles)

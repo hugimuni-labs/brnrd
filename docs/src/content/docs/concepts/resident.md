@@ -3,8 +3,8 @@ title: The resident
 description: The repo-aware continuity that survives across Runner processes and models.
 ---
 
-A resident is the repo-aware coworker behind the remote door. Claude Code,
-Codex, or Gemini CLI is the medium for a particular run; the resident is the
+A resident is the repo-aware coworker behind the remote door. Claude Code or
+Codex is the medium for a particular run; the resident is the
 continuity that survives when that process exits and another one starts.
 
 Each repo gets:

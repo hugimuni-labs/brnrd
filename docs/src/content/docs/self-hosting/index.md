@@ -23,7 +23,7 @@ remove it.
 ## What you operate
 
 - the host and its network exposure;
-- the Claude Code, Codex, or Gemini CLI login;
+- the Claude Code or Codex login;
 - gate credentials and authorization choices;
 - repository and resident-state backups;
 - updates to this alpha software.
