@@ -394,3 +394,18 @@ Tick 00:15 (2026-07-22) dispatched #311 (spawn-restart reconciliation, option
   and message_path under ~/.local/state/brnrd did NOT exist on this host —
   event body carried the summary, review worked from the diff itself. If this
   recurs, the spawn report path contract is worth a look.
+
+- #311 merged to main `f97c1e4a` (run tqdp, ~00:45): whole-diff reviewed clean
+  — boot-time `_reconcile_orphaned_spawn_dispatches` before the first dispatch
+  scan; provably-dead stuck-`processing` spawn events resolved to `error`
+  (status transition = idempotence guard) + crash note via unmodified
+  `_notify_spawn_parent_of_crash`. Seams verified against production:
+  manifest `pid` is the dispatcher's (written for exactly this boot-proof, per
+  its own comment), run-ledger is append-at-close so any row proves the worker
+  ended, candidate filter mirrors the dispatch slot's inversion. Accepted
+  residual (documented): a successfully-closed run whose reap-notify was lost
+  reads to the parent as a crash note — option ②'s trade-off, no new state.
+  Branch forked pre-#503 → real merge candidate built; suite 2039✓ + the same
+  2 host-env failures; 5 new e2e tests pass. Announced standalone on telegram.
+  Both halves of the 00:15 tick pair now closed. Spawn's report/message paths
+  again nonexistent on this host — second occurrence, pattern confirmed.
