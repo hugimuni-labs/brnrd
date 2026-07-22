@@ -515,6 +515,10 @@ class RunnerInvocation:
     # command construction instead of throwing it away and reloading a dict by
     # profile-name string in another module.
     selected_runner: "RunnerProfile | None" = None
+    # Optional daemon-owned live JSONL surface for Codex ``--json`` events.
+    # The heartbeat reads only ``thread.started`` from it while the child is
+    # alive, then :func:`invoke_runner` removes it after capturing the result.
+    codex_events_path: Path | None = None
 
     @property
     def trace_root(self) -> Path:
@@ -1800,6 +1804,9 @@ def invoke_runner(
     if codex_correlation:
         codex_last_message_path = capture_dir / "last-message.txt"
         cmd_template = [*cmd_template, "--json", "-o", str(codex_last_message_path)]
+        if invocation.codex_events_path is not None:
+            invocation.codex_events_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path = invocation.codex_events_path
     cmd = _fill_prompt(cmd_template, invocation.prompt, cfg)
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
     # stdin and argv are mutually exclusive prompt channels; the *template*
@@ -1892,6 +1899,15 @@ def invoke_runner(
             stdout = _read_capture(codex_last_message_path) + "\n"
         else:
             stdout = ""
+    if codex_correlation and invocation.codex_events_path is not None:
+        try:
+            invocation.codex_events_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Runtime-only telemetry: a failed cleanup must not take down the
+            # actual runner result. The next attempt truncates the path.
+            pass
     _retire_capture_dir(capture_dir, returncode)
 
     stdout, observed_core = _process_runner_stdout(
