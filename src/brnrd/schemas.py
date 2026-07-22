@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RepoCreate(BaseModel):
@@ -412,6 +412,26 @@ class LiveRunIn(BaseModel):
     phase: str | None = Field(default=None, max_length=32)
     card_text: str | None = Field(default=None, max_length=4096)
     card_updated_at: str | None = None
+    # #342 relics-so-far: counts of the run's attested produce mid-flight
+    # (`{"commit": 2, "kb": 1}`), read by the daemon from its own
+    # heartbeat-refreshed portal capsule (`brr.relics.live_portal_counts`)
+    # at publish time. `None` = nothing attested (ad-hoc session, no
+    # capsule yet); `{}` = known, no produce yet. Kind names are gated to
+    # a conservative identifier shape daemon-side; the cap here only
+    # bounds a hostile payload.
+    relics_counts: dict[str, int] | None = None
+
+    @field_validator("relics_counts")
+    @classmethod
+    def _bound_relics_counts(
+        cls, value: dict[str, int] | None,
+    ) -> dict[str, int] | None:
+        if value is None:
+            return None
+        return {
+            str(kind)[:32]: count
+            for kind, count in list(value.items())[:24]
+        }
 
 
 class LiveRunsReport(BaseModel):

@@ -1163,3 +1163,74 @@ def test_failed_packet_is_in_card_packets():
     needs to redraw to surface."""
     assert "failed" in run_progress.CARD_PACKETS
     assert "done" in run_progress.CARD_PACKETS
+
+
+# ── relics-so-far on the card (#342) ────────────────────────────────
+
+
+def _write_produce_capsule(brr_dir: Path, event_id: str, counts) -> None:
+    import json
+
+    outbox = brr_dir / "outbox" / event_id
+    outbox.mkdir(parents=True)
+    (outbox / "portal-state.json").write_text(
+        json.dumps({"produce": {"known": True, "counts": counts}}),
+        encoding="utf-8",
+    )
+
+
+def _start_run(brr_dir: Path, key: str, run_id: str, event_id: str) -> None:
+    _emit(brr_dir, key, "run_created", run_id=run_id, event_id=event_id,
+          env="worktree")
+    _emit(brr_dir, key, "attempt_started", run_id=run_id, attempt=1)
+
+
+def test_projection_joins_relics_counts_from_portal_capsule(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9:"
+    _start_run(brr_dir, key, "run-9", "evt-9")
+    _write_produce_capsule(brr_dir, "evt-9", {"commit": 2, "kb": 1})
+
+    view = run_progress.project_run(brr_dir, key, "run-9")
+    assert view is not None
+    assert view.relics_counts == {"commit": 2, "kb": 1}
+
+    latest = run_progress.project_conversation_latest(brr_dir, key)
+    assert latest is not None
+    assert latest.relics_counts == {"commit": 2, "kb": 1}
+
+
+def test_projection_relics_counts_none_without_capsule(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:10:"
+    _start_run(brr_dir, key, "run-10", "evt-10")
+
+    view = run_progress.project_run(brr_dir, key, "run-10")
+    assert view is not None
+    assert view.relics_counts is None
+    # And the rendered card carries no relics line at all.
+    assert "relics:" not in run_progress.render_text(view, compact=True)
+
+
+def test_compact_card_appends_relics_tail(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:11:"
+    _start_run(brr_dir, key, "run-11", "evt-11")
+    _write_produce_capsule(brr_dir, "evt-11", {"commit": 2, "kb": 1})
+
+    view = run_progress.project_run(brr_dir, key, "run-11")
+    text = run_progress.render_text(view, compact=True)
+    # The issue's own example shape, as the card's tail line.
+    assert text.rstrip().splitlines()[-1] == "relics: 2 commits · 1 page"
+
+
+def test_compact_card_zero_relics_renders_no_line(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:12:"
+    _start_run(brr_dir, key, "run-12", "evt-12")
+    _write_produce_capsule(brr_dir, "evt-12", {})
+
+    view = run_progress.project_run(brr_dir, key, "run-12")
+    assert view is not None
+    assert view.relics_counts == {}
+    assert "relics:" not in run_progress.render_text(view, compact=True)

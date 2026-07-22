@@ -585,3 +585,93 @@ def test_merge_label_and_icon():
     assert relics.label({"kind": "merge", "sha": "abc1234def",
                          "subject": ""}) == "merge abc1234"
     assert relics.icon("merge") == "⤵️"
+
+
+# ── live portal counts / compact tail (#342) ─────────────────────────
+
+
+def _write_portal_state(brr_dir: Path, event_id: str, produce) -> None:
+    import json
+
+    outbox = brr_dir / "outbox" / event_id
+    outbox.mkdir(parents=True)
+    (outbox / "portal-state.json").write_text(
+        json.dumps({"version": 1, "produce": produce}), encoding="utf-8",
+    )
+
+
+def test_live_portal_counts_reads_produce_facet(tmp_path: Path):
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(
+        brr_dir, "evt-1",
+        {"known": True, "counts": {"commit": 2, "kb": 1, "branch": 1}},
+    )
+    assert relics.live_portal_counts(brr_dir, "evt-1") == {
+        "commit": 2, "kb": 1, "branch": 1,
+    }
+
+
+def test_live_portal_counts_absent_paths_degrade_to_none(tmp_path: Path):
+    brr_dir = tmp_path / ".brr"
+    # No event id at all (ad-hoc session presence entry).
+    assert relics.live_portal_counts(brr_dir, None) is None
+    assert relics.live_portal_counts(brr_dir, "") is None
+    # No capsule on disk.
+    assert relics.live_portal_counts(brr_dir, "evt-missing") is None
+    # Facet explicitly unknown.
+    _write_portal_state(brr_dir, "evt-unknown", {"known": False})
+    assert relics.live_portal_counts(brr_dir, "evt-unknown") is None
+    # Torn / half-written JSON.
+    outbox = brr_dir / "outbox" / "evt-torn"
+    outbox.mkdir(parents=True)
+    (outbox / "portal-state.json").write_text('{"produce": {', encoding="utf-8")
+    assert relics.live_portal_counts(brr_dir, "evt-torn") is None
+
+
+def test_live_portal_counts_known_but_empty_is_empty_dict(tmp_path: Path):
+    """Known-with-no-produce is `{}` (renderers drop the line), not None —
+    the distinction mirrors the facet's own known/unknown contract."""
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(brr_dir, "evt-idle", {"known": True, "counts": {}})
+    assert relics.live_portal_counts(brr_dir, "evt-idle") == {}
+
+
+def test_live_portal_counts_gates_hostile_kinds_and_values(tmp_path: Path):
+    """A reported relic's `kind` is resident-authored free text that flows
+    into chat markup and the publish payload — gate it on a conservative
+    identifier shape, and drop non-integer or non-positive counts."""
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(
+        brr_dir, "evt-h",
+        {"known": True, "counts": {
+            "<script>": 3, "commit": 2, "weird kind": 1, "issue": 0,
+            "pr": "not-a-number", "comment": -4, "x" * 40: 2,
+        }},
+    )
+    assert relics.live_portal_counts(brr_dir, "evt-h") == {"commit": 2}
+
+
+def test_counts_phrase_matches_issue_example():
+    # The #342 ask, verbatim: `relics: 2 commits · 1 page`.
+    assert relics.counts_phrase({"commit": 2, "kb": 1}) == "2 commits · 1 page"
+
+
+def test_counts_phrase_singular_plural_and_order():
+    phrase = relics.counts_phrase(
+        {"kb": 2, "commit": 1, "pr": 1, "issue": 3, "merge": 1},
+    )
+    # Produce-first order mirrors _TAIL_NOUNS, not dict order.
+    assert phrase == "1 commit · 1 merge · 1 PR · 3 issues · 2 pages"
+
+
+def test_counts_phrase_excludes_branch_and_summary_but_keeps_unknown():
+    phrase = relics.counts_phrase(
+        {"commit": 2, "branch": 1, "summary": 1, "artifact": 2},
+    )
+    assert phrase == "2 commits · 2 artifact"
+
+
+def test_counts_phrase_empty_and_none_are_empty():
+    assert relics.counts_phrase(None) == ""
+    assert relics.counts_phrase({}) == ""
+    assert relics.counts_phrase({"branch": 1}) == ""
