@@ -1835,6 +1835,264 @@ def test_spawn_reconciliation_accepts_closed_ledger_as_proof(tmp_path):
     assert notes[0]["conversation_key"] == "telegram:92:"
 
 
+# ── #316: boot-time interrupted-run marker ───────────────────────────
+
+
+def _dead_pid() -> int:
+    """A pid that provably belonged to a real, now-dead process."""
+    proc = subprocess.Popen(["sleep", "0"])
+    proc.wait()
+    return proc.pid
+
+
+def _frozen_run(tmp_path, conv_key="telegram:95:", *, pid="dead"):
+    """Stage a real addressed run frozen at the moment a daemon died.
+
+    #304 e2e discipline: the event is written by the real
+    ``protocol.create_event``, advanced to ``processing`` with the very
+    ``protocol.set_status`` write the dispatch loop performs, and the run
+    manifest is built through the real ``Run.from_event`` seam — including
+    the exact ``task.meta["pid"]`` write whose stated purpose is this
+    future boot's proof of death. The conversation log then receives the
+    same lifecycle packets a live worker would have emitted before the
+    crash, so the "frozen card" the sweep must update is the projection a
+    real card renders from. Returns ``(event, task)``.
+    """
+    if not (tmp_path / "AGENTS.md").exists():
+        write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    runs_dir = brr_dir / "runs"
+    event_path = protocol.create_event(
+        inbox, "telegram", "long research task",
+        conversation_key=conv_key, trust_tier="owner",
+    )
+    event = next(
+        e for e in protocol.list_pending(inbox)
+        if Path(e["_path"]) == event_path
+    )
+    protocol.set_status(event, "processing")
+    task = Run.from_event(event)
+    if pid == "dead":
+        task.meta["pid"] = _dead_pid()
+    elif pid is not None:
+        task.meta["pid"] = pid
+    task.save(runs_dir)
+    emit = daemon._WorkerEmit(brr_dir, conv_key, str(event["id"]))
+    emit(
+        "run_created", run_id=task.id, event_id=event["id"],
+        env="worktree", repo_label="Gurio/brr",
+    )
+    emit("attempt_started", run_id=task.id, event_id=event["id"], attempt=1)
+    emit(
+        "run_started", run_id=task.id, event_id=event["id"],
+        runner="claude", branch=f"brr/{task.id}",
+    )
+    return event, task
+
+
+def _boot_daemon_recording_dispatches(tmp_path, monkeypatch):
+    """Drive ``daemon.start`` through boot and its dispatch loop, recording
+    which events the loop dispatches.
+
+    Unlike ``_boot_daemon_once``, the loop is allowed to dispatch: the
+    #316 marker must leave the crash-recovery re-dispatch of the frozen
+    run's event undisturbed, so the retry itself is part of what these
+    tests pin. The fake worker raises, which drives the real
+    crashed-before-a-Run backstop (event retired to ``error``), keeping a
+    double boot from re-dispatching endlessly.
+    """
+    dispatched: list[str] = []
+    ticks = {"n": 0}
+
+    def fake_run_worker(event, *_a, **_k):
+        dispatched.append(str(event.get("id") or ""))
+        raise RuntimeError("worker stub: dispatch recorded")
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        if dispatched or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+    return dispatched
+
+
+def _host_interrupted_records(brr_dir, conv_key):
+    from brr import conversations
+
+    return [
+        r for r in conversations.read_records(brr_dir, conv_key)
+        if r.get("type") == "failed"
+        and r.get("failure_kind") == "host_interrupted"
+    ]
+
+
+def test_interrupted_run_marked_and_card_updated_on_boot(tmp_path, monkeypatch):
+    """#316 direction (1), end to end: a run left in flight by a daemon
+    death (manifest still ``pending``/``running``, dispatcher pid provably
+    dead, no presence) is marked ``host_interrupted`` at the next boot,
+    its frozen card re-renders as "interrupted … retrying", and the
+    event's own crash-recovery retry still fires — the marker changes the
+    card story, never the retry mechanism."""
+    from brr import run_progress
+
+    event, task = _frozen_run(tmp_path)
+
+    dispatched = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
+
+    brr_dir = tmp_path / ".brr"
+    refreshed = Run.from_file(brr_dir / "runs" / task.id / "run.md")
+    assert refreshed is not None
+    assert refreshed.status == "error"
+    assert refreshed.meta.get("failure_kind") == "host_interrupted"
+    assert "dispatching daemon" in str(refreshed.meta.get("interrupt_reason"))
+    # The terminal packet the dead daemon never sent reached the card's
+    # conversation log exactly once …
+    records = _host_interrupted_records(brr_dir, "telegram:95:")
+    assert len(records) == 1
+    assert records[0].get("run_id") == task.id
+    # … and the rendered card now tells the truthful story.
+    view = run_progress.project_run(brr_dir, "telegram:95:", task.id)
+    assert view is not None
+    assert view.state == "failed"
+    assert view.failure_kind == "host_interrupted"
+    card = run_progress.render_text(view)
+    assert "interrupted" in card
+    assert "retrying" in card
+    # The existing retry mechanism dispatched the same event untouched.
+    assert dispatched == [str(event["id"])]
+
+
+def test_interrupted_marker_leaves_live_run_untouched(tmp_path):
+    """Conservative liveness: a live presence entry — or a still-alive
+    recorded dispatcher pid (a dev-reload re-exec keeps the same pid) —
+    means the run is owned by someone; the marker must not touch it even
+    when every durable file is ancient."""
+    event, task = _frozen_run(tmp_path, conv_key="telegram:96:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    presence.register(
+        brr_dir, kind="daemon", run_id=task.id, pid=os.getpid(),
+    )
+    _age_path(runs_dir / task.id / "run.md", 25 * 3600)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 0
+
+    # Same verdict when only the recorded pid is alive (no presence).
+    event2, task2 = _frozen_run(tmp_path, conv_key="telegram:96:",
+                                pid=os.getpid())
+    _age_path(runs_dir / task2.id / "run.md", 25 * 3600)
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 0
+
+    for staged in (task, task2):
+        refreshed = Run.from_file(runs_dir / staged.id / "run.md")
+        assert refreshed.status == "pending"
+        assert "failure_kind" not in refreshed.meta
+    assert not _host_interrupted_records(brr_dir, "telegram:96:")
+    # Event state untouched either way — the retry path is not ours.
+    for ev in (event, event2):
+        fm = protocol.parse_frontmatter(
+            Path(ev["_path"]).read_text(encoding="utf-8"))
+        assert fm.get("status") == "processing"
+
+
+def test_interrupted_marker_skips_terminal_runs(tmp_path):
+    """A run that already reached a terminal status tells its own story;
+    the marker must not rewrite history however dead its pid is."""
+    _event, task = _frozen_run(tmp_path, conv_key="telegram:97:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    task.update_status("done", runs_dir)
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 0
+
+    refreshed = Run.from_file(runs_dir / task.id / "run.md")
+    assert refreshed.status == "done"
+    assert "failure_kind" not in refreshed.meta
+    assert not _host_interrupted_records(brr_dir, "telegram:97:")
+
+
+def test_interrupted_marker_idempotent_across_double_boot(tmp_path, monkeypatch):
+    """A second boot must not double-mark or double-emit: the manifest's
+    ``error`` transition is the guard, no extra bookkeeping."""
+    _event, task = _frozen_run(tmp_path, conv_key="telegram:98:")
+
+    first = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
+    second = _boot_daemon_recording_dispatches(tmp_path, monkeypatch)
+
+    brr_dir = tmp_path / ".brr"
+    records = _host_interrupted_records(brr_dir, "telegram:98:")
+    assert len(records) == 1
+    assert records[0].get("run_id") == task.id
+    # First boot retried the event; the fake worker's crash retired it
+    # (the real crashed-before-a-Run backstop), so the second boot had
+    # nothing to dispatch — and nothing to re-mark.
+    assert len(first) == 1
+    assert second == []
+
+
+def test_interrupted_marker_waits_out_fresh_pidless_manifests(tmp_path):
+    """No recorded pid means no affirmative proof: a fresh manifest is
+    left for a later boot, and only the janitors' conservative staleness
+    horizon (the fallback, never the preferred evidence) marks it."""
+    from brr import run_progress
+
+    _event, task = _frozen_run(tmp_path, conv_key="telegram:99:", pid=None)
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 0
+    refreshed = Run.from_file(runs_dir / task.id / "run.md")
+    assert refreshed.status == "pending"
+
+    _age_path(runs_dir / task.id / "run.md", 25 * 3600)
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+    refreshed = Run.from_file(runs_dir / task.id / "run.md")
+    assert refreshed.status == "error"
+    assert refreshed.meta.get("failure_kind") == "host_interrupted"
+    assert "safety horizon" in str(refreshed.meta.get("interrupt_reason"))
+    view = run_progress.project_run(brr_dir, "telegram:99:", task.id)
+    assert view.failure_kind == "host_interrupted"
+
+
+def test_interrupted_marker_retry_tail_follows_event_state(tmp_path):
+    """The card's "retrying" tail is read off the event's actual
+    dispatchability, not asserted: a still-``processing`` event earns the
+    tail; an already-retired event gets plain "interrupted"."""
+    from brr import run_progress
+
+    event, task = _frozen_run(tmp_path, conv_key="telegram:100:")
+    ctx = daemon.account.resolve_context(tmp_path, {})
+    protocol.set_status(event, "error")
+
+    assert daemon._mark_interrupted_runs(ctx, tmp_path, {}) == 1
+
+    brr_dir = tmp_path / ".brr"
+    view = run_progress.project_run(brr_dir, "telegram:100:", task.id)
+    card = run_progress.render_text(view)
+    assert "interrupted" in card
+    assert "retrying" not in card
+    # The sweep never touches event state — retired stays retired.
+    fm = protocol.parse_frontmatter(
+        Path(event["_path"]).read_text(encoding="utf-8"))
+    assert fm.get("status") == "error"
+
+
 def _account_context_for_policy(tmp_path):
     home = tmp_path / "account-home"
     return daemon.account.AccountContext(
