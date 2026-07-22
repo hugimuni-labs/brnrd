@@ -925,32 +925,11 @@ class DockerEnv(WorktreeEnv):
         stdout = ""
         stderr = ""
         returncode = 0
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                # ``input=`` writes the prompt and closes the pipe (prompt,
-                # then EOF — the muted-fd invariant, preserved); DEVNULL
-                # only when the pinned command already carries the prompt.
-                **(
-                    {"input": prompt_stdin}
-                    if prompt_stdin is not None
-                    else {"stdin": subprocess.DEVNULL}
-                ),
-            )
-            stdout = completed.stdout
-            stderr = completed.stderr
-            returncode = completed.returncode
-        except FileNotFoundError:
-            stderr = "executable 'docker' not found on PATH"
-            returncode = 127
-        except subprocess.TimeoutExpired as exc:
-            stdout = _subprocess_text(exc.stdout)
-            stderr = _subprocess_text(exc.stderr)
-            stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
-            returncode = 124
+        proc_key = ""
+        proc: subprocess.Popen | None = None
+
+        def _kill_container() -> None:
+            """Stop the engine-side workload when its docker client is killed."""
             try:
                 subprocess.run(
                     ["docker", "kill", container_name],
@@ -961,6 +940,43 @@ class DockerEnv(WorktreeEnv):
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
+
+        try:
+            proc_key, proc = runner.start_registered_process(
+                command,
+                invocation.label or f"docker-{id(invocation)}",
+                on_kill=_kill_container,
+                # ``input=`` writes the prompt and closes the pipe (prompt,
+                # then EOF — the muted-fd invariant, preserved); DEVNULL
+                # only when the pinned command already carries the prompt.
+                stdin=(
+                    subprocess.PIPE if prompt_stdin is not None
+                    else subprocess.DEVNULL
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, stderr = proc.communicate(input=prompt_stdin, timeout=timeout)
+            returncode = proc.returncode
+        except FileNotFoundError:
+            stderr = "executable 'docker' not found on PATH"
+            returncode = 127
+        except subprocess.TimeoutExpired as exc:
+            if proc is not None:
+                # The shared registry hook kills both the foreground Docker
+                # client and its still-live container.  Timeout is just the
+                # local caller of that same primitive.
+                runner._kill_procs([proc])
+                stdout, stderr = proc.communicate()
+            else:
+                stdout = _subprocess_text(exc.stdout)
+                stderr = _subprocess_text(exc.stderr)
+            stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
+            returncode = 124
+        finally:
+            if proc is not None:
+                runner._clear_active_proc(proc_key, proc)
 
         stdout, observed_core = runner._process_runner_stdout(
             runner_name, stdout, invocation.env
