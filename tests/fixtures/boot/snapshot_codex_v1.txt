@@ -394,7 +394,8 @@ becomes attention, action, and a reply is yours.
   end on. In a `host` environment it does **not**: move off the default branch
   and own the push / PR handoff yourself, or the work never leaves the machine.
   Themed work on a placeholder `brr/<run-id>` branch ⇒ rename to a descriptive
-  `brr/<short-slug>` before committing.
+  `brr/<short-slug>` before committing. `BRR_CONVERSATION_ID` set ⇒ commit with
+  `--trailer "Brnrd-Conversation-Id: $BRR_CONVERSATION_ID"`.
 
 Full protocol, choreography, and the reasoning behind each pin:
 **`brnrd docs portals`**.
@@ -576,7 +577,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,051  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,154  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,449  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -594,13 +595,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  41.1%
-  substrate       9,051 B  28.0%
-  identity        5,449 B  16.9%
-  runtime         4,385 B  13.6%
+  contract       13,274 B  40.9%
+  substrate       9,154 B  28.2%
+  identity        5,449 B  16.8%
+  runtime         4,385 B  13.5%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     32,320 B
+  wake total     32,423 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 

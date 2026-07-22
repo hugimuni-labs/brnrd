@@ -497,12 +497,30 @@ def push_branch(
     return result.returncode == 0
 
 
-def commit_all(worktree_path: Path, message: str) -> bool:
-    """Stage everything and commit in *worktree_path*. Best-effort; returns success."""
+# Git trailer stamped on every brr-created commit so brnrd's metadata-only
+# conversation graph can re-derive conversation linkage from any branch
+# (kb/plan-conversation-id-propagation.md). The value is the existing
+# ``conversation_key`` string — no separate id scheme.
+CONVERSATION_TRAILER = "Brnrd-Conversation-Id"
+
+
+def commit_all(
+    worktree_path: Path, message: str, *, conversation_id: str | None = None,
+) -> bool:
+    """Stage everything and commit in *worktree_path*. Best-effort; returns success.
+
+    ``conversation_id`` (the task's ``conversation_key``, when known) is
+    stamped as a ``Brnrd-Conversation-Id`` git trailer; empty/None means no
+    trailer — never stamp an empty value.
+    """
     add = _git(worktree_path, "add", "-A", check=False)
     if add.returncode != 0:
         return False
-    commit = _git(worktree_path, "commit", "-m", message, check=False)
+    args = ["commit", "-m", message]
+    key = (conversation_id or "").strip()
+    if key:
+        args += ["--trailer", f"{CONVERSATION_TRAILER}: {key}"]
+    commit = _git(worktree_path, *args, check=False)
     return commit.returncode == 0
 
 
