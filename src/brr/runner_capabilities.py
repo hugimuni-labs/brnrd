@@ -5,14 +5,25 @@ scores are hints for class assignment, never a live network dependency and
 never a promise that one benchmark captures task quality. The packaged JSON
 cache is intentionally small and source/freshness tagged so a future refresh
 can update data without changing dispatch code.
+
+Capability claims drift faster than releases, so the packaged cache is a
+*floor*, not the whole truth: a daemon-owned overlay file at the brnrd state
+root (``$XDG_STATE_HOME/brnrd/runner-capabilities.json``) can override or add
+entries without a package upgrade. The overlay is entry-level — one overlay
+entry replaces one packaged entry wholly — and it is never read from a repo's
+``.brr/`` tree: the #533 trust split means an untrusted run must not be able
+to rewrite what the daemon believes about its Shells. A malformed overlay
+degrades to the packaged floor with a single warning, never a partial apply.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 ECONOMY = "economy"
@@ -116,7 +127,18 @@ def web_research_for_shell(shell: str | None) -> WebResearchCapability | None:
     return None
 
 
-def _load_raw() -> Any:
+def _state_root() -> Path:
+    """The daemon-owned brnrd state root (never a repo ``.brr/`` dir)."""
+    from .account import DEFAULT_STATE_NAMESPACE, _xdg_state_home
+
+    return _xdg_state_home() / DEFAULT_STATE_NAMESPACE
+
+
+def _overlay_path() -> Path:
+    return _state_root() / _DATA_FILE
+
+
+def _load_packaged() -> Any:
     try:
         text = resources.files(_DATA_PACKAGE).joinpath(_DATA_FILE).read_text(
             encoding="utf-8"
@@ -124,6 +146,96 @@ def _load_raw() -> Any:
         return json.loads(text)
     except (FileNotFoundError, json.JSONDecodeError, ModuleNotFoundError):
         return {}
+
+
+def _load_overlay() -> dict[str, Any] | None:
+    """Read the state-root overlay, or ``None`` when absent/unusable.
+
+    A malformed or unreadable overlay is worth exactly one warning line and
+    a clean fall-through to the packaged floor — never a crash, never a
+    partially applied file.
+    """
+    path = _overlay_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        print(
+            f"brr: warning: unreadable capabilities overlay {path}: {exc}; "
+            "using packaged data",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(
+            f"brr: warning: malformed capabilities overlay {path}: {exc}; "
+            "using packaged data",
+            file=sys.stderr,
+        )
+        return None
+    if not isinstance(raw, dict):
+        print(
+            f"brr: warning: capabilities overlay {path} is not a JSON object; "
+            "using packaged data",
+            file=sys.stderr,
+        )
+        return None
+    return raw
+
+
+def _stamped_entries(overlay: dict[str, Any], section: str) -> dict[str, Any]:
+    """Overlay *section* entries with the overlay's own top-level provenance.
+
+    Packaged model entries inherit the packaged file's top-level ``source`` /
+    ``freshness_date``; an overlay entry must inherit the *overlay's*, not the
+    packaged file's — so stamp them in before the raw payloads merge. Entries
+    without tags anywhere keep the loader's existing leniency (tags stay
+    ``None``).
+    """
+    entries = overlay.get(section)
+    if not isinstance(entries, dict):
+        return {}
+    top_source = _str(overlay.get("source"))
+    top_freshness = _str(overlay.get("freshness_date"))
+    out: dict[str, Any] = {}
+    for key, entry in entries.items():
+        if isinstance(entry, dict):
+            entry = dict(entry)
+            if top_source and not _str(entry.get("source")):
+                entry["source"] = top_source
+            if top_freshness and not _str(entry.get("freshness_date")):
+                entry["freshness_date"] = top_freshness
+        out[str(key)] = entry
+    return out
+
+
+@lru_cache(maxsize=1)
+def _load_raw() -> Any:
+    """Packaged capability data with the state-root overlay applied.
+
+    Entry-level override: an overlay entry for a model/shell replaces the
+    packaged entry wholly; overlay-only entries are added; packaged entries
+    without an overlay counterpart survive untouched.
+    """
+    packaged = _load_packaged()
+    overlay = _load_overlay()
+    if not overlay:
+        return packaged
+    if not isinstance(packaged, dict):
+        packaged = {}
+    merged = dict(packaged)
+    for section in ("models", "shells"):
+        replacements = _stamped_entries(overlay, section)
+        if not replacements:
+            continue
+        base = packaged.get(section)
+        section_out = dict(base) if isinstance(base, dict) else {}
+        section_out.update(replacements)
+        merged[section] = section_out
+    return merged
 
 
 @lru_cache(maxsize=1)
