@@ -13,25 +13,23 @@ observable and correctable instead of silent.
 
 ## Authorization today
 
-The critical rule is simple: **gates currently authorize the channel or trigger,
-not the person**.
+Authorization happens before enqueue. GitHub and Telegram bind it to a person;
+Slack still binds it to the configured channel.
 
 | Gate | Who can trigger a run today |
 |---|---|
-| Managed one-to-one Telegram | The paired user. This is the dogfooded path. |
-| Self-hosted Telegram | Any chat that can reach an unbound bot; after binding, any member of that chat. |
+| Managed or self-hosted Telegram | The paired user plus explicitly allowlisted user ids. Other group members and unattributed senders are denied. |
 | Self-hosted Slack | Any member of the polled channel. |
-| GitHub | Any commenter who uses the trigger on a connected repo. On a public repo, that means anyone. |
+| GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
+| GitHub (managed) | GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, plus explicitly allowlisted logins. |
 
-[hugimuni-labs/brnrd#408](https://github.com/hugimuni-labs/brnrd/issues/408) tracks per-commenter
-GitHub authorization. [hugimuni-labs/brnrd#409](https://github.com/hugimuni-labs/brnrd/issues/409)
-tracks per-sender chat authorization. Both are release blockers.
+The operating rules follow from that boundary:
 
-Until they land:
-
-- connect GitHub gates only to private repos;
-- prefer managed one-to-one Telegram;
-- do not treat a group chat as a trusted personal channel;
+- keep GitHub and Telegram allowlists narrow;
+- remember that a Telegram group does not authorize its whole membership by default;
+- use Slack only when every member of the configured channel may drive the daemon;
+- set `trust.collaborator_env=solitary` when authorized collaborators should not
+  inherit the operator's normal runtime authority;
 - remember that every inbound message becomes potential instruction to an
   approval-bypassed coding agent.
 
