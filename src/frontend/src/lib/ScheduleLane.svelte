@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
-	import { untilText, type ScheduledWake } from './scheduledWakes';
+	import { wakeTimingExplanation, wakeTimingText, type ScheduledWake } from './scheduledWakes';
 	import { typeReveal } from './transitions';
 	import { STATUS_UNKNOWN, THERMAL_STOPS, statusDotStyle, type GlowUrgency } from './statusPalette';
 
@@ -53,6 +53,7 @@
 	}
 
 	function markerColor(wake: ScheduledWake): string {
+		if (wake.status === 'quota-paused') return THERMAL_STOPS.ash;
 		if (!wake.scheduled_for) return STATUS_UNKNOWN;
 		const dt = Date.parse(wake.scheduled_for) - now;
 		if (Number.isNaN(dt)) return STATUS_UNKNOWN;
@@ -61,6 +62,7 @@
 	}
 
 	function markerUrgency(wake: ScheduledWake): GlowUrgency {
+		if (wake.status === 'quota-paused') return 'calm';
 		if (!wake.scheduled_for) return 'calm';
 		const dt = Date.parse(wake.scheduled_for) - now;
 		if (Number.isNaN(dt) || dt > DUE_SOON_MS) return 'calm';
@@ -111,7 +113,8 @@
 		</div>
 		<div class="space-y-2">
 			{#each sorted as wake (wake.id)}
-				{@const due = untilText(wake.scheduled_for, now)}
+				{@const due = wakeTimingText(wake, now)}
+				{@const timingExplanation = wakeTimingExplanation(wake)}
 				{@const color = markerColor(wake)}
 				<div
 					class="subpanel p-2.5 text-xs"
@@ -151,6 +154,9 @@
 					<p class="mt-1.5 break-words text-stone-300" use:typeReveal={{ text: wake.summary }}>
 						{wake.summary}
 					</p>
+					{#if timingExplanation}
+						<p class="mt-1 text-[10px] text-amber-200/75">{timingExplanation}</p>
+					{/if}
 					{#if wake.conversation_key}
 						<p class="break-all font-mono text-[10px] text-ink-mute">
 							→ {wake.conversation_key}

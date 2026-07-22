@@ -197,6 +197,7 @@ export function scheduledCost(rows: RunLedgerRow[], shell?: string): ScheduledCo
  *  has no fire time yet, and guessing one would be inventing draw. */
 export function wakesBefore(wakes: ScheduledWake[], nowMs: number, beforeMs: number): number {
 	return wakes.filter((wake) => {
+		if (wake.status === 'quota-paused') return false;
 		if (!wake.scheduled_for) return false;
 		const t = Date.parse(wake.scheduled_for);
 		if (Number.isNaN(t)) return false;
