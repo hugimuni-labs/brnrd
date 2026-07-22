@@ -3027,6 +3027,8 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
     order: list[str] = []
 
     class FakeWatcher:
+        last_changed: list = []
+
         def changed(self):
             order.append("watch")
             return True
@@ -3082,6 +3084,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     class FakeWatcher:
         def __init__(self):
             self.calls = 0
+            self.last_changed: list = []
 
         def changed(self):
             self.calls += 1
@@ -3366,6 +3369,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
     class FakeWatcher:
         def __init__(self):
             self.calls = 0
+            self.last_changed: list = []
 
         def changed(self):
             self.calls += 1
