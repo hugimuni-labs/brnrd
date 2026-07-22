@@ -30,6 +30,18 @@ const WINDOW_DURATION_S: Record<string, number> = {
 	week: 7 * 86400
 };
 
+/** The reset dial is a filled pie: a circle of radius R/2 stroked at width R
+ *  covers the full disc, so a stroke-dasharray arc reads as a wedge. 2026-07-22
+ *  ask — the old second bar shared the fuel bar's grammar while meaning time,
+ *  and nothing on screen said so; a filling disc reads as a clock natively. */
+export const DIAL_WEDGE_RADIUS = 2.75;
+const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
+
+export function dialDasharray(fraction: number): string {
+	const clamped = Math.max(0, Math.min(1, fraction));
+	return `${(clamped * DIAL_CIRCUMFERENCE).toFixed(3)} ${DIAL_CIRCUMFERENCE.toFixed(3)}`;
+}
+
 function shortDelta(seconds: number): string {
 	const s = Math.max(0, Math.floor(seconds));
 	const d = Math.floor(s / 86400);
@@ -131,7 +143,7 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 				percentLabel,
 				resetShort,
 				timeFraction,
-				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}`,
+				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}${timeFraction === null ? '' : ` · window ${Math.round(timeFraction * 100)}% elapsed`}`,
 				stale: shell.status === 'stale'
 			};
 		})

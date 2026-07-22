@@ -537,7 +537,7 @@
 	<div class="mx-auto max-w-2xl p-6">
 		<header class="ignite" style="--ignite-delay: 0ms">
 			<div class="flex items-start justify-between gap-4">
-				<p class="eyebrow">brnrd · resident dashboard</p>
+				<p class="eyebrow">brnrd</p>
 				<!-- Named directly as a real gap (2026-07-08): no way to end a
 			     session short of clearing cookies by hand. Small on purpose
 			     ("a small one somewhere") — a plain link, not a nav bar this
@@ -568,11 +568,14 @@
 			</div>
 			<!-- Masthead compressed in the promote composition: the band is the
 		     opening statement now, the title is a label, not a hero. -->
+			<!-- "— next" cut 2026-07-22: it was staging language against a
+			     dashboard that never shipped publicly, so to every real reader
+			     it implied a ghost predecessor. -->
 			<h1
 				class="mt-1 font-mono text-lg font-semibold tracking-tight text-amber-100"
-				use:typeReveal={{ text: 'brnrd dashboard — next', delay: 120 }}
+				use:typeReveal={{ text: 'resident dashboard', delay: 120 }}
 			>
-				brnrd dashboard — next
+				resident dashboard
 			</h1>
 		</header>
 
