@@ -5,6 +5,7 @@ from pathlib import Path
 
 from brr.gitops import (
     branch_head,
+    commit_all,
     current_branch,
     fast_forward_branch,
     is_tracked,
@@ -345,3 +346,42 @@ def test_classify_worktree_hygiene_unknown_on_pr_lookup_failure():
 
     assert report.classification == "unknown"
     assert report.reason == "PR lookup failed: gh auth failed"
+
+
+def test_commit_all_stamps_conversation_trailer(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+
+    assert commit_all(
+        repo, "brnrd-kb: capture", conversation_id="telegram:-1001234567890:"
+    ) is True
+
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Conversation-Id,valueonly)"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "telegram:-1001234567890:"
+    # The trailer decorates the message; the subject stays intact.
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert subject == "brnrd-kb: capture"
+
+
+def test_commit_all_omits_trailer_without_conversation(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+    assert commit_all(repo, "no conversation") is True
+
+    (repo / "file.txt").write_text("more\n", encoding="utf-8")
+    assert commit_all(repo, "blank conversation", conversation_id="  ") is True
+
+    for ref in ("HEAD", "HEAD~1"):
+        body = subprocess.run(
+            ["git", "log", "-1", "--format=%(trailers)", ref],
+            cwd=repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        assert body == ""

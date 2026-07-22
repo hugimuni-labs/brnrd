@@ -134,7 +134,8 @@ becomes attention, action, and a reply is yours.
   end on. In a `host` environment it does **not**: move off the default branch
   and own the push / PR handoff yourself, or the work never leaves the machine.
   Themed work on a placeholder `brr/<run-id>` branch ⇒ rename to a descriptive
-  `brr/<short-slug>` before committing.
+  `brr/<short-slug>` before committing. `BRR_CONVERSATION_ID` set ⇒ commit with
+  `--trailer "Brnrd-Conversation-Id: $BRR_CONVERSATION_ID"`.
 
 Full protocol, choreography, and the reasoning behind each pin:
 **`brnrd docs portals`**.

@@ -142,6 +142,9 @@ class ResponsePost(BaseModel):
     event_id: str
     body_markdown: str
     status: str = "done"
+    # #61 — the daemon's conversation_key; optional so pre-#61 daemons that
+    # omit it keep working unchanged.
+    conversation_id: str | None = Field(default=None, max_length=255)
 
 
 class ResponseAck(BaseModel):

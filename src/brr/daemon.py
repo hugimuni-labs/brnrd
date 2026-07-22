@@ -2388,6 +2388,12 @@ def _run_worker(
                 (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
             ),
         }
+        # Conversation identity passthrough: lets the resident stamp its own
+        # commits with the Brnrd-Conversation-Id trailer (see gitops.commit_all
+        # and kb/plan-conversation-id-propagation.md). Absent when the task has
+        # no conversation — never export an empty value.
+        if task.conversation_key:
+            env["BRR_CONVERSATION_ID"] = task.conversation_key
         # The closeout guard (`hooks.next_move`, default off). Armed per-run via env
         # so the hook subprocess needs no config of its own. Default-off is the
         # control arm, not timidity: `next_move` failed 0/6 across *both* arms of the
@@ -5956,6 +5962,7 @@ def _capture_knowledge(
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
         captured_pages=captured_pages,
+        conversation_id=task.conversation_key or None,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
@@ -6044,6 +6051,7 @@ def _capture_dominion(
             remote=remote,
             branch=branch,
             push=push and bool(remote),
+            conversation_id=task.conversation_key or None,
         )
         if committed:
             print(f"[brnrd] dominion: captured working memory after {task.id}")
@@ -6096,6 +6104,7 @@ def _capture_worktree(
             if gitops.commit_all(
                 run_root,
                 f"brr salvage: in-flight work from interrupted run {task.id}",
+                conversation_id=task.conversation_key or None,
             ):
                 print(f"[brnrd] salvage: committed in-flight work for {task.id}")
         seed_ref = getattr(branch_plan, "seed_ref", None)
