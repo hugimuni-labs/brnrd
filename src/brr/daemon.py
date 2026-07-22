@@ -2892,6 +2892,14 @@ def _run_worker(
                 "model_observed": result.observed_core,
                 "core_mismatch": result.core_mismatch,
             }
+        if result.codex_thread_id:
+            # Per-run state, not a global (issue #195 multi-run safety): this
+            # attempt's proven thread id, stashed on the task so the
+            # "finalizing" portal-state write just below — and a later retry
+            # attempt's own "running" write before its *own* runner call
+            # returns — can correlate the rollout exactly instead of
+            # guessing newest-mtime across every Codex Shell alive right now.
+            task.meta["codex_thread_id"] = result.codex_thread_id
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Tier-2 Stop is a synchronous portal boundary: the runner cannot
         # return until the matching flush token has been accepted. A normal
@@ -3693,8 +3701,18 @@ def _collect_levels(
     *,
     refresh: bool = True,
     shared_dir: Path | None = None,
+    codex_thread_id: str | None = None,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
+
+    *codex_thread_id*, when the caller has one (a codex invocation that
+    already returned and proved its ``thread.started`` id — see
+    ``RunnerResult.codex_thread_id``), is passed straight through to
+    :func:`codex_status.load_levels` for exact rollout correlation (issue
+    #195). ``None`` is the correct value whenever no run has completed yet
+    (a pre-dispatch read, a schedule-pacing tick with no live run) — it
+    reproduces :func:`codex_status.load_levels`'s previous newest-mtime
+    fallback exactly, never a crash or a silently-wrong id.
 
     Each Shell exposes its quota/context (and, for Claude, spend) through a
     different head-less seam, so the level *source* is per-Shell:
@@ -3738,7 +3756,9 @@ def _collect_levels(
             codex_usage.load_or_refresh_snapshot(cache_dir)
             if refresh else codex_usage.load_snapshot(cache_dir)
         )
-        merged = codex_usage.merge_levels(probe, codex_status.load_levels())
+        merged = codex_usage.merge_levels(
+            probe, codex_status.load_levels(thread_id=codex_thread_id),
+        )
         # Give the point reading a memory: this is the heartbeat cadence, so it
         # is the series trailing burn is measured from (`usage_samples`). A
         # side effect of a read that already happened — never its own poll.
@@ -4072,6 +4092,10 @@ def _write_live_portal_state(
         run_levels, run_level_slots = _collect_levels(
             runner_name, outbox_dir, work_dir,
             refresh=refresh_levels, shared_dir=brr_dir,
+            codex_thread_id=(
+                task.meta.get("codex_thread_id")
+                if hasattr(task, "meta") else None
+            ),
         )
         pacing_status = _quota_pacing_status(cfg or {}, run_levels)
         coexisting_snapshot: list[dict[str, object]] | None = None
