@@ -19,7 +19,7 @@ from typing import Any, Callable
 import requests
 
 from .. import claude_status, claude_usage, codex_status, codex_usage, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
-from .. import dominion, run_stop_request, schedule as schedule_mod, wake_request
+from .. import conversations, dominion, run_stop_request, schedule as schedule_mod, wake_request
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
@@ -780,7 +780,14 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
         limit = _RESPONSE_LIMITS.get(event.get("cloud_platform") or "")
         if limit is not None:
             body = delivery.resolve_overflow(body, limit=limit, gist_fn=delivery.post_gist)
-        return _request(state["brnrd_url"], "POST", "/v1/daemons/responses", token=state["token"], json={"event_id": cloud_event_id, "body_markdown": body, "status": status})
+        payload = {"event_id": cloud_event_id, "body_markdown": body, "status": status}
+        # Conversation identity for brnrd's metadata-only conversation graph
+        # (kb/plan-conversation-id-propagation.md): the existing
+        # conversation_key string, omitted when the event resolves to none.
+        conversation_id = conversations.conversation_key_for_event(event)
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+        return _request(state["brnrd_url"], "POST", "/v1/daemons/responses", token=state["token"], json=payload)
 
     runtime.deliver_stream(
         inbox_dir,

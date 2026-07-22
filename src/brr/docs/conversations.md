@@ -158,6 +158,20 @@ when it becomes shared architecture, research, or decision material. The
 removed stream `title`/`intent`/`summary` fields are not coming back;
 they were leaky by design when derived from raw chat text.
 
+## Conversation identity in git
+
+brr stamps every commit it creates during a task with a
+`Brnrd-Conversation-Id: <conversation_key>` git trailer (e.g.
+`Brnrd-Conversation-Id: telegram:-1001234567890:`), and exports
+`BRR_CONVERSATION_ID` into the runner environment so agent-made commits
+can carry the same trailer. Response POSTs to a managed brnrd server
+include the same key as `conversation_id`. Together these make the
+conversation a first-class, git-sourced identity: brnrd's managed-mode
+cross-gate graph can re-derive conversation linkage from any branch
+without holding conversation contents. For self-hosted and OSS users the
+trailer is harmless metadata — one conventional line, no behavioural
+change. Commits with no associated conversation carry no trailer.
+
 ## What conversations do not replace
 
 - The KB. Decisions, research, architecture notes still live in `kb/`.

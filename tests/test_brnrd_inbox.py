@@ -611,3 +611,92 @@ def test_gc_events_hourly_throttle(env):
         inbox_service.gc_events(db)  # throttled: must not touch the new row
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event).where(Event.event_id == "evt-late-arrival")).scalar_one().body == "old"
+
+
+def test_response_sets_conversation_id_when_null(env):
+    """#61 — the acceptor adopts the daemon-reported conversation_id."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    resp = client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event_id,
+            "body_markdown": "done",
+            "status": "done",
+            "conversation_id": "telegram:-100123:",
+        },
+        headers=dmn,
+    )
+    assert resp.status_code == 200, resp.text
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.conversation_id == "telegram:-100123:"
+
+
+def test_response_preserves_existing_conversation_id(env):
+    """#61 — set-when-null only: a later post never overwrites the value."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    # An interim post sets it first (persists even though the event stays open)…
+    client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event_id,
+            "body_markdown": "working",
+            "status": "processing",
+            "conversation_id": "telegram:-100123:",
+        },
+        headers=dmn,
+    )
+    # …and the terminal post reporting a different value does not win.
+    client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event_id,
+            "body_markdown": "done",
+            "status": "done",
+            "conversation_id": "slack:C42:1234.5",
+        },
+        headers=dmn,
+    )
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.conversation_id == "telegram:-100123:"
+
+
+def test_response_without_conversation_id_stays_compatible(env):
+    """#61 — pre-#61 daemons omit the field; the post still lands unchanged."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    resp = client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "done", "status": "done"},
+        headers=dmn,
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(forwarder.items) == 1
+
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+        assert row.conversation_id is None

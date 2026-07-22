@@ -490,6 +490,7 @@ def capture(
     brr_dir: Path | None = None,
     lock_timeout: float = 30.0,
     captured_pages: list[str] | None = None,
+    conversation_id: str | None = None,
 ) -> bool:
     """Commit and push the knowledge chain. Best-effort; never raises.
 
@@ -535,14 +536,18 @@ def capture(
 
             # 1. The repo-local checkout, if a resident wrote through it.
             if has_checkout and gitops.worktree_dirty(checkout):
-                moved |= gitops.commit_all(checkout, message)
+                moved |= gitops.commit_all(
+                    checkout, message, conversation_id=conversation_id,
+                )
 
             # 2. Direct writes into the account tree — today's common path,
             #    since ``active_kb_dir`` points residents straight at it.
             #    Committing these *before* the push is also what makes
             #    ``updateInstead`` accept it (it refuses a dirty tree).
             if gitops.worktree_dirty(home_knowledge):
-                moved |= gitops.commit_all(home_knowledge, message)
+                moved |= gitops.commit_all(
+                    home_knowledge, message, conversation_id=conversation_id,
+                )
 
             branch = gitops.current_branch(home_knowledge)
             if not branch or branch == "HEAD":
