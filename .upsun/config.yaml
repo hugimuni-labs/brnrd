@@ -45,8 +45,8 @@ applications:
           # `fallback: 'index.html'` (vite.config.ts) — client-side routes
           # like /activity have no per-path file in build/, so any request
           # the rules below don't claim serves the SPA shell and the
-          # router takes it from there. (#327: first client route beyond
-          # "/", the ported activity feed.)
+          # router takes it from there. (#327: Jinja pages moved here one
+          # by one; config-approve was the final content template.)
           passthru: "/index.html"
           scripts: false
           rules:
@@ -55,14 +55,15 @@ applications:
             # Keep this list in sync with src/brnrd/app.py's include_router
             # calls and src/brnrd/routers/web_auth.py / dashboard.py —
             # anything added there needs a passthru rule here or it never
-            # reaches FastAPI. /activity, /repos, /login, /connect/<code>
-            # and /runs/<repo>/<run> (the Wyrd run node, #476) deliberately
-            # absent: SPA-owned, so a deep link falls through to the
-            # index.html shell above and the client router resolves it.
+            # reaches FastAPI. /activity, /repos, /login, /connect/<code>,
+            # /config-approve/<request>, and /runs/<repo>/<run> (the Wyrd
+            # run node, #476) deliberately absent: SPA-owned, so a deep link
+            # falls through to the index.html shell above and the client
+            # router resolves it.
             # /plans stays passthru'd so old bookmarks hit the backend's
             # 308 → "/" (#326) instead of the SPA's 404. /logout stays
             # backend-owned (it must clear the session cookie).
-            '^/(v1|api|r|logout|auth|plans|static|terms/accept|config-approve)(/|$)':
+            '^/(v1|api|r|logout|auth|plans|static|terms/accept)(/|$)':
               passthru: true
 
     variables:
