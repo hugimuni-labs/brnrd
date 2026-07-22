@@ -152,7 +152,7 @@ these command strings.
   custom profile's shell. By default brnrd probes `--help` for model names
   — and fabricates selectable `<name>-<model>` profile variants by
   splicing `--model X` into the base cmd — **only for the bundled shells**
-  (`claude`, `codex`, `gemini`). A custom declared profile is taken at its
+  (`claude`, `codex`). A custom declared profile is taken at its
   word: no fabricated siblings for auto-selection to prefer over it unless
   this flag says so.
 

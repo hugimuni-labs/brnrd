@@ -4,8 +4,8 @@ Sets up the ``.brr/`` runtime directory, detects a runner, and delegates
 the repository contract to the runner itself. The runner receives
 ``setup.md`` plus the host-agnostic adopter template
 (``templates/constitution.md``, *not* brr's own playbook) and tailors it
-to the repo. brnrd then writes shell bridges (``CLAUDE.md`` / ``GEMINI.md``)
-for every detected shell and verifies the contract is structurally sound
+to the repo. brnrd then writes a shell bridge (``CLAUDE.md``) for every
+detected shell that needs one and verifies the contract is structurally sound
 and reachable from each — see ``constitution`` for both mechanics.
 
 The adopter's knowledge shape (committed ``kb/`` vs account home) is asked,
@@ -151,7 +151,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
 
     # L2: every *detected* shell gets a bridge to the contract, not only the
     # configured runner — the drop-in audience switches tools, and a bare
-    # Claude/Gemini session in an adopted repo is otherwise never told
+    # A Claude session in an adopted repo is otherwise never told
     # AGENTS.md exists.
     shells = _detect_shells()
     written = constitution.write_bridges(repo_root, shells)
@@ -172,7 +172,6 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
 _SHELL_BINARIES: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
-    "gemini": "gemini",
     "cursor": "cursor-agent",
 }
 

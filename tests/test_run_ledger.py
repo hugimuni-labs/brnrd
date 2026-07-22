@@ -4,6 +4,10 @@ from brr import run_ledger
 from brr.run import Run
 
 
+def test_removed_gemini_family_is_not_normalized_as_a_bundled_shell():
+    assert run_ledger._runner_shell("gemini-custom") == "gemini-custom"
+
+
 _ROW_FIELDS = {
     "run_id",
     "event_id",

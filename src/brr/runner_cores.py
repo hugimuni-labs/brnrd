@@ -60,13 +60,13 @@ from . import runner_capabilities, runner_select
 # Shells brnrd ships first-class knowledge for. No single prior definition
 # existed in code (closest anchors: the `_BUNDLED_CORES` shells below, the
 # hook flavours `hooks.render_native` knows, and `runner_quota._provider_key`'s
-# prefix list — all agree on these three, and all must move in lockstep with
+# prefix list — all agree on these two, and all must move in lockstep with
 # this set). Model probing / Core fabrication (`_probed_core_entries`) is
 # restricted to these shells: splicing a probed `--model X` into a *custom*
 # declared cmd fabricates `<name>-<model>` variants that auto-selection then
 # prefers over the profile the user actually declared. Custom profiles opt in
 # per-profile with `probe_models: true`.
-BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex", "gemini"})
+BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex"})
 
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
