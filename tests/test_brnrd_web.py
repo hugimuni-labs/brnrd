@@ -15,7 +15,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, Repo, TgPairCode  # noqa: E402
+from brnrd.models import Account, PairRequest, Repo, TgPairCode  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -342,38 +342,117 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     assert "provider down" in r.text
 
 
-def test_connect_page_requires_login(client):
+def test_connect_page_is_spa_owned(client):
+    # The SPA serves /connect/[code] in production (passthru removed); the
+    # backend route only survives for bare uvicorn, same 308 shape as /login.
     _account_and_repo(client)
     pair = client.post("/v1/accounts/pair").json()
     r = client.get(f"/connect/{pair['pair_code']}", follow_redirects=False)
-    assert r.status_code == 303
-    assert "/login" in r.headers["location"]
+    assert r.status_code == 308
+    assert r.headers["location"] == "/"
 
 
-def test_connect_page_lists_repos(client, monkeypatch):
+def test_connect_api_requires_login(client):
+    """#327 /connect slice: the session requirement the Jinja page enforced
+    with a 303 → /login is a 401 on the JSON transport — no anonymous read
+    of the repo list, no anonymous approve."""
+    _account_and_repo(client)
+    pair = client.post("/v1/accounts/pair").json()
+    r = client.get(f"/v1/connect/{pair['pair_code']}")
+    assert r.status_code == 401
+    assert r.json() == {"detail": "unauthenticated"}
+    r = client.post(f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x"})
+    assert r.status_code == 401
+    assert r.json() == {"detail": "unauthenticated"}
+
+
+def test_connect_context_lists_repos_and_code_status(client, monkeypatch):
+    repo_id = _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair").json()
+    r = client.get(f"/v1/connect/{pair['pair_code']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == pair["pair_code"]
+    assert body["status"] == "pending"
+    assert body["repos"] == [{"id": repo_id, "repo_full_name": "Gurio/laptop"}]
+
+    unknown = client.get("/v1/connect/BR-NOPE")
+    assert unknown.status_code == 200
+    assert unknown.json()["status"] == "unknown"
+
+
+def test_connect_context_reports_expired_code(client, monkeypatch):
     _account_and_repo(client)
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
-    r = client.get(f"/connect/{pair['pair_code']}")
-    assert r.status_code == 200
-    assert "flow-lockup" in r.text
-    assert "pairing handshake" in r.text
-    assert "laptop" in r.text
-    assert pair["pair_code"] in r.text
+    from datetime import datetime, timedelta, timezone
+
+    with client.app.state.SessionLocal() as db:
+        row = db.execute(
+            select(PairRequest).where(PairRequest.pair_code == pair["pair_code"])
+        ).scalar_one()
+        row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+    r = client.get(f"/v1/connect/{pair['pair_code']}")
+    assert r.json()["status"] == "expired"
+
+    approve = client.post(
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": "repo_x"}
+    )
+    assert approve.status_code == 410
+    assert approve.json() == {"ok": False, "notice": "pair code expired"}
 
 
-def test_approve_makes_poll_return_token(client, monkeypatch):
+def test_connect_approve_rejects_unknown_code(client, monkeypatch):
+    _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    r = client.post("/v1/connect/BR-NOPE", json={"repo_id": "repo_x"})
+    assert r.status_code == 404
+    assert r.json() == {"ok": False, "notice": "unknown pair code"}
+
+
+def test_connect_approve_binds_to_the_sessions_account(client, monkeypatch):
+    """The repo lookup is scoped to the session's own account (`approve_core`):
+    approving with another account's repo id is a 404, and the pair code
+    stays pending — the exact scoping the Jinja form had."""
+    _account_and_repo(client)
+    other_repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Intruder/box"},
+        headers=brnrd_account_headers(
+            client.app, github_id="99999", login="intruder", email="other@example.com"
+        ),
+    ).json()["repo_id"]
+    _login_web(client, monkeypatch)  # session for the _GITHUB_ID account
+    pair = client.post("/v1/accounts/pair").json()
+
+    r = client.post(
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": other_repo_id}
+    )
+    assert r.status_code == 404
+    assert r.json() == {"ok": False, "notice": "repo not found"}
+    with client.app.state.SessionLocal() as db:
+        row = db.execute(
+            select(PairRequest).where(PairRequest.pair_code == pair["pair_code"])
+        ).scalar_one()
+        assert row.status == PairRequest.STATUS_PENDING
+        assert row.account_id is None
+
+
+def test_connect_approve_makes_poll_return_token(client, monkeypatch):
     repo_id = _account_and_repo(client)
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
 
     approve = client.post(
-        f"/connect/{pair['pair_code']}",
-        data={"repo_id": repo_id},
-        follow_redirects=False,
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
     )
     assert approve.status_code == 200
-    assert "Approved" in approve.text
+    body = approve.json()
+    assert body["ok"] is True
+    assert "Your daemon is connected" in body["notice"]
+    assert body["telegram"]["pair_code"].startswith("TG-")
 
     # The CLI's poll now returns the freshly minted daemon token.
     polled = client.get(
@@ -387,21 +466,43 @@ def test_approve_makes_poll_return_token(client, monkeypatch):
     assert f"/start {polled['telegram_pair']['pair_code']}" in polled["telegram_pair"]["instructions"]
 
 
-def test_approve_offers_telegram_pair_link(monkeypatch):
+def test_connect_approve_is_single_use_after_poll(client, monkeypatch):
+    """Once the daemon's poll consumes the code, a second approve is a 409 —
+    the same single-use guarantee the Jinja POST had (`approve_core`)."""
+    repo_id = _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair").json()
+    assert client.post(
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+    ).json()["ok"] is True
+    client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    )
+
+    again = client.post(
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
+    )
+    assert again.status_code == 409
+    assert again.json() == {"ok": False, "notice": "pair code already used"}
+    status = client.get(f"/v1/connect/{pair['pair_code']}").json()
+    assert status["status"] == "consumed"
+
+
+def test_connect_approve_offers_telegram_pair_link(monkeypatch):
     client = _make_client(telegram_bot_username="@brnrd_bot")
     repo_id = _account_and_repo(client)
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
 
     approve = client.post(
-        f"/connect/{pair['pair_code']}",
-        data={"repo_id": repo_id},
-        follow_redirects=False,
+        f"/v1/connect/{pair['pair_code']}", json={"repo_id": repo_id}
     )
     assert approve.status_code == 200
-    assert "Your daemon is connected" in approve.text
-    assert "https://t.me/brnrd_bot?start=TG-" in approve.text
-    assert "Open Telegram and press Start" in approve.text
+    body = approve.json()
+    assert "Your daemon is connected" in body["notice"]
+    assert body["telegram"]["deep_link"].startswith("https://t.me/brnrd_bot?start=TG-")
+    assert "bind this chat" in body["telegram"]["instructions"]
 
     polled = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",
