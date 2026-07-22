@@ -225,6 +225,34 @@ def test_daemon_owned_run_state_is_not_drift(tmp_path: Path) -> None:
     assert c.drift == ()
 
 
+def test_delivery_mutated_message_records_are_not_drift(tmp_path: Path) -> None:
+    """Post-capture delivery bookkeeping is the daemon's, not lost memory.
+
+    The capture net commits at run end; the delivery pipeline then mutates the
+    run's ``messages/*`` frontmatter (``status: pending → delivered``,
+    ``platform_message_id``, ``delivered_at``) once the platform acks.  So any
+    wake that delivered a reply left its message records *modified after* the
+    capture commit — and counting them fired ``capture net did not close`` on
+    three consecutive real wakes (260721–260722) about a net that had closed
+    perfectly.  Same permanent-lie shape as ``state.md``, one seam later.
+    """
+    brr_dir = _brr_with_prior_wake(tmp_path)
+    dom = tmp_path / "dominion"
+    _git_repo(dom)
+    msgs = dom / "runs" / "Gurio__brr" / "run-260722-0037-tqdp" / "messages"
+    msgs.mkdir(parents=True)
+    rec = msgs / "000001-outbound.md"
+    rec.write_text("---\nstatus: pending\n---\nbody", encoding="utf-8")
+    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
+    # The delivery pipeline's post-capture mutation:
+    rec.write_text("---\nstatus: delivered\n---\nbody", encoding="utf-8")
+
+    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
+    assert c.mount == "✓"          # exercise the real path, not an early return
+    assert c.drift == ()
+
+
 def test_uncommitted_resident_memory_is_drift(tmp_path: Path) -> None:
     """Real lost memory still fires — the check is scoped, not disabled."""
     brr_dir = _brr_with_prior_wake(tmp_path)
