@@ -187,7 +187,93 @@ def clean_runner_environ() -> dict[str, str]:
             cleaned.pop("GITHUB_TOKEN", None)
             cleaned.pop("GH_CONFIG_DIR", None)
             _inject_github_git_config(cleaned)
+    else:
+        # No operator token, no managed token ⇒ **fail closed** (2026-07-21
+        # decision; #557/#560 post-mortem): the runner works unauthenticated,
+        # never as the operator. The leak has two transports and both are
+        # shut here: ``gh`` falls back to the operator's config dir/keyring
+        # unless GH_CONFIG_DIR points at an identity-free dir, and git
+        # consults the operator's *global* credential helper (e.g.
+        # ``credential.https://github.com.helper = !gh auth git-credential``)
+        # unless the helper list is reset to empty. Anonymous HTTPS reads of
+        # public repos keep working — no helper is not no transport — and
+        # GIT_TERMINAL_PROMPT=0 turns a would-be password prompt into a fast
+        # failure instead of a hung run.
+        cleaned.pop("GH_TOKEN", None)
+        cleaned.pop("GITHUB_TOKEN", None)
+        cleaned["GH_CONFIG_DIR"] = str(_github_null_identity_dir())
+        cleaned["GIT_TERMINAL_PROMPT"] = "0"
+        _inject_github_credential_reset(cleaned)
     return cleaned
+
+
+_GITHUB_NULL_DIR_MODE = 0o700
+
+
+def _github_null_identity_dir() -> Path:
+    """A gh config dir that carries *no* identity, created lazily.
+
+    Exported as ``GH_CONFIG_DIR`` on the fail-closed path so ``gh`` resolves
+    its host configuration here — an empty ``hosts.yml`` means no host entry,
+    hence no keyring lookup and no operator identity. Lives beside the
+    managed credential pointer dir when a cloud gate names one
+    (``.brr/credentials/github-null``); otherwise a per-user temp dir. The
+    ``hosts.yml`` is (re)truncated on every call rather than only created, so
+    nothing another process wrote into it can smuggle an identity back in.
+    Owner-only permissions, same discipline as the credential pointer store.
+
+    Best-effort on I/O failure: the env var itself does the isolation — a
+    ``GH_CONFIG_DIR`` pointing at a missing dir still keeps ``gh`` away from
+    the operator's real config.
+    """
+    base: Path | None = None
+    try:
+        from .gates import cloud
+
+        pointer_dir = cloud.github_credentials_dir()
+    except Exception:
+        pointer_dir = None
+    if pointer_dir is not None:
+        base = pointer_dir.parent / "github-null"
+    else:
+        suffix = f"-{os.getuid()}" if hasattr(os, "getuid") else ""
+        base = Path(tempfile.gettempdir()) / f"brnrd-github-null{suffix}"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        if os.name == "posix":
+            os.chmod(base, _GITHUB_NULL_DIR_MODE)
+        fd = os.open(
+            base / "hosts.yml", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        os.close(fd)
+    except OSError:
+        pass
+    return base
+
+
+def _inject_github_credential_reset(env: dict[str, str]) -> None:
+    """Reset git's inherited credential-helper list via env config pairs.
+
+    An empty ``credential.helper`` value clears every helper accumulated from
+    earlier config scopes (system/global/local), and the host-scoped
+    ``credential.https://github.com.helper`` reset covers the second leak
+    transport from the #557 post-mortem explicitly. Env config ranks after
+    all config files, so these pairs are the last word. Pairs already staged
+    in the env are preserved via the same offset handling as the injectors
+    above.
+    """
+    try:
+        offset = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        offset = 0
+    pairs = (
+        ("credential.helper", ""),
+        ("credential.https://github.com.helper", ""),
+    )
+    env["GIT_CONFIG_COUNT"] = str(offset + len(pairs))
+    for index, (key, value) in enumerate(pairs, start=offset):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
 
 
 def _github_credential_pointer_dir() -> Path | None:
