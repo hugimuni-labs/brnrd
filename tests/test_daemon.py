@@ -1633,6 +1633,208 @@ def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     assert "boom" in note["body"]
 
 
+def _stuck_spawn_dispatch(tmp_path, conv_key="telegram:88:", parent_run="run-parent-orphan"):
+    """Stage a real spawn dispatch frozen at the moment a daemon died.
+
+    Follows the #304 e2e discipline: the spawn event is produced by the
+    real ``_drain_outbox`` → ``_queue_spawn_request`` path (so it carries
+    exactly the parent-linkage meta production writes), then advanced to
+    ``processing`` with the very ``protocol.set_status`` write the spawn
+    dispatch slot performs — the durable state a daemon death between
+    dispatch and reap leaves behind. Returns the spawn event dict.
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    parent_outbox = brr_dir / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    parent_path = protocol.create_event(
+        inbox, "telegram", "parent task", status="processing",
+        conversation_key=conv_key,
+    )
+    parent_event_id = parent_path.stem
+    (parent_outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nbounded concurrent task\n",
+        encoding="utf-8",
+    )
+    parent_task = Run(
+        id=parent_run, event_id=parent_event_id, body="parent task",
+        source="telegram", conversation_key=conv_key,
+        meta={"repo_label": "Gurio/brr"},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, conv_key, parent_event_id),
+        parent_task, responses, parent_event_id, parent_outbox, inbox,
+    )
+    assert promoted == 1
+    spawn_events = [
+        e for e in protocol.list_pending(inbox) if e.get("spawn_immediate")
+    ]
+    assert len(spawn_events) == 1
+    spawn_event = spawn_events[0]
+    # The exact write the concurrent-spawn dispatch slot performs before
+    # submitting the worker — the last durable trace a daemon death leaves.
+    protocol.set_status(spawn_event, "processing")
+    return spawn_event
+
+
+def _boot_daemon_once(tmp_path, monkeypatch):
+    """Drive a fresh ``daemon.start`` through boot, exiting on the first tick.
+
+    The reconciliation sweep under test runs *before* the main loop, so one
+    tick is enough; ``_run_worker`` is rigged to fail loudly if the loop
+    ever reaches a dispatch, pinning that the sweep (not a re-dispatched
+    worker) produced whatever the assertions observe.
+    """
+    cfg: dict = {}
+
+    def fail_run_worker(*_a, **_k):
+        raise AssertionError("boot tick must not dispatch a worker")
+
+    def stop_immediately(*_a, **_k):
+        raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fail_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", stop_immediately)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+
+def _age_path(path, seconds):
+    old = time.time() - seconds
+    os.utime(path, (old, old))
+
+
+def test_orphaned_spawn_reconciled_to_parent_on_restart(tmp_path, monkeypatch):
+    """#311 option (2), end to end: a spawn event left ``processing`` by a
+    daemon death, provably no longer running (no presence, no live pid, no
+    write inside the safety horizon), is resolved at the next boot and the
+    crash notification lands in the parent's conversation — from the
+    parent-linkage meta the real ``_queue_spawn_request`` wrote, via the
+    real, unmocked ``_notify_spawn_parent_of_crash``.
+    """
+    spawn_event = _stuck_spawn_dispatch(tmp_path)
+    _age_path(spawn_event["_path"], 25 * 3600)
+
+    _boot_daemon_once(tmp_path, monkeypatch)
+
+    inbox = tmp_path / ".brr" / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["conversation_key"] == "telegram:88:"
+    assert note["spawn_parent_run_id"] == "run-parent-orphan"
+    assert "restarted" in note["body"]
+    # The stuck event itself is resolved — the idempotence guard, and what
+    # keeps the crash-recovery re-dispatch path off work the parent has
+    # just been told died.
+    refreshed = protocol.parse_frontmatter(
+        Path(spawn_event["_path"]).read_text(encoding="utf-8"))
+    assert refreshed.get("status") == "error"
+    assert "spawn reconciliation" in str(refreshed.get("reconcile_reason"))
+
+
+def test_orphaned_spawn_reconciliation_is_idempotent_across_restarts(
+    tmp_path, monkeypatch,
+):
+    """A second restart must not double-notify: the first sweep resolved the
+    event's status, and a resolved event never matches the sweep again —
+    the status transition *is* the guard, no extra bookkeeping."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:89:")
+    _age_path(spawn_event["_path"], 25 * 3600)
+
+    _boot_daemon_once(tmp_path, monkeypatch)
+    _boot_daemon_once(tmp_path, monkeypatch)
+
+    inbox = tmp_path / ".brr" / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+
+
+def test_spawn_reconciliation_leaves_live_worker_untouched(
+    tmp_path, monkeypatch,
+):
+    """Conservative liveness: a spawn whose run still has a live presence
+    entry is not swept, even when every durable file is ancient — a daemon
+    restart can leave an orphaned runner still writing, and presence is the
+    live authority the janitors already trust."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:90:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    live_run = Run(
+        id="run-spawn-still-live", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    )
+    live_run.save(runs_dir)
+    presence.register(
+        brr_dir, kind="daemon", run_id="run-spawn-still-live",
+        pid=os.getpid(),
+    )
+    # Age every durable trace past the safety horizon so presence is the
+    # only thing keeping this dispatch alive — the sharpest reading of the
+    # liveness check.
+    _age_path(spawn_event["_path"], 25 * 3600)
+    _age_path(runs_dir / "run-spawn-still-live" / "run.md", 25 * 3600)
+
+    _boot_daemon_once(tmp_path, monkeypatch)
+
+    inbox = brr_dir / "inbox"
+    assert not [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    refreshed = protocol.parse_frontmatter(
+        Path(spawn_event["_path"]).read_text(encoding="utf-8"))
+    assert refreshed.get("status") == "processing"
+
+
+def test_spawn_reconciliation_waits_out_fresh_dispatches(tmp_path):
+    """No liveness signal at all still doesn't mean dead: a freshly-stuck
+    event (inside the safety horizon, no closed ledger row) is left for a
+    later boot — "stale for a generous threshold" over "not in my table"."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:91:")
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 0
+    refreshed = protocol.parse_frontmatter(
+        Path(spawn_event["_path"]).read_text(encoding="utf-8"))
+    assert refreshed.get("status") == "processing"
+
+
+def test_spawn_reconciliation_accepts_closed_ledger_as_proof(tmp_path):
+    """A closed ledger row for the event's run proves the worker ended even
+    inside the staleness horizon (daemon died between the worker's ledger
+    append and the reap-notify), so the parent hears promptly instead of a
+    day later."""
+    spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:92:")
+    brr_dir = tmp_path / ".brr"
+    runs_dir = brr_dir / "runs"
+    Run(
+        id="run-spawn-ledger-closed", event_id=spawn_event["id"],
+        body="bounded concurrent task", source="spawn",
+    ).save(runs_dir)
+    ledger_path = daemon.run_ledger.ledger_path(tmp_path)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps({"run_id": "run-spawn-ledger-closed"}) + "\n",
+        encoding="utf-8",
+    )
+    ctx = daemon.account.resolve_context(tmp_path, {})
+
+    assert daemon._reconcile_orphaned_spawn_dispatches(ctx, tmp_path, {}) == 1
+    inbox = brr_dir / "inbox"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    assert notes[0]["conversation_key"] == "telegram:92:"
+
+
 def _account_context_for_policy(tmp_path):
     home = tmp_path / "account-home"
     return daemon.account.AccountContext(
