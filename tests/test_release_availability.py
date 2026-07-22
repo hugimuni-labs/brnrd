@@ -10,8 +10,10 @@ import pytest
 from brr import release_availability
 
 
-def _repo(tmp_path: Path) -> Path:
+def _repo(tmp_path: Path, monkeypatch) -> Path:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     (tmp_path / ".brr").mkdir()
+    release_availability.cache_path(tmp_path).parent.mkdir(parents=True)
     return tmp_path
 
 
@@ -27,7 +29,7 @@ def test_compares_pep440_versions(installed, latest, expected):
 
 
 def test_fresh_cache_skips_request_and_stale_cache_refreshes(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, monkeypatch)
     checked_at = 10_000.0
     path = release_availability.cache_path(repo)
     path.write_text(json.dumps({"checked_at": checked_at, "latest": "0.1.0"}), encoding="utf-8")
@@ -50,7 +52,7 @@ def test_fresh_cache_skips_request_and_stale_cache_refreshes(tmp_path, monkeypat
 
 
 def test_request_failure_preserves_last_good_observation(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, monkeypatch)
     original = {"schema": 1, "checked_at": 1.0, "latest": "0.2.0"}
     path = release_availability.cache_path(repo)
     path.write_text(json.dumps(original), encoding="utf-8")
@@ -61,9 +63,20 @@ def test_request_failure_preserves_last_good_observation(tmp_path, monkeypatch):
         now=release_availability.DEFAULT_TTL_SECONDS + 2,
     )
 
-    assert json.loads(path.read_text(encoding="utf-8")) == original
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["latest"] == original["latest"]
+    assert saved["checked_at"] == original["checked_at"]
+    assert saved["attempted_at"] == release_availability.DEFAULT_TTL_SECONDS + 2
     assert observed is not None
     assert observed.render() == "update available: 0.1.0 → 0.2.0"
+
+    # The failed attempt is itself cached: a fast daemon tick cannot retry
+    # until the daily TTL has elapsed.
+    release_availability.refresh_if_stale(
+        repo,
+        now=release_availability.DEFAULT_TTL_SECONDS + 3,
+    )
+    assert json.loads(path.read_text(encoding="utf-8")) == saved
 
 
 def test_rejects_pypi_metadata_for_a_different_project(monkeypatch):

@@ -378,13 +378,13 @@ regardless of status, so a human can recover work.
   a brnrd checkout. If you're on an older daemon, set that by hand or rebuild
   after pulling. For non-brr repos, rebuild the runner image when brnrd itself
   changes (``brnrd init -i``).
-- **`brnrd review` runs the wrong tool (image-renderer help)** — PyPI's
-  ``brnrd`` package is an unrelated terminal image renderer. Older bundled
-  Dockerfiles ``pip install 'brnrd>=0.1.0'`` pulled that by mistake.
-  Rebuild from the current bundled Dockerfile (`brnrd init -i`): it copies
-  this checkout into the build context and ``pip install /opt/brr``.
-  Custom images: never ``pip install brnrd`` from PyPI; install from a git
-  URL or ``COPY`` + ``pip install .`` instead.
+- **`brnrd review` runs the wrong tool (image-renderer help)** — older images
+  may contain the historical, unrelated package that occupied the ``brnrd``
+  PyPI name before this project acquired it. Rebuild from the current bundled
+  Dockerfile (`brnrd init -i`): it copies this checkout into the build context
+  and ``pip install /opt/brr``. The current ``brnrd`` PyPI project is ours;
+  custom images should still pin a known release rather than inheriting an
+  unknown cached package.
 - **`brnrd`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
   local image from the current bundled Dockerfile (`brnrd init -i` can do this
   during setup). Older `brr-runner:*` images predate the baseline dev toolbox
