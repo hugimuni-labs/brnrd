@@ -2202,8 +2202,8 @@ def _run_worker(
         # A host run has no assigned branch, so relic derivation cannot
         # measure "what this run committed" from branch-vs-seed — the usual
         # host flow merges back into the seed branch, which erases the range.
-        # Pin the checkout's HEAD now; commits that appear beyond this OID
-        # during the run are this run's produce (relics.collection_scope).
+        # Pin the checkout's HEAD now; identity-stamped commits beyond this
+        # OID are this run's produce (relics.collection_scope / collect).
         start_oid = gitops.rev_parse(repo_root, "HEAD")
         if start_oid:
             task.meta["host_start_oid"] = start_oid
@@ -4099,6 +4099,10 @@ def _write_live_portal_state(
                 branch=live_branch,
                 seed_ref=live_seed,
                 outbox_dir=outbox_dir,
+                commit_conversation_id=(
+                    task.conversation_key or ""
+                    if not task.meta.get("branch_name") else None
+                ),
             )
             if work_dir else {"known": False}
         )
@@ -6043,6 +6047,11 @@ def _finalize_stopped_run(
     task.meta["stopped_by"] = stopped_by
     if control.get("stop_reason"):
         task.meta["stop_reason"] = str(control["stop_reason"])
+    # Host runs share their checkout with concurrent workers.  Once this run
+    # is stopped, the start..HEAD window cannot distinguish its commits from
+    # a sibling's, so never turn that shared window into this run's receipt.
+    # Worktree runs still retain their isolated branch and are unaffected.
+    task.meta["suppress_shared_commit_window"] = True
     task.update_status("stopped", runs_dir)
     _set_event_status_if_present(event, "cancelled")
     _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
@@ -6073,22 +6082,36 @@ def _capture_knowledge(
     """Commit + push knowledge edits; replies now belong to the home run store."""
     if not bool(cfg.get("knowledge.capture", True)):
         return
+    if task.status == "stopped":
+        # A stopped run has no trustworthy ownership boundary in the shared
+        # account knowledge checkout.  Capturing here can both commit a live
+        # sibling's dirty edits under this run's identity and credit sibling
+        # commits from the run-start window (#565).  Leave the shared tree for
+        # the owning run's capture net instead.
+        return
 
-    captured_pages: list[str] = []
+    # The capture net is crash insurance over a shared checkout, not proof of
+    # which run authored a dirty file.  Commit residue as daemon housekeeping
+    # without a conversation trailer and derive Produce only from explicitly
+    # identity-stamped mid-run commits below (#565).
     moved = knowledge.capture(
-        repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
-        captured_pages=captured_pages,
-        conversation_id=task.conversation_key or None,
+        repo_root,
+        f"brnrd-kb: capture unowned knowledge residue after {task.id}",
+        cfg=cfg,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
-    # Union in pages the resident committed mid-run (#538): everything the
-    # knowledge repo took between the run-start stamp and now, scoped to
-    # this repo's pages. The capture commit above lands inside the window
-    # too, so dedupe against the dirty-diff manifest before appending.
-    seen_pages = set(captured_pages)
+    # Credit pages the resident committed mid-run (#538), but only when the
+    # commit carries this run's conversation identity.  The shared knowledge
+    # repo can advance for any concurrent sibling; elapsed time is not
+    # authorship (#565).
+    captured_pages: list[str] = []
+    seen_pages: set[str] = set()
     for page in knowledge.committed_pages_in_window(
-        repo_root, str(task.meta.get("kb_start_oid") or "") or None, cfg=cfg,
+        repo_root,
+        str(task.meta.get("kb_start_oid") or "") or None,
+        conversation_id=task.conversation_key,
+        cfg=cfg,
     ):
         if page not in seen_pages:
             captured_pages.append(page)
@@ -6384,6 +6407,10 @@ def _run_state_produce_changed(
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
+            commit_conversation_id=(
+                task.conversation_key or ""
+                if not task.meta.get("branch_name") else None
+            ),
         )
     except Exception:
         return False
@@ -6414,6 +6441,10 @@ def _run_state_produce_lines(
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
+            commit_conversation_id=(
+                task.conversation_key or ""
+                if not task.meta.get("branch_name") else None
+            ),
         )
     except Exception:
         return _existing_produce_lines(path)

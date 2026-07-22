@@ -408,14 +408,18 @@ def test_capture_knowledge_no_longer_archives_replies(tmp_path, monkeypatch):
     assert "reply_archive" not in task.meta
 
 
-def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypatch):
+def test_capture_knowledge_does_not_report_unowned_capture_residue(
+    tmp_path, monkeypatch,
+):
+    """#565: a shared-tree sweep is daemon residue, not run Produce."""
     task = Run(id="run-kb-relic", event_id="evt-kb-relic", body="answer")
     outbox = tmp_path / ".brr" / "outbox" / task.event_id
     outbox.mkdir(parents=True)
     daemon.relics.append(outbox, "kb_page", path="kb/already.md")
 
-    def fake_capture(*_args, captured_pages, **_kwargs):
-        captured_pages.extend(["already.md", "new.md"])
+    def fake_capture(*_args, **kwargs):
+        assert "captured_pages" not in kwargs
+        assert "conversation_id" not in kwargs
         return True
 
     monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
@@ -428,35 +432,66 @@ def test_capture_knowledge_auto_reports_changed_kb_pages_once(tmp_path, monkeypa
 
     assert daemon.relics.read_reported(outbox) == [
         {"kind": "kb", "path": "kb/already.md"},
-        {"kind": "kb", "path": "new.md", "url": "https://example.test/new.md"},
     ]
+
+
+def test_capture_knowledge_skips_stopped_run_shared_checkout(tmp_path, monkeypatch):
+    """#565: a stopped run must not sweep or credit a sibling's kb work."""
+    task = Run(
+        id="run-stopped-kb",
+        event_id="evt-stopped-kb",
+        body="partial",
+        status="stopped",
+        meta={"kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        daemon.knowledge,
+        "capture",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stopped run swept shared knowledge")
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.knowledge,
+        "committed_pages_in_window",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stopped run inspected shared commit window")
+        ),
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == []
 
 
 def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
     tmp_path, monkeypatch,
 ):
-    """#538: pages committed mid-run surface via the run-start OID window,
-    unioned with the dirty-diff manifest and deduped against both it and
-    resident self-reports — no page appears twice."""
+    """#538/#565: identity-stamped commits surface, residue does not."""
     task = Run(
         id="run-kb-window",
         event_id="evt-kb-window",
         body="answer",
+        conversation_key="telegram:kb-window:",
         meta={"kb_start_oid": "a" * 40},
     )
     outbox = tmp_path / ".brr" / "outbox" / task.event_id
     outbox.mkdir(parents=True)
     daemon.relics.append(outbox, "kb", path="kb/self-reported.md")
 
-    def fake_capture(*_args, captured_pages, **_kwargs):
-        captured_pages.append("dirty.md")
+    def fake_capture(*_args, **kwargs):
+        assert "captured_pages" not in kwargs
+        assert "conversation_id" not in kwargs
         return True
 
-    window_calls: list[str | None] = []
+    window_calls: list[tuple[str | None, str | None]] = []
 
-    def fake_window(_root, start_oid, *, cfg=None):
-        window_calls.append(start_oid)
-        return ["dirty.md", "windowed.md", "self-reported.md"]
+    def fake_window(_root, start_oid, *, conversation_id=None, cfg=None):
+        window_calls.append((start_oid, conversation_id))
+        return ["owned.md", "windowed.md", "self-reported.md"]
 
     monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
     monkeypatch.setattr(
@@ -468,10 +503,10 @@ def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
 
     daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
 
-    assert window_calls == ["a" * 40]
+    assert window_calls == [("a" * 40, "telegram:kb-window:")]
     assert daemon.relics.read_reported(outbox) == [
         {"kind": "kb", "path": "kb/self-reported.md"},
-        {"kind": "kb", "path": "dirty.md"},
+        {"kind": "kb", "path": "owned.md"},
         {"kind": "kb", "path": "windowed.md"},
     ]
 
@@ -3995,6 +4030,7 @@ def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
         "branch": "brr/work",
         "seed_ref": "main",
         "outbox_dir": outbox_dir,
+        "commit_conversation_id": None,
     }
 
 

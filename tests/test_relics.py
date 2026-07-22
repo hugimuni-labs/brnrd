@@ -469,6 +469,80 @@ def test_collection_scope_detached_head_yields_no_branch(tmp_path: Path):
     assert seed == "main"
 
 
+def test_collection_scope_stopped_host_run_skips_shared_commit_window(
+    tmp_path: Path,
+):
+    """#565: sibling commits in a shared host checkout are not run produce."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    start_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    commit_files(repo, {"sibling.txt": "2"}, message="sibling work")
+
+    branch, seed = relics.collection_scope(
+        {
+            "host_start_oid": start_oid,
+            "suppress_shared_commit_window": True,
+        },
+        repo,
+    )
+
+    assert (branch, seed) == (None, None)
+    assert relics.derive_auto(
+        repo, branch=branch, seed_ref=seed, outbox_dir=None,
+    ) == []
+
+
+def test_shared_host_commit_window_filters_by_conversation_identity(
+    tmp_path: Path,
+):
+    """#565: a host run never books a concurrent sibling's commit."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    start_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    commit_files(
+        repo,
+        {"sibling.txt": "2"},
+        message=(
+            "sibling work\n\n"
+            "Brnrd-Conversation-Id: schedule:sibling:"
+        ),
+    )
+    commit_files(
+        repo,
+        {"ours.txt": "3"},
+        message=(
+            "owner work\n\n"
+            "Brnrd-Conversation-Id: telegram:owner:"
+        ),
+    )
+
+    out = relics.derive_auto(
+        repo,
+        branch="main",
+        seed_ref=start_oid,
+        outbox_dir=None,
+        commit_conversation_id="telegram:owner:",
+    )
+    subjects = [record.get("subject") for record in out]
+    assert "owner work" in subjects
+    assert "sibling work" not in subjects
+    assert relics.derive_auto(
+        repo,
+        branch="main",
+        seed_ref=start_oid,
+        outbox_dir=None,
+        commit_conversation_id="",
+    ) == []
+
+
 def test_collection_scope_without_work_dir_is_meta_only():
     assert relics.collection_scope({}, None) == (None, None)
 

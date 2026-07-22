@@ -683,22 +683,25 @@ def committed_pages_in_window(
     repo_root: Path,
     start_oid: str | None,
     *,
+    conversation_id: str | None = None,
     cfg: dict | None = None,
 ) -> list[str]:
-    """Repo-scoped kb pages committed to the knowledge repo in ``start..HEAD``.
+    """Repo-scoped kb pages this conversation committed in ``start..HEAD``.
 
     The other half of #538: pages a resident committed mid-run are invisible
     to the dirty-diff capture manifest, so closeout unions this commit-window
-    view in. Deliberately no sibling-overlap gate — under concurrency the
-    window may credit a sibling's page to this run, a misattribution the
-    design accepts ("the main run owns the work").
+    view in.  The account knowledge checkout is shared by concurrent runs, so
+    only commits carrying this run's ``Brnrd-Conversation-Id`` trailer are
+    evidence of ownership (#565).  An absent identity returns no pages rather
+    than falling back to a sibling-blind time window.
 
     Falls back to an empty list on any doubt: no start OID, no knowledge
     repo, an OID git cannot resolve, or one no longer an ancestor of HEAD
     (rebase/gc rewrote the window) — each degrades to today's behavior.
     """
 
-    if not start_oid:
+    identity = (conversation_id or "").strip()
+    if not start_oid or not identity:
         return []
     try:
         cfg = cfg if cfg is not None else conf.load_config(repo_root)
@@ -726,44 +729,72 @@ def committed_pages_in_window(
         account.repo_knowledge_path(ctx, label) if split else home_knowledge
     )
     return sorted(
-        _committed_markdown_paths(home_knowledge, scope, start_oid)
+        _committed_markdown_paths(
+            home_knowledge, scope, start_oid, conversation_id=identity,
+        )
     )
 
 
 def _committed_markdown_paths(
-    git_root: Path, scope: Path, start_oid: str,
+    git_root: Path,
+    scope: Path,
+    start_oid: str,
+    *,
+    conversation_id: str,
 ) -> set[str]:
-    """Non-deleted markdown paths committed in ``start_oid..HEAD``, scoped."""
+    """Markdown paths in conversation-owned commits after ``start_oid``."""
 
     try:
         scope_rel = scope.resolve().relative_to(git_root.resolve())
     except (OSError, ValueError):
         return set()
     pathspec = scope_rel.as_posix() or "."
-    result = subprocess.run(
+    commits = subprocess.run(
         [
-            "git", "diff", "--name-only", "--diff-filter=ACMRTUXB", "-z",
-            start_oid, "HEAD", "--", pathspec,
+            "git", "log", f"{start_oid}..HEAD",
+            "--fixed-strings",
+            f"--grep=Brnrd-Conversation-Id: {conversation_id}",
+            "--format=%H",
         ],
         cwd=git_root, capture_output=True, text=True, check=False,
     )
-    if result.returncode != 0:
+    if commits.returncode != 0:
         return set()
     changed: set[str] = set()
-    for raw in result.stdout.split("\0"):
-        if not raw:
+    for oid in commits.stdout.splitlines():
+        trailer = subprocess.run(
+            [
+                "git", "show", "-s",
+                "--format=%(trailers:key=Brnrd-Conversation-Id,valueonly)",
+                oid,
+            ],
+            cwd=git_root, capture_output=True, text=True, check=False,
+        )
+        if trailer.returncode != 0 or trailer.stdout.strip() != conversation_id:
             continue
-        path = git_root / raw
-        try:
-            rel = path.resolve().relative_to(scope.resolve())
-        except (OSError, ValueError):
+        result = subprocess.run(
+            [
+                "git", "diff-tree", "--no-commit-id", "--name-only", "-r",
+                "--diff-filter=ACMRTUXB", "-z", oid, "--", pathspec,
+            ],
+            cwd=git_root, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
             continue
-        if (
-            path.is_file()
-            and path.suffix.lower() == ".md"
-            and (not rel.parts or rel.parts[0] != REPLIES_DIRNAME)
-        ):
-            changed.add(rel.as_posix())
+        for raw in result.stdout.split("\0"):
+            if not raw:
+                continue
+            path = git_root / raw
+            try:
+                rel = path.resolve().relative_to(scope.resolve())
+            except (OSError, ValueError):
+                continue
+            if (
+                path.is_file()
+                and path.suffix.lower() == ".md"
+                and (not rel.parts or rel.parts[0] != REPLIES_DIRNAME)
+            ):
+                changed.add(rel.as_posix())
     return changed
 
 

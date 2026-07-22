@@ -266,13 +266,18 @@ def collection_scope(
     So for a branchless task the scope falls back to the checkout's current
     branch, measured against the checkout's **HEAD OID captured at run
     start** (``host_start_oid``, stamped by the daemon at env prepare) — the
-    commits that appeared during this run, regardless of what branch dance
-    produced them. A detached HEAD yields no branch rather than the literal
-    string ``HEAD``.
+    candidate commits that appeared during this run, regardless of what
+    branch dance produced them. Callers pair this shared scope with the run's
+    conversation identity; the window alone is not ownership (#565). A
+    detached HEAD yields no branch rather than the literal string ``HEAD``.
     """
     branch = str(meta.get("branch_name") or "") or None
     seed = str(meta.get("seed_ref") or "") or None
-    if branch is None and work_dir is not None:
+    if (
+        branch is None
+        and work_dir is not None
+        and not meta.get("suppress_shared_commit_window")
+    ):
         try:
             current = gitops.current_branch(Path(work_dir))
         except Exception:
@@ -284,7 +289,11 @@ def collection_scope(
 
 
 def _commits_since_seed(
-    repo_root: Path, branch: str, seed_ref: str | None,
+    repo_root: Path,
+    branch: str,
+    seed_ref: str | None,
+    *,
+    conversation_id: str | None = None,
 ) -> list[tuple[str, str, int, str]]:
     """Return ``[(short_sha, subject, parent_count, committer_email), ...]``
     for commits on *branch* not on the seed ref, newest first (``git log``'s
@@ -295,6 +304,9 @@ def _commits_since_seed(
     """
     if not branch:
         return []
+    identity = None if conversation_id is None else conversation_id.strip()
+    if conversation_id is not None and not identity:
+        return []
     seed = seed_ref or gitops.default_branch(repo_root) or "HEAD"
     try:
         merge_base = subprocess.run(
@@ -302,8 +314,19 @@ def _commits_since_seed(
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
         base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else seed
+        log_args = ["git", "log", f"{base_ref}..{branch}"]
+        if identity is not None:
+            log_args += [
+                "--fixed-strings",
+                f"--grep=Brnrd-Conversation-Id: {identity}",
+            ]
+        log_args += [
+            f"--max-count={_MAX_RECORDS}",
+            "--format=%h\x1f%P\x1f%ce\x1f%s",
+            "--no-color",
+        ]
         result = subprocess.run(
-            ["git", "log", f"{base_ref}..{branch}", "--format=%h\x1f%P\x1f%ce\x1f%s", "--no-color"],
+            log_args,
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -318,6 +341,21 @@ def _commits_since_seed(
         if len(parts) != 4:
             continue
         sha, parents, committer, subject = parts
+        if identity is not None:
+            try:
+                trailer = subprocess.run(
+                    [
+                        "git", "show", "-s",
+                        "--format=%(trailers:key=Brnrd-Conversation-Id,valueonly)",
+                        sha,
+                    ],
+                    cwd=repo_root, capture_output=True, text=True, check=False,
+                    timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if trailer.returncode != 0 or trailer.stdout.strip() != identity:
+                continue
         if sha:
             out.append((sha, subject, len(parents.split()), committer.strip()))
     return out
@@ -471,6 +509,7 @@ def derive_auto(
     seed_ref: str | None,
     outbox_dir: Path | None,
     links: _ForgeLinks | None = None,
+    commit_conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Zero-resident-effort relics: commits, merges, the pushed branch, and
     the PR.
@@ -511,7 +550,12 @@ def derive_auto(
     _pr_url = links.pull_request
 
     if branch:
-        commits = _commits_since_seed(repo_root, branch, seed_ref)
+        commits = _commits_since_seed(
+            repo_root,
+            branch,
+            seed_ref,
+            conversation_id=commit_conversation_id,
+        )
         for sha, subject, parent_count, committer in commits[:_MAX_RECORDS]:
             commit_url = links.commit(sha)
             merge: dict[str, Any] | None = None
@@ -623,6 +667,7 @@ def collect(
     branch: str | None,
     seed_ref: str | None,
     outbox_dir: Path | None,
+    commit_conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """The full relic list for one run: summary first, then produce.
 
@@ -652,7 +697,7 @@ def collect(
         link_reported(rest_reported, links)
     auto = derive_auto(
         repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-        links=links,
+        links=links, commit_conversation_id=commit_conversation_id,
     )
     return dedupe(summary + auto + rest_reported)
 
@@ -779,6 +824,7 @@ def live_summary(
     branch: str | None,
     seed_ref: str | None,
     outbox_dir: Path | None,
+    commit_conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Compile the run's attested produce for its live portal facet.
 
@@ -795,7 +841,7 @@ def live_summary(
         records = dedupe(
             derive_auto(
                 root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-                links=links,
+                links=links, commit_conversation_id=commit_conversation_id,
             )
             + link_reported(read_reported(outbox_dir), links)
         )

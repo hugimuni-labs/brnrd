@@ -210,15 +210,22 @@ def build_closed_run_row(
     # nothing ever wrote it) ``task.meta["external_refs"]`` path so a task
     # that somehow pre-populated it directly doesn't regress.
     # Scope resolution handles the host-run case: no assigned branch, so the
-    # commits are measured from the checkout's run-start HEAD instead
-    # (relics.collection_scope) — otherwise a host run that merged its work
-    # into the seed branch books an empty manifest.
+    # candidate commits are measured from the checkout's run-start HEAD and
+    # filtered by conversation identity (relics.collection_scope / collect) —
+    # otherwise a host run either books an empty manifest after merging or
+    # falsely claims a concurrent sibling's commits (#565).
     relic_branch, relic_seed = relics.collection_scope(task.meta, work_dir)
     collected_relics = relics.collect(
         work_dir,
         branch=relic_branch,
         seed_ref=relic_seed,
         outbox_dir=outbox_dir,
+        # A host run measures a shared checkout.  Require its conversation
+        # trailer there; worktree branches remain isolated and need no filter.
+        commit_conversation_id=(
+            task.conversation_key or ""
+            if not task.meta.get("branch_name") else None
+        ),
     )
     row = {
         "run_id": task.id,

@@ -449,11 +449,49 @@ def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
     other.parent.mkdir(parents=True)
     other.write_text("another repo's page\n", encoding="utf-8")
     _git(knowledge_repo, "add", "-A")
-    _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
+    _git(
+        knowledge_repo,
+        "commit", "-q", "-m", "resident: mid-run kb work",
+        "--trailer", "Brnrd-Conversation-Id: telegram:kb-owner:",
+    )
 
-    assert knowledge.committed_pages_in_window(repo, start, cfg=cfg) == [
+    assert knowledge.committed_pages_in_window(
+        repo, start, conversation_id="telegram:kb-owner:", cfg=cfg,
+    ) == [
         "mid-run.md",
     ]
+
+
+def test_committed_pages_in_window_excludes_sibling_identity(tmp_path):
+    """#565: concurrency advances HEAD, but only identity proves ownership."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    start = knowledge.head_oid(repo, cfg)
+    assert start
+
+    ours = knowledge_repo / "repos" / "Gurio__brr" / "ours.md"
+    ours.write_text("ours\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(
+        knowledge_repo,
+        "commit", "-q", "-m", "owner work",
+        "--trailer", "Brnrd-Conversation-Id: telegram:owner:",
+    )
+    sibling = knowledge_repo / "repos" / "Gurio__brr" / "sibling.md"
+    sibling.write_text("sibling\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(
+        knowledge_repo,
+        "commit", "-q", "-m", "sibling work",
+        "--trailer", "Brnrd-Conversation-Id: schedule:sibling:",
+    )
+
+    assert knowledge.committed_pages_in_window(
+        repo, start, conversation_id="telegram:owner:", cfg=cfg,
+    ) == ["ours.md"]
+    assert knowledge.committed_pages_in_window(
+        repo, start, conversation_id=None, cfg=cfg,
+    ) == []
 
 
 def test_committed_pages_in_window_falls_back_on_bad_or_rewritten_oid(tmp_path):
@@ -466,17 +504,24 @@ def test_committed_pages_in_window_falls_back_on_bad_or_rewritten_oid(tmp_path):
     _git(knowledge_repo, "add", "-A")
     _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
 
-    assert knowledge.committed_pages_in_window(repo, None, cfg=cfg) == []
-    assert knowledge.committed_pages_in_window(repo, "", cfg=cfg) == []
+    identity = "telegram:kb-owner:"
     assert knowledge.committed_pages_in_window(
-        repo, "deadbeef" * 5, cfg=cfg,
+        repo, None, conversation_id=identity, cfg=cfg,
+    ) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "", conversation_id=identity, cfg=cfg,
+    ) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "deadbeef" * 5, conversation_id=identity, cfg=cfg,
     ) == []
     # An OID that resolves but is no ancestor of HEAD (rebase/gc rewrote
     # the window) — the ancestry guard refuses to diff across it.
     orphan = _git(
         knowledge_repo, "commit-tree", "HEAD^{tree}", "-m", "orphan",
     ).stdout.strip()
-    assert knowledge.committed_pages_in_window(repo, orphan, cfg=cfg) == []
+    assert knowledge.committed_pages_in_window(
+        repo, orphan, conversation_id=identity, cfg=cfg,
+    ) == []
 
 
 def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
@@ -484,7 +529,9 @@ def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
     init_git_repo(repo)
 
     assert knowledge.head_oid(repo, {}) is None
-    assert knowledge.committed_pages_in_window(repo, "deadbeef" * 5, cfg={}) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "deadbeef" * 5, conversation_id="telegram:none:", cfg={},
+    ) == []
 
 
 def test_capture_reconciles_a_stray_account_write_against_a_checkout_write(tmp_path):
