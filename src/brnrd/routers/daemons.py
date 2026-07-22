@@ -7,6 +7,7 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -130,32 +131,74 @@ def publishing_credential(
     repo = db.get(Repo, principal.repo_id)
     if repo is None or repo.forge != "github":
         raise HTTPException(status_code=404, detail="GitHub repo not found")
-    installed = db.execute(
+    # Match by forge repo id first: it is stable across transfers and renames,
+    # where the name is not. Order by installed-row freshness (last_seen_at)
+    # rather than installation sync time — a stale row's last_seen_at freezes
+    # when the repo leaves its installation, so freshness discriminates
+    # correctly where installation-level last_synced_at does not (#transfer
+    # incident 2026-07-22).
+    base_query = (
         select(GitHubInstalledRepo, GitHubInstallation)
         .join(
             GitHubInstallation,
             GitHubInstallation.id == GitHubInstalledRepo.github_installation_id,
         )
-        .where(
-            GitHubInstallation.account_id == principal.account_id,
-            GitHubInstalledRepo.repo_full_name == repo.repo_full_name,
-        )
-        .order_by(GitHubInstallation.last_synced_at.desc())
-    ).first()
+        .where(GitHubInstallation.account_id == principal.account_id)
+        .order_by(GitHubInstalledRepo.last_seen_at.desc())
+    )
+    installed = None
+    if repo.forge_repo_id:
+        installed = db.execute(
+            base_query.where(
+                GitHubInstalledRepo.forge_repo_id == repo.forge_repo_id
+            )
+        ).first()
+    if installed is None:
+        installed = db.execute(
+            base_query.where(
+                GitHubInstalledRepo.repo_full_name == repo.repo_full_name
+            )
+        ).first()
     if installed is None:
         raise HTTPException(status_code=409, detail="GitHub App is not installed for this repo")
     installed_repo, installation = installed
+    if installed_repo.repo_full_name != repo.repo_full_name:
+        # forge_repo_id matched under a different name ⇒ the repo was
+        # transferred or renamed. Self-heal the Repo row so name-keyed paths
+        # (webhook routing included) recover without operator surgery.
+        owner, _, name = installed_repo.repo_full_name.partition("/")
+        if owner and name:
+            repo.repo_full_name = installed_repo.repo_full_name
+            repo.repo_owner = owner
+            repo.repo_name = name
+            db.commit()
     raw_repo_id = installed_repo.forge_repo_id or repo.forge_repo_id
     try:
         repository_id = int(raw_repo_id or "")
     except ValueError:
         repository_id = None
-    credential = github_app_client.installation_access_credential(
-        request.app.state.settings,
-        installation.installation_id,
-        repository_ids=[repository_id] if repository_id is not None else None,
-        repositories=None if repository_id is not None else [repo.repo_name],
-    )
+    try:
+        credential = github_app_client.installation_access_credential(
+            request.app.state.settings,
+            installation.installation_id,
+            repository_ids=[repository_id] if repository_id is not None else None,
+            repositories=None if repository_id is not None else [repo.repo_name],
+        )
+    except httpx.HTTPStatusError as exc:
+        gh_status = exc.response.status_code
+        hint = (
+            "; the installation likely no longer covers this repo — "
+            "re-sync the GitHub App installation"
+            if gh_status == 422
+            else ""
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"GitHub declined the installation token mint with "
+                f"status {gh_status}{hint}"
+            ),
+        ) from exc
     response.headers["Cache-Control"] = "no-store"
     return schemas.PublishingCredential(
         token=credential["token"],
