@@ -144,9 +144,12 @@ def latest_claude_usage_outbox_dir(brr_dir: Path) -> Path | None:
     itself — a shared-level reader that has no "current run" of its own (the
     schedule-pacing read in ``daemon._fire_due_schedules``, the dashboard
     quota publish in ``brr.gates.cloud``) has to go find the freshest one.
-    brr is single-flight per dominion, so "freshest mtime" is the same
-    heuristic :func:`codex_status._latest_rollout` uses for Codex. Returns
-    ``None`` when no run has ever cached one (cold daemon, or Codex-only).
+    Same "freshest mtime" shape as :func:`codex_status._latest_rollout_fallback`
+    — the compatibility fallback Codex now falls back to only when it has no
+    ``thread_id`` to correlate on exactly (issue #195); Claude's outbox scan
+    here has no comparable per-run id to correlate on, so it keeps the
+    mtime guess unconditionally. Returns ``None`` when no run has ever cached
+    one (cold daemon, or Codex-only).
     """
     from . import claude_usage
 
