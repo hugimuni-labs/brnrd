@@ -202,3 +202,16 @@ session logs first; if none exist, a PTY scrape may still be viable, but cache i
 and label the source quality honestly. Always fire the collector in the actual
 run mode (`--print`/`exec`/interactive PTY) before trusting it — "the UI has the
 field" ≠ "brr receives the field cheaply."
+
+## A run's final reply kills its watchers — don't close out while waiting on a verdict
+trigger: watcher armed, still waiting on the backend suite, re-invokes this run, background suite, spawn finished status=done uncommitted, stranded worktree, linger to review
+Seen 2026-07-22 (run-260722-0753-slsr, #327 jinja-connect-port): the worker armed a
+background watcher for the backend suite, then emitted its terminal reply — brr
+finalized the run on that reply and the watcher died with the process. Result:
+status=done, publish nothing, all work stranded uncommitted; its message_path and
+/tmp report were never written. The "background task re-invokes you" contract holds
+only *within* a live thought — it does not survive closeout. If a verdict is still
+pending: extend `.keepalive`, wait in-thought (Monitor/background task, no terminal
+reply), or commit first and let a reviewer re-run the suite. The parent/reviewer
+wake should always check the child's worktree for uncommitted work before trusting
+status=done.
