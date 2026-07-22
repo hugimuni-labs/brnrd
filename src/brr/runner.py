@@ -1781,11 +1781,10 @@ def invoke_runner(
     # ``event_processor_with_jsonl_output.rs``); the rollout filename embeds
     # the same id, which ``codex_status._rollout_for_thread`` matches
     # exactly. ``-o <file>`` asks codex to *also* write the plain
-    # final-message text to a file -- confirmed against
-    # ``event_processor.rs::handle_last_message`` to be byte-for-byte the
-    # same string plain-mode stdout would have printed via
-    # ``println!("{message}")`` -- so swapping the captured "stdout" for
-    # that file's content below is invisible to every existing consumer
+    # final-message text to a file. ``handle_last_message`` writes raw bytes,
+    # while plain mode uses ``println!("{message}")``; the read below restores
+    # that one trailing newline so swapping the captured stdout stays
+    # byte-equivalent for every existing consumer
     # (response file, hooks, terminal reply); only *where* brr reads the
     # reply from changes. The file lives inside `capture_dir` so
     # `_retire_capture_dir` cleans it up on success and keeps it for
@@ -1882,12 +1881,17 @@ def invoke_runner(
         # turn that failed/was interrupted never gets a last-message file
         # either (codex only writes one on a completed turn), matching
         # plain mode's own behaviour of printing nothing in that case.
-        stdout = (
-            _read_capture(codex_last_message_path)
-            if codex_last_message_path is not None
+        if (
+            codex_last_message_path is not None
             and codex_last_message_path.exists()
-            else ""
-        )
+        ):
+            # `--output-last-message` writes the message bytes; plain-mode
+            # stdout uses Rust's `println!` and appends one newline. Preserve
+            # that existing stdout contract exactly, including when the
+            # message itself already ends in a newline.
+            stdout = _read_capture(codex_last_message_path) + "\n"
+        else:
+            stdout = ""
     _retire_capture_dir(capture_dir, returncode)
 
     stdout, observed_core = _process_runner_stdout(
