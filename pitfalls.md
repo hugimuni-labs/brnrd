@@ -230,3 +230,36 @@ a silent merge forces full re-review; (2) never start a second merge inside a
 closeout window you can't finish the choreography in — leave it for the
 spawn_completed wake that's already coming; (3) a reviewer landing on an
 unexplained merge should re-review rather than trust the commit's existence.
+
+## Two dispatchers can double-spawn the same issue — check flight status by *issue*, not branch
+trigger: spawn_completed review, duplicate dispatch, dedup, director tick, hourly release tick, one-dispatch-per-tick, in-flight check, same issue two branches
+Seen 2026-07-22 (run-260722-2337-nig2 vs -pqav, both #565): the 23:42 tick folded
+the hourly release-push grant into the 5h director tick and spawned "two bounded,
+not-in-flight fixes" — but *both* landed on #565 (stopped-run kb credit) under
+different branch names: nig2 → `brr/produce-attribute-by-identity` (finished,
+pushed, trailer-based design), pqav → `brr/stopped-run-kb-credit` (uncommitted WIP,
+broader design touching relics.py/run_ledger.py). The one-dispatch-per-tick and
+"already-in-flight" guards both check *branch/PR* references, so two dispatchers (or
+one tick minting two) can each pick the same top issue and collide when neither has
+opened a branch yet. Lessons: (1) the in-flight check must key on the *issue* the
+move addresses, not just an existing branch/PR name — an unstarted second dispatch
+of the same issue is the gap; (2) on a spawn_completed review, before merging, scan
+sibling worktrees for another branch solving the *same issue* under a different name
+(`git worktree list` + status), not only the branch you were sent; (3) don't merge
+one design while a sibling's competing design for the same issue is mid-flight —
+that's the #234 mid-work lesson; leave both, surface the pick to the maintainer.
+
+## gh auth lapses recur — the director tick's "re-derive from open issues/PRs" premise silently degrades
+trigger: gh auth status, gh auth login, GH_TOKEN, director tick, re-derive from GH, gh pr list, gh issue list, forge merge, token expired
+Seen 2026-07-22 (run-260722-2353-91xa): `gh auth status` = "not logged into any
+GitHub hosts", GH_TOKEN unset — same class of token lapse the 07-20 tick had to
+repair ("the token came back live"). This blocks the whole director-tick premise
+(re-derive ranked moves from `gh issue list`/`gh pr list`) *and* any forge merge, but
+degrades silently: `gh` prints a login hint to stderr and every list returns empty,
+which reads as "no open PRs/issues" rather than "auth down". Lessons: (1) a director
+tick that gets empty `gh` output must check `gh auth status` before trusting it as
+current state — empty ≠ nothing open; (2) forge merge/PR actions are impossible
+while auth is down, so "merge the clean ones" collapses to "review + leave branch,
+report the blocker"; (3) recurring enough to warrant a durable fix (a refreshed
+long-lived token or a preflight auth check the tick runs first) — flag to maintainer,
+don't just re-repair each lapse.
