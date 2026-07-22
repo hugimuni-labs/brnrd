@@ -6750,6 +6750,145 @@ def _recorded_pid_alive(task: Run) -> bool:
     return bool(pid and presence.pid_alive(pid))
 
 
+def _mark_interrupted_runs(
+    account_context: account.AccountContext,
+    repo_root: Path,
+    cfg: dict,
+    *,
+    now: float | None = None,
+    stale_after_seconds: float = _RUN_STATE_REAP_AFTER_SECONDS,
+) -> int:
+    """Boot-time marker for runs a dead daemon left frozen mid-flight (#316).
+
+    A host suspend/crash/OOM kills the daemon between a run's dispatch and
+    its terminal packet, so the chat status card freezes on its last
+    rendered text ("running · 1m 03s") with no signal that anything went
+    wrong. The event-retry mechanism already recovers the *work* — the
+    still-``processing`` event is re-dispatched as a new run — but nothing
+    ever tells the old run's card its story ended. This sweep closes
+    exactly that gap: it marks the orphaned run record with a dedicated
+    ``failure_kind`` (``host_interrupted``) and emits the terminal
+    ``failed`` packet the dead daemon never got to send, so the frozen
+    card re-renders as "interrupted" (plus a retry note when the event is
+    still dispatchable). It deliberately touches **no event state** — the
+    retry path stays exactly as it was.
+
+    Proof discipline mirrors ``_reconcile_orphaned_spawn_dispatches``
+    below, conservative by construction:
+
+    - **presence is the live authority**: a live presence entry for the
+      run ⇒ leave it alone;
+    - **the recorded dispatcher pid**: the manifest's ``pid`` still alive
+      ⇒ the dispatching process may still be mid-flight ⇒ leave it alone
+      (this also protects dev-reload re-execs, which keep the same pid);
+    - **proof of death**: a recorded pid that is *dead* is affirmative
+      proof here — ``_run_worker`` persists the dispatching daemon's pid
+      on the manifest precisely "so that future boot can prove the
+      process which owned the run is gone". Unlike the spawn-event sweep
+      (where an event may have no run record or pid at all), every
+      manifest this sweep judges documents its owner. Manifests with no
+      recorded pid fall back to the janitors' conservative staleness
+      horizon (*stale_after_seconds*, default 24h) — the timestamp is
+      the fallback, never the preferred evidence.
+
+    Idempotent by the status transition itself: the sweep moves the
+    manifest to ``error``, and a terminal manifest never matches the
+    unfinished-status filter again, so a second boot cannot double-emit.
+    Runs before the zombie janitors in ``start()`` so a manifest they
+    would silently reap gets its card told first.
+    """
+    timestamp = time.time() if now is None else now
+    marked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+    # Events still eligible for the main loop's crash-recovery re-dispatch:
+    # the honest basis for the card's "retrying" tail. Read, not asserted —
+    # the sweep never changes event state.
+    retry_eligible: set[str] = set()
+    try:
+        for target in _dispatchable_targets(account_context, repo_root, cfg):
+            eid = str(target.event.get("id") or "")
+            if eid:
+                retry_eligible.add(eid)
+    except Exception:  # noqa: BLE001 - retry hint is advisory, never blocking
+        pass
+    roots: dict[Path, Path] = {}
+    for candidate in [repo_root] + [
+        registered.root for registered in account_context.repos.values()
+    ]:
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        roots.setdefault(key, candidate)
+    marked = 0
+    for root in roots.values():
+        brr_dir = gitops.shared_brr_dir(root)
+        runs_dir = brr_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+        live_run_ids = {
+            str(entry.get("run_id") or "")
+            for entry in presence.list_active(brr_dir, now=timestamp)
+        }
+        for task in list_runs(runs_dir):
+            if task.status.casefold() not in _UNFINISHED_RUN_STATUSES:
+                continue
+            if task.id in live_run_ids:
+                continue
+            if _recorded_pid_alive(task):
+                continue
+            try:
+                pid = int(task.meta.get("pid") or 0)
+            except (TypeError, ValueError):
+                pid = 0
+            if pid:
+                proof = f"its dispatching daemon (pid {pid}) is gone"
+            else:
+                try:
+                    modified_at = run_manifest_path(
+                        runs_dir, task.id).stat().st_mtime
+                except OSError:
+                    continue
+                if timestamp - modified_at < stale_after_seconds:
+                    # No pid recorded and still inside the safety horizon:
+                    # "not provably alive" is not "provably dead".
+                    continue
+                proof = (
+                    "no recorded pid and no manifest write inside the "
+                    "safety horizon"
+                )
+            will_retry = bool(task.event_id and task.event_id in retry_eligible)
+            # Status first, packet after — same order as the spawn
+            # reconciliation sweep: a crash between the two loses one card
+            # update; the reverse order would re-emit on every restart
+            # that hits the window.
+            task.meta["failure_kind"] = runner_failures.HOST_INTERRUPTED
+            task.meta["interrupted_at"] = marked_at
+            task.meta["interrupt_reason"] = (
+                f"boot interrupted-run marker: {proof}"
+            )
+            task.update_status("error", runs_dir)
+            error_text = (
+                "the daemon was interrupted (host suspend/crash) while "
+                "this run was in flight"
+            )
+            if will_retry:
+                error_text += "; retrying the event on a fresh run"
+            _WorkerEmit(brr_dir, task.conversation_key, task.event_id)(
+                "failed",
+                run_id=task.id,
+                event_id=task.event_id,
+                stage="interrupted",
+                failure_kind=runner_failures.HOST_INTERRUPTED,
+                error=error_text,
+            )
+            marked += 1
+            print(
+                f"[brnrd] interrupted-run marker: {task.id} marked "
+                f"host_interrupted ({proof})"
+            )
+    return marked
+
+
 def _reconcile_orphaned_spawn_dispatches(
     account_context: account.AccountContext,
     repo_root: Path,
@@ -7686,6 +7825,21 @@ def start(
 
     cfg = conf.load_config(repo_root)
     account_context = account.resolve_context(repo_root, cfg)
+    # #316: mark runs the previous daemon process left frozen mid-flight
+    # so their chat cards read "interrupted" instead of stale running
+    # text. Must run before the zombie janitors (which would silently
+    # move the same manifests to terminal without telling the card) and
+    # before the first dispatch scan (which re-dispatches the event as a
+    # fresh run — the marker is what makes that card story truthful).
+    try:
+        interrupted = _mark_interrupted_runs(account_context, repo_root, cfg)
+        if interrupted:
+            print(
+                "[brnrd] interrupted-run marker: marked "
+                f"{interrupted} interrupted run(s)"
+            )
+    except Exception as exc:  # noqa: BLE001 - marker must not block boot
+        print(f"[brnrd] interrupted-run marker skipped: {exc}")
     _sweep_zombie_runs(account_context)
     try:
         backfilled = _backfill_dispatch_edges(account_context)
