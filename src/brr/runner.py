@@ -478,6 +478,13 @@ class RunnerResult:
     # diagnostics, so they retain this exact capture while ``stderr`` is safe
     # to put in daemon packets and terminal replies.
     trace_stderr: str | None = field(default=None, repr=False)
+    # The Codex thread id proven by this invocation's own ``thread.started``
+    # event (see ``_extract_codex_thread_id``), or ``None`` when the Shell
+    # isn't codex, the id wasn't captured, or a pinned ``runner_cmd``
+    # override skipped correlation entirely. Rides on the per-invocation
+    # result rather than any module-global — a concurrent sibling run's id
+    # must never be reachable from here (issue #195 multi-run safety).
+    codex_thread_id: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -1470,6 +1477,41 @@ def _uses_codex_shell(selected: object, selected_name: str, cmd: list[str]) -> b
     return str(shell).strip().lower() == "codex"
 
 
+def _extract_codex_thread_id(stdout: str) -> str | None:
+    """Pull the ``thread_id`` out of codex's ``--json`` JSONL event stream.
+
+    ``codex exec --json``'s very first stdout line is always
+    ``{"type":"thread.started","thread_id":"…"}`` (fixed by
+    ``EventProcessorWithJsonOutput::print_config_summary`` in codex-rs) — the
+    same id the rollout filename embeds
+    (``rollout-…-<thread_id>.jsonl``), which is what makes exact per-run
+    correlation possible (issue #195) instead of the old newest-mtime guess.
+
+    Scans line by line rather than trusting position 0: a stray blank line
+    or a warning ahead of it costs nothing to skip past, and codex's JSONL
+    schema is upstream's to change without notice. Never raises — a missing
+    stream, a line that isn't JSON, an object missing the field, or a
+    non-string id are all "not found," identical to a pre-``--json`` runner
+    that never emitted the event at all.
+    """
+    if not stdout:
+        return None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or '"thread.started"' not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != "thread.started":
+            continue
+        thread_id = record.get("thread_id")
+        if isinstance(thread_id, str) and thread_id.strip():
+            return thread_id.strip()
+    return None
+
+
 def _retire_capture_dir(capture_dir: Path, returncode: int) -> None:
     """Delete the capture on a clean run; *keep it* when something went wrong.
 
@@ -1656,6 +1698,46 @@ def invoke_runner(
         invocation.repo_root,
         extra_args=invocation.extra_runner_args,
     )
+    # Capture to *disk*, not to in-memory pipes. `communicate()` returns only when
+    # the child exits, so a killed runner used to hand back two empty strings --
+    # every kill looked identical (budget SIGKILL, OOM, an agent's own stray
+    # `pkill`) and none of them left a byte to diagnose. Observed 2026-07-07
+    # (run-260707-1154-kem3) and again 2026-07-14 (run-260714-1442-hgc3): exit 143,
+    # zero output, cause unknown for a week. Files are written by the child as it
+    # runs, so whatever it managed to say survives its own death.
+    capture_dir = _live_capture_dir(invocation.repo_root)
+    out_path = capture_dir / "stdout.txt"
+    err_path = capture_dir / "stderr.txt"
+    # Codex thread-id correlation (issue #195). Plain ``codex exec`` prints
+    # only the final message to stdout -- no run identity at all -- so brr
+    # cannot tell *which* on-disk session rollout is *this* invocation's
+    # without asking codex to say so. ``--json`` turns stdout into one JSONL
+    # event per line, whose first event is always
+    # ``{"type":"thread.started","thread_id":…}`` (verified against
+    # ``codex-rs/exec/src/exec_events.rs`` and
+    # ``event_processor_with_jsonl_output.rs``); the rollout filename embeds
+    # the same id, which ``codex_status._rollout_for_thread`` matches
+    # exactly. ``-o <file>`` asks codex to *also* write the plain
+    # final-message text to a file -- confirmed against
+    # ``event_processor.rs::handle_last_message`` to be byte-for-byte the
+    # same string plain-mode stdout would have printed via
+    # ``println!("{message}")`` -- so swapping the captured "stdout" for
+    # that file's content below is invisible to every existing consumer
+    # (response file, hooks, terminal reply); only *where* brr reads the
+    # reply from changes. The file lives inside `capture_dir` so
+    # `_retire_capture_dir` cleans it up on success and keeps it for
+    # diagnosis on failure, exactly like stdout.txt/stderr.txt -- no
+    # separate lifecycle. Skipped under a pinned `runner_cmd` override: that
+    # argv is the user's, verbatim, the same rule `extra_runner_args`
+    # already follows.
+    codex_correlation = (
+        _uses_codex_shell(selected, selected_name, cmd_template)
+        and not cfg.get("runner_cmd")
+    )
+    codex_last_message_path: Path | None = None
+    if codex_correlation:
+        codex_last_message_path = capture_dir / "last-message.txt"
+        cmd_template = [*cmd_template, "--json", "-o", str(codex_last_message_path)]
     cmd = _fill_prompt(cmd_template, invocation.prompt, cfg)
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
     # stdin and argv are mutually exclusive prompt channels; the *template*
@@ -1673,16 +1755,6 @@ def invoke_runner(
     stderr = ""
     returncode = 0
     timed_out = False
-    # Capture to *disk*, not to in-memory pipes. `communicate()` returns only when
-    # the child exits, so a killed runner used to hand back two empty strings --
-    # every kill looked identical (budget SIGKILL, OOM, an agent's own stray
-    # `pkill`) and none of them left a byte to diagnose. Observed 2026-07-07
-    # (run-260707-1154-kem3) and again 2026-07-14 (run-260714-1442-hgc3): exit 143,
-    # zero output, cause unknown for a week. Files are written by the child as it
-    # runs, so whatever it managed to say survives its own death.
-    capture_dir = _live_capture_dir(invocation.repo_root)
-    out_path = capture_dir / "stdout.txt"
-    err_path = capture_dir / "stderr.txt"
     try:
         with open(out_path, "w", encoding="utf-8") as f_out, \
                 open(err_path, "w", encoding="utf-8") as f_err:
@@ -1744,6 +1816,25 @@ def invoke_runner(
         stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
     if _uses_codex_shell(selected, selected_name, cmd):
         stderr = _strip_prompt_echo(stderr, invocation.prompt)
+    codex_thread_id: str | None = None
+    if codex_correlation and returncode != 127:
+        # `stdout` here is still the raw JSONL stream (pre-swap) -- exactly
+        # what `_extract_codex_thread_id` expects. A malformed/absent
+        # `thread.started` line yields None, never a crash (requirement:
+        # honest absence, not a fabricated id).
+        codex_thread_id = _extract_codex_thread_id(stdout)
+        # Swap the captured "stdout" for the `-o` file's plain final-message
+        # text -- see the comment above `codex_correlation` for why this is
+        # content-equivalent to what plain-mode stdout would have held. A
+        # turn that failed/was interrupted never gets a last-message file
+        # either (codex only writes one on a completed turn), matching
+        # plain mode's own behaviour of printing nothing in that case.
+        stdout = (
+            _read_capture(codex_last_message_path)
+            if codex_last_message_path is not None
+            and codex_last_message_path.exists()
+            else ""
+        )
     _retire_capture_dir(capture_dir, returncode)
 
     stdout, observed_core = _process_runner_stdout(
@@ -1785,6 +1876,7 @@ def invoke_runner(
         observed_core=observed_core,
         core_mismatch=mismatch,
         trace_stderr=trace_stderr,
+        codex_thread_id=codex_thread_id,
     )
     if trace:
         result.trace_dir = _write_trace(result)

@@ -2036,3 +2036,174 @@ class TestDeclaredCmdOnlyRunnerEndToEnd:
         )
         assert result.has_response
         assert response_path.read_text(encoding="utf-8") == "script reply\n"
+
+
+class TestCodexThreadCorrelation:
+    """Issue #195: `codex exec` alone prints only the final message to
+    stdout, no run identity at all. `invoke_runner` must add `--json -o
+    <file>` on the codex path, learn the run's `thread_id` from the JSONL
+    stream, and swap the captured "stdout" for the `-o` file's content so
+    every existing consumer (response file, terminal reply) sees the exact
+    same final-message text as before — never the raw JSONL."""
+
+    def setup_method(self):
+        from brr import runner_select
+
+        self._CODEX = runner_select.RunnerProfile(
+            name="codex", profile="codex", shell="codex",
+        )
+
+    @staticmethod
+    def _last_message_path(cmd: list[str]) -> str:
+        return cmd[cmd.index("-o") + 1]
+
+    def test_codex_invocation_gains_json_and_output_last_message_flags(
+        self, tmp_path, monkeypatch,
+    ):
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _fake_proc(kwargs, out='{"type":"thread.started","thread_id":"t-1"}\n')
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-json", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        invoke_runner(self._CODEX, invocation, cfg={})
+
+        cmd = captured["cmd"]
+        assert "--json" in cmd
+        assert "-o" in cmd
+        assert cmd[0] == "codex"
+
+    def test_thread_id_captured_and_stdout_swapped_for_last_message(
+        self, tmp_path, monkeypatch,
+    ):
+        def _fake_popen(cmd, **kwargs):
+            # Simulate the real codex binary: JSONL events on stdout, the
+            # plain final-message text written separately to the `-o` file.
+            last_message_path = self._last_message_path(cmd)
+            with open(last_message_path, "w", encoding="utf-8") as handle:
+                handle.write("the final agent reply")
+            jsonl = "\n".join([
+                '{"type":"thread.started","thread_id":"abc-123-thread"}',
+                '{"type":"turn.started"}',
+                '{"type":"turn.completed","usage":{"input_tokens":1,'
+                '"cached_input_tokens":0,"output_tokens":1,'
+                '"reasoning_output_tokens":0}}',
+            ])
+            return _fake_proc(kwargs, out=jsonl)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-swap", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert result.codex_thread_id == "abc-123-thread"
+        # The reply any existing caller sees is the plain final-message
+        # text, byte-identical to what plain-mode stdout would have held —
+        # never the raw JSONL the correlation logic consumed internally.
+        assert result.stdout == "the final agent reply"
+        assert "thread.started" not in result.stdout
+
+    def test_missing_last_message_file_yields_empty_stdout_not_jsonl(
+        self, tmp_path, monkeypatch,
+    ):
+        """A turn that failed/was interrupted never gets a last-message
+        file (codex only writes one on a completed turn) — plain mode
+        prints nothing in that case too, so this must not leak the raw
+        JSONL as a fake "reply."""
+        def _fake_popen(cmd, **kwargs):
+            return _fake_proc(
+                kwargs, out='{"type":"thread.started","thread_id":"nope"}\n',
+                code=1,
+            )
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-interrupted", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert result.codex_thread_id == "nope"
+        assert result.stdout == ""
+
+    def test_malformed_or_missing_thread_started_event_is_honest_none(
+        self, tmp_path, monkeypatch,
+    ):
+        def _fake_popen(cmd, **kwargs):
+            last_message_path = self._last_message_path(cmd)
+            open(last_message_path, "w", encoding="utf-8").write("reply text")
+            return _fake_proc(kwargs, out="not even json\n{}\n")
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-malformed", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert result.codex_thread_id is None
+        # Correlation failing must never take the reply down with it.
+        assert result.stdout == "reply text"
+
+    def test_runner_cmd_override_skips_json_correlation_entirely(
+        self, tmp_path, monkeypatch,
+    ):
+        """A pinned `runner_cmd` is the user's argv, verbatim — the same
+        rule `extra_runner_args` already follows must hold for `--json`/
+        `-o` too."""
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _fake_proc(kwargs, out="plain reply\n")
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-pinned", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+        )
+
+        result = invoke_runner(
+            self._CODEX, invocation, cfg={"runner_cmd": ["mock"]},
+        )
+
+        assert captured["cmd"] == ["mock"]
+        assert result.codex_thread_id is None
+        assert result.stdout == "plain reply\n"
+
+
+class TestExtractCodexThreadId:
+    def test_finds_thread_id_amid_other_events(self):
+        from brr.runner import _extract_codex_thread_id
+
+        stdout = "\n".join([
+            "",
+            '{"type":"turn.started"}',
+            '{"type":"thread.started","thread_id":"real-id"}',
+            '{"type":"item.completed"}',
+        ])
+        assert _extract_codex_thread_id(stdout) == "real-id"
+
+    def test_none_for_empty_or_malformed_or_wrong_shape(self):
+        from brr.runner import _extract_codex_thread_id
+
+        assert _extract_codex_thread_id("") is None
+        assert _extract_codex_thread_id("not json at all") is None
+        assert _extract_codex_thread_id('{"type":"thread.started"}') is None
+        assert _extract_codex_thread_id(
+            '{"type":"thread.started","thread_id":123}'
+        ) is None
+        assert _extract_codex_thread_id(
+            '{"type":"thread.started","thread_id":""}'
+        ) is None
