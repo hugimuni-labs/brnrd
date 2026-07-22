@@ -1797,6 +1797,7 @@ def build_daemon_prompt(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    update_available: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     runner_name: str | None = None,
     runner_shell: str | None = None,
@@ -1858,6 +1859,7 @@ def build_daemon_prompt(
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
         runner_quota=runner_quota,
+        update_available=update_available,
         runner_shell=runner_shell,
         runner_catalog=runner_catalog,
         repo_root=repo_root,
@@ -2016,6 +2018,7 @@ def _build_run_context_bundle(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    update_available: str | None = None,
     runner_shell: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     repo_root: Path,
@@ -2076,6 +2079,8 @@ def _build_run_context_bundle(
         )
         if runner_quota:
             sections.append(f"- Quota: {runner_quota}")
+    if update_available:
+        sections.append(f"- {update_available}")
     # Native web-research declaration (issue #411 L0): always present, so a
     # waking resident never has to guess whether its Shell can verify a
     # changing fact — a missing declaration is itself the "undeclared" answer.

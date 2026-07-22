@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, presence, protocol
+from brr import daemon, envs, presence, protocol, release_availability
 from brr import schedule as schedule_mod
 from brr.run import Run
 from brr.runner import RunnerResult
@@ -1713,6 +1713,20 @@ def _boot_daemon_once(tmp_path, monkeypatch):
 def _age_path(path, seconds):
     old = time.time() - seconds
     os.utime(path, (old, old))
+
+
+def test_daemon_start_reports_available_update(tmp_path, monkeypatch, capsys):
+    (tmp_path / "AGENTS.md").write_text("test\n", encoding="utf-8")
+
+    def refresh(_repo_root, *, on_complete=None):
+        assert on_complete is not None
+        on_complete(release_availability.Availability("0.1.0", "0.2.0"))
+        return False
+
+    monkeypatch.setattr(release_availability, "refresh_if_stale_async", refresh)
+    _boot_daemon_once(tmp_path, monkeypatch)
+
+    assert "[brnrd] update available: 0.1.0 → 0.2.0" in capsys.readouterr().out
 
 
 def test_orphaned_spawn_reconciled_to_parent_on_restart(tmp_path, monkeypatch):
