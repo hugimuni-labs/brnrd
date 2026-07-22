@@ -6,18 +6,123 @@ import {
 	fileDirKey,
 	groupByLayer,
 	headingAnchor,
+	hiddenCount,
 	inlineTokens,
 	markdownBlocks,
+	previewBlock,
 	splitIntoSections,
+	PREVIEW_ITEMS,
 	SECTION_THRESHOLD
 } from './surface.ts';
 
 test('markdownBlocks keeps authored structure as data', () => {
 	assert.deepEqual(markdownBlocks('# Work\n\n- one\n- two\n\n```\n<x>\n```'), [
 		{ kind: 'heading', level: 1, text: 'Work' },
-		{ kind: 'list', ordered: false, items: ['one', 'two'] },
+		{ kind: 'list', ordered: false, items: [{ text: 'one' }, { text: 'two' }] },
 		{ kind: 'code', text: '<x>' }
 	]);
+});
+
+// ── List chunking: one list stays one list ────────────────────────────────────
+
+test('markdownBlocks folds wrapped continuation lines into their item', () => {
+	// The live ranked-moves shape: bold lead, then a 3-space continuation. Before
+	// this, each item became its own <ol> (all numbered 1.) with the remainder
+	// orphaned as a top-level paragraph.
+	const blocks = markdownBlocks(
+		'1. **First** — opening clause\n   and its wrapped remainder.\n2. **Second** — another.\n'
+	);
+	assert.equal(blocks.length, 1);
+	const list = blocks[0];
+	assert.equal(list.kind, 'list');
+	if (list.kind !== 'list') return;
+	assert.equal(list.ordered, true);
+	assert.equal(list.start, 1);
+	assert.deepEqual(list.items, [
+		{ text: '**First** — opening clause and its wrapped remainder.' },
+		{ text: '**Second** — another.' }
+	]);
+});
+
+test('markdownBlocks keeps an ordered list whole across a lazy continuation', () => {
+	const blocks = markdownBlocks('1. one\nunindented wrap\n2. two\n');
+	assert.equal(blocks.length, 1);
+	const list = blocks[0];
+	assert.ok(list.kind === 'list' && list.items.length === 2);
+});
+
+test('markdownBlocks nests a sub-list under its parent item', () => {
+	const blocks = markdownBlocks('- parent\n  - kid a\n  - kid b\n- sibling\n');
+	assert.equal(blocks.length, 1);
+	const list = blocks[0];
+	assert.ok(list.kind === 'list');
+	if (list.kind !== 'list') return;
+	assert.equal(list.items.length, 2);
+	assert.equal(list.items[0].text, 'parent');
+	const kids = list.items[0].children;
+	assert.ok(kids && kids.length === 1 && kids[0].kind === 'list');
+	assert.deepEqual(kids[0].kind === 'list' ? kids[0].items : null, [
+		{ text: 'kid a' },
+		{ text: 'kid b' }
+	]);
+	assert.equal(list.items[1].text, 'sibling');
+});
+
+test('markdownBlocks keeps a loose list (blank lines between items) whole', () => {
+	const blocks = markdownBlocks('- one\n\n- two\n\n- three\n');
+	assert.equal(blocks.length, 1);
+	assert.ok(blocks[0].kind === 'list' && blocks[0].items.length === 3);
+});
+
+test('markdownBlocks records the authored start of an ordered list', () => {
+	const blocks = markdownBlocks('3. third\n4. fourth\n');
+	assert.ok(blocks[0].kind === 'list' && blocks[0].start === 3);
+});
+
+test('markdownBlocks does not merge a bullet list into an ordered one', () => {
+	const blocks = markdownBlocks('- bullet\n1. number\n');
+	assert.equal(blocks.length, 2);
+	assert.ok(blocks[0].kind === 'list' && blocks[0].ordered === false);
+	assert.ok(blocks[1].kind === 'list' && blocks[1].ordered === true);
+});
+
+test('markdownBlocks carries an indented code block inside its item', () => {
+	const blocks = markdownBlocks('- item\n\n  ```\n  x = 1\n  ```\n\n- next\n');
+	assert.equal(blocks.length, 1);
+	const list = blocks[0];
+	assert.ok(list.kind === 'list' && list.items.length === 2);
+	if (list.kind !== 'list') return;
+	assert.deepEqual(list.items[0].children, [{ kind: 'code', text: 'x = 1' }]);
+});
+
+test('inlineTokens renders backticked spans as code tokens', () => {
+	const tokens = inlineTokens('run `brr status` now', 'index.md', new Set());
+	assert.deepEqual(tokens, [
+		{ kind: 'text', text: 'run ' },
+		{ kind: 'code', text: 'brr status' },
+		{ kind: 'text', text: ' now' }
+	]);
+});
+
+test('previewBlock clamps a collapsed list by item and hiddenCount reports it', () => {
+	const list = {
+		kind: 'list' as const,
+		ordered: true,
+		start: 1,
+		items: [{ text: 'a' }, { text: 'b' }, { text: 'c' }, { text: 'd' }]
+	};
+	const section = {
+		heading: null,
+		preview: list,
+		tail: [{ kind: 'paragraph' as const, text: 'z' }]
+	};
+	const clamped = previewBlock(list, true);
+	assert.ok(clamped.kind === 'list' && clamped.items.length === PREVIEW_ITEMS);
+	// The list's own numbering survives the clamp — no restart at 1 elsewhere.
+	assert.ok(clamped.kind === 'list' && clamped.start === 1);
+	// Expanding restores every item, so nothing is reachable only via the clamp.
+	assert.equal(previewBlock(list, false), list);
+	assert.equal(hiddenCount(section), 1 + (4 - PREVIEW_ITEMS));
 });
 
 test('inlineTokens resolves known relative pages and refuses script links', () => {
@@ -186,4 +291,33 @@ test('inlineTokens keeps same-page fragment links navigable', () => {
 	const link = tokens[0];
 	assert.equal(link.kind === 'link' && link.target, 'knowledge/index.md');
 	assert.equal(link.kind === 'link' && link.anchor, 'section-two');
+});
+
+test('splitIntoSections weighs list items, so a list-heavy page still folds', () => {
+	// 6 blocks, but the lists carry 12 items — before item-weighting this page
+	// rendered flat and the reader lost the fold on exactly the ranked plans the
+	// outline exists for.
+	const blocks = [
+		{ kind: 'heading' as const, level: 2, text: 'Alpha' },
+		{ kind: 'paragraph' as const, text: 'a' },
+		{
+			kind: 'list' as const,
+			ordered: true,
+			start: 1,
+			items: Array.from({ length: 8 }, (_, i) => ({ text: `i${i}` }))
+		},
+		{ kind: 'heading' as const, level: 2, text: 'Beta' },
+		{ kind: 'paragraph' as const, text: 'b' },
+		{
+			kind: 'list' as const,
+			ordered: false,
+			items: Array.from({ length: 4 }, (_, i) => ({ text: `j${i}` }))
+		}
+	];
+	const sections = splitIntoSections(blocks);
+	assert.ok(sections !== null);
+	assert.equal(sections!.length, 2);
+	assert.equal(sections![0].preview?.kind, 'paragraph');
+	assert.equal(sections![0].tail.length, 1); // the whole list, unsplit
+	assert.equal(sections![0].tail[0].kind, 'list');
 });
