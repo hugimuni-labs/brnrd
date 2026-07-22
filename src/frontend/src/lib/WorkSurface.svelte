@@ -10,7 +10,9 @@
 		fileDirKey,
 		fileLayer,
 		headingAnchor,
+		hiddenCount,
 		markdownBlocks,
+		previewBlock,
 		splitIntoSections,
 		type SurfaceResponse
 	} from './surface';
@@ -204,7 +206,7 @@
 				{/each}
 			</nav>
 
-			<article class="subpanel min-w-0 p-4 text-sm text-stone-300" in:fade={{ duration: 120 }}>
+			<article class="subpanel min-w-0 p-4 text-sm text-stone-400" in:fade={{ duration: 120 }}>
 				<!-- Pane header: path + expand/collapse all (when outline mode is active) -->
 				<div class="mb-3 flex items-baseline justify-between gap-2 border-b border-stone-800 pb-2">
 					<span class="font-mono text-[10px] text-ink-mute">{selected?.path}</span>
@@ -228,6 +230,8 @@
 					<!-- Outline reader: each section collapses to heading + preview.
 					     Preamble content (before the first split heading) is always visible. -->
 					{#each sections as section, i (i)}
+						{@const collapsed = !!section.heading && !expandedSections.has(i)}
+						{@const hidden = hiddenCount(section)}
 						<div class="mb-3">
 							{#if section.heading}
 								<!-- Section heading doubles as the expand/collapse toggle.
@@ -237,34 +241,37 @@
 									onclick={() => toggleSection(i)}
 								>
 									<span class="shrink-0 font-mono text-[10px] text-ink-mute"
-										>{section.tail.length > 0 ? (expandedSections.has(i) ? '▾' : '▸') : '·'}</span
+										>{hidden > 0 ? (expandedSections.has(i) ? '▾' : '▸') : '·'}</span
 									>
 									{#if section.heading.level === 1}
-										<span
-											class="text-lg font-semibold text-amber-100"
-											use:typeReveal={headingReveal[i]
-												? { text: section.heading.text, delay: Math.min(640, i * 45) }
-												: { text: section.heading.text, duration: 0 }}>{section.heading.text}</span
-										>
-									{:else}
 										<span
 											class="font-mono text-xs tracking-wide text-amber-200 uppercase"
 											use:typeReveal={headingReveal[i]
 												? { text: section.heading.text, delay: Math.min(640, i * 45) }
 												: { text: section.heading.text, duration: 0 }}>{section.heading.text}</span
 										>
+									{:else}
+										<span
+											class="font-mono text-[11px] tracking-wide text-amber-200/90 uppercase"
+											use:typeReveal={headingReveal[i]
+												? { text: section.heading.text, delay: Math.min(640, i * 45) }
+												: { text: section.heading.text, duration: 0 }}>{section.heading.text}</span
+										>
 									{/if}
-									{#if !expandedSections.has(i) && section.tail.length > 0}
+									{#if collapsed && hidden > 0}
 										<span class="ml-auto shrink-0 font-mono text-[10px] text-ink-mute"
-											>+{section.tail.length}</span
+											>+{hidden}</span
 										>
 									{/if}
 								</button>
 							{/if}
 							{#if section.preview}
-								<div class:line-clamp-2={!!section.heading && !expandedSections.has(i)}>
+								<!-- Collapsed preview clamps by *item*, not by CSS line: a
+								     `line-clamp` cut a ranked list mid-item and mid-marker.
+								     Prose still clamps by line — there's nothing to cut on. -->
+								<div class:line-clamp-2={collapsed && section.preview.kind !== 'list'}>
 									<MarkdownContent
-										blocks={[section.preview]}
+										blocks={[previewBlock(section.preview, collapsed)]}
 										sourcePath={selected?.path ?? ''}
 										{knownPaths}
 										onNavigate={select}

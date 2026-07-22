@@ -73,7 +73,12 @@
 	/** Revealable characters in a block — code is excluded, so it costs none. */
 	function blockLength(block: MarkdownBlock): number {
 		if (block.kind === 'code') return 0;
-		if (block.kind === 'list') return block.items.reduce((sum, item) => sum + item.length, 0);
+		if (block.kind === 'list')
+			return block.items.reduce(
+				(sum, item) =>
+					sum + item.text.length + (item.children ?? []).reduce((s, c) => s + blockLength(c), 0),
+				0
+			);
 		return block.text.length;
 	}
 
@@ -112,8 +117,12 @@
 	{@const sweep = revealTimeline(tokens.map((token) => token.text.length))}
 	{#each tokens as token, i (i)}
 		{@const stream = streams ? { text: token.text, delay, ...sweep[i] } : null}
-		{#if token.kind === 'strong'}<strong class="font-semibold text-stone-100"
+		{#if token.kind === 'strong'}<strong class="font-semibold text-stone-200"
 				>{@render label(token.text, stream)}</strong
+			>
+		{:else if token.kind === 'code'}<code
+				class="rounded bg-stone-900 px-1 py-px font-mono text-[0.9em] text-amber-200/90"
+				>{@render label(token.text, stream)}</code
 			>
 		{:else if token.kind === 'link' && token.target && onNavigate}<button
 				class="cursor-pointer text-amber-300 underline decoration-amber-700/70 underline-offset-2 hover:text-amber-100"
@@ -138,32 +147,71 @@
 	{/each}
 {/snippet}
 
+<!-- Typography is the dashboard register, not browser-default prose: mono,
+     uppercase, amber headings in the same three sizes the sibling blocks use
+     (`ControlStrip`, `RunNode`), `text-sm text-stone-400` body on the ink ramp,
+     and spacing tightened so a mirrored page sits in the instrument rather than
+     on top of it. -->
 {#snippet renderBlock(block: MarkdownBlock, streams: boolean, delay: number)}
 	{#if block.kind === 'heading'}
-		{#if block.level === 1}<h2 class="mt-4 mb-2 text-lg font-semibold text-amber-100">
+		{#if block.level === 1}<h2
+				class="mt-4 mb-1.5 font-mono text-xs tracking-wide text-amber-200 uppercase first:mt-0"
+			>
 				{@render inline(block.text, streams, delay)}
 			</h2>
-		{:else}<h3 class="mt-4 mb-1 font-mono text-xs tracking-wide text-amber-200 uppercase">
+		{:else if block.level === 2}<h3
+				class="mt-3 mb-1 font-mono text-[11px] tracking-wide text-amber-200/90 uppercase first:mt-0"
+			>
 				{@render inline(block.text, streams, delay)}
-			</h3>{/if}
-	{:else if block.kind === 'paragraph'}<p class="my-2 leading-relaxed">
+			</h3>
+		{:else}<h4
+				class="mt-2.5 mb-1 font-mono text-[10px] tracking-wide text-amber-300/70 uppercase first:mt-0"
+			>
+				{@render inline(block.text, streams, delay)}
+			</h4>{/if}
+	{:else if block.kind === 'paragraph'}<p class="my-1.5 text-sm leading-relaxed text-stone-400">
 			{@render inline(block.text, streams, delay)}
 		</p>
 	{:else if block.kind === 'quote'}<blockquote
-			class="my-2 border-l-2 border-amber-800 pl-3 text-stone-400"
+			class="my-1.5 border-l-2 border-amber-900/70 pl-2.5 text-sm leading-relaxed text-ink-quiet"
 		>
 			{@render inline(block.text, streams, delay)}
 		</blockquote>
 	{:else if block.kind === 'code'}<pre
-			class="my-2 overflow-x-auto rounded bg-stone-950 p-3 font-mono text-xs text-stone-300"><code
+			class="my-2 overflow-x-auto rounded border border-stone-800 bg-stone-950 p-2.5 font-mono text-[11px] leading-relaxed text-stone-300"><code
 				>{block.text}</code
 			></pre>
 	{:else if block.kind === 'list'}
-		{#if block.ordered}<ol class="my-2 list-decimal space-y-1 pl-5">
-				{#each block.items as item, i (i)}<li>{@render inline(item, streams, delay)}</li>{/each}
+		<!-- `start` keeps an authored `3.` — and any partially-rendered list —
+		     numbering from where the page says, never from 1 again. -->
+		{#if block.ordered}<ol
+				start={block.start ?? 1}
+				class="my-1.5 list-decimal space-y-1 pl-5 text-sm text-stone-400 marker:font-mono marker:text-ink-mute"
+			>
+				{#each block.items as item, i (i)}<li class="leading-relaxed">
+						{@render inline(
+							item.text,
+							streams,
+							delay
+						)}{#each item.children ?? [] as child, c (c)}{@render renderBlock(
+								child,
+								streams,
+								delay
+							)}{/each}
+					</li>{/each}
 			</ol>
-		{:else}<ul class="my-2 list-disc space-y-1 pl-5">
-				{#each block.items as item, i (i)}<li>{@render inline(item, streams, delay)}</li>{/each}
+		{:else}<ul class="my-1.5 list-disc space-y-1 pl-5 text-sm text-stone-400 marker:text-ink-mute">
+				{#each block.items as item, i (i)}<li class="leading-relaxed">
+						{@render inline(
+							item.text,
+							streams,
+							delay
+						)}{#each item.children ?? [] as child, c (c)}{@render renderBlock(
+								child,
+								streams,
+								delay
+							)}{/each}
+					</li>{/each}
 			</ul>{/if}
 	{/if}
 {/snippet}
