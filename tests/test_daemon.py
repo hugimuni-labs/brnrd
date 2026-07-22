@@ -452,10 +452,10 @@ def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
         captured_pages.append("dirty.md")
         return True
 
-    window_calls: list[str | None] = []
+    window_calls: list[tuple[str | None, str | None]] = []
 
-    def fake_window(_root, start_oid, *, cfg=None):
-        window_calls.append(start_oid)
+    def fake_window(_root, start_oid, *, cfg=None, run_id=None):
+        window_calls.append((start_oid, run_id))
         return ["dirty.md", "windowed.md", "self-reported.md"]
 
     monkeypatch.setattr(daemon.knowledge, "capture", fake_capture)
@@ -468,7 +468,9 @@ def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
 
     daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
 
-    assert window_calls == ["a" * 40]
+    # The window is now filtered by *this run's* identity (#565), not just
+    # a bare time range — the caller must pass its own run id through.
+    assert window_calls == [("a" * 40, "run-kb-window")]
     assert daemon.relics.read_reported(outbox) == [
         {"kind": "kb", "path": "kb/self-reported.md"},
         {"kind": "kb", "path": "dirty.md"},
