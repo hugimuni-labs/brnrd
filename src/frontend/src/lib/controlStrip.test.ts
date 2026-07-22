@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fuelRows, runnerBlocks } from './controlStrip.ts';
+import { DIAL_WEDGE_RADIUS, dialDasharray, fuelRows, runnerBlocks } from './controlStrip.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners.ts';
 
@@ -143,6 +143,8 @@ test('fuelRows derives countdown and window-elapsed fraction from resets_at', ()
 	const rows = fuelRows(shells, nowMs);
 	assert.equal(rows[0].resetShort, '2h30m');
 	assert.ok(Math.abs((rows[0].timeFraction ?? 0) - 0.5) < 0.001);
+	assert.match(rows[0].tooltip, /window 50% elapsed$/u);
+	assert.ok(!rows[2].tooltip.includes('elapsed'));
 	assert.equal(rows[1].resetShort, '4d2h');
 	assert.ok(
 		Math.abs((rows[1].timeFraction ?? 0) - (1 - (4 * 86400 + 2 * 3600) / (7 * 86400))) < 0.001
@@ -173,4 +175,14 @@ test('fuelRows clamps an already-passed reset to zero, full window', () => {
 	const rows = fuelRows(shells, nowMs);
 	assert.equal(rows[0].resetShort, '0m');
 	assert.equal(rows[0].timeFraction, 1);
+});
+
+test('dialDasharray draws the elapsed wedge proportionally and clamps', () => {
+	const circumference = 2 * Math.PI * DIAL_WEDGE_RADIUS;
+	assert.equal(dialDasharray(0), `0.000 ${circumference.toFixed(3)}`);
+	assert.equal(dialDasharray(1), `${circumference.toFixed(3)} ${circumference.toFixed(3)}`);
+	assert.equal(dialDasharray(0.5).split(' ')[0], (circumference / 2).toFixed(3));
+	// Out-of-range fractions clamp instead of drawing an impossible arc.
+	assert.equal(dialDasharray(1.7), dialDasharray(1));
+	assert.equal(dialDasharray(-0.3), dialDasharray(0));
 });
