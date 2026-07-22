@@ -241,7 +241,7 @@ def _body_sha(body_markdown: str) -> str:
     return hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
 
 
-def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder) -> Event | None:
+def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: str, status: str, forwarder: Forwarder, conversation_id: str | None = None) -> Event | None:
     """Forward one daemon message for *event_id*; close the event on ``done``.
 
     The streaming protocol posts interim messages with a non-``done`` status
@@ -268,6 +268,14 @@ def record_response(db: Session, *, repo_id: str, event_id: str, body_markdown: 
     event = db.execute(select(Event).where(Event.event_id == event_id, Event.repo_id == repo_id)).scalar_one_or_none()
     if event is None:
         return None
+    # #61 — conversation identity is set-once: adopt the daemon's reported
+    # conversation_key only when the event has none yet; never overwrite an
+    # existing value (git trailers stay the source of truth). Committed
+    # eagerly so interim posts — which return before the done-path commit —
+    # still persist it.
+    if conversation_id and not event.conversation_id:
+        event.conversation_id = conversation_id
+        db.commit()
     sha = _body_sha(body_markdown)
     if event.status == Event.STATUS_RESPONDED and sha == event.response_sha:
         # Idempotent retry of the last forwarded message: quiet ACK.

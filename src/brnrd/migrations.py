@@ -193,6 +193,9 @@ def _migrate_events(conn: Connection) -> None:
     # #525 — telegram image-attachment pointers (never bytes; see
     # models.Event.attachments_json).
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS attachments_json TEXT DEFAULT '[]'"))
+    # #61 — conversation identity reported by the daemon on response POSTs
+    # (set-when-null; see models.Event.conversation_id).
+    conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

@@ -171,6 +171,11 @@ class Event(Base):
     # that lets a responded event keep forwarding continuation messages
     # while still ACKing an exact terminal-retry duplicate quietly.
     response_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # #61 — the daemon's conversation_key (the human-readable gate
+    # fingerprint, e.g. ``telegram:-100123:``), reported on response POSTs.
+    # Set once when first reported; never overwritten — git trailers remain
+    # the source of truth, this column is a cache for the metadata index.
+    conversation_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     # #525 — image-attachment *pointers* (JSON list of {file_id, filename,
     # kind[, file_size]}), never bytes: the server is a bounded mirror (#543
     # data minimization, #542 pointer-not-copy). A daemon streams the actual

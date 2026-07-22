@@ -496,7 +496,7 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
     if owned_event is None:
         raise HTTPException(status_code=404, detail="event not found for this account")
     try:
-        event = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder)
+        event = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder, conversation_id=payload.conversation_id)
     except inbox_service.DeliveryError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"forward to platform failed: {e}") from e
     if event is None:
