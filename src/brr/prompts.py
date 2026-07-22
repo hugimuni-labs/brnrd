@@ -1642,6 +1642,115 @@ def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
 
 # ── Top-level builders ───────────────────────────────────────────────
 
+#: The Stage line an init wake's Run Context Bundle carries. One constant
+#: because three places must agree on it: the bundle renderer (which hangs
+#: the bootstrap-commit carveout off it), ``init_wake`` (which passes it),
+#: and the tests that pin both.
+INIT_WAKE_STAGE = "brnrd init wake"
+
+#: The playbook the init wake receives as its task. A separate name because
+#: the file is a *prompt contract* (maintainer-owned, ``prompts/``) while
+#: everything that reads it is runtime.
+INIT_PLAYBOOK_NAME = "init-playbook.md"
+
+
+def init_playbook_available(repo_root: Path | None = None) -> bool:
+    """Whether the init playbook prompt exists on this install.
+
+    The wake path is only offered when it does. A brnrd built without the
+    playbook (or with it removed by a per-repo override that emptied it)
+    falls back to the mechanical install rather than dispatching
+    a wake with no task — a wake whose contract is an empty string would
+    improvise the product's first impression.
+    """
+    return bool(read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip())
+
+
+def build_init_wake_facts(facts: dict[str, Any]) -> str:
+    """Render the init wake's facts block — what code already knows.
+
+    Everything here is something the wake would otherwise have to ask the
+    user or shell out for, and getting it wrong costs an interview beat.
+    Notably the *detection report*: a Runner necessarily exists (the
+    mechanical doctor handles zero-runner before any wake), so a missing
+    alternative is a resilience note, never a blocker.
+    """
+    lines = ["### Init facts", ""]
+    lines.append(
+        "_What brnrd already established mechanically. Treat as ground "
+        "truth; don't re-derive it, and don't send the user back through "
+        "installation for a Runner that is visibly working._"
+    )
+    lines.append("")
+    for label, key in (
+        ("Repo root", "repo_root"),
+        ("Selected runner", "runner_name"),
+        ("Detected runners", "detected_runners"),
+        ("Detected shells", "detected_shells"),
+        ("Shell families not on PATH", "missing_shells"),
+        ("Configured gates", "configured_gates"),
+        ("gh CLI", "gh_available"),
+        ("git remotes", "git_remotes"),
+        ("Existing AGENTS.md", "agents_md"),
+        ("Knowledge shape (if already chosen)", "knowledge_shape"),
+    ):
+        if key not in facts:
+            continue
+        value = facts[key]
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(str(v) for v in value) or "(none)"
+        elif isinstance(value, bool):
+            value = "yes" if value else "no"
+        elif value in (None, ""):
+            value = "(none)"
+        lines.append(f"- {label}: {value}")
+    return "\n".join(lines)
+
+
+def build_init_wake_prompt(
+    repo_root: Path,
+    *,
+    event_id: str,
+    response_path: str,
+    outbox_path: str,
+    facts: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> "tuple[str, Any]":
+    """Assemble the init wake's prompt (spec §3.3). Returns ``(prompt, score)``.
+
+    A thin wrapper over :func:`build_daemon_prompt_with_score` — the boot
+    score, keyed preamble, injected blocks, and the Run Context Bundle are
+    the daemon's, unchanged, because the entire point of #507 is that init
+    is *not* a special mode. What init supplies is only what is genuinely
+    different: the Stage line, the playbook as the task, and a facts block.
+
+    Resident stack (``worker=False``, F3): the user meets the being they
+    will be working with, not a bounded thought that opens by disclaiming
+    residency. The injected resident blocks must therefore degrade on a
+    repo with no connected account — the normal state at minute zero.
+    """
+    task_parts = [read_prompt(INIT_PLAYBOOK_NAME, repo_root).strip()]
+    if facts:
+        task_parts.append(build_init_wake_facts(facts))
+    from . import constitution
+
+    tpl_path = constitution.TEMPLATE_PATH
+    if tpl_path.exists():
+        task_parts.append(
+            "---\n\n## Adopter template (author `AGENTS.md` from this)\n\n"
+            + tpl_path.read_text(encoding="utf-8")
+        )
+    task = "\n\n".join(p for p in task_parts if p)
+
+    kwargs.setdefault("stage", INIT_WAKE_STAGE)
+    kwargs.setdefault("source", "init")
+    kwargs.setdefault("environment", "host")
+    kwargs.setdefault("worker", False)
+    kwargs.setdefault("outbox_path", outbox_path)
+    return build_daemon_prompt_with_score(
+        task, event_id, response_path, repo_root, **kwargs,
+    )
+
 
 def build_init_prompt(repo_root: Path, knowledge_shape: str = "repo") -> str:
     """Build the prompt for ``brnrd init`` — setup.md + adopter template.
@@ -1775,6 +1884,7 @@ def build_daemon_prompt(
     response_path: str,
     repo_root: Path,
     *,
+    stage: str = "brnrd daemon run",
     outbox_path: str | None = None,
     run_id: str | None = None,
     source: str | None = None,
@@ -1855,6 +1965,7 @@ def build_daemon_prompt(
     bundle = _build_run_context_bundle(
         event_id=event_id,
         response_path=response_path,
+        stage=stage,
         outbox_path=outbox_path,
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
@@ -2014,6 +2125,7 @@ def _build_run_context_bundle(
     *,
     event_id: str,
     response_path: str,
+    stage: str = "brnrd daemon run",
     outbox_path: str | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
@@ -2057,7 +2169,19 @@ def _build_run_context_bundle(
 
     sections.append("")
     sections.append("### Mode")
-    sections.append("- Stage: brnrd daemon run")
+    # Parametrized, not hard-coded: the Stage line is what licenses a wake's
+    # stage-specific deltas. The init wake commits on the *current* branch
+    # (spec §5 / F4) — the exact opposite of the host-environment receipts
+    # pin below — and it is this line that tells the wake which of the two
+    # it is living under, instead of leaving it to fight its training.
+    sections.append(f"- Stage: {stage}")
+    if stage == INIT_WAKE_STAGE:
+        sections.append(
+            "- Bootstrap exception: this is the repository's first wake. "
+            "Commit what you author on the **current branch** — the user "
+            "just asked for these files in the checkout they are standing "
+            "in. No branch ceremony, no PR handoff."
+        )
     if source:
         sections.append(f"- Source: {source}")
     if environment:

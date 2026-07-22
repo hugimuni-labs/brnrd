@@ -109,8 +109,18 @@ def _confirm(label: str, default: bool = True, timeout: int = 10) -> bool:
 # ── Init ────────────────────────────────────────────────────────────
 
 
-def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
-    """Initialize a repository for brr management."""
+def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
+    """Phase 1 — the mechanical substrate both init paths share (spec §2).
+
+    Steps 1–5 of the old ``init_repo``: clone-or-detect, ``.brr/`` tree,
+    dominion, runner detection. Already idempotent (``mkdir exist_ok``,
+    config only-if-absent), which is what makes "resume = re-run" free: a
+    second init converges on the same substrate instead of restarting.
+
+    Raises ``SystemExit`` with the shared runner doctor when no Runner
+    resolves — the one failure the wake cannot explain, because with no
+    Shell on PATH there is no model process to explain it with.
+    """
     if url:
         name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         print(f"[brnrd] cloning {url}")
@@ -124,11 +134,125 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     available = runner.detect_all_runners(repo_root)
     if not available:
         raise SystemExit(
-            "[brnrd] no runner found on PATH (claude, codex).\n"
-            "       Install one and re-run `brnrd init`."
+            runner.render_runner_doctor(runner.diagnose_runners(repo_root))
+        )
+    return repo_root, available
+
+
+def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
+    """Initialize a repository for brr management.
+
+    ``brnrd init`` is **one verb** (#507, maintainer decision 2026-07-22).
+    On a TTY with a working Runner it is the mechanical bootstrap followed
+    by the *init wake*: one wake-shaped dispatch that interviews, authors
+    the contract, and wires gates — the user's first contact with brnrd is
+    the resident they will be working with, not a form.
+
+    Everything else **degrades**, it does not branch: no TTY, no playbook,
+    or the wake explicitly disabled ⇒ the pre-#507 mechanical install runs
+    instead, with one line naming why the wake was skipped. There is no
+    flag, because a flag would ask the user to choose between two things
+    they have no way to tell apart before their first run. CI stays safe by
+    construction: no TTY means no wake and no blocking read on stdin.
+
+    ``interactive`` is the retired ``-i``: a no-op on the wake path (the
+    interview *is* the point) and the old timed-question path when the wake
+    was skipped.
+    """
+    repo_root, available = bootstrap(url)
+
+    from . import init_wake as init_wake_mod
+
+    tty = bool(sys.stdin.isatty())
+    wake_ok, why_not = init_wake_mod.wake_path_available(
+        repo_root, interactive=tty,
+    )
+    if wake_ok:
+        _init_via_wake(repo_root, available, init_wake_mod)
+        return
+    print(f"[brnrd] {why_not}")
+    _init_auto(repo_root, available, interactive=interactive and tty)
+
+
+def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None:
+    """Phase 2 — hand the session to the agent, then verify mechanically.
+
+    brnrd keeps the two post-passes it already owns (bridges, verify): the
+    wake is told not to write bridges, and a contract the model believes is
+    finished still has to pass the same structure gate the headless path
+    enforces.
+    """
+    runner_name = available[0]
+    cfg = conf.load_config(repo_root)
+    configured = str(cfg.get("runner") or "auto")
+    if configured != "auto" and configured in available:
+        runner_name = configured
+    print(f"[brnrd] runner: {runner_name}")
+    print("[brnrd] handing this session to the agent — talk to it below.\n")
+
+    facts = init_wake_mod.collect_facts(
+        repo_root,
+        runner_name=runner_name,
+        detected_runners=available,
+        detected_shells=_detect_shells(),
+    )
+    result = init_wake_mod.run_init_wake(
+        repo_root, runner_name, cfg=cfg, facts=facts,
+    )
+
+    if result.card:
+        print("\n[brnrd] run body:\n")
+        print(result.card.strip())
+    if result.reply:
+        print(f"\n{result.reply.strip()}\n")
+
+    if result.aborted:
+        print(
+            "\n[brnrd] interrupted. Nothing was rolled back — every artifact "
+            "already written is independently useful.\n"
+            "        Re-run `brnrd init` to continue where this left off."
+        )
+    elif result.error:
+        print(f"\n[brnrd] the init wake did not finish: {result.error}\n")
+        print(
+            runner_mod_doctor(repo_root, attempted=runner_name, error=result.error)
         )
 
-    if interactive and sys.stdin.isatty():
+    shells = _detect_shells()
+    written = constitution.write_bridges(repo_root, shells)
+    if written:
+        print(f"[brnrd] shell bridges written: {', '.join(sorted(written))}")
+    # F5(a): the shape was chosen *inside* the interview, so brnrd reads it
+    # back off the tree rather than pretending it decided. A wake that
+    # scaffolded no `kb/` chose home knowledge; verifying against "repo"
+    # there would print misses for files nobody asked for.
+    knowledge_shape = "repo" if (repo_root / "kb").is_dir() else "home"
+    _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
+    if result.gates_configured:
+        print(f"[brnrd] gates configured: {', '.join(result.gates_configured)}")
+    print("[brnrd] next: `brnrd up`, then send it work.")
+    if result.error and not result.aborted:
+        raise SystemExit(1)
+
+
+def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:
+    """The launch-failure rendering of the shared doctor (spec §6)."""
+    return runner.render_runner_doctor(
+        runner.diagnose_runners(repo_root), attempted=attempted, error=error,
+    )
+
+
+def _init_auto(
+    repo_root: Path, available: list[str], *, interactive: bool = False
+) -> None:
+    """The pre-#507 install, unchanged — what init degrades *to*.
+
+    Not a mode the user can ask for: reached only when the wake genuinely
+    cannot run (no TTY, no playbook). Kept byte-for-byte so a CI install and
+    an install on a machine without a terminal keep behaving exactly as they
+    did before this issue.
+    """
+    if interactive:
         runner_name, cfg_overrides = _interactive_configure(available)
     else:
         runner_name = available[0]
@@ -476,7 +600,11 @@ def _run_setup(
         result.raise_for_error()
     except RuntimeError as e:
         print(f"[brnrd] setup failed: {e}")
-        print("[brnrd] re-run `brnrd init` to retry")
+        # Same ladder the zero-runner branch prints (spec §2.1/§6): a runner
+        # that vanished between detection and launch, or died on auth/quota,
+        # is the same user problem as one that was never there — and it used
+        # to end in a bare "re-run to retry" with nothing to act on.
+        print(runner_mod_doctor(repo_root, attempted=runner_name, error=str(e)))
         raise SystemExit(1)
     if not result.validation_ok:
         missing = ", ".join(artifact.label for artifact in result.missing_artifacts)

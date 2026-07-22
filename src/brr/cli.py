@@ -66,8 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="set up a repo for brnrd")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
+    # #507: `brnrd init` is one verb. The interview wake is what init *is*
+    # on a TTY with a working Runner; everything else degrades to the
+    # mechanical install automatically, with one line saying why. No flag —
+    # a mode switch here would ask the user to choose between two things
+    # they have no way to tell apart yet (maintainer decision, 2026-07-22).
+    # `-i` survives only as a no-op alias so muscle memory still lands on
+    # the friendlier path instead of an argparse error.
     p.add_argument("-i", "--interactive", action="store_true",
-                   help="ask setup questions (runner, config) with timed defaults")
+                   help="deprecated no-op — the interview is the default")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("run", help="run a task through the runner")
@@ -485,7 +492,7 @@ def _maybe_repo_root() -> Path | None:
 
 def cmd_init(args):
     from . import adopt
-    adopt.init_repo(args.url, interactive=args.interactive)
+    adopt.init_repo(args.url, interactive=getattr(args, "interactive", False))
 
 
 def cmd_gc(args):

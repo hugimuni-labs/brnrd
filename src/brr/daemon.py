@@ -69,6 +69,7 @@ from . import gitops
 from . import hooks as hooks_mod
 from . import knowledge
 from . import message_store
+from . import portals
 from . import presence
 from . import prompts
 from . import codex_status
@@ -171,8 +172,10 @@ _POST_DELIVERY_ATTEND_POLL_INTERVAL = 1.0
 _QUOTA_LOW_FLOOR_PCT_DEFAULT = 20.0
 _QUOTA_CRITICAL_FLOOR_PCT_DEFAULT = 8.0
 _QUOTA_STRETCH_FACTOR_DEFAULT = 3.0
-_LIVE_INBOX_NAME = "inbox.json"
-_LIVE_PORTAL_STATE_NAME = "portal-state.json"
+# Names owned by ``portals`` — the one place the driver-side file contract
+# is spelled, now that ``init`` plays driver for its own single wake (#507).
+_LIVE_INBOX_NAME = portals.LIVE_INBOX_NAME
+_LIVE_PORTAL_STATE_NAME = portals.LIVE_PORTAL_STATE_NAME
 # Agent-owned run body: the resident writes this control dotfile
 # in its outbox; the daemon drains it on each heartbeat into a
 # ``card_composed`` packet and the gate re-renders the live card. See
@@ -3647,28 +3650,16 @@ def _write_live_inbox(
     The file sits in the run outbox because that directory is already
     mounted into every daemon-run environment. It is daemon-owned control
     state, not a deliverable outbox message.
+
+    The *writing* moved to :mod:`portals` (#507 L3) so init can produce the
+    same file without a daemon; what stays here is the daemon's own
+    visibility rule — which pending events this wake is allowed to see.
     """
-    if not outbox_dir:
-        return None
-    try:
-        outbox_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "generated_at": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "current_event": current_event_id,
-            "events": _pending_events_for_agent(
-                inbox_dir, current_event_id, worker=worker,
-            ),
-        }
-        path = outbox_dir / _LIVE_INBOX_NAME
-        protocol._atomic_write(
-            path,
-            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        )
-        return path
-    except OSError:
-        return None
+    return portals.write_live_inbox(
+        outbox_dir,
+        current_event_id,
+        _pending_events_for_agent(inbox_dir, current_event_id, worker=worker),
+    )
 
 
 def _iso_utc(epoch: float | None) -> str | None:
