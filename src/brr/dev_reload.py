@@ -38,6 +38,7 @@ class DevReloadWatcher:
         self.package_dir = package_dir.resolve()
         self.extra_paths = tuple(path.resolve() for path in extra_paths)
         self._snapshot = self._take_snapshot()
+        self._last_changed: list[str] = []
 
     @classmethod
     def for_repo(cls, repo_root: Path) -> "DevReloadWatcher":
@@ -62,11 +63,30 @@ class DevReloadWatcher:
                 extra_paths.append(pyproject)
         return cls(package_dir, extra_paths)
 
+    @property
+    def last_changed(self) -> list[str]:
+        """Path keys that differed in the most recent positive :meth:`changed` call.
+
+        Empty when no change has been detected yet.  Each element is the
+        internal snapshot key (``"package/<relpath>"`` for package files,
+        ``"extra/<abspath>"`` for extra paths).
+        """
+        return list(self._last_changed)
+
     def changed(self) -> bool:
-        """Return True once per observed snapshot change."""
+        """Return True once per observed snapshot change, recording which files changed.
+
+        :attr:`last_changed` is always set to the diff of this call: an empty
+        list when nothing changed, a list of changed keys when it did.  This
+        means ``last_changed`` is always the result of the *most recent*
+        ``changed()`` call and never carries stale diff state from a previous
+        one.
+        """
         current = self._take_snapshot()
         if current == self._snapshot:
+            self._last_changed = []
             return False
+        self._last_changed = _diff_snapshots(self._snapshot, current)
         self._snapshot = current
         return True
 
@@ -84,6 +104,22 @@ class DevReloadWatcher:
             key = f"extra/{path.as_posix()}"
             entries.append(_stat_entry(path, key) or (key, -1, -1))
         return tuple(sorted(entries))
+
+
+def _diff_snapshots(
+    old: tuple[tuple[str, int, int], ...],
+    new: tuple[tuple[str, int, int], ...],
+) -> list[str]:
+    """Return the snapshot keys whose size/mtime differ between *old* and *new*.
+
+    Includes paths added, removed, or modified.  Used by
+    :class:`DevReloadWatcher` to populate :attr:`~DevReloadWatcher.last_changed`
+    after a positive :meth:`~DevReloadWatcher.changed` call.
+    """
+    old_map = {k: (size, mtime) for k, size, mtime in old}
+    new_map = {k: (size, mtime) for k, size, mtime in new}
+    keys = sorted(set(old_map) | set(new_map))
+    return [k for k in keys if old_map.get(k) != new_map.get(k)]
 
 
 def _should_watch(path: Path) -> bool:
@@ -172,3 +208,48 @@ def reexec() -> None:
     env[_REEXEC_ENV] = "1"
     argv = [sys.executable, *sys.argv]
     os.execve(sys.executable, argv, env)
+
+
+# Cap the number of file paths shown in the pre-exec breadcrumb.  In normal
+# dev practice only one or two files change per save; a large edit session can
+# accumulate many, but listing them all would flood the terminal and bury the
+# signal.  The "+N more" tail keeps the output honest without being noisy.
+_MAX_BREADCRUMB_FILES = 5
+
+
+def _breadcrumb_display_key(key: str) -> str:
+    """Strip internal prefixes from a snapshot key for human-readable output."""
+    if key.startswith("package/"):
+        return key[len("package/"):]
+    if key.startswith("extra/"):
+        # Use just the last two path components to stay readable without leaking
+        # full paths that may encode home-directory structure.
+        parts = key[len("extra/"):].split("/")
+        return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+    return key
+
+
+def format_dev_reload_breadcrumb(changed_files: list[str]) -> str:
+    """Return a bounded, human-readable string identifying a dev-reload trigger.
+
+    *changed_files* should be the snapshot keys returned by
+    :attr:`DevReloadWatcher.last_changed` (accumulated across iterations if
+    the watcher fired more than once before the run boundary).  The result is
+    meant to appear in a ``print(f"[brnrd] {result}")`` call immediately
+    before :func:`reexec`.
+
+    The breadcrumb:
+
+    - Names the event as "dev-reload" so observers know the restart is
+      deliberate, not a crash.
+    - Lists up to :data:`_MAX_BREADCRUMB_FILES` changed paths in a readable
+      short form (no home-directory leakage, no unbounded dumps).
+    - Appends "+N more" when there are more files than the cap.
+    """
+    unique = sorted({_breadcrumb_display_key(f) for f in changed_files})
+    if not unique:
+        return "dev-reload: reexecing — package files changed"
+    shown = unique[:_MAX_BREADCRUMB_FILES]
+    rest = len(unique) - len(shown)
+    tail = f", +{rest} more" if rest else ""
+    return f"dev-reload: reexecing — changed: {', '.join(shown)}{tail}"
