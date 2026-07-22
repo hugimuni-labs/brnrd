@@ -375,3 +375,22 @@ identity) + #538 (kb produce OID-window).
   pre-closeout and was folded in — reviewed clean, combined suite on the
   real two-branch merge 2020✓, merged `593a2777`. Both 23:13 dispatches now
   reviewed + merged; origin push is the daemon's (solitary egress).
+
+Tick 00:15 (2026-07-22) dispatched #311 (spawn-restart reconciliation, option
+② sweep) + #503 (custom-runner prompt delivery).
+
+- #503 merged to main `55714369` (run xaj0, ~00:4x): whole-diff reviewed clean
+  — `_cmd_template`/`_fill_prompt` split keeps the stdin-vs-argv decision and
+  the substitution on one truth (decided on the template, not substituted
+  argv); embedded `--flag={prompt}` rejected loudly; `runner_cmd` legacy
+  embedded-replace preserved; probe fabrication gated to `BUNDLED_SHELLS`
+  {claude,codex,gemini} + per-profile `probe_models: true` opt-in;
+  runners.md prompt-delivery docs made honest. Branch forked from main tip
+  (593a2777), so the branch was the merge candidate; suite 2034✓, same 2
+  host-env failures (fastapi, linger prompt) as before. Spawn env: 2304✓.
+  Announced standalone on telegram.
+- #311 spawn (run frjl) still in flight at close; reviews on its completion
+  event. Note: spawn's stated report path /tmp/brr-custom-runner-prompt-report.md
+  and message_path under ~/.local/state/brnrd did NOT exist on this host —
+  event body carried the summary, review worked from the diff itself. If this
+  recurs, the spawn report path contract is worth a look.
