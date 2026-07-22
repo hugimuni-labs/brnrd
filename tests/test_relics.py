@@ -675,3 +675,161 @@ def test_counts_phrase_empty_and_none_are_empty():
     assert relics.counts_phrase(None) == ""
     assert relics.counts_phrase({}) == ""
     assert relics.counts_phrase({"branch": 1}) == ""
+
+
+# ── forge link derivation for reported relics ────────────────────────
+#
+# Regression (maintainer, 2026-07-22, on run-260722-1634-7t6x): the run
+# node's Produce block rendered "🎫 issue #566 (opened)" as bare text.
+# Only derive_auto minted URLs, so every self-reported thread relic
+# reached the renderer link-less.
+
+
+def _github_repo(tmp_path: Path, name: str = "repo") -> Path:
+    repo = tmp_path / name
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+    return repo
+
+
+def test_collect_links_reported_issue_relic(tmp_path: Path):
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "issue", number=566, action="opened")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert out == [{
+        "kind": "issue", "number": 566, "action": "opened",
+        "url": "https://github.com/Gurio/brr/issues/566",
+    }]
+
+
+def test_collect_links_reported_pr_and_commit_relics(tmp_path: Path):
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "pr", number=571)
+    relics.append(outbox, "commit", sha="0123456789abcdef")
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+    urls = {r["kind"]: r.get("url") for r in out}
+
+    assert urls == {
+        "pr": "https://github.com/Gurio/brr/pull/571",
+        "commit": "https://github.com/Gurio/brr/commit/0123456789abcdef",
+    }
+
+
+def test_collect_links_reported_remote_merge_relic(tmp_path: Path):
+    """A pure-remote ``gh pr merge`` leaves no local commit — the resident
+    reports it, and it still deserves the PR link."""
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "merge", pr=540)
+
+    out = relics.collect(repo, branch=None, seed_ref=None, outbox_dir=outbox)
+
+    assert out == [{
+        "kind": "merge", "pr": 540,
+        "url": "https://github.com/Gurio/brr/pull/540",
+    }]
+
+
+def test_link_reported_honours_explicit_url(tmp_path: Path):
+    """A resident URL may point at another forge entirely; never overwrite."""
+    repo = _github_repo(tmp_path)
+    records = [{
+        "kind": "issue", "number": 12,
+        "url": "https://gitlab.example.test/o/r/-/issues/12",
+    }]
+
+    relics.link_reported(records, relics.forge_links(repo))
+
+    assert records[0]["url"] == "https://gitlab.example.test/o/r/-/issues/12"
+
+
+def test_link_reported_uses_record_repo_for_cross_project_issue(tmp_path: Path):
+    repo = _github_repo(tmp_path)
+    records = [{"kind": "issue", "number": 7, "repo": "other/project"}]
+
+    relics.link_reported(records, relics.forge_links(repo))
+
+    assert records[0]["url"] == "https://github.com/other/project/issues/7"
+
+
+def test_link_reported_without_remote_leaves_relic_unlinked(tmp_path: Path):
+    """No attested forge ⇒ render as today. Never fabricate a URL."""
+    repo = tmp_path / "bare"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    records = [
+        {"kind": "issue", "number": 566},
+        {"kind": "commit", "sha": "abcdef1"},
+    ]
+
+    relics.link_reported(records, relics.forge_links(repo))
+
+    assert all("url" not in record for record in records)
+
+
+def test_link_reported_ignores_numberless_and_unknown_kinds():
+    links = relics.forge_links(None)
+    records = [
+        {"kind": "issue"},
+        {"kind": "comment", "on": "#12"},
+        {"kind": "summary", "text": "did a thing"},
+    ]
+
+    relics.link_reported(records, links)
+
+    assert all("url" not in record for record in records)
+
+
+def test_link_reported_honours_forge_kind_override(tmp_path: Path, monkeypatch):
+    repo = _github_repo(tmp_path)
+    monkeypatch.setattr(
+        relics.conf, "load_config",
+        lambda *_: {
+            "forge.kind": "gitlab",
+            "forge.url_base": "https://git.example.test",
+        },
+    )
+    records = [{"kind": "issue", "number": 42}]
+
+    relics.link_reported(records, relics.forge_links(repo))
+
+    assert records[0]["url"] == (
+        "https://git.example.test/Gurio/brr/-/issues/42"
+    )
+
+
+def test_live_summary_links_reported_issue(tmp_path: Path):
+    repo = _github_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    relics.append(outbox, "issue", number=566, action="closed")
+
+    summary = relics.live_summary(
+        repo, branch=None, seed_ref=None, outbox_dir=outbox,
+    )
+    issues = [r for r in summary["records"] if r["kind"] == "issue"]
+
+    assert issues[0]["url"] == "https://github.com/Gurio/brr/issues/566"
+
+
+def test_render_markdown_links_issue_relic():
+    body = relics.render_markdown([{
+        "kind": "issue", "number": 566, "action": "opened",
+        "url": "https://github.com/Gurio/brr/issues/566",
+    }])
+
+    assert body[-1] == (
+        "- 🎫 [issue #566 (opened)](https://github.com/Gurio/brr/issues/566)"
+    )

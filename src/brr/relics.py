@@ -28,8 +28,15 @@ The full resident-facing grammar lives in ``brnrd docs portals``.
 Append format — one JSON object per line, at least a ``"kind"`` key:
 
     {"kind": "summary", "text": "Closed #200 and #317 as one relics feature."}
-    {"kind": "issue", "number": 317, "action": "closed", "url": "https://..."}
-    {"kind": "kb", "path": "design-run-relics.md", "url": "https://..."}
+    {"kind": "issue", "number": 317, "action": "closed"}
+    {"kind": "kb", "path": "design-run-relics.md"}
+
+``url`` is never the resident's job: the daemon knows the run's forge and
+``owner/repo``, so issue/PR/commit/branch relics get their link derived at
+collection time (:func:`link_reported`), and ``kb`` pages resolve against
+the forge-tracking ref. Supply one explicitly only to point somewhere the
+daemon *cannot* derive — a thread on another forge. A relic whose repo or
+forge is unattested renders unlinked; nothing here fabricates a URL.
 
 Everything here is best-effort: a malformed line, a missing git repo, an
 unparseable remote — all degrade to "fewer relics", never a closeout
@@ -316,15 +323,161 @@ def _commits_since_seed(
     return out
 
 
+class _ForgeLinks:
+    """Forge URL derivation for one checkout's relics.
+
+    A resident-authored relic line carries only *what* it produced —
+    ``{"kind": "issue", "number": 566}``. The forge, the web host and the
+    ``owner/repo`` are the daemon's knowledge, not the resident's, so link
+    derivation belongs here (maintainer, 2026-07-22: issue relics rendered
+    as bare "🎫 issue #566 (opened)" on the run node). One resolver serves
+    both collection paths so auto-derived and self-reported produce cannot
+    link differently.
+
+    Every method returns ``None`` when the fact isn't attested — no remote,
+    an unparseable remote, an unknown forge kind. A relic whose repo/forge
+    is unknown renders unlinked rather than pointing at a fabricated URL.
+    """
+
+    def __init__(
+        self,
+        remote_url: str | None,
+        *,
+        override_kind: str | None = None,
+        override_url_base: str | None = None,
+    ) -> None:
+        self.remote_url = remote_url or None
+        self.override_kind = override_kind
+        self.override_url_base = override_url_base
+        self.repo_path: str | None = None
+        if self.remote_url:
+            parsed = forges.parse_remote(self.remote_url)
+            if parsed is not None:
+                _, owner, repo = parsed
+                self.repo_path = f"{owner}/{repo}"
+
+    def _thread_repo(self, repo: Any = None) -> str | None:
+        """``owner/repo`` for a thread relic: the record's own ``repo`` field
+        when it names another project, else this checkout's origin."""
+        named = str(repo or "").strip().strip("/")
+        return named if "/" in named else self.repo_path
+
+    def pull_request(self, number: Any, repo: Any = None) -> str | None:
+        path = self._thread_repo(repo)
+        if not self.remote_url or not path:
+            return None
+        return forges.pull_request_url(
+            self.remote_url, path, str(number),
+            override_kind=self.override_kind,
+            override_url_base=self.override_url_base,
+        )
+
+    def issue(self, number: Any, repo: Any = None) -> str | None:
+        path = self._thread_repo(repo)
+        if not self.remote_url or not path:
+            return None
+        return forges.thread_url(
+            self.remote_url, path, str(number),
+            override_kind=self.override_kind,
+            override_url_base=self.override_url_base,
+        )
+
+    def commit(self, sha: Any) -> str | None:
+        if not self.remote_url or not sha:
+            return None
+        return forges.commit_url(
+            self.remote_url, str(sha),
+            override_kind=self.override_kind,
+            override_url_base=self.override_url_base,
+        )
+
+    def branch(self, name: Any) -> str | None:
+        if not self.remote_url or not name:
+            return None
+        return forges.view_branch_url(
+            self.remote_url, str(name),
+            override_kind=self.override_kind,
+            override_url_base=self.override_url_base,
+        )
+
+
+def forge_links(repo_root: Path | None) -> _ForgeLinks:
+    """Build the URL resolver for *repo_root*'s origin remote.
+
+    Best-effort like everything else here: a missing repo, an unreadable
+    config, or a remote lookup failure yields a resolver that derives
+    nothing rather than raising into closeout.
+    """
+    if repo_root is None:
+        return _ForgeLinks(None)
+    remote_url: str | None = None
+    try:
+        remote_name = gitops.default_remote(repo_root)
+        remote_url = gitops.remote_url(repo_root, remote_name) if remote_name else None
+    except Exception:
+        remote_url = None
+    try:
+        cfg = conf.load_config(repo_root)
+    except Exception:
+        cfg = {}
+    return _ForgeLinks(
+        remote_url,
+        override_kind=cfg.get("forge.kind") or None,
+        override_url_base=cfg.get("forge.url_base") or None,
+    )
+
+
+def link_reported(
+    records: list[dict[str, Any]], links: _ForgeLinks,
+) -> list[dict[str, Any]]:
+    """Fill in the forge ``url`` for self-reported issue/PR/commit/merge relics.
+
+    The resident writes ``{"kind": "issue", "number": 566, "action":
+    "opened"}`` and nothing more — the ``.relics.jsonl`` grammar explicitly
+    does not ask it to know the forge's URL shape. Before this, only
+    :func:`derive_auto` produced links, so every reported thread relic
+    reached the run node's ``## Produce`` block as bare text.
+
+    An explicit ``url`` on the record is honoured as-is (the resident may be
+    pointing at a *different* forge than origin); records whose URL cannot
+    be attested are returned untouched.
+    """
+    for record in records:
+        if not isinstance(record, dict) or str(record.get("url") or "").strip():
+            continue
+        kind = str(record.get("kind") or "")
+        url: str | None = None
+        if kind == "issue" and record.get("number"):
+            url = links.issue(record["number"], record.get("repo"))
+        elif kind == "pr" and record.get("number"):
+            url = links.pull_request(record["number"], record.get("repo"))
+        elif kind == "commit" and record.get("sha"):
+            url = links.commit(record["sha"])
+        elif kind == "branch" and record.get("name"):
+            url = links.branch(record["name"])
+        elif kind == "merge":
+            url = (
+                links.pull_request(record["pr"]) if record.get("pr") else None
+            ) or links.commit(record.get("sha"))
+        if url:
+            record["url"] = url
+    return records
+
+
 def derive_auto(
     repo_root: Path | None,
     *,
     branch: str | None,
     seed_ref: str | None,
     outbox_dir: Path | None,
+    links: _ForgeLinks | None = None,
 ) -> list[dict[str, Any]]:
     """Zero-resident-effort relics: commits, merges, the pushed branch, and
     the PR.
+
+    *links* lets a caller that already built the forge resolver (see
+    :func:`forge_links`) reuse it instead of paying the ``git remote``
+    lookups twice per collection.
 
     Commits and merges come from ``git log``; the PR from the existing
     ``.pr`` control file — nothing new is asked of the resident, matching
@@ -353,42 +506,14 @@ def derive_auto(
     if repo_root is None:
         return []
     out: list[dict[str, Any]] = []
-    remote_url: str | None = None
-    try:
-        remote_name = gitops.default_remote(repo_root)
-        remote_url = gitops.remote_url(repo_root, remote_name) if remote_name else None
-    except Exception:
-        remote_url = None
-
-    try:
-        cfg = conf.load_config(repo_root)
-    except Exception:
-        cfg = {}
-    override_kind = cfg.get("forge.kind") or None
-    override_base = cfg.get("forge.url_base") or None
-
-    def _pr_url(number: str | int) -> str | None:
-        if not remote_url:
-            return None
-        parsed = forges.parse_remote(remote_url)
-        if parsed is None:
-            return None
-        _, owner, repo = parsed
-        return forges.pull_request_url(
-            remote_url, f"{owner}/{repo}", str(number),
-            override_kind=override_kind, override_url_base=override_base,
-        )
+    if links is None:
+        links = forge_links(repo_root)
+    _pr_url = links.pull_request
 
     if branch:
         commits = _commits_since_seed(repo_root, branch, seed_ref)
         for sha, subject, parent_count, committer in commits[:_MAX_RECORDS]:
-            commit_url = (
-                forges.commit_url(
-                    remote_url, sha,
-                    override_kind=override_kind, override_url_base=override_base,
-                )
-                if remote_url else None
-            )
+            commit_url = links.commit(sha)
             merge: dict[str, Any] | None = None
             if parent_count >= 2:
                 merge = {"kind": "merge", "sha": sha, "subject": subject}
@@ -414,14 +539,9 @@ def derive_auto(
             else:
                 out.append({"kind": "commit", "sha": sha, "subject": subject, "url": commit_url})
         if commits:
-            branch_url = (
-                forges.view_branch_url(
-                    remote_url, branch,
-                    override_kind=override_kind, override_url_base=override_base,
-                )
-                if remote_url else None
+            out.append(
+                {"kind": "branch", "name": branch, "url": links.branch(branch)}
             )
-            out.append({"kind": "branch", "name": branch, "url": branch_url})
 
     pr_number = _read_pr_control(outbox_dir)
     if pr_number:
@@ -516,6 +636,7 @@ def collect(
     ]
     summary = [r for r in reported if r.get("kind") == "summary"][:1]
     rest_reported = [r for r in reported if r.get("kind") != "summary"]
+    links = forge_links(repo_root)
     if repo_root is not None:
         for record in rest_reported:
             if record.get("kind") != "kb":
@@ -528,7 +649,11 @@ def collect(
             record.pop("url", None)
             if url:
                 record["url"] = url
-    auto = derive_auto(repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir)
+        link_reported(rest_reported, links)
+    auto = derive_auto(
+        repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
+        links=links,
+    )
     return dedupe(summary + auto + rest_reported)
 
 
@@ -666,11 +791,13 @@ def live_summary(
         root = Path(repo_root)
         if not root.is_dir():
             return {"known": False}
+        links = forge_links(root)
         records = dedupe(
             derive_auto(
                 root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
+                links=links,
             )
-            + read_reported(outbox_dir)
+            + link_reported(read_reported(outbox_dir), links)
         )
 
         # A .pr number is useful live even when forge URL derivation cannot
