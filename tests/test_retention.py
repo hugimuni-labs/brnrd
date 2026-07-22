@@ -45,6 +45,24 @@ def _ctx(tmp_path: Path) -> account.HomeContext:
     return ctx
 
 
+def _account_ctx(tmp_path: Path, account_dir: str = "acc_test") -> account.HomeContext:
+    home = tmp_path / "state" / "brnrd" / "accounts" / account_dir / "home"
+    ctx = account.HomeContext(
+        account_id=account_dir,
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={},
+        default_repo=account.AccountRepo(label="r", root=tmp_path / "repo"),
+        kind="account",
+        home_root=home,
+    )
+    for path in (ctx.dispatch_inbox, ctx.responses_dir, ctx.runs_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    return ctx
+
+
 def _write_aged(path: Path, text: str, age_days: float) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -76,12 +94,14 @@ def test_window_absent_zero_or_garbage_means_keep_forever():
     w = retention.Windows.from_config({
         "retention.messages_days": 0,
         "retention.inbox_days": -3,
+        "retention.run_state_days": "not-a-number",
         "retention.run_history_days": "not-a-number",
     })
     assert w.conversations is None  # absent
     assert w.messages is None       # zero
     assert w.inbox is None          # negative
     assert w.run_history is None    # garbage
+    assert w.run_state is None      # absent
     assert w.all_disabled()
 
 
@@ -285,6 +305,80 @@ def test_inbox_done_events_and_artifacts_deleted_pending_kept(tmp_path):
     assert reports["inbox"].items >= 4
 
 
+# ── account-home run state (#320) ──────────────────────────────────
+
+
+def test_run_state_window_boundary_and_keep_forever_default(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _ctx(tmp_path)
+    old = _write_aged(
+        ctx.runs_dir / "r" / "run-old" / "state.md", "old state", 90.01)
+    boundary = _write_aged(
+        ctx.runs_dir / "r" / "run-boundary" / "state.md", "boundary", 90)
+
+    disabled = retention.build_plan(
+        repo, ctx, retention.Windows.from_config({}), now=NOW)
+    assert not any(action.store == "run-state" for action in disabled.actions)
+
+    _plan, reports = retention.gc(
+        repo, ctx, _windows(run_state=90), dry_run=False, now=NOW)
+    assert not old.exists()
+    assert boundary.exists()  # exactly at the cutoff is retained
+    assert reports["run-state"].items == 1
+
+
+def test_live_run_state_is_protected_and_legacy_docs_are_supported(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _ctx(tmp_path)
+    live = _write_aged(
+        ctx.runs_dir / "r" / "run-live" / "state.md", "live", 120)
+    legacy = _write_aged(
+        ctx.dominion_repo / "run-state" / "r" / "run-legacy.md",
+        "legacy", 120,
+    )
+    presence.register(
+        gitops.shared_brr_dir(repo), kind="daemon-run",
+        run_id="run-live", pid=os.getpid())
+
+    _plan, reports = retention.gc(
+        repo, ctx, _windows(run_state=90), dry_run=False, now=NOW)
+    assert live.exists()
+    assert not legacy.exists()
+    assert reports["run-state"].items == 1
+
+
+# ── obsolete literal connected account (#320) ─────────────────────
+
+
+def test_stale_connected_account_collected_without_general_orphan_sweep(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _account_ctx(tmp_path)
+    accounts_root = ctx.home_root.parent.parent
+    stale = accounts_root / "connected"
+    _write_aged(stale / "home" / "knowledge" / "memory.md", "obsolete", 1)
+    legitimate = accounts_root / "disconnected-legitimate"
+    memory = _write_aged(
+        legitimate / "home" / "knowledge" / "memory.md", "keep", 999)
+
+    _plan, reports = retention.gc(
+        repo, ctx, retention.Windows.from_config({}), dry_run=False, now=NOW)
+    assert not stale.exists()
+    assert memory.exists()
+    assert reports["connected"].items == 1
+
+
+def test_connected_account_is_kept_when_it_is_the_resolved_home(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _account_ctx(tmp_path, account_dir="connected")
+    marker = _write_aged(ctx.home_root / "knowledge" / "memory.md", "keep", 999)
+
+    plan, reports = retention.gc(
+        repo, ctx, retention.Windows.from_config({}), dry_run=False, now=NOW)
+    assert marker.exists()
+    assert not any(action.store == "connected" for action in plan.actions)
+    assert reports == {}
+
+
 # ── dry-run vs real parity ──────────────────────────────────────────
 
 
@@ -311,6 +405,26 @@ def test_dry_run_deletes_nothing_and_reports_what_real_run_deletes(tmp_path):
     assert {s: (r.items, r.bytes) for s, r in dry.items()} == \
            {s: (r.items, r.bytes) for s, r in real.items()}
     assert all(r.errors == 0 for r in real.values())
+
+
+def test_dry_run_report_includes_account_home_stores(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _account_ctx(tmp_path)
+    state = _write_aged(
+        ctx.runs_dir / "r" / "run-old" / "state.md", "run state", 120)
+    connected = ctx.home_root.parent.parent / "connected"
+    marker = _write_aged(connected / "home" / "account" / "repos.json", "{}", 1)
+    windows = _windows(run_state=90)
+
+    _plan, reports = retention.gc(
+        repo, ctx, windows, dry_run=True, now=NOW)
+    rendered = retention.render_report(reports, windows, dry_run=True)
+    assert state.exists() and marker.exists()
+    assert reports["run-state"].items == 1
+    assert reports["connected"].items == 1
+    assert "run-state" in rendered
+    assert "connected" in rendered
+    assert "would delete" in rendered
 
 
 def test_disabled_windows_touch_nothing(tmp_path):
@@ -350,6 +464,7 @@ def test_existing_config_is_never_touched(tmp_path):
     adopt._setup_brr_dir(repo)
     cfg = conf.load_config(repo)
     assert "retention.conversations_days" not in cfg
+    assert "retention.run_state_days" not in cfg
 
 
 # ── daemon sweep plumbing ───────────────────────────────────────────

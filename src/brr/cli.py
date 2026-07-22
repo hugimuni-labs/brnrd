@@ -501,12 +501,6 @@ def cmd_gc(args):
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
     windows = retention.Windows.from_config(cfg)
-    if windows.all_disabled():
-        print(
-            "[brnrd] gc: no retention windows configured "
-            "(retention.*_days in .brr/config) — keeping everything"
-        )
-        return
     try:
         ctx = account_mod.resolve_context(repo_root, cfg, create=False)
     except Exception:
