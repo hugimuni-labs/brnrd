@@ -85,8 +85,8 @@ def subscription_checkout(
     price_id, cohort = billing.resolve_subscription_price(settings, db, payload.cadence)
     if not price_id:
         raise HTTPException(status_code=503, detail=f"no Stripe price configured for {cohort} {payload.cadence}")
-    customer_id = _ensure_customer(db, settings, account)
     try:
+        customer_id = _ensure_customer(db, settings, account)
         session = stripe_api.create_subscription_checkout(
             settings,
             customer_id=customer_id,
