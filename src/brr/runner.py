@@ -1119,6 +1119,83 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
     return resolve_runner_profile(repo_root, overrides).name
 
 
+_PROMPT_PLACEHOLDER = "{prompt}"
+
+
+def _cmd_template(
+    runner_name: "str | RunnerProfile",
+    cfg: dict[str, Any],
+    repo_root: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
+    """The argv *template* for a runner — before prompt placement.
+
+    Elements may contain the literal ``{prompt}`` placeholder; the template
+    is what :func:`_prompt_stdin` inspects to decide stdin-vs-argv delivery,
+    and what :func:`_fill_prompt` substitutes into. Resolution order matches
+    the historical ``_build_cmd``: a pinned ``runner_cmd`` override wins
+    verbatim (no *extra_args* injected — a pinned command is the user's),
+    else the declared/generated profile ``cmd``, else the bare runner name.
+    """
+    extra = list(extra_args or [])
+
+    custom = cfg.get("runner_cmd")
+    if custom:
+        if isinstance(custom, list):
+            return [str(s) for s in custom]
+        return shlex.split(str(custom))
+
+    from . import runner_select
+
+    if isinstance(runner_name, runner_select.RunnerProfile):
+        profile_cmd = runner_name.cmd or runner_name.name
+    else:
+        profile = _selection_profiles(repo_root, probe=False).get(runner_name)
+        profile_cmd = str(profile.get("cmd", runner_name)) if profile else runner_name
+    if profile_cmd:
+        cmd = shlex.split(profile_cmd)
+        cmd.extend(extra)
+        return cmd
+
+    return [str(runner_name), *extra]
+
+
+def _fill_prompt(
+    template: list[str], prompt: str, cfg: dict[str, Any]
+) -> list[str]:
+    """Substitute the prompt into an argv template.
+
+    Two regimes, deliberately different:
+
+    - ``runner_cmd`` config override (legacy): every element gets an embedded
+      ``str.replace`` of ``{prompt}`` — unchanged since before the stdin
+      migration, kept verbatim for backward compatibility.
+    - declared/generated profile ``cmd``: **whole-argument substitution
+      only.** An element that *is* ``{prompt}`` becomes the prompt; an
+      element that merely *contains* it (``--flag={prompt}``) is rejected
+      loudly rather than silently shipped as a literal or half-substituted
+      string. Bundled profile cmds contain no placeholder, so their argv is
+      byte-identical to before.
+    """
+    if cfg.get("runner_cmd"):
+        return [s.replace(_PROMPT_PLACEHOLDER, prompt) for s in template]
+    out: list[str] = []
+    for part in template:
+        if part == _PROMPT_PLACEHOLDER:
+            out.append(prompt)
+        elif _PROMPT_PLACEHOLDER in part:
+            raise ValueError(
+                "runner cmd element %r embeds {prompt}; declared profile "
+                "cmds support whole-argument substitution only — make "
+                "'{prompt}' its own argv token (embedded substitution is "
+                "only honoured by the legacy runner_cmd config override)"
+                % part
+            )
+        else:
+            out.append(part)
+    return out
+
+
 def _build_cmd(
     runner_name: "str | RunnerProfile",
     prompt: str,
@@ -1137,36 +1214,30 @@ def _build_cmd(
     before the prompt on the profile / bare path. A ``runner_cmd`` override is
     honoured verbatim — a pinned command is the user's, so extra args are not
     injected into it.
+
+    The prompt is NOT appended here. By default it travels on stdin (see
+    ``_prompt_stdin``); a cmd that carries a whole-argument ``{prompt}``
+    placeholder receives it in argv instead.
     """
-    def _replace_placeholders(parts: list[str]) -> list[str]:
-        return [s.replace("{prompt}", prompt) for s in parts]
-
-    extra = list(extra_args or [])
-
-    custom = cfg.get("runner_cmd")
-    if custom:
-        if isinstance(custom, list):
-            return _replace_placeholders(custom)
-        return _replace_placeholders(shlex.split(str(custom)))
-
-    # The prompt is NOT appended here. It travels on stdin -- see `_prompt_stdin`.
-    from . import runner_select
-
-    if isinstance(runner_name, runner_select.RunnerProfile):
-        profile_cmd = runner_name.cmd or runner_name.name
-    else:
-        profile = _selection_profiles(repo_root, probe=False).get(runner_name)
-        profile_cmd = str(profile.get("cmd", runner_name)) if profile else runner_name
-    if profile_cmd:
-        cmd = shlex.split(profile_cmd)
-        cmd.extend(extra)
-        return cmd
-
-    return [str(runner_name), *extra]
+    return _fill_prompt(
+        _cmd_template(runner_name, cfg, repo_root, extra_args), prompt, cfg
+    )
 
 
-def _prompt_stdin(cfg: dict[str, Any], prompt: str) -> str | None:
-    """The prompt to pipe, or ``None`` when a pinned ``runner_cmd`` owns its argv.
+def _prompt_stdin(
+    cfg: dict[str, Any],
+    prompt: str,
+    cmd_template: list[str] | None = None,
+) -> str | None:
+    """The prompt to pipe, or ``None`` when argv owns prompt delivery.
+
+    Argv owns delivery in exactly two cases: a pinned ``runner_cmd``
+    override (historical contract — ``{prompt}`` means "put it here", and
+    even without a placeholder the pinned command owns its own argv), or a
+    *cmd_template* containing a whole-argument ``{prompt}`` element (the
+    declared-profile opt-in). Both MUST NOT also receive stdin: a runner
+    told "the prompt is in argv" that also finds bytes on stdin has two
+    prompts and no rule for which wins.
 
     **Why the prompt is not an argv token any more.**  It used to be, and on
     2026-07-14 that killed a run (``run-260714-1442-hgc3``).  The wake had grown to
@@ -1197,11 +1268,17 @@ def _prompt_stdin(cfg: dict[str, Any], prompt: str) -> str | None:
     prompt into and then *closes* gives exactly that: the prompt, then EOF.  What was
     ever forbidden is an fd nobody closes.
 
-    A ``runner_cmd`` override is the one exception: ``{prompt}`` in a pinned command
-    means *"put it here"*, and a pinned command is the user's.  That path keeps argv,
-    and keeps ``_spill_oversized_argv`` behind it.
+    A ``runner_cmd`` override and a profile-cmd ``{prompt}`` element are the
+    exceptions: ``{prompt}`` in a command means *"put it here"*, and a pinned
+    command is the user's.  Those paths keep argv, and keep
+    ``_spill_oversized_argv`` behind them.
     """
     if cfg.get("runner_cmd"):
+        return None
+    if cmd_template is not None and _PROMPT_PLACEHOLDER in cmd_template:
+        # Exact-element membership: whole-argument placeholders only.
+        # (Embedded placeholders never reach here — _fill_prompt rejects
+        # them loudly on the same template.)
         return None
     return prompt
 
@@ -1487,15 +1564,18 @@ def invoke_runner(
     selected_name = selected.name if isinstance(
         selected, runner_select.RunnerProfile
     ) else selected
-    cmd = _build_cmd(
+    cmd_template = _cmd_template(
         selected,
-        invocation.prompt,
         cfg,
         invocation.repo_root,
         extra_args=invocation.extra_runner_args,
     )
+    cmd = _fill_prompt(cmd_template, invocation.prompt, cfg)
     cmd = _spill_oversized_argv(cmd, invocation.repo_root)
-    prompt_stdin = _prompt_stdin(cfg, invocation.prompt)
+    # stdin and argv are mutually exclusive prompt channels; the *template*
+    # (not the substituted argv) is what decides, so a prompt that itself
+    # contains "{prompt}" can never flip the decision.
+    prompt_stdin = _prompt_stdin(cfg, invocation.prompt, cmd_template)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
