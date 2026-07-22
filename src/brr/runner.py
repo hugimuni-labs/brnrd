@@ -28,7 +28,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 _profiles_cache: dict[str, dict[str, Any]] | None = None
@@ -46,14 +46,64 @@ _active_procs: dict[str, subprocess.Popen] = {}
 _proc_lock = threading.Lock()
 
 
-def _register_active_proc(label: str, proc: subprocess.Popen) -> None:
-    with _proc_lock:
-        _active_procs[label] = proc
+def _proc_key_locked(label: str) -> str:
+    """Reserve a non-shadowing registry key while ``_proc_lock`` is held."""
+    key = label
+    bump = 1
+    while key in _active_procs:
+        key = f"{label}#{bump}"
+        bump += 1
+    return key
 
 
-def _clear_active_proc(label: str) -> None:
+def _register_active_proc(
+    label: str,
+    proc: subprocess.Popen,
+    *,
+    on_kill: Callable[[], None] | None = None,
+) -> str:
+    """Register *proc* and optionally its resource-specific kill cleanup.
+
+    The registry deliberately remains one mapping of invocation labels to
+    subprocesses.  Backends which own an extra resource (a Docker container,
+    for example) attach its cleanup to that same process instead of teaching
+    daemon stop dispatch about environments or creating a second registry.
+    """
     with _proc_lock:
-        _active_procs.pop(label, None)
+        key = _proc_key_locked(label)
+        if on_kill is not None:
+            setattr(proc, "_brr_on_kill", on_kill)
+        _active_procs[key] = proc
+    return key
+
+
+def start_registered_process(
+    command: list[str],
+    label: str,
+    *,
+    on_kill: Callable[[], None] | None = None,
+    **popen_kwargs: Any,
+) -> tuple[str, subprocess.Popen]:
+    """Start a process atomically with its invocation-label registration.
+
+    A stop can arrive while a runner is being launched.  Holding the registry
+    lock across ``Popen`` means it sees either no process (and the worker's
+    stopped flag prevents a retry) or the fully registered process; never an
+    unaddressable live interval.
+    """
+    with _proc_lock:
+        proc = subprocess.Popen(command, **popen_kwargs)
+        key = _proc_key_locked(label)
+        if on_kill is not None:
+            setattr(proc, "_brr_on_kill", on_kill)
+        _active_procs[key] = proc
+    return key, proc
+
+
+def _clear_active_proc(label: str, proc: subprocess.Popen | None = None) -> None:
+    with _proc_lock:
+        if proc is None or _active_procs.get(label) is proc:
+            _active_procs.pop(label, None)
 
 
 def _kill_procs(procs: list[subprocess.Popen]) -> bool:
@@ -61,11 +111,24 @@ def _kill_procs(procs: list[subprocess.Popen]) -> bool:
     for proc in procs:
         if proc.poll() is not None:
             continue
+        handled = False
+        cleanup = getattr(proc, "_brr_on_kill", None)
+        if cleanup is not None:
+            try:
+                cleanup()
+                handled = True
+            except Exception:
+                # Resource cleanup is best-effort. A broken Docker CLI must
+                # not prevent the foreground client itself being reclaimed.
+                pass
         try:
             proc.kill()
+            handled = True
         except OSError:
-            continue
-        killed = True
+            # Cleanup may have made the client exit before this signal. That
+            # is still a successful kill path, not a reason to report idle.
+            pass
+        killed = killed or handled
     return killed
 
 
@@ -1686,27 +1749,19 @@ def invoke_runner(
     try:
         with open(out_path, "w", encoding="utf-8") as f_out, \
                 open(err_path, "w", encoding="utf-8") as f_err:
-            proc_key = invocation.label or f"invoke-{id(invocation)}"
-            with _proc_lock:
-                # A duplicate label must not shadow a live sibling's handle
-                # (it would orphan that proc from every kill path).
-                base_key = proc_key
-                bump = 1
-                while proc_key in _active_procs:
-                    proc_key = f"{base_key}#{bump}"
-                    bump += 1
-                proc = _active_procs[proc_key] = subprocess.Popen(
-                    cmd,
-                    cwd=invocation.cwd,
-                    stdin=(
-                        subprocess.PIPE if prompt_stdin is not None
-                        else subprocess.DEVNULL
-                    ),
-                    stdout=f_out,
-                    stderr=f_err,
-                    text=True,
-                    env=proc_env,
-                )
+            proc_key, proc = start_registered_process(
+                cmd,
+                invocation.label or f"invoke-{id(invocation)}",
+                cwd=invocation.cwd,
+                stdin=(
+                    subprocess.PIPE if prompt_stdin is not None
+                    else subprocess.DEVNULL
+                ),
+                stdout=f_out,
+                stderr=f_err,
+                text=True,
+                env=proc_env,
+            )
             if prompt_stdin is not None and proc.stdin is not None:
                 # Cannot deadlock: stdout/stderr are *files*, not pipes, so the child
                 # is never blocked on a full pipe we are not draining. It reads the
@@ -1723,7 +1778,7 @@ def invoke_runner(
             try:
                 returncode = proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_procs([proc])
                 proc.wait()
                 returncode = 124
                 timed_out = True
@@ -1731,10 +1786,8 @@ def invoke_runner(
         stderr = f"executable '{cmd[0]}' not found on PATH"
         returncode = 127
     finally:
-        with _proc_lock:
-            for key, live in list(_active_procs.items()):
-                if live.poll() is not None:
-                    _active_procs.pop(key, None)
+        if "proc_key" in locals() and "proc" in locals():
+            _clear_active_proc(proc_key, proc)
 
     if returncode != 127:
         stdout = _read_capture(out_path)
