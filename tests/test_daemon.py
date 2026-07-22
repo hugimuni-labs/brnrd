@@ -4344,12 +4344,14 @@ def test_home_run_has_no_publish_lane_and_refuses_spawn(tmp_path):
     assert notices and "shared host tree" in notices[0]["text"]
 
 
-# ── host-env default-branch publisher ───────────────────────────────
+# ── default-branch publisher ────────────────────────────────────────
 #
-# Host runs merge reviewed work into the default branch of the shared
+# Runs merge reviewed work into the default branch of the shared
 # checkout; publish() only carries per-run branches, so nothing pushed
-# it (found live 2026-07-22: origin/main 11 commits behind). Every
-# "GitHub" here is a real local ``git init --bare`` repo.
+# it (found live 2026-07-22: origin/main 11 commits behind). The gate
+# is branch state, not run env — the first (host-only) cut stranded
+# solitary-env continuation merges the very next morning (#327/#61).
+# Every "GitHub" here is a real local ``git init --bare`` repo.
 
 
 def _host_publish_repo(tmp_path):
@@ -4435,13 +4437,36 @@ def test_host_publish_skips_diverged_remote_with_marker(tmp_path, capsys):
     assert "pushing main" not in out
 
 
-def test_host_publish_never_fires_for_worktree_env(tmp_path, capsys):
+def test_publish_fires_for_solitary_env_when_default_branch_moved(
+    tmp_path, capsys,
+):
+    """The live 2026-07-22 morning shape: a solitary-env continuation run
+    merges a reviewed PR into the shared checkout's main — the publisher
+    keys on branch state, not run env, so the merge still leaves the
+    machine."""
+    repo, origin = _host_publish_repo(tmp_path)
+    head = commit_files(
+        repo, {"work.txt": "merged by solitary continuation\n"},
+        message="reviewed merge",
+    )
+    assert _head_oid(origin) != head
+
+    daemon.publish_default_branch(repo, _host_task(env="solitary"))
+
+    assert _head_oid(origin) == head
+    assert "pushing main" in capsys.readouterr().out
+
+
+def test_publish_noops_for_worktree_env_that_left_main_alone(
+    tmp_path, capsys,
+):
+    """A worktree run that only worked its own branch: main in sync,
+    publisher stays silent — env-agnostic must not mean chatty."""
     repo, origin = _host_publish_repo(tmp_path)
     before = _head_oid(origin)
-    commit_files(repo, {"work.txt": "worktree lane\n"}, message="ahead")
 
     daemon.publish_default_branch(
-        repo, _host_task(env="worktree", publish_branch="main"),
+        repo, _host_task(env="worktree", publish_branch="brr/topic"),
     )
 
     assert _head_oid(origin) == before

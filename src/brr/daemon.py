@@ -527,21 +527,29 @@ def publish(
 
 
 def publish_default_branch(repo_root: Path, task: Run) -> None:
-    """Best-effort fast-forward push of the default branch after a host run.
+    """Best-effort fast-forward push of the default branch after a run.
 
-    Host-environment runs merge reviewed work into the repo's default
-    branch in the shared checkout, but ``publish`` only carries per-run
-    branches (``publish_branch``, set by ``WorktreeEnv.finalize``) — a
-    host run arms nothing, so its merges never left the machine. Found
-    live 2026-07-22: origin/main was 11 commits (~7 hours) behind local
-    main, every announced merge unpushed, and the gap self-concealed
-    because each run's scm line said "N unpushed" while nobody owned the
-    push.
+    Runs merge reviewed work into the repo's default branch in the
+    shared checkout, but ``publish`` only carries per-run branches
+    (``publish_branch``, set by ``WorktreeEnv.finalize``) — a merge to
+    the default branch arms nothing, so it never left the machine.
+    Found live 2026-07-22: origin/main was 11 commits (~7 hours) behind
+    local main, every announced merge unpushed, and the gap
+    self-concealed because each run's scm line said "N unpushed" while
+    nobody owned the push.
+
+    Deliberately env-agnostic: the first cut fired only for ``host``
+    runs, and the very next morning three ``solitary``-env continuation
+    runs merged reviewed PRs into the shared checkout's main through
+    the repo mount — five commits stranded again (found live
+    2026-07-22, #327/#61). The env of the run says nothing about
+    whether the default branch moved; the branch state does, and this
+    function already reads it.
 
     Fires only when ALL hold:
 
-    - the run's environment was ``host`` (worktree runs already publish
-      their own branch; home runs belong to the account capture net);
+    - the run's root is not the account home (home commits belong to
+      the account capture net);
     - the local default branch has commits the remote lacks;
     - the remote default branch is an **ancestor** of the local one — a
       plain fast-forward. A diverged remote is the operator's to
@@ -554,8 +562,6 @@ def publish_default_branch(repo_root: Path, task: Run) -> None:
     credential setup applies). Best-effort like the capture net: every
     failure is a log line, never an exception into finalization.
     """
-    if task.env != "host":
-        return
     if task.meta.get("root_kind") == "home":
         # Home is committed and pushed by the account-home capture net.
         return
@@ -579,14 +585,14 @@ def publish_default_branch(repo_root: Path, task: Run) -> None:
             return
         if not gitops.is_ancestor(repo_root, remote_ref, branch):
             print(
-                f"[brnrd] host publish: {remote_ref} has diverged from "
+                f"[brnrd] default-branch publish: {remote_ref} has diverged from "
                 f"local {branch}; skipping push — reconcile by hand "
                 f"(fetch / merge / push) in {repo_root}"
             )
             return
         print(
             f"[brnrd] pushing {branch} ({len(commits)} commit(s)) after "
-            f"host run {task.id}..."
+            f"run {task.id}..."
         )
         with _branch_lock(branch):
             pushed = gitops.push_branch(
@@ -594,11 +600,11 @@ def publish_default_branch(repo_root: Path, task: Run) -> None:
             )
         if not pushed:
             print(
-                f"[brnrd] host publish: push of {branch} to {remote} was "
+                f"[brnrd] default-branch publish: push of {branch} to {remote} was "
                 f"rejected; the remote is the operator's to reconcile"
             )
     except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
-        print(f"[brnrd] host publish: skipped on error: {exc}")
+        print(f"[brnrd] default-branch publish: skipped on error: {exc}")
 
 
 def _push_command(
