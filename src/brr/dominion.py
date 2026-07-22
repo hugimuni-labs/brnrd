@@ -246,6 +246,7 @@ def commit(
     branch: str | None = None,
     push: bool = False,
     lock_timeout: float = 30.0,
+    conversation_id: str | None = None,
 ) -> bool:
     """Capture the dominion's working-tree changes as one commit, serialized.
 
@@ -283,7 +284,9 @@ def commit(
             if not held:
                 return False
             if gitops.worktree_dirty(dominion_dir):
-                committed = gitops.commit_all(dominion_dir, message)
+                committed = gitops.commit_all(
+                    dominion_dir, message, conversation_id=conversation_id,
+                )
         if push and remote:
             target = branch or gitops.current_branch(dominion_dir)
             # Push after a real commit, or to settle a standing divergence

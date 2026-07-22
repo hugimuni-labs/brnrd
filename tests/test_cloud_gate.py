@@ -2274,3 +2274,37 @@ def test_attachment_filename_is_sanitized_locally(tmp_path, monkeypatch):
     assert cloud._safe_attachment_name({"filename": "..\\..\\x.png"}, 0) == "x.png"
     assert cloud._safe_attachment_name({"filename": ""}, 3) == "attachment-03"
     assert cloud._safe_attachment_name({"filename": ".."}, 1) == "attachment-01"
+
+
+def test_response_post_carries_conversation_id(tmp_path, monkeypatch):
+    """#61 — the response POST includes conversation_id (= conversation_key)."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir, responses_dir = brr_dir / "inbox", brr_dir / "responses"
+    path = protocol.create_event(
+        inbox_dir,
+        source="cloud",
+        body="do the thing",
+        cloud_event_id="evt-cloud-1",
+        cloud_platform="telegram",
+        cloud_chat_id="-1001234567890",
+    )
+    ev = protocol._read_event(path)
+    protocol.set_status(ev, "done")
+    protocol.write_response(responses_dir, ev["id"], "all done")
+
+    posts = []
+
+    def fake_request(base_url, method, path, *, token=None, json=None, **kwargs):
+        posts.append((method, path, json))
+        return {}
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    state = {"brnrd_url": "https://brnrd.dev", "token": "bd_daemon"}
+
+    cloud._deliver_responses(brr_dir, inbox_dir, responses_dir, state)
+
+    assert len(posts) == 1
+    method, url_path, payload = posts[0]
+    assert (method, url_path) == ("POST", "/v1/daemons/responses")
+    assert payload["event_id"] == "evt-cloud-1"
+    assert payload["conversation_id"] == "cloud:telegram:-1001234567890:"
