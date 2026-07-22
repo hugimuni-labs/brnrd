@@ -930,6 +930,186 @@ def detect_all_runners(repo_root: Path | None = None) -> list[str]:
     return [name for name in profiles if _runner_available(name, profiles)]
 
 
+# ── The runner doctor (#507 §2.1) ───────────────────────────────────
+#
+# The first wake cannot explain how to install its own medium: with no
+# Shell on PATH there is no model process to invoke. So this guidance is
+# mechanical, lives next to the catalog it reads, and is shared by every
+# caller that can hit "no Runner" — init, `runners list`, and the
+# selected-Runner launch-failure path — precisely so those three cannot
+# drift apart.
+
+
+@dataclass(frozen=True)
+class ShellHelp:
+    """Install/verify facts for one supported Shell family.
+
+    One table, runner-owned. Keeping the URLs here rather than in each
+    caller is the whole point: a stale install URL should be wrong in
+    exactly one place.
+    """
+
+    shell: str
+    label: str
+    blurb: str
+    docs_url: str
+    install_hint: str
+
+
+SHELL_HELP: dict[str, ShellHelp] = {
+    "claude": ShellHelp(
+        shell="claude",
+        label="Claude Code",
+        blurb="Anthropic's terminal agent; needs a paid Claude plan or an API key.",
+        docs_url="https://code.claude.com/docs/en/setup",
+        install_hint="curl -fsSL https://claude.ai/install.sh | bash",
+    ),
+    "codex": ShellHelp(
+        shell="codex",
+        label="Codex CLI",
+        blurb="OpenAI's terminal agent; needs a ChatGPT plan with Codex or an API key.",
+        docs_url="https://developers.openai.com/codex/cli/",
+        install_hint="npm install -g @openai/codex",
+    ),
+    "gemini": ShellHelp(
+        shell="gemini",
+        label="Gemini CLI",
+        blurb="Google's terminal agent; free tier available with a Google account.",
+        docs_url="https://github.com/google-gemini/gemini-cli",
+        install_hint="npm install -g @google/gemini-cli",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class RunnerDiagnosis:
+    """What brnrd observed when it looked for a Runner.
+
+    Deliberately an *observation*, not a verdict about the machine:
+    ``shells_missing`` means "did not resolve on this process's PATH",
+    which is a different thing from "not installed" and the distinction is
+    the single most common init failure (an installer changed PATH in a
+    shell profile the running terminal never re-read).
+    """
+
+    available: list[str]
+    shells_on_path: list[str]
+    shells_missing: list[str]
+    auth_blocked: list[str]
+    path_dirs: list[str]
+
+    @property
+    def any_runner(self) -> bool:
+        return bool(self.available)
+
+
+def diagnose_runners(repo_root: Path | None = None) -> RunnerDiagnosis:
+    """Probe the declared catalog and report what resolved, and what didn't.
+
+    Derived from the profile catalog, never from a hard-coded
+    ``(claude, codex)`` pair — a Shell added to ``runners.md`` must show up
+    in the doctor without a second edit here.
+    """
+    profiles = _load_profiles(repo_root)
+    available: list[str] = []
+    on_path: list[str] = []
+    missing: list[str] = []
+    auth_blocked: list[str] = []
+    for name in profiles:
+        binary = _profile_binary(name, profiles)
+        found = shutil.which(binary) is not None
+        if found and binary not in on_path:
+            on_path.append(binary)
+        if not found and binary not in missing:
+            missing.append(binary)
+        if _runner_available(name, profiles):
+            available.append(name)
+        elif found:
+            auth_blocked.append(name)
+    # Families brnrd knows how to talk a user through, even when the
+    # catalog happens not to declare a profile for one right now.
+    for shell in SHELL_HELP:
+        if shell not in on_path and shell not in missing:
+            missing.append(shell)
+    path_dirs = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    return RunnerDiagnosis(
+        available=available,
+        shells_on_path=on_path,
+        shells_missing=missing,
+        auth_blocked=auth_blocked,
+        path_dirs=path_dirs,
+    )
+
+
+def render_runner_doctor(
+    diagnosis: RunnerDiagnosis,
+    *,
+    attempted: str | None = None,
+    error: str | None = None,
+    resume_command: str = "brnrd init",
+) -> str:
+    """The shared install/PATH/auth/verify ladder, as terminal text.
+
+    *attempted* / *error* turn the zero-runner report into the
+    selected-Runner launch-failure report: same ladder, preceded by the
+    exact profile that failed and its bounded error. The only return path
+    offered is re-running init: every other route needs a Runner too, and
+    naming one would just move this same failure behind less guidance.
+    """
+    lines: list[str] = []
+    if attempted:
+        lines.append(f"[brnrd] runner {attempted!r} failed to run.")
+        if error:
+            bounded = error.strip().splitlines()[-8:]
+            lines.extend(f"        {line}" for line in bounded)
+        lines.append("")
+
+    checked = ", ".join(sorted(set(diagnosis.shells_missing))) or "(none)"
+    lines.append(f"[brnrd] what I checked: {checked}")
+    lines.append(
+        "        None of those resolved on this process's PATH. That is an "
+        "observation about\n        this terminal, not a claim they are "
+        "absent from the machine."
+    )
+    if diagnosis.path_dirs:
+        lines.append("        PATH:")
+        lines.extend(f"          {d}" for d in diagnosis.path_dirs)
+    if diagnosis.auth_blocked:
+        lines.append(
+            "        On PATH but not usable (missing auth env): "
+            + ", ".join(sorted(set(diagnosis.auth_blocked)))
+        )
+
+    lines.append("")
+    lines.append("[brnrd] already installed one of these?")
+    for shell in sorted(set(diagnosis.shells_missing) & set(SHELL_HELP)):
+        lines.append(f"          command -v {shell} && {shell} --version")
+    lines.append(
+        "        If an installer just changed your PATH, open a fresh "
+        "terminal first."
+    )
+    lines.append("        Full profile table: brnrd runners list --all")
+
+    lines.append("")
+    lines.append("[brnrd] not installed yet? any one of these is enough:")
+    for shell in sorted(set(diagnosis.shells_missing) & set(SHELL_HELP)):
+        help_ = SHELL_HELP[shell]
+        lines.append(f"          {help_.label} — {help_.blurb}")
+        lines.append(f"            install: {help_.install_hint}")
+        lines.append(f"            docs:    {help_.docs_url}")
+
+    lines.append("")
+    lines.append(
+        "[brnrd] then: authenticate that CLI directly, check it starts, and "
+        f"re-run `{resume_command}`."
+    )
+    lines.append(
+        "        Everything written so far is kept — a re-run resumes, it "
+        "does not roll back."
+    )
+    return "\n".join(lines)
+
+
 def available_selection_runners(repo_root: Path | None = None) -> list["RunnerProfile"]:
     """Available declared/generated Runner profiles for selection policy."""
     from . import runner_select
