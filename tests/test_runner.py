@@ -2134,7 +2134,7 @@ class TestCodexThreadCorrelation:
         # The reply any existing caller sees is the plain final-message
         # text, byte-identical to what plain-mode stdout would have held —
         # never the raw JSONL the correlation logic consumed internally.
-        assert result.stdout == "the final agent reply"
+        assert result.stdout == "the final agent reply\n"
         assert "thread.started" not in result.stdout
 
     def test_missing_last_message_file_yields_empty_stdout_not_jsonl(
@@ -2179,7 +2179,7 @@ class TestCodexThreadCorrelation:
 
         assert result.codex_thread_id is None
         # Correlation failing must never take the reply down with it.
-        assert result.stdout == "reply text"
+        assert result.stdout == "reply text\n"
 
     def test_runner_cmd_override_skips_json_correlation_entirely(
         self, tmp_path, monkeypatch,

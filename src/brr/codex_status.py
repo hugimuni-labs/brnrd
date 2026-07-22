@@ -50,8 +50,8 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -304,22 +304,23 @@ def _latest_rollout_fallback(root: Path) -> Path | None:
     return newest
 
 
-# codex thread ids are UUIDs in practice, but this only needs to be safe, not
-# exactly right: any charset outside this is rejected rather than trusted, so
-# a malformed/hostile id degrades to "no id available" (the mtime fallback)
-# instead of ever reaching a filesystem glob. Blocks path separators and
-# ``..`` traversal by construction (neither character is in the allowed set).
-_SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-
-
 def _safe_thread_id(thread_id: Any) -> str | None:
-    """*thread_id*, validated for safe use in a filename glob, or None."""
+    """*thread_id* as Codex's canonical UUID, or ``None``.
+
+    Rollout filenames do not delimit a variable-length session id beyond the
+    final ``-<id>.jsonl`` suffix, so accepting an arbitrary safe-looking token
+    would make ``abc`` also match ``xabc``. Codex emits a canonical UUID and
+    stores that same fixed-width value in the filename. Pinning that contract
+    makes the suffix match exact; upstream drift degrades to honest absence.
+    """
     if not isinstance(thread_id, str):
         return None
     candidate = thread_id.strip()
-    if not candidate or not _SAFE_THREAD_ID_RE.match(candidate):
+    try:
+        canonical = str(uuid.UUID(candidate))
+    except (ValueError, AttributeError):
         return None
-    return candidate
+    return canonical if candidate.lower() == canonical else None
 
 
 def _rollout_for_thread(root: Path, thread_id: str) -> Path | None:
@@ -391,16 +392,15 @@ def load_levels(
     fix for issue #195: brr used to always take the newest-mtime rollout
     under the sessions root, which silently reads a *sibling* Codex run's
     quota/context snapshot the moment more than one is alive at once. With
-    no usable *thread_id* (absent, malformed, or the caller never proved
-    one — e.g. a pre-run read before any Codex invocation exists yet) this
-    falls back to :func:`_latest_rollout_fallback`, the same newest-mtime
-    guess as before, explicitly named so nothing downstream can mistake it
-    for correlation.
+    no *thread_id* at all (the caller never proved one — e.g. a pre-run read
+    before any Codex invocation exists yet) this falls back to
+    :func:`_latest_rollout_fallback`, the same newest-mtime guess as before,
+    explicitly named so nothing downstream can mistake it for correlation.
 
-    A *thread_id* that IS given but matches no rollout file is **not**
-    retried against the mtime fallback: guessing there would risk exactly
-    the sibling-read this parameter exists to prevent, so that case returns
-    None (honest absence) same as "no rollout at all."
+    A *thread_id* that is given but malformed or matches no rollout file is
+    **not** retried against the mtime fallback: guessing there would risk
+    exactly the sibling-read this parameter exists to prevent, so that case
+    returns None (honest absence) same as "no rollout at all."
 
     Extracts the last ``token_count`` event and normalizes it either way.
     Returns None when no rollout, no ``token_count`` event, or nothing
@@ -409,8 +409,13 @@ def load_levels(
     root = sessions_root(env)
     if not root.is_dir():
         return None
-    safe_id = _safe_thread_id(thread_id)
-    rollout = _rollout_for_thread(root, safe_id) if safe_id else _latest_rollout_fallback(root)
+    if thread_id is None:
+        rollout = _latest_rollout_fallback(root)
+    else:
+        safe_id = _safe_thread_id(thread_id)
+        if safe_id is None:
+            return None
+        rollout = _rollout_for_thread(root, safe_id)
     if rollout is None:
         return None
     found = _last_token_count(rollout)
