@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { LiveRunsAuthError, liveRunDisplayName, requestRunStop } from './liveRuns.ts';
+import {
+	LiveRunsAuthError,
+	liveRelicChips,
+	liveRunDisplayName,
+	requestRunStop
+} from './liveRuns.ts';
 
 test('live run display prefers the resident-authored name', () => {
 	assert.equal(
@@ -61,4 +66,28 @@ test('the run id is encoded, not interpolated raw', async () => {
 	}) as unknown as typeof fetch;
 	await requestRunStop('run/../evil', spy);
 	assert.ok(!seen.includes('run/../evil'), 'a slash in a handle must not reshape the path');
+});
+
+// ── relics-so-far chips (#342) ──────────────────────────────────────
+
+test('relic chips order produce first and keep unknown kinds', () => {
+	assert.deepEqual(liveRelicChips({ kb: 1, commit: 2, artifact: 3, pr: 1 }), [
+		{ kind: 'commit', count: 2 },
+		{ kind: 'pr', count: 1 },
+		{ kind: 'kb', count: 1 },
+		{ kind: 'artifact', count: 3 }
+	]);
+});
+
+test('branch and summary never chip — they restate other produce', () => {
+	assert.deepEqual(liveRelicChips({ branch: 1, summary: 1, commit: 2 }), [
+		{ kind: 'commit', count: 2 }
+	]);
+});
+
+test('zero, empty, and absent counts render no chips at all', () => {
+	assert.deepEqual(liveRelicChips(null), []);
+	assert.deepEqual(liveRelicChips(undefined), []);
+	assert.deepEqual(liveRelicChips({}), []);
+	assert.deepEqual(liveRelicChips({ commit: 0 }), []);
 });

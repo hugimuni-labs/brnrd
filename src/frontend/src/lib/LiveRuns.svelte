@@ -3,7 +3,14 @@
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { typeReveal } from './transitions';
-	import { ageSince, heartbeatLevel, liveRunDisplayName, type LiveRun } from './liveRuns';
+	import {
+		ageSince,
+		heartbeatLevel,
+		liveRelicChips,
+		liveRunDisplayName,
+		type LiveRun
+	} from './liveRuns';
+	import { relicIcon } from './runLedger';
 	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
 
@@ -238,6 +245,18 @@
 										note updated {clock(run.card_updated_at)}
 									</p>
 								{/if}
+							{/if}
+							{#if liveRelicChips(run.relics_counts).length > 0}
+								<!-- Relics-so-far (#342): same icon+count chip grammar the
+								     collapsed receipt speaks (RunLedgerReceipt / relicCounts),
+								     so live and closed renderings of one run's produce agree.
+								     Zero relics → no row at all. -->
+								<p class="flex flex-wrap items-center gap-2 font-mono text-[10px] text-stone-400">
+									<span class="tracking-wide text-ink-mute uppercase">relics</span>
+									{#each liveRelicChips(run.relics_counts) as chip (chip.kind)}
+										<span title={chip.kind}>{relicIcon(chip.kind)} {chip.count}</span>
+									{/each}
+								</p>
 							{/if}
 							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-ink-quiet">
 								<span>run: {run.run_id || run.id}</span>
