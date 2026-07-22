@@ -6,8 +6,9 @@ semantics are byte-compatible with the previous module.
 
 ``message.html`` (Jinja) is replaced by the inline ``_message_response``
 helper below — no Jinja dependency for error/outcome pages.  The
-``connect.html`` and ``config_approve.html`` form pages retain their Jinja
-templates (moved to ``src/brnrd/routers/templates/``).
+``config_approve.html`` form page retains its Jinja template (in
+``src/brnrd/routers/templates/``); ``connect.html`` was ported to the
+SvelteKit ``/connect/[code]`` route (#327).
 """
 
 from __future__ import annotations
@@ -266,57 +267,101 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
     return resp
 
 
-@router.get("/connect/{code}", response_class=HTMLResponse)
-def connect_page(code: str, request: Request, db: Session = Depends(get_db)):
+def _pair_code_status(db: Session, code: str) -> str:
+    """Classify a pair code the way ``pairing._get_pair`` + ``approve_core`` would.
+
+    Mirrors the exact check order of the POST path (unknown → expired →
+    consumed → live status) so the GET context and a subsequent approve
+    can never disagree about the same code.
+    """
+    from sqlalchemy import select
+
+    from brnrd.models import PairRequest
+
+    pair = db.execute(select(PairRequest).where(PairRequest.pair_code == code)).scalar_one_or_none()
+    if pair is None:
+        return "unknown"
+    expires = pair.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < datetime.now(timezone.utc):
+        return "expired"
+    return pair.status
+
+
+@router.get("/v1/connect/{code}")
+def connect_context_api(code: str, request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Context for the SPA /connect/[code] page (#327 Jinja-removal, /connect slice).
+
+    Session-authenticated exactly like the retired Jinja ``connect_page``:
+    no session → 401 (the SPA renders the sign-in link with
+    ``next=/connect/{code}``, replacing the old 303 redirect). The code
+    status only reveals distinctions the POST path already exposed to any
+    signed-in browser (404 unknown / 410 expired / 409 used).
+    """
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url=f"/login?next=/connect/{code}", status_code=303)
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account_id)
-    if not repos:
-        return _message_response(
-            title="No repos",
-            eyebrow="Daemon approval",
-            heading="No repos connected yet",
-            message="Connect a repo first, then reload this approval page.",
-            severity="warning",
-        )
-    return _render(request, "connect.html", {"title": "Approve daemon", "code": code, "repos": repos})
+    return JSONResponse(
+        {
+            "code": code,
+            "status": _pair_code_status(db, code),
+            "repos": [{"id": repo.id, "repo_full_name": repo.repo_full_name} for repo in repos],
+        }
+    )
 
 
-@router.post("/connect/{code}", response_class=HTMLResponse)
-def connect_submit(code: str, request: Request, repo_id: str = Form(...), db: Session = Depends(get_db)):
+@router.post("/v1/connect/{code}")
+def connect_approve_api(
+    code: str,
+    request: Request,
+    payload: dict[str, object] | None = Body(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Approve a daemon pair code (#327 Jinja-removal, /connect slice).
+
+    JSON transport for the retired Jinja ``connect_submit`` — the auth and
+    approval semantics are ``approve_core``'s, unchanged: session required,
+    code expiry (410), single-use after the daemon polls (409), and the repo
+    lookup is scoped to the session's own account (404 on any other
+    account's repo).
+    """
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url=f"/login?next=/connect/{code}", status_code=303)
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repo_id = str((payload or {}).get("repo_id") or "")
     from fastapi import HTTPException
 
     try:
         approve_core(db, account_id, code, repo_id)
     except HTTPException as exc:
-        return _message_response(
-            title="Approve failed",
-            eyebrow="Daemon approval",
-            heading="Could not approve",
-            message=str(exc.detail),
-            severity="error",
-            status_code=exc.status_code,
-        )
+        return JSONResponse({"ok": False, "notice": str(exc.detail)}, status_code=exc.status_code)
     try:
         pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
     except Exception:
         pair = None
-    message = "Your daemon is connected. You can return to your terminal."
+    telegram = None
     if pair is not None:
-        message += f" To use Telegram, bind the chat too: {pair.instructions}"
-    return _message_response(
-        title="Approved",
-        eyebrow="Daemon approval",
-        heading="Approved",
-        message=message,
-        action_url=pair.deep_link if pair else "",
-        action_label="Open Telegram and press Start" if pair and pair.deep_link else "",
-        severity="success",
+        telegram = {
+            "pair_code": pair.pair_code,
+            "instructions": pair.instructions,
+            "deep_link": pair.deep_link,
+        }
+    return JSONResponse(
+        {
+            "ok": True,
+            "notice": "Your daemon is connected. You can return to your terminal.",
+            "telegram": telegram,
+        }
     )
+
+
+@router.get("/connect/{code}")
+def connect_redirect(code: str) -> RedirectResponse:
+    # SPA owns /connect/[code] in production (passthru removed); backend
+    # shim for bare uvicorn only, same 308 shape as /login and /repos.
+    return RedirectResponse(url="/", status_code=308)
 
 
 def _config_change_request_view(db: Session, request_id: str) -> ConfigChangeRequest | None:

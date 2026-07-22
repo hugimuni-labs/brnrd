@@ -55,14 +55,14 @@ applications:
             # Keep this list in sync with src/brnrd/app.py's include_router
             # calls and src/brnrd/routers/web_auth.py / dashboard.py —
             # anything added there needs a passthru rule here or it never
-            # reaches FastAPI. /activity, /repos, /login and /runs/<repo>/<run>
-            # (the Wyrd run node, #476) deliberately absent: SPA-owned, so a
-            # deep link falls through to the index.html shell above and the
-            # client router resolves it. /plans stays passthru'd so old
-            # bookmarks hit the backend's 308 → "/" (#326) instead of the
-            # SPA's 404. /logout stays backend-owned (it must clear the
-            # session cookie).
-            '^/(v1|api|r|logout|auth|connect|plans|static|terms/accept|config-approve)(/|$)':
+            # reaches FastAPI. /activity, /repos, /login, /connect/<code>
+            # and /runs/<repo>/<run> (the Wyrd run node, #476) deliberately
+            # absent: SPA-owned, so a deep link falls through to the
+            # index.html shell above and the client router resolves it.
+            # /plans stays passthru'd so old bookmarks hit the backend's
+            # 308 → "/" (#326) instead of the SPA's 404. /logout stays
+            # backend-owned (it must clear the session cookie).
+            '^/(v1|api|r|logout|auth|plans|static|terms/accept|config-approve)(/|$)':
               passthru: true
 
     variables:
