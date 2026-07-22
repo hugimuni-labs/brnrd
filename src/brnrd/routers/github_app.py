@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .. import ids
@@ -60,10 +60,12 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     repos = gh_app.list_installation_repositories(settings, installation_id)
     target_login = ""
     target_type = ""
+    listed_names: set[str] = set()
     for item in repos:
         full_name = str(item.get("full_name") or "")
         if not full_name:
             continue
+        listed_names.add(full_name)
         owner = item.get("owner") or {}
         if not target_login:
             target_login = str(owner.get("login") or "")
@@ -78,6 +80,15 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
         row.github_pushed_at = _github_dt(item.get("pushed_at"))
         row.github_updated_at = _github_dt(item.get("updated_at"))
         row.last_seen_at = datetime.now(timezone.utc)
+    # Prune rows this installation no longer covers: a transferred or
+    # uninstalled repo otherwise lingers as a stale name-match candidate
+    # for credential minting (#transfer incident 2026-07-22).
+    db.execute(
+        delete(GitHubInstalledRepo).where(
+            GitHubInstalledRepo.github_installation_id == installation.id,
+            GitHubInstalledRepo.repo_full_name.not_in(listed_names),
+        )
+    )
     installation.target_login = target_login or installation.target_login
     installation.target_type = target_type or installation.target_type
     installation.last_synced_at = datetime.now(timezone.utc)
