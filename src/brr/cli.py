@@ -1723,6 +1723,11 @@ def cmd_daemon_up(args):
         from . import daemon_install
         code = daemon_install.start_service()
         if code is not None:
+            if code == 0:
+                from . import release_availability
+                observation = release_availability.refresh_if_stale(Path.cwd())
+                if observation and (fact := observation.render()):
+                    print(f"[brnrd] {fact}")
             return code
     return cmd_up(args)
 
