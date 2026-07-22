@@ -101,14 +101,15 @@ def test_rejects_pypi_metadata_for_a_different_project(monkeypatch):
     assert release_availability._fetch_latest() is None
 
 
-def test_accepts_matching_pypi_project_metadata(monkeypatch):
+@pytest.mark.parametrize("repository_url", release_availability.REPOSITORY_URLS)
+def test_accepts_matching_pypi_project_metadata(monkeypatch, repository_url):
     class Response:
         def read(self, _limit):
             return json.dumps({
                 "info": {
                     "name": "brnrd",
                     "version": "0.2.0",
-                    "project_urls": {"Repository": release_availability.REPOSITORY_URL},
+                    "project_urls": {"Repository": repository_url},
                 },
             }).encode()
 

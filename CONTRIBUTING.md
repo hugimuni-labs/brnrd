@@ -8,8 +8,8 @@ expect from a PR.
 Python 3.10+ and git are required.
 
 ```bash
-git clone https://github.com/Gurio/brr
-cd brr
+git clone https://github.com/hugimuni-labs/brnrd
+cd brnrd
 pip install -e ".[dev]"   # or: uv pip install -e ".[dev]"
 pytest
 ```
