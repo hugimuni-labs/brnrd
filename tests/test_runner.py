@@ -112,6 +112,8 @@ def test_clean_runner_environ_points_managed_path_at_pointer_dir(tmp_path, monke
     assert cleaned["GIT_CONFIG_KEY_2"] == "credential.helper"
     assert f"cat {str(pointer_dir / 'token')}" in cleaned["GIT_CONFIG_VALUE_2"]
     assert "$GH_TOKEN" not in cleaned["GIT_CONFIG_VALUE_2"]
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    assert "GIT_TERMINAL_PROMPT" not in runner_mod.clean_runner_environ()
 
 
 def test_clean_runner_environ_falls_back_when_no_pointer_dir(monkeypatch):
@@ -131,6 +133,8 @@ def test_clean_runner_environ_falls_back_when_no_pointer_dir(monkeypatch):
     assert cleaned["GH_TOKEN"] == "app-token"
     assert "GH_CONFIG_DIR" not in cleaned
     assert "password=$GH_TOKEN" in cleaned["GIT_CONFIG_VALUE_2"]
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    assert "GIT_TERMINAL_PROMPT" not in runner_mod.clean_runner_environ()
 
 
 def test_clean_runner_environ_operator_gh_token_ignores_pointer(tmp_path, monkeypatch):
@@ -154,6 +158,106 @@ def test_clean_runner_environ_operator_gh_token_ignores_pointer(tmp_path, monkey
     assert cleaned["GH_TOKEN"] == "operator-token"
     assert "GH_CONFIG_DIR" not in cleaned
     assert "password=$GH_TOKEN" in cleaned["GIT_CONFIG_VALUE_2"]
+    # Fail-closed machinery is branch-3-only: no prompt kill-switch here.
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    assert "GIT_TERMINAL_PROMPT" not in runner_mod.clean_runner_environ()
+
+
+def _clear_git_config_env(monkeypatch):
+    """Drop inherited runner-scoped Git env so append semantics start at 0.
+
+    The suite itself may run *inside* a brnrd runner whose env already
+    carries GIT_CONFIG pairs and (post fail-closed) GIT_TERMINAL_PROMPT.
+    """
+    for key in tuple(os.environ):
+        if key == "GIT_CONFIG_COUNT" or key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+
+
+def test_clean_runner_environ_fails_closed_without_any_token(tmp_path, monkeypatch):
+    """Branch 3 (2026-07-21 ratified decision; #557 post-mortem): no operator
+    token and no managed token ⇒ the runner is *unauthenticated* — never the
+    operator's keyring (gh) and never the operator's global credential helper
+    (git)."""
+    _clear_git_config_env(monkeypatch)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "human-token")
+    monkeypatch.setenv("GH_CONFIG_DIR", "/home/operator/.config/gh")
+    from brr.gates import cloud as cloud_mod
+
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: pointer_dir)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert "GH_TOKEN" not in cleaned
+    assert "GITHUB_TOKEN" not in cleaned
+    # gh identity: pointed at the daemon-owned null config dir, not the
+    # operator's stale GH_CONFIG_DIR and not the keyring.
+    null_dir = tmp_path / ".brr" / "credentials" / "github-null"
+    assert cleaned["GH_CONFIG_DIR"] == str(null_dir)
+    assert (null_dir / "hosts.yml").read_text(encoding="utf-8") == ""
+    if os.name == "posix":
+        assert (null_dir.stat().st_mode & 0o777) == 0o700
+        assert ((null_dir / "hosts.yml").stat().st_mode & 0o777) == 0o600
+    # git identity: helper list reset (global helper neutralized), and no
+    # interactive prompt to hang on.
+    assert cleaned["GIT_TERMINAL_PROMPT"] == "0"
+    assert cleaned["GIT_CONFIG_COUNT"] == "2"
+    assert cleaned["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert cleaned["GIT_CONFIG_VALUE_0"] == ""
+    assert cleaned["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+    assert cleaned["GIT_CONFIG_VALUE_1"] == ""
+
+
+def test_clean_runner_environ_fail_closed_preserves_staged_git_config_pairs(
+    tmp_path, monkeypatch
+):
+    """The helper reset appends at the existing GIT_CONFIG offset instead of
+    clobbering pairs already staged in the env."""
+    _clear_git_config_env(monkeypatch)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "pre-existing")
+    from brr.gates import cloud as cloud_mod
+
+    pointer_dir = tmp_path / ".brr" / "credentials" / "github"
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: pointer_dir)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert cleaned["GIT_CONFIG_COUNT"] == "3"
+    assert cleaned["GIT_CONFIG_KEY_0"] == "user.name"
+    assert cleaned["GIT_CONFIG_VALUE_0"] == "pre-existing"
+    assert cleaned["GIT_CONFIG_KEY_1"] == "credential.helper"
+    assert cleaned["GIT_CONFIG_VALUE_1"] == ""
+    assert cleaned["GIT_CONFIG_KEY_2"] == "credential.https://github.com.helper"
+    assert cleaned["GIT_CONFIG_VALUE_2"] == ""
+
+
+def test_clean_runner_environ_fails_closed_without_cloud_gate(monkeypatch):
+    """No cloud gate naming a credentials dir ⇒ the null identity dir falls
+    back to a per-user temp location — fail-closed never depends on the gate."""
+    _clear_git_config_env(monkeypatch)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("BRNRD_MANAGED_GITHUB_TOKEN", raising=False)
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(cloud_mod, "github_credentials_dir", lambda brr_dir=None: None)
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert "GH_TOKEN" not in cleaned
+    assert cleaned["GIT_TERMINAL_PROMPT"] == "0"
+    null_dir = cleaned["GH_CONFIG_DIR"]
+    assert "brnrd-github-null" in null_dir
+    assert (runner_mod.Path(null_dir) / "hosts.yml").read_text(encoding="utf-8") == ""
 
 
 def test_detect_runner_returns_string_or_none():
