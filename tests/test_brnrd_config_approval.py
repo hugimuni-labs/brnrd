@@ -12,6 +12,9 @@ outcome lands as a plain inbox ``Event`` the daemon's existing
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -130,6 +133,22 @@ def test_config_approve_context_requires_login_and_spa_handoff_is_compatible():
     handoff = client.get(f"/config-approve/{minted['request_id']}", follow_redirects=False)
     assert handoff.status_code == 308
     assert handoff.headers["location"] == "/"
+
+
+def test_config_approve_deep_link_is_spa_owned_in_production():
+    """The static host must not passthru the retired Jinja URL to FastAPI.
+
+    FastAPI retains a bare-uvicorn compatibility redirect, but production
+    deep links must reach SvelteKit's fallback shell. Keeping
+    ``config-approve`` in this rule makes every emailed approval link land on
+    the dashboard instead of the approval page.
+    """
+    config = (Path(__file__).parents[1] / ".upsun" / "config.yaml").read_text()
+    backend_rule = re.search(r"'\^/\(([^)]*)\)\(/\|\$\)'", config)
+
+    assert backend_rule is not None
+    assert "v1" in backend_rule.group(1).split("|")
+    assert "config-approve" not in backend_rule.group(1).split("|")
 
 
 def test_config_approve_context_shows_account_owned_details():
