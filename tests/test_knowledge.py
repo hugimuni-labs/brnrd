@@ -587,3 +587,21 @@ def test_archived_reply_is_linkable_once_captured(tmp_path):
         "https://github.com/hugimuni-labs/brnrd-knowledge/blob/main/"
         "replies/Gurio__brr/run-1.md"
     )
+
+
+def test_capture_stamps_conversation_trailer_on_kb_commit(tmp_path):
+    """#61 — the kb capture commit carries the Brnrd-Conversation-Id trailer."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    page = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "log.md"
+    page.write_text("an entry\n", encoding="utf-8")
+
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, conversation_id="github:Gurio/brr:61",
+    ) is True
+
+    home_knowledge = tmp_path / "home" / "knowledge"
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Conversation-Id,valueonly)"],
+        cwd=home_knowledge, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "github:Gurio/brr:61"
