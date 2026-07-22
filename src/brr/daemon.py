@@ -5696,6 +5696,7 @@ def _fire_due_schedules(
         # defensive layer is added here.
         scheduled_entries = entries
         dropped_ids: set[str] = set()
+        pacing_snapshot: dict[str, object] = {"mode": "normal"}
         shell_pin = str(cfg.get("shell") or "").strip()
         runner_cfg = str(cfg.get("runner") or "").strip()
         runner_name = shell_pin or (
@@ -5724,8 +5725,17 @@ def _fire_due_schedules(
                 if binding_pct < _quota_critical_floor_pct(cfg):
                     scheduled_entries = [e for e in entries if e.kind != "every"]
                     dropped_ids = {e.id for e in entries if e.kind == "every"}
+                    pacing_snapshot = {
+                        "mode": "quota-paused",
+                        "remaining_pct": round(binding_pct, 1),
+                    }
                 elif binding_pct < _quota_low_floor_pct(cfg):
                     stretch = _quota_stretch_factor(cfg)
+                    pacing_snapshot = {
+                        "mode": "quota-paced",
+                        "factor": stretch,
+                        "remaining_pct": round(binding_pct, 1),
+                    }
                     scheduled_entries = [
                         replace(e, interval=(e.interval or 0) * stretch)
                         if e.kind == "every" else e
@@ -5742,6 +5752,10 @@ def _fire_due_schedules(
         for did in dropped_ids:
             if did in state and did not in new_state:
                 new_state[did] = state[did]
+        # The dashboard must render the same effective schedule this tick
+        # used. Without this receipt it applies the authored interval and can
+        # call a deliberately stretched/paused wake "overdue".
+        new_state["_pacing"] = pacing_snapshot
         for entry in due:
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
