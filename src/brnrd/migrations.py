@@ -194,8 +194,10 @@ def _migrate_events(conn: Connection) -> None:
     # models.Event.attachments_json).
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS attachments_json TEXT DEFAULT '[]'"))
     # #61 — conversation identity reported by the daemon on response POSTs
-    # (set-when-null; see models.Event.conversation_id).
+    # (set-when-null; see models.Event.conversation_id). The index mirrors the
+    # model's ``index=True`` for installs that migrate instead of create.
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_conversation_id ON events (conversation_id)"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
