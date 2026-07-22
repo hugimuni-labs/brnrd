@@ -87,6 +87,7 @@ from . import spending_plan
 from . import sync
 from . import transcript
 from . import updates
+from . import release_availability
 from . import usage_samples
 from . import worktree
 from .run import Run, list_runs, run_manifest_path
@@ -2607,6 +2608,7 @@ def _run_worker(
 
         # Built once, so the fail-closed rebuild below cannot drift from the
         # prompt it is replacing.
+        update_observation = release_availability.observation(repo_root)
         _prompt_kwargs: dict[str, Any] = dict(
             outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
             run_id=task.id,
@@ -2659,6 +2661,9 @@ def _run_worker(
                 ),
             ),
             runner_quota=quota_summary,
+            update_available=(
+                update_observation.render() if update_observation else None
+            ),
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
             worker=bool(task.meta.get("worker")),
@@ -7986,6 +7991,12 @@ def start(
     signal.signal(signal.SIGINT, _handle_signal)
 
     cfg = conf.load_config(repo_root)
+
+    def _report_update(observation: release_availability.Availability | None) -> None:
+        if observation and (fact := observation.render()):
+            print(f"[brnrd] {fact}")
+
+    release_availability.refresh_if_stale_async(repo_root, on_complete=_report_update)
     account_context = account.resolve_context(repo_root, cfg)
     # #316: mark runs the previous daemon process left frozen mid-flight
     # so their chat cards read "interrupted" instead of stale running
@@ -8251,6 +8262,10 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+
+            # This is a daily, background observation; a release endpoint can
+            # never delay dispatch or make the daemon unhealthy.
+            release_availability.refresh_if_stale_async(repo_root)
 
             # One scan feeds both dispatch decisions below — a spawn-
             # marked event is never a resident-lead candidate and vice

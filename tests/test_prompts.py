@@ -297,6 +297,14 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" not in prompt
         assert "Review pack path" not in prompt
 
+    def test_daemon_prompt_surfaces_available_update(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            update_available="update available: 0.1.0 → 0.2.0",
+        )
+
+        assert "- update available: 0.1.0 → 0.2.0" in prompt
+
     def test_daemon_prompt_worker_excludes_resident_stack(self, tmp_path):
         # A pitfall would normally surface for a matching task — confirm
         # the worker path skips the injected blocks entirely, not just the
