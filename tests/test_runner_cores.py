@@ -407,3 +407,84 @@ def test_stale_entries_uses_today_by_default():
     result = runner_cores.stale_entries(registry)
     assert "old" in result
     assert "new" not in result
+
+
+# ── #503: probe fabrication is bundled-shells-only ─────────────────────────
+
+
+def test_bundled_shells_set():
+    assert runner_cores.BUNDLED_SHELLS == frozenset({"claude", "codex", "gemini"})
+
+
+def test_probe_fabrication_skipped_for_declared_custom_shell(monkeypatch):
+    """A custom declared profile gets no fabricated `<name>-<model>` twins.
+
+    Before #503 the probe spliced `--model X` into a custom cmd and
+    auto-selection preferred the fabricated variant over the profile the
+    user actually declared.
+    """
+    monkeypatch.setattr(
+        runner_cores, "probe_shell_models", lambda shell: ("mymodel-9",)
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"mycli": {"cmd": "mycli --go"}}
+    )
+
+    assert not any(name.startswith("mycli") for name in profiles)
+
+
+def test_probe_fabrication_for_declared_custom_shell_with_opt_in(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores, "probe_shell_models", lambda shell: ("mymodel-9",)
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"mycli": {"cmd": "mycli --go", "probe_models": "true"}}
+    )
+
+    generated = profiles["mycli-mymodel-9"]
+    assert generated["model"] == "mymodel-9"
+    assert "--model mymodel-9" in generated["cmd"]
+    assert generated["freshness_source"] == "cli-help"
+
+
+def test_probe_fabrication_opt_in_false_spelling_stays_off(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores, "probe_shell_models", lambda shell: ("mymodel-9",)
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"mycli": {"cmd": "mycli --go", "probe_models": "false"}}
+    )
+
+    assert not any(name.startswith("mycli") for name in profiles)
+
+
+def test_probe_fabrication_still_runs_for_bundled_shell(monkeypatch):
+    """No behavior change for bundled shells: claude keeps probing."""
+    monkeypatch.setattr(
+        runner_cores,
+        "probe_shell_models",
+        lambda shell: ("claude-preview-9",) if shell == "claude" else (),
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"claude": {"cmd": "claude --print"}}
+    )
+
+    assert "claude-claude-preview-9" in profiles
+
+
+def test_probe_eligible_shells_mixed_catalog():
+    declared = {
+        "claude": {"cmd": "claude --print"},
+        "gemini": {"cmd": "gemini"},
+        "mycli": {"cmd": "mycli --go"},
+        "othercli": {"cmd": "othercli", "probe_models": True},
+    }
+    assert runner_cores._probe_eligible_shells(declared) == {
+        "claude",
+        "gemini",
+        "othercli",
+    }

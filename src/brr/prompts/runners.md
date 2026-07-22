@@ -35,11 +35,15 @@ selectable Runner. The **resident** inhabits whichever Runner this wake
 was given; `prompts/runners.md` (this file) catalogs what's available.
 
 The runner contract is deliberately abstract: a runner is a process that
-can intelligently operate files in its working directory. brnrd passes the
-assembled prompt as the final command argument, captures stdout as the
-plain current-thread output artifact, treats stderr as progress/debug
-output, and interprets the exit status as the process result. The runner
-does not need to know the response-file path for the common case.
+can intelligently operate files in its working directory. brnrd pipes the
+assembled prompt to the runner on **stdin** (written whole, then closed —
+prompt, then EOF), captures stdout as the plain current-thread output
+artifact, treats stderr as progress/debug output, and interprets the exit
+status as the process result. A profile whose `cmd` carries a
+whole-argument `{prompt}` placeholder receives the prompt in argv there
+instead — argv and stdin are mutually exclusive prompt channels, never
+both. The runner does not need to know the response-file path for the
+common case.
 
 ## The minimal runner interface (tiers)
 
@@ -47,20 +51,22 @@ The contract stays lean by staying *tiered* — each tier is optional
 enrichment of the one below, and a runner that satisfies only Tier 0 still
 works. See `kb/design-runner-back-channel.md` for the full design.
 
-- **Tier 0 (required).** A process that, given the assembled prompt as its
-  final argument, operates files in its working directory and exits with a
-  status code. The irreducible floor — all real work happens here.
-  Safety net: Linux caps a single argv string at 128 KiB
+- **Tier 0 (required).** A process that, given the assembled prompt on
+  stdin (or in argv, where its `cmd` asks for that via `{prompt}`),
+  operates files in its working directory and exits with a status code.
+  The irreducible floor — all real work happens here. stdin became the
+  default on 2026-07-14: a prompt in argv is world-readable in `ps` and
+  sits in the haystack every `pkill -f`/`pgrep -f` a run performs matches
+  against — one run SIGTERM'd *itself* through a quoted command in its own
+  prompt. Argv-path safety net: Linux caps a single argv string at 128 KiB
   (`MAX_ARG_STRLEN`) regardless of the larger overall `ARG_MAX` — a wake's
   assembled prompt tripped this in production 2026-07-07 (176 KB, an
   `OSError: [Errno 7] Argument list too long` that killed the thought
-  before it started). `invoke_runner` now spills any argv element over
+  before it started). `invoke_runner` still spills any argv element over
   ~100 KB to `.brr/prompt-overflow/<hash>.md` and passes a short
-  "read this file first" pointer instead — no stdin involved, so it can't
-  collide with codex's own documented (and load-bearing) stdin-prompt
-  path. A Tier-0 runner never sees this directly; it just occasionally
-  gets a pointer instead of the prompt inline, and reads it with the same
-  file tools it already has.
+  "read this file first" pointer instead. A Tier-0 runner never sees this
+  directly; it just occasionally gets a pointer instead of the prompt
+  inline, and reads it with the same file tools it already has.
 - **Tier 1 (optional).** Prints a final reply on stdout (progress/debug on
   stderr). brnrd captures stdout as the plain current-thread reply. This is
   the `response_path` capture above.
@@ -131,10 +137,24 @@ for terminal spend/context facets. Repository orientation, AGENTS.md, dominion
 context, and the Run Context Bundle belong in the assembled prompt, not in
 these command strings.
 
-- `cmd` — base command. brnrd appends the prompt as the final argument.
+- `cmd` — base command. brnrd pipes the prompt to it on stdin by default.
+  To receive the prompt in argv instead, include `{prompt}` as **its own
+  argument** (`mycli --run {prompt}`): that element is replaced with the
+  whole prompt and stdin stays closed (immediate EOF). Whole-argument
+  substitution only — an element that merely *embeds* the placeholder
+  (`--flag={prompt}`) is rejected loudly at dispatch, never shipped
+  half-substituted. (The legacy `runner_cmd` config override is the one
+  place embedded substitution still works.)
 - `binary` — optional PATH binary for alias profiles. When set, the
   profile must be named explicitly via `shell=`/`core=` in `.brr/config`
   (not auto-detected).
+- `probe_models` — opt-in (`true`) for CLI-help model discovery on a
+  custom profile's shell. By default brnrd probes `--help` for model names
+  — and fabricates selectable `<name>-<model>` profile variants by
+  splicing `--model X` into the base cmd — **only for the bundled shells**
+  (`claude`, `codex`, `gemini`). A custom declared profile is taken at its
+  word: no fabricated siblings for auto-selection to prefer over it unless
+  this flag says so.
 
 Optional **Core metadata** (read by `runner_select.py`, the cost-aware
 Core-selection layer) also rides these keys. None is required; a profile
@@ -201,8 +221,9 @@ traces, and tool output should go to stderr (which is the convention for
 both runners above).
 
 Users can override `cmd` per-repo by setting `runner_cmd` in
-`.brr/config`. The same stdout capture rules apply, and `{prompt}` is
-substituted before exec.
+`.brr/config`. The same stdout capture rules apply. A `runner_cmd` always
+owns its argv: `{prompt}` is substituted before exec (embedded occurrences
+included, for backward compatibility) and nothing is piped on stdin.
 
 Quota and price signals are metadata about a Core, not part of the
 command string. Today brnrd reads them from `runner.quota.*`,
