@@ -2526,6 +2526,11 @@ def _run_worker(
     fallback_notice: str | None = None
     while True:
         attempt += 1
+        # An id proves one completed Codex invocation, not the task forever.
+        # A retry is a new invocation; retaining the previous attempt's id
+        # would make every running heartbeat report the old thread until the
+        # replacement process returned and overwrote it.
+        task.meta.pop("codex_thread_id", None)
         stop_control = _stopped_run_control(eid)
         if stop_control is not None:
             # The parent stopped this child before (or between) attempts —
