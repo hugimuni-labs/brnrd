@@ -4344,6 +4344,197 @@ def test_home_run_has_no_publish_lane_and_refuses_spawn(tmp_path):
     assert notices and "shared host tree" in notices[0]["text"]
 
 
+# ── host-env default-branch publisher ───────────────────────────────
+#
+# Host runs merge reviewed work into the default branch of the shared
+# checkout; publish() only carries per-run branches, so nothing pushed
+# it (found live 2026-07-22: origin/main 11 commits behind). Every
+# "GitHub" here is a real local ``git init --bare`` repo.
+
+
+def _host_publish_repo(tmp_path):
+    """Real repo + bare origin, main pushed and in sync. Returns both."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "-b", "main", str(origin)],
+        check=True,
+    )
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"README.md": "seed\n"})
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True,
+    )
+    subprocess.run(
+        ["git", "push", "-q", "-u", "origin", "main"], cwd=repo, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return repo, origin
+
+
+def _head_oid(repo, ref="main"):
+    return subprocess.run(
+        ["git", "rev-parse", ref], cwd=repo,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _host_task(run_id="run-hostpub", env="host", **meta):
+    return Run(
+        id=run_id, event_id="evt-hostpub", body="merge work",
+        status="done", env=env, meta=meta,
+    )
+
+
+def test_host_publish_fast_forwards_default_branch(tmp_path, capsys):
+    repo, origin = _host_publish_repo(tmp_path)
+    head = commit_files(
+        repo, {"work.txt": "merged by host run\n"}, message="host merge",
+    )
+    # False-positive guard: remote genuinely lacks the commit beforehand.
+    assert _head_oid(origin) != head
+
+    daemon.publish_default_branch(repo, _host_task())
+
+    assert _head_oid(origin) == head
+    assert "pushing main" in capsys.readouterr().out
+
+
+def test_host_publish_skips_diverged_remote_with_marker(tmp_path, capsys):
+    repo, origin = _host_publish_repo(tmp_path)
+    # A second machine pushes to origin/main...
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(other)], check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Other"], cwd=other, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "other@example.com"],
+        cwd=other, check=True,
+    )
+    remote_head = commit_files(
+        other, {"remote.txt": "remote-side\n"}, message="remote work",
+    )
+    subprocess.run(
+        ["git", "push", "-q", "origin", "main"], cwd=other, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    # ...while the host run merged different local work, and the daemon
+    # knows about the divergence (tracking ref is current).
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=repo, check=True)
+    commit_files(repo, {"local.txt": "local-side\n"}, message="local work")
+
+    daemon.publish_default_branch(repo, _host_task())
+
+    # No push, no force: origin still at the remote-side head.
+    assert _head_oid(origin) == remote_head
+    out = capsys.readouterr().out
+    assert "[brnrd]" in out and "diverged" in out
+    assert "pushing main" not in out
+
+
+def test_host_publish_never_fires_for_worktree_env(tmp_path, capsys):
+    repo, origin = _host_publish_repo(tmp_path)
+    before = _head_oid(origin)
+    commit_files(repo, {"work.txt": "worktree lane\n"}, message="ahead")
+
+    daemon.publish_default_branch(
+        repo, _host_task(env="worktree", publish_branch="main"),
+    )
+
+    assert _head_oid(origin) == before
+    assert capsys.readouterr().out == ""
+
+
+def test_host_publish_never_fires_for_home_root(tmp_path, capsys):
+    repo, origin = _host_publish_repo(tmp_path)
+    before = _head_oid(origin)
+    commit_files(repo, {"work.txt": "home capture net owns this\n"})
+
+    daemon.publish_default_branch(repo, _host_task(root_kind="home"))
+
+    assert _head_oid(origin) == before
+    assert capsys.readouterr().out == ""
+
+
+def test_host_publish_noop_when_nothing_to_push(tmp_path, capsys):
+    repo, origin = _host_publish_repo(tmp_path)
+    before = _head_oid(origin)
+
+    daemon.publish_default_branch(repo, _host_task())
+
+    assert _head_oid(origin) == before
+    assert capsys.readouterr().out == ""
+
+
+def test_host_env_run_finalize_publishes_default_branch(tmp_path, monkeypatch):
+    """e2e: a host-env run through ``_run_worker_and_finalize`` lands its
+    default-branch merge on the (bare, local) remote."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "-b", "main", str(origin)],
+        check=True,
+    )
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    write_repo_scaffold(repo)
+    commit_files(repo, {"README.md": "seed\n", "AGENTS.md": "# Project\n"})
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True,
+    )
+    subprocess.run(
+        ["git", "push", "-q", "-u", "origin", "main"], cwd=repo, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    event = make_event(repo, eid="evt-hostpub-e2e", environment="host")
+
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    merged: dict[str, str] = {}
+    base_env = envs.get_env("host")
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        # The "agent" merges reviewed work into the default branch of the
+        # shared checkout — the observed host-run shape.
+        (repo / "merged.txt").write_text("reviewed work\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "merged.txt"], cwd=repo, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "merge reviewed work"],
+            cwd=repo, check=True,
+        )
+        merged["head"] = _head_oid(repo)
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("merged\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="merged\n", stderr="", returncode=0,
+            trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, repo, repo / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert task.env == "host"
+    assert merged["head"]
+    assert _head_oid(origin) == merged["head"]
+
+
 def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"

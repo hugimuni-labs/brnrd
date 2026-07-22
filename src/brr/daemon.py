@@ -526,6 +526,81 @@ def publish(
         pass
 
 
+def publish_default_branch(repo_root: Path, task: Run) -> None:
+    """Best-effort fast-forward push of the default branch after a host run.
+
+    Host-environment runs merge reviewed work into the repo's default
+    branch in the shared checkout, but ``publish`` only carries per-run
+    branches (``publish_branch``, set by ``WorktreeEnv.finalize``) — a
+    host run arms nothing, so its merges never left the machine. Found
+    live 2026-07-22: origin/main was 11 commits (~7 hours) behind local
+    main, every announced merge unpushed, and the gap self-concealed
+    because each run's scm line said "N unpushed" while nobody owned the
+    push.
+
+    Fires only when ALL hold:
+
+    - the run's environment was ``host`` (worktree runs already publish
+      their own branch; home runs belong to the account capture net);
+    - the local default branch has commits the remote lacks;
+    - the remote default branch is an **ancestor** of the local one — a
+      plain fast-forward. A diverged remote is the operator's to
+      reconcile: skip and print a ``[brnrd]`` marker line, mirroring the
+      capture net's needs-sync discipline. Never force, never
+      ``--force-with-lease`` here.
+
+    Pushes through the same lane as ``publish`` / ``gitops.push_branch``
+    (a plain ``git push`` in ``repo_root``, so the daemon's managed
+    credential setup applies). Best-effort like the capture net: every
+    failure is a log line, never an exception into finalization.
+    """
+    if task.env != "host":
+        return
+    if task.meta.get("root_kind") == "home":
+        # Home is committed and pushed by the account-home capture net.
+        return
+    try:
+        branch = gitops.default_branch(repo_root)
+        if not branch or branch == "HEAD":
+            return
+        remote = (
+            gitops.branch_remote(repo_root, branch)
+            or gitops.default_remote(repo_root)
+        )
+        if not remote:
+            return
+        remote_ref = f"{remote}/{branch}"
+        if not gitops.rev_parse(repo_root, remote_ref):
+            # No remote-tracking ref to compare against; creating the
+            # remote branch is not this lane's job.
+            return
+        commits = _commits_between(repo_root, remote_ref, branch)
+        if not commits:
+            return
+        if not gitops.is_ancestor(repo_root, remote_ref, branch):
+            print(
+                f"[brnrd] host publish: {remote_ref} has diverged from "
+                f"local {branch}; skipping push — reconcile by hand "
+                f"(fetch / merge / push) in {repo_root}"
+            )
+            return
+        print(
+            f"[brnrd] pushing {branch} ({len(commits)} commit(s)) after "
+            f"host run {task.id}..."
+        )
+        with _branch_lock(branch):
+            pushed = gitops.push_branch(
+                repo_root, remote, branch, set_upstream=False,
+            )
+        if not pushed:
+            print(
+                f"[brnrd] host publish: push of {branch} to {remote} was "
+                f"rejected; the remote is the operator's to reconcile"
+            )
+    except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
+        print(f"[brnrd] host publish: skipped on error: {exc}")
+
+
 def _push_command(
     remote: str,
     source: str,
@@ -7590,6 +7665,7 @@ def _run_worker_and_finalize(
             print(f"[brnrd] run {task.id}: run-ledger append failed: {exc}")
 
         publish(repo_root, task)
+        publish_default_branch(repo_root, task)
         repo_label = str(task.meta.get("repo_label") or _repo_label(repo_root, event, cfg))
         _persist_run_body(
             account_context,
