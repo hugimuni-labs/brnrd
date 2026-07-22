@@ -50,3 +50,26 @@ jobs:
         run: |
           npx svelte-kit sync
           npm run check
+
+  launcher:
+    name: npm launcher package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packaging/npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Parse the launcher
+        run: node --check bin/brnrd.js
+      # The release job publishes this tarball with no rehearsal. Pack it on
+      # every PR so a manifest or missing-file break surfaces here, not at the
+      # one moment the version number can no longer be reused. `npm pack`, not
+      # `npm publish --dry-run`: the latter asks the registry and fails on the
+      # already-published version, which is the normal state between releases.
+      - name: Pack the tarball the release would publish
+        run: npm pack --dry-run

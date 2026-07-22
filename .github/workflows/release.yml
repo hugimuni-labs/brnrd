@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish release
 
 on:
   release:
@@ -16,6 +16,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check the release tag against the declared version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python packaging/check_release_version.py "$RELEASE_TAG"
       - name: Run tests
         run: |
           python -m pip install --upgrade pip
@@ -31,8 +35,8 @@ jobs:
           name: python-package-distributions
           path: dist/
 
-  publish:
-    name: Publish distribution
+  publish-pypi:
+    name: Publish distribution to PyPI
     needs: test-and-build
     runs-on: ubuntu-latest
     environment: pypi
@@ -47,3 +51,29 @@ jobs:
           path: dist/
       - name: Publish distributions
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    name: Publish launcher to npm
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      # OIDC is the whole credential here: no NODE_AUTH_TOKEN, no npm secret.
+      # The npm trusted publisher must name this workflow file and the `npm`
+      # environment, or the token's claims will not match and publish is denied.
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm CLI that speaks OIDC
+        # Trusted publishing needs npm >= 11.5.1; setup-node still ships older.
+        run: npm install --global npm@latest
+      - name: Publish launcher
+        working-directory: packaging/npm
+        # Provenance is automatic under trusted publishing — no --provenance.
+        run: npm publish --access public
