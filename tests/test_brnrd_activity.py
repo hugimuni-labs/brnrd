@@ -195,11 +195,48 @@ def test_activity_dashboard_renders_snapshot():
     assert rows[0]["daemon_name"] == "laptop"
     assert rows[0]["bucket"] == "running"
     assert rows[0]["branch"] == "brr/activity"
+    assert rows[0]["started_at"] == "2026-06-29T05:59:00+00:00"
+    assert rows[0]["updated_at"] == "2026-06-29T06:00:00+00:00"
     # Filter vocab comes from the repo-scoped (kind/status-unfiltered) view:
     # the scheduled record still contributes even though `kind=run` hid it.
     assert "scheduled" in body["kinds"]
     assert "scheduled" in body["statuses"]
     assert body["total"] == 1
+
+
+def test_dashboard_scheduled_instants_keep_utc_on_the_wire():
+    """A timezone-less ISO instant is browser-local, not UTC.
+
+    SQL databases return these legacy DateTime columns as naive values, so
+    the dashboard boundary must restore their known UTC timezone before JSON
+    serialization. Otherwise a healthy wake looks overdue west/east of UTC.
+    """
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    client.put(
+        "/v1/daemons/activity",
+        json={
+            "records": [
+                {
+                    "id": "schedule:hourly",
+                    "kind": "scheduled",
+                    "source": "schedule",
+                    "summary": "hourly release tick",
+                    "status": "recurring",
+                    "scheduled_for": "2026-07-22T12:51:19Z",
+                }
+            ]
+        },
+        headers=daemon_headers,
+    )
+    _login_cookie(client)
+
+    row = client.get(
+        "/v1/dashboard/activity", params={"kind": "scheduled"}
+    ).json()["rows"][0]
+
+    assert row["scheduled_for"] == "2026-07-22T12:51:19+00:00"
+    assert row["reported_at"].endswith("+00:00")
 
 
 def test_dashboard_activity_api_requires_login():

@@ -998,6 +998,18 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JS
 
 def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
     record: ActivityRecord = view["record"]
+
+    def utc_iso(value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        # Activity timestamps are UTC on ingestion, but the database columns
+        # predate timezone-aware storage and return naive datetimes. A bare
+        # ISO string is parsed as browser-local time, making every scheduled
+        # wake appear offset by the viewer's timezone (and often "overdue").
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+
     return {
         "id": record.record_id,
         "kind": record.kind,
@@ -1012,11 +1024,11 @@ def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
         "runner": {"shell": view["shell"], "core": view["core"], "summary": view["runner_summary"]},
         "branch": record.branch,
         "pr_number": record.pr_number,
-        "started_at": record.started_at.isoformat() if record.started_at else None,
-        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
-        "scheduled_for": record.scheduled_for.isoformat() if record.scheduled_for else None,
-        "defer_until": record.defer_until.isoformat() if record.defer_until else None,
-        "reported_at": record.reported_at.isoformat() if record.reported_at else None,
+        "started_at": utc_iso(record.started_at),
+        "updated_at": utc_iso(record.updated_at),
+        "scheduled_for": utc_iso(record.scheduled_for),
+        "defer_until": utc_iso(record.defer_until),
+        "reported_at": utc_iso(record.reported_at),
         "links": view["links"],
     }
 
