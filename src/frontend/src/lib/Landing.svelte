@@ -9,6 +9,7 @@
 		type RepoStats
 	} from '$lib/publicStats';
 	import { typeReveal } from '$lib/transitions';
+	import WinkWordmark from '$lib/WinkWordmark.svelte';
 
 	// The landing (#509): what an anonymous visitor sees at brnrd.dev.
 	// Two doors, one truth — in both of them the agent executes on the
@@ -35,7 +36,9 @@
 <div class="mx-auto max-w-4xl p-6">
 	<header class="ignite flex items-start justify-between gap-4" style="--ignite-delay: 0ms">
 		<div>
-			<p class="font-mono text-3xl font-semibold tracking-tight text-amber-100">brnrd</p>
+			<p class="font-mono text-3xl font-semibold tracking-tight text-amber-100">
+				<WinkWordmark />
+			</p>
 			<p class="mt-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 				drain local · route wisely
 			</p>
