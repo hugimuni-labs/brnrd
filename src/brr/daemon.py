@@ -2372,6 +2372,7 @@ def _run_worker(
     # design doc).
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, object] = {}
+    codex_events_path = outbox_dir / ".codex-events.jsonl"
     run_started_monotonic = time.monotonic()
 
     def _runner_runtime(selected: "runner_select.RunnerProfile") -> _RunnerRuntime:
@@ -2531,6 +2532,10 @@ def _run_worker(
         # would make every running heartbeat report the old thread until the
         # replacement process returned and overwrote it.
         task.meta.pop("codex_thread_id", None)
+        try:
+            codex_events_path.unlink()
+        except FileNotFoundError:
+            pass
         stop_control = _stopped_run_control(eid)
         if stop_control is not None:
             # The parent stopped this child before (or between) attempts —
@@ -2737,6 +2742,7 @@ def _run_worker(
         )
 
         def _emit_heartbeat() -> None:
+            _refresh_codex_thread_id(task, codex_events_path)
             # Drain first: promoting an interim response is the resident's
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
@@ -2814,6 +2820,7 @@ def _run_worker(
             _emit_new_containers(emit, task.id, env_ctx, seen_containers)
 
         def _emit_flush() -> None:
+            _refresh_codex_thread_id(task, codex_events_path)
             # Event-driven drain fired by the boundary back channel's .flush signal
             # (chunk 3 of the back channel): push the just-written outbox
             # file / card to the gate promptly, then refresh the live inbox
@@ -2876,6 +2883,7 @@ def _run_worker(
                 extra_runner_args=extra_runner_args,
                 expected_core=runner_choice.model,
                 selected_runner=runner_choice,
+                codex_events_path=codex_events_path,
             ),
             cfg=cfg,
             trace=True,
@@ -3353,6 +3361,26 @@ def _budget_exceeded(
     if hard_cap_seconds is not None:
         deadline = min(deadline, start_mono + hard_cap_seconds)
     return now_mono >= deadline
+
+
+def _refresh_codex_thread_id(task: Run, events_path: Path) -> str | None:
+    """Publish the thread id from an in-flight Codex JSONL stream.
+
+    ``thread.started`` is the first Codex event. Reading this runtime surface
+    from the heartbeat makes rollout correlation live; waiting for the final
+    ``RunnerResult`` would leave every long-running snapshot on the old
+    newest-mtime guess.
+    """
+    try:
+        raw = events_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    thread_id = codex_status._safe_thread_id(
+        runner._extract_codex_thread_id(raw)
+    )
+    if thread_id:
+        task.meta["codex_thread_id"] = thread_id
+    return thread_id
 
 
 def _invoke_with_heartbeat(
