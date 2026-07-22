@@ -75,6 +75,11 @@ def create_subscription_checkout(
             "customer": customer_id,
             "line_items[0][price]": price_id,
             "line_items[0][quantity]": "1",
+            # Promotion codes typed by the customer at checkout (2026-07-22
+            # ask: near-free self-test subscriptions without a parallel
+            # price). Codes are minted in the Stripe dashboard; nothing
+            # brnrd-side needs to know they exist.
+            "allow_promotion_codes": "true",
             "success_url": success_url,
             "cancel_url": cancel_url,
             "automatic_tax[enabled]": "true",
