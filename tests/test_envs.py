@@ -1,4 +1,5 @@
 import subprocess
+import threading
 
 import pytest
 
@@ -120,6 +121,49 @@ def _stub_worktree(monkeypatch, tmp_path):
 
     monkeypatch.setattr(envs.worktree, "create", _create)
     monkeypatch.setattr(envs.worktree, "switch_to", lambda _path, _branch: None)
+
+
+class _DockerPopen:
+    """Small foreground ``docker run`` fake for registry-backed invokes."""
+
+    def __init__(self, command, *, captured=None, commands=None, **kwargs):
+        self.command = list(command)
+        self.kwargs = kwargs
+        self.captured = captured
+        self.commands = commands
+        self.returncode = None
+        if commands is not None:
+            commands.append(self.command)
+
+    def communicate(self, input=None, timeout=None):
+        if self.captured is not None:
+            self.captured["input"] = input
+            self.captured["stdin"] = self.kwargs.get("stdin")
+            self.captured["command"] = self.command
+            self.captured["timeout"] = timeout
+        self.returncode = 0
+        return "agent reply\n", ""
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+def _stub_docker_runner(monkeypatch, *, captured=None, commands=None):
+    monkeypatch.setattr(
+        envs.runner.subprocess,
+        "Popen",
+        lambda command, **kwargs: _DockerPopen(
+            command, captured=captured, commands=commands, **kwargs,
+        ),
+    )
 
 
 def _init_repo(repo):
@@ -392,6 +436,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
         return envs.subprocess.CompletedProcess(command, 0, "agent reply\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", fake_run)
+    _stub_docker_runner(monkeypatch, commands=commands)
     invocation = RunnerInvocation(
         kind="daemon-run",
         label="evt-3-attempt-1",
@@ -462,6 +507,7 @@ def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
         return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    _stub_docker_runner(monkeypatch, captured=captured)
     response_path = tmp_path / ".brr" / "responses" / "evt-stdin.md"
     response_path.parent.mkdir(parents=True)
     task = Run(id="task-stdin", event_id="evt-stdin", body="hi")
@@ -508,6 +554,7 @@ def test_docker_invoke_pipes_prompt_on_default_path(tmp_path, monkeypatch):
         return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    _stub_docker_runner(monkeypatch, captured=captured)
     response_path = tmp_path / ".brr" / "responses" / "evt-pipe.md"
     response_path.parent.mkdir(parents=True)
     task = Run(id="task-pipe", event_id="evt-pipe", body="hi")
@@ -530,7 +577,7 @@ def test_docker_invoke_pipes_prompt_on_default_path(tmp_path, monkeypatch):
 
     # The prompt is piped (prompt, then EOF via input=), never in argv.
     assert captured["input"] == "the whole assembled wake"
-    assert captured["stdin"] is None
+    assert captured["stdin"] == subprocess.PIPE
     assert "the whole assembled wake" not in captured["command"]
     assert "-i" in captured["command"]
 
@@ -551,6 +598,7 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
         return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    _stub_docker_runner(monkeypatch, captured=captured)
     response_path = tmp_path / ".brr" / "responses" / "evt-t.md"
     response_path.parent.mkdir(parents=True)
     task = Run(id="task-t", event_id="evt-t", body="hi")
@@ -585,6 +633,7 @@ def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
         return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    _stub_docker_runner(monkeypatch, captured=captured)
     response_path = tmp_path / ".brr" / "responses" / "evt-cfg.md"
     response_path.parent.mkdir(parents=True)
     task = Run(id="task-cfg", event_id="evt-cfg", body="hi")
@@ -648,6 +697,19 @@ def test_docker_invoke_timeout_message_uses_configured_value(
         branch_plan=_plan(), response_path=response_path,
     )
     monkeypatch.setattr(envs.subprocess, "run", _dispatch)
+    class _TimeoutDockerPopen(_DockerPopen):
+        def communicate(self, input=None, timeout=None):
+            if self.returncode is not None:
+                return "", "partial"
+            raise envs.subprocess.TimeoutExpired(
+                self.command, timeout, output="", stderr="partial",
+            )
+
+    monkeypatch.setattr(
+        envs.runner.subprocess,
+        "Popen",
+        lambda command, **kwargs: _TimeoutDockerPopen(command, **kwargs),
+    )
     invocation = RunnerInvocation(
         kind="daemon-run",
         label="evt-to-1",
@@ -664,6 +726,81 @@ def test_docker_invoke_timeout_message_uses_configured_value(
     assert result.returncode == 124
     assert "runner timed out after 42s" in result.stderr
     assert kill_calls  # docker kill <container> was attempted
+
+
+def test_docker_invoke_stop_control_kills_named_container_only(
+    tmp_path, monkeypatch,
+):
+    """A stop label reaches the Docker client and its engine-side workload."""
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    docker_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: docker_calls.append(list(command))
+        or envs.subprocess.CompletedProcess(command, 0, "", ""),
+    )
+    started = threading.Event()
+    released = threading.Event()
+
+    class _BlockingDockerPopen:
+        def __init__(self, _command, **_kwargs):
+            self.returncode = None
+
+        def communicate(self, input=None, timeout=None):
+            if self.returncode is None:
+                started.set()
+                assert released.wait(5)
+            return "partial reply\n", "partial logs\n"
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+            released.set()
+
+    monkeypatch.setattr(
+        envs.runner.subprocess, "Popen",
+        lambda command, **kwargs: _BlockingDockerPopen(command, **kwargs),
+    )
+    response_path = tmp_path / ".brr" / "responses" / "evt-stop.md"
+    response_path.parent.mkdir(parents=True)
+    task = Run(id="task-stop", event_id="evt-stop", body="hi")
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, {"docker.image": "img:latest"},
+        branch_plan=_plan(), response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run", label="evt-stop-attempt-1", prompt="hello",
+        cwd=ctx.cwd, repo_root=tmp_path, response_path=str(response_path),
+    )
+    result: dict = {}
+    thread = threading.Thread(
+        target=lambda: result.setdefault(
+            "value", envs.get_env("docker").invoke(
+                ctx, "mock-runner", invocation,
+                {"docker.image": "img:latest", "runner_cmd": ["mock", "{prompt}"]},
+            ),
+        ),
+    )
+    other = _BlockingDockerPopen([])
+    runner_key = envs.runner._register_active_proc("evt-other-attempt-1", other)
+    try:
+        thread.start()
+        assert started.wait(5)
+
+        assert envs.runner.kill_matching("evt-stop-attempt-") is True
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+        assert result["value"].returncode == -9
+        assert ["docker", "kill", ctx.env_state["docker_container"]] in docker_calls
+        assert other.poll() is None, "a stop must not touch a sibling label"
+    finally:
+        envs.runner._clear_active_proc(runner_key, other)
 
 
 def _build_docker_invoke(
@@ -693,6 +830,7 @@ def _build_docker_invoke(
         lambda command, **_kwargs: commands.append(command)
         or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
     )
+    _stub_docker_runner(monkeypatch, commands=commands)
     invocation = RunnerInvocation(
         kind="daemon-run",
         label=label,
@@ -979,6 +1117,7 @@ def _build_docker_invoke_with_task(
         lambda command, **_kwargs: commands.append(command)
         or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
     )
+    _stub_docker_runner(monkeypatch, commands=commands)
     invocation = RunnerInvocation(
         kind="daemon-run",
         label=label,
@@ -1373,6 +1512,7 @@ def _solitary_ctx_and_recorder(
     )
     recorder = _DockerRecorder()
     monkeypatch.setattr(envs.subprocess, "run", recorder)
+    _stub_docker_runner(monkeypatch, commands=recorder.commands)
     return backend, ctx, recorder, cfg, task, response_path
 
 
@@ -1643,7 +1783,7 @@ def test_solitary_finalize_success_removes_network_and_cred_stage(
     assert net_rms and net_rms[0][-1] == ctx.env_state["solitary_network"]
 
 
-def test_solitary_finalize_failure_stops_proxy_keeps_containers(
+def test_solitary_finalize_stopped_run_stops_proxy_keeps_readable_containers(
     tmp_path, monkeypatch,
 ):
     backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
@@ -1653,7 +1793,7 @@ def test_solitary_finalize_failure_stops_proxy_keeps_containers(
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
     _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
     stage_parent = envs.Path(ctx.env_state["solitary_cred_stage"]).parent
-    task.status = "error"
+    task.status = "stopped"
     recorder.commands.clear()
 
     backend.finalize(ctx, task, tmp_path / ".brr" / "runs")
@@ -1663,6 +1803,9 @@ def test_solitary_finalize_failure_stops_proxy_keeps_containers(
     stops = recorder.only("docker", "stop")
     assert stops and "solitary-proxy" in stops[0][-1]
     assert recorder.only("docker", "network", "rm") == []
+    # Neither the runner nor proxy is removed, so their ``docker logs``
+    # remain available to the stopped-run finalizer's caller.
+    assert task.meta["docker_containers"] == ", ".join(ctx.env_state["docker_containers"])
 
 
 def test_solitary_proxy_start_failure_cleans_up_network(tmp_path, monkeypatch):

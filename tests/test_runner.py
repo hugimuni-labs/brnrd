@@ -1873,6 +1873,31 @@ class TestKillActive:
             runner_mod._active_procs.clear()
         assert runner_mod.kill_active() is False
 
+    def test_cleanup_that_exits_process_still_counts_as_killed(self):
+        class CleanupExitedProcess:
+            def __init__(self):
+                self.exited = False
+
+            def poll(self):
+                return 0 if self.exited else None
+
+            def kill(self):
+                raise ProcessLookupError
+
+        proc = CleanupExitedProcess()
+
+        def cleanup():
+            proc.exited = True
+
+        key = runner_mod._register_active_proc(  # type: ignore[arg-type]
+            "test-cleanup-exit", proc, on_kill=cleanup,
+        )
+        try:
+            assert runner_mod.kill_matching("test-cleanup-") is True
+            assert proc.exited is True
+        finally:
+            runner_mod._clear_active_proc(key, proc)  # type: ignore[arg-type]
+
     def test_invocation_timeout_seconds_overrides_cfg_default(self):
         # The daemon passes a generous hard cap here; cfg's
         # runner.timeout_seconds is the fallback only when unset.
