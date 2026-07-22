@@ -6703,8 +6703,6 @@ def _retention_sweep(
         return 0.0
     try:
         windows = retention.Windows.from_config(cfg)
-        if windows.all_disabled():
-            return interval_h * 3600.0
         _plan, reports = retention.gc(
             repo_root, account_context, windows, dry_run=False)
         items = sum(r.items for r in reports.values())
