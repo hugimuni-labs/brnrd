@@ -6710,6 +6710,170 @@ def _reap_zombie_run_manifests(
     return reaped
 
 
+def _repo_ledger_run_ids(repo_root: Path) -> set[str]:
+    """Run ids proved closed by *repo_root*'s own ledger.
+
+    Per-repo sibling of ``_closed_ledger_run_ids`` (which walks the account's
+    registered repos): the spawn reconciliation sweep resolves each candidate
+    event against the repo it would dispatch into, and must work in
+    legacy repo-local mode too, where the account registry can be empty.
+    """
+    closed: set[str] = set()
+    try:
+        lines = run_ledger.ledger_path(repo_root).read_text(
+            encoding="utf-8").splitlines()
+    except OSError:
+        return closed
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        run_id = str(row.get("run_id") or "") if isinstance(row, dict) else ""
+        if run_id:
+            closed.add(run_id)
+    return closed
+
+
+def _recorded_pid_alive(task: Run) -> bool:
+    """True when the pid persisted on a run manifest is still running.
+
+    The manifest records the *dispatching daemon's* pid (see the
+    ``task.meta["pid"]`` write in ``_run_worker``): the runner subprocess is
+    that process's child, so a live recorded pid means the dispatch may
+    still be in flight and the sweep must not touch it.
+    """
+    try:
+        pid = int(task.meta.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    return bool(pid and presence.pid_alive(pid))
+
+
+def _reconcile_orphaned_spawn_dispatches(
+    account_context: account.AccountContext,
+    repo_root: Path,
+    cfg: dict,
+    *,
+    now: float | None = None,
+    stale_after_seconds: float = _RUN_STATE_REAP_AFTER_SECONDS,
+) -> int:
+    """Boot-time reconciliation for spawn dispatches orphaned by a daemon death.
+
+    Issue #311, option (2) — no new persisted state. ``active_spawns`` (the
+    in-memory link between a dispatched ``spawn:`` child and the parent
+    conversation waiting on its completion note) dies with the daemon
+    process; everything needed to reconstruct the notification is already
+    durable on the spawned event itself (``spawn_parent_run_id`` /
+    ``spawn_parent_conversation_key``, written by ``_queue_spawn_request``
+    and never stripped by ``Run.from_event`` — #268's hand-traced seam). So
+    on startup, sweep for spawn events stuck in ``processing`` whose worker
+    is provably no longer running and deliver the crash notification the
+    reap block would have delivered.
+
+    Proof discipline mirrors the zombie-run janitors above, conservative by
+    construction — a daemon death can leave an *orphaned runner subprocess*
+    still writing, so "not in my in-memory table" is never evidence:
+
+    - **presence is the live authority**: any live presence entry for a run
+      dispatched from this event ⇒ leave it alone;
+    - **the recorded dispatcher pid**: the manifest's ``pid`` still alive ⇒
+      the dispatching process (the runner's parent) may still be mid-flight
+      ⇒ leave it alone;
+    - **proof of death**: a closed ledger row for the event's run (the
+      worker finished; only the reap-notify was lost), or no write to the
+      event file / run manifest for longer than *stale_after_seconds*
+      (defaults to the janitors' 24h crash-recovery horizon — beyond any
+      runner budget, keepalive-extended or not).
+
+    Idempotent by the status transition itself: the sweep resolves the
+    event to ``error``, and a resolved event never appears in
+    ``list_pending`` again, so a second restart cannot double-notify.
+    Resolving the status also stops the main loop's crash-recovery
+    re-dispatch (``list_dispatchable`` treats ``processing`` as eligible)
+    from re-running work whose parent has just been told it died.
+    """
+    timestamp = time.time() if now is None else now
+    notified = 0
+    runs_cache: dict[Path, list[Run]] = {}
+    presence_cache: dict[Path, set[str]] = {}
+    ledger_cache: dict[Path, set[str]] = {}
+    for target in _dispatchable_targets(account_context, repo_root, cfg):
+        event = target.event
+        if str(event.get("status") or "") != "processing":
+            continue
+        if not event.get("spawn_immediate") or event.get("spawn_message_for_event"):
+            continue
+        if not event.get("spawn_parent_run_id"):
+            continue
+        eid = str(event.get("id") or "")
+        if not eid:
+            continue
+        brr_dir = gitops.shared_brr_dir(target.repo_root)
+        runs_dir = brr_dir / "runs"
+        if runs_dir not in runs_cache:
+            runs_cache[runs_dir] = list_runs(runs_dir)
+        event_runs = [t for t in runs_cache[runs_dir] if t.event_id == eid]
+        if brr_dir not in presence_cache:
+            presence_cache[brr_dir] = {
+                str(entry.get("run_id") or "")
+                for entry in presence.list_active(brr_dir, now=timestamp)
+            }
+        if any(t.id in presence_cache[brr_dir] for t in event_runs):
+            continue
+        if any(_recorded_pid_alive(t) for t in event_runs):
+            continue
+        newest_write = _event_mtime(event)
+        for t in event_runs:
+            try:
+                newest_write = max(
+                    newest_write,
+                    run_manifest_path(runs_dir, t.id).stat().st_mtime,
+                )
+            except OSError:
+                pass
+        if target.repo_root not in ledger_cache:
+            ledger_cache[target.repo_root] = _repo_ledger_run_ids(
+                target.repo_root)
+        ledger_closed = any(
+            t.id in ledger_cache[target.repo_root] for t in event_runs)
+        ancient = timestamp - newest_write >= stale_after_seconds
+        if not (ledger_closed or ancient):
+            continue
+        proof = (
+            "its run closed in the ledger but the completion was never delivered"
+            if ledger_closed
+            else "no write for longer than the reconciliation safety horizon"
+        )
+        # Status first, notify after — same order as the live path (the
+        # worker thread resolves the event before the reap block notifies).
+        # A crash between the two loses one notification; the reverse order
+        # would double-notify on every restart that hits the window.
+        protocol.set_status(event, "error")
+        try:
+            protocol.update_event_meta(
+                event,
+                reconciled_at=time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp)),
+                reconcile_reason=f"boot spawn reconciliation: {proof}",
+            )
+        except OSError:
+            pass
+        _notify_spawn_parent_of_crash(
+            target.inbox_dir,
+            event,
+            RuntimeError(
+                f"the daemon restarted while this spawn was in flight ({proof})"
+            ),
+        )
+        notified += 1
+        print(
+            f"[brnrd] spawn reconciliation: notified parent of orphaned "
+            f"spawn {eid} ({proof})"
+        )
+    return notified
+
+
 def _event_requires_thread_delivery(event: dict) -> bool:
     """True when the originating event has a user-facing thread to close."""
     return str(event.get("source") or "") not in _INTERNAL_EVENT_SOURCES
@@ -7529,6 +7693,20 @@ def start(
             print(f"[brnrd] wyrd: recovered dispatch edges for {backfilled} run(s)")
     except Exception as exc:  # noqa: BLE001 - backfill must not block boot
         print(f"[brnrd] dispatch-edge backfill skipped: {exc}")
+    # #311: reconcile spawn dispatches orphaned by a daemon death — must run
+    # before the main loop's first dispatch scan, because list_dispatchable
+    # treats "processing" as still-eligible and the spawn slot would
+    # otherwise re-dispatch a stuck event before the sweep can judge it.
+    try:
+        reconciled = _reconcile_orphaned_spawn_dispatches(
+            account_context, repo_root, cfg)
+        if reconciled:
+            print(
+                "[brnrd] spawn reconciliation: notified "
+                f"{reconciled} orphaned spawn dispatch(es)"
+            )
+    except Exception as exc:  # noqa: BLE001 - reconciliation must not block boot
+        print(f"[brnrd] spawn reconciliation skipped: {exc}")
     for registered in account_context.repos.values():
         try:
             repo_brr_dir = gitops.shared_brr_dir(registered.root)
