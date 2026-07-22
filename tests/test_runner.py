@@ -2137,6 +2137,37 @@ class TestCodexThreadCorrelation:
         assert result.stdout == "the final agent reply\n"
         assert "thread.started" not in result.stdout
 
+    def test_live_jsonl_path_exposes_thread_started_then_is_retired(
+        self, tmp_path, monkeypatch,
+    ):
+        events_path = tmp_path / "outbox" / ".codex-events.jsonl"
+        seen_while_running = {}
+
+        def _fake_popen(cmd, **kwargs):
+            last_message_path = self._last_message_path(cmd)
+            open(last_message_path, "w", encoding="utf-8").write("reply")
+            kwargs["stdout"].write(
+                '{"type":"thread.started","thread_id":'
+                '"a0d0f1e9-8aeb-4f27-8e3c-f72822288984"}\n'
+            )
+            kwargs["stdout"].flush()
+            seen_while_running["body"] = events_path.read_text(encoding="utf-8")
+            return _fake_proc(kwargs)
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="codex-live-id", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path, selected_runner=self._CODEX,
+            codex_events_path=events_path,
+        )
+
+        result = invoke_runner(self._CODEX, invocation, cfg={})
+
+        assert "thread.started" in seen_while_running["body"]
+        assert result.codex_thread_id == "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+        assert result.stdout == "reply\n"
+        assert not events_path.exists()
+
     def test_missing_last_message_file_yields_empty_stdout_not_jsonl(
         self, tmp_path, monkeypatch,
     ):

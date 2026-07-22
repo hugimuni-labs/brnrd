@@ -5613,3 +5613,28 @@ def test_run_state_produce_change_detection(tmp_path, monkeypatch):
     # The probe is read-only: it must never convince the next write that it
     # already published something it did not.
     assert task.meta["run_state_produce_fingerprint"] != daemon.relics.fingerprint(records)
+
+
+def test_refresh_codex_thread_id_reads_live_jsonl_fail_closed(tmp_path):
+    task = Run(id="run-codex", event_id="evt-codex", body="x")
+    events = tmp_path / ".codex-events.jsonl"
+    events.write_text(
+        '{"type":"thread.started","thread_id":'
+        '"a0d0f1e9-8aeb-4f27-8e3c-f72822288984"}\n',
+        encoding="utf-8",
+    )
+
+    assert daemon._refresh_codex_thread_id(task, events) == (
+        "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    )
+    assert task.meta["codex_thread_id"] == (
+        "a0d0f1e9-8aeb-4f27-8e3c-f72822288984"
+    )
+
+    events.write_text(
+        '{"type":"thread.started","thread_id":"not-a-uuid"}\n',
+        encoding="utf-8",
+    )
+    task.meta.pop("codex_thread_id")
+    assert daemon._refresh_codex_thread_id(task, events) is None
+    assert "codex_thread_id" not in task.meta
