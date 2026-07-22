@@ -30,6 +30,17 @@ The parse is **defensive** (the rollout schema is OpenAI's, undocumented and
 free to change): every field is optional, an unrecognized shape yields a
 snapshot with no level slots (facets stay ``absent``), never an exception.
 
+**Which rollout is "the active run's"?** :func:`load_levels` prefers exact
+``thread_id`` correlation (:func:`_rollout_for_thread`) whenever the caller
+proved one — ``runner.py`` captures it from ``codex exec --json``'s
+``thread.started`` event, the same id the rollout filename embeds
+(``rollout-…-<thread_id>.jsonl``). With no id it falls back to
+:func:`_latest_rollout_fallback`'s newest-mtime guess, explicitly named as a
+compatibility path rather than correlation — the assumption that "newest is
+the active run" only holds when exactly one Codex Shell is alive at a time,
+which is not guaranteed the moment a worker spawn or a sibling wake runs a
+second one concurrently (issue #195).
+
 Returns the shared *levels* snapshot shape
 (``{"quota"|"context_window": {"summary": ...}}``), so the daemon folds it into
 :func:`brr.facets.build` through the identical ``levels=`` seam.
@@ -40,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -260,15 +272,75 @@ def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> d
     return levels
 
 
-def _latest_rollout(root: Path) -> Path | None:
+def _latest_rollout_fallback(root: Path) -> Path | None:
     """The most recently modified ``rollout-*.jsonl`` under *root*, or None.
 
-    brr is single-flight per dominion, so the newest rollout is the active run's
-    session — the same heuristic ``ccusage`` uses.
+    **Compatibility fallback only — not correlation.** Until issue #195 this
+    newest-mtime guess was the *only* way brr picked a rollout, on the theory
+    that brr is single-flight per dominion so "newest" is "the active run"
+    (the same heuristic ``ccusage`` uses). That theory breaks the moment two
+    Codex Shells are alive at once — a worker spawn, a sibling wake, a stray
+    interactive session — since this function has no way to tell whose
+    rollout it just picked. :func:`load_levels` now prefers exact
+    ``thread_id`` correlation (:func:`_rollout_for_thread`) whenever the
+    caller has proven one; this stays reachable only when no id was proven
+    (the Shell isn't codex, the invocation predates ``--json`` correlation,
+    or a pinned ``runner_cmd`` override skipped it), and only ever as an
+    explicitly-named fallback, never presented as correlation.
     """
     try:
         candidates = root.rglob("rollout-*.jsonl")
     except OSError:
+        return None
+    newest: Path | None = None
+    newest_mtime = -1.0
+    for path in candidates:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > newest_mtime:
+            newest, newest_mtime = path, mtime
+    return newest
+
+
+def _safe_thread_id(thread_id: Any) -> str | None:
+    """*thread_id* as Codex's canonical UUID, or ``None``.
+
+    Rollout filenames do not delimit a variable-length session id beyond the
+    final ``-<id>.jsonl`` suffix, so accepting an arbitrary safe-looking token
+    would make ``abc`` also match ``xabc``. Codex emits a canonical UUID and
+    stores that same fixed-width value in the filename. Pinning that contract
+    makes the suffix match exact; upstream drift degrades to honest absence.
+    """
+    if not isinstance(thread_id, str):
+        return None
+    candidate = thread_id.strip()
+    try:
+        canonical = str(uuid.UUID(candidate))
+    except (ValueError, AttributeError):
+        return None
+    return canonical if candidate.lower() == canonical else None
+
+
+def _rollout_for_thread(root: Path, thread_id: str) -> Path | None:
+    """The rollout file whose name ends in *thread_id*, or None.
+
+    Exact correlation (issue #195): a rollout is named
+    ``rollout-<timestamp>-<thread_id>.jsonl``, and *thread_id* here has
+    already passed :func:`_safe_thread_id`, so this is a plain suffix glob —
+    never a substring/prefix scan that could cross-match a sibling run's id.
+    Multi-run safety depends on this being exact: a run must never read
+    another Codex run's context-window/token snapshot, and "starts with the
+    same characters" is not "is the same thread." More than one match should
+    never happen (ids are unique per thread); newest mtime breaks that tie
+    defensively rather than raising.
+    """
+    try:
+        candidates = list(root.rglob(f"rollout-*-{thread_id}.jsonl"))
+    except OSError:
+        return None
+    if not candidates:
         return None
     newest: Path | None = None
     newest_mtime = -1.0
@@ -310,17 +382,40 @@ def _last_token_count(path: Path) -> tuple[dict[str, Any], Any] | None:
     return last
 
 
-def load_levels(env: dict[str, str] | None = None) -> dict[str, Any] | None:
-    """Read the active Codex run's quota from its rollout file, or None.
+def load_levels(
+    env: dict[str, str] | None = None, *, thread_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Read a Codex run's quota from its rollout file, or None.
 
-    Finds the newest rollout under the sessions root, extracts the last
-    ``token_count`` event, and normalizes it. Returns None when no rollout, no
-    ``token_count`` event, or nothing parseable is found — never raises.
+    *thread_id*, when given and safe (:func:`_safe_thread_id`), resolves the
+    rollout by exact filename correlation (:func:`_rollout_for_thread`) — the
+    fix for issue #195: brr used to always take the newest-mtime rollout
+    under the sessions root, which silently reads a *sibling* Codex run's
+    quota/context snapshot the moment more than one is alive at once. With
+    no *thread_id* at all (the caller never proved one — e.g. a pre-run read
+    before any Codex invocation exists yet) this falls back to
+    :func:`_latest_rollout_fallback`, the same newest-mtime guess as before,
+    explicitly named so nothing downstream can mistake it for correlation.
+
+    A *thread_id* that is given but malformed or matches no rollout file is
+    **not** retried against the mtime fallback: guessing there would risk
+    exactly the sibling-read this parameter exists to prevent, so that case
+    returns None (honest absence) same as "no rollout at all."
+
+    Extracts the last ``token_count`` event and normalizes it either way.
+    Returns None when no rollout, no ``token_count`` event, or nothing
+    parseable is found — never raises.
     """
     root = sessions_root(env)
     if not root.is_dir():
         return None
-    rollout = _latest_rollout(root)
+    if thread_id is None:
+        rollout = _latest_rollout_fallback(root)
+    else:
+        safe_id = _safe_thread_id(thread_id)
+        if safe_id is None:
+            return None
+        rollout = _rollout_for_thread(root, safe_id)
     if rollout is None:
         return None
     found = _last_token_count(rollout)
