@@ -17,6 +17,12 @@ from . import __version__, account
 PACKAGE_NAME = "brnrd"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
 REPOSITORY_URL = "https://github.com/hugimuni-labs/brnrd"
+# A published release's metadata is immutable, so the identity check matches
+# every URL this project has ever published under, not only its current one.
+# ``Gurio/brr`` is the pre-transfer name that 0.1.0 (2026-07-12) carries; PyPI
+# cannot be edited in place, only superseded by a later release. Retire the
+# alias once no supported release still names it.
+REPOSITORY_URLS = (REPOSITORY_URL, "https://github.com/Gurio/brr")
 CACHE_NAME = "release-availability.json"
 SCHEMA = 1
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
@@ -106,7 +112,7 @@ def _fetch_latest(*, timeout: float = REQUEST_TIMEOUT_SECONDS) -> str | None:
         urls = project_urls.values() if isinstance(project_urls, dict) else ()
         if (
             info.get("name") != PACKAGE_NAME
-            or not any(str(url).rstrip("/") == REPOSITORY_URL for url in urls)
+            or not any(str(url).rstrip("/") in REPOSITORY_URLS for url in urls)
         ):
             return None
         latest = info["version"]
