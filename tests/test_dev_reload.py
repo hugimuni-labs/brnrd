@@ -154,3 +154,116 @@ def test_edit_then_revert_is_not_stale(tmp_path, monkeypatch):
     assert dev_reload.image_is_stale() is False
 
     dev_reload._IMAGE_FINGERPRINT = None
+
+
+# ── Changed-path tracking for the pre-exec breadcrumb (#421) ────────────────
+
+
+def test_last_changed_is_empty_before_any_change_is_detected(tmp_path):
+    """A freshly-constructed watcher has no last_changed entries."""
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "daemon.py").write_text("v1\n", encoding="utf-8")
+
+    watcher = DevReloadWatcher(pkg)
+    assert watcher.last_changed == []
+
+
+def test_changed_records_which_files_differed(tmp_path):
+    """last_changed names the files that actually changed, not the full set."""
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "daemon.py").write_text("v1\n", encoding="utf-8")
+    (pkg / "runner.py").write_text("v1\n", encoding="utf-8")
+
+    watcher = DevReloadWatcher(pkg)
+    assert watcher.changed() is False
+
+    (pkg / "daemon.py").write_text("v2\n", encoding="utf-8")
+    assert watcher.changed() is True
+
+    changed = watcher.last_changed
+    assert any("daemon.py" in k for k in changed), f"daemon.py missing from {changed}"
+    assert all("runner.py" not in k for k in changed), (
+        f"unmodified runner.py should not appear in {changed}"
+    )
+
+
+def test_last_changed_clears_after_no_change(tmp_path):
+    """After a quiet poll cycle last_changed reflects the new (empty) diff."""
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "daemon.py").write_text("v1\n", encoding="utf-8")
+
+    watcher = DevReloadWatcher(pkg)
+    (pkg / "daemon.py").write_text("v2\n", encoding="utf-8")
+    assert watcher.changed() is True
+    assert watcher.last_changed  # non-empty
+
+    # Second call: no new changes — snapshot advances, last_changed resets.
+    assert watcher.changed() is False
+    assert watcher.last_changed == []
+
+
+def test_added_and_deleted_files_appear_in_last_changed(tmp_path):
+    """Additions and removals are both changes that should appear in last_changed."""
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "keeper.py").write_text("stays\n", encoding="utf-8")
+    new_file = pkg / "fresh.py"
+
+    watcher = DevReloadWatcher(pkg)
+
+    new_file.write_text("new\n", encoding="utf-8")
+    assert watcher.changed() is True
+    assert any("fresh.py" in k for k in watcher.last_changed)
+
+    new_file.unlink()
+    assert watcher.changed() is True
+    assert any("fresh.py" in k for k in watcher.last_changed)
+
+
+# ── Pre-exec breadcrumb (#421) ──────────────────────────────────────────────
+
+
+def test_breadcrumb_names_the_event_as_dev_reload():
+    """The breadcrumb text must say "dev-reload" so it's distinguishable from a crash."""
+    bc = dev_reload.format_dev_reload_breadcrumb(["package/daemon.py"])
+    assert "dev-reload" in bc
+
+
+def test_breadcrumb_shows_short_path_not_prefix(tmp_path):
+    """The display key strips "package/" so the breadcrumb reads as a filename."""
+    bc = dev_reload.format_dev_reload_breadcrumb(["package/daemon.py", "package/runner.py"])
+    assert "daemon.py" in bc
+    assert "runner.py" in bc
+    # The internal prefix is not shown verbatim.
+    assert "package/daemon.py" not in bc
+
+
+def test_breadcrumb_is_bounded_to_max_files():
+    """When many files change the breadcrumb shows at most _MAX_BREADCRUMB_FILES paths."""
+    import re
+
+    files = [f"package/mod{i}.py" for i in range(20)]
+    bc = dev_reload.format_dev_reload_breadcrumb(files)
+    # The "+N more" tail must appear.
+    assert "+15 more" in bc
+    # Exactly _MAX_BREADCRUMB_FILES file names appear in the visible portion.
+    shown = re.findall(r'mod\d+\.py', bc)
+    assert len(shown) == dev_reload._MAX_BREADCRUMB_FILES
+
+
+def test_breadcrumb_deduplicates_repeated_keys():
+    """Duplicate paths from multiple watcher firings should appear only once."""
+    files = ["package/daemon.py", "package/daemon.py", "package/runner.py"]
+    bc = dev_reload.format_dev_reload_breadcrumb(files)
+    # "daemon.py" appears exactly once.
+    assert bc.count("daemon.py") == 1
+
+
+def test_breadcrumb_handles_empty_changed_list():
+    """An empty changed list (unlikely but defensive) doesn't crash."""
+    bc = dev_reload.format_dev_reload_breadcrumb([])
+    assert "dev-reload" in bc
+    assert "changed:" not in bc

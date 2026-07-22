@@ -8074,6 +8074,11 @@ def start(
     # _notify_spawn_parent_of_crash.
     active_spawns: list[dict] = []
     reload_requested = False
+    # Accumulated changed-file keys since reload was first requested, bounded
+    # at emit time by format_dev_reload_breadcrumb. A run may keep the reload
+    # pending across several watcher polls, so keep every trigger until the
+    # quiescent re-exec boundary.
+    reload_changed_files: list[str] = []
     # The zombie sweep runs on a slow interval as well as at boot, so a
     # long-lived daemon repairs its own stores instead of waiting for the
     # next restart to notice. Slow on purpose: the only thing it can find
@@ -8105,8 +8110,10 @@ def start(
 
             # Poll the dev-reload watcher exactly once per iteration —
             # the main thread is its only caller, so the changed()
-            # bookkeeping stays consistent.
+            # bookkeeping stays consistent.  Accumulate changed-file keys
+            # so the pre-exec breadcrumb can name what actually changed.
             if reload_watcher is not None and reload_watcher.changed():
+                reload_changed_files.extend(reload_watcher.last_changed)
                 reload_requested = True
 
             # Reap the in-flight thought once it finishes.
@@ -8160,7 +8167,12 @@ def start(
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
             if reload_requested and current is None:
-                print("[brnrd] package files changed; re-execing daemon")
+                # Emit a deliberate breadcrumb *before* exec so an operator
+                # watching the terminal can tell this restart was intentional
+                # (not a crash) and see what changed.
+                print(
+                    f"[brnrd] {reload_mod.format_dev_reload_breadcrumb(reload_changed_files)}"
+                )
                 pool.shutdown(wait=True)
                 reload_mod.reexec()  # noreturn on success
 
