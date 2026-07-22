@@ -156,7 +156,7 @@ def test_edit_then_revert_is_not_stale(tmp_path, monkeypatch):
     dev_reload._IMAGE_FINGERPRINT = None
 
 
-# ── Reconnect/refetch: last_changed exposes which files triggered reexec (#421) ─
+# ── Changed-path tracking for the pre-exec breadcrumb (#421) ────────────────
 
 
 def test_last_changed_is_empty_before_any_change_is_detected(tmp_path):
@@ -218,6 +218,10 @@ def test_added_and_deleted_files_appear_in_last_changed(tmp_path):
     assert watcher.changed() is True
     assert any("fresh.py" in k for k in watcher.last_changed)
 
+    new_file.unlink()
+    assert watcher.changed() is True
+    assert any("fresh.py" in k for k in watcher.last_changed)
+
 
 # ── Pre-exec breadcrumb (#421) ──────────────────────────────────────────────
 
@@ -262,3 +266,4 @@ def test_breadcrumb_handles_empty_changed_list():
     """An empty changed list (unlikely but defensive) doesn't crash."""
     bc = dev_reload.format_dev_reload_breadcrumb([])
     assert "dev-reload" in bc
+    assert "changed:" not in bc

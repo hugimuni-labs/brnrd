@@ -8075,10 +8075,9 @@ def start(
     active_spawns: list[dict] = []
     reload_requested = False
     # Accumulated changed-file keys since reload was first requested, bounded
-    # at emit time by format_dev_reload_breadcrumb.  Reset on each positive
-    # changed() call rather than across iterations so the breadcrumb reflects
-    # the files that triggered *this* reload, not previous ones from earlier
-    # in the daemon's life.
+    # at emit time by format_dev_reload_breadcrumb. A run may keep the reload
+    # pending across several watcher polls, so keep every trigger until the
+    # quiescent re-exec boundary.
     reload_changed_files: list[str] = []
     # The zombie sweep runs on a slow interval as well as at boot, so a
     # long-lived daemon repairs its own stores instead of waiting for the
