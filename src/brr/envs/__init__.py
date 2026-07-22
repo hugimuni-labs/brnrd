@@ -822,19 +822,20 @@ class DockerEnv(WorktreeEnv):
             containers.append(container_name)
         ctx.env_state["docker_container"] = container_name
 
-        inner_cmd = runner._build_cmd(
+        inner_template = runner._cmd_template(
             invocation.selected_runner or runner_name,
-            invocation.prompt,
             cfg,
         )
+        inner_cmd = runner._fill_prompt(inner_template, invocation.prompt, cfg)
         # Same contract as the host path (``invoke_runner``): since the
         # 2026-07-14 stdin migration the prompt is NOT in ``inner_cmd`` —
-        # it must be piped. ``None`` only when a pinned ``runner_cmd``
-        # owns its argv (``{prompt}`` placement). Forgetting this pipe
+        # it must be piped. ``None`` only when argv owns delivery: a pinned
+        # ``runner_cmd``, or a profile cmd carrying a whole-argument
+        # ``{prompt}`` element. Forgetting this pipe
         # starved every docker/solitary runner of its prompt for a week:
         # claude died with "Input must be provided either through stdin
         # or as a prompt argument" (found by the #515 probe, 2026-07-21).
-        prompt_stdin = runner._prompt_stdin(cfg, invocation.prompt)
+        prompt_stdin = runner._prompt_stdin(cfg, invocation.prompt, inner_template)
         command = [
             "docker", "run",
             "--name", container_name,
