@@ -193,7 +193,10 @@ def test_loop_captures_parent_thread_ts(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
-    slack._save_state(brr_dir, {"token": "secret", "channel": "C123"})
+    slack._save_state(
+        brr_dir,
+        {"token": "secret", "channel": "C123", "bot_user_id": "UBOT"},
+    )
 
     def fake_slack_api(token, method, params=None):
         if method == "conversations.history":
@@ -201,14 +204,14 @@ def test_loop_captures_parent_thread_ts(tmp_path, monkeypatch):
                 "ok": True,
                 "messages": [
                     # Top-level message (no thread_ts) — captured plain.
-                    {"ts": "1700.0001", "user": "U1", "text": "first"},
+                    {"ts": "1700.0001", "user": "U1", "text": "<@UBOT> first"},
                     # Reply inside an existing thread — parent ts must
                     # ride through as slack_thread_ts.
                     {
                         "ts": "1700.0050",
                         "thread_ts": "1700.0001",
                         "user": "U2",
-                        "text": "second, in-thread",
+                        "text": "<@UBOT> second, in-thread",
                     },
                 ],
             }

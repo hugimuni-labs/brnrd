@@ -213,18 +213,24 @@ def test_github_gate_stamps_collaborator(tmp_path, monkeypatch):
     assert events[0].get("trust_tier") == "collaborator"
 
 
-def test_slack_gate_stamps_collaborator(tmp_path, monkeypatch):
+def test_slack_gate_requires_explicit_mention_and_stamps_collaborator(tmp_path, monkeypatch):
     from brr import protocol
     from brr.gates import slack
 
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    slack._save_state(brr_dir, {"token": "x", "channel": "C1", "oldest_ts": "0"})
+    slack._save_state(
+        brr_dir,
+        {"token": "x", "channel": "C1", "bot_user_id": "UBOT", "oldest_ts": "0"},
+    )
 
     def fake_api(token, method, params=None):
         if method == "conversations.history":
-            return {"messages": [{"text": "hello", "ts": "1.0", "user": "U1"}]}
+            return {"messages": [
+                {"text": "ambient chat", "ts": "1.0", "user": "U2"},
+                {"text": "<@UBOT> do the thing", "ts": "2.0", "user": "U1"},
+            ]}
         return {"ok": True}
 
     monkeypatch.setattr(slack, "_slack_api", fake_api)
@@ -232,4 +238,6 @@ def test_slack_gate_stamps_collaborator(tmp_path, monkeypatch):
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
+    assert events[0]["body"] == "do the thing"
     assert events[0].get("trust_tier") == "collaborator"
+    assert slack._load_state(brr_dir)["oldest_ts"] == "2.0"

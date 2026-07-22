@@ -26,7 +26,7 @@ def test_slack_setup_saves_token_and_channel(tmp_path, monkeypatch):
 
     def fake_slack_api(token, method, params=None):
         calls.append((token, method, params))
-        return {"ok": True}
+        return {"ok": True, "user_id": "U_BOT"}
 
     monkeypatch.setattr("builtins.input", lambda prompt: next(inputs))
     monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
@@ -35,10 +35,10 @@ def test_slack_setup_saves_token_and_channel(tmp_path, monkeypatch):
 
     assert slack._load_state(brr_dir) == {
         "token": "xoxb-secret",
+        "bot_user_id": "U_BOT",
         "channel": "C123",
     }
     assert calls == [
         ("xoxb-secret", "auth.test", None),
         ("xoxb-secret", "chat.postMessage", {"channel": "C123", "text": "brnrd bound."}),
     ]
-
