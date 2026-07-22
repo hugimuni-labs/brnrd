@@ -42,8 +42,13 @@ Before your first message, look:
 
 - `.git`: remotes (deduce the forge repo — `git remote -v`), current
   branch, whether there are any commits yet.
-- The facts block in your bundle: detected shells, detected runners,
-  configured gates, `gh` availability.
+- The facts block in your bundle: detected shells, detected runners (including
+  shell families absent from this process's PATH), configured gates, `gh`
+  availability. A Runner necessarily exists if you are reading this: the
+  mechanical runner doctor handles the zero-runner case before a wake can
+  begin. Do not send the user back through installation for a healthy selected
+  Runner. Mention a missing alternative only when they ask about resilience or
+  the selected Runner is visibly unhealthy.
 - `README`, build/config files (`pyproject.toml`, `package.json`,
   `Makefile`, CI configs), tests layout.
 - Existing agent config: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, editor
@@ -139,6 +144,8 @@ incomplete, that's yours to fix before the wake ends.
 ## Failure honesty
 
 - A gate that won't authenticate is *parked*, never silently dropped.
+- If the selected Runner is working but another supported shell is absent,
+  finish init normally. Optional redundancy is advice, not a prerequisite.
 - If the user vanishes mid-interview (no reply on a beat), take defaults
   for the rest, say so in the final message, and finish the install —
   a half-configured repo is worse than a default-configured one.

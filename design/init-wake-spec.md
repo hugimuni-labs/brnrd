@@ -32,8 +32,11 @@ prompt the init wake receives.
    gates, prompts, runs, traces, reviews, worktrees), default config written
    only if absent (`adopt.py:362-377`), `.gitignore` marker
 4. `_bootstrap_dominion` (`adopt.py:392`) — best-effort, soft-skip
-5. `runner.detect_all_runners` (`runner.py:767`); zero runners ⇒
-   `SystemExit` (`adopt.py:125-129`)
+5. `runner.detect_all_runners` (`runner.py:767`); zero runners ⇒ the runner
+   doctor in §2.1. Today's two-line `SystemExit` (`adopt.py:125-129`) is not
+   enough: it hard-codes only two shells, cannot distinguish "not installed"
+   from "installed but outside this process's PATH", and gives no verification
+   ladder.
 6. interactive only: `_interactive_configure` (`adopt.py:205`) — runner
    choice + docker-vs-worktree (`_configure_environment`, `adopt.py:223`)
 7. `_resolve_knowledge_shape` (`adopt.py:184`) — the landed D2(a): repo-kb
@@ -108,7 +111,44 @@ brnrd init --auto     # today's non-interactive path, verbatim (substrate retain
 - No TTY and no `--auto` ⇒ warn once, fall back to `--auto` behavior
   (CI-safe; never hang on stdin).
 
-### 2.1 Why not a daemon boot
+### 2.1 Zero runners is an onboarding branch, not an exception
+
+The first wake cannot explain how to install its own medium: when detection
+finds no supported Runner there is no model process to invoke. Guidance must
+therefore live in the mechanical init layer, before the portal loop, and be
+shared with the selected-Runner launch-failure path.
+
+Add a small `runner.diagnose_runners(repo_root)` / adopter renderer that uses
+the declared runner catalog rather than a duplicated `(claude, codex)` list.
+Its terminal result has three parts:
+
+1. **What brnrd checked.** Name the supported shell commands and say that none
+   resolved on this process's `PATH`; print the PATH directories, not the
+   user's whole environment. This is an observation, not a claim that the
+   tools are absent from the machine.
+2. **Two recovery lanes.** "Already installed" points to `command -v <shell>`,
+   `<shell> --version`, opening a fresh terminal after an installer changed
+   PATH, and `brnrd runners list --all`. "Not installed yet" offers the three
+   supported Shells (Claude Code, Codex CLI, Gemini CLI) with one sentence each
+   and a canonical official install URL. Keep the URLs and any current install
+   commands in one runner-owned help table so init, `runners list --all`, and
+   troubleshooting cannot drift independently.
+3. **The return path.** Authenticate the chosen CLI directly, verify it can
+   start, then rerun `brnrd init`. Preserve the substrate already written;
+   rerun is resume, not rollback.
+
+The selected-runner failure path uses the same advice, preceded by the exact
+profile/binary attempted and the bounded launch error. If another detected
+Runner exists, offer rerunning init and choosing it. Do not recommend `--auto`:
+that path also needs a Runner and would only move the same failure behind less
+guidance.
+
+The init facts block carries the detection report (available profiles plus
+missing shell families) once a wake *can* run. The resident may mention an
+optional second Runner when it materially improves resilience, but missing
+alternatives never block a healthy first wake.
+
+### 2.2 Why not a daemon boot
 
 Per the design's build note: the wake needs **prompt assembly + portals**,
 not the daemon lifecycle. `_run_worker` (`daemon.py:1602`) is ~1400 lines of
@@ -270,9 +310,12 @@ wake's read-side: it can verify configuration without parsing state files.
   (today's `setup.md:35-38` analog); configured gates ⇒ skip/confirm;
   interview only fills gaps. Re-runs converge instead of restarting — no
   resume file, no checkpoint format.
-- **Runner failure** (nonzero exit, quota): same message surface as
-  today's `_run_setup` failure (`adopt.py:441-449`) — report, suggest
-  re-run, exit 1. `--auto` remains the degraded escape hatch.
+- **Runner failure** (not found between detection and launch, nonzero exit,
+  auth, quota): report the selected profile and bounded error, then render the
+  shared runner doctor from §2.1. Suggest a detected alternative when one
+  exists; otherwise give the install/PATH/auth/verify ladder. Exit 1 with the
+  partial substrate intact. `--auto` is not an escape hatch — it needs the same
+  Runner.
 - **Runner never speaks / silent exit**: the drain loop notices the thread
   ended with no outbox and no response file ⇒ treat as runner failure.
 
@@ -286,7 +329,8 @@ wake's read-side: it can verify configuration without parsing state files.
    `_offer_home_link`'s TTY duties on the wake path (they become playbook
    beats + control verbs); keep them for `--auto` only where they never ran
    anyway (non-interactive skipped them all — so this is pure deletion
-   pressure, verify with tests).
+   pressure, verify with tests); call the shared zero-runner / launch-failure
+   diagnosis before either branch can fail opaque.
 3. **New** `src/brr/init_wake.py` — §3: event synthesis, portal surfaces,
    runner thread, terminal drain loop, control-verb dispatch, SIGINT,
    closeout (`_verify` + summary).
@@ -300,11 +344,14 @@ wake's read-side: it can verify configuration without parsing state files.
    `daemon.py:3336` + thin portal-state writer; daemon delegates.
 7. `src/brr/gates/` — no changes (the control-verb seam reuses
    `auth`/`bind`/`setup` as-is).
-8. `src/brr/runner.py` — no changes (`RunnerInvocation.env`,
-   `timeout_seconds`, artifact specs suffice).
+8. `src/brr/runner.py` — add the catalog-derived runner diagnosis/help data;
+   `RunnerInvocation.env`, `timeout_seconds`, and artifact specs otherwise
+   suffice.
 9. Tests — init-wake loop with a scripted fake runner (writes outbox files,
    reads inbox.json); `--auto` regression pin (byte-identical to today's
-   non-interactive init); no-account prompt assembly; abort/resume
+   non-interactive init); zero-runner output (catalog-derived shell list,
+   installed-but-not-on-PATH lane, install lane, resume command); selected
+   runner disappearing before launch; no-account prompt assembly; abort/resume
    convergence.
 
 Non-goals: daemon boot inside init; gate *threads*; cloud onboarding; the
