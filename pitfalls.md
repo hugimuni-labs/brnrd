@@ -215,3 +215,18 @@ pending: extend `.keepalive`, wait in-thought (Monitor/background task, no termi
 reply), or commit first and let a reviewer re-run the suite. The parent/reviewer
 wake should always check the child's worktree for uncommitted work before trusting
 status=done.
+
+## A merge with no receipts is not a merge — announce + review evidence at merge time
+trigger: spawn_completed review, merge to main, whole-diff review, unreviewed diff, empty reply, no announce, review-before-merge
+Seen 2026-07-22 (run-260722-0804-01mn → run-260722-0815-w9zk, #61 conversation-id):
+the prior thought merged `brr/conversation-id` into local main at 08:14:05Z — 51s
+after its #327 announce, *before* the worker's terminal message, then finalized
+with an empty reply, no announce, no review or suite receipt anywhere. The next
+wake (me) could not distinguish that from an unreviewed merge, so the review had
+to be redone from scratch — and it found a real gap (migration added the
+conversation_id column but not the model's index; fresh installs indexed, migrated
+installs not). Lessons: (1) the announce at merge time IS the review receipt —
+a silent merge forces full re-review; (2) never start a second merge inside a
+closeout window you can't finish the choreography in — leave it for the
+spawn_completed wake that's already coming; (3) a reviewer landing on an
+unexplained merge should re-review rather than trust the commit's existence.
