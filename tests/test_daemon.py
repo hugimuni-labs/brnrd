@@ -2900,14 +2900,14 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
 
     def fake_list_pending(_inbox):
         pending_calls.append(1)
-        # Call 1 is the boot spawn-reconciliation sweep (#311), which
-        # inspects and skips this non-spawn event; call 2 is the loop's
-        # first dispatch scan. The third call breaks the loop in the
-        # main thread. The finally block waits for the in-flight worker
-        # to finish before tearing the pool down, so statuses observed
-        # by the worker thread are present when pytest.raises captures
-        # the exit.
-        if len(pending_calls) <= 2:
+        # Call 1 is the boot interrupted-run marker (#316) and call 2 the
+        # boot spawn-reconciliation sweep (#311) — both inspect and skip
+        # this non-spawn event; call 3 is the loop's first dispatch scan.
+        # The fourth call breaks the loop in the main thread. The finally
+        # block waits for the in-flight worker to finish before tearing
+        # the pool down, so statuses observed by the worker thread are
+        # present when pytest.raises captures the exit.
+        if len(pending_calls) <= 3:
             return [event]
         raise StopIteration
 
@@ -2993,10 +2993,11 @@ def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
     with pytest.raises(StopIteration):
         daemon.start(tmp_path)
 
-    # Two scans: the boot spawn-reconciliation sweep (#311) scans first and
-    # its must-not-block-boot guard swallows the fixture's StopIteration;
+    # Three scans: the boot interrupted-run marker (#316) and the boot
+    # spawn-reconciliation sweep (#311) each scan first and their
+    # must-not-block-boot guards swallow the fixture's StopIteration;
     # the main loop's own first scan then raises it for real.
-    assert calls == ["write-pid", "scan", "scan", "clear-pid"]
+    assert calls == ["write-pid", "scan", "scan", "scan", "clear-pid"]
 
 
 def test_start_rejects_existing_pid_without_reexec(tmp_path, monkeypatch):
