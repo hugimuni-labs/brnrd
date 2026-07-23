@@ -6122,16 +6122,21 @@ def _capture_knowledge(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
         captured_pages=captured_pages,
         conversation_id=task.conversation_key or None,
+        run_id=task.id,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
     # Union in pages the resident committed mid-run (#538): everything the
     # knowledge repo took between the run-start stamp and now, scoped to
-    # this repo's pages. The capture commit above lands inside the window
-    # too, so dedupe against the dirty-diff manifest before appending.
+    # this repo's pages *and* this run's own commits (#565) — a sibling's
+    # commit inside the same shared-checkout window is filtered out by the
+    # ``Brnrd-Run-Id`` trailer, not credited by proximity in time. The
+    # capture commit above lands inside the window too, so dedupe against
+    # the dirty-diff manifest before appending.
     seen_pages = set(captured_pages)
     for page in knowledge.committed_pages_in_window(
         repo_root, str(task.meta.get("kb_start_oid") or "") or None, cfg=cfg,
+        run_id=task.id,
     ):
         if page not in seen_pages:
             captured_pages.append(page)

@@ -437,7 +437,10 @@ def test_capture_page_manifest_excludes_reply_archives(tmp_path):
 
 def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
     """#538: a page the resident *commits* mid-run is invisible to the
-    dirty-vs-HEAD capture diff; the run-start OID window still sees it."""
+    dirty-vs-HEAD capture diff; the run-start OID window still sees it —
+    provided the commit carries this run's identity trailer (#565), which is
+    what the knowledge repo's installed ``commit-msg`` hook stamps in
+    production from ``$BRR_RUN_ID``."""
     repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
     knowledge_repo = tmp_path / "home" / "knowledge"
     start = knowledge.head_oid(repo, cfg)
@@ -449,11 +452,62 @@ def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
     other.parent.mkdir(parents=True)
     other.write_text("another repo's page\n", encoding="utf-8")
     _git(knowledge_repo, "add", "-A")
-    _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
+    _git(
+        knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work",
+        "--trailer", "Brnrd-Run-Id: run-mine",
+    )
 
-    assert knowledge.committed_pages_in_window(repo, start, cfg=cfg) == [
-        "mid-run.md",
-    ]
+    assert knowledge.committed_pages_in_window(
+        repo, start, cfg=cfg, run_id="run-mine",
+    ) == ["mid-run.md"]
+
+
+def test_committed_pages_in_window_attributes_by_run_identity_not_time(tmp_path):
+    """#565: stopped runs were credited, on their own dashboard nodes, with a
+    concurrent sibling worker's kb commits, because the window used to union
+    in everything committed in ``start..HEAD`` on the *shared* account-
+    knowledge checkout with no regard for who committed it. Two runs land
+    commits into the same overlapping window here; each must be credited
+    only its own pages, and a commit with no trailer at all (a maintainer's
+    hand commit) must go to neither — never fall back to crediting it by
+    time alone."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    start = knowledge.head_oid(repo, cfg)
+    assert start
+
+    page_a = knowledge_repo / "repos" / "Gurio__brr" / "run-a.md"
+    page_a.write_text("run a's page\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(
+        knowledge_repo, "commit", "-q", "-m", "run a: kb work",
+        "--trailer", "Brnrd-Run-Id: run-A",
+    )
+
+    page_b = knowledge_repo / "repos" / "Gurio__brr" / "run-b.md"
+    page_b.write_text("run b's page\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(
+        knowledge_repo, "commit", "-q", "-m", "run b: kb work",
+        "--trailer", "Brnrd-Run-Id: run-B",
+    )
+
+    page_hand = knowledge_repo / "repos" / "Gurio__brr" / "hand.md"
+    page_hand.write_text("a maintainer's hand commit\n", encoding="utf-8")
+    _git(knowledge_repo, "add", "-A")
+    _git(knowledge_repo, "commit", "-q", "-m", "maintainer: hand edit")
+
+    assert knowledge.committed_pages_in_window(
+        repo, start, cfg=cfg, run_id="run-A",
+    ) == ["run-a.md"]
+    assert knowledge.committed_pages_in_window(
+        repo, start, cfg=cfg, run_id="run-B",
+    ) == ["run-b.md"]
+    # No run owns the trailer-less hand commit — not run A, not run B, and
+    # not a third run id that happens to ask.
+    assert knowledge.committed_pages_in_window(
+        repo, start, cfg=cfg, run_id="run-C",
+    ) == []
 
 
 def test_committed_pages_in_window_falls_back_on_bad_or_rewritten_oid(tmp_path):
@@ -464,19 +518,31 @@ def test_committed_pages_in_window_falls_back_on_bad_or_rewritten_oid(tmp_path):
     page = knowledge_repo / "repos" / "Gurio__brr" / "mid-run.md"
     page.write_text("committed mid-run\n", encoding="utf-8")
     _git(knowledge_repo, "add", "-A")
-    _git(knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work")
+    _git(
+        knowledge_repo, "commit", "-q", "-m", "resident: mid-run kb work",
+        "--trailer", "Brnrd-Run-Id: run-mine",
+    )
 
-    assert knowledge.committed_pages_in_window(repo, None, cfg=cfg) == []
-    assert knowledge.committed_pages_in_window(repo, "", cfg=cfg) == []
     assert knowledge.committed_pages_in_window(
-        repo, "deadbeef" * 5, cfg=cfg,
+        repo, None, cfg=cfg, run_id="run-mine",
     ) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "", cfg=cfg, run_id="run-mine",
+    ) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "deadbeef" * 5, cfg=cfg, run_id="run-mine",
+    ) == []
+    # No run_id at all also degrades to empty — never a fallback to the old
+    # unfiltered-by-time behavior.
+    assert knowledge.committed_pages_in_window(repo, "deadbeef" * 5, cfg=cfg) == []
     # An OID that resolves but is no ancestor of HEAD (rebase/gc rewrote
     # the window) — the ancestry guard refuses to diff across it.
     orphan = _git(
         knowledge_repo, "commit-tree", "HEAD^{tree}", "-m", "orphan",
     ).stdout.strip()
-    assert knowledge.committed_pages_in_window(repo, orphan, cfg=cfg) == []
+    assert knowledge.committed_pages_in_window(
+        repo, orphan, cfg=cfg, run_id="run-mine",
+    ) == []
 
 
 def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
@@ -484,7 +550,9 @@ def test_committed_pages_in_window_noop_without_knowledge_repo(tmp_path):
     init_git_repo(repo)
 
     assert knowledge.head_oid(repo, {}) is None
-    assert knowledge.committed_pages_in_window(repo, "deadbeef" * 5, cfg={}) == []
+    assert knowledge.committed_pages_in_window(
+        repo, "deadbeef" * 5, cfg={}, run_id="run-mine",
+    ) == []
 
 
 def test_capture_reconciles_a_stray_account_write_against_a_checkout_write(tmp_path):
@@ -605,3 +673,79 @@ def test_capture_stamps_conversation_trailer_on_kb_commit(tmp_path):
         cwd=home_knowledge, check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert trailers == "github:Gurio/brr:61"
+
+
+def test_capture_stamps_run_id_trailer_on_kb_commit(tmp_path):
+    """#565 — the automated capture commit carries a Brnrd-Run-Id trailer,
+    the identity ``committed_pages_in_window`` filters a shared window by."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    page = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "log.md"
+    page.write_text("an entry\n", encoding="utf-8")
+
+    assert knowledge.capture(
+        repo, "kb: capture", cfg=cfg, run_id="run-260722-9999-abcd",
+    ) is True
+
+    home_knowledge = tmp_path / "home" / "knowledge"
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=home_knowledge, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "run-260722-9999-abcd"
+
+
+def test_capture_installs_a_commit_msg_hook_that_stamps_brr_run_id(tmp_path, monkeypatch):
+    """#565 — residents commit kb pages directly, mid-run, with a bare
+    ``git commit`` no Python code ever sees. The one code-only interception
+    point (no prompt file may teach a resident to type ``--trailer`` by
+    hand) is a ``commit-msg`` hook capture installs into the knowledge repo,
+    which turns ``$BRR_RUN_ID`` into the same trailer the automated commit
+    gets."""
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    home_knowledge = tmp_path / "home" / "knowledge"
+
+    # Capture (even a no-op one) must have installed the hook already.
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is False
+    hook_path = home_knowledge / ".git" / "hooks" / "commit-msg"
+    assert hook_path.is_file()
+    assert hook_path.stat().st_mode & 0o111
+
+    page = home_knowledge / "repos" / "Gurio__brr" / "hand-written.md"
+    page.write_text("a resident wrote this mid-run\n", encoding="utf-8")
+    monkeypatch.setenv("BRR_RUN_ID", "run-hooked")
+    _git(home_knowledge, "add", "-A")
+    _git(home_knowledge, "commit", "-q", "-m", "resident: mid-run kb work")
+
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=home_knowledge, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "run-hooked"
+
+
+def test_commit_msg_hook_leaves_a_hand_commit_untouched_without_the_env(
+    tmp_path, monkeypatch,
+):
+    """No ``$BRR_RUN_ID`` in the shell (a maintainer, logged in directly) ⇒
+    the hook is a no-op — credited to no run, never a guess (#565).
+
+    Explicitly ``delenv`` rather than trusting a bare environment: this
+    suite can itself run inside a brnrd-dispatched worker, whose own shell
+    carries a real ``BRR_RUN_ID`` — exactly the ambient value this test
+    must rule out to mean anything.
+    """
+    monkeypatch.delenv("BRR_RUN_ID", raising=False)
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    home_knowledge = tmp_path / "home" / "knowledge"
+    knowledge.capture(repo, "kb: capture", cfg=cfg)
+
+    page = home_knowledge / "repos" / "Gurio__brr" / "hand-written.md"
+    page.write_text("a maintainer wrote this\n", encoding="utf-8")
+    _git(home_knowledge, "add", "-A")
+    _git(home_knowledge, "commit", "-q", "-m", "maintainer: hand edit")
+
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=home_knowledge, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == ""
