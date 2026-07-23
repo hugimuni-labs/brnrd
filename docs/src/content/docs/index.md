@@ -5,7 +5,7 @@ description: Local coding agents, reachable from anywhere, with continuity acros
 
 **Local agents go brr. From anywhere.**
 
-Claude Code, Codex, and Gemini CLI live where the work is: your repo,
+Claude Code and Codex live where the work is: your repo,
 shell, credentials, and test setup. brnrd gives them a doorbell, a memory, and
 a live line back to you.
 
@@ -28,7 +28,7 @@ you · Telegram / Slack / GitHub / dashboard
                          ▼
           brnrd daemon · your machine · your repo
                          │
-             Claude Code · Codex · Gemini CLI
+                 Claude Code · Codex
                          │
                          ▼
                 progress · replies · git

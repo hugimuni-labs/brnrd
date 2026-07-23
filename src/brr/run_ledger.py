@@ -447,8 +447,6 @@ def _runner_shell(runner_name: str | None) -> str | None:
         return "claude"
     if runner_name.startswith("codex"):
         return "codex"
-    if runner_name.startswith("gemini"):
-        return "gemini"
     return runner_name
 
 

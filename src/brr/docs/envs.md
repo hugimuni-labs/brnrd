@@ -228,8 +228,7 @@ RUN npm install -g @anthropic-ai/claude-code
 ```
 
 Build with `docker build -t my-brr-runner .` and set
-`docker.image=my-brr-runner`. Repeat for `@openai/codex` or
-`@google/gemini-cli` for the other runners.
+`docker.image=my-brr-runner`. Use `@openai/codex` instead for a Codex image.
 
 ### Layering project tooling
 

@@ -15,8 +15,8 @@ mechanical halves of that split:
   repo material lives outside blocks and is never touched.
 
 - **Shell bridges (L2).** Codex and Cursor read a root ``AGENTS.md``
-  natively; Claude reads ``CLAUDE.md`` and Gemini reads ``GEMINI.md``. Init
-  writes a small pointer stub (``@AGENTS.md``) for each detected shell —
+  natively; Claude reads ``CLAUDE.md``. Init writes a small pointer stub
+  (``@AGENTS.md``) for each detected shell that needs one —
   portable and auditable where a symlink is neither — and verification asks
   *reachability* (can this shell see the contract?), not mere existence.
 
@@ -258,17 +258,16 @@ def block_drift(installed_text: str, template_text: str) -> list[BlockDrift]:
 # ── Shell bridges (L2) ───────────────────────────────────────────────
 
 # The contract every shell must reach. Codex and Cursor read it natively
-# from the repo root; Claude and Gemini need a pointer stub.
+# from the repo root; Claude needs a pointer stub.
 CONTRACT_FILE = "AGENTS.md"
 
-# Import directive both Claude Code and Gemini CLI honour in their context
-# files (``CLAUDE.md`` / ``GEMINI.md``): ``@path`` pulls the target in.
+# Claude Code's import directive: ``@path`` pulls the target into its
+# ``CLAUDE.md`` context file.
 _IMPORT = f"@{CONTRACT_FILE}"
 
 # shell -> bridge filename, or None when the shell reads AGENTS.md natively.
 _BRIDGE_FILE: dict[str, str | None] = {
     "claude": "CLAUDE.md",
-    "gemini": "GEMINI.md",
     "codex": None,
     "cursor": None,
 }
@@ -356,8 +355,7 @@ def verify_reachability(repo_root: Path, shell: str) -> Reachability:
     Reachability, not existence (L2): the contract must both *exist* at the
     root and be *routed to* by whatever file the shell actually loads. Codex
     and Cursor read ``AGENTS.md`` directly, so the contract's presence is the
-    whole check; Claude and Gemini additionally need their bridge to point at
-    it.
+    whole check; Claude additionally needs its bridge to point at it.
     """
     shell = shell.lower()
     contract = repo_root / CONTRACT_FILE
