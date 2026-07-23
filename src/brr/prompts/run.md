@@ -12,7 +12,8 @@ orient:
 - `kb/index.md` → what's already known. The project taught it once.
   Home-knowledge repos have no `kb/` in the tree: the index arrives in the
   wake's Knowledge Sources block, which also **names the directory you author
-  into** — that path, not the `.brnrd-kb/` clone root, which holds no pages.
+  into** — that path, not the `.brnrd-kb/` clone root, a mirror that may
+  lag; the account path is authoritative.
   `brnrd kb <query>` reaches the long tail. An empty `kb/` is a shape, not a
   finding: which shape decides what the silence means.
 - `Run Context Bundle` below ⇒ the brnrd daemon is host and the bundle is

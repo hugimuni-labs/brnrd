@@ -813,3 +813,150 @@ def test_iter_docs_root_may_itself_be_a_dot_directory(tmp_path):
     names = [p.name for p in knowledge._iter_docs(root)]
 
     assert names == ["page.md"]
+
+
+# ── ensure_checkout refresh (#613) ───────────────────────────────────
+#
+# The checkout used to be returned untouched whenever its origin still
+# matched — no fetch, no pull, ever. capture() pushes only when the
+# checkout is ahead and pulls only after a failed push, so behind-and-
+# clean drifted permanently (measured live: 28 commits / 3 days, two
+# pages `brnrd kb` could not return by any spelling). These fixtures
+# each *assert their own staleness first* so they cannot quietly become
+# already-current input and pin nothing (the #611 failure mode).
+
+
+def _seeded_checkout(tmp_path):
+    """A home knowledge repo with one commit and a checkout cloned from it."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    krepo = home / "knowledge"
+    krepo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=krepo, check=True)
+    (krepo / "index.md").write_text("v1\n", encoding="utf-8")
+    _commit(krepo, "seed")
+    cfg = {"home.path": str(home)}
+    checkout = knowledge.ensure_checkout(repo, cfg)
+    assert (checkout / "index.md").exists()
+    return repo, krepo, checkout, cfg
+
+
+def _advance_home(krepo, filename="late-page.md"):
+    (krepo / filename).write_text("account-side content\n", encoding="utf-8")
+    _commit(krepo, f"add {filename}")
+
+
+def _head(repo):
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_checkout_fast_forwards_when_behind_origin(tmp_path):
+    """The #613 defect itself: a clean checkout behind its origin must come
+    back current, and a page that never existed checkout-side must become
+    searchable rather than invisible to every spelling of `brnrd kb`."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _advance_home(krepo)
+
+    # Guard the fixture: genuinely behind, page genuinely absent.
+    assert _head(checkout) != _head(krepo)
+    assert not (checkout / "late-page.md").exists()
+
+    result = knowledge.ensure_checkout(repo, cfg)
+
+    assert result == checkout
+    assert _head(checkout) == _head(krepo)
+    assert (checkout / "late-page.md").read_text(
+        encoding="utf-8"
+    ) == "account-side content\n"
+    behind = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD..origin/main"],
+        cwd=checkout, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert behind == "0"
+
+
+def test_checkout_refresh_tolerates_untracked_files(tmp_path):
+    """Stray untracked files are a checkout's normal state; they must not
+    block the fast-forward (that would re-create #613 for any checkout
+    holding one) and must survive it."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    marker = checkout / "scratch-note.md"
+    marker.write_text("untracked\n", encoding="utf-8")
+    _advance_home(krepo)
+    assert _head(checkout) != _head(krepo)
+
+    knowledge.ensure_checkout(repo, cfg)
+
+    assert _head(checkout) == _head(krepo)
+    assert marker.read_text(encoding="utf-8") == "untracked\n"
+
+
+def test_checkout_refresh_skips_dirty_tracked_files(tmp_path):
+    """A modified tracked file means an in-flight edit: refresh must skip —
+    return what we have — never stash, clobber, or raise."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    (checkout / "index.md").write_text("local edit in flight\n", encoding="utf-8")
+    _advance_home(krepo)
+    old_head = _head(checkout)
+    assert old_head != _head(krepo)
+
+    result = knowledge.ensure_checkout(repo, cfg)
+
+    assert result == checkout
+    assert _head(checkout) == old_head
+    assert (checkout / "index.md").read_text(
+        encoding="utf-8"
+    ) == "local edit in flight\n"
+    assert not (checkout / "late-page.md").exists()
+
+
+def test_checkout_refresh_skips_diverged_history(tmp_path):
+    """Diverged histories (checkout committed locally, account advanced
+    separately) must degrade to a no-op: --ff-only refuses, nothing is
+    rebased or merged — reconciliation belongs to capture(), not a read."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    (checkout / "local-page.md").write_text("checkout-side\n", encoding="utf-8")
+    _commit(checkout, "local commit")
+    _advance_home(krepo)
+    old_head = _head(checkout)
+    assert old_head != _head(krepo)
+
+    result = knowledge.ensure_checkout(repo, cfg)
+
+    assert result == checkout
+    assert _head(checkout) == old_head
+    assert (checkout / "local-page.md").exists()
+    assert not (checkout / "late-page.md").exists()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=checkout,
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert status == ""  # no merge/rebase state left behind
+
+
+def test_refresh_checkout_survives_unreachable_origin(tmp_path):
+    """An origin that stopped existing must degrade to "return what we
+    have", not raise. Driven at the helper level: `ensure_checkout` mkdirs
+    and re-inits its own origin path before refreshing, so a *genuinely*
+    unreachable origin can only reach `_refresh_checkout` directly."""
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=source, check=True)
+    (source / "index.md").write_text("v1\n", encoding="utf-8")
+    _commit(source, "seed")
+    checkout = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(source), str(checkout)], check=True
+    )
+    import shutil as _shutil
+
+    _shutil.rmtree(source)
+    old_head = _head(checkout)
+
+    knowledge._refresh_checkout(checkout)  # must not raise
+
+    assert _head(checkout) == old_head
