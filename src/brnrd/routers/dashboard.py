@@ -433,11 +433,18 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     """Account-scoped live/coexisting-runs view (#258)."""
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
-        return {"runs": [], "stale": False, "generated_at": None, "spawn_max_concurrent": None}
+        return {
+            "runs": [],
+            "stale": False,
+            "generated_at": None,
+            "spawn_max_concurrent": None,
+            "daemon_mood": None,
+        }
     now = datetime.now(timezone.utc)
     runs: dict[str, dict[str, Any]] = {}
     newest_reported_at: datetime | None = None
     spawn_max_concurrent: int | None = None
+    daemon_mood: dict[str, Any] | None = None
     daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
     for daemon in daemons:
         reported_at = _dt(daemon.live_runs_updated_at)
@@ -446,6 +453,14 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         if newest_reported_at is None or reported_at > newest_reported_at:
             newest_reported_at = reported_at
             spawn_max_concurrent = daemon.spawn_max_concurrent
+            try:
+                daemon_mood = (
+                    json.loads(daemon.daemon_mood_json)
+                    if daemon.daemon_mood_json
+                    else None
+                )
+            except ValueError:
+                daemon_mood = None
         try:
             entries = json.loads(daemon.live_runs_json or "[]")
         except ValueError:
@@ -474,6 +489,7 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         "stale": stale,
         "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
         "spawn_max_concurrent": spawn_max_concurrent,
+        "daemon_mood": daemon_mood,
     }
 
 
@@ -863,6 +879,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "stale": view["stale"],
             "reported_at": view["generated_at"],
             "spawn_max_concurrent": view["spawn_max_concurrent"],
+            "daemon_mood": view["daemon_mood"],
         }
     )
 

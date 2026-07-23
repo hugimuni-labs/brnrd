@@ -2369,3 +2369,65 @@ def test_response_post_carries_conversation_id(tmp_path, monkeypatch):
     assert (method, url_path) == ("POST", "/v1/daemons/responses")
     assert payload["event_id"] == "evt-cloud-1"
     assert payload["conversation_id"] == "cloud:telegram:-1001234567890:"
+
+
+def test_live_runs_snapshot_resolves_mood_at_the_serving_edge(tmp_path):
+    """#566 slice 0: the raw `.mood` handle rides the presence entry; glyph
+    and pitch are resolved here, where `brr.emotes` exists — the frontend
+    never owns an emote table. An unknown handle degrades to name-only
+    (never a guessed face); an unset mood stays None throughout."""
+    from brr import emotes, presence
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="daemon", stream="t:1:", run_id="run-real-mood",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-real",
+    )
+    presence.heartbeat(brr_dir, "e-real", mood="fo.cus")
+    presence.register(
+        brr_dir, kind="daemon", stream="t:2:", run_id="run-unknown-mood",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-unknown",
+    )
+    presence.heartbeat(brr_dir, "e-unknown", mood="not-a-face")
+    presence.register(
+        brr_dir, kind="daemon", stream="t:3:", run_id="run-no-mood",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-none",
+    )
+
+    rows = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}
+    real = rows["run-real-mood"]
+    expected = emotes.lookup("fo.cus")
+    assert real["mood"] == "fo.cus"
+    assert real["mood_glyph"] == expected.frames[0]
+    assert real["mood_pitch"] == expected.pitch
+    unknown = rows["run-unknown-mood"]
+    assert unknown["mood"] == "not-a-face"
+    assert unknown["mood_glyph"] is None
+    assert unknown["mood_pitch"] is None
+    none = rows["run-no-mood"]
+    assert none["mood"] is None
+    assert none["mood_glyph"] is None
+    assert none["mood_pitch"] is None
+
+
+def test_daemon_mood_payload_reports_board_state(tmp_path):
+    """The daemon-level telemetry face: idle when no run-kind presence is
+    live, running when one is — the first caller of `emotes.for_telemetry`
+    since the layer shipped in #601."""
+    from brr import emotes, presence
+
+    brr_dir = tmp_path / ".brr"
+    idle = cloud._daemon_mood_payload(brr_dir)
+    assert idle["state"] == "idle"
+    assert idle["name"] == emotes.for_telemetry("idle").name
+    assert idle["glyph"] == emotes.for_telemetry("idle").frames[0]
+    assert 0.0 <= idle["pitch"] <= 1.0
+    assert idle["frames"][0] == idle["frames"][-1]  # base frame first and last
+
+    presence.register(
+        brr_dir, kind="daemon", stream="t:1:", run_id="run-live",
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    busy = cloud._daemon_mood_payload(brr_dir)
+    assert busy["state"] == "running"
+    assert busy["name"] == emotes.for_telemetry("running").name

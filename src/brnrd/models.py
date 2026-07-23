@@ -100,6 +100,11 @@ class Daemon(Base):
     # count is just `is_subspawn` runs in live_runs_json above).
     # kb/design-multi-workstream-concurrency.md §"Loom envelope".
     spawn_max_concurrent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # #566 slice 0: the daemon-level telemetry face (state/name/glyph/frames/
+    # pitch as JSON), piggybacked on the same live-runs publish tick. What
+    # the board wears when no run is live; per-run resident moods ride
+    # inside live_runs_json entries instead.
+    daemon_mood_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # PR-review queue snapshot (#259), mirrored from `gh pr list` via
     # `PUT /v1/daemons/pr-review-queue`. Calendar age, not runner quota, is
     # the meaningful clock for this lane.

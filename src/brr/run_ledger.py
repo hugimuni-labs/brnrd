@@ -27,6 +27,13 @@ ESTIMATE_ACTUAL = "actual"
 RUN_NAME_CONTROL_NAME = ".name"
 _RUN_NAME_MAX_BYTES = 240
 _RUN_NAME_MAX_CHARS = 60
+RUN_MOOD_CONTROL_NAME = ".mood"
+# First line is the emote handle (`emotes.py` caps handles well under this);
+# anything after is free narration the wire never carries. Byte cap mirrors
+# hooks._MOOD_READ_CAP_CHARS so the two readers of the same file agree on
+# how much of it is ever trusted.
+_RUN_MOOD_MAX_BYTES = 500
+_RUN_MOOD_MAX_CHARS = 64
 
 _BEFORE_WEEKLY_KEY = "run_ledger_weekly_used_before"
 _BEFORE_FIVE_HOUR_KEY = "run_ledger_five_hour_used_before"
@@ -394,6 +401,26 @@ def read_run_name_control(outbox_dir: Path | None) -> str | None:
         return None
     lines = raw[:_RUN_NAME_MAX_BYTES].decode("utf-8", errors="replace").splitlines()
     value = lines[0].strip()[:_RUN_NAME_MAX_CHARS] if lines else ""
+    return value or None
+
+
+def read_run_mood_control(outbox_dir: Path | None) -> str | None:
+    """Read the resident-authored mood handle: `.mood` first line, capped.
+
+    The daemon-side sibling of ``hooks._read_mood`` (which serves the
+    in-run statusline and must stay import-light in the hook path). Returns
+    the raw handle without resolving it against ``emotes`` — resolution
+    happens at the serving edge, where an unknown handle renders as nothing
+    rather than a guessed face (the emote library's honesty bar).
+    """
+    if outbox_dir is None:
+        return None
+    try:
+        raw = (outbox_dir / RUN_MOOD_CONTROL_NAME).read_bytes()
+    except OSError:
+        return None
+    lines = raw[:_RUN_MOOD_MAX_BYTES].decode("utf-8", errors="replace").splitlines()
+    value = lines[0].strip()[:_RUN_MOOD_MAX_CHARS] if lines else ""
     return value or None
 
 
