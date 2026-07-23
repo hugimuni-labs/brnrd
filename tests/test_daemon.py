@@ -222,10 +222,12 @@ def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatc
         "codex-mini (requested from the dashboard spool rack)"
     )
     # #564: consumption leaves a trace — who spent it, from what source.
-    assert wake_request_mod.last_receipt(brr_dir) == {
+    receipt = wake_request_mod.last_receipt(brr_dir)
+    assert receipt["at"]
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
         "request_id": "wake_9",
         "source": "telegram",
-        "run_id": "evt-wake",
+        "event_id": "evt-wake",
         "profile": "codex-mini",
     }
 
@@ -4817,10 +4819,12 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(tmp_path):
     assert wake_request_mod.pending(repo_a / ".brr") is None
     assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_dispatch"]
     # #564: consumption leaves a trace — who spent it, from what source.
-    assert wake_request_mod.last_receipt(repo_a / ".brr") == {
+    receipt = wake_request_mod.last_receipt(repo_a / ".brr")
+    assert receipt["at"]
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
         "request_id": "wake_dispatch",
         "source": "telegram",
-        "run_id": target.event["id"],
+        "event_id": target.event["id"],
         "profile": "codex-mini",
     }
 
