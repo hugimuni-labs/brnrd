@@ -338,82 +338,64 @@ def test_resolve_self_inject_modes(tmp_path):
     assert "delta" not in digest        # selected by no entry
 
 
-def test_resolve_self_inject_digest_schedule_lint_appends_findings(tmp_path):
+def test_dominion_block_surfaces_schedule_lint_without_any_self_inject_entry(tmp_path):
+    """#579's whole point: the lint is visible whether or not the resident
+    lists `schedule.md` in its manifest.
+
+    The first shape of this hung the block off a self-inject entry rendering
+    `schedule.md` — which no seed manifest and no real dominion in this
+    account actually has, so the feature shipped dark and its tests passed
+    only because the fixture opted in. Here the manifest names the playbook
+    and nothing else, exactly as production does.
+    """
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
     (path / "schedule.md").write_text(
         "## Followup\nat: 2020-01-01T00:00:00Z\ncheck CI\n", encoding="utf-8",
     )
-    (path / "self-inject").write_text("full schedule.md\n", encoding="utf-8")
-
-    digest, _overflow = dominion.resolve_self_inject_digest(
-        path, schedule_lint_now=1893456000.0,  # long past the 2020 `at:`
-    )
-
-    assert "Schedule lint" in digest
-    assert "stale-at" in digest
-    assert "followup" in digest
-
-
-def test_resolve_self_inject_digest_schedule_lint_omitted_by_default(tmp_path):
-    """No `schedule_lint_now` ⇒ zero behaviour change from before #579."""
-    repo = _repo(tmp_path)
-    path = dominion.ensure_dominion(repo, push=False)
-    (path / "schedule.md").write_text(
-        "## Followup\nat: 2020-01-01T00:00:00Z\ncheck CI\n", encoding="utf-8",
-    )
-    (path / "self-inject").write_text("full schedule.md\n", encoding="utf-8")
-
-    digest, _overflow = dominion.resolve_self_inject_digest(path)
-
-    assert "Schedule lint" not in digest
-
-
-def test_resolve_self_inject_digest_schedule_lint_no_findings_is_byte_identical(tmp_path):
-    """Zero findings must render nothing — not even a clean-bill-of-health
-    line — so a healthy schedule's self-inject fragment is unchanged."""
-    repo = _repo(tmp_path)
-    path = dominion.ensure_dominion(repo, push=False)
-    (path / "schedule.md").write_text(
-        "## Reconcile\nevery: 24h\ndo upkeep\n", encoding="utf-8",
-    )
-    (path / "self-inject").write_text("full schedule.md\n", encoding="utf-8")
-
-    with_lint, _ = dominion.resolve_self_inject_digest(path, schedule_lint_now=1000.0)
-    without_lint, _ = dominion.resolve_self_inject_digest(path)
-
-    assert with_lint == without_lint
-    assert "Schedule lint" not in with_lint
-
-
-def test_resolve_self_inject_digest_schedule_lint_only_touches_schedule_target(tmp_path):
-    """A non-schedule.md manifest entry never grows a lint block, even with
-    a stale-`at:`-shaped schedule.md sitting unreferenced beside it."""
-    repo = _repo(tmp_path)
-    path = dominion.ensure_dominion(repo, push=False)
-    (path / "schedule.md").write_text(
-        "## Followup\nat: 2020-01-01T00:00:00Z\ncheck CI\n", encoding="utf-8",
-    )
-    (path / "notes.md").write_text("just some notes\n", encoding="utf-8")
-    (path / "self-inject").write_text("full notes.md\n", encoding="utf-8")
-
-    digest, _ = dominion.resolve_self_inject_digest(path, schedule_lint_now=1893456000.0)
-
-    assert "Schedule lint" not in digest
-
-
-def test_dominion_block_surfaces_schedule_lint_findings(tmp_path):
-    repo = _repo(tmp_path)
-    path = dominion.ensure_dominion(repo, push=False)
-    (path / "schedule.md").write_text(
-        "## Followup\nat: 2020-01-01T00:00:00Z\ncheck CI\n", encoding="utf-8",
-    )
-    (path / "self-inject").write_text("full schedule.md\n", encoding="utf-8")
+    (path / "playbook.md").write_text("standing orientation\n", encoding="utf-8")
+    (path / "self-inject").write_text("full playbook.md\n", encoding="utf-8")
 
     block = prompts._build_dominion_block(repo)
 
+    assert "standing orientation" in block
     assert "Schedule lint" in block
     assert "stale-at" in block
+    assert "followup" in block
+
+
+def test_dominion_block_with_a_clean_schedule_is_byte_identical(tmp_path):
+    """Zero findings render nothing — not even a clean-bill-of-health line.
+
+    This is what makes an always-on surface affordable: the common case costs
+    zero bytes of every wake, forever.
+    """
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "playbook.md").write_text("standing orientation\n", encoding="utf-8")
+    (path / "self-inject").write_text("full playbook.md\n", encoding="utf-8")
+
+    without_schedule = prompts._build_dominion_block(repo)
+    (path / "schedule.md").write_text(
+        "## Reconcile\nevery: 24h\ndo upkeep\n", encoding="utf-8",
+    )
+    with_clean_schedule = prompts._build_dominion_block(repo)
+
+    assert with_clean_schedule == without_schedule
+    assert "Schedule lint" not in with_clean_schedule
+
+
+def test_dominion_block_survives_an_unparseable_schedule(tmp_path):
+    """A lint pass is a bonus, never a wake-blocking dependency."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "playbook.md").write_text("standing orientation\n", encoding="utf-8")
+    (path / "self-inject").write_text("full playbook.md\n", encoding="utf-8")
+    (path / "schedule.md").write_bytes(b"\xff\xfe not utf-8 at all")
+
+    block = prompts._build_dominion_block(repo)
+
+    assert "standing orientation" in block
 
 
 def test_resolve_self_inject_skips_exec(tmp_path):

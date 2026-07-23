@@ -403,3 +403,36 @@ def test_render_lint_block_renders_each_finding():
     assert "Schedule lint" in block
     assert "stale-at" in block and "`y`" in block
     assert "overlap" in block and "`a`" in block and "`b`" in block
+
+
+def test_lint_stale_reference_leaves_a_merged_pr_cited_as_provenance_alone():
+    """Review fixup: an entry citing a merged PR as *why a rule exists* is
+    not stale — it is well-sourced.
+
+    The rule's first live run against this account's real `schedule.md`
+    produced exactly one finding, and it was this false positive: the
+    dedup section cites #527 precisely *because* it merged and over-claimed.
+    A linter whose only real-world output is noise is the cry-wolf failure
+    the issue itself calls worse than not existing.
+    """
+    provenance = schedule.ScheduleEntry(
+        "dispatch-tick", "every", interval=3600.0, raw_when="1h",
+        # Verbatim from this account's real schedule.md, which is where the
+        # false positive was found.
+        body=("A ticket can be stale-open with live residue: #527 cut "
+              "gemini's Core rows and closed the cheap half; the bundled "
+              "Shell stayed selectable against a dead CLI."),
+    )
+    remit = schedule.ScheduleEntry(
+        "followup", "every", interval=3600.0, raw_when="1h",
+        body="Pick up #527 and finish the runner rack cleanup.",
+    )
+    forge = {"prs": [{"number": 527, "state": "MERGED"}]}
+
+    provenance_findings = schedule.lint_schedule(
+        [provenance], now=1000.0, forge=forge)
+    remit_findings = schedule.lint_schedule([remit], now=1000.0, forge=forge)
+
+    assert provenance_findings == []
+    assert [f.rule for f in remit_findings] == ["stale-reference"]
+    assert "#527" in remit_findings[0].message

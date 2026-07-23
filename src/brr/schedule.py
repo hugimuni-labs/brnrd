@@ -405,11 +405,35 @@ def due_entries(
 # worse than not existing.
 OVERLAP_RATIO_THRESHOLD = 0.6
 
-# An `at:` more than this stale still gets a finding — mechanical detection
-# doesn't need the daemon's surprise-fire grace period (`DEFAULT_STALE_GRACE_S`
-# governs whether the daemon *fires* a very old one-shot, not whether a lint
-# pass should mention it still being listed).
 _ISSUE_PR_REF_RE = re.compile(r"#(\d+)\b")
+
+# A schedule entry's body cites forge numbers in two quite different voices:
+# as *remit* ("dispatch #580") and as *provenance* ("#527 for #519's cheap
+# half — the merged PR did part of the work"). Only the first goes stale when
+# the number closes; the second cites it precisely *because* it closed.
+# Nothing mechanical can read intent, but the sentence usually says so out
+# loud, so a reference sharing its sentence with one of these words is left
+# alone. Calibrated against this account's real schedule.md, where the rule's
+# first live run produced exactly one finding and it was a false positive of
+# this shape. Under-reporting is the correct direction here: the issue's own
+# bar is that a linter which cries wolf is worse than one that does not exist.
+# Deliberately narrow. The first draft also carried `was|were|already|fixed`,
+# which suppresses ordinary remit prose ("check whether #580 was addressed") —
+# a suppressor wide enough to swallow the rule is not a calibration, it is a
+# deletion with extra steps.
+_SETTLED_CONTEXT_RE = re.compile(
+    r"\b(merged|closed|resolved|shipped|landed|superseded|withdrawn|"
+    r"stale-open|history|historical)\b",
+    re.IGNORECASE,
+)
+
+
+def _sentence_around(text: str, index: int) -> str:
+    """The sentence-ish span of *text* containing *index* — split on `.`/newline."""
+    start = max(text.rfind("\n", 0, index), text.rfind(". ", 0, index)) + 1
+    ends = [e for e in (text.find("\n", index), text.find(". ", index)) if e != -1]
+    end = min(ends) if ends else len(text)
+    return text[start:end]
 
 
 @dataclass(frozen=True)
@@ -516,15 +540,18 @@ def _lint_stale_reference(entries: list[ScheduleEntry], forge: Any) -> list[Sche
                 continue
             seen.add(number)
             pr_state = lookup.get(number)
-            if pr_state in ("MERGED", "CLOSED"):
-                findings.append(
-                    ScheduleFinding(
-                        "stale-reference",
-                        (e.id,),
-                        f"references #{number}, which is {pr_state} — the "
-                        "entry may describe a world that no longer exists.",
-                    )
+            if pr_state not in ("MERGED", "CLOSED"):
+                continue
+            if _SETTLED_CONTEXT_RE.search(_sentence_around(e.body, match.start())):
+                continue  # cited as provenance, not as pending work
+            findings.append(
+                ScheduleFinding(
+                    "stale-reference",
+                    (e.id,),
+                    f"names #{number}, which is {pr_state} — worth checking "
+                    "it is cited as history and not as pending work.",
                 )
+            )
     return findings
 
 
@@ -549,8 +576,10 @@ def lint_schedule(
     - ``stale-reference`` — an entry whose body names a ``#<number>`` that
       *forge* (a network-free PR list/state — see
       :func:`brr.forge_pr_cache.read_state`) reports ``MERGED`` or
-      ``CLOSED``. Skipped entirely when *forge* is ``None`` or carries no
-      usable rows — this rule only ever reads a local cache, never a forge
+      ``CLOSED``, *and* whose surrounding sentence does not already speak of
+      it in the settled past (see :data:`_SETTLED_CONTEXT_RE`) — an entry
+      citing a merged PR as provenance is not stale, it is well-sourced.
+      Skipped entirely when *forge* is ``None`` or carries no usable rows — this rule only ever reads a local cache, never a forge
       API, so an absent cache just means this rule finds nothing, not an
       error.
 
