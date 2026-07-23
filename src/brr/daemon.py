@@ -5465,12 +5465,21 @@ def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
 
 
 def _configured_gate_names(brr_dir: Path) -> list[str]:
-    """Agent-facing gate names deliverable on this account.
+    """Delivery-loop gate names deliverable on this account.
 
     Catalog order (:data:`_BUILTIN_GATES`), built from the same
     :func:`_gate_is_configured` probe :func:`_gate_can_deliver` uses — a
     refusal notice quoting this list can never name a set that disagrees
     with the single-gate decision it explains.
+
+    These are delivery-loop names, and every one of them is also addressable
+    as-is in an agent's ``gate:`` key, so the list is always actionable. It is
+    not the *complete* set of accepted spellings: :func:`_delivery_source_for_gate`
+    additionally accepts ``forge`` as an alias for ``github``, which this list
+    does not render. Harmless where it is read — the notice only fires for a
+    gate that was refused, and an account with ``github`` configured never
+    refuses ``forge`` in the first place. Revisit if a second alias appears,
+    or if the alias map ever stops being one-way.
     """
     return [name for name in _BUILTIN_GATES if _gate_is_configured(brr_dir, name)]
 
