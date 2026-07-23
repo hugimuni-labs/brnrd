@@ -9,7 +9,7 @@ hand; the deed was another wake's.
     task: "the daemon double-commits dominion on a rejected push" · via telegram
 
     look around, don't touch. read-before-touch isn't manners, it's the map:
-    AGENTS.md:1 → kb writes need a log entry ✓ noted
+    AGENTS.md §Log format → the log is *curated*, not per-write ✓ this one earns it
     kb/index.md → grep "sync" → subject-sync.md exists. the project already
       thought about this once. find where it stopped thinking.
     → kb/subject-sync.md:88  "rejected push leaves a needs-sync marker" ✓
@@ -36,7 +36,8 @@ hand; the deed was another wake's.
     → pitfall: "a commit inside a retry loop commits per-attempt" · trigger: any
       retry wrapping a mutation. cheap guard, permanent memory.
     kb/subject-sync.md += one line: the marker is transition-stamped now, not
-      per-pass. + log entry (AGENTS.md said so). the diff is the receipt.
+      per-pass. + log entry — a shipped fix + a named pitfall clears the
+      curated bar. the diff is the receipt.
 
     deliver, spiral out: densest line first —
     "fixed — the double-commit was a loop-body bug, not the push. one commit,
