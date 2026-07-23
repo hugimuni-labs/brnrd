@@ -749,3 +749,67 @@ def test_commit_msg_hook_leaves_a_hand_commit_untouched_without_the_env(
         cwd=home_knowledge, check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert trailers == ""
+
+
+def test_repo_docs_block_skips_vendored_trees(tmp_path):
+    """A docs site's `node_modules/` must not displace its authored pages.
+
+    Live shape, 2026-07-23: this project's `docs/` is an Astro site, so 505
+    of its 518 markdown files are dependency READMEs. `_source_excerpt`
+    lists the first 20 sorted paths, and `node_modules/` sorts ahead of
+    `src/` — so the wake's "repo docs" block was `README.md` plus nineteen
+    Astro dependency READMEs and "... 530 more", with not one authored page
+    in it.
+    """
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    docs = repo / "docs"
+    (docs / "src" / "content").mkdir(parents=True)
+    (docs / "README.md").write_text("authored readme", encoding="utf-8")
+    (docs / "src" / "content" / "guide.md").write_text("authored", encoding="utf-8")
+    vendored = docs / "node_modules" / "@astrojs" / "starlight"
+    vendored.mkdir(parents=True)
+    for name in ("README.md", "CHANGELOG.md"):
+        (vendored / name).write_text("vendored", encoding="utf-8")
+    built = docs / "dist"
+    built.mkdir()
+    (built / "index.md").write_text("built", encoding="utf-8")
+    hidden = docs / ".astro"
+    hidden.mkdir()
+    (hidden / "types.md").write_text("generated", encoding="utf-8")
+
+    block = knowledge.render_injection(repo, {})
+
+    assert "src/content/guide.md" in block
+    assert "README.md" in block
+    assert "node_modules" not in block
+    assert "dist/index.md" not in block
+    assert ".astro" not in block
+
+
+def test_search_does_not_descend_into_vendored_trees(tmp_path):
+    """`brnrd kb <query>` has a 20-hit cap — vendored files must not eat it."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    docs = repo / "docs"
+    vendored = docs / "node_modules" / "pkg"
+    vendored.mkdir(parents=True)
+    (vendored / "CHANGELOG.md").write_text("needle vendored\n" * 40, encoding="utf-8")
+    (docs / "guide.md").write_text("needle authored", encoding="utf-8")
+
+    hits = knowledge.search(repo, "needle", {})
+
+    assert [h.path.name for h in hits] == ["guide.md"]
+
+
+def test_iter_docs_root_may_itself_be_a_dot_directory(tmp_path):
+    """Only components *below* the root are tested — `.brnrd-kb/` still walks."""
+    root = tmp_path / ".brnrd-kb"
+    (root / "repos").mkdir(parents=True)
+    (root / "repos" / "page.md").write_text("kept", encoding="utf-8")
+    (root / "node_modules").mkdir()
+    (root / "node_modules" / "dep.md").write_text("dropped", encoding="utf-8")
+
+    names = [p.name for p in knowledge._iter_docs(root)]
+
+    assert names == ["page.md"]
