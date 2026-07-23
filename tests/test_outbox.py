@@ -17,6 +17,7 @@ from brr import (
     daemon,
     hooks,
     message_store,
+    portals,
     protocol,
     run_context,
     run_progress,
@@ -46,6 +47,17 @@ def test_hooks_installed_packet_is_persisted(tmp_path):
     assert record["type"] == "hooks_installed"
     assert record["run_id"] == "run-a"
     assert record["flavour"] == "codex"
+
+
+def test_is_staging_name_matches_tmp_anywhere_in_the_suffix_chain():
+    """The predicate three drains share (#590)."""
+    assert portals.is_staging_name("note.md.tmp")
+    assert portals.is_staging_name("note.md.tmp.1680005.8f6c42b9a1f7")
+    assert portals.is_staging_name("note.tmp.md")  # any component counts
+    # Real messages, including ones whose *name* merely contains "tmp".
+    assert not portals.is_staging_name("note.md")
+    assert not portals.is_staging_name("tmp-notes.md")
+    assert not portals.is_staging_name("note-tmp.md")
 
 
 class TestDrainOutbox:
@@ -93,6 +105,73 @@ class TestDrainOutbox:
         assert (outbox / "staging.tmp").exists()
         # A blank file is consumed (removed) but never promoted.
         assert not (outbox / "blank.md").exists()
+
+    def test_skips_editor_staging_names_with_a_trailing_token(
+        self, tmp_path, monkeypatch,
+    ):
+        """#590: ``.tmp`` is not always the *last* suffix component.
+
+        Claude's editor stages as ``<name>.tmp.<pid>.<rand>`` and renames.
+        A bare ``Path.suffix == ".tmp"`` check saw ``.8f6c42b9a1f7`` and
+        delivered the half-written file as a chat message — the resident's
+        own rename then failed with ENOENT on a message the user already
+        had. The real staging name from that incident is the fixture.
+        """
+        n, responses, outbox, _ = self._drain(
+            tmp_path, monkeypatch,
+            [("note-dispatch.md.tmp.1680005.8f6c42b9a1f7", "half written"),
+             ("real.md", "hi\n")],
+        )
+        assert n == 1
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["hi"]
+        staging = outbox / "note-dispatch.md.tmp.1680005.8f6c42b9a1f7"
+        assert staging.exists(), "the rename must still have a file to rename"
+
+    def test_staged_then_renamed_message_delivers_exactly_once(
+        self, tmp_path, monkeypatch,
+    ):
+        """The whole point of the staging skip: commit-by-rename works."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        outbox = brr_dir / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        staged = outbox / "note.md.tmp.4242.cafe"
+        staged.write_text("the whole message\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+
+        assert daemon._drain_outbox(
+            emit, task, responses, "evt-1", outbox) == 0
+        staged.rename(outbox / "note.md")
+        assert daemon._drain_outbox(
+            emit, task, responses, "evt-1", outbox) == 1
+        assert daemon._drain_outbox(
+            emit, task, responses, "evt-1", outbox) == 0
+
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["the whole message"]
+
+    def test_staging_file_is_not_listed_as_a_pending_outbox_file(
+        self, tmp_path,
+    ):
+        """The same predicate, on the resident's own portal read (#590).
+
+        A staging file counted as an undelivered message made
+        ``portal-state.json`` report work the resident had not left behind.
+        """
+        outbox = tmp_path / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        (outbox / "note.md.tmp.99.beef").write_text("half written")
+        (outbox / "real.md").write_text("hi\n")
+        (outbox / "notes.md").write_text("also real\n")
+
+        assert sorted(daemon._outbox_message_files(outbox)) == [
+            "notes.md", "real.md"]
 
     def test_skips_control_dotfiles(self, tmp_path, monkeypatch):
         n, responses, outbox, _ = self._drain(
