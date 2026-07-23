@@ -527,6 +527,42 @@ def test_read_records_for_correspondent_respawn_reuse_not_collapsed(tmp_path):
     ]
 
 
+def test_read_records_for_correspondent_same_key_repeat_survives(tmp_path):
+    """A person repeating themselves on one pipe is not a mirror.
+
+    Review fixup on #338: the first draft collapsed any two matching
+    bodies inside the window regardless of which conversation key they
+    arrived on. But a mirror is a *fan-out* — one delivery written to
+    two keys. Two matching bodies on the **same** key are one human
+    saying the same thing twice, which most often happens because
+    nobody answered the first time; that repeat is the highest-signal
+    turn in the thread, and it is the one case where collapsing leaves
+    nothing to record (`duplicate_conversation_keys` has no sibling key
+    to name). Only cross-key pairs collapse.
+    """
+    key = "telegram:11:"
+    for idx, body in ((1, "ping"), (2, "ping")):
+        conversations.append_event(
+            tmp_path,
+            key,
+            {
+                "id": f"evt-repeat-{idx}",
+                "source": "telegram",
+                "body": body,
+                "telegram_chat_id": 11,
+                "telegram_user_id": 43,
+                "telegram_message_id": 500 + idx,
+            },
+        )
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, key, "telegram:user-id:43",
+    )
+
+    assert [r.get("body") for r in records] == ["ping", "ping"]
+    assert not any(r.get("duplicate_conversation_keys") for r in records)
+
+
 def test_read_records_for_correspondent_dedup_keeps_sibling_only_turns(tmp_path):
     """Dedup must never become a filter that drops turns unique to one pipe."""
     native, cloud = _mirrored_event(message_id=1, body="shared msg")
