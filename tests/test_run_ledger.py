@@ -571,3 +571,22 @@ def test_a_flat_window_still_reports_a_real_zero(monkeypatch, tmp_path):
     assert row["weekly_pct_delta"] == 0.0
     assert row["five_hour_pct_delta"] == 0.0
     assert row["usd_subscription_attributed"] == 0.0
+
+
+def test_read_run_mood_control_uses_first_line_and_caps_length(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".mood").write_text("fo.cus" + "x" * 200 + "\nfree narration line\n")
+    assert run_ledger.read_run_mood_control(outbox) == ("fo.cus" + "x" * 200)[:64]
+    assert run_ledger.read_run_mood_control(tmp_path / "missing") is None
+    assert run_ledger.read_run_mood_control(None) is None
+
+
+def test_read_run_mood_control_blank_file_is_no_mood(tmp_path):
+    """An empty or whitespace-only `.mood` is an unset mood, not an empty
+    string — absence must stay distinguishable so no surface renders a
+    blank chip."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".mood").write_text("\n\n")
+    assert run_ledger.read_run_mood_control(outbox) is None

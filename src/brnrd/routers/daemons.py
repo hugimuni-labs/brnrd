@@ -405,6 +405,11 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     daemon.live_runs_json = json.dumps([run.model_dump() for run in payload.runs], separators=(",", ":"))
     daemon.live_runs_updated_at = now
     daemon.spawn_max_concurrent = payload.spawn_max_concurrent
+    daemon.daemon_mood_json = (
+        json.dumps(payload.daemon_mood.model_dump(), separators=(",", ":"))
+        if payload.daemon_mood is not None
+        else None
+    )
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
