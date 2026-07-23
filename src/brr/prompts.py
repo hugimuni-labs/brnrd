@@ -174,11 +174,13 @@ def _entries_attestation(
     on purpose:
 
     - Dates differ ⇒ compare days. Sound at any precision.
-    - Dates tie ⇒ compare times, but **only when every entry in scope carries
-      a corroborated one** (*precise*). This is the tier that catches the
-      incident the feature is named after — an 11:31 entry sitting below a
-      13:42 one, both dated 2026-07-23, which day granularity reports as
-      healthy.
+    - Dates tie ⇒ compare times, but **only when every entry sharing the
+      source's newest date carries a corroborated one** (*precise*). That
+      cohort is exactly the set that can decide a tie; an entry on an older
+      date is settled by the day comparison above and its missing time is
+      irrelevant. This is the tier that catches the incident the feature is
+      named after — an 11:31 entry sitting below a 13:42 one, both dated
+      2026-07-23, which day granularity reports as healthy.
     - Dates tie and precision is unavailable ⇒ **not stale, and not certain**.
       The caller must not claim the tail is current; see ``_trim_marker``.
       This is the branch that matters most: the honest output there is a
@@ -189,14 +191,26 @@ def _entries_attestation(
         return None, None, None, False, False
     picked_keys = [_entry_key(e) for e in picked_entries]
 
-    # Precise only if *every* entry in scope carries a corroborated time; one
-    # bare heading makes same-day ordering unknowable for the whole set.
-    precise = all(k[1] is not None for k in all_keys)
+    # Precise only if every entry that could *decide* the comparison carries a
+    # corroborated time — and that is the cohort sharing the source's newest
+    # date, not the whole file. Time is only ever the tie-breaker: an entry
+    # dated earlier than the source's newest can never be the source's newest,
+    # so its missing time cannot change the verdict. Scoping this to the whole
+    # file was strictly stronger than the proof needs, and the cost was not
+    # theoretical — measured on this account's live ledger (162 entries, 55
+    # untimed, but only 1 untimed on the newest date), whole-file scope holds
+    # `precise` at False permanently. Legacy headings cannot be repaired
+    # without inventing timestamps, so the strong tier could never turn on,
+    # however disciplined later writing became: a guard gated on a condition
+    # the past can no longer satisfy is a guard that never fires.
+    top_date = max(k[0] for k in all_keys)
+    precise = all(k[1] is not None for k in all_keys if k[0] == top_date)
 
     # Normalize the missing time to "" before ordering: a set mixing timed and
     # untimed headings would otherwise compare str against None and raise.
-    # Safe because staleness only consults the time component when *every*
-    # entry has one (`precise`), so "" is never the deciding term.
+    # Safe because staleness only consults the time component when both sides
+    # sit on `top_date` (see below), where `precise` guarantees a real time —
+    # so "" is never the deciding term.
     def _ord(key: tuple[str, str | None]) -> tuple[str, str]:
         return key[0], key[1] or ""
 
@@ -269,8 +283,9 @@ class TrimResult:
     precise: bool = False
     """Whether same-day ordering was actually checkable for this trim.
 
-    ``True`` only when every entry in scope carried a *corroborated* run-id
-    time. When ``False`` and the tail's newest shares a date with the source's
+    ``True`` only when every entry sharing the source's newest date — the
+    cohort that can actually decide a same-day tie — carried a *corroborated*
+    run-id time. When ``False`` and the tail's newest shares a date with the source's
     newest, this result can say "not known to be stale" but **must not** say
     the tail is current — a distinction :func:`_trim_marker` renders and
     ``attest_blocks`` respects by staying silent rather than reassuring.
