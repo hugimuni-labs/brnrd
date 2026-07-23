@@ -5079,6 +5079,19 @@ def _queue_spawn_request(
     return True
 
 
+def _short_event_summary(event: dict, *, limit: int = 80) -> str:
+    """One clipped line describing *event*'s own body, for a redirect prefix.
+
+    Best-effort only: an event with no body (or none readable) yields an
+    empty string, and the caller falls back to a gate-only mention rather
+    than manufacture a summary that isn't there.
+    """
+    text = " ".join(str(event.get("body") or "").split())
+    if not text:
+        return ""
+    return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -5338,6 +5351,57 @@ def _drain_outbox(
         target_source = str(
             (target_event or {}).get("source") or getattr(task, "source", "")
         )
+        own_source = str(getattr(task, "source", "") or "")
+        redirected = False
+        if (
+            cross
+            and target_event is not None
+            and target_source
+            and target_source != own_source
+            and _gate_owns_source(target_source)
+            and not _gate_can_deliver(emit.brr_dir, target_source)
+        ):
+            # Cross-gate, not reachable from this run (#578): a real gate
+            # owns the target event, but it's neither this run's own gate
+            # nor configured/running here — staging a reply for it would
+            # sit ``pending`` in a store nobody polls. Record the foreign
+            # target as explicitly undeliverable, retire it exactly like
+            # any other cross reply, and redirect the body onto this run's
+            # own live gate instead, prefixed with its origin, so the
+            # answer still reaches someone rather than nobody.
+            _stage_outbound(
+                task,
+                account_context,
+                body=body,
+                kind="interim",
+                target_event=target,
+                target_gate=target_source,
+                target_thread=str(target_event.get("conversation_key") or ""),
+                source_ref=str(fpath),
+                status=message_store.UNDELIVERABLE,
+                reason=(
+                    f"gate {target_source!r} is not reachable from this run "
+                    "— redirected to the run's own gate"
+                ),
+            )
+            _set_event_status_if_present(target_event, "done")
+            _record_outbox_notice(
+                outbox_dir,
+                f"reply redirected: event {target} is owned by gate "
+                f"{target_source!r}, not reachable from this run — delivered "
+                "on this run's own gate instead, prefixed with its origin",
+            )
+            summary = _short_event_summary(target_event)
+            origin_note = (
+                f"re: {summary} — originally on {target_source}\n\n"
+                if summary else f"re: an event on {target_source}\n\n"
+            )
+            body = origin_note + body
+            target = event_id
+            cross = False
+            target_event = None
+            target_source = own_source
+            redirected = True
         # Interim replies ride the target event's own gate. Dispatch-tree
         # sources (spawn, spawn_completed, dispatch_message) have no gate and
         # no collector for interims — only a worker's *terminal* report is
@@ -5357,7 +5421,12 @@ def _drain_outbox(
                 (target_event or {}).get("conversation_key")
                 or getattr(task, "conversation_key", "")
             ),
-            source_ref=str(fpath),
+            # A redirect already staged one durable row for the foreign
+            # target above (``source_ref=str(fpath)``); this second row is
+            # the redirected delivery itself and needs its own identity, or
+            # ``stage``'s idempotency-by-source_ref would just hand back
+            # that first (undeliverable) row instead of creating this one.
+            source_ref=str(fpath) + ("#redirect" if redirected else ""),
             status=(
                 message_store.PENDING if deliverable
                 else message_store.UNDELIVERABLE
