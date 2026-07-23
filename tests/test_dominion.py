@@ -349,15 +349,128 @@ def test_resolve_self_inject_skips_exec(tmp_path):
 
 
 def test_resolve_self_inject_respects_budget(tmp_path):
+    """The pre-fix version of this test asserted the whole digest fit in
+    ``budget + 64`` bytes — that bound encoded the very silent-overflow
+    contract issue #583 changes (a clip with no accounting). The banner is
+    now deliberately *additional* to the content budget: it's the loud
+    signal the issue asks for, not more silently-dropped content, so it is
+    checked structurally (via the accounting object) rather than folded
+    into a raw byte ceiling. See test_resolve_self_inject_overflow_* below
+    for the full banner / marker / structural-clip contract.
+    """
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
     (path / "big.md").write_text("x" * 5000, encoding="utf-8")
     (path / "self-inject").write_text("full big.md\n", encoding="utf-8")
 
-    digest = dominion.resolve_self_inject(path, budget_bytes=512)
+    digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=512)
 
-    assert len(digest.encode("utf-8")) <= 512 + 64  # budget + truncation marker
     assert "truncated" in digest
+    assert overflow is not None
+    assert overflow.budget_bytes == 512
+    assert overflow.clipped_entry == "full big.md"
+    assert overflow.clipped_dropped_bytes > 0
+    # The clipped *content* itself (excluding the banner, which is meta
+    # information about the memory, not memory content) still respects the
+    # budget within the truncation marker's own overhead.
+    clipped_only = digest.split("\n\n", 1)[-1]
+    assert len(clipped_only.encode("utf-8")) <= 512 + 64
+
+
+def test_resolve_self_inject_no_overflow_is_byte_identical_and_unmarked(tmp_path):
+    """Happy-path guarantee: a manifest that fits the budget renders exactly
+    as it did before #583 — no banner, no markers, no behaviour change."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "small.md").write_text("hello world\n", encoding="utf-8")
+    (path / "self-inject").write_text("full small.md\n", encoding="utf-8")
+
+    digest, overflow = dominion.resolve_self_inject_digest(path)
+    plain = dominion.resolve_self_inject(path)
+
+    assert overflow is None
+    assert digest == plain
+    assert "overflow" not in digest
+    assert "dropped" not in digest
+    assert "truncated" not in digest
+
+
+def test_resolve_self_inject_overflow_never_drops_entry_silently(tmp_path):
+    """Regression for #583: once one entry overflowed, every later entry
+    used to vanish with no trace — a 4-entry manifest whose 2nd entry
+    overflowed was indistinguishable, from inside the wake, from a 2-entry
+    manifest. Entry 3 here must still produce a visible marker naming it
+    and its byte size."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "a.md").write_text("A" * 100 + "\n", encoding="utf-8")
+    (path / "b.md").write_text("B" * 5000 + "\n", encoding="utf-8")  # overflows
+    (path / "c.md").write_text("C" * 100 + "\n", encoding="utf-8")  # must not vanish
+    (path / "self-inject").write_text(
+        "full a.md\nfull b.md\nfull c.md\n", encoding="utf-8",
+    )
+
+    digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=512)
+
+    assert overflow is not None
+    assert "full a.md" in digest and "A" * 100 in digest  # entry 1 rendered whole
+    assert overflow.clipped_entry == "full b.md"  # entry 2 is the clip
+    assert overflow.dropped_entry_count == 1
+    label, size = overflow.dropped_entries[0]
+    assert label == "full c.md"
+    assert size > 0
+    # Entry 3 is never silent: it names itself and its size in the digest.
+    assert "full c.md" in digest
+    assert str(size) in digest
+    assert "dropped" in digest.lower()
+
+
+def test_resolve_self_inject_overflow_banner_leads_with_shortfall(tmp_path):
+    """Requirement: rendering overflows ⇒ the digest opens with a loud
+    banner naming the byte shortfall, the clipped entry, and the
+    percentage — before any injected content."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "big.md").write_text("x" * 5000, encoding="utf-8")
+    (path / "self-inject").write_text("full big.md\n", encoding="utf-8")
+
+    digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=512)
+
+    assert overflow is not None
+    assert digest.startswith("> **self-inject overflow")
+    # The banner is the *first* thing in the digest — strictly before the
+    # real content marker for the clipped entry.
+    banner_span = digest.index("\n\n<!-- self-inject: full big.md -->")
+    assert digest.index("self-inject overflow") < banner_span
+    assert f"{overflow.total_dropped_bytes:,}" in digest
+    assert "full big.md" in digest
+    assert f"{overflow.percent_dropped:.0f}%" in digest
+
+
+def test_resolve_self_inject_overflow_clips_at_structural_boundary(tmp_path):
+    """The clip lands on a structural (paragraph) boundary, not a byte
+    offset — no severed sentence. Paragraph 1 survives whole; paragraph 2
+    (the "remedy") never leaks in half-formed."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    para1 = "First paragraph, the condition."
+    para2 = "Second paragraph, the remedy that must not be severed."
+    (path / "rule.md").write_text(f"{para1}\n\n{para2}\n", encoding="utf-8")
+    (path / "self-inject").write_text("full rule.md\n", encoding="utf-8")
+
+    header = "<!-- self-inject: full rule.md -->\n"
+    # Enough budget for the header + paragraph 1 + the paragraph break,
+    # plus a few bytes into paragraph 2 — so paragraph 2 is reached but
+    # incomplete, forcing the boundary back off to the end of paragraph 1.
+    budget = len((header + para1 + "\n\n").encode("utf-8")) + 5
+
+    digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=budget)
+
+    assert overflow is not None
+    assert overflow.clipped_entry == "full rule.md"
+    before_marker = digest.split("…[truncated", 1)[0]
+    assert "Second paragraph" not in before_marker  # boundary, not a bleed
+    assert before_marker.rstrip().endswith(para1)  # ends at the boundary I defined
 
 
 def test_resolve_self_inject_stays_inside_dominion(tmp_path):
