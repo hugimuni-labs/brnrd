@@ -278,6 +278,33 @@ def test_build_runner_block_can_expose_relay_consent():
     assert relay["consent_state"] == "pending"
 
 
+def test_build_runner_block_exposes_wake_request_miss():
+    """#577: a tap that existed and did not apply is visible on
+    resources.runner.wake_request — "you asked for X, you got Y, why"."""
+    res = facets.build(
+        runner_name="claude-opus",
+        runner_meta={"class": "strong"},
+        wake_request={
+            "requested_profile": "claude-fable",
+            "resolved_profile": "claude-opus",
+            "applied": False,
+            "reason": "tap parked outside the claim window for this wake",
+        },
+    )
+    wake_request = res["runner"]["wake_request"]
+    assert wake_request["requested_profile"] == "claude-fable"
+    assert wake_request["resolved_profile"] == "claude-opus"
+    assert wake_request["applied"] is False
+    assert "claim window" in wake_request["reason"]
+
+
+def test_build_runner_block_omits_wake_request_key_when_absent():
+    """No tap in play this wake ⇒ the key is absent, not null — a run that
+    never touched the dashboard tap must not look like a miss."""
+    res = facets.build(runner_name="codex")
+    assert "wake_request" not in res["runner"]
+
+
 def test_render_line_does_not_include_runner_block():
     """render_line iterates FACETS (the level/state walls); runner is governance,
     not a wall, so it should NOT appear in the hook injection line."""
