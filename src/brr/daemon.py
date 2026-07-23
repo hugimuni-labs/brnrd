@@ -2603,6 +2603,14 @@ def _run_worker(
             "BRR_PORTAL_STATE": str(
                 (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
             ),
+            # The wake's persisted BootScore — arms the hook's orientation
+            # ledger (#513 Slice 9): `orient x/y` is metered against the
+            # score's `orientation_set`. Same host-path convention as
+            # BRR_CONTEXT_PATH (both live in `.brr/runs/<run-id>/`, written
+            # by run_context before the runner starts).
+            "BRR_BOOT_SCORE": str(
+                brr_dir / "runs" / task.id / "boot-score.json"
+            ),
         }
         # Conversation identity passthrough: lets the resident stamp its own
         # commits with the Brnrd-Conversation-Id trailer (see gitops.commit_all
