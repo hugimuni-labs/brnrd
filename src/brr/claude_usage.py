@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import pty
 import re
@@ -28,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 SNAPSHOT_NAME = ".claude-usage-levels.json"
 
@@ -131,6 +134,16 @@ _CREDIT_SPEND_RE = re.compile(
     re.IGNORECASE,
 )
 _AMOUNT_RE = re.compile(r"(?P<currency>[$\u20ac\u00a3])?\s*(?P<amount>\d+(?:[.,]\d+)?)")
+
+# A per-model week bucket's reset is elided from the summary when it names the
+# same instant as the primary week reset. Compared in epoch seconds, not the
+# rendered strings, because the panel renders one instant two ways across a
+# reset boundary (2026-07-23 live: "Jul 24, 12am (Europe/Berlin)" for
+# `week_resets_at` vs "Jul 23, 11:59pm (Europe/Berlin)" for a model bucket's
+# reset \u2014 the same 1784844000-vs-1784843940 instant, 60s apart in rendered
+# text). 2 minutes comfortably covers that skew while staying far short of any
+# *genuinely* different reset, which differs by hours.
+_RESET_ELIDE_TOLERANCE_SECONDS = 120.0
 
 
 def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> float | None:
@@ -462,15 +475,31 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         buckets["week"] = {"remaining_percentage": bucket["remaining_percentage"]}
     week_model_buckets: dict[str, Any] = {}
     for label, found in week_models.items():
-        # Elide the reset in the summary when it matches the primary week's —
-        # the per-model buckets share the weekly window, and the Runner line
-        # this summary feeds should not repeat the same timestamp.
-        summary_reset = None if week and found[1] == week[1] else found[1]
+        # Elide the reset in the summary when it names the same instant as the
+        # primary week's — the per-model buckets share the weekly window, and
+        # the Runner line this summary feeds should not repeat the same
+        # timestamp. Comparing the *parsed epochs* rather than the rendered
+        # strings matters because Claude's own panel renders one instant two
+        # ways across a reset boundary ("Jul 24, 12am (Europe/Berlin)" vs
+        # "Jul 23, 11:59pm (Europe/Berlin)", 60s apart) — a string compare
+        # flickers on exactly that boundary. Tolerance is 2 minutes: comfortably
+        # wider than the observed 60s skew, still tight enough that two
+        # genuinely different resets (which differ by hours at least) never
+        # collide.
+        model_reset_epoch = _reset_epoch(found[1])
+        summary_reset = found[1]
+        if week:
+            week_epoch = levels.get("week_resets_at")
+            if week_epoch is not None and model_reset_epoch is not None:
+                if abs(model_reset_epoch - week_epoch) <= _RESET_ELIDE_TOLERANCE_SECONDS:
+                    summary_reset = None
+            elif found[1] == week[1]:
+                summary_reset = None
         bucket = _bucket_summary(f"{label} week", found[0], summary_reset)
         levels.setdefault("week_models", {})[label] = {
             "used_percentage": found[0],
             "reset": found[1],
-            "resets_at": _reset_epoch(found[1]),
+            "resets_at": model_reset_epoch,
         }
         parts.append(str(bucket["summary"]))
         week_model_buckets[label] = {
@@ -758,7 +787,17 @@ def _carry_candidates(outbox_dir: Path) -> list[dict[str, Any]]:
 # "Per-model breakdown unavailable (rate limited — try again in a moment)" in
 # their place. A scrape that lands in that window parses cleanly; it just has
 # no per-model rows and no usage-credits block in it.
-_ASYNC_SECTIONS = ("usage_credits", "week_models")
+#
+# `quota` is different in kind: it is the *primary* session/week reading, not
+# an optional extra, and a scrape normally draws all of it or none of it. It
+# is listed here only for that "none of it" case — a PTY scrape that renders
+# no session/week rows at all, so `parse_usage_text` returns no `quota` key
+# and the scrape proved nothing (see `capture_levels`). A fresh scrape that
+# parsed even a partial quota block is left exactly as parsed; the loop below
+# only ever carries a section that is entirely *absent* from `fresh`.
+# `quota` goes first so its carry (if any) lands in `fresh` before the
+# `week_models` branch below reads `fresh["quota"]`.
+_ASYNC_SECTIONS = ("quota", "usage_credits", "week_models")
 
 # How long a section may be carried across a scrape that didn't render it.
 # Long enough to ride out the panel's rate-limit windows, short enough that a
@@ -790,6 +829,14 @@ def carry_forward_sections(
     pass itself off as freshly seen. Everything the scrape *did* prove —
     session, week, resets — is taken from the fresh reading, unconditionally.
 
+    ``quota`` rides the same mechanism for the one case where the scrape
+    proved nothing at all: no session/week rows rendered, so `fresh` carries
+    no `quota` key whatsoever. That is the *only* trigger — a fresh reading
+    that parsed even a partial quota block is never touched, so the promise
+    above stays literally true for anything the scrape did prove. The carried
+    `quota` block is stamped with the same `carried_from` discipline as
+    `usage_credits`, so a stale reading can't pass itself off as fresh either.
+
     *previous* is a list of candidate snapshots, newest first (a lone dict is
     accepted for callers that have only one). Searching per section rather than
     trusting the single newest snapshot is what heals a hole that has already
@@ -810,18 +857,50 @@ def carry_forward_sections(
         if source is None:
             continue
         carried = source[section]
-        if section == "usage_credits" and isinstance(carried, dict):
+        if section in ("usage_credits", "quota") and isinstance(carried, dict):
             carried = {**carried, "carried_from": source.get("updated_at")}
         fresh[section] = carried
+        if section == "quota":
+            # A silent heal is how the underlying loss (partial scrape erases
+            # a known quota reading, blinding `_fire_due_schedules`'s pacing
+            # decision) stayed invisible for days — nothing in the daemon log
+            # distinguished "no pacing needed" from "pacing blind". This is
+            # the one line that makes a quota carry visible.
+            logger.info(
+                "claude_usage: carried quota forward from %s "
+                "(fresh /usage scrape parsed no quota buckets)",
+                source.get("updated_at"),
+            )
         # The per-model weekly buckets ride inside `quota.buckets` for pacing
         # (`runner_quota.binding_quota_remaining_pct`); carrying `week_models`
         # without them would leave the two halves of one reading disagreeing.
         if section == "week_models":
             quota = fresh.get("quota")
+            quota_carried_from = (
+                quota.get("carried_from") if isinstance(quota, dict) else None
+            )
+            # `quota` and `week_models` are carried independently — each
+            # searches the candidate list for its own newest source, and
+            # those sources can differ. If `quota` itself was carried this
+            # round, only fold `week_models`' bucket in when it comes from
+            # that *same* source; otherwise the merge would stitch one
+            # reading's session/week facts to a different reading's per-model
+            # bucket, which is exactly the disagreement carrying is meant to
+            # prevent. `quota` came from the fresh scrape (not carried) is the
+            # original, unconditional case — that quota is trustworthy
+            # regardless of where the week_models heal comes from.
+            consistent_source = (
+                quota_carried_from is None
+                or quota_carried_from == source.get("updated_at")
+            )
             prior_models = ((source.get("quota") or {}).get("buckets") or {}).get(
                 "week_models"
             )
-            if isinstance(quota, dict) and isinstance(prior_models, dict):
+            if (
+                isinstance(quota, dict)
+                and isinstance(prior_models, dict)
+                and consistent_source
+            ):
                 buckets = quota.setdefault("buckets", {})
                 buckets.setdefault("week_models", prior_models)
     return fresh
