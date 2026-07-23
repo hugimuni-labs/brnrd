@@ -70,9 +70,26 @@ export interface LiveRunsResponse {
 	spawn_max_concurrent: number | null;
 }
 
-/** Resident-authored name wins; the waking-message excerpt remains a fallback. */
-export function liveRunDisplayName(run: Pick<LiveRun, 'name' | 'label' | 'kind'>): string {
-	return run.name || run.label || run.kind || 'run';
+/**
+ * Resident-authored name wins, then the conversation key, then the kind.
+ *
+ * The middle of this chain used to be "the waking-message excerpt" — and
+ * that excerpt was a run's verbatim task body, which #585 removed at the
+ * producer: a presence label is dashboard chrome, not a content channel
+ * into every sibling's model context. `label` stays in the chain because a
+ * deliberate, handle-shaped label is still legal; it is simply empty now
+ * for a run that hasn't authored a `.name`.
+ *
+ * `stream` (the conversation key) is the new middle rung, matching the
+ * precedence `facets.py::_sibling_handle` already uses on the other
+ * consumer of the same presence entry. Without it a card with no `.name`
+ * yet falls straight through to `kind` and every live run on the board
+ * reads "daemon" — the leak closed, and the panel's legibility with it.
+ */
+export function liveRunDisplayName(
+	run: Pick<LiveRun, 'name' | 'label' | 'kind'> & Partial<Pick<LiveRun, 'stream'>>
+): string {
+	return run.name || run.label || run.stream || run.kind || 'run';
 }
 
 // Render order for relics-so-far chips — produce first, chatter last.
