@@ -1,6 +1,6 @@
 """The boundary facet schema — the single definition every renderer projects."""
 
-from brr import facets
+from brr import facets, presence
 
 
 def test_schema_is_wall_derived_and_ordered():
@@ -101,6 +101,132 @@ def test_build_coexisting_known_with_sibling_summary():
     assert "2 sibling runs" in facet["summary"]
     assert "frontend repair" in facet["summary"]
     assert len(facet["siblings"]) == 2
+
+
+# ── #585: presence label must never carry another run's task prose ──────────
+#
+# The mechanism: a sibling's presence entry (name/label/stream/run_id) is
+# read by `presence.list_active`, handed to `facets.build` as `coexisting`,
+# and its rendered `summary` is injected into *this* run's own hook context
+# at every tool-call boundary (`hooks.py` -> `facets.render_line`). Two
+# guards: (1) daemon.py's presence `register()` call no longer falls back to
+# `task.body` for `label` (see `daemon._presence_label_for_event`, tested in
+# test_daemon.py); (2) this facet must independently refuse to emit long
+# free text regardless of which field a sibling's entry carries it in — the
+# tests below pin guard (2).
+#
+# N = 32 (`facets._SIBLING_HANDLE_MAX_CHARS`): long enough that a real
+# handle (a run id like "run-260723-1241-xv6d", a short resident `.name`, a
+# conversation key) renders in full; short enough that no truncated prefix
+# of a task spec reads as a sentence-length directive a sibling could
+# mistake for its own instruction.
+
+
+def test_sibling_handle_hard_caps_long_free_text_regardless_of_source():
+    long_body = "Fix GitHub issue **#565**: stopped runs are credited " + (
+        "even though the branch never merged, which double-counts them " * 4
+    )
+    assert len(long_body) > facets._SIBLING_HANDLE_MAX_CHARS
+    for field in ("name", "label", "stream", "run_id"):
+        handle = facets._sibling_handle({field: long_body})
+        assert len(handle) <= facets._SIBLING_HANDLE_MAX_CHARS + 1  # +1 for "…"
+        assert long_body[:facets._SIBLING_HANDLE_MAX_CHARS + 1] not in handle
+
+
+def test_sibling_handle_prefers_name_then_label_then_stream_then_run_id():
+    assert facets._sibling_handle(
+        {"name": "n", "label": "l", "stream": "s", "run_id": "r"}
+    ) == "n"
+    assert facets._sibling_handle(
+        {"label": "l", "stream": "s", "run_id": "r"}
+    ) == "l"
+    assert facets._sibling_handle({"stream": "s", "run_id": "r"}) == "s"
+    assert facets._sibling_handle({"run_id": "r"}) == "r"
+    assert facets._sibling_handle({}) == "?"
+
+
+def test_sibling_handle_collapses_whitespace_before_capping():
+    # A multi-line body must not wrap into something that reads like a
+    # continued sentence once truncated.
+    handle = facets._sibling_handle({"label": "line one\nline two\nline three"})
+    assert "\n" not in handle
+
+
+def test_build_coexisting_never_leaks_a_sibling_task_body_substring(tmp_path):
+    """The mechanical regression test #585 specifies: two *live* runs with
+    distinct task bodies, presence registered for both (via the real
+    ``presence`` module — the shape a hypothetical future producer bug
+    would put a verbatim task body in as ``label``, exactly what guard (2)
+    exists to survive even though guard (1), in ``daemon.py``, no longer
+    produces it). Compute the ``coexisting_runs`` facet for one run and
+    assert no substring longer than N chars of the *other* run's task body
+    appears verbatim in the facet summary or in the woven
+    ``- resources: …`` line. No issue-number heuristics, no semantics —
+    purely mechanical."""
+    n = facets._SIBLING_HANDLE_MAX_CHARS
+    brr_dir = tmp_path / ".brr"
+    body_a = (
+        "# Task — issue #565: stopped runs are credited even though the "
+        "branch never merged, which double-counts them in the ledger view."
+    )
+    body_b = (
+        "# Task — issue #564: the dominion inject drops a third of the "
+        "resident's playbook silently on every third heartbeat tick."
+    )
+    presence.register(brr_dir, kind="daemon", run_id="run-a", label=body_a)
+    presence.register(brr_dir, kind="daemon", run_id="run-b", label=body_b)
+    active = presence.list_active(brr_dir)
+    assert len(active) == 2
+
+    def _facet_and_line(self_run_id: str) -> tuple[dict, str]:
+        siblings = [e for e in active if e["run_id"] != self_run_id]
+        res = facets.build(quota_summary="42%", coexisting=siblings)
+        return res["coexisting_runs"], facets.render_line(res)
+
+    def _assert_no_leak(other_body: str, facet: dict, line: str) -> None:
+        for start in range(0, len(other_body) - n):
+            window = other_body[start : start + n + 1]
+            assert window not in facet["summary"]
+            assert window not in line
+
+    # From run-a's perspective, run-b is the only sibling: its body must
+    # not leak more than N verbatim chars.
+    facet_a, line_a = _facet_and_line("run-a")
+    _assert_no_leak(body_b, facet_a, line_a)
+    # Symmetric: from run-b's perspective, run-a's body must not leak.
+    facet_b, line_b = _facet_and_line("run-b")
+    _assert_no_leak(body_a, facet_b, line_b)
+
+
+def test_build_coexisting_incident_shape_issue_number_prose_does_not_leak():
+    """The real #574 incident shape: a spawn worker's task body opens with
+    `Fix GitHub issue **#565**: …`. A sibling's facet must not carry that
+    prose — a bare, short `#565` alone would be fine (it's not a directive
+    by itself), but the surrounding sentence must not survive."""
+    task_body = (
+        "Fix GitHub issue **#565**: stopped runs are credited even though "
+        "the branch never merged, which double-counts them in the ledger."
+    )
+    res = facets.build(
+        quota_summary="42%",
+        coexisting=[{"run_id": "run-nig2", "label": task_body, "kind": "daemon"}],
+    )
+    facet = res["coexisting_runs"]
+    line = facets.render_line(res)
+    assert "stopped runs are credited even though" not in facet["summary"]
+    assert "stopped runs are credited even though" not in line
+
+
+def test_build_coexisting_resident_authored_name_still_renders():
+    """Requirement (4): a resident-authored `.name` is the one legitimate
+    label and must keep rendering through the facet boundary."""
+    res = facets.build(
+        quota_summary="42%",
+        coexisting=[
+            {"run_id": "run-a", "name": "dashboard name", "kind": "daemon"},
+        ],
+    )
+    assert "dashboard name" in res["coexisting_runs"]["summary"]
 
 
 def test_render_line_carries_every_schema_facet_in_order():
