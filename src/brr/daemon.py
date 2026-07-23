@@ -2499,13 +2499,15 @@ def _run_worker(
         )
         if forge_facet:
             communication_snapshot["forge"] = forge_facet
-        # Reader model (#217): the declared unfolding depth for replies on
-        # this thread. v1 reads the repo-level `user_commitment` config key
-        # (full | profane); per-correspondent declaration at the gate
-        # boundary stays the eventual shape.
-        commitment = str(cfg.get("user_commitment") or "").strip()
-        if commitment:
-            communication_snapshot["user_commitment"] = commitment
+        # Reader fluency (#217): which language this thread's reader reads.
+        # v1 reads the repo-level `fluency` config key (weave | prose);
+        # per-correspondent declaration at the gate boundary stays the
+        # eventual shape. Renamed from `user_commitment: full | profane`
+        # 2026-07-23 — `full` read as an amount, which is the one thing this
+        # field must never mean (identity-core → Voice And The Seam).
+        fluency = str(cfg.get("fluency") or "").strip()
+        if fluency:
+            communication_snapshot["fluency"] = fluency
     recent_conversation = (
         communication_snapshot.get("recent_turns", [])
         if communication_snapshot else []
