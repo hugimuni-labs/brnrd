@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -408,33 +409,44 @@ def test_resolve_self_inject_skips_exec(tmp_path):
     assert dominion.resolve_self_inject(path) == ""
 
 
+def _mk_paragraphs(n: int, name: str = "Paragraph") -> str:
+    """*n* distinct, meaningfully-sized blank-line-separated paragraphs, in
+    priority order (``{name} 0`` first) — big enough that a one-line
+    collapse stub is materially smaller than the paragraph it replaces."""
+    return "\n\n".join(
+        f"{name} {i}: " + ("filler prose word " * 15).strip() + "."
+        for i in range(n)
+    )
+
+
 def test_resolve_self_inject_respects_budget(tmp_path):
-    """The pre-fix version of this test asserted the whole digest fit in
-    ``budget + 64`` bytes — that bound encoded the very silent-overflow
-    contract issue #583 changes (a clip with no accounting). The banner is
-    now deliberately *additional* to the content budget: it's the loud
-    signal the issue asks for, not more silently-dropped content, so it is
-    checked structurally (via the accounting object) rather than folded
-    into a raw byte ceiling. See test_resolve_self_inject_overflow_* below
-    for the full banner / marker / structural-clip contract.
+    """Extended for the section-aware collapse this replaces the old
+    byte-tail truncation with (incident #583's follow-up): the pre-fix
+    version of this test asserted the whole digest fit in ``budget + 64``
+    bytes — a bound that encoded a raw byte cut. Collapse can legitimately
+    render *larger* than the budget once banner + stub overhead is counted
+    (the banner counts toward the budget by spec, but nothing here fakes a
+    fit by severing a paragraph), so the fit itself is no longer the
+    assertion; what must hold is: the shortfall is loud, the highest-priority
+    paragraph survives whole, and every later paragraph is named and sized
+    rather than silently gone.
     """
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
-    (path / "big.md").write_text("x" * 5000, encoding="utf-8")
+    (path / "big.md").write_text(_mk_paragraphs(5) + "\n", encoding="utf-8")
     (path / "self-inject").write_text("full big.md\n", encoding="utf-8")
 
     digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=512)
 
-    assert "truncated" in digest
     assert overflow is not None
     assert overflow.budget_bytes == 512
     assert overflow.clipped_entry == "full big.md"
     assert overflow.clipped_dropped_bytes > 0
-    # The clipped *content* itself (excluding the banner, which is meta
-    # information about the memory, not memory content) still respects the
-    # budget within the truncation marker's own overhead.
-    clipped_only = digest.split("\n\n", 1)[-1]
-    assert len(clipped_only.encode("utf-8")) <= 512 + 64
+    assert "collapsed" in digest.lower()
+    # Paragraph 0 — highest priority, first in the file — survives whole;
+    # paragraphs 1-4 are each replaced by a named, sized stub, not just gone.
+    assert "Paragraph 0" in digest
+    assert digest.count("§ collapsed") == 4
 
 
 def test_resolve_self_inject_no_overflow_is_byte_identical_and_unmarked(tmp_path):
@@ -507,30 +519,175 @@ def test_resolve_self_inject_overflow_banner_leads_with_shortfall(tmp_path):
     assert f"{overflow.percent_dropped:.0f}%" in digest
 
 
-def test_resolve_self_inject_overflow_clips_at_structural_boundary(tmp_path):
-    """The clip lands on a structural (paragraph) boundary, not a byte
-    offset — no severed sentence. Paragraph 1 survives whole; paragraph 2
-    (the "remedy") never leaks in half-formed."""
+def test_resolve_self_inject_overflow_no_h2_falls_back_to_block_collapse(tmp_path):
+    """Degenerate input (no H2 headings at all): collapse falls back to
+    blank-line-separated block granularity, bottom-up — never a mid-line
+    byte cut. This supersedes the old paragraph-*boundary-clip* contract
+    (a byte offset backed off to the nearest boundary, then severed with a
+    "…[truncated]" suffix): the replacement never cuts a surviving block at
+    all — a block is either whole or replaced by its own named, sized
+    stub."""
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
-    para1 = "First paragraph, the condition."
-    para2 = "Second paragraph, the remedy that must not be severed."
+    para1 = "First paragraph, the condition, spelled out in enough words to matter here."
+    para2 = "Second paragraph, the remedy — it must never leak in half-formed."
     (path / "rule.md").write_text(f"{para1}\n\n{para2}\n", encoding="utf-8")
     (path / "self-inject").write_text("full rule.md\n", encoding="utf-8")
 
     header = "<!-- self-inject: full rule.md -->\n"
-    # Enough budget for the header + paragraph 1 + the paragraph break,
-    # plus a few bytes into paragraph 2 — so paragraph 2 is reached but
-    # incomplete, forcing the boundary back off to the end of paragraph 1.
+    # Enough budget for the header + paragraph 1 whole, not enough for
+    # paragraph 2 too — so paragraph 2 must collapse, not bleed in partway.
     budget = len((header + para1 + "\n\n").encode("utf-8")) + 5
 
     digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=budget)
 
     assert overflow is not None
     assert overflow.clipped_entry == "full rule.md"
-    before_marker = digest.split("…[truncated", 1)[0]
-    assert "Second paragraph" not in before_marker  # boundary, not a bleed
-    assert before_marker.rstrip().endswith(para1)  # ends at the boundary I defined
+    assert para1 in digest  # paragraph 1 survives whole
+    assert "Second paragraph" not in digest  # paragraph 2 never bleeds in
+    assert "§ collapsed" in digest  # ...it's named and sized instead
+
+
+def _mk_h2_doc(names: list[str], *, preamble: str = "Preamble sentence, the highest priority context.\n\n") -> str:
+    """A synthetic dominion-style markdown document: *preamble* (highest
+    priority — content before the first H2) followed by one H2 section per
+    entry in *names*, each with a body large enough that a collapse stub is
+    materially smaller than the section it replaces."""
+    text = preamble
+    for name in names:
+        text += f"## {name}\n\n"
+        text += "\n".join(
+            f"{name} filler line {i} with enough words to be realistic prose."
+            for i in range(6)
+        )
+        text += "\n\n"
+    return text
+
+
+def test_collapse_under_budget_is_byte_identical_passthrough(tmp_path):
+    """Requirement 1: a section-structured file that already fits its
+    budget renders byte-identical — no banner, no stub, no reordering.
+    Collapse is a last resort, never a cosmetic rewrite."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    doc = _mk_h2_doc(["Section A", "Section B"])
+    (path / "doc.md").write_text(doc, encoding="utf-8")
+    (path / "self-inject").write_text("full doc.md\n", encoding="utf-8")
+
+    digest, overflow = dominion.resolve_self_inject_digest(path)  # ample default budget
+
+    assert overflow is None
+    assert "§ collapsed" not in digest
+    assert "self-inject collapsed" not in digest
+    header = "<!-- self-inject: full doc.md -->\n"
+    assert digest == (header + doc.rstrip())
+
+
+def test_resolve_self_inject_collapses_sections_bottom_up(tmp_path):
+    """Requirement 2: sections collapse from the bottom of the document
+    upward — the lowest-priority material goes first, the topmost section
+    (right after the preamble) is the last thing touched."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    doc = _mk_h2_doc(["Section A", "Section B", "Section C"])
+    (path / "doc.md").write_text(doc, encoding="utf-8")
+    (path / "self-inject").write_text("full doc.md\n", encoding="utf-8")
+
+    # Sized to force collapsing C and B while A (topmost) survives whole —
+    # see the exploratory run this was derived from in the commit that adds
+    # it: 800 B lands past "everything collapsed" and short of "nothing
+    # collapsed" for this fixture.
+    digest, overflow = dominion.resolve_self_inject_digest(path, budget_bytes=800)
+
+    assert overflow is not None
+    # Section A's body (all 6 lines) survives whole — never trimmed.
+    assert "Section A filler line 5" in digest
+    assert "Section A\n_(§ collapsed" not in digest
+    # B and C are each collapsed to their own stub under their own heading...
+    assert "Section B\n_(§ collapsed" in digest
+    assert "Section C\n_(§ collapsed" in digest
+    assert "Section B filler line" not in digest
+    assert "Section C filler line" not in digest
+    # ...and named bottom-up: C (lowest priority) before B in the banner.
+    banner_line = next(
+        line for line in digest.splitlines() if line.startswith("> collapsed bottom-up")
+    )
+    assert banner_line.index("Section C") < banner_line.index("Section B")
+
+
+def test_collapse_banner_byte_math_is_exact(tmp_path):
+    """Requirement 4: the banner's byte math is exact, not approximate —
+    source, budget, and rendered bytes must match reality precisely,
+    including the banner's own contribution to the rendered total (the
+    banner counts toward budget itself)."""
+    doc = _mk_h2_doc(["Section A", "Section B", "Section C"])
+
+    for budget in (300, 500, 700, 900):
+        rendered, dropped_bytes = dominion._collapse_markdown_to_budget(
+            doc, budget, source_label="doc.md",
+        )
+        m = re.search(
+            r"source ([\d,]+) B, budget ([\d,]+) B, rendered ([\d,]+) B",
+            rendered,
+        )
+        assert m, f"banner missing at budget={budget}"
+        claimed_source, claimed_budget, claimed_rendered = (
+            int(g.replace(",", "")) for g in m.groups()
+        )
+        assert claimed_source == len(doc.encode("utf-8"))
+        assert claimed_budget == budget
+        # The exact, load-bearing check: the banner's own "rendered" claim
+        # matches the true byte length of what it opens — including itself.
+        assert claimed_rendered == len(rendered.encode("utf-8"))
+        assert dropped_bytes > 0
+
+
+def test_resolve_self_inject_realistic_30kb_fixture_collapses_to_fit(tmp_path):
+    """Drives a ~30 KB realistic playbook-shaped fixture through the real
+    ``resolve_self_inject`` (not a synthetic unit call) to prove the whole
+    chain — manifest resolution, entry rendering, and collapse — behaves
+    under production-shaped input at production scale."""
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+
+    def para(prefix: str, n: int = 7) -> str:
+        return "\n".join(
+            f"{prefix} line {i}: guidance prose padded out to a realistic "
+            "sentence length for budget math."
+            for i in range(n)
+        )
+
+    names = [
+        "Two memories", "Working tree", "Contracts", "Reading the room",
+        "Reading economically", "Delegation", "Environment shaping",
+        "Identity and delivery", "Keep this place useful", "Closing notes",
+    ]
+    fixture = (
+        "# Playbook\n\n"
+        "This is the standing orientation. Read top to bottom; invariants "
+        "are at the top and outrank everything below them.\n"
+    )
+    for name in names:
+        fixture += f"\n## {name}\n\n"
+        for p in range(4):
+            fixture += para(f"{name} para{p}") + "\n\n"
+    fixture_bytes = len(fixture.encode("utf-8"))
+    assert 25_000 <= fixture_bytes <= 35_000  # keep this test "realistic ~30 KB"
+
+    (path / "playbook.md").write_text(fixture, encoding="utf-8")
+    (path / "self-inject").write_text("full playbook.md\n", encoding="utf-8")
+
+    digest = dominion.resolve_self_inject(path, budget_bytes=dominion.DEFAULT_INJECT_BUDGET_BYTES)
+
+    assert "self-inject collapsed" in digest  # mandatory banner fired
+    assert len(digest.encode("utf-8")) <= dominion.DEFAULT_INJECT_BUDGET_BYTES
+    # The opening orientation and the topmost section (highest priority)
+    # survive whole...
+    assert "Read top to bottom; invariants" in digest
+    assert "Two memories para0 line 0" in digest
+    # ...while lowest-priority trailing sections are named, sized stubs.
+    assert "Closing notes\n_(§ collapsed" in digest
+    assert "§ collapsed" in digest
 
 
 def test_resolve_self_inject_stays_inside_dominion(tmp_path):
