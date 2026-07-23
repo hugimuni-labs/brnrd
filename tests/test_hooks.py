@@ -1285,7 +1285,7 @@ def test_post_tool_bar_renders_every_segment_when_laden():
 
     assert bar == (
         "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4 │ "
-        "mood stoked·keep? │ card ok"
+        "mood stoked │ card ok"
     )
 
 
@@ -1355,13 +1355,18 @@ def test_post_tool_bar_never_renders_a_pending_count_as_a_segment():
 # ── The `.mood` control channel (#566 layer 2) ───────────────────────────
 
 
-def test_post_tool_mood_renders_as_a_bar_segment_with_keep_prompt(tmp_path):
+def test_post_tool_mood_renders_as_a_bar_segment(tmp_path):
+    # Display, no ask: a quiet boundary shows the face and says nothing about
+    # it. The old unconditional "·keep?" asked at every boundary, which is the
+    # habituation this module already names one segment over (2026-07-23).
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood bo_Od·keep?" in ctx
+    assert "mood bo_Od" in ctx
+    assert "keep?" not in ctx
+    assert "←" not in ctx
 
 
 def test_post_tool_mood_absent_renders_no_segment(tmp_path):
@@ -1369,7 +1374,6 @@ def test_post_tool_mood_absent_renders_no_segment(tmp_path):
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "keep?" not in ctx
     assert "mood" not in ctx
 
 
@@ -1381,7 +1385,7 @@ def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "- mood: curious" in ctx
-    assert "keep or change" in ctx
+    assert "a mood worth showing is one the work moved" in ctx
 
 
 def test_mood_malformed_file_is_read_defensively(tmp_path):
@@ -1402,7 +1406,7 @@ def test_mood_blank_file_renders_no_segment(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("   \n\nsecond line\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "keep?" not in ctx
+    assert "mood" not in ctx
 
 
 def test_mood_chip_truncates_a_long_name():
@@ -1432,3 +1436,89 @@ def test_quota_chip_disambiguates_a_repeated_first_letter():
     letters = chip[len("q "):].split("·")
     assert len(letters) == 2
     assert letters[0] != letters[1]
+
+
+# ── Mood asks on the edge, not on the tick (2026-07-23) ──────────────────
+
+
+def _batch(response: str, tool: str = "Bash") -> str:
+    """A claude ``PostToolBatch`` stdin payload with one call in it.
+
+    Shape verified against a live payload (run-260723-1659-85cx): the batch
+    hands over ``{tool_name, tool_input, tool_use_id, tool_response}`` and no
+    structured error flag — a non-zero exit arrives as the string
+    ``"Exit code 1"``.
+    """
+    return json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [{
+            "tool_name": tool,
+            "tool_input": {"command": "x"},
+            "tool_use_id": "toolu_1",
+            "tool_response": response,
+        }],
+    })
+
+
+def test_tool_surprise_reads_a_failed_call_and_ignores_a_clean_one():
+    assert hooks._tool_surprise(json.loads(_batch("Exit code 1"))) == "Bash ✗"
+    assert hooks._tool_surprise(json.loads(_batch("probe-armed"))) is None
+    assert hooks._tool_surprise({}) is None
+    assert hooks._tool_surprise({"tool_calls": "nonsense"}) is None
+
+
+def test_mood_ask_fires_on_the_failure_edge_and_names_it(tmp_path):
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    (tmp_path / hooks.MOOD_NAME).write_text("fo.cus\n", encoding="utf-8")
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
+    )
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "mood fo.cus ← Bash ✗" in ctx
+
+
+def test_mood_ask_is_transition_stamped_not_per_pass(tmp_path):
+    # A run debugging a red test fails at every boundary of the debugging.
+    # The interesting moment is clean -> broken, once — the same discipline a
+    # commit inside a retry loop needs.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    (tmp_path / hooks.MOOD_NAME).write_text("fo.cus\n", encoding="utf-8")
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _batch("Exit code 1"), env)
+    assert "← Bash ✗" in first["hookSpecificOutput"]["additionalContext"]
+
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _batch("Exit code 2"), env)
+    ctx = (second.get("hookSpecificOutput") or {}).get("additionalContext", "")
+    assert "←" not in ctx
+
+    # Clean again, then broken again — that is a fresh edge.
+    hooks.run_hook(hooks.PHASE_POST_TOOL, _batch("all good"), env)
+    third, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _batch("Exit code 1"), env)
+    assert "← Bash ✗" in third["hookSpecificOutput"]["additionalContext"]
+
+
+def test_mood_edge_renders_even_when_the_portal_token_has_not_moved(tmp_path):
+    # The gate this opens is the point: a failing tool call changes nothing
+    # the daemon writes into portal-state, so a token-gated ask would render
+    # nothing at exactly the boundary it exists for.
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.MOOD_NAME).write_text("fo.cus\n", encoding="utf-8")
+    env = _env(tmp_path)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)  # consume the token
+    quiet, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert not (quiet.get("hookSpecificOutput") or {}).get("additionalContext")
+
+    edged, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _batch("Exit code 1"), env)
+    assert "← Bash ✗" in edged["hookSpecificOutput"]["additionalContext"]
+
+
+def test_no_mood_means_no_surprise_annotation(tmp_path):
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
+    )
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "←" not in ctx and "mood" not in ctx
