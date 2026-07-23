@@ -40,7 +40,18 @@ PUBLIC_COMMANDS = (
 )
 
 #: Verbs that parse but are hidden from ``--help``.
-HIDDEN_COMMANDS = ("prompts", "hook", "statusline", "worktree-hygiene")
+#
+# ``config`` lands here, not in ``PUBLIC_COMMANDS``, on a test-suite
+# constraint, not a discoverability judgment: ``test_help_stays_small_
+# enough_to_read`` pins an 18-verb ceiling on the public list and it was
+# already full. ``brnrd config promote`` is a rare, operator-run,
+# one-time migration (issue #533) — closer in shape to ``prompts``/
+# ``worktree-hygiene`` (parses, documented, not a everyday verb) than to
+# the daily-use nouns the ceiling protects. It still parses, keeps its
+# docstring, and is named explicitly in onboarding docs; if a future
+# maintainer wants it front-and-center, retiring or folding another verb
+# to make room is the tradeoff to make deliberately, not by accident here.
+HIDDEN_COMMANDS = ("prompts", "hook", "statusline", "worktree-hygiene", "config")
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
 ALL_COMMANDS = tuple(
@@ -186,6 +197,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--knowledge-name", default=None,
                    help="repo name for the knowledge backup (default: brnrd-knowledge)")
     p.set_defaults(func=cmd_home_link)
+
+    # Hidden per HIDDEN_COMMANDS above (help ceiling, not obscurity) — omit
+    # `help=` here too, or it leaks into the listing despite the constant.
+    config_p = sub.add_parser("config")
+    config_sub = config_p.add_subparsers(dest="config_command", required=True)
+
+    p = config_sub.add_parser(
+        "promote",
+        help="move security-defining keys (runner_cmd, trust.*, docker.*, "
+             "solitary.*, environment/env/default_env) out of the "
+             "repo-writable .brr/config into the daemon-owned security.config",
+    )
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the plan; change nothing")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite a security.config value that differs "
+                        "from .brr/config's, instead of refusing")
+    p.set_defaults(func=cmd_config_promote)
 
     # `up` / `down` are blessed shortcuts — the muscle-memory verbs every doc
     # uses — but they are *thin aliases*, not a second implementation. Before
@@ -1371,6 +1400,76 @@ def cmd_home_link(args):
         )
     except home_link.HomeLinkError as exc:
         raise SystemExit(f"[brnrd] {exc}")
+
+
+def cmd_config_promote(args):
+    """``brnrd config promote`` — move security keys out of ``.brr/config``.
+
+    Issue #533: ``runner_cmd`` / ``trust.*`` / ``docker.*`` / ``solitary.*``
+    / ``environment``/``env``/``default_env`` are security-defining —
+    ``config.load_config`` has already stopped honouring them from the
+    repo-writable ``.brr/config``. This is the operator-run migration that
+    carries any already sitting there into the daemon-owned
+    ``security.config``, once. Always prints the plan before touching
+    anything; ``--dry-run`` stops there.
+    """
+    from . import config as conf
+
+    repo_root = _repo_root()
+    plan = conf.plan_promote(repo_root)
+
+    if not plan.moves:
+        print(
+            "[brnrd config promote] no security-defining keys in "
+            ".brr/config — nothing to do"
+        )
+        return 0
+
+    if plan.security_path is None:
+        print(
+            "[brnrd config promote] could not resolve the daemon-owned "
+            "home for this repo — nothing to promote into"
+        )
+        return 2
+
+    print(
+        f"[brnrd config promote] moving {len(plan.moves)} key(s) from "
+        f".brr/config to {plan.security_path}:"
+    )
+    for key in sorted(plan.moves):
+        if key in plan.conflicts:
+            old, new = plan.conflicts[key]
+            tag = (
+                f"  (--force: overwrites existing security.config value {old!r})"
+                if args.force
+                else f"  (CONFLICTS with existing security.config value {old!r} — needs --force)"
+            )
+        else:
+            tag = ""
+        print(f"  {key}={plan.moves[key]!r}{tag}")
+
+    if plan.conflicts and not args.force:
+        print(
+            "[brnrd config promote] refusing to overwrite differing "
+            "security.config value(s) without --force"
+        )
+        return 2
+
+    if args.dry_run:
+        print("[brnrd config promote] --dry-run: nothing changed")
+        return 0
+
+    try:
+        conf.apply_promote(repo_root, plan, force=args.force)
+    except conf.ConfigPromoteError as exc:
+        print(f"[brnrd config promote] {exc}")
+        return 2
+
+    print(
+        f"[brnrd config promote] done — {plan.security_path} holds "
+        f"{len(plan.moves)} promoted key(s), mode 0600"
+    )
+    return 0
 
 
 def cmd_setup(args):

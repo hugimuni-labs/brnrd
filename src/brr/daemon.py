@@ -2302,6 +2302,33 @@ def _run_worker(
     outbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_dir = inbox_dir or (brr_dir / "inbox")
 
+    # #533: a security-defining key (`runner_cmd`, `trust.*`, `docker.*`,
+    # `solitary.*`, `environment`/`env`/`default_env`) set in the
+    # repo-writable `.brr/config` is silently *dropped* by
+    # `conf.load_config` — it never reaches `cfg` above. "Never honoured"
+    # must not also mean "never seen": recomputed here (cheap — one file
+    # read) so this run's own outbox carries the notice even though `cfg`
+    # itself no longer distinguishes an ignored key from one that was
+    # never set. Visible two ways, matching the #524 discipline: a portal
+    # notice this run can read, and a host-side WARNING an operator
+    # tailing logs sees regardless of whether anyone reads the notice.
+    ignored_security_keys = conf.load_config_report(repo_root)[1]
+    if ignored_security_keys:
+        print(
+            f"[brnrd] WARNING: run {task.id} (event {eid}): .brr/config set "
+            f"security-defining key(s) {ignored_security_keys} — ignored, "
+            "not honoured (they load only from the daemon-owned "
+            "security.config; run `brnrd config promote` to migrate them)"
+        )
+        _record_outbox_notice(
+            outbox_dir,
+            "repo config tried to set security-defining key(s) "
+            f"{ignored_security_keys} in .brr/config — ignored, not "
+            "honoured (they load only from the daemon-owned "
+            "security.config; run `brnrd config promote` to migrate them "
+            "there).",
+        )
+
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
