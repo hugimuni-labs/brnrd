@@ -76,6 +76,7 @@ __all__ = [
     "TELEMETRY_DEFAULTS",
     "TELEMETRY_STATES",
     "lookup",
+    "glyph",
     "for_telemetry",
 ]
 
@@ -574,6 +575,26 @@ def lookup(name: str) -> Emote | None:
     """
 
     return EMOTES.get(name)
+
+
+def glyph(name: str) -> str | None:
+    """Base-frame glyph for *name*, or ``None`` if the handle is unknown.
+
+    The rendering path, and the seam this module owes its one non-resident
+    caller: ``hooks._emote_glyph`` calls exactly this, to prefix the
+    statusline's mood chip with the face the resident is wearing. It was
+    written against this signature while both halves were in flight (#603
+    statusline / #601 library) and shipped naming a function that did not
+    exist — a silent ``AttributeError`` swallowed by the caller's
+    deliberately broad guard, so every mood chip since has rendered as a
+    bare name with no face. Adding it here rather than reaching into
+    ``lookup(name).frames[0]`` from the caller keeps "which frame is the
+    resting one" a fact this module states — see the frame rules in the
+    module docstring: base state first and last.
+    """
+
+    emote = EMOTES.get(name)
+    return emote.frames[0] if emote else None
 
 
 def for_telemetry(state: str) -> Emote | None:

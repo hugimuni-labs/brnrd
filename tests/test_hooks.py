@@ -1364,7 +1364,8 @@ def test_post_tool_mood_renders_as_a_bar_segment(tmp_path):
     (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood bo_Od" in ctx
+    # Glyph-prefixed: `bo_Od` is a real handle, so the face renders (#601 seam).
+    assert "mood b·_·d bo_Od" in ctx
     assert "keep?" not in ctx
     assert "←" not in ctx
 
@@ -1415,11 +1416,49 @@ def test_mood_chip_truncates_a_long_name():
     assert len(chip) <= hooks._MOOD_DISPLAY_MAX_CHARS + 1
 
 
-def test_emote_glyph_degrades_to_none_when_module_absent():
-    # `brr.emotes` (#566) does not exist in this tree yet — the resolver
-    # must degrade silently, never raise, so the raw mood name still renders.
-    assert hooks._emote_glyph("bo_Od") is None
-    assert hooks._mood_chip("bo_Od") == "bo_Od"
+def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
+    """A handle with no library entry degrades silently — never raises.
+
+    This test used to read "`brr.emotes` (#566) does not exist in this tree
+    yet" and assert no glyph for **`bo_Od`** — which is a real entry in the
+    shipped library. So once #601 landed it was no longer testing degradation
+    at all: it was pinning the broken resolver's output as correct. A fixture
+    that quietly becomes valid input is how a negative test turns into a lock
+    on the bug. The handle below is invented on purpose and stays invented.
+    """
+    from brr import emotes
+
+    name = "not_an_emote_xyz"
+    assert name not in emotes.EMOTES, "fixture must stay unresolvable"
+    assert hooks._emote_glyph(name) is None
+    assert hooks._mood_chip(name) == name
+
+
+def test_a_real_emote_handle_renders_its_face_in_the_chip():
+    """The seam between the statusline (#603) and the emote library (#601).
+
+    Every other mood test in this file names an *invented* handle — "stoked",
+    "curious", "bo_Od" — so "no glyph" was the expected output everywhere and
+    a broken resolver was indistinguishable from a green suite. It was broken:
+    ``hooks._emote_glyph`` called ``emotes.glyph``, a function the shipped
+    library never had, and the caller's deliberately broad ``except`` ate the
+    ``AttributeError`` on every boundary. The face never rendered, for anyone,
+    ever — which is exactly what a guard swallowing its own signal buys you.
+
+    So this test uses a handle that really is in ``EMOTES``. It is the only
+    one here that can fail if the seam breaks again.
+    """
+    from brr import emotes
+
+    name = "fo.cus"
+    assert emotes.lookup(name) is not None, "fixture handle must be a real emote"
+
+    expected = emotes.glyph(name)
+    assert expected, "a resolvable handle must yield a base-frame glyph"
+    assert expected == emotes.EMOTES[name].frames[0], "base frame is frames[0]"
+
+    assert hooks._emote_glyph(name) == expected
+    assert hooks._mood_chip(name) == f"{expected} {name}"
 
 
 def test_quota_chip_disambiguates_a_repeated_first_letter():
@@ -1475,7 +1514,7 @@ def test_mood_ask_fires_on_the_failure_edge_and_names_it(tmp_path):
         hooks.PHASE_POST_TOOL, _batch("Exit code 1"), _env(tmp_path)
     )
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "mood fo.cus ← Bash ✗" in ctx
+    assert "mood b·_·d fo.cus ← Bash ✗" in ctx
 
 
 def test_mood_ask_is_transition_stamped_not_per_pass(tmp_path):
