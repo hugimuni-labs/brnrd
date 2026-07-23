@@ -784,3 +784,41 @@ def test_carry_forward_plan_change_does_not_block_usage_credits():
 
     assert healed["usage_credits"]["spent_amount"] == 4.2
     assert healed["usage_credits"]["carried_from"]
+
+
+def test_carry_forward_says_it_carried_when_an_older_same_plan_reading_serves(caplog):
+    """Review fixup: a blocked *candidate* is not a blocked *carry*.
+
+    Candidates are searched in list order, so a mismatched one can be
+    followed by an older snapshot recorded under the current plan — which
+    is a perfectly good carry source. The log line must say that happened.
+    A fixed "refusing to carry" string printed while the section was in
+    fact carried is the #568 defect: a refusal message describing a
+    different failure than the one that occurred.
+    """
+    mismatched = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Pro",
+        "quota": {"summary": "session 10% left",
+                  "buckets": {"session": {"remaining_percentage": 10.0}}},
+    }
+    usable = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "quota": {"summary": "session 80% left",
+                  "buckets": {"session": {"remaining_percentage": 80.0}}},
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    with caplog.at_level("INFO", logger="brr.claude_usage"):
+        healed = claude_usage.carry_forward_sections([mismatched, usable], fresh)
+
+    assert healed["quota"]["buckets"]["session"]["remaining_percentage"] == 80.0
+    line = next(r.message for r in caplog.records if "plan changed" in r.message)
+    assert "carried from an older same-plan reading instead" in line
+    assert "refusing to carry" not in line
