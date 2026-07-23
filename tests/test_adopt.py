@@ -395,6 +395,6 @@ class TestShellBridges:
     def test_detect_shells_uses_path(self, monkeypatch):
         monkeypatch.setattr(
             adopt.shutil, "which",
-            lambda binary: "/usr/bin/" + binary if binary in ("claude", "gemini") else None,
+            lambda binary: "/usr/bin/" + binary if binary in ("claude", "codex") else None,
         )
-        assert adopt._detect_shells() == ["claude", "gemini"]
+        assert adopt._detect_shells() == ["claude", "codex"]

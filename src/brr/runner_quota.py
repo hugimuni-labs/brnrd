@@ -435,7 +435,7 @@ def _runner_keys(runner_name: str) -> tuple[str, ...]:
 
 
 def _provider_key(slug: str) -> str:
-    for prefix in ("codex", "claude", "gemini"):
+    for prefix in ("codex", "claude"):
         if slug == prefix or slug.startswith(prefix + "-") or slug.startswith(prefix + "_"):
             return prefix
     return slug

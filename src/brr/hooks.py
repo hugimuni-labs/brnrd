@@ -1076,21 +1076,6 @@ def render_native(
             }
         return out, 0
 
-    if flavour == "gemini":
-        out = {}
-        if inject:
-            # Injection field for gemini's AfterTool/SessionStart — the exact
-            # schema lives in gemini's hooks *reference* page; `additionalContext`
-            # is the working name pending that pin (see design §Resolutions).
-            out["additionalContext"] = inject
-        if block:
-            # gemini blocks with `decision: "deny"` + exit 2.
-            out["decision"] = "deny"
-            if reason:
-                out["reason"] = reason
-            return out, 2
-        return out, 0
-
     # Unknown / custom runner: hand back the neutral envelope unchanged.
     return {
         "inject": inject,
@@ -1115,8 +1100,7 @@ def render_native(
 # precheck is the *assertion* (kb/design-runner-back-channel.md §Resolutions).
 
 # Flavours brr writes a native hook *settings file* for. Codex installs via
-# argv (:func:`codex_hook_args`); gemini's emitter is a follow-up, so it
-# degrades to Tier 0/1 until that exists.
+# argv (:func:`codex_hook_args`).
 _FILE_CONFIG_FLAVOURS = {"claude"}
 
 

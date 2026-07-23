@@ -81,7 +81,7 @@ recent log) so a non-brr wrapper can reuse the same orientation semantic.
 
 When the resident chooses a plain current-thread reply, brnrd captures stdout
 and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
-headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
+headless (`claude --print` or `codex exec`); progress
 goes to stderr, so no per-runner output flag is needed for the common
 stdout-capture case.
 

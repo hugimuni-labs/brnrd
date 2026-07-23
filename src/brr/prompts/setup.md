@@ -46,8 +46,8 @@ machinery. Your job is to tailor it into this repo's `AGENTS.md`.
    scaffold a committed `kb/` (using the seeds below) or leave knowledge to
    the account home. Only create `kb/` files when that directive says so.
 
-5. **Do not create `CLAUDE.md` or `GEMINI.md` yourself** — brnrd writes the
-   shell bridges after setup and verifies each shell can reach `AGENTS.md`.
+5. **Do not create `CLAUDE.md` yourself** — brnrd writes the shell bridge
+   after setup and verifies each detected shell can reach `AGENTS.md`.
 
 6. Commit the created/modified files with message: "chore: set up
    AGENTS.md and knowledge base".

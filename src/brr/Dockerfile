@@ -1,6 +1,6 @@
-# brnrd runner image — bundles claude, codex, and gemini CLIs alongside a
+# brnrd runner image — bundles claude and codex CLIs alongside a
 # practical baseline toolbox for daemon-launched development work. node:22-slim
-# is the base because all three runner CLIs are distributed via npm.
+# is the base because both runner CLIs are distributed via npm.
 #
 # This is still a runner image, not a project image: it preinstalls brr's own
 # CLI/runtime deps and the runner toolbox, but not arbitrary repo dependencies,
@@ -83,12 +83,11 @@ RUN git config --system --add safe.directory '*'
 RUN npm install -g \
         @anthropic-ai/claude-code \
         @openai/codex \
-        @google/gemini-cli \
     && npm cache clean --force
 
 # Writable HOME for whichever UID the daemon hands us. Mode 1777 is the
 # same shape /tmp uses — any UID can create files inside, but only the
-# owner can delete them. The CLIs (codex, claude, gemini) and git
+# owner can delete them. The CLIs (codex and claude) and git
 # discover credentials through ``$HOME``; the daemon mounts the host's
 # real credential dirs and ``.gitconfig`` here at runtime.
 RUN mkdir -p /brr-home \

@@ -14,8 +14,8 @@ matched by an enforced control, the gap is named and linked to a tracking issue.
 brnrd runs coding agents that execute commands with **your** authority against your
 **real** repository, using your real credentials and network. The runners are
 launched with their approval prompts deliberately bypassed
-(`claude --dangerously-skip-permissions`, `codex exec --dangerously-bypass-…`,
-`gemini --yolo`). The base assumption is that **whoever can reach a configured gate
+(`claude --dangerously-skip-permissions` or `codex exec --dangerously-bypass-…`).
+The base assumption is that **whoever can reach a configured gate
 has been authorized to instruct the agent**. GitHub and Telegram authorize the
 individual sender before enqueue; Slack still authorizes at channel membership.
 Everything below is defense-in-depth over that base. None of it is a cage for a

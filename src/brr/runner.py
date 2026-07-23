@@ -1,7 +1,7 @@
 """Runner — shell out to AI CLIs, one run at a time.
 
 brr doesn't do AI work itself. It delegates to whatever runner CLI the
-user has installed (claude, codex, gemini, or any command on PATH).
+user has installed (claude, codex, or any command on PATH).
 Profiles are project-owned data (``.brr/runners.md``), with bundled
 defaults kept for first-run convenience. Prompt assembly lives in
 :mod:`brr.prompts`. This module is the plumbing: runner detection,
@@ -782,7 +782,7 @@ def profile_hooks_flavour(
 
     Tier 2 of the runner interface (``kb/design-runner-back-channel.md``):
     a profile opts into the hooks back channel with a ``hooks: <flavour>``
-    field naming the runner family (``claude`` / ``codex`` / ``gemini``)
+    field naming the bundled runner family (``claude`` / ``codex``)
     whose native hook config brr generates. This reads the *declared*
     intent from the profile; whether the runner is actually hooks-capable
     is a separate runtime precheck (settings location writable, native
@@ -1635,7 +1635,7 @@ _MAX_PROMPT_ARG_BYTES = 100_000
 def _spill_oversized_argv(cmd: list[str], repo_root: Path | None) -> list[str]:
     """Replace any argv element too large for ``execve`` with a file pointer.
 
-    Every Tier-0 runner (claude, codex, gemini) is a coding agent with
+    Every bundled runner (claude, codex) is a coding agent with
     baseline file-read capability, so trading one oversized argv string for
     a short pointer plus one Read call costs a turn, not a redesign -- and
     it needs no CLI-specific stdin behaviour (codex documents reading a

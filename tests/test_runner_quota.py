@@ -87,6 +87,10 @@ def test_describe_runner_quota_uses_provider_key_for_alias(tmp_path):
     assert summary == "requests 31% - resets in 2h"
 
 
+def test_removed_gemini_family_is_not_a_bundled_provider_prefix():
+    assert runner_quota._provider_key("gemini-pro") == "gemini-pro"
+
+
 def test_describe_runner_quota_returns_none_without_signal(tmp_path):
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()

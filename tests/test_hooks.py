@@ -692,12 +692,13 @@ def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
     assert 'command="brnrd hook post-tool"' in joined
 
 
-def test_gemini_block_uses_deny_exit_2(tmp_path):
+def test_removed_gemini_flavour_uses_custom_neutral_envelope(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path, "gemini"))
-    assert out["decision"] == "deny"
-    assert code == 2
+    assert out["block"] is True
+    assert out["block_reason"]
+    assert code == 0
 
 
 def test_unknown_flavour_returns_neutral(tmp_path):
@@ -728,10 +729,9 @@ def test_missing_portal_state_is_graceful(tmp_path):
 def test_hook_config_supported_only_claude_today():
     # ``hook_config_supported`` is the *settings-file* install gate. Codex is
     # hooks-capable but installs via argv (codex_hook_args), so it is excluded
-    # here; Gemini has no emitter yet.
+    # here.
     assert hooks.hook_config_supported("claude") is True
     assert hooks.hook_config_supported("codex") is False
-    assert hooks.hook_config_supported("gemini") is False
     assert hooks.hook_config_supported(None) is False
     assert hooks.hook_config_supported("") is False
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Local agents go brr. From anywhere.</strong><br>
-  Claude Code, Codex, and Gemini CLI on your machine — reachable from Telegram, Slack, GitHub, and the web.
+  Claude Code and Codex on your machine — reachable from Telegram, Slack, GitHub, and the web.
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@ reach when you are away from the terminal.
 | 📟 | **A remote door** | Fire off a task from Telegram, Slack, GitHub, or the dashboard. The agent runs at home; you drive from your pocket. |
 | 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
-| 🔀 | **The model is a medium** | Pin Claude, Codex, or Gemini. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
+| 🔀 | **The model is a medium** | Pin Claude or Codex. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
 | 🏠 | **Local means local** | Checkout, shell, runner process, and execution stay on your machine. Managed gates relay messages and status; your source never leaves home. |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
@@ -54,11 +54,11 @@ you · Telegram / Slack / GitHub / dashboard
                          ▼
         brnrd daemon · your machine · your repo
                          │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-     Claude Code        Codex       Gemini CLI
-          │              │              │
-          └──────────────┼──────────────┘
+                 ┌───────┴───────┐
+                 ▼               ▼
+            Claude Code        Codex
+                 │               │
+                 └───────┬───────┘
                          ▼
              progress · replies · git
 ```

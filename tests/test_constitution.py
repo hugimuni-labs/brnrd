@@ -126,7 +126,7 @@ def test_template_carries_no_retired_architecture():
 
 def test_bridge_filename_and_content_per_shell():
     assert C.bridge_filename("claude") == "CLAUDE.md"
-    assert C.bridge_filename("gemini") == "GEMINI.md"
+    assert C.bridge_filename("gemini") is None
     assert C.bridge_filename("codex") is None
     assert C.bridge_filename("cursor") is None
     assert "@AGENTS.md" in C.bridge_content("claude")
@@ -136,9 +136,9 @@ def test_bridge_filename_and_content_per_shell():
 def test_write_bridges_writes_only_shells_that_need_one(tmp_path):
     (tmp_path / "AGENTS.md").write_text("contract", encoding="utf-8")
     written = C.write_bridges(tmp_path, ["claude", "gemini", "codex", "cursor"])
-    assert set(written) == {"claude", "gemini"}
+    assert set(written) == {"claude"}
     assert (tmp_path / "CLAUDE.md").exists()
-    assert (tmp_path / "GEMINI.md").exists()
+    assert not (tmp_path / "GEMINI.md").exists()
     assert "@AGENTS.md" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
 
 
