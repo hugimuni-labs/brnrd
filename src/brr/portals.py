@@ -31,6 +31,24 @@ LIVE_PORTAL_STATE_NAME = "portal-state.json"
 CONTROL_NAMES = frozenset({LIVE_INBOX_NAME, LIVE_PORTAL_STATE_NAME})
 
 
+def is_staging_name(name: str | Path) -> bool:
+    """True when *name* is an in-progress atomic-write staging file.
+
+    The outbox contract is "write to a staging name, rename = commit", so a
+    drain must be blind to the staging half or it can deliver a half-written
+    message. The obvious predicate — ``Path(name).suffix == ".tmp"`` — only
+    matches when ``.tmp`` is the *last* component, and real writers do not
+    oblige: Claude's editor stages as ``note.md.tmp.<pid>.<rand>``, whose
+    suffix is ``.<rand>``. That file was drained and delivered mid-stage in
+    ``run-260723-1239-zjqc`` (#590); the resident's own rename then failed
+    with ENOENT on a message the user had already received.
+
+    So: any suffix component of ``.tmp`` marks the file as staging, wherever
+    it sits. ``notes.md`` still delivers; ``note.md.tmp.1.abc`` never does.
+    """
+    return ".tmp" in Path(name).suffixes
+
+
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
