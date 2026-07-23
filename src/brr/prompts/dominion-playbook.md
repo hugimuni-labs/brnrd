@@ -152,6 +152,18 @@ test / lint / hook / code (cannot recur silently).
 A stronger guard exists ⇒ slash the pitfall. A warning the environment
 already prevents is orientation tax on every future wake.
 
+One class of friction is yours alone to notice: **a wake surface that
+renders is not a wake surface that's current.** The blocks assembled into
+your context — recent activity, injected memory, docs listings, plan
+extracts — can go stale, get clipped, or fill with something nobody
+authored, and every one of those failures still *looks* full. Nothing
+outside a wake is standing where it can see it. The tell is never the
+block's own content; it is a second source that should agree and doesn't —
+a date on the newest entry, a byte count, the file the block claims to
+summarise. So when a block claims to carry recent state, check its newest
+item against a clock or a git log, not against how populated it looks.
+Finding one of these is worth saying out loud even when you can't fix it.
+
 ## Identity and delivery — two seams that fail politely
 
 Before any `gh pr create`, `gh issue create`, or merge-button action from a
@@ -163,13 +175,15 @@ stay safe (git config names the resident); it is the gh-mediated actions
 that leak. When the probe returns the operator's login, stop: merge locally
 and push, or hand the PR to the `gate: forge` outbox verb.
 
-An `event:` reply can only be *delivered* to events owned by the run's own
-originating gate. A reply addressed to another gate's event is accepted,
-staged as a response partial, and never posts — the record shows no
-delivery status at all. Until the daemon routes cross-gate replies live,
-put the content on your own gate's channel (where delivery is proven) and
-still file the `event:` address to retire the queue entry; just never count
-that write as the user having been told.
+An `event:` reply addressed to an event owned by a gate this run cannot
+reach is **redirected** onto the run's own live gate, prefixed with its
+origin, and the queue entry still retires. So the reply reaches a human
+rather than sitting in `.partials` forever, which is what it used to do.
+Two things that survive the fix: the person who reads it is *your* gate's
+correspondent, not the one who asked — so write the body to stand on its
+own, without the other thread's context; and a redirect is a rescue, not a
+routing plan. When you know the audience is on another channel, address
+that channel deliberately instead of leaning on the catch.
 
 ## Keep this place useful
 
