@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import textwrap
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,11 @@ HOOK_STATE_NAME = ".hook-state.json"
 # than promoting the portal-derived `inject` lines in place.
 CARD_NAME = ".card"
 FORGE_HANDOFF_NAME = ".forge-handoff"
+# Resident-authored mood glyph/name (#566 layer 2 — the daemon-derived mood
+# is computed elsewhere; this is the resident's own meta-channel). A control
+# dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
+# read fresh at every boundary. First line only — see `_read_mood`.
+MOOD_NAME = ".mood"
 # The run body rides the closeout delta whole. Capped only against a
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
@@ -183,6 +189,37 @@ def _read_card_body(ctx: HookContext) -> str | None:
         return None
 
 
+# Defensive read cap on `.mood` I/O: free-authored text with no size
+# contract, so a runaway echo or accidental paste must never be able to
+# bloat a hook boundary or crash rendering. Far larger than the rendered
+# chip's own truncation (`_MOOD_DISPLAY_MAX_CHARS`) — this one only bounds
+# the read itself.
+_MOOD_READ_CAP_CHARS = 500
+
+
+def _read_mood(ctx: HookContext) -> str | None:
+    """Read the resident's `.mood` control file fresh, first line only.
+
+    Same "read the artifact, not a cached copy" doctrine :func:`_read_card_body`
+    keeps: the resident may rewrite it between boundaries, and the point of
+    the channel (#566) is that the face the user sees and the face the
+    resident knows it is wearing are the same object. Defensive by
+    construction — a missing file, an unreadable one, or a blank first line
+    all fall through to ``None`` (no mood segment renders) rather than
+    raising or reading the whole file into memory.
+    """
+    if ctx.outbox_dir is None:
+        return None
+    path = ctx.outbox_dir / MOOD_NAME
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            first_line = handle.readline(_MOOD_READ_CAP_CHARS)
+    except OSError:
+        return None
+    text = first_line.strip()
+    return text or None
+
+
 def _read_hook_state(ctx: HookContext) -> dict[str, Any]:
     return _read_json(ctx.state_path)
 
@@ -250,6 +287,387 @@ def _touch_flush(ctx: HookContext) -> None:
 
 
 # ── Injection rendering (portal-state → compact delta) ───────────────────
+#
+# Slice 8 (#513): the mid-run (``post-tool``) boundary renders as ONE compact
+# "agnoster"-style status bar instead of the multi-line prose block seed/stop
+# keep. ``seed`` and ``stop`` stay affirmative, clear prose on purpose (the
+# maintainer's 2026-06-23 rule, kept below) — only ``post-tool`` gets the bar,
+# because it is the boundary that fires often enough for verbosity to become
+# habituation. See :func:`_render_bar` for the assembler and
+# :data:`BAR_SEGMENTS` for the vocabulary.
+
+
+@dataclass(frozen=True)
+class _BarSegment:
+    """One documented entry in the bar's fixed segment vocabulary."""
+
+    key: str
+    glyph: str
+    meaning: str
+
+
+#: The bar's segment vocabulary, in render order. Fixed and documented (#513
+#: — "a fixed documented segment vocabulary") rather than ad-hoc per-render
+#: choices, so a resident (or a human skimming several bars) learns it once.
+#: Every segment renders only when laden/changed; a quiet boundary emits a
+#: short bar with just a handful of these. Deliberately *not* here: pending
+#: events, a stale/blank ``.card``'s reason, an unwritten ``.name``, and a
+#: "running long" warning — those are obligations, and burying an obligation
+#: in a glyph is exactly the failure this vocabulary exists to avoid, so they
+#: stay full detail lines below the bar (see :func:`_render_bar`) instead of
+#: a segment here.
+BAR_SEGMENTS: tuple[_BarSegment, ...] = (
+    _BarSegment(
+        "run", "⌁",
+        "run identity — the run id's 4-char random disambiguator "
+        "(`run-YYMMDD-HHMM-<rand>` → `<rand>`). Always first when the bar "
+        "renders at all.",
+    ),
+    _BarSegment(
+        "budget", "⏱",
+        "wall-clock posture — elapsed/soft-limit minutes (`16/120m`). "
+        "Renders whenever both numbers are known.",
+    ),
+    _BarSegment(
+        "quota", "q",
+        "every subscription quota bucket the `quota` facet knows about, "
+        "abbreviated to one letter + remaining percent, joined by `·` "
+        "(`S57·W50·F27` = session 57%, week 50%, a named per-model bucket "
+        "27%). Renders only when quota is `known`.",
+    ),
+    _BarSegment(
+        "siblings", "▷",
+        "coexisting sibling runs in this dominion (`▷1`). Renders only "
+        "when the count is > 0 — an idle dominion says nothing here.",
+    ),
+    _BarSegment(
+        "keepalive", "rb",
+        "keepalive extension remaining, the slot held past budget (`rb3h`). "
+        "Renders only while `.keepalive` is active.",
+    ),
+    _BarSegment(
+        "delivery", "⇡",
+        "delivery this run — current-thread replies + everything else "
+        "(other threads, outbound messages) (`⇡2+3`). Renders only once "
+        "something has been sent.",
+    ),
+    _BarSegment(
+        "produce", "⚒",
+        "total attested produce items this run (commits, branches, PRs, kb "
+        "pages, issues, comments, messages, files) (`⚒4`). Renders only "
+        "when nonzero.",
+    ),
+    _BarSegment(
+        "mood", "mood",
+        "the resident's own `.mood` control file (#566 layer 2), truncated "
+        "to 16 chars, with the emote's base-frame glyph prefixed when "
+        "`brr.emotes` resolves the name. Always followed by `·keep?` — an "
+        "invitation to reconsider it, not an assertion it still holds. "
+        "Renders every boundary it is present.",
+    ),
+    _BarSegment(
+        "card", "card",
+        "the live `.card` surface's own health: `ok` / `stale` / `blank`. "
+        "Always the last segment when the bar renders at all — the cheap, "
+        "always-current anchor. A `stale` value also gets its own detail "
+        "line naming why (see above) — the chip alone is never the whole "
+        "obligation.",
+    ),
+)
+
+
+def _run_id_chip(run: dict[str, Any]) -> str | None:
+    run_id = str(run.get("id") or "").strip()
+    if not run_id:
+        return None
+    tail = run_id.rsplit("-", 1)[-1].strip()
+    return f"⌁ {tail}" if tail else None
+
+
+def _budget_chip(budget: dict[str, Any]) -> str | None:
+    elapsed = budget.get("elapsed_seconds")
+    limit = budget.get("budget_seconds")
+    if elapsed is None or limit is None:
+        return None
+    try:
+        return f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
+    except (TypeError, ValueError):
+        return None
+
+
+# One quota-bucket phrase within the facet's rendered summary string, e.g.
+# "session 57% left (resets ...)" or "Fable week 27% left" (claude_usage.py)
+# or "5h 79% left" / "weekly 41% left" (codex_status.py) — parsed back apart
+# because the bar needs the label+percent, not the prose. A leading digit in
+# a duration-style label ("5h") is not part of the captured label — harmless,
+# since `_quota_bucket_letter` derives the chip from the label's first
+# *alphabetic* character, not strictly its first character.
+_QUOTA_BUCKET_RE = re.compile(
+    r"(?P<label>[A-Za-z][\w]*(?:\s+[A-Za-z][\w]*)*?)\s+"
+    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*left",
+)
+_QUOTA_MODEL_WEEK_RE = re.compile(r"^(?P<model>.+?)\s+week$")
+
+
+def _quota_bucket_letter(label: str, taken: set[str]) -> str:
+    """Abbreviate one quota bucket's label to a single letter.
+
+    ``session`` → S, ``week`` → W (the maintainer's own shorthand, #513); a
+    per-model week bucket (Claude's ``"Fable week"``) abbreviates to the
+    *model's* first letter, not W again — two buckets both reading "week"
+    would be indistinguishable. Anything else (Codex's ``5h`` / ``weekly``)
+    falls back to its label's first *alphabetic* character (a duration label
+    can lead with a digit the regex above doesn't capture, but defends here
+    too rather than assuming). A repeat letter (two per-model buckets
+    sharing an initial) widens to two characters rather than one chip
+    silently swallowing another.
+    """
+    key = label.strip().lower()
+    if key == "session":
+        letter = "S"
+    elif key == "week":
+        letter = "W"
+    else:
+        model_week = _QUOTA_MODEL_WEEK_RE.match(key)
+        if model_week:
+            model = model_week.group("model").strip()
+            letter = (model[:1] or "w").upper()
+        else:
+            alpha = next((ch for ch in key if ch.isalpha()), None)
+            letter = alpha.upper() if alpha else (key[:1].upper() or "?")
+    if letter in taken:
+        letter = label.strip()[:2] or letter
+    taken.add(letter)
+    return letter
+
+
+def _quota_chip(resources: dict[str, Any]) -> str | None:
+    facet = resources.get("quota") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    summary = str(facet.get("summary") or "").strip()
+    if not summary:
+        return None
+    taken: set[str] = set()
+    chips: list[str] = []
+    for part in summary.split(";"):
+        match = _QUOTA_BUCKET_RE.search(part)
+        if not match:
+            continue
+        pct = match.group("pct").split(".")[0]
+        chips.append(f"{_quota_bucket_letter(match.group('label'), taken)}{pct}")
+    return "q " + "·".join(chips) if chips else None
+
+
+def _siblings_chip(resources: dict[str, Any]) -> str | None:
+    facet = resources.get("coexisting_runs") if isinstance(resources, dict) else None
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return None
+    siblings = facet.get("siblings")
+    n = len(siblings) if isinstance(siblings, list) else 0
+    return f"▷{n}" if n else None
+
+
+def _keepalive_remaining_seconds(until_iso: Any) -> float | None:
+    if not isinstance(until_iso, str) or not until_iso.strip():
+        return None
+    try:
+        dt = datetime.datetime.strptime(until_iso.strip(), "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    dt = dt.replace(tzinfo=datetime.timezone.utc)
+    remaining = (dt - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()
+    return remaining if remaining > 0 else None
+
+
+def _fmt_short_duration(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds >= 3600:
+        return f"{max(1, round(seconds / 3600))}h"
+    return f"{max(1, round(seconds / 60))}m"
+
+
+def _keepalive_chip(budget: dict[str, Any]) -> str | None:
+    keepalive = budget.get("keepalive") if isinstance(budget.get("keepalive"), dict) else {}
+    if keepalive.get("status") != "active":
+        return None
+    remaining = _keepalive_remaining_seconds(keepalive.get("until"))
+    if remaining is None:
+        return None
+    return f"rb{_fmt_short_duration(remaining)}"
+
+
+def _delivery_chip(outbound: dict[str, Any]) -> str | None:
+    current = int(outbound.get("replies_current", 0) or 0)
+    other = int(outbound.get("replies_other", 0) or 0) + int(
+        outbound.get("outbound_messages", 0) or 0
+    )
+    if not current and not other:
+        return None
+    return f"⇡{current}+{other}"
+
+
+def _produce_total(produce: dict[str, Any]) -> int:
+    if not produce.get("known"):
+        return 0
+    counts = produce.get("counts") if isinstance(produce.get("counts"), dict) else {}
+    return sum(int(v or 0) for v in counts.values() if isinstance(v, (int, float)))
+
+
+def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
+    if card_stale:
+        return "card stale"
+    return "card ok" if card.get("active") else "card blank"
+
+
+# Rendered chip length for a `.mood` name — short enough that a verbose mood
+# can't dominate a boundary, long enough that a real emote name reads whole
+# (e.g. "quietly_stuck").
+_MOOD_DISPLAY_MAX_CHARS = 16
+
+
+def _emote_glyph(name: str) -> str | None:
+    """Best-effort base-frame glyph for *name*, from `brr.emotes`.
+
+    `brr.emotes` (#566) is being built in parallel and may not exist yet, or
+    may exist without a resolvable entry for this name — both degrade to no
+    glyph (the raw name still renders) rather than raising. The import lives
+    inside the ``try``, not at module scope, so a not-yet-stable sibling
+    module can never break every hook boundary in this one; the broad
+    ``except`` extends the same tolerance to whatever shape its lookup ends
+    up taking (assumed here: a ``glyph(name) -> str | None`` function —
+    reconcile this call if the shipped module's surface differs).
+    """
+    try:
+        from . import emotes  # type: ignore
+    except ImportError:
+        return None
+    try:
+        glyph = emotes.glyph(name)
+    except Exception:
+        return None
+    glyph = str(glyph or "").strip()
+    return glyph or None
+
+
+def _mood_chip(raw: str) -> str:
+    """The resident's `.mood` first line, rendered as a short chip."""
+    name = raw.strip()
+    if len(name) > _MOOD_DISPLAY_MAX_CHARS:
+        name = name[:_MOOD_DISPLAY_MAX_CHARS].rstrip() + "…"
+    glyph = _emote_glyph(name)
+    return f"{glyph} {name}" if glyph else name
+
+
+def _render_bar(
+    *,
+    run: dict[str, Any],
+    pending: int,
+    pending_files: int,
+    events: list[Any],
+    budget: dict[str, Any],
+    outbound: dict[str, Any],
+    produce: dict[str, Any],
+    card: dict[str, Any],
+    card_stale: bool,
+    resources: dict[str, Any],
+    run_name: dict[str, Any],
+    mood: str | None,
+) -> str | None:
+    """The mid-run (``post-tool``) status bar: one line + obligation details.
+
+    Builds the fixed :data:`BAR_SEGMENTS` chips left to right, then appends
+    detail lines *only* for new obligations — non-zero pending events, a
+    stale/blank card's reason, an unwritten ``.name``, running long — the
+    same guardrail this whole redesign exists to keep (#513: "never bury an
+    obligation in a glyph"). Returns ``None`` when nothing here is worth a
+    turn, mirroring the mid-run gate the old prose form kept: mere resource
+    or produce chatter must not manufacture an injection by itself.
+    """
+    segments: list[str] = []
+    id_chip = _run_id_chip(run)
+    if id_chip:
+        segments.append(id_chip)
+    budget_chip = _budget_chip(budget)
+    if budget_chip:
+        segments.append(budget_chip)
+    quota_chip = _quota_chip(resources)
+    if quota_chip:
+        segments.append(quota_chip)
+    siblings_chip = _siblings_chip(resources)
+    if siblings_chip:
+        segments.append(siblings_chip)
+    keepalive_chip = _keepalive_chip(budget)
+    if keepalive_chip:
+        segments.append(keepalive_chip)
+    delivery_chip = _delivery_chip(outbound)
+    if delivery_chip:
+        segments.append(delivery_chip)
+    produce_total = _produce_total(produce)
+    if produce_total:
+        segments.append(f"⚒{produce_total}")
+    if mood:
+        segments.append(f"mood {_mood_chip(mood)}·keep?")
+    segments.append(_card_chip(card, card_stale))
+
+    details: list[str] = []
+    if pending:
+        # Same framing fix as the prose form (2026-07-05): a bare count reads
+        # as ambient telemetry, so non-zero pending gets an explicit verb —
+        # applies *more* here, since a dense bar habituates faster than prose.
+        details.append(
+            f"{pending} pending event(s), {pending_files} undelivered outbox "
+            "file(s). Address each below — fold in, or say on .card why it "
+            "stays queued — before your next plan boundary or closeout."
+        )
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            summary = str(ev.get("summary") or "").strip()
+            details.append(
+                f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
+                f"{summary[:200]}"
+            )
+    if budget.get("long_running"):
+        limit = budget.get("budget_seconds")
+        details.append(
+            f"- running long: past the {limit}s soft budget — extend via "
+            ".keepalive if the work needs it, else wind down."
+        )
+    elapsed = budget.get("elapsed_seconds")
+    if not run_name.get("written") and isinstance(elapsed, (int, float)) and elapsed >= 240:
+        details.append(
+            "- .name: still unwritten — add a short resident-authored run name "
+            "so the live dashboard can identify this work beyond its waking-message excerpt."
+        )
+    if card_stale:
+        age = card.get("age_seconds")
+        age_txt = f"{age}s" if age is not None else "a while"
+        moved = card.get("state_moved_seconds")
+        if card.get("active") and moved is not None:
+            details.append(
+                f"- card: the run moved {moved}s ago (produce, branch, "
+                "delivery, or pending events) and .card hasn't been rewritten "
+                f"since — it's {age_txt} old and now describes a different run."
+            )
+        else:
+            details.append(
+                f"- card: no change in {age_txt} — rewrite .card (even one "
+                "line) so the surface the user is watching isn't sitting blank "
+                "or stale."
+            )
+
+    resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
+    any_delivery = bool(delivery_chip)
+    if (
+        pending == 0 and pending_files == 0 and not any_delivery
+        and not resources_laden and not card_stale
+    ):
+        return None
+    bar = " │ ".join(segments)
+    return bar + ("\n" + "\n".join(details) if details else "")
 
 
 def format_delta(
@@ -258,6 +676,7 @@ def format_delta(
     seed: bool = False,
     stop: bool = False,
     run_body: str | None = None,
+    mood: str | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -265,17 +684,28 @@ def format_delta(
     so it carries only what shifts attention — pending events, delivery
     acks, budget pressure — plus the run's compact attested produce briefing.
 
-    Two boundaries render *unconditionally* (``seed`` and ``stop``): the
+    Two boundaries render *unconditionally* (``seed`` and ``stop``) as
+    affirmative, clear prose — never compressed into the bar (#513): the
     seed is the initial capsule, and the stop is the closeout capsule. At
     those moments an explicit "0 pending event(s)" is itself the signal —
     silence is ambiguous, an affirmative "all clear" is not (maintainer's
     point, 2026-06-23). Stop additionally surfaces the local SCM posture
     (unpushed commits / modified files) so a wake about to end sees its
-    branch is not yet pushed. Mid-run (``post-tool``) it stays gated and
-    returns ``None`` when nothing shifted, so the channel injects no noise —
-    except card staleness (2026-07-05), which renders at every boundary: a
-    stale-or-blank ``.card`` is itself a mid-run failure, not one that can
-    wait for closeout.
+    branch is not yet pushed.
+
+    Mid-run (``post-tool``) renders as the single compact status bar
+    :func:`_render_bar` builds — one line per boundary, working-register
+    style, from the fixed :data:`BAR_SEGMENTS` vocabulary — with detail lines
+    below it only for new obligations. It stays gated and returns ``None``
+    when nothing shifted, so the channel injects no noise — except card
+    staleness (2026-07-05) and non-zero pending events, which always earn a
+    detail line: a stale-or-blank ``.card`` or an unaddressed follow-up is a
+    mid-run failure, not one that can wait for closeout or be buried in a
+    glyph.
+
+    ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
+    fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
+    a bar segment mid-run, or its own prose line at seed/stop.
     """
     if not payload:
         return None
@@ -304,13 +734,22 @@ def format_delta(
 
     pending = int(attention.get("pending_event_count", 0) or 0)
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+
+    if not seed and not stop:
+        card_stale = bool(card.get("stale"))
+        run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
+        return _render_bar(
+            run=run, pending=pending, pending_files=pending_files, events=events,
+            budget=budget, outbound=outbound, produce=produce, card=card,
+            card_stale=card_stale, resources=resources, run_name=run_name,
+            mood=mood,
+        )
+
     lines: list[str] = []
-    if seed:
-        header = "brnrd portal seed"
-    elif stop:
-        header = "brnrd portal closeout"
-    else:
-        header = "brnrd portal update"
+    # Only seed/stop reach this point — post-tool returned via `_render_bar`
+    # above — so this is always one of the two verbose-prose headers.
+    header = "brnrd portal seed" if seed else "brnrd portal closeout"
     # Framing, not just data: a bare count reads as ambient telemetry and
     # habituates fast — a maintainer caught this live (2026-07-05) when two
     # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
@@ -327,7 +766,6 @@ def format_delta(
             "queued — before your next plan boundary or closeout."
         )
     lines.append(header_line)
-    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     for ev in events:
         if not isinstance(ev, dict):
             continue
@@ -569,23 +1007,24 @@ def format_delta(
             )
     # Work-status posture (cost / quota / parallelism). Known fields carry
     # their value; not-yet-built ones read as named states with reasons so the
-    # resident sees the slot honestly rather than a gap. It renders on seed /
-    # stop, and on post-tool updates whenever portal-state changed enough to be
-    # injected at all — live quota is a wall, not a footer-only nicety.
-    rendered_resources = None
+    # resident sees the slot honestly rather than a gap.
     if resources:
         rendered = _format_resources(resources)
         if rendered:
-            rendered_resources = rendered
             lines.append(rendered)
-    # Mid-run, a bare header with no pending work and no movement isn't worth
-    # a turn. Seed and stop always render: their empty state ("0 pending") is
-    # the affirmative signal, not noise.
-    if (
-        not seed and not stop and pending == 0 and pending_files == 0
-        and not any_delivery and not rendered_resources and not card_stale
-    ):
-        return None
+    # The resident's own `.mood` (#566 layer 2): unconditional prose here,
+    # same as the rest of this seed/stop block — the bar-style "·keep?"
+    # segment is the mid-run shape (`_render_bar`); this is its plain-prose
+    # twin so the invitation to reconsider still lands at the two boundaries
+    # that stay verbose on purpose.
+    if mood:
+        lines.append(
+            f"- mood: {_mood_chip(mood)} — yours to keep or change; rewrite "
+            ".mood any time."
+        )
+    # Seed and stop always render — their empty state ("0 pending") is the
+    # affirmative signal, not noise (this function only reaches here for
+    # those two boundaries; post-tool returns earlier via `_render_bar`).
     return "\n".join(lines)
 
 
@@ -939,9 +1378,14 @@ def compute_neutral(
     inject: str | None = None
     block = False
     block_reason: str | None = None
+    # Read fresh at every boundary (#566 layer 2), same "artifact, not a
+    # cached copy" doctrine as `.card` — the resident may rewrite `.mood`
+    # between hook fires, and the whole point is that the face rendered here
+    # is the face the resident actually just set.
+    mood = _read_mood(ctx)
 
     if phase == PHASE_SESSION_START:
-        inject = format_delta(portal, seed=True)
+        inject = format_delta(portal, seed=True, mood=mood)
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
         # The closeout boundary renders unconditionally *once per distinct
@@ -962,13 +1406,15 @@ def compute_neutral(
         # signal.
         stop_token = portal.get("change_token")
         if stop_token != state.get("stop_last_token"):
-            inject = format_delta(portal, stop=True, run_body=_read_card_body(ctx))
+            inject = format_delta(
+                portal, stop=True, run_body=_read_card_body(ctx), mood=mood
+            )
         state["stop_last_token"] = stop_token
         state["last_token"] = stop_token
     else:
         token = portal.get("change_token")
         if token is not None and token != state.get("last_token"):
-            inject = format_delta(portal)
+            inject = format_delta(portal, mood=mood)
             state["last_token"] = token
 
     if phase == PHASE_STOP:

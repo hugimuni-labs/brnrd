@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import threading
@@ -302,7 +303,10 @@ def test_scm_unknown_is_silent(tmp_path):
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_produce_line_renders_attested_kinds(tmp_path):
+def test_post_tool_compresses_produce_into_the_bar_total(tmp_path):
+    # #513: post-tool now compresses produce into the bar's `⚒<n>` total
+    # rather than the composed "- produce: ..." breakdown — a dense mid-run
+    # bar earns "how much", not "what" (see the stop test below for "what").
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
@@ -316,6 +320,26 @@ def test_produce_line_renders_attested_kinds(tmp_path):
         },
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "⚒6" in ctx
+    assert "- produce:" not in ctx
+
+
+def test_stop_surfaces_composed_produce_breakdown(tmp_path):
+    # Seed/stop stay affirmative, clear prose (#513) — unlike post-tool, the
+    # composed breakdown (not just a bar total) still renders there.
+    _portal(
+        tmp_path, token="t1", pending=0,
+        produce={
+            "known": True,
+            "counts": {"commit": 2, "branch": 1, "pr": 1, "kb": 1,
+                       "issue": 1},
+            "latest_commit": "a1b2c3d",
+            "branch": "brr/foo",
+            "pr": 451,
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert (
         "- produce: 2 commit(s) (latest a1b2c3d) · branch brr/foo · "
@@ -471,22 +495,30 @@ def test_seed_surfaces_recorded_pr_posture(tmp_path):
 
 
 def test_post_tool_renders_resources_when_injection_fires(tmp_path):
-    # Quota is a live wall, so when a post-tool boundary injects a portal-state
-    # update it carries the work-status line too.
+    # Quota is a live wall, so when a post-tool boundary injects (here,
+    # because of a pending event) the bar carries the `q` quota chip too.
+    # spend/context-window/remote-scm stay out of the bar on purpose (#513
+    # scopes the compact rendering to actionable, glance-worthy facets; the
+    # full facet line remains a seed/stop-only shape — see
+    # test_seed_surfaces_resources_with_known_quota_and_gaps).
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
-        resources={"quota": {"status": "absent"},
+        resources={"quota": {"status": "known", "summary": "week 42% left"},
                    "spend": {"status": "unimplemented"},
                    "context_window": {"status": "unimplemented"},
                    "coexisting_runs": {"status": "unimplemented"},
                    "remote_scm": {"status": "absent"}},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "resources:" in out["hookSpecificOutput"]["additionalContext"]
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "q W42" in ctx
+    assert "resources:" not in ctx
 
 
 def test_post_tool_can_inject_resource_only_update(tmp_path):
+    # Quota alone (no pending, no delivery, no stale card) still opens the
+    # mid-run gate — a live wall changing is worth a boundary by itself.
     _portal(
         tmp_path, token="t1", pending=0,
         resources={
@@ -499,8 +531,7 @@ def test_post_tool_can_inject_resource_only_update(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "resources:" in ctx
-    assert "quota=week 55% left" in ctx
+    assert "q W55" in ctx
 
 
 def test_stop_flags_no_outbound_messages(tmp_path):
@@ -1203,3 +1234,201 @@ class TestStopRunBody:
         assert "your run body" not in hooks.format_delta(
             self._payload(), stop=True, run_body="   \n",
         )
+
+
+# ── Slice 8 (#513): the agnoster mid-run status bar ──────────────────────
+
+
+def _bar_payload(**overrides):
+    """A fully-laden post-tool payload — every bar segment has something to
+    show. Individual tests knock pieces out via ``overrides`` to exercise the
+    quiet/partial shapes."""
+    until = (
+        datetime.datetime.now(tz=datetime.timezone.utc)
+        + datetime.timedelta(hours=3)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {
+        "run": {"id": "run-260723-1241-3jy8"},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "inbound": {"events": []},
+        "budget": {
+            "elapsed_seconds": 16 * 60, "budget_seconds": 120 * 60,
+            "keepalive": {"status": "active", "until": until},
+        },
+        "outbound": {"replies_current": 2, "replies_other": 3,
+                     "outbound_messages": 0},
+        "produce": {"known": True, "counts": {"commit": 3, "kb": 1}},
+        "card": {"active": True, "stale": False},
+        "resources": {
+            "quota": {
+                "status": "known",
+                "summary": (
+                    "session 57% left (resets 8:30pm (Europe/Berlin)); "
+                    "week 50% left (resets Jul 24, 12am (Europe/Berlin)); "
+                    "Fable week 27% left"
+                ),
+            },
+            "coexisting_runs": {
+                "status": "known",
+                "siblings": [{"run_id": "run-x"}],
+            },
+        },
+    }
+    for key, value in overrides.items():
+        payload[key] = value
+    return payload
+
+
+def test_post_tool_bar_renders_every_segment_when_laden():
+    rendered = hooks.format_delta(_bar_payload(), mood="stoked")
+    bar = rendered.splitlines()[0]
+
+    assert bar == (
+        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4 │ "
+        "mood stoked·keep? │ card ok"
+    )
+
+
+def test_post_tool_bar_is_quiet_when_nothing_is_laden():
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+    )
+    assert hooks.format_delta(payload) is None
+
+
+def test_post_tool_bar_short_when_only_run_id_and_budget_move():
+    # A boundary with nothing to act on still renders a *short* bar when
+    # something genuinely laden triggers it — here, a known quota bucket.
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 16 * 60, "budget_seconds": 120 * 60},
+        outbound={"replies_current": 0, "replies_other": 0,
+                   "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={"quota": {"status": "known", "summary": "week 80% left"}},
+    )
+    rendered = hooks.format_delta(payload)
+    bar = rendered.splitlines()[0]
+    assert bar == "⌁ 3jy8 │ ⏱ 16/120m │ q W80 │ card ok"
+
+
+def test_post_tool_bar_pending_events_always_get_a_detail_line():
+    # #513: "never bury an obligation in a glyph" — pending events are never
+    # compressed into a bar segment, and non-zero pending always earns a
+    # full action-verb detail line below the bar, no matter how quiet
+    # everything else is.
+    payload = _bar_payload(
+        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
+        inbound={"events": [
+            {"id": "evt-9", "source": "telegram", "summary": "ping"},
+        ]},
+        budget={"elapsed_seconds": 0, "budget_seconds": 0},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+    )
+    rendered = hooks.format_delta(payload)
+    lines = rendered.splitlines()
+    assert "▷" not in lines[0] and "⚒" not in lines[0]
+    assert "1 pending event(s)" in rendered
+    assert "Address each below" in rendered
+    assert "- pending evt-9 (telegram): ping" in rendered
+
+
+def test_post_tool_bar_never_renders_a_pending_count_as_a_segment():
+    # The obligation must live in a detail line, not a glyph on the bar
+    # itself — assert the bar *line* (not the whole rendered block) carries
+    # no bare pending count.
+    payload = _bar_payload(
+        attention={"pending_event_count": 2, "pending_outbox_file_count": 0},
+        inbound={"events": []},
+    )
+    rendered = hooks.format_delta(payload)
+    bar = rendered.splitlines()[0]
+    assert "pending" not in bar
+
+
+# ── The `.mood` control channel (#566 layer 2) ───────────────────────────
+
+
+def test_post_tool_mood_renders_as_a_bar_segment_with_keep_prompt(tmp_path):
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    (tmp_path / hooks.MOOD_NAME).write_text("bo_Od\n", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "mood bo_Od·keep?" in ctx
+
+
+def test_post_tool_mood_absent_renders_no_segment(tmp_path):
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "keep?" not in ctx
+    assert "mood" not in ctx
+
+
+def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
+    # Seed/stop stay affirmative prose (#513) — mood still rides every
+    # boundary (#566), just not compressed into a bar segment there.
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.MOOD_NAME).write_text("curious", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "- mood: curious" in ctx
+    assert "keep or change" in ctx
+
+
+def test_mood_malformed_file_is_read_defensively(tmp_path):
+    # A huge, newline-free `.mood` must never bloat the boundary or crash
+    # rendering — first line only, hard-capped at read time.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    (tmp_path / hooks.MOOD_NAME).write_text("x" * 5000, encoding="utf-8")
+    out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert code == 0
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert len(ctx) < 2000
+
+
+def test_mood_blank_file_renders_no_segment(tmp_path):
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    (tmp_path / hooks.MOOD_NAME).write_text("   \n\nsecond line\n", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "keep?" not in ctx
+
+
+def test_mood_chip_truncates_a_long_name():
+    chip = hooks._mood_chip("a-very-long-mood-name-that-overflows-the-chip")
+    assert chip == "a-very-long-mood…"
+    assert len(chip) <= hooks._MOOD_DISPLAY_MAX_CHARS + 1
+
+
+def test_emote_glyph_degrades_to_none_when_module_absent():
+    # `brr.emotes` (#566) does not exist in this tree yet — the resolver
+    # must degrade silently, never raise, so the raw mood name still renders.
+    assert hooks._emote_glyph("bo_Od") is None
+    assert hooks._mood_chip("bo_Od") == "bo_Od"
+
+
+def test_quota_chip_disambiguates_a_repeated_first_letter():
+    # Two per-model week buckets that would otherwise both abbreviate to the
+    # same letter must not collapse into one chip.
+    resources = {
+        "quota": {
+            "status": "known",
+            "summary": "Wisp week 10% left; Wren week 20% left",
+        },
+    }
+    chip = hooks._quota_chip(resources)
+    assert chip is not None
+    letters = chip[len("q "):].split("·")
+    assert len(letters) == 2
+    assert letters[0] != letters[1]
