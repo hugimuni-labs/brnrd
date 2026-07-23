@@ -366,7 +366,49 @@ def _build_dominion_block(repo_root: Path) -> str:
         "Self-injected below per your `self-inject` index — yours to "
         "reshape:\n\n"
         f"{digest}"
+        f"{_schedule_lint_note(repo_root, path)}"
     )
+
+
+def _schedule_lint_note(repo_root: Path, dominion_dir: Path) -> str:
+    """The mechanical schedule-lint addendum for this wake, or ``""`` (#579).
+
+    Deliberately **not** tied to the self-inject manifest. The first shape of
+    this hooked the block onto whichever manifest entry rendered
+    ``schedule.md`` — which reads sensibly and ships dark: `self-inject` is
+    opt-in per dominion, the seed lists only the playbook, and this account's
+    own production manifest lists only the playbook too. A linter wired
+    exclusively to an opt-in surface is a linter that never runs, and its
+    tests pass only because the fixture opts in.
+
+    So it rides the dominion block itself, which is always assembled when a
+    dominion exists. That is affordable precisely because zero findings render
+    zero bytes: the common case costs nothing, and the rare case is the whole
+    point. Every input is a local read (parsed ``schedule.md``, the firing
+    state cache, the network-free PR cache) — no network joins the wake path.
+    Never raises: a lint pass is a bonus, not a wake-blocking dependency.
+    """
+    import time
+
+    from . import forge_pr_cache
+    from . import gitops
+    from . import schedule as schedule_mod
+
+    try:
+        now = time.time()
+        entries = schedule_mod.parse_schedule(dominion_dir)
+        if not entries:
+            return ""
+        findings = schedule_mod.lint_schedule(
+            entries,
+            now=now,
+            state=schedule_mod.load_state(gitops.shared_brr_dir(repo_root)),
+            forge=forge_pr_cache.read_state(repo_root, now=now),
+        )
+        block = schedule_mod.render_lint_block(findings)
+    except Exception:  # noqa: BLE001 - a lint pass never blocks a wake
+        return ""
+    return f"\n\n{block}" if block else ""
 
 
 def _build_identity_core_block(_repo_root: Path) -> str:
