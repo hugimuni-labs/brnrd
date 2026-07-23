@@ -666,13 +666,17 @@ def find_event_by_origin_message(
 
 
 # Window for the cross-thread duplicate fallback in
-# `_dedupe_woven_records` — mirrors `daemon.py`'s
-# `_DEDUP_WINDOW_SECONDS_DEFAULT` (dispatch-time re-delivery dedup),
-# since both describe the same phenomenon: the cloud gate mirrors
-# telegram, fanning one external message out to two conversation keys
-# within seconds of each other. A body-hash match this far apart is
-# treated as the same delivery; further apart, as a genuine repeat.
-_CORRESPONDENT_DEDUP_WINDOW_SECONDS = 6 * 3600.0
+# `_dedupe_woven_records`. Deliberately *not* `daemon.py`'s
+# `_DEDUP_WINDOW_SECONDS_DEFAULT` (6h), though the first draft of this
+# borrowed it: that constant bounds *re-delivery* — the same external
+# message arriving again after an outage or a retry, which can be hours
+# late. What this collapses is a *fan-out*: one delivery written to two
+# conversation keys by the same dispatch pass, seconds apart. Two
+# predicates that read alike answering different questions, so they get
+# different numbers. Fifteen minutes is already orders of magnitude more
+# slack than a fan-out needs; wider than that only buys the chance to
+# eat a real repeat.
+_CORRESPONDENT_DEDUP_WINDOW_SECONDS = 15 * 60.0
 
 
 def _correspondent_dedup_identity(record: dict[str, Any]) -> tuple[str, ...] | None:
@@ -760,22 +764,31 @@ def _dedupe_woven_records(
             continue
         ts_epoch = _ts_epoch(record)
         prior = last_seen.get(identity)
+        other_key = str(record.get("conversation_key") or "").strip()
         if (
             prior is not None
             and (ts_epoch - prior[0]) <= _CORRESPONDENT_DEDUP_WINDOW_SECONDS
         ):
             index = prior[1]
             survivor = kept[index]
-            other_key = str(record.get("conversation_key") or "").strip()
             survivor_key = str(survivor.get("conversation_key") or "").strip()
-            if other_key and other_key != survivor_key:
+            # Only a *cross-key* pair is a mirror. Two matching bodies on
+            # the same conversation key are one person saying the same
+            # thing twice — most often because nobody answered the first
+            # time, which makes the repeat the highest-signal turn in the
+            # thread, not noise. Collapsing it would also be the one
+            # branch that erases a turn with no provenance to record
+            # (`duplicate_conversation_keys` has nothing to name when
+            # both copies sit on the same key). That unrecordable branch
+            # is the tell that it should never have been reachable.
+            if other_key and survivor_key and other_key != survivor_key:
                 dupes = list(survivor.get("duplicate_conversation_keys") or [])
                 if other_key not in dupes:
                     dupes.append(other_key)
                     survivor = {**survivor, "duplicate_conversation_keys": dupes}
                     kept[index] = survivor
-            last_seen[identity] = (ts_epoch, index)
-            continue
+                last_seen[identity] = (ts_epoch, index)
+                continue
         last_seen[identity] = (ts_epoch, len(kept))
         kept.append(record)
     return kept
