@@ -18,7 +18,7 @@ Each finding carries a ``severity``:
 
 - ``error``: a structural inconsistency the scanner is confident
   about. Existing types: ``missing-from-index``, ``stale-index-entry``,
-  ``broken-link``, ``missing-index``.
+  ``broken-link``, ``missing-index``, ``log-ordering-violation``.
 - ``warning``: a heuristic advisory worth acting on when proportional.
   Types: ``oversized-page``, ``missing-status-marker``,
   ``revision-history-heavy``.
@@ -160,6 +160,14 @@ _REFERENCE_LINK_RE = re.compile(r"^\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 
 _LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
 
+# Match the dated form of a log heading — ``## [YYYY-MM-DD] ...`` — used
+# to pull the date out of an entry whose text starts at a ``_LOG_ENTRY_RE``
+# boundary. A plain ``## Title`` (no bracket) never reaches
+# ``_LOG_ENTRY_RE`` in the first place; a bracketed-but-undated heading
+# (rare, malformed) fails this and is treated as undated: skipped by the
+# ordering check, not an error.
+_LOG_DATE_HEADING_RE = re.compile(r"^## \[(\d{4}-\d{2}-\d{2})\]")
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -222,6 +230,7 @@ def scan(repo_root: Path, kb_dir: Path | None = None) -> list[Finding]:
     findings.extend(_check_missing_status_marker(kb_dir, pages))
     findings.extend(_check_revision_history_heavy(kb_dir, pages))
     findings.extend(_check_recent_log_budget(kb_dir))
+    findings.extend(_check_log_ordering(kb_dir))
     findings.extend(_check_hub_coverage(kb_dir, index_path))
     findings.extend(_check_proposal_scaffolding(kb_dir, pages))
 
@@ -476,6 +485,102 @@ def _check_recent_log_budget(kb_dir: Path) -> list[Finding]:
             "context block."
         ),
         severity="info",
+    )]
+
+
+def _check_log_ordering(kb_dir: Path) -> list[Finding]:
+    """Flag the first place kb/log.md's dated headings go non-ascending.
+
+    ``AGENTS.md`` → "Read recent activity" mandates that ``kb/log.md``
+    appends newest entries to the *bottom* (ascending by date), and
+    ``prompts._read_recent_log`` walks the file bottom-up trusting
+    exactly that. A hand-written wake once started *prepending* instead
+    and ran both conventions for nine days — silently breaking the
+    bottom-up walk for that whole span with no signal anywhere. This is
+    the deterministic guard against recurrence: it doesn't touch the
+    log's content or its data, only checks the ``## [YYYY-MM-DD]``
+    heading date sequence.
+
+    Only bracketed, dated headings participate; a plain ``## Title``
+    heading is skipped, not an error (behaviour #1). Reports the first
+    adjacent pair that breaks non-decreasing order — a heading lower in
+    the file dated earlier than the heading above it — and stops there;
+    later breaks in the same file aren't separate findings (behaviour
+    #3). The consequence line models ``prompts._read_recent_log``'s
+    bottom-up, byte-budget walk using this module's own
+    ``_RECENT_LOG_BYTES`` mirror (the entry-count cap lives only in
+    ``prompts`` and isn't duplicated here) to report how many entries
+    positioned above the offending boundary fall outside what a wake
+    would actually reach (behaviour #4).
+    """
+    log_path = kb_dir / "log.md"
+    if not log_path.exists():
+        return []
+    text = log_path.read_text(encoding="utf-8")
+    matches = list(_LOG_ENTRY_RE.finditer(text))
+    if len(matches) < 2:
+        return []
+
+    # (line_no, date-or-None, utf8 byte size) for every "## [" entry, in
+    # file order — dated and undated alike, since the byte-budget walk
+    # below needs every entry's size regardless of whether it's dated.
+    entries: list[tuple[int, str | None, int]] = []
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        entry_text = text[start:end]
+        date_match = _LOG_DATE_HEADING_RE.match(entry_text)
+        date = date_match.group(1) if date_match else None
+        line_no = text.count("\n", 0, start) + 1
+        entries.append((line_no, date, len(entry_text.encode("utf-8"))))
+
+    dated = [(i, ln, d) for i, (ln, d, _) in enumerate(entries) if d is not None]
+
+    boundary = None
+    for k in range(1, len(dated)):
+        _, prev_line, prev_date = dated[k - 1]
+        _, cur_line, cur_date = dated[k]
+        if cur_date < prev_date:
+            boundary = (prev_line, prev_date, cur_line, cur_date)
+            break
+    if boundary is None:
+        return []
+    prev_line, prev_date, cur_line, cur_date = boundary
+
+    # Mirror prompts._read_recent_log's bottom-up walk: always keep the
+    # newest (last) entry, then keep accepting older entries while the
+    # running byte total stays within budget; the first entry that would
+    # push it over budget, and everything older than it, is unreached.
+    used = 0
+    reached_from = len(entries)
+    for i in range(len(entries) - 1, -1, -1):
+        entry_bytes = entries[i][2]
+        projected = used + entry_bytes
+        if i != len(entries) - 1 and projected > _RECENT_LOG_BYTES:
+            break
+        used = projected
+        reached_from = i
+    unreachable = sum(
+        1 for line_no, date, _ in entries[:reached_from]
+        if date is not None and line_no < cur_line
+    )
+    noun = "entry" if unreachable == 1 else "entries"
+    consequence = (
+        f"{unreachable} {noun} above this boundary will not reach a wake "
+        f"under the current recent-log byte budget ({_RECENT_LOG_BYTES} "
+        "bytes)."
+    )
+
+    return [Finding(
+        type="log-ordering-violation",
+        target=f"kb/log.md:{cur_line}",
+        description=(
+            f"heading `[{cur_date}]` at line {cur_line} is dated earlier "
+            f"than the heading `[{prev_date}]` above it at line "
+            f"{prev_line}; kb/log.md must append newest entries to the "
+            "bottom (AGENTS.md → \"Read recent activity\"). "
+            + consequence
+        ),
     )]
 
 
