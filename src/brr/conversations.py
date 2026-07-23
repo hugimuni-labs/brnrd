@@ -29,6 +29,24 @@ file in the directory by ``ts``. Tailing only the latest rows uses
 ``read_recent``, which avoids loading whole files when *limit* is small
 (see that function's docstring).
 
+One human can reach the resident through more than one gate that all
+resolve to the same ``correspondent_key`` (a native ``telegram:<chat>:``
+thread and the ``cloud:telegram:<chat>:`` thread the cloud gate mirrors
+it onto are two conversation keys for one person).
+``read_records_for_correspondent`` / ``read_recent_for_correspondent`` /
+``build_communication_snapshot`` weave those sibling threads' records
+together for a wake: the *N* most recent dialogue turns across *all* of
+the correspondent's conversation keys, merged chronologically by ``ts``,
+one shared ``limit`` for the whole woven set rather than a per-thread
+budget. Because the dispatcher persists an inbound event on every
+conversation key it lands on even when it recognises a mirrored
+delivery and skips a second worker run, the same exchange can appear on
+two sibling keys' stores; the weave dedups those before applying
+``limit``, so a fixed budget is never spent twice on one exchange (see
+``_dedupe_woven_records``). The surviving copy keeps the sibling
+key(s) it also arrived on in ``duplicate_conversation_keys`` — dedup
+collapses the display, never the provenance.
+
 Single-line ``O_APPEND`` writes in binary mode rely on the kernel's
 guarantee that the offset advance and the write happen atomically
 together — defence in depth, since the per-event-file partitioning
@@ -41,6 +59,7 @@ kb page rather than asking brr for a typed identity field.
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import json
 import os
@@ -646,18 +665,152 @@ def find_event_by_origin_message(
     return None
 
 
+# Window for the cross-thread duplicate fallback in
+# `_dedupe_woven_records`. Deliberately *not* `daemon.py`'s
+# `_DEDUP_WINDOW_SECONDS_DEFAULT` (6h), though the first draft of this
+# borrowed it: that constant bounds *re-delivery* — the same external
+# message arriving again after an outage or a retry, which can be hours
+# late. What this collapses is a *fan-out*: one delivery written to two
+# conversation keys by the same dispatch pass, seconds apart. Two
+# predicates that read alike answering different questions, so they get
+# different numbers. Fifteen minutes is already orders of magnitude more
+# slack than a fan-out needs; wider than that only buys the chance to
+# eat a real repeat.
+_CORRESPONDENT_DEDUP_WINDOW_SECONDS = 15 * 60.0
+
+
+def _correspondent_dedup_identity(record: dict[str, Any]) -> tuple[str, ...] | None:
+    """Return the cross-thread duplicate identity for *record*, or None.
+
+    Only ``event`` records are eligible. They are the only records the
+    dispatcher persists on *every* conversation key an inbound message
+    lands on — even when it recognises the delivery as a mirror of one
+    already seen and skips a second worker run (``daemon.py``'s
+    dispatch path calls :func:`append_event` before it checks
+    :func:`find_event_by_origin_message`).
+
+    ``origin_message_key`` is *not*, on its own, a safe exact handle here
+    — checked against the live conversation store (#338), it is reused
+    on purpose by a respawn chain: ``daemon.py``'s own comment on
+    ``is_respawn_origin`` notes a respawned event "carries its parent's
+    telegram_chat_id / telegram_message_id / telegram_topic_id forward
+    so its eventual reply lands in the same thread," which recomputes to
+    the *same* ``origin_message_key`` for what is a genuinely new,
+    unrelated message. Live data confirmed this is not a rare edge case:
+    62 of 1186 origin-key groups on one real correspondent were exactly
+    this — same key, completely different body text, spanning most of a
+    thread's history. Treating ``origin_message_key`` alone as identity
+    would have silently collapsed dozens of real distinct turns.
+
+    So identity always includes a body hash — an origin-key match still
+    requires matching text to collapse, which is exactly what a genuine
+    mirrored delivery has (the cloud gate mirrors the literal message)
+    and a respawn continuation does not. When a record predates the
+    ``origin_message_key`` field or its source computes none, identity
+    falls back to the body hash alone; the caller windows every
+    body-hash-bearing identity by time so an unrelated old message that
+    merely repeats a later one's text is never mistaken for the same
+    delivery.
+    """
+    if record.get("kind") != "event":
+        return None
+    body = record.get("body")
+    if not isinstance(body, str):
+        return None
+    body = body.strip()
+    if not body:
+        return None
+    body_hash = hashlib.sha1(body.encode("utf-8")).hexdigest()
+    origin = str(record.get("origin_message_key") or "").strip()
+    if origin:
+        return ("origin", origin, body_hash)
+    return ("body", body_hash)
+
+
+def _dedupe_woven_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse cross-thread duplicates from a ``ts``-sorted merged list.
+
+    Two conversation keys for the same correspondent — a native gate and
+    the one that mirrors it (``telegram:<chat>:`` / ``cloud:telegram:
+    <chat>:``) — both persist the inbound event even when the dispatcher
+    recognises the mirrored delivery and skips a second worker run. Left
+    unmerged, the woven view shows that one exchange twice and a fixed
+    ``limit`` tail spends half its slots on the duplicate.
+
+    Identity is :func:`_correspondent_dedup_identity` — always body-hash
+    inclusive, per that function's docstring. Every identity is windowed
+    to ``_CORRESPONDENT_DEDUP_WINDOW_SECONDS`` (records must already be
+    ``ts``-sorted, so each candidate is checked against the nearest
+    prior occurrence of the same identity) — two genuinely repeated
+    identical messages days apart both survive as distinct turns; only a
+    near-simultaneous mirror collapses.
+
+    The earliest-arriving copy survives — the gate that actually
+    delivered first. Its ``duplicate_conversation_keys`` field names any
+    sibling conversation key(s) that also carried the exchange, so a
+    dedup never silently erases which pipes carried a turn.
+
+    O(n) over *records*: one dict lookup and update per record, no
+    second read of the conversation store.
+    """
+    kept: list[dict[str, Any]] = []
+    last_seen: dict[tuple[str, ...], tuple[float, int]] = {}
+    for record in records:
+        identity = _correspondent_dedup_identity(record)
+        if identity is None:
+            kept.append(record)
+            continue
+        ts_epoch = _ts_epoch(record)
+        prior = last_seen.get(identity)
+        other_key = str(record.get("conversation_key") or "").strip()
+        if (
+            prior is not None
+            and (ts_epoch - prior[0]) <= _CORRESPONDENT_DEDUP_WINDOW_SECONDS
+        ):
+            index = prior[1]
+            survivor = kept[index]
+            survivor_key = str(survivor.get("conversation_key") or "").strip()
+            # Only a *cross-key* pair is a mirror. Two matching bodies on
+            # the same conversation key are one person saying the same
+            # thing twice — most often because nobody answered the first
+            # time, which makes the repeat the highest-signal turn in the
+            # thread, not noise. Collapsing it would also be the one
+            # branch that erases a turn with no provenance to record
+            # (`duplicate_conversation_keys` has nothing to name when
+            # both copies sit on the same key). That unrecordable branch
+            # is the tell that it should never have been reachable.
+            if other_key and survivor_key and other_key != survivor_key:
+                dupes = list(survivor.get("duplicate_conversation_keys") or [])
+                if other_key not in dupes:
+                    dupes.append(other_key)
+                    survivor = {**survivor, "duplicate_conversation_keys": dupes}
+                    kept[index] = survivor
+                last_seen[identity] = (ts_epoch, index)
+                continue
+        last_seen[identity] = (ts_epoch, len(kept))
+        kept.append(record)
+    return kept
+
+
 def read_records_for_correspondent(
     brr_dir: Path,
     key: str,
     correspondent_key: str | None,
 ) -> list[dict[str, Any]]:
-    """Return merged records for the current thread's correspondent.
+    """Return merged, deduped records for the current thread's correspondent.
 
     The active *key* is always included. When the correspondent is known,
     sibling conversation directories that have carried the same
     ``correspondent_key`` are merged too, with ``conversation_key`` added
     to returned records so prompt renderers can show which pipe a turn
-    came through.
+    came through, sorted chronologically by ``ts``, and deduped so an
+    exchange mirrored onto more than one gate (e.g. the cloud gate
+    mirroring telegram) appears once — see :func:`_dedupe_woven_records`
+    for the identity and window. When *correspondent_key* is falsy this
+    is exactly the single-thread path (no merge, no dedup): only *key*'s
+    own records, unchanged from before dedup existed.
     """
     if not correspondent_key:
         return [_tag_record(r, key) for r in read_records(brr_dir, key)]
@@ -667,7 +820,7 @@ def read_records_for_correspondent(
     ):
         out.extend(_tag_record(r, related) for r in read_records(brr_dir, related))
     out.sort(key=_ts_key)
-    return out
+    return _dedupe_woven_records(out)
 
 
 def read_recent_for_correspondent(
@@ -678,7 +831,13 @@ def read_recent_for_correspondent(
     *,
     include_lifecycle: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return the recent tail for a thread plus its known sibling channels."""
+    """Return the ``limit`` most recent turns across a thread and its siblings.
+
+    One merged, chronological, deduped stream feeds *limit* — a single
+    budget for the whole woven set, not one per conversation key — so
+    dedup always runs (:func:`read_records_for_correspondent`) before the
+    tail is cut, and every slot in the returned tail is a distinct turn.
+    """
     records = read_records_for_correspondent(brr_dir, key, correspondent_key)
     if not include_lifecycle:
         records = [r for r in records if _is_dialogue_record(r)]
@@ -975,9 +1134,18 @@ def build_communication_snapshot(
     """Return the curated wake-time communication snapshot.
 
     The snapshot is prompt-facing: it shows which thread is active,
-    sibling channels for the same correspondent, and recent dialogue
-    turns woven across those channels. A bounded recent-tail copy of
-    deeper history lives in separate JSONL files produced by
+    sibling channels for the same correspondent, and the ``recent_limit``
+    most recent dialogue turns across *all* of those channels, merged
+    chronologically by ``ts`` into one budget for the whole woven set —
+    never a separate budget per thread. When a correspondent is known,
+    the merge is deduped (:func:`_dedupe_woven_records`) so an exchange
+    mirrored onto more than one gate (the cloud gate mirroring telegram)
+    contributes one turn, not one per pipe it rode in on; a deduped
+    turn's ``duplicate_conversation_keys`` names the sibling pipe(s) it
+    also arrived on. ``related_threads``' per-thread counts are each
+    thread's own raw record count, not deduped — they describe what that
+    thread's store actually holds. A bounded recent-tail copy of deeper
+    history lives in separate JSONL files produced by
     :func:`write_grouped_history_files`; the full, permanent history for
     every thread stays in the base conversation store
     (:func:`conversation_path`), named in each group's ``store_path``
@@ -996,6 +1164,10 @@ def build_communication_snapshot(
     for records in records_by_key.values():
         merged.extend(records)
     merged.sort(key=_ts_key)
+    if correspondent_key:
+        # Single-thread path (no correspondent) stays exactly as it was
+        # before dedup existed — there is only one gate to mirror against.
+        merged = _dedupe_woven_records(merged)
     prior = _without_current_records(
         merged, event_id=event_id, run_id=run_id,
     )
