@@ -2702,6 +2702,38 @@ def _run_worker(
             env["BRR_FLUSH_SYNC"] = "1"
         return _RunnerRuntime(meta, quota, env, extra_args, hooks_installed)
 
+    # Re-read the selected runner immediately before building the runtime.
+    # `resolve_runner_profile` ran ~600 lines back, before the trust/env
+    # setup, the worktree build, and the prompt assembly — a real window in
+    # which an operator can change the pin from the dashboard or `.brr/config`
+    # and watch the run start on the *old* one, with nothing saying why.
+    # Maintainer ask, 2026-07-23.
+    #
+    # Deliberately a re-resolution with the *same* overrides rather than a
+    # raw config read: an override in force (a dashboard wake request,
+    # `quality: escalate`) must keep winning, and passing the same overrides
+    # makes that true by construction instead of by a special case. This is
+    # also the last point where adopting a change is safe — every consumer
+    # of `runner_choice` that shapes the actual run (`_runner_runtime`, the
+    # catalog, `_record_task_runner`, the `expected_core` attestation) sits
+    # at or below this line.
+    reselected = runner.resolve_runner_profile(repo_root, runner_overrides or None)
+    if reselected.name != runner_choice.name:
+        print(
+            f"[brnrd] run {task.id} (event {eid}): selected runner changed "
+            f"{runner_choice.name} -> {reselected.name} between resolution and "
+            "spawn — adopting the current selection"
+        )
+        _record_outbox_notice(
+            outbox_dir,
+            f"runner selection changed between resolution and spawn: "
+            f"{runner_choice.name} -> {reselected.name}. The run starts on "
+            f"{reselected.name}, the currently-set profile.",
+        )
+        runner_choice = reselected
+        runner_name = runner_choice.name
+        runner_meta = runner_choice.portal_metadata()
+
     runtime = _runner_runtime(runner_choice)
     runner_meta = runtime.meta
     quota_summary = runtime.quota
