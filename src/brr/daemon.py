@@ -129,6 +129,12 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
+# #577: a dashboard wake-tap's claim window and staleness backstop.
+# Overridable via ``.brr/config`` (``dispatch.wake_request_claim_window_seconds``
+# / ``dispatch.wake_request_ttl_seconds``). See ``wake_request.py`` for the
+# mechanism these gate.
+_WAKE_REQUEST_CLAIM_WINDOW_DEFAULT = wake_request_mod.DEFAULT_CLAIM_WINDOW_S
+_WAKE_REQUEST_TTL_DEFAULT = wake_request_mod.DEFAULT_TTL_S
 _RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
 # How often a live daemon re-sweeps both run-truth stores for zombies. See
 # ``_sweep_zombie_runs``: boot-only made a data repair the user had to
@@ -1659,6 +1665,7 @@ def _apply_dashboard_wake_request(
     target: _DispatchTarget,
     account_context: account.AccountContext,
     default_repo_root: Path,
+    cfg: dict | None = None,
 ) -> _DispatchTarget:
     """Bind a parked dispatch-header choice to the lead event atomically.
 
@@ -1676,6 +1683,15 @@ def _apply_dashboard_wake_request(
     no receipt anywhere. The tap is a promise to *the next wake the
     maintainer is about to cause* — a schedule firing isn't that wake, so it
     must not spend the tap, whether or not it would otherwise apply.
+
+    #577: a tap read here can still be for *some other* wake — the mirror
+    file is repopulated every publish tick and this daemon has no way to
+    tell "still the same tap the maintainer meant a minute ago" from
+    "already stale, meant for whatever fired before this one" without a
+    timestamp. ``claimable_for_event`` judges that from the tap's
+    server-stamped ``parked_at`` against this event's own ``created``; a
+    tap that fails the check is not applied here, but also must not sit
+    armed for an unrelated later wake — see the lapse call below.
     """
     if any(target.event.get(key) for key in ("shell", "core", "runner")):
         return target
@@ -1683,7 +1699,12 @@ def _apply_dashboard_wake_request(
         return target
     original_target = target
     brr_dir = gitops.shared_brr_dir(default_repo_root)
-    request = wake_request_mod.pending(brr_dir)
+    ttl_seconds = float(
+        (cfg or {}).get(
+            "dispatch.wake_request_ttl_seconds", _WAKE_REQUEST_TTL_DEFAULT
+        )
+    )
+    request = wake_request_mod.pending(brr_dir, ttl_seconds=ttl_seconds)
     if request is None:
         return target
 
@@ -1712,6 +1733,29 @@ def _apply_dashboard_wake_request(
         # so the maintainer never got what he asked for *and* the tap was
         # gone. The server-side cancel path (no longer returning the
         # request) still reclaims it if it's simply wrong.
+        return original_target
+
+    claim_window = float(
+        (cfg or {}).get(
+            "dispatch.wake_request_claim_window_seconds",
+            _WAKE_REQUEST_CLAIM_WINDOW_DEFAULT,
+        )
+    )
+    if not wake_request_mod.claimable_for_event(
+        request, str(target.event.get("created") or ""),
+        window_seconds=claim_window,
+    ):
+        # #577: this dispatch was otherwise eligible (no pin, not a
+        # schedule wake, a profile this daemon knows) but the tap's
+        # server-stamped park time is outside the claim window for *this*
+        # event — it belongs to a wake that already came and went. Lapse
+        # rather than leave it armed to ambush whatever fires next.
+        wake_request_mod.lapse(
+            brr_dir, request["request_id"],
+            source=str(target.event.get("source") or ""),
+            event_id=str(target.event.get("id") or "") or None,
+            reason="tap parked outside the claim window for this wake",
+        )
         return original_target
 
     updates: dict[str, object] = {
@@ -1891,17 +1935,64 @@ def _run_worker(
         if event.get("dashboard_wake_request_id")
         else None
     )
-    wake_req = wake_request_mod.pending(brr_dir)
+    # #577: "you asked for X, you got Y, because Z" — surfaced on
+    # `resources.runner.wake_request` (facets.py) whenever a tap existed for
+    # this wake, whether or not it applied. `None` when no tap was ever in
+    # play, which is the common case and must read as absent, not as a miss.
+    wake_request_report: dict[str, object] | None = None
+    if event.get("dashboard_wake_request_id"):
+        wake_request_report = {
+            "requested_profile": str(event.get("runner") or "") or None,
+            "applied": True,
+            "reason": None,
+        }
+    wake_req_ttl = float(
+        cfg.get("dispatch.wake_request_ttl_seconds", _WAKE_REQUEST_TTL_DEFAULT)
+    )
+    wake_req = wake_request_mod.pending(brr_dir, ttl_seconds=wake_req_ttl)
     wake_req_source = str(event.get("source") or "")
-    if (
-        wake_req
-        and wake_req_source != "schedule"
-        and not any(
-            runner_overrides.get(key) for key in ("shell", "core", "runner")
-        )
-    ):
+    wake_req_has_override = any(
+        runner_overrides.get(key) for key in ("shell", "core", "runner")
+    )
+    if wake_req and wake_request_report is None:
+        # Not already bound at dispatch time (`_apply_dashboard_wake_request`
+        # saw nothing pending yet, or this daemon dispatches with no account
+        # context). #577: this is the second, later read the claim window
+        # is for — whatever the mirror has picked up since dispatch first
+        # looked is visible now, judged against this event's own timestamp
+        # rather than applied blind.
         requested_profile = wake_req["profile"]
-        if runner.profile_metadata(requested_profile, repo_root) is not None:
+        reason: str | None = None
+        if wake_req_has_override:
+            reason = "an event-level runner pin outranks the dashboard tap"
+        elif wake_req_source == "schedule":
+            reason = "a schedule-source wake never spends a dashboard tap"
+        elif runner.profile_metadata(requested_profile, repo_root) is None:
+            print(
+                f"[brnrd] wake request {wake_req['request_id']} names unknown "
+                f"profile '{requested_profile}'; dropping it"
+            )
+            # #564: don't consume on drop — see _apply_dashboard_wake_request.
+            reason = f"profile '{requested_profile}' is unknown to this daemon"
+        elif not wake_request_mod.claimable_for_event(
+            wake_req, str(event.get("created") or ""),
+            window_seconds=float(
+                cfg.get(
+                    "dispatch.wake_request_claim_window_seconds",
+                    _WAKE_REQUEST_CLAIM_WINDOW_DEFAULT,
+                )
+            ),
+        ):
+            reason = "tap parked outside the claim window for this wake"
+            # #577: this wake *was* otherwise eligible (no pin, not a
+            # schedule firing, a known profile) and still didn't fit — the
+            # tap belongs to a wake that already came and went. Lapse it
+            # rather than leave it armed to ambush whatever fires next.
+            wake_request_mod.lapse(
+                brr_dir, wake_req["request_id"],
+                source=wake_req_source, event_id=eid, reason=reason,
+            )
+        else:
             runner_overrides["runner"] = requested_profile
             runner_wake_note = "requested from the dashboard spool rack"
             wake_request_mod.consume(brr_dir, wake_req["request_id"])
@@ -1912,15 +2003,16 @@ def _run_worker(
                 event_id=eid,
                 profile=requested_profile,
             )
-        else:
-            print(
-                f"[brnrd] wake request {wake_req['request_id']} names unknown "
-                f"profile '{requested_profile}'; dropping it"
-            )
-            # #564: don't consume on drop — see _apply_dashboard_wake_request.
+        wake_request_report = {
+            "requested_profile": requested_profile,
+            "applied": reason is None,
+            "reason": reason,
+        }
     runner_choice = runner.resolve_runner_profile(
         repo_root, runner_overrides or None,
     )
+    if wake_request_report is not None:
+        wake_request_report["resolved_profile"] = runner_choice.name
     runner_name = runner_choice.name
     runner_meta: dict[str, object] = runner_choice.portal_metadata()
     quality_escalation = _quality_escalation_meta(repo_root, runner_name)
@@ -1976,6 +2068,8 @@ def _run_worker(
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
         task.meta["repo_label"] = repo_label
+        if wake_request_report is not None:
+            task.meta["wake_request"] = wake_request_report
         protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
         _persist_run_state_doc(
             account_context, task, repo_label=repo_label,
@@ -2047,6 +2141,11 @@ def _run_worker(
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
+    if wake_request_report is not None:
+        # #577: "you asked for X, you got Y, because Z" — carried onto the
+        # run so `_resources_facet` can surface it on `resources.runner`
+        # without the resident having to notice the miss on its own.
+        task.meta["wake_request"] = wake_request_report
     protocol.update_event_meta(event, run_id=task.id, repo_label=repo_label)
 
     # Source-trust tiering (#517): an untrusted event that no isolated
@@ -3889,6 +3988,7 @@ def _resources_facet(
     relay_consent: "dict[str, object] | None" = None,
     pacing_status: "dict[str, object] | None" = None,
     coexisting: "list[dict[str, object]] | None" = None,
+    wake_request: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -3903,6 +4003,12 @@ def _resources_facet(
     give (see ``_write_live_portal_state``'s ``brr_dir`` param) — passing
     ``None`` reproduces the previous always-``unimplemented`` behaviour
     exactly.
+
+    ``wake_request`` (#577) is ``task.meta["wake_request"]`` when this wake
+    had a dashboard tap in play: ``requested_profile`` / ``resolved_profile``
+    / ``applied`` / ``reason``, so "you asked for X, you got Y, because Z"
+    is readable without the resident having to notice a miss on its own.
+    ``None`` when no tap was ever pending for this wake.
     """
     return facets.build(
         quota_summary=quota_summary,
@@ -3917,6 +4023,7 @@ def _resources_facet(
         relay_consent=relay_consent,
         pacing_status=pacing_status,
         coexisting=coexisting,
+        wake_request=wake_request,
     )
 
 
@@ -4314,6 +4421,7 @@ def _write_live_portal_state(
                 relay_consent=relay_consent,
                 pacing_status=pacing_status,
                 coexisting=coexisting_snapshot,
+                wake_request=task.meta.get("wake_request"),
             ),
         }
         if task.meta.get("root_kind") == "home":
@@ -8848,7 +8956,7 @@ def start(
                         # multi-response ``event:`` path), so a burst becomes
                         # one thought, not one spawn per fragment.
                         target = _apply_dashboard_wake_request(
-                            pending[0], account_context, repo_root,
+                            pending[0], account_context, repo_root, cfg,
                         )
                         event = target.event
                         eid = event["id"]

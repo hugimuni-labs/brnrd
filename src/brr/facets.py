@@ -145,6 +145,7 @@ def _runner_block(
     relay_consent: "dict[str, object] | None" = None,
     runner_catalog: "list[dict[str, object]] | None" = None,
     levels: "dict[str, object] | None" = None,
+    wake_request: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the ``resources.runner`` governance block.
 
@@ -162,6 +163,14 @@ def _runner_block(
     ``relay_consent`` is optional and carries spending plan details when
     relay fallback is being offered: reason, model, provider, estimated costs,
     per-run cap, relay balance, and consent state (pending/approved/denied/capped).
+
+    ``wake_request`` (#577) is present exactly when a dashboard spool-rack
+    tap was in play for this wake: ``requested_profile`` / ``resolved_profile``
+    / ``applied`` (bool) / ``reason`` (``None`` when applied). This is the
+    "you asked for X, you got Y, because Z" surface — a tap that existed and
+    silently failed to apply used to be indistinguishable from no tap ever
+    having been parked; this key is what makes the miss visible without the
+    resident needing to notice on its own.
     """
     catalog = list(runner_catalog or [])
     if not runner_name:
@@ -170,6 +179,8 @@ def _runner_block(
         }
         if catalog:
             block["catalog"] = catalog
+        if wake_request:
+            block["wake_request"] = wake_request
         return block
     from . import claude_status, runner_select
 
@@ -221,6 +232,8 @@ def _runner_block(
         block["relay_consent"] = relay_consent
     if catalog:
         block["catalog"] = catalog
+    if wake_request:
+        block["wake_request"] = wake_request
     return block
 
 
@@ -238,6 +251,7 @@ def build(
     relay_consent: "dict[str, object] | None" = None,
     pacing_status: "dict[str, object] | None" = None,
     coexisting: "list[dict[str, object]] | None" = None,
+    wake_request: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -292,6 +306,10 @@ def build(
       ``kb/design-multi-workstream-concurrency.md`` names as ready-to-wire
       infrastructure for any future concurrent-workstream slice, independent
       of which fan-out shape ships.
+    - ``wake_request`` (#577) — ``task.meta["wake_request"]`` when a
+      dashboard spool-rack tap was in play for this wake; attached under
+      ``resources.runner.wake_request`` when present, absent otherwise. See
+      ``_runner_block`` for the shape.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -376,6 +394,7 @@ def build(
             relay_consent,
             runner_catalog,
             levels,
+            wake_request,
         ),
         "quota": quota_facet,
         "spend": spend_facet,
