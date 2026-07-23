@@ -125,6 +125,16 @@ class HookContext:
         repo = env.get("BRR_REPO_DIR")
         self.repo_dir = Path(repo) if repo else None
         self.seed_ref = (env.get("BRR_SEED_REF") or "").strip() or None
+        # Whether `gate: forge` is deliverable on this account, armed by the
+        # daemon from the same `_gate_can_deliver` probe the router itself
+        # uses (`daemon._runner_runtime`). This hook has no way to probe gate
+        # config on its own — only the runner env — so the `scm` closeout
+        # clause may name the `gate: forge` escape route only when this is
+        # set; absent (an older daemon, an ad-hoc hook run) reads as off,
+        # never as "assume it's there."
+        self.forge_gate = (
+            env.get("BRR_FORGE_GATE") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self.flush_sync = (
             env.get("BRR_FLUSH_SYNC") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -780,10 +790,17 @@ def _scm_closeout_clause(ctx: "HookContext") -> str | None:
     if missing_handoff:
         gaps.append("no PR or accepted `gate: forge` handoff")
     detail = "; ".join(p for p in (receipt, ", ".join(gaps)) if p)
+    # Name the `gate: forge` route only when the daemon told us it can
+    # actually deliver on this account (`ctx.forge_gate`) — a guard may only
+    # point at a door it has been told opens. Off (or unset) ⇒ the generic
+    # instruction, no route that may not exist.
+    handoff = (
+        "hand off the branch (`gate: forge`)" if ctx.forge_gate
+        else "open the PR yourself"
+    )
     return (
         f"the work isn't landed — {detail}. A host checkout publishes nothing "
-        "on its own; commit, push, and hand off the branch (`gate: forge`) "
-        "before ending"
+        f"on its own; commit, push, and {handoff} before ending"
     )
 
 
