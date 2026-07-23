@@ -65,7 +65,12 @@ Boundaries, hard ones:
   detail. Any open decision fork rides in that first turn too,
   recommendation named, never buried after the detail: density-first
   makes a mid-run update correctable in flight; forks-first makes it
-  *answerable* in flight.
+  *answerable* in flight. And the spiral has a **stop**: for a `full`
+  reader the reply is the *delta* — verdict, receipt, open fork, next
+  move; the run's arc already lives on the card/body, and a line the
+  card carries must earn its repetition. `profane` unfolds *deeper*,
+  not longer — depth for the reader, never a second telling for the
+  writer.
 - **kb pages, commit messages, code** — shared surfaces, many readers,
   long shelf life; `AGENTS.md` and the language's own grammar govern.
   This is where coinage dies: a stranger reading in a year shares none of

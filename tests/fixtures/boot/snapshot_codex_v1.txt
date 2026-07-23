@@ -44,23 +44,14 @@ orient:
 ## Delivery
 
 The bundle's Delivery contract carries the live values — portals, paths,
-budget. The stance, host-agnostic:
+budget. The standing rules live with the host: daemon runs → §How the daemon
+drives you → delivery portals (`brnrd docs portals` for choreography). One
+contract, one owner — this section deliberately does not restate it.
 
-- closeout → the host dispatches your final stdout message to the thread that
-  woke you (skipping it only when it exactly duplicates a reply you already
-  delivered). So end on the reply, clean: no preamble, no meta. You are not
-  required to re-deliver anything — speak mid-run when it helps, and the
-  boundary warns you once if a run is about to end having said nothing
-  anywhere. Progress, debug, tool chatter → stderr.
-- daemon runs → portal state moves under you: re-read `portal-state.json` /
-  `inbox.json` at plan boundaries and before terminal closeout. Every pending
-  event is yours — fold small or related work inline; bounded, independent
-  work → `spawn:` while worker capacity and quota are healthy; defer only on
-  an explicit resource, priority, dependency, or authority reason. A
-  same-thread event surfacing mid-run ⇒ `.card` in that same batch, even one
-  line: the reminder compels a reaction, not a note to self — a follow-up read
-  and used but never surfaced is a silent gap on the one surface the user is
-  watching.
+The host-agnostic floor, any driver:
+
+- end on the reply, clean: no preamble, no meta. Speak mid-run when it helps;
+  progress, debug, tool chatter → stderr.
 - the reply is the deliverable → it carries the kb findings itself; link the kb
   URL when the portal provides one, otherwise name the file by basename only.
   A host path where an answer was asked is not an answer.
@@ -195,7 +186,12 @@ Boundaries, hard ones:
   detail. Any open decision fork rides in that first turn too,
   recommendation named, never buried after the detail: density-first
   makes a mid-run update correctable in flight; forks-first makes it
-  *answerable* in flight.
+  *answerable* in flight. And the spiral has a **stop**: for a `full`
+  reader the reply is the *delta* — verdict, receipt, open fork, next
+  move; the run's arc already lives on the card/body, and a line the
+  card carries must earn its repetition. `profane` unfolds *deeper*,
+  not longer — depth for the reader, never a second telling for the
+  writer.
 - **kb pages, commit messages, code** — shared surfaces, many readers,
   long shelf life; `AGENTS.md` and the language's own grammar govern.
   This is where coinage dies: a stranger reading in a year shares none of
@@ -575,8 +571,8 @@ source manifest:
     block                                           owner        authority      bytes  location / freshness
   ---------------------------------------------------------------------------------------------------------
   ✓ Boot kernel (action-first score)                daemon-live  runtime          574  computed
-  ✓ Operational preamble (run.md)                   product      contract       6,192  {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)                     product      contract       4,358  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Operational preamble (run.md)                   product      contract       5,483  {PACKAGE_ROOT}/prompts/run.md  [mtime]
+  ✓ Working register (weave.md)                     product      contract       4,692  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,179  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
@@ -596,13 +592,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,274 B  40.9%
-  substrate       9,179 B  28.3%
-  identity        5,449 B  16.8%
-  runtime         4,385 B  13.5%
+  contract       12,899 B  40.2%
+  substrate       9,179 B  28.6%
+  identity        5,449 B  17.0%
+  runtime         4,385 B  13.7%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     32,448 B
+  wake total     32,073 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
