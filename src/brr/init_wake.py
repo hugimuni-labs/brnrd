@@ -57,9 +57,13 @@ _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
 _KEEPALIVE_NAME = ".keepalive"
 _NAME_NAME = ".name"
+# Resident-authored mood glyph/name (#566 layer 2) — same control-dotfile
+# idiom as `.card`/`.keepalive`/`.name`, registered here for the same reason:
+# never chat, never delivered. See `hooks.MOOD_NAME`.
+_MOOD_NAME = ".mood"
 
 #: Outbox dotfiles that are control surfaces, never chat.
-_CONTROL_FILES = frozenset({_CARD_NAME, _KEEPALIVE_NAME, _NAME_NAME})
+_CONTROL_FILES = frozenset({_CARD_NAME, _KEEPALIVE_NAME, _NAME_NAME, _MOOD_NAME})
 
 
 @dataclass
