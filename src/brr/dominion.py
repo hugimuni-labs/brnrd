@@ -318,7 +318,7 @@ class InjectOverflow:
     """
 
     budget_bytes: int
-    clipped_entry: str  # manifest line clipped at a structural boundary; "" if none was
+    clipped_entry: str  # manifest line section-collapsed to fit budget; "" if none was
     clipped_dropped_bytes: int  # bytes cut from clipped_entry
     dropped_entries: tuple[tuple[str, int], ...]  # (manifest line, byte size) never rendered at all
     total_dropped_bytes: int  # clipped_dropped_bytes + every dropped_entries size
@@ -335,27 +335,278 @@ class InjectOverflow:
         return (self.total_dropped_bytes / self.total_source_bytes) * 100
 
 
-def _clip_to_structural_boundary(fragment: str, max_bytes: int) -> tuple[str, int]:
-    """Clip *fragment* to at most *max_bytes* UTF-8 bytes, backing off to the
-    last full paragraph (blank-line break) or, failing that, the last full
-    line before the limit — never a raw byte offset. A severed sentence
-    reads as a rule whose condition survived and whose remedy didn't, which
-    is worse than the rule being absent; a clean stop at a boundary is
-    legible instead. Not a Markdown parser — just paragraph/line boundaries.
+_H2_RE = re.compile(r"(?m)^## .*$")
 
-    Returns ``(clipped_text, bytes_dropped)``, where *bytes_dropped* is
-    measured against the original (unclipped) fragment.
+
+def _split_h2_sections(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split *text* into a preamble and its H2 (``## ``) sections.
+
+    Each section is ``(heading_line, body)``, where *body* is everything
+    from just after the heading through (not including) the next H2 heading
+    — so ``preamble + "".join(h + b for h, b in sections) == text`` exactly.
+    Playbooks are ordered most-important-first (invariants at top): the
+    preamble outranks every section, and earlier sections outrank later
+    ones. An empty section list means *text* has no H2 headings at all —
+    the caller's degenerate case, handled by :func:`_collapse_blocks_to_budget`.
     """
-    total = len(fragment.encode("utf-8"))
-    if max_bytes <= 0:
-        return "", total
-    raw = fragment.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
-    boundary = raw.rfind("\n\n")
-    if boundary == -1:
-        boundary = raw.rfind("\n")
-    clipped = (raw[:boundary] if boundary > 0 else raw).rstrip()
-    dropped = total - len(clipped.encode("utf-8"))
-    return clipped, dropped
+    matches = list(_H2_RE.finditer(text))
+    if not matches:
+        return text, []
+    preamble = text[: matches[0].start()]
+    sections: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections.append((m.group(), text[body_start:body_end]))
+    return preamble, sections
+
+
+def _split_blocks(text: str) -> list[str]:
+    """Split *text* into blank-line-separated top-level blocks.
+
+    Each block keeps its own trailing blank-line separator (if any), so
+    ``"".join(_split_blocks(text)) == text`` exactly — reconstructing the
+    unclipped original never has to guess at whitespace.
+    """
+    pieces = re.split(r"(\n{2,})", text)
+    blocks: list[str] = []
+    for i in range(0, len(pieces), 2):
+        block = pieces[i] + (pieces[i + 1] if i + 1 < len(pieces) else "")
+        if block:
+            blocks.append(block)
+    return blocks
+
+
+def _collapse_stub(dropped: str, *, source_label: str) -> str:
+    """The one-line stand-in for a section/block collapsed to fit budget.
+
+    Names its own size so the resident can judge, from the stub alone,
+    whether the collapsed material is worth reading in full — and where.
+    """
+    lines = len(dropped.splitlines())
+    n_bytes = len(dropped.encode("utf-8"))
+    return (
+        f"_(§ collapsed: {lines} lines, {n_bytes:,} bytes — "
+        f"full text: {source_label})_"
+    )
+
+
+def _render_collapse_banner(
+    *,
+    source_label: str,
+    source_bytes: int,
+    budget_bytes: int,
+    rendered_bytes: int,
+    collapsed: tuple[str, ...],
+) -> str:
+    """Mandatory, resident-facing banner whenever section/block collapse
+    fired — never a silent reshuffle. Exact byte math, not "roughly": a
+    resident can act on "34% of playbook.md collapsed, here's which
+    sections", it can't act on a vague "some content was cut"."""
+    lines = [
+        f"> **self-inject collapsed `{source_label}` to fit budget**",
+        (
+            f"> source {source_bytes:,} B, budget {budget_bytes:,} B, "
+            f"rendered {rendered_bytes:,} B."
+        ),
+    ]
+    if collapsed:
+        shown = collapsed[:8]
+        names = ", ".join(shown)
+        if len(collapsed) > len(shown):
+            names += f", and {len(collapsed) - len(shown)} more"
+        lines.append(f"> collapsed bottom-up: {names}")
+    return "\n".join(lines)
+
+
+def _collapse_blocks_to_budget(
+    text: str, max_bytes: int, *, source_bytes: int, source_label: str,
+) -> tuple[str, int]:
+    """Degenerate-input fallback for :func:`_collapse_markdown_to_budget`:
+    *text* has no H2 headings at all, so there is no section to key
+    priority off. Falls back to the same bottom-up treatment at
+    blank-line-separated block granularity — still never a mid-line cut.
+    The first block (the opening, highest-priority material) is kept whole
+    whenever any other block can be collapsed instead.
+    """
+    blocks = _split_blocks(text)
+    collapsed = [False] * len(blocks)
+    labels: list[str] = []
+
+    def render() -> str:
+        parts = []
+        for i, block in enumerate(blocks):
+            parts.append(
+                _collapse_stub(block, source_label=source_label) + "\n\n"
+                if collapsed[i]
+                else block
+            )
+        return "".join(parts)
+
+    def with_banner() -> tuple[str, int]:
+        # The banner names its own rendered size, which is a fixed point:
+        # guess a size, render, and stop once the render's actual byte
+        # length matches the guess (converges in 1-2 steps — the only thing
+        # that can move is the digit/comma width of the number itself).
+        body_text = render()
+        size_guess = 0
+        candidate = ""
+        for _ in range(4):
+            banner = _render_collapse_banner(
+                source_label=source_label,
+                source_bytes=source_bytes,
+                budget_bytes=max_bytes,
+                rendered_bytes=size_guess,
+                collapsed=tuple(labels),
+            )
+            candidate = f"{banner}\n\n{body_text}" if body_text.strip() else banner
+            actual = len(candidate.encode("utf-8"))
+            if actual == size_guess:
+                break
+            size_guess = actual
+        return candidate, len(candidate.encode("utf-8"))
+
+    def dropped_bytes() -> int:
+        return sum(
+            len(blocks[i].encode("utf-8")) for i in range(len(blocks)) if collapsed[i]
+        )
+
+    for i in range(len(blocks) - 1, 0, -1):
+        rendered, size = with_banner()
+        if size <= max_bytes:
+            return rendered, dropped_bytes()
+        collapsed[i] = True
+        labels.append(f"block {i + 1}")
+
+    rendered, _size = with_banner()
+    return rendered, dropped_bytes()
+
+
+def _collapse_markdown_to_budget(
+    text: str, max_bytes: int, *, source_label: str,
+) -> tuple[str, int]:
+    """Fit *text* into *max_bytes* UTF-8 bytes by collapsing whole sections
+    bottom-up, never a mid-line byte cut.
+
+    Playbooks are ordered most-important-first — invariants at top — so a
+    budget shortfall must collapse the *least* important material first:
+    H2 (``## ``) sections from the bottom of the document upward, each
+    replaced by a one-line stub (see :func:`_collapse_stub`) under its own
+    heading. The preamble (content before the first H2) is the
+    highest-priority material and is never collapsed.
+
+    If collapsing every section but the topmost still doesn't fit, the
+    topmost section's own trailing blocks (paragraphs / list items) collapse
+    next, bottom-up, within that section — same stub, never mid-line.
+    Documents with no H2 headings at all fall back to the same bottom-up
+    treatment at blank-line-separated block granularity (see
+    :func:`_collapse_blocks_to_budget`).
+
+    A banner naming the exact byte math and which sections collapsed rides
+    at the top of the return value whenever *text* didn't already fit
+    (never silent) and counts toward *max_bytes* itself.
+
+    Returns ``(text, 0)`` unchanged — byte-identical — when *text* already
+    fits *max_bytes*. Otherwise returns ``(rendered, bytes_dropped)``, where
+    *bytes_dropped* is the source bytes of whatever got replaced by a stub
+    (banner and stub overhead don't count as "dropped" — they're new,
+    informational bytes, not content that vanished).
+    """
+    source_bytes = len(text.encode("utf-8"))
+    if source_bytes <= max_bytes:
+        return text, 0
+
+    preamble, sections = _split_h2_sections(text)
+    if not sections:
+        return _collapse_blocks_to_budget(
+            text, max_bytes, source_bytes=source_bytes, source_label=source_label,
+        )
+
+    headings = [heading for heading, _ in sections]
+    bodies = [body for _, body in sections]
+    n = len(sections)
+    collapsed = [False] * n
+    labels: list[str] = []
+    top_trim: str | None = None  # replacement body for section 0, once trimmed
+
+    def section_label(i: int) -> str:
+        return headings[i].removeprefix("## ").strip()
+
+    def render() -> str:
+        parts = [preamble]
+        for i in range(n):
+            if collapsed[i]:
+                stub = _collapse_stub(bodies[i], source_label=source_label)
+                parts.append(f"{headings[i]}\n{stub}\n")
+            elif i == 0 and top_trim is not None:
+                parts.append(headings[0] + top_trim)
+            else:
+                parts.append(headings[i] + bodies[i])
+        return "".join(parts)
+
+    def with_banner() -> tuple[str, int]:
+        # The banner names its own rendered size, which is a fixed point:
+        # guess a size, render, and stop once the render's actual byte
+        # length matches the guess (converges in 1-2 steps — the only thing
+        # that can move is the digit/comma width of the number itself).
+        body_text = render()
+        size_guess = 0
+        candidate = ""
+        for _ in range(4):
+            banner = _render_collapse_banner(
+                source_label=source_label,
+                source_bytes=source_bytes,
+                budget_bytes=max_bytes,
+                rendered_bytes=size_guess,
+                collapsed=tuple(labels),
+            )
+            candidate = f"{banner}\n\n{body_text}" if body_text.strip() else banner
+            actual = len(candidate.encode("utf-8"))
+            if actual == size_guess:
+                break
+            size_guess = actual
+        return candidate, len(candidate.encode("utf-8"))
+
+    top_dropped_bytes = 0
+
+    def dropped_bytes() -> int:
+        total = sum(
+            len(bodies[i].encode("utf-8")) for i in range(n) if collapsed[i]
+        )
+        return total + top_dropped_bytes
+
+    # Pass 1: whole sections, bottom-up, topmost (index 0) exempt.
+    for i in range(n - 1, 0, -1):
+        rendered, size = with_banner()
+        if size <= max_bytes:
+            return rendered, dropped_bytes()
+        collapsed[i] = True
+        labels.append(section_label(i))
+
+    rendered, size = with_banner()
+    if size <= max_bytes:
+        return rendered, dropped_bytes()
+
+    # Pass 2: every section but the topmost is gone and it still doesn't
+    # fit — trim the topmost section's own trailing blocks, bottom-up.
+    blocks = _split_blocks(bodies[0])
+    labels.append(f"{section_label(0)} (trailing items)")
+    for cut in range(len(blocks) - 1, -1, -1):
+        kept = "".join(blocks[:cut])
+        dropped = "".join(blocks[cut:])
+        # Keep the heading/body newline even when nothing of the section
+        # survives (kept == "") — otherwise the heading and the stub run
+        # together on one line.
+        prefix = kept if kept.endswith("\n") else kept + "\n"
+        top_trim = prefix + _collapse_stub(dropped, source_label=source_label) + "\n"
+        top_dropped_bytes = len(dropped.encode("utf-8"))
+        rendered, size = with_banner()
+        if size <= max_bytes:
+            return rendered, dropped_bytes()
+
+    # Nothing left to trim without touching the preamble itself — return the
+    # tightest achievable render (topmost section down to just its stub).
+    return rendered, dropped_bytes()
 
 
 def _dropped_entry_marker(label: str, frag_bytes: int) -> str:
@@ -390,8 +641,9 @@ def _render_overflow_banner(overflow: InjectOverflow) -> str:
     ]
     if overflow.clipped_entry:
         lines.append(
-            f"> clipped at a structural boundary: `{overflow.clipped_entry}` "
-            f"— {overflow.clipped_dropped_bytes:,} B cut."
+            f"> section-collapsed to fit: `{overflow.clipped_entry}` "
+            f"— {overflow.clipped_dropped_bytes:,} B cut (see its own "
+            "collapse banner below for which sections)."
         )
     if overflow.dropped_entries:
         names = ", ".join(
@@ -423,10 +675,10 @@ def resolve_self_inject_digest(
     missing, empty, or resolves to nothing. *overflow* is ``None`` on the
     happy path (everything fit — digest is byte-identical to a budget-less
     render) and an :class:`InjectOverflow` when something didn't fit: the
-    first entry that overflows the budget is clipped at a structural
-    boundary rather than a byte offset, and every entry after it still gets
-    a rendered marker naming it and its size — nothing is ever dropped to
-    zero silently.
+    first entry that overflows the budget is section-aware collapsed (see
+    :func:`_collapse_markdown_to_budget`) rather than cut at a byte offset,
+    and every entry after it still gets a rendered marker naming it and its
+    size — nothing is ever dropped to zero silently.
     """
     manifest = dominion_dir / SELF_INJECT_FILE
     if not manifest.exists():
@@ -461,27 +713,25 @@ def resolve_self_inject_digest(
             continue
 
         if not overflowed:
-            # First entry that doesn't fit: clip at a structural boundary
-            # and switch to accounting mode. Nothing past this point gets
-            # real content (the budget is spent), but every entry — this
-            # one included — still gets something rendered.
+            # First entry that doesn't fit: collapse it section-aware and
+            # switch to accounting mode. Nothing past this point gets real
+            # content (the budget is spent), but every entry — this one
+            # included — still gets something rendered.
             overflowed = True
             remaining = budget_bytes - used - sep
-            clipped_text = ""
-            clip_drop = frag_bytes
+            collapsed_text = ""
+            collapse_drop = frag_bytes
             if remaining > 0:
-                clipped_text, clip_drop = _clip_to_structural_boundary(
-                    fragment, remaining,
+                collapsed_text, collapse_drop = _collapse_markdown_to_budget(
+                    fragment, remaining, source_label=Path(target).name,
                 )
-            if clipped_text.strip():
-                fragments.append(
-                    f"{clipped_text}\n\n…[truncated to fit dominion inject budget]"
-                )
+            if collapsed_text.strip():
+                fragments.append(collapsed_text)
                 clipped_label = line
-                clipped_dropped = clip_drop
-                clipped_kept_bytes = len(clipped_text.encode("utf-8"))
+                clipped_dropped = collapse_drop
+                clipped_kept_bytes = len(collapsed_text.encode("utf-8"))
             else:
-                # No room even for a boundary-respecting clip — this entry
+                # No room even for the collapse banner itself — this entry
                 # is fully dropped, exactly like every one after it.
                 dropped_entries.append((line, frag_bytes))
                 fragments.append(_dropped_entry_marker(line, frag_bytes))
