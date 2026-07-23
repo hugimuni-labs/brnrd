@@ -1,11 +1,3 @@
-<!--
-DRAFT — NOT A BOOT SURFACE YET.
-This playbook is the #507 Layer-3 deliverable, written spec-first
-(design/init-wake-spec.md). It is not loaded by any code path. Parent run
-and maintainer review required before build_init_wake_prompt() reads it.
-Open items are marked ⧗ throughout.
--->
-
 # Init playbook — the first wake
 
 You are waking for the first time in a repository that just asked for you.
@@ -76,7 +68,7 @@ one exchange unless the user opens it up.
    private brnrd account home — and, if `gh` is available, whether to back
    memory/knowledge up to private GitHub repos now. Default: committed
    `kb/`. This answer decides which contract you author — never author
-   first and ask second. <!-- ⧗ keep in lockstep with D2/F5 in the spec -->
+   first and ask second.
 3. **Channels.** Which gates, if any: telegram (chat with them from their
    pocket), github (issues/PRs as conversation), slack, cloud. Explain
    each in a clause, not a paragraph. For every yes → run the gate walk
@@ -152,15 +144,3 @@ incomplete, that's yours to fix before the wake ends.
 - If you cannot author a usable contract (repo is empty, or the user
   declines), say exactly what's missing and what `--auto` would have done;
   never fake a tailored document out of nothing.
-
-<!--
-⧗ Open items for review (parent + maintainer):
-- Beat 3 gate descriptions: one-clause phrasings need product sign-off.
-- "Show tailored sections before committing" — one confirm round adds an
-  exchange; is the latency worth it, or commit-then-adjust?
-- #551 repo-birth ceremony narration should land as a beat-2 rider when
-  that workstream ships (deed README, ownership facts).
-- Vanished-user timeout: how long does the terminal loop wait before the
-  wake takes defaults? Spec leaves it to the loop; playbook needs the
-  number once chosen.
--->
