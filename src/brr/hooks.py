@@ -361,9 +361,12 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "mood", "mood",
         "the resident's own `.mood` control file (#566 layer 2), truncated "
         "to 16 chars, with the emote's base-frame glyph prefixed when "
-        "`brr.emotes` resolves the name. Always followed by `·keep?` — an "
-        "invitation to reconsider it, not an assertion it still holds. "
-        "Renders every boundary it is present.",
+        "`brr.emotes` resolves the name. Renders every boundary it is "
+        "present; on a boundary that *surprised* the run it also carries "
+        "`← <what happened>`, which is the ask — the mood channel questions "
+        "itself on an edge, not on every tick (#604). The older "
+        "unconditional `·keep?` suffix this entry used to document was "
+        "removed with that change.",
     ),
     _BarSegment(
         "card", "card",
@@ -531,14 +534,22 @@ _MOOD_DISPLAY_MAX_CHARS = 16
 def _emote_glyph(name: str) -> str | None:
     """Best-effort base-frame glyph for *name*, from `brr.emotes`.
 
-    `brr.emotes` (#566) is being built in parallel and may not exist yet, or
-    may exist without a resolvable entry for this name — both degrade to no
-    glyph (the raw name still renders) rather than raising. The import lives
-    inside the ``try``, not at module scope, so a not-yet-stable sibling
-    module can never break every hook boundary in this one; the broad
-    ``except`` extends the same tolerance to whatever shape its lookup ends
-    up taking (assumed here: a ``glyph(name) -> str | None`` function —
-    reconcile this call if the shipped module's surface differs).
+    `brr.emotes` may not be importable in a stripped install, and a name the
+    resident invented has no entry — both degrade to no glyph (the raw name
+    still renders) rather than raising. The import lives inside the ``try``,
+    not at module scope, so a sibling module can never break every hook
+    boundary in this one.
+
+    **The broad ``except`` is a tolerance, not a contract.** It was written
+    while `brr.emotes` was still in flight (#566 / #601) against an assumed
+    ``glyph(name)``, with a note to reconcile if the shipped surface
+    differed. It differed — the library shipped ``lookup`` / ``for_telemetry``
+    and no ``glyph`` — so every boundary since raised ``AttributeError`` here
+    and swallowed it, and the mood chip has rendered a bare name with no face
+    for its whole life. Nobody could see it, because a guard that catches the
+    signal it was meant to survive fails *quietly* by construction. The seam
+    is now a named function in `brr.emotes` and pinned by a test that renders
+    a real chip end to end; this guard covers only the cases named above.
     """
     try:
         from . import emotes  # type: ignore
