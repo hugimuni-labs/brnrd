@@ -546,10 +546,20 @@ def commit_all(
 # hook already on disk from that version still self-identifies as ours.
 _RUN_ID_HOOK_MARKER = "# brnrd: stamp Brnrd-Run-Id trailer (#565) — do not hand-edit"
 
+# The newline guard is load-bearing, not tidiness. ``git commit`` hands the
+# hook a message file ending in a newline, so ``interpret-trailers`` opens a
+# fresh paragraph and the trailer parses. ``git merge -m`` hands it a
+# message with **no trailing newline** — the trailer is then appended to the
+# subject's own paragraph, which means `%(trailers:key=…)` reports nothing
+# and `%s` renders as ``Merge feat Brnrd-Run-Id: run-…``. Merging a
+# reviewed branch is this project's canonical produce event, so without the
+# guard every host-run merge would be silently dropped by the identity
+# filter it is supposed to satisfy. Measured, not reasoned about.
 _RUN_ID_HOOK_SCRIPT = (
     "#!/bin/sh\n"
     f"{_RUN_ID_HOOK_MARKER}\n"
     'if [ -n "$BRR_RUN_ID" ]; then\n'
+    '  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf \'\\n\' >> "$1"; fi\n'
     f'  git interpret-trailers --if-exists doNothing '
     f'--trailer "{RUN_ID_TRAILER}=$BRR_RUN_ID" --in-place "$1"\n'
     "fi\n"

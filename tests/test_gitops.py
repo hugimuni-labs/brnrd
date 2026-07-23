@@ -458,6 +458,51 @@ def test_ensure_run_id_hook_installs_a_commit_msg_hook(tmp_path, monkeypatch):
     assert trailers == "run-hooked"
 
 
+def test_ensure_run_id_hook_stamps_a_merge_commit_parseably(tmp_path, monkeypatch):
+    """Merging a reviewed branch is this project's canonical produce event,
+    and it is the one commit shape ``git`` hands the hook **without** a
+    trailing newline: ``git merge -m`` writes the bare subject, so an
+    unguarded ``interpret-trailers`` appends the trailer inside the
+    subject's own paragraph. The line is then present in ``%B`` but
+    invisible to ``%(trailers:…)`` — and `relics._commits_since_seed`'s
+    identity filter reads exactly that placeholder, so every host-run merge
+    would be silently dropped from produce by the very filter it satisfies.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-merger")
+
+    def _git(*args):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    trunk = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    _git("checkout", "-q", "-b", "feature")
+    (repo / "feature.txt").write_text("work\n", encoding="utf-8")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "feature work")
+    _git("checkout", "-q", trunk)
+    _git("merge", "--no-ff", "-q", "feature", "-m", "Merge feature")
+
+    head = subprocess.run(
+        [
+            "git", "log", "-1",
+            "--format=%s\x1f%(trailers:key=Brnrd-Run-Id,valueonly,separator=%x2C)",
+        ],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    subject, _, trailer = head.partition("\x1f")
+    assert trailer == "run-merger"
+    # …and the subject stays a subject, not "Merge feature Brnrd-Run-Id: …"
+    assert subject == "Merge feature"
+
+
 def test_ensure_run_id_hook_no_env_leaves_commit_untouched(tmp_path, monkeypatch):
     """No ``$BRR_RUN_ID`` in the shell (a maintainer, logged in directly) ⇒
     the hook is a no-op — credited to no run, never a guess (#575)."""
