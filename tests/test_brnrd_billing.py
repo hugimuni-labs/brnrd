@@ -374,3 +374,39 @@ def test_billing_api_still_401s_with_no_credentials():
     assert client.get("/v1/accounts/subscription").status_code == 401
     assert client.get("/v1/accounts/wallet").status_code == 401
     assert client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"}).status_code == 401
+
+
+def test_grant_bucket_insert_order_survives_fk_enforcement():
+    """Live incident 2026-07-23 (first real subscription): postgres rejected
+    the subscriber grant with a ForeignKeyViolation — the flush emitted the
+    billing_ledger insert ahead of the credit_buckets row it references.
+    sqlite's default FK-off mode made every existing test blind to ordering;
+    this one turns the pragma on, so the grant path is pinned against the
+    same database that broke it in spirit."""
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from brnrd import billing
+    from brnrd.models import Account, Base
+
+    engine = create_engine("sqlite://")
+
+    @event.listens_for(engine, "connect")
+    def _fk_on(dbapi_connection, _record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    db.add(Account(id="acc_fk", github_id="fk-9", github_login="fkpin"))
+    db.commit()
+    bucket = billing.grant_bucket(
+        db,
+        "acc_fk",
+        source="subscriber_monthly",
+        credits=300,
+        op="grant_subscriber_monthly",
+        stripe_ref="in_fk_pin",
+    )
+    db.commit()
+    assert bucket is not None
+    db.close()
