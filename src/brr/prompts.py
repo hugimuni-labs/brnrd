@@ -16,6 +16,7 @@ subprocess plumbing.
 
 from __future__ import annotations
 
+import difflib
 import re
 from pathlib import Path
 from typing import Any
@@ -2069,6 +2070,25 @@ def build_daemon_prompt(
 # tail. Keep the daemon's read cap = RECENT_CONVERSATION_MAX + headroom.
 RECENT_CONVERSATION_MAX = 8
 
+# Issue #576: a recurring schedule.md entry re-enters the conversation store
+# as a `source: schedule` user turn every time it fires. Those turns weave
+# into "Recent turns" on every later wake, *and* the current firing renders
+# again under "### Original event body" — the same multi-thousand-token
+# document counted two or three times in one wake. conversations.py already
+# collapses byte-identical repeat firings at the store layer
+# (`_collapse_schedule_repeats`), but a live entry's body drifts slightly
+# firing to firing (timestamps, a line of accreted rationale), so exact
+# matching misses the near-duplicates that make up most of the waste
+# (measured 0.971 similarity between two real firings). SequenceMatcher.ratio
+# is a cheap, dependency-free way to catch those near-misses.
+SCHEDULE_TURN_DEDUP_RATIO = 0.9
+SCHEDULE_TURN_DEDUP_EVENT_STUB = (
+    "[schedule entry, identical to this run's event body — not repeated]"
+)
+SCHEDULE_TURN_DEDUP_TURN_STUB = (
+    "[schedule entry, identical to the {ts} firing above — not repeated]"
+)
+
 
 def _render_runner_catalog(
     catalog: list[dict[str, Any]] | None,
@@ -2360,14 +2380,18 @@ def _build_run_context_bundle(
         sections.append("")
         sections.append(presence_block)
 
-    snapshot_block = _format_communication_snapshot(communication_snapshot)
+    snapshot_block = _format_communication_snapshot(
+        communication_snapshot, event_body=event_body
+    )
     if snapshot_block:
         sections.append("")
         sections.append("### Communication snapshot")
         sections.append("")
         sections.append(snapshot_block)
     else:
-        recent_block = _format_recent_conversation(recent_conversation)
+        recent_block = _format_recent_conversation(
+            recent_conversation, event_body=event_body
+        )
         if recent_block:
             sections.append("")
             sections.append("### Recent in this conversation")
@@ -2450,6 +2474,8 @@ def _format_presence(
 
 def _format_communication_snapshot(
     snapshot: dict[str, Any] | None,
+    *,
+    event_body: str | None = None,
 ) -> str:
     """Render the curated cross-channel wake snapshot.
 
@@ -2548,7 +2574,9 @@ def _format_communication_snapshot(
             lines.append("")
         lines.append(forge_block)
 
-    turns = _format_recent_conversation(snapshot.get("recent_turns"))
+    turns = _format_recent_conversation(
+        snapshot.get("recent_turns"), event_body=event_body
+    )
     if turns:
         if lines:
             lines.append("")
@@ -2739,16 +2767,27 @@ def _format_thread_of_record(repo_root: Path) -> str:
 
 def _format_recent_conversation(
     records: list[dict[str, Any]] | None,
+    *,
+    event_body: str | None = None,
 ) -> str:
     """Render the last few conversation records as human-readable bullets.
 
     Callers pass only prior records; the current event body is rendered
-    separately in the Run Context Bundle. Returns an empty string when
-    nothing useful is available.
+    separately in the Run Context Bundle (or passed as ``event_body`` here
+    so a `source: schedule` turn can be checked against it). Returns an
+    empty string when nothing useful is available.
+
+    Issue #576: a `source: schedule` turn whose body is a near-duplicate
+    (>= ``SCHEDULE_TURN_DEDUP_RATIO``) of either the current event body or
+    an earlier schedule turn already kept in full here collapses to a
+    one-line stub instead of repeating the whole body. A user repeating
+    themselves is signal and is left alone; only `schedule`-sourced turns
+    are ever collapsed.
     """
     if not records:
         return ""
     bullets: list[str] = []
+    kept_schedule_turns: list[tuple[str, str]] = []
     for record in records[-RECENT_CONVERSATION_MAX:]:
         kind = record.get("kind")
         ts = record.get("ts", "")
@@ -2757,6 +2796,14 @@ def _format_recent_conversation(
             body = _conversation_body(record)
             summary = body or (record.get("summary") or "").strip()
             source = _conversation_source_label(record)
+            if str(record.get("source") or "").strip() == "schedule" and summary:
+                stub = _schedule_turn_dedup_stub(
+                    summary, event_body=event_body, kept=kept_schedule_turns
+                )
+                if stub is not None:
+                    summary = stub
+                else:
+                    kept_schedule_turns.append((ts, summary))
             line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "run":
             tid = record.get("run_id", "")
@@ -2792,6 +2839,32 @@ def _format_recent_conversation(
         if line:
             bullets.append(line)
     return "\n".join(bullets)
+
+
+def _schedule_turn_dedup_stub(
+    body: str,
+    *,
+    event_body: str | None,
+    kept: list[tuple[str, str]],
+) -> str | None:
+    """Return a collapse stub for a near-duplicate `schedule` turn body.
+
+    Checks the current run's event body first — that is the largest,
+    guaranteed-duplicate case (the firing that woke this run, rendered a
+    second time as a recent turn) — then earlier schedule turns already
+    kept in full during this same render. Returns ``None`` when ``body``
+    is novel enough to render in full, in which case the caller is
+    responsible for adding it to ``kept``.
+    """
+    if event_body:
+        ratio = difflib.SequenceMatcher(None, body, event_body).ratio()
+        if ratio >= SCHEDULE_TURN_DEDUP_RATIO:
+            return SCHEDULE_TURN_DEDUP_EVENT_STUB
+    for kept_ts, kept_body in kept:
+        ratio = difflib.SequenceMatcher(None, body, kept_body).ratio()
+        if ratio >= SCHEDULE_TURN_DEDUP_RATIO:
+            return SCHEDULE_TURN_DEDUP_TURN_STUB.format(ts=kept_ts)
+    return None
 
 
 def _conversation_body(record: dict[str, Any]) -> str:
