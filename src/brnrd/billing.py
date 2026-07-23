@@ -149,6 +149,13 @@ def grant_bucket(
         stripe_ref=stripe_ref,
     )
     db.add(bucket)
+    # Flush the bucket row before the ledger row that references it. Observed
+    # live (2026-07-23, first real subscription): postgres rejected the grant
+    # with a ForeignKeyViolation because the unit of work emitted the
+    # billing_ledger insert ahead of the credit_buckets insert — sqlite tests
+    # never enforced the FK, so only production could see it. The flush makes
+    # the ordering explicit instead of trusting the flush plan.
+    db.flush()
     ledger_append(
         db, account_id, op, credits_delta=credits, bucket_id=bucket.id, metadata=metadata
     )
