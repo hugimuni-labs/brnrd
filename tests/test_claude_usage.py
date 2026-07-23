@@ -24,6 +24,26 @@ Usage credits
 Usage credits are off
 """
 
+# The boot banner, captured live against a real account (2026-07-23) via
+# `claude_usage.capture_usage_raw()` before this fix existed — issue #580's
+# answer to "does the panel render a plan/tier label anywhere": not inside
+# `/usage` itself, but the line right after the version banner does.
+_USAGE_SCREEN_WITH_PLAN_BANNER = """
+Claude Code v2.1.218
+Haiku 4.5 · Claude Max
+~/src/misc/brr/.brr/worktrees/run-260723-1345-r67i
+you: /usage
+Settings Status Config Usage Stats
+Current session
+1% used
+Resets 8:30pm (Europe/Berlin)
+Current week (all models)
+58% used
+Resets Jul 24, 12am (Europe/Berlin)
+Usage credits
+Usage credits are off
+"""
+
 
 def test_supported_is_per_vessel():
     assert claude_usage.supported("claude") is True
@@ -611,3 +631,194 @@ def test_parse_usage_text_does_not_elide_a_genuinely_different_model_reset(
         "week 95% left (resets Jul 10, 12am (Europe/Berlin)); "
         "Fable week 92% left (resets Jul 17, 12am (Europe/Berlin))"
     )
+
+
+def test_parse_usage_text_extracts_plan_type_from_boot_banner():
+    """Issue #580 part 1: the `/usage` panel body never names the account's
+    plan, but the boot banner line right after the version string does
+    (`<model> · Claude <Tier>`, confirmed live 2026-07-23 as `Haiku 4.5 ·
+    Claude Max`). Parsed into `levels["plan_type"]` — the same key Codex's
+    collector already uses for its own plan identity."""
+    levels = claude_usage.parse_usage_text(_USAGE_SCREEN_WITH_PLAN_BANNER)
+
+    assert levels["plan_type"] == "Max"
+
+
+def test_parse_usage_text_plan_type_absent_without_a_banner_line():
+    """Defensive by construction: no recognizable banner line means no
+    `plan_type` key at all — never a guess standing in for a fact the capture
+    didn't actually contain."""
+    levels = claude_usage.parse_usage_text(_USAGE_SCREEN)
+
+    assert "plan_type" not in levels
+
+
+def test_carry_forward_refuses_quota_across_a_known_plan_change(caplog):
+    """Issue #580 part 2, the boundary condition: a previous reading recorded
+    under a different, *known* plan is not a stale copy of the same quantity
+    — it is a reading of a different quantity in the same units. Carrying
+    must refuse outright, not carry-with-a-warning; there is no annotation
+    that makes a percentage mean the right thing again."""
+    previous = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Pro",
+        "quota": {
+            "summary": "session 10% left",
+            "buckets": {"session": {"remaining_percentage": 10.0}},
+        },
+        "week_models": {"fable": {"used_percentage": 50.0}},
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    with caplog.at_level("INFO", logger="brr.claude_usage"):
+        healed = claude_usage.carry_forward_sections([previous], fresh)
+
+    assert "quota" not in healed
+    assert "week_models" not in healed
+    # Said once, at the point of detection — not once per blocked section.
+    plan_change_lines = [
+        r.message for r in caplog.records if "plan changed" in r.message
+    ]
+    assert len(plan_change_lines) == 1
+    assert "Pro" in plan_change_lines[0] and "Max" in plan_change_lines[0]
+
+
+def test_carry_forward_still_carries_when_fresh_plan_type_is_unknown():
+    """Pinned regression: unknown is not different. A fresh scrape with no
+    `plan_type` at all (the #561 partial-scrape case this fix must not
+    disturb) keeps carrying exactly as it does today — trading a units bug
+    for a blindness bug would be no fix at all."""
+    previous = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Pro",
+        "quota": {
+            "summary": "session 10% left",
+            "buckets": {"session": {"remaining_percentage": 10.0}},
+        },
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    healed = claude_usage.carry_forward_sections([previous], fresh)
+
+    assert healed["quota"]["summary"].startswith("session 10% left")
+    assert healed["quota"]["carried_from"]
+
+
+def test_carry_forward_still_carries_when_candidate_plan_type_is_unknown():
+    """The other unknown side of the same boundary: a candidate written
+    before this fix existed (no `plan_type` at all) must not be treated as a
+    disagreeing plan just because it lacks the field."""
+    previous = {
+        "updated_at": _now_stamp(),
+        "quota": {
+            "summary": "session 10% left",
+            "buckets": {"session": {"remaining_percentage": 10.0}},
+        },
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    healed = claude_usage.carry_forward_sections([previous], fresh)
+
+    assert healed["quota"]["summary"].startswith("session 10% left")
+
+
+def test_carry_forward_same_known_plan_carries_normally():
+    """Not every candidate with a `plan_type` is suspect — only a *disagreeing*
+    one. The common case (no plan change at all) must carry exactly as
+    before."""
+    previous = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "quota": {
+            "summary": "session 10% left",
+            "buckets": {"session": {"remaining_percentage": 10.0}},
+        },
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    healed = claude_usage.carry_forward_sections([previous], fresh)
+
+    assert healed["quota"]["summary"].startswith("session 10% left")
+
+
+def test_carry_forward_plan_change_does_not_block_usage_credits():
+    """`usage_credits` is a dollar-denominated pool, not a plan-relative
+    percentage — the issue never named it as affected, so a plan change must
+    not block its carry the way it blocks `quota`/`week_models`."""
+    previous = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Pro",
+        "usage_credits": {
+            "spent_amount": 4.2,
+            "limit_amount": 50.0,
+            "summary": "usage credits $4.20 of $50.00",
+        },
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "session_used_percentage": 6.0,
+    }
+
+    healed = claude_usage.carry_forward_sections([previous], fresh)
+
+    assert healed["usage_credits"]["spent_amount"] == 4.2
+    assert healed["usage_credits"]["carried_from"]
+
+
+def test_carry_forward_says_it_carried_when_an_older_same_plan_reading_serves(caplog):
+    """Review fixup: a blocked *candidate* is not a blocked *carry*.
+
+    Candidates are searched in list order, so a mismatched one can be
+    followed by an older snapshot recorded under the current plan — which
+    is a perfectly good carry source. The log line must say that happened.
+    A fixed "refusing to carry" string printed while the section was in
+    fact carried is the #568 defect: a refusal message describing a
+    different failure than the one that occurred.
+    """
+    mismatched = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Pro",
+        "quota": {"summary": "session 10% left",
+                  "buckets": {"session": {"remaining_percentage": 10.0}}},
+    }
+    usable = {
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "quota": {"summary": "session 80% left",
+                  "buckets": {"session": {"remaining_percentage": 80.0}}},
+    }
+    fresh = {
+        "source": "claude /usage PTY",
+        "updated_at": _now_stamp(),
+        "plan_type": "Max",
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    with caplog.at_level("INFO", logger="brr.claude_usage"):
+        healed = claude_usage.carry_forward_sections([mismatched, usable], fresh)
+
+    assert healed["quota"]["buckets"]["session"]["remaining_percentage"] == 80.0
+    line = next(r.message for r in caplog.records if "plan changed" in r.message)
+    assert "carried from an older same-plan reading instead" in line
+    assert "refusing to carry" not in line
