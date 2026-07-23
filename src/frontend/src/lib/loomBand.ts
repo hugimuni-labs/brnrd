@@ -128,10 +128,15 @@ export interface ShelfGroupable {
  * rows nest. A grandchild — a child whose direct parent is itself a nested
  * child — falls back to its own root row, same as an orphan: one hop,
  * and nothing ever silently vanishes from the shelf.
+ *
+ * `lastChild` is the tree rail's one input: the shelf draws a connector
+ * down the seam edge, and the last child in a brood is where the vertical
+ * line stops (`└` rather than `├`, mirrored for a right-anchored shelf).
+ * A root row is never a `lastChild` — it has no rail to terminate.
  */
 export function nestShelfChildren<T extends ShelfGroupable>(
 	items: T[]
-): Array<T & { depth: 0 | 1 }> {
+): Array<T & { depth: 0 | 1; lastChild: boolean }> {
 	const byRunId = new Map<string, T>();
 	for (const item of items) {
 		if (item.runId) byRunId.set(item.runId, item);
@@ -164,13 +169,15 @@ export function nestShelfChildren<T extends ShelfGroupable>(
 		}
 	}
 
-	const out: Array<T & { depth: 0 | 1 }> = [];
+	const out: Array<T & { depth: 0 | 1; lastChild: boolean }> = [];
 	for (const root of [...roots].sort((a, b) => a.ageMs - b.ageMs)) {
-		out.push({ ...root, depth: 0 });
-		const children = childrenByParent.get(root.runId ?? '') ?? [];
-		for (const child of [...children].sort((a, b) => a.ageMs - b.ageMs)) {
-			out.push({ ...child, depth: 1 });
-		}
+		out.push({ ...root, depth: 0, lastChild: false });
+		const children = [...(childrenByParent.get(root.runId ?? '') ?? [])].sort(
+			(a, b) => a.ageMs - b.ageMs
+		);
+		children.forEach((child, index) => {
+			out.push({ ...child, depth: 1, lastChild: index === children.length - 1 });
+		});
 	}
 	return out;
 }
