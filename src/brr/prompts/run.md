@@ -27,23 +27,14 @@ orient:
 ## Delivery
 
 The bundle's Delivery contract carries the live values — portals, paths,
-budget. The stance, host-agnostic:
+budget. The standing rules live with the host: daemon runs → §How the daemon
+drives you → delivery portals (`brnrd docs portals` for choreography). One
+contract, one owner — this section deliberately does not restate it.
 
-- closeout → the host dispatches your final stdout message to the thread that
-  woke you (skipping it only when it exactly duplicates a reply you already
-  delivered). So end on the reply, clean: no preamble, no meta. You are not
-  required to re-deliver anything — speak mid-run when it helps, and the
-  boundary warns you once if a run is about to end having said nothing
-  anywhere. Progress, debug, tool chatter → stderr.
-- daemon runs → portal state moves under you: re-read `portal-state.json` /
-  `inbox.json` at plan boundaries and before terminal closeout. Every pending
-  event is yours — fold small or related work inline; bounded, independent
-  work → `spawn:` while worker capacity and quota are healthy; defer only on
-  an explicit resource, priority, dependency, or authority reason. A
-  same-thread event surfacing mid-run ⇒ `.card` in that same batch, even one
-  line: the reminder compels a reaction, not a note to self — a follow-up read
-  and used but never surfaced is a silent gap on the one surface the user is
-  watching.
+The host-agnostic floor, any driver:
+
+- end on the reply, clean: no preamble, no meta. Speak mid-run when it helps;
+  progress, debug, tool chatter → stderr.
 - the reply is the deliverable → it carries the kb findings itself; link the kb
   URL when the portal provides one, otherwise name the file by basename only.
   A host path where an answer was asked is not an answer.

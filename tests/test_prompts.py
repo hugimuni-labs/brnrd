@@ -1139,7 +1139,9 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
-        assert "fold small or related work inline" in prompt
+        # Pending-event ownership is single-sourced in daemon-substrate's
+        # portals block since the P2 dedup (run.md Delivery is a pointer now).
+        assert "Own every pending event" in prompt
         assert "card + mid-thought replies" in prompt
         assert "waiting in the dark" in prompt
 
