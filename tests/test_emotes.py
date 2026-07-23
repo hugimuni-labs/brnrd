@@ -145,3 +145,91 @@ def test_wordmark_faces_are_present():
     body and one mutation should live here."""
     marks = [e for e in EMOTES.values() if any("brnrd" in f or "Я" in f for f in e.frames)]
     assert marks, "expected at least one brnrd-wordmark face"
+
+
+# ── The MIX layout + n-as-mouth rules (the maintainer's two decisions) ──
+#
+# Read a name-weave frame ``b r n r d`` as a face: b/d are the cheeks (the
+# fixed frame), the two r's are the eyes, the n is the mouth. These tests
+# pin the rework so a later "simplification" can't silently flatten the
+# faces back to single-glyph moods or drop the wordmark from telemetry.
+
+# Mouth glyphs that read as a forward/upward curl — the smug smirk shape.
+_UP_MOUTHS = {"ᵕ", "‿", "^", "w"}
+
+
+def _is_name_weave(frame: str) -> bool:
+    """A name-weave face: the wordmark frame ``b<eye><mouth><eye>d`` — five
+    cells, brand cheeks fixed at the ends."""
+    return len(frame) == 5 and frame[0] == "b" and frame[-1] == "d"
+
+
+def test_telemetry_faces_use_the_name_weave_wordmark_frame():
+    """Decision 1, telemetry half: telemetry leans name-weave so the brand
+    reads sharpest where the daemon speaks for the body. Every telemetry
+    frame is the ``b…d`` wordmark frame, and each rests on the plain
+    wordmark — the daemon's body is the mark itself, animated."""
+    telemetry = [e for e in EMOTES.values() if e.kind == "telemetry"]
+    for e in telemetry:
+        for f in e.frames:
+            assert _is_name_weave(f), (e.name, f)
+        # base state first AND last is the neutral resting wordmark
+        assert e.frames[0] == "brnrd", (e.name, e.frames[0])
+        assert e.frames[-1] == "brnrd", (e.name, e.frames[-1])
+
+
+def test_name_weave_neutral_resting_frame_is_exactly_brnrd():
+    """Decision 2, anchor: the neutral resting face is the plain ``brnrd``
+    (mouth ``n`` un-morphed). The idle body — awake, nothing queued — is
+    the wordmark at rest, and it is byte-exact."""
+    idle = EMOTES["id_l"]
+    assert idle.frames[0] == "brnrd"
+    assert idle.frames[-1] == "brnrd"
+    # the mouth (n slot, index 2) is the un-morphed 'n' at rest
+    assert idle.frames[0][2] == "n"
+
+
+def test_smug_mutates_the_n_mouth_forward_and_upward():
+    """Decision 2, the heart of it: 'smug' is the maintainer's named default
+    — the n (mouth) extends forward and upward into an anime smirk, and the
+    eyes (r's) shift with it. Neutral ``brnrd`` has a flat ``n`` mouth; the
+    smug peak must curl that mouth up and move at least one eye."""
+    smug = EMOTES["smug_"]
+    assert _is_name_weave(smug.frames[0])
+    assert smug.frames[0] == "brnrd"          # rests on neutral
+    assert smug.frames[0][2] == "n"           # neutral mouth is flat 'n'
+    # some frame curls the mouth (index 2) up-and-forward, away from 'n'
+    curled = [f for f in smug.frames if f[2] in _UP_MOUTHS]
+    assert curled, (smug.name, smug.frames)
+    assert all(f[2] != "n" for f in curled)
+    # and the eyes (index 1 / 3) shift with the mood — not left at 'r'
+    assert any(f[1] != "r" or f[3] != "r" for f in smug.frames), smug.frames
+
+
+def test_situational_split_leans_cheek_form_with_a_name_weave_family():
+    """Decision 1, situational half: situational faces lean cheek form
+    (``b{eyes}d``) for two-eye nuance, while a named family (smug /
+    vindicated) still reads best as name-weave. Both halves must be real —
+    the mix is not all-one-thing."""
+    situational = [e for e in EMOTES.values() if e.kind == "situational"]
+    cheek = [e for e in situational if all(_is_name_weave(f) for f in e.frames)
+             and any(f == "brnrd" for f in e.frames) is False
+             and e.frames[0] != "brnrd"]
+    name_weave = [e for e in situational if e.frames[0] == "brnrd"]
+    # the bulk wear the brand cheeks
+    assert len(cheek) >= 50, len(cheek)
+    # the smug/vindicated family carries the wordmark smirk
+    assert len(name_weave) >= 3
+    for handle in ("smug_", "knew_", "told_"):
+        assert EMOTES[handle].frames[0] == "brnrd", handle
+
+
+def test_cheek_form_carries_the_brand_cheeks():
+    """A cheek-form face is a two-eye kaomoji wrapped in ``b…d`` — the
+    example faces the maintainer named must be exactly that shape."""
+    puzzled = EMOTES["hm_m"]        # bo_·d — one brow up
+    assert any(_is_name_weave(f) and f[0] == "b" and f[-1] == "d"
+               for f in puzzled.frames)
+    assert "bo_·d" in puzzled.frames
+    strained = EMOTES["grr_"]       # b>_<d — both eyes shut
+    assert "b>_<d" in strained.frames
