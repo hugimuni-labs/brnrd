@@ -902,8 +902,10 @@ def carry_forward_sections(
     with the fresh reading's known `plan_type` is skipped, even if it is
     otherwise the newest thing that has the section. Skipping it is a refusal,
     not a downgrade — no warning-annotated carry, because there is no way to
-    annotate a percentage into meaning the right thing again. Logged once, at
-    the point a carry is actually refused this way.
+    annotate a percentage into meaning the right thing again. Logged once per
+    call, at the point a mismatch is *detected*, and the line says which of
+    the two outcomes followed: the section was carried from an older
+    same-plan snapshot, or nothing was carried at all.
     """
     candidates = [previous] if isinstance(previous, dict) else list(previous or [])
     candidates = [
@@ -931,10 +933,20 @@ def carry_forward_sections(
                 if blocked_plan is None and isinstance(candidate_plan, str) and candidate_plan.strip():
                     blocked_plan = candidate_plan.strip()
             if blocked_plan is not None and not plan_change_logged:
+                # Say which of the two things actually happened. A blocked
+                # candidate does not mean a blocked carry — an older snapshot
+                # from the *current* plan can still serve, and a line reading
+                # "refusing to carry" when the section was carried anyway is
+                # the #568 defect: a fixed refusal string describing a
+                # different failure than the one that occurred.
                 logger.info(
-                    "claude_usage: plan changed (%s -> %s); refusing to carry "
-                    "%s across the regime boundary",
-                    blocked_plan, fresh_plan, section,
+                    "claude_usage: plan changed (%s -> %s); %s for %s",
+                    blocked_plan,
+                    fresh_plan,
+                    "carried from an older same-plan reading instead"
+                    if source is not None
+                    else "refusing to carry across the regime boundary",
+                    section,
                 )
                 plan_change_logged = True
         else:
