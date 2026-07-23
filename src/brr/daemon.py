@@ -1881,6 +1881,34 @@ def _build_continuity_facet(
         return BootContinuity(mount="✗ unreachable")
 
 
+def _presence_label_for_event(event: dict) -> str:
+    """Derive a run's presence ``label`` — dashboard chrome, not content.
+
+    Read back by every *other* concurrently-active run and injected
+    straight into that sibling's own hook context (``facets.py``'s
+    ``coexisting_runs`` facet -> ``hooks.py`` ``additionalContext``). The
+    pre-#585 shape fell back to a run's own ``task.body`` — its full,
+    verbatim task spec — whenever ``event.get("summary")`` was empty, which
+    it always was: no writer populates ``summary`` on this creation-time
+    ``event`` dict before a run exists (audited for #585:
+    ``_pending_event_record`` and ``conversations.append_event`` each build
+    a *different*, display-only ``summary`` on a copy of the event/log
+    record, never on this one). That made every spawn worker's presence
+    label its own task prose, leaked into every sibling's model context at
+    every tool-call boundary — the mechanism behind #574's real incident (a
+    worker read a sibling's leaked spec as a directive and shipped the
+    wrong issue).
+
+    Do not resurrect a ``task.body`` (or any other free-text) fallback
+    here. An empty label degrades gracefully: ``facets.py`` already falls
+    back ``name -> label -> stream -> run_id``, and ``stream`` (the
+    conversation key) is itself a handle. ``facets._sibling_handle`` is the
+    second guard — a hard length cap at the facet boundary — for when a
+    future writer forgets this one.
+    """
+    return " ".join(str(event.get("summary") or "").split())[:120]
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -2240,9 +2268,7 @@ def _run_worker(
     # _run_worker_and_finalize's finally; the heartbeat closure refreshes it.
     presence_id: str | None = None
     try:
-        live_run_label = " ".join(
-            str(event.get("summary") or task.body or "").split()
-        )[:120]
+        live_run_label = _presence_label_for_event(event)
         # Same fields, same derivation as the closed-run ledger row
         # (run_ledger.py::_ledger_row) — `spawn_immediate` is set only on a
         # concurrent `spawn:` child's own event (_queue_spawn_request), so

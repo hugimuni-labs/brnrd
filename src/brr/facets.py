@@ -237,6 +237,40 @@ def _runner_block(
     return block
 
 
+# #585 second guard: the coexisting_runs facet must refuse to emit long free
+# text regardless of which field it came from. 32 is picked to sit inside
+# the ~24-40 char band the regression test (test_facets.py) justifies: long
+# enough that a real handle (a run id like "run-260723-1241-xv6d", a short
+# resident `.name`, a conversation key) renders whole, short enough that no
+# truncated prefix reads as a sentence-length directive a sibling could
+# mistake for its own instruction.
+_SIBLING_HANDLE_MAX_CHARS = 32
+
+
+def _sibling_handle(entry: dict[str, object]) -> str:
+    """Render one coexisting-run entry as a short handle, never free text.
+
+    Same source precedence every prior caller relied on (``name`` — the
+    resident-authored, length-capped ``.name`` control file, checked first
+    so it keeps winning — then ``label``, ``stream``, ``run_id``), but this
+    is the *second* guard: the producer side (``daemon.py``'s presence
+    ``register()`` call) no longer falls back to a run's own ``task.body``
+    for ``label`` (#585), yet this function does not trust that to hold
+    forever. Whitespace is collapsed first so a multi-line body can't wrap
+    into something that *reads* like prose, then the result is hard-capped
+    at :data:`_SIBLING_HANDLE_MAX_CHARS` regardless of source — a length
+    cap on chrome, not a redesign of the facet.
+    """
+    raw = str(
+        entry.get("name") or entry.get("label")
+        or entry.get("stream") or entry.get("run_id") or "?"
+    )
+    collapsed = " ".join(raw.split())
+    if len(collapsed) > _SIBLING_HANDLE_MAX_CHARS:
+        return collapsed[:_SIBLING_HANDLE_MAX_CHARS].rstrip() + "…"
+    return collapsed
+
+
 def build(
     *,
     quota_summary: str | None = None,
@@ -356,10 +390,7 @@ def build(
             "note": "no sibling runs active right now",
         }
     else:
-        names = [
-            str(e.get("name") or e.get("label") or e.get("stream") or e.get("run_id") or "?")
-            for e in coexisting[:3]
-        ]
+        names = [_sibling_handle(e) for e in coexisting[:3]]
         n = len(coexisting)
         plural = "s" if n != 1 else ""
         coexisting_facet = {
