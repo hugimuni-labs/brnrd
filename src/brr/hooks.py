@@ -306,12 +306,30 @@ def _touch_flush(ctx: HookContext) -> None:
 
 ORIENTATION_READ_KEY = "orientation_read"
 
-# What counts as a declared skip: one `.card` line carrying both words,
-# case-insensitively — matches the canonical "assuming prior knowledge,
-# skipping orientation" as well as a terse "orient: skip". Line-scoped so a
-# card that mentions skipping a test here and orientation there does not
-# accidentally declare. A first-class outcome, not a failure state.
-_ORIENT_SKIP_RE = re.compile(r"^(?=.*orient)(?=.*skip).*$", re.IGNORECASE | re.MULTILINE)
+# What counts as a declared skip. Two forms, both *declarations*: a terse
+# `orient: skip` heading the line (list/quote/heading markers tolerated), or
+# the canonical sentence. A first-class outcome, not a failure state.
+#
+# The first shape was `^(?=.*orient)(?=.*skip).*$` — line-scoped, which the
+# comment claimed and the regex delivered. But **line-scoped is not
+# declaration-scoped**, and the resident holds the pen on `.card`. Driven
+# against realistic card prose, that form fired on:
+#
+#     "Reviewed Slice 9: skip is a first-class outcome for the orientation walk"
+#     "orient 3/5 rendered; nothing skipped"        ← a NEGATION, silencing the meter
+#
+# A guard that a description of itself disables is not a guard, and the second
+# line is the ledger *reporting its own value* and thereby turning itself off.
+# So: narrow, and lean false-negative on purpose. A meter that renders when it
+# should have hidden costs one segment; a meter that hides when the walk never
+# happened costs the whole feature.
+_ORIENT_SKIP_RE = re.compile(
+    # `orient: skip` / `orientation = skip`, at the head of a line
+    r"^[\s>*\-#]*orient(?:ation)?\s*[:=-]\s*skip\b"
+    # …or the canonical sentence, specific enough to be intentional anywhere
+    r"|assuming prior knowledge[,\s]+skipping orientation\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _orientation_set_paths(ctx: HookContext) -> list[str]:
@@ -449,8 +467,11 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "the orientation ledger (#513 Slice 9): files read from the wake's "
         "deterministic orientation set (`orient 3/5`). Renders only while "
         "the walk is open — set non-empty, not every file read, no skip "
-        "declared on `.card` (a line carrying both \"orient\" and \"skip\", "
-        "any case). Disappears at completion or skip, and never opens the "
+        "**declared** on `.card`. A declaration is `orient: skip` heading a "
+        "line, or the sentence \"assuming prior knowledge, skipping "
+        "orientation\"; merely *mentioning* both words is prose, not a "
+        "declaration, and does not silence the meter. Disappears at "
+        "completion or skip, and never opens the "
         "bar on its own: a meter is not an obligation, and a meter that "
         "never leaves trains skimming.",
     ),
