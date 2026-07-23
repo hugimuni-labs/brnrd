@@ -55,6 +55,31 @@ from typing import Any
 
 SECURITY_CONFIG_FILENAME = "security.config"
 
+# Resolved ``security.config`` paths, keyed by (repo root, raw repo-config
+# contents). Review fixup on the first #533 draft, which resolved the home
+# on *every* ``load_config`` call. Measured on an otherwise-idle machine,
+# 200 warm calls each:
+#
+#     main                     0.037 ms/call
+#     draft (no cache)         4.047 ms/call   ~109x
+#     with this cache          0.094 ms/call
+#
+# The draft's cost is ``account.resolve_context`` → ``repo_label`` →
+# ``gitops.default_remote``/``remote_url`` — two `git` subprocess spawns
+# per call. ``load_config`` was a pure file read and is called 13 times by
+# ``prompts.py`` alone while assembling one wake, so the draft put ~26
+# subprocess spawns on the hottest path in the product; it showed up as
+# the +7% full-suite wall time the worker reported and correctly flagged.
+#
+# Keying on the raw repo config means any edit to a locating key
+# (``home.path``, ``account.id``, ...) misses the cache and re-resolves,
+# which is the only input a caller can change deliberately. The residual
+# staleness is a *git remote* change mid-process — `repo_label` reads it —
+# which in practice is followed by a daemon restart anyway. Existence of
+# the file is never cached: ``_read_flat`` stats it on every call, so
+# ``config promote`` takes effect immediately.
+_SECURITY_PATH_CACHE: dict[tuple[str, tuple[tuple[str, str], ...]], Path | None] = {}
+
 # Exact key names that are security-defining regardless of any prefix
 # match below. ``runner_cmd`` has no dotted/underscore twin (it's already
 # flat); the env-policy keys are read from either the repo config or an
@@ -144,6 +169,43 @@ def repo_config_path(repo_root: Path) -> Path:
     return gitops.shared_brr_dir(repo_root) / "config"
 
 
+def _canonical_repo_root(repo_root: Path) -> Path:
+    """The repo's *main* worktree root, given any of its worktrees.
+
+    Review fixup on the first #533 draft, and the one defect that would
+    have shipped dark. ``account._connected_account_id`` falls back to
+    matching the account repo registry by **exact path**
+    (``registered.resolve() == resolved_repo``). A linked worktree lives
+    at a different path, so it never matches, ``resolve_context`` falls
+    through to ``kind="project"``, and the home resolves to
+    ``…/state/brnrd/projects/<slug>-<hash>/home`` instead of the
+    account's. Measured on this account:
+
+        host checkout  → …/accounts/acc_bdda…/home     (kind=account)
+        linked worktree→ …/projects/hugimuni-labs__brnrd-2521ecb6a9/home
+
+    Both resolve the *same* ``shared_brr_dir``, so the repo identity was
+    never in doubt — only the path used to look it up. Left unfixed,
+    every run in a ``worktree`` environment would look for
+    ``security.config`` in a home nobody writes, find nothing, and run
+    with every security key silently unset — the split failing open in
+    exactly the environment it matters most. It passes tests and passes a
+    live check on a ``host``-environment account, which is this one.
+
+    ``shared_brr_dir`` already resolves a worktree to the main checkout's
+    ``.brr``, so its parent is the canonical root. Falls back to
+    *repo_root* unchanged if that lookup fails or doesn't look like a
+    repo root.
+    """
+    from . import gitops
+
+    try:
+        candidate = gitops.shared_brr_dir(repo_root).parent
+    except Exception:
+        return repo_root
+    return candidate if candidate.is_dir() else repo_root
+
+
 def security_config_path(
     repo_root: Path, repo_cfg: dict[str, Any] | None = None
 ) -> Path | None:
@@ -164,11 +226,22 @@ def security_config_path(
     """
     from . import account
 
+    repo_root = _canonical_repo_root(repo_root)
+    cache_key = (
+        str(repo_root),
+        tuple(sorted((str(k), str(v)) for k, v in (repo_cfg or {}).items())),
+    )
+    if cache_key in _SECURITY_PATH_CACHE:
+        return _SECURITY_PATH_CACHE[cache_key]
+
     try:
         ctx = account.resolve_context(repo_root, repo_cfg or {}, create=False)
     except Exception:
-        return None
-    return account.context_home_root(ctx) / SECURITY_CONFIG_FILENAME
+        resolved = None
+    else:
+        resolved = account.context_home_root(ctx) / SECURITY_CONFIG_FILENAME
+    _SECURITY_PATH_CACHE[cache_key] = resolved
+    return resolved
 
 
 def load_config_report(repo_root: Path) -> tuple[dict[str, Any], list[str]]:

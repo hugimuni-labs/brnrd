@@ -567,3 +567,68 @@ def test_config_is_hidden_but_still_parses():
 
     assert "config" in HIDDEN_COMMANDS
     assert "config" not in PUBLIC_COMMANDS
+
+
+def test_security_config_resolves_the_same_from_a_linked_worktree(
+    tmp_path, monkeypatch
+):
+    """A run in a worktree must find the *same* security.config.
+
+    Review fixup, and the one defect that would have shipped dark.
+    ``account._connected_account_id``'s durable lookup matches the account
+    repo registry by **exact path** (``registered.resolve() ==
+    resolved_repo``). A linked worktree — which is where every run in a
+    ``worktree`` environment executes — never matches, so
+    ``resolve_context`` falls through to a ``project`` home and the
+    security config is looked for somewhere nobody writes it. Every
+    security key then comes back unset: the split failing open in exactly
+    the environment that needs it, while passing on a ``host``-environment
+    account, which is what this one is.
+
+    Deliberately does **not** set ``home.path``: an explicit home
+    short-circuits the registry lookup entirely, so a test that sets one
+    passes with or without the fix. (It did, on the first attempt.)
+    """
+    import json
+    import subprocess
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = (
+        tmp_path / "state" / "brnrd" / "accounts" / "acc_test" / "home"
+    )
+    (home / "account").mkdir(parents=True)
+    (home / "account" / "repos.json").write_text(
+        json.dumps({"account_id": "acc_test", "repos": [{"path": str(repo)}]}),
+        encoding="utf-8",
+    )
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "docker.image=from-security\n", encoding="utf-8"
+    )
+    conf.write_config(repo, {"docker.image": "from-repo"})
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    from_repo = conf.security_config_path(
+        repo, conf._read_flat(conf.repo_config_path(repo))
+    )
+    from_linked = conf.security_config_path(
+        linked, conf._read_flat(conf.repo_config_path(linked))
+    )
+
+    assert from_repo == home / conf.SECURITY_CONFIG_FILENAME
+    assert from_linked == from_repo
+    # And the value survives the trip from inside the worktree, which is
+    # the behaviour, not just the path.
+    assert conf.load_config(linked).get("docker.image") == "from-security"
