@@ -1052,6 +1052,35 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     assert persisted.status == "error"
 
 
+def test_presence_label_for_event_never_falls_back_to_task_body():
+    """#585: a presence `label` is dashboard chrome, not a content channel.
+
+    The pre-fix shape derived the label as
+    ``event.get("summary") or task.body``, so a spawn worker's presence
+    label was its own full task spec whenever `summary` was unpopulated —
+    which it always was (audited: no writer sets it on this creation-time
+    `event` dict). `_presence_label_for_event` must never read `body`
+    (or any task-prose field) at all — an absent `summary` degrades to an
+    empty label, not to the event's body."""
+    huge_task_prose = (
+        "# Task — issue #565: stopped runs are credited even though the "
+        "branch never merged, which double-counts them in the ledger. " * 5
+    )
+    event = {"id": "evt-1", "body": huge_task_prose}
+    assert daemon._presence_label_for_event(event) == ""
+
+
+def test_presence_label_for_event_uses_summary_when_a_caller_sets_it():
+    """A caller that *does* populate a short, deliberate `summary` still
+    gets it through, truncated to 120 chars — the field stays usable for
+    a future handle-shaped writer, just never task prose by default."""
+    event = {"id": "evt-1", "body": "irrelevant", "summary": "Add labels to live runs"}
+    assert daemon._presence_label_for_event(event) == "Add labels to live runs"
+
+    event_long = {"id": "evt-2", "summary": "x" * 200}
+    assert len(daemon._presence_label_for_event(event_long)) == 120
+
+
 def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(
