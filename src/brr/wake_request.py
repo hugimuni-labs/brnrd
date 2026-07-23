@@ -8,8 +8,11 @@ two daemon threads that touch it locally:
   mirrors the server's pending request into ``.brr/wake-request.json`` and
   reports consumed ids back on the next ``PUT /v1/daemons/runners``;
 - the **dispatch loop** (`daemon.py`) applies the pending request as a
-  one-shot runner override on the next wake and moves its id to
-  ``.brr/wake-request-consumed.json``.
+  one-shot runner override on the next wake — gated to non-``schedule``
+  sources (#564: a scheduled wake is never the interactive one a tap was
+  parked for) and only on an actual apply, never a drop — and moves its id
+  to ``.brr/wake-request-consumed.json``, leaving a trace of who spent it
+  in ``.brr/wake-request-receipt.json``.
 
 Files are daemon-owned control state, not user surfaces. Writes are
 atomic-rename; the cancel path is simply the server no longer returning
@@ -19,11 +22,13 @@ the request, upon which the mirror file is removed.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _PENDING_NAME = "wake-request.json"
 _CONSUMED_NAME = "wake-request-consumed.json"
+_RECEIPT_NAME = "wake-request-receipt.json"
 
 
 def _pending_path(brr_dir: Path) -> Path:
@@ -32,6 +37,10 @@ def _pending_path(brr_dir: Path) -> Path:
 
 def _consumed_path(brr_dir: Path) -> Path:
     return brr_dir / _CONSUMED_NAME
+
+
+def _receipt_path(brr_dir: Path) -> Path:
+    return brr_dir / _RECEIPT_NAME
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -110,6 +119,60 @@ def consumed_ids(brr_dir: Path) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def record_receipt(
+    brr_dir: Path,
+    request_id: str,
+    *,
+    source: str,
+    event_id: str | None = None,
+    profile: str | None = None,
+) -> None:
+    """#564: the human/dashboard-readable trace of *who* spent a request.
+
+    ``consume()`` is the file-protocol spend — one id moved to the ack
+    ledger, source-blind by design (it has to be: it's shared by every
+    dispatch-time caller). That blindness is exactly what let a scheduled
+    wake silently eat a dashboard tap parked for an interactive one, with
+    zero trace anywhere. This is the trace: which event consumed the
+    request and what woke it, so a future wake or the dashboard can tell
+    "spent, and by what" instead of just "gone." One requester parks at
+    most one pending request at a time, so only the latest consumption is
+    live context — each call overwrites the last.
+
+    ``event_id`` is the *event*, not a run: both call sites bind the tap
+    before a run exists, so there is no run id to record. Naming the field
+    for what it actually holds is the point — a receipt that misnames its
+    own subject is the failure it was built to prevent.
+
+    Also emitted as one stdout line, because a JSON file nothing reads is
+    not yet a receipt: the daemon log is the surface an operator already
+    watches when asking "where did my dashboard pick go?".
+    """
+    request_id = str(request_id or "").strip()
+    if not request_id:
+        return
+    payload = {
+        "request_id": request_id,
+        "source": str(source or ""),
+        "event_id": str(event_id or "") or None,
+        "profile": str(profile or "") or None,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    _write_json(_receipt_path(brr_dir), payload)
+    print(
+        f"[brnrd] wake request {request_id} consumed by "
+        f"{payload['event_id'] or 'an unnamed event'} "
+        f"(source={payload['source'] or 'unknown'}, "
+        f"profile={payload['profile'] or 'unknown'})"
+    )
+
+
+def last_receipt(brr_dir: Path) -> dict[str, Any] | None:
+    """The most recent consumption receipt, or None."""
+    data = _read_json(_receipt_path(brr_dir))
+    return data if isinstance(data, dict) else None
 
 
 def clear_consumed(brr_dir: Path, acked: list[str]) -> None:
