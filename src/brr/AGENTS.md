@@ -506,6 +506,15 @@ recipe (and where `<kb-root>` resolves to for this repo).
 The log is a **curated** narrative. Add an entry when your task produced a
 meaningful learning, decision, or shipped change. If it didn't, don't.
 
+**An entry is a paragraph, not a report.** Orientation tooling injects a
+fixed-byte tail of this log into every session start, so entry size directly
+sets how many entries of continuity a reader gets: fat entries silently
+narrow the window while it still looks populated. Aim for ≤ ~1,500 bytes —
+the verdict, the one transferable lesson, and links; the full reasoning
+belongs on the kb page or PR the entry points at. (Measured 2026-07-24:
+average entry size doubled over six weeks and the injected tail's carrying
+capacity fell from ~4-8 entries to ~1-2.)
+
 ### What to persist
 
 - **Decisions** — context, alternatives considered, why this option was
