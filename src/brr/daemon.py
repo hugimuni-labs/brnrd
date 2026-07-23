@@ -5935,11 +5935,17 @@ _SPAWN_NOTIFY_RESPONSE_MAX_CHARS = 2000
 # #574: the first `brr/<slug>` token in a spec is the branch it commits the
 # child to — the convention every dispatch already uses (`_queue_spawn_
 # request`'s own docstring). The lookbehind excludes a `brr/` reached via a
-# preceding `/` or word char so a spec's own source anchors (`src/brr/
-# daemon.py`, routine in this repo's spec bodies) never masquerade as the
-# branch commitment; without it the *first* `brr/...` token in a spec that
-# also cites `daemon.py` line anchors would be the wrong one.
-_SPAWN_CONTRACT_BRANCH_RE = re.compile(r"(?<![\w/])brr/[A-Za-z0-9][A-Za-z0-9_.-]*")
+# preceding word char, `/`, or `.` so nothing in a spec *but* a branch name
+# can masquerade as the branch commitment. All three are load-bearing and
+# each names a token this repo's own spec bodies carry as a matter of course:
+# `src/brr/daemon.py` (source anchors, `/`), and — the one the first cut of
+# this check missed — `.brr/worktrees/<run-id>` and `.brr/outbox/…`, which
+# every *host*-environment spawn spec names in its working rules, and which
+# yielded a confident `brr/worktrees` as the "spec branch". A guard that
+# false-positives on a worker that did everything right is worse than no
+# guard: it teaches the reader to skip the flag, and it is gone the one time
+# it is right (`hooks.py:441-444`, the #562 lesson, one module over).
+_SPAWN_CONTRACT_BRANCH_RE = re.compile(r"(?<![\w/.])brr/[A-Za-z0-9][A-Za-z0-9_.-]*")
 # The first `/tmp/brr-*.md` token is the report path convention every
 # dispatch spec uses; the `/tmp/brr-` prefix is distinctive enough that no
 # lookbehind is needed.
