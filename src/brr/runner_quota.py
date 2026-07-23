@@ -199,7 +199,10 @@ def latest_claude_spend_outbox_dir(brr_dir: Path) -> Path | None:
     return best_path
 
 
-def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | None:
+def binding_quota_remaining_pct(
+    levels: Mapping[str, Any] | None,
+    model: str | None = None,
+) -> float | None:
     """The lowest remaining-percent found in a level snapshot's ``quota`` dict.
 
     Reads either shape a collector produces (`kb/design-director-loop.md`
@@ -211,6 +214,21 @@ def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | Non
     ``None`` when nothing numeric is present. Never falls back to parsing
     the ``summary`` string; a policy decision needs a proven number, not a
     guess.
+
+    ``session`` and ``week`` (and Codex's two buckets) are account-wide —
+    *any* dispatched Core spends them, so they always bind. A
+    ``week_models.<label>`` bucket is per-Core: it binds only when *model*
+    names the Core that would actually spend it (matched case-insensitively
+    against the collector's label, e.g. Claude's rendered ``"Fable"`` vs. a
+    catalog ``core=fable``). Every *other* per-model bucket is excluded from
+    the ``min()`` — a near-exhausted premium Core must not throttle work
+    dispatched to a different one (#561). When *model* is ``None`` (a
+    scheduling tick that hasn't committed to a runner yet), every per-model
+    bucket is excluded: a scheduler must not pace itself against a bucket it
+    has not decided to spend. Exclusion only changes what *binds*; excluded
+    buckets stay fully visible in the collector's own ``summary`` string, and
+    :func:`excluded_week_model_buckets` surfaces them for a caller that wants
+    to mention a thin one without acting on it.
     """
     if not isinstance(levels, Mapping):
         return None
@@ -224,11 +242,17 @@ def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | Non
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             found.append(float(value))
 
+    model_key = _slug(model) if model else None
+
     buckets = quota.get("buckets")
     if isinstance(buckets, Mapping):
         for key, bucket in buckets.items():
             if key == "week_models" and isinstance(bucket, Mapping):
-                for model_bucket in bucket.values():
+                if model_key is None:
+                    continue
+                for label, model_bucket in bucket.items():
+                    if _slug(str(label)) != model_key:
+                        continue
                     if isinstance(model_bucket, Mapping):
                         _add(model_bucket.get("remaining_percentage"))
                 continue
@@ -239,6 +263,43 @@ def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | Non
     _add(quota.get("secondary_remaining_percent"))
 
     return min(found) if found else None
+
+
+def excluded_week_model_buckets(
+    levels: Mapping[str, Any] | None,
+    model: str | None,
+) -> dict[str, float]:
+    """The per-model ``week_models`` buckets *not* counted by :func:`binding_quota_remaining_pct`.
+
+    Same exclusion rule as that function, inverted: every ``week_models.
+    <label>`` bucket except the one matching *model* (case-insensitively), or
+    every bucket when *model* is ``None``. Returns ``{label:
+    remaining_percentage}`` so a caller can flag one that is thin (e.g. for
+    ``_quota_pacing_status``'s ``excluded_thin``) without it binding policy.
+    """
+    if not isinstance(levels, Mapping):
+        return {}
+    quota = levels.get("quota")
+    if not isinstance(quota, Mapping):
+        return {}
+    buckets = quota.get("buckets")
+    if not isinstance(buckets, Mapping):
+        return {}
+    week_models = buckets.get("week_models")
+    if not isinstance(week_models, Mapping):
+        return {}
+
+    model_key = _slug(model) if model else None
+    excluded: dict[str, float] = {}
+    for label, model_bucket in week_models.items():
+        if model_key is not None and _slug(str(label)) == model_key:
+            continue
+        if not isinstance(model_bucket, Mapping):
+            continue
+        value = model_bucket.get("remaining_percentage")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            excluded[str(label)] = float(value)
+    return excluded
 
 
 def format_snapshot(snapshot: RunnerQuotaSnapshot) -> str | None:
