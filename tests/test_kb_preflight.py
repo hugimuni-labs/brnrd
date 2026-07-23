@@ -295,6 +295,81 @@ def test_scan_does_not_flag_recent_log_within_budget(tmp_path):
     assert all(f.type != "recent-log-budget-exceeded" for f in findings)
 
 
+def test_scan_does_not_flag_ascending_log_order(tmp_path):
+    """A well-ordered log — newest entries appended at the bottom —
+    gets zero ordering findings."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(
+        tmp_path / "kb" / "log.md",
+        (
+            "# Log\n\n"
+            "## [2026-05-10] implement | First\n\n"
+            "Body one.\n\n"
+            "## [2026-05-11] implement | Second\n\n"
+            "Body two.\n\n"
+            "## [2026-05-12] implement | Third\n\n"
+            "Body three.\n"
+        ),
+    )
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "log-ordering-violation" for f in findings), findings
+
+
+def test_scan_flags_first_log_ordering_violation_only(tmp_path):
+    """A log with one descending boundary gets exactly one finding,
+    naming the first offending boundary's line and both dates — not a
+    verdict on the rest of the file."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(
+        tmp_path / "kb" / "log.md",
+        (
+            "# Log\n\n"                                          # line 1-2
+            "## [2026-05-10] implement | First\n\n"               # line 3
+            "Body one.\n\n"                                       # line 5
+            "## [2026-05-12] implement | Second\n\n"              # line 7
+            "Body two.\n\n"                                       # line 9
+            "## [2026-05-11] implement | Third (out of order)\n\n"  # line 11
+            "Body three.\n"                                       # line 13
+        ),
+    )
+
+    findings = kb_preflight.scan(tmp_path)
+
+    ordering = [f for f in findings if f.type == "log-ordering-violation"]
+    assert len(ordering) == 1, findings
+    finding = ordering[0]
+    assert finding.severity == "error"
+    assert finding.target == "kb/log.md:11"
+    assert "2026-05-11" in finding.description
+    assert "2026-05-12" in finding.description
+    assert "line 11" in finding.description
+    assert "line 7" in finding.description
+
+
+def test_scan_ignores_undated_headings_for_log_ordering(tmp_path):
+    """A plain ``## Title`` heading (no bracketed date) is skipped, not
+    an error — only dated headings participate in the order check."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(
+        tmp_path / "kb" / "log.md",
+        (
+            "# Log\n\n"
+            "## [2026-05-10] implement | First\n\n"
+            "Body one.\n\n"
+            "## A plain title, no date\n\n"
+            "Some narrative aside.\n\n"
+            "## [2026-05-11] implement | Second\n\n"
+            "Body two.\n"
+        ),
+    )
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "log-ordering-violation" for f in findings), findings
+
+
 def test_format_findings_renders_severity_prefix_for_advisories():
     """Errors keep the existing bullet format; advisories get a
     bracketed severity prefix so a human reader can triage at a
