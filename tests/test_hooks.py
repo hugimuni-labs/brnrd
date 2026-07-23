@@ -1639,13 +1639,25 @@ def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
     assert state[hooks.ORIENTATION_READ_KEY] == [str(a.resolve())]
 
 
-def test_orient_skip_needs_both_words_on_one_card_line(tmp_path):
+def test_orient_skip_needs_a_declaration_not_a_mention(tmp_path):
+    """Prose about skipping and orientation must not silence the meter.
+
+    The first shape of this guard matched any single line carrying both
+    words. That is line-scoped but not *declaration*-scoped, and the resident
+    holds the pen on `.card` — so a line reporting the ledger's own value, or
+    a line about working on this very ticket, turned the ledger off. The
+    second string below is the sharp one: it contains an explicit **negation**
+    and used to declare a skip.
+    """
     a, b = _orient_files(tmp_path)
     _boot_score(tmp_path, [a, b])
-    # "skip" and "orient" both present, but never on the same line — this is
-    # a card that talks about skipping a test and, separately, orientation.
     (tmp_path / hooks.CARD_NAME).write_text(
-        "## Now\nskip the flaky test for now\norientation files come next\n",
+        "## Now\n"
+        "skip the flaky test for now\n"            # words on separate lines
+        "orientation files come next\n"
+        "orient 3/5 rendered; nothing skipped\n"   # same line, and a negation
+        "Reviewed Slice 9: skip is a first-class outcome for orientation\n"
+        "the resident declares the skip for orientation on .card\n",
         encoding="utf-8",
     )
     _portal(tmp_path, token="t1", pending=1,
@@ -1654,6 +1666,25 @@ def test_orient_skip_needs_both_words_on_one_card_line(tmp_path):
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
     assert "orient 0/2" in _inject_text(out)
+
+
+def test_orient_skip_accepts_the_terse_declaration(tmp_path):
+    """`orient: skip` heading a line is the terse form, and must still work.
+
+    Narrowing the guard is only correct if the *intended* declarations still
+    land — otherwise the fix trades a false positive for a dead feature.
+    """
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\n- orient: skip\n", encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient" not in _inject_text(out)
 
 
 def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):

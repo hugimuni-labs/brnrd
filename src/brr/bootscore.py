@@ -628,9 +628,16 @@ def format_kernel(score: BootScore) -> str:
         lines.append(f"posture: {' · '.join(p_bits)}")
 
     if score.orientation_set:
-        # The orientation ledger's walk (#513 Slice 9). Differential like every
-        # other kernel line: absent — and costing nothing — when nothing
-        # deterministic could be named. Full absolute paths on purpose: the
+        # The orientation ledger's walk (#513 Slice 9). Unlike `attest:` and
+        # `image_stale` above, this line is **not** differential and should not
+        # be read as one: `AGENTS.md` is the set's first candidate and
+        # effectively always exists, so the block effectively always renders.
+        # Measured on this repo — 3 files / 64,092 B, 3 / 51,710 B, and 2 /
+        # 38,782 B with no task text at all. Never zero. That is deliberate:
+        # the kernel names the walk *before* it happens, so it cannot key off a
+        # completion that has not occurred yet. The differential half lives in
+        # the hooks' `orient x/y` segment, which does leave at completion or
+        # skip. Two surfaces, two jobs. Full absolute paths on purpose: the
         # line exists to be *acted on* (each entry is one Read call), and a
         # basename the wake would have to resolve first is a walk with a toll
         # booth. The hooks meter these Reads as `orient x/y` until the walk
