@@ -1119,6 +1119,39 @@ def test_scm_silent_when_repo_dir_unset(tmp_path):
     assert out.get("decision") != "block"
 
 
+def test_scm_names_forge_gate_route_only_when_armed(tmp_path):
+    """#568 defect 2: the blocking clause may only point at `gate: forge`
+    when the daemon told this hook the gate is actually deliverable here
+    (`BRR_FORGE_GATE`, read into `HookContext.forge_gate`). A guard may
+    not name a route it hasn't been told exists."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "wip.txt").write_text("half-done\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+
+    env = _armed_scm(tmp_path, repo)
+    env["BRR_FORGE_GATE"] = "1"
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "gate: forge" in out["reason"]
+    assert "open the PR yourself" not in out["reason"]
+
+
+def test_scm_omits_forge_gate_route_when_unarmed(tmp_path):
+    """Flag absent (an unconfigured account, or an older daemon that never
+    set it) ⇒ treated as off: the clause falls back to a route that
+    doesn't presuppose a gate this account may not have."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "wip.txt").write_text("half-done\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+
+    env = _armed_scm(tmp_path, repo)
+    assert "BRR_FORGE_GATE" not in env
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out["decision"] == "block"
+    assert "open the PR yourself" in out["reason"]
+    assert "gate: forge" not in out["reason"]
+
+
 class TestStopRunBody:
     """The run's own body rides the closeout delta (wyrd §5, maintainer 2026-07-19)."""
 
