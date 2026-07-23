@@ -1730,7 +1730,7 @@ def _apply_dashboard_wake_request(
         brr_dir,
         request["request_id"],
         source=str(target.event.get("source") or ""),
-        run_id=str(target.event.get("id") or "") or None,
+        event_id=str(target.event.get("id") or "") or None,
         profile=requested_profile,
     )
     return target
@@ -1909,7 +1909,7 @@ def _run_worker(
                 brr_dir,
                 wake_req["request_id"],
                 source=wake_req_source,
-                run_id=eid,
+                event_id=eid,
                 profile=requested_profile,
             )
         else:

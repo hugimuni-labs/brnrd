@@ -22,6 +22,7 @@ the request, upon which the mirror file is removed.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +126,7 @@ def record_receipt(
     request_id: str,
     *,
     source: str,
-    run_id: str | None = None,
+    event_id: str | None = None,
     profile: str | None = None,
 ) -> None:
     """#564: the human/dashboard-readable trace of *who* spent a request.
@@ -134,23 +135,37 @@ def record_receipt(
     ledger, source-blind by design (it has to be: it's shared by every
     dispatch-time caller). That blindness is exactly what let a scheduled
     wake silently eat a dashboard tap parked for an interactive one, with
-    zero trace anywhere. This is the trace: which run consumed the
+    zero trace anywhere. This is the trace: which event consumed the
     request and what woke it, so a future wake or the dashboard can tell
     "spent, and by what" instead of just "gone." One requester parks at
     most one pending request at a time, so only the latest consumption is
     live context — each call overwrites the last.
+
+    ``event_id`` is the *event*, not a run: both call sites bind the tap
+    before a run exists, so there is no run id to record. Naming the field
+    for what it actually holds is the point — a receipt that misnames its
+    own subject is the failure it was built to prevent.
+
+    Also emitted as one stdout line, because a JSON file nothing reads is
+    not yet a receipt: the daemon log is the surface an operator already
+    watches when asking "where did my dashboard pick go?".
     """
     request_id = str(request_id or "").strip()
     if not request_id:
         return
-    _write_json(
-        _receipt_path(brr_dir),
-        {
-            "request_id": request_id,
-            "source": str(source or ""),
-            "run_id": str(run_id or "") or None,
-            "profile": str(profile or "") or None,
-        },
+    payload = {
+        "request_id": request_id,
+        "source": str(source or ""),
+        "event_id": str(event_id or "") or None,
+        "profile": str(profile or "") or None,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    _write_json(_receipt_path(brr_dir), payload)
+    print(
+        f"[brnrd] wake request {request_id} consumed by "
+        f"{payload['event_id'] or 'an unnamed event'} "
+        f"(source={payload['source'] or 'unknown'}, "
+        f"profile={payload['profile'] or 'unknown'})"
     )
 
 

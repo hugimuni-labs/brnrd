@@ -77,24 +77,27 @@ def test_record_receipt_roundtrip_and_overwrite(tmp_path):
     assert wake_request.last_receipt(brr_dir) is None
 
     wake_request.record_receipt(
-        brr_dir, "wake_5", source="telegram", run_id="evt-a", profile="codex-mini",
+        brr_dir, "wake_5", source="telegram", event_id="evt-a", profile="codex-mini",
     )
-    assert wake_request.last_receipt(brr_dir) == {
+    receipt = wake_request.last_receipt(brr_dir)
+    assert receipt["at"]  # stamped, so a stale receipt is legible as stale
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
         "request_id": "wake_5",
         "source": "telegram",
-        "run_id": "evt-a",
+        "event_id": "evt-a",
         "profile": "codex-mini",
     }
     # Doesn't touch the ack ledger the publish tick sends over the wire.
     assert wake_request.consumed_ids(brr_dir) == []
 
     wake_request.record_receipt(
-        brr_dir, "wake_6", source="github", run_id="evt-b", profile="claude",
+        brr_dir, "wake_6", source="github", event_id="evt-b", profile="claude",
     )
-    assert wake_request.last_receipt(brr_dir) == {
+    receipt = wake_request.last_receipt(brr_dir)
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
         "request_id": "wake_6",
         "source": "github",
-        "run_id": "evt-b",
+        "event_id": "evt-b",
         "profile": "claude",
     }
 
