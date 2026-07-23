@@ -51,6 +51,52 @@ export const THERMAL_STOPS = Object.fromEntries(
 	THERMAL_SCALE.map((stop) => [stop.name, stop.color])
 ) as Record<ThermalStop['name'], string>;
 
+export interface PitchStop {
+	name: 'gut' | 'belly' | 'chest' | 'throat' | 'crown';
+	color: string;
+}
+
+/**
+ * The body axis a mood's `mood_pitch` ∈ [0,1] reports, gut (0) → crown (1)
+ * (`brr.emotes`: "the dashboard may map pitch → hue"). Discrete for exactly
+ * the reason THERMAL_SCALE is: hue is never interpolated. The route this
+ * scale walks — clay → amber → pale-warm → frost → a cool crown — is chosen
+ * so the low end and the high end sit on opposite sides of the canvas's
+ * warmth without a lerp crossing the green in between. Two stops are shared
+ * with the thermal scale on purpose: pitch is a second reading of the same
+ * surface, not a second palette. Every stop clears WCAG AA normal-text
+ * contrast on the #0c0906 canvas.
+ */
+export const PITCH_SCALE = [
+	{ name: 'gut', color: '#c07a5a' },
+	{ name: 'belly', color: STATUS_BURNING },
+	{ name: 'chest', color: '#c9b98f' },
+	{ name: 'throat', color: STATUS_COOLING },
+	{ name: 'crown', color: '#b9a8d8' }
+] as const satisfies readonly PitchStop[];
+
+export const PITCH_STOPS = Object.fromEntries(
+	PITCH_SCALE.map((stop) => [stop.name, stop.color])
+) as Record<PitchStop['name'], string>;
+
+/**
+ * `mood_pitch` → the accent hue for a mood's glyph, or `null` when the wire
+ * carried no usable pitch. Null rather than a default color, for the same
+ * reason an unknown mood renders no face: a tint the daemon didn't report is
+ * a guess, and a guessed body reading is worse than none.
+ *
+ * Bands are uniform (`1/PITCH_SCALE.length` wide) and closed at the top, so
+ * the mapping is total over [0,1] and deterministic at every stop. Values
+ * outside the range are clamped — an out-of-contract pitch is a producer bug
+ * worth rendering at the nearest end, not a reason to drop the tint.
+ */
+export function pitchAccent(pitch: number | null | undefined): string | null {
+	if (typeof pitch !== 'number' || !Number.isFinite(pitch)) return null;
+	const clamped = Math.min(1, Math.max(0, pitch));
+	const band = Math.floor(clamped * PITCH_SCALE.length);
+	return PITCH_SCALE[Math.min(PITCH_SCALE.length - 1, band)].color;
+}
+
 function canonicalLevel(level: StatusLevel): ThermalTier | 'unknown' {
 	if (level === 'ample') return 'burning';
 	if (level === 'low') return 'cooling';

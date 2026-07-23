@@ -3,11 +3,13 @@
 	import { flip } from 'svelte/animate';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { typeReveal } from './transitions';
+	import MoodChip from './MoodChip.svelte';
 	import {
 		ageSince,
 		heartbeatLevel,
 		liveRelicChips,
 		liveRunDisplayName,
+		moodFace,
 		type LiveRun
 	} from './liveRuns';
 	import { relicIcon } from './runLedger';
@@ -147,6 +149,7 @@
 					: null}
 				{@const isOpen = expanded.has(run.id)}
 				{@const runner = runnerLabel(run)}
+				{@const mood = moodFace(run.mood, run.mood_glyph, run.mood_pitch)}
 				<div
 					class="subpanel p-2.5 text-xs"
 					data-loom-run={run.run_id || run.id}
@@ -175,6 +178,7 @@
 								>
 									{label(run, lvl)}
 								</span>
+								<MoodChip face={mood} />
 							</span>
 							<span class="flex shrink-0 items-center gap-1.5 font-mono text-ink-quiet">
 								{ageSince(run.started_at, now) ?? ''}

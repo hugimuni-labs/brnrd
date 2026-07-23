@@ -322,3 +322,27 @@ test('bodySection lifts the produce manifest off the attested frame', () => {
 	// which the renderer must not flatten into "produced nothing".
 	assert.equal(bodySection('# Run run-1\n\n- status: done', 'Produce'), '');
 });
+
+test('nodeDigest carries the frame mood as a bare handle (#566)', () => {
+	const node = (frontmatter: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: `---\n${frontmatter}---\n`,
+						layer: 'runs'
+					}
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	// A closed run's frame is a text record: the handle survives, the glyph
+	// never existed there. The chip renders the bare name, which is exactly
+	// what the emote library's honesty bar asks for.
+	assert.equal(node('status: done\nmood: id_l\n').mood, 'id_l');
+	// A run that set no mood reports none — and '' renders nothing at all.
+	assert.equal(node('status: done\n').mood, '');
+});

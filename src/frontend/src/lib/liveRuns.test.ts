@@ -5,7 +5,10 @@ import {
 	LiveRunsAuthError,
 	liveRelicChips,
 	liveRunDisplayName,
-	requestRunStop
+	moodFace,
+	requestRunStop,
+	wordmarkMood,
+	type LiveRun
 } from './liveRuns.ts';
 
 test('live run display prefers the resident-authored name', () => {
@@ -110,4 +113,115 @@ test('zero, empty, and absent counts render no chips at all', () => {
 	assert.deepEqual(liveRelicChips(undefined), []);
 	assert.deepEqual(liveRelicChips({}), []);
 	assert.deepEqual(liveRelicChips({ commit: 0 }), []);
+});
+
+// ── mood (#566) ─────────────────────────────────────────────────────
+//
+// The house rule these pin, from `brr.emotes`' own docstring: an unknown or
+// absent mood renders as NOTHING or the bare handle name — never a guessed or
+// default face. The frontend owns no emote table, so every glyph here is one
+// the wire supplied.
+
+function moodRun(over: Partial<LiveRun>): LiveRun {
+	return {
+		id: 'p1',
+		kind: 'daemon',
+		stream: 'telegram:1:',
+		label: '',
+		name: 'a run',
+		run_id: 'run-1',
+		repo_label: 'org/repo',
+		started_at: '2026-07-23T22:00:00Z',
+		last_seen: '2026-07-23T22:00:00Z',
+		parent_run_id: null,
+		is_subspawn: false,
+		runner: {},
+		phase: 'running',
+		card_text: null,
+		card_updated_at: null,
+		...over
+	};
+}
+
+test('an unknown mood handle degrades to the bare name, never a face', () => {
+	// The daemon could not resolve the handle against the emote library, so it
+	// published the name with no glyph. That is the whole contract: the chip
+	// says the word and shows nothing.
+	assert.deepEqual(moodFace('sideways', null, null), {
+		name: 'sideways',
+		glyph: null,
+		pitch: null
+	});
+});
+
+test('an absent mood is not a mood — the surfaces render nothing', () => {
+	assert.equal(moodFace(null), null);
+	assert.equal(moodFace(undefined, '(・_・)', 0.5), null);
+	assert.equal(moodFace('   ', '(・_・)'), null);
+});
+
+test('a glyph is worn only when the wire carried one', () => {
+	assert.deepEqual(moodFace('id_l', '(-_-)', 0.25), {
+		name: 'id_l',
+		glyph: '(-_-)',
+		pitch: 0.25
+	});
+	// Whitespace-only is the same as absent; a pitch that isn't a real number
+	// is dropped rather than tinting off a NaN.
+	assert.equal(moodFace('id_l', '  ')?.glyph, null);
+	assert.equal(moodFace('id_l', '(-_-)', Number.NaN)?.pitch, null);
+});
+
+test('the wordmark wears the newest live mood, not the first one it finds', () => {
+	const runs = [
+		moodRun({ id: 'old', started_at: '2026-07-23T21:00:00Z', mood: 'gnaw', mood_glyph: '>_<' }),
+		moodRun({ id: 'new', started_at: '2026-07-23T22:30:00Z', mood: 'id_l', mood_glyph: '(-_-)' })
+	];
+	assert.deepEqual(wordmarkMood(runs, null), { frames: ['(-_-)'], pitch: null });
+});
+
+test('runs without a mood are skipped, and a moodless board falls to the daemon', () => {
+	const daemon = {
+		state: 'idle',
+		name: 'brnrd breathing',
+		glyph: '(-_-)',
+		frames: ['(-_-)', '(-.-)'],
+		pitch: 0.4
+	};
+	assert.deepEqual(wordmarkMood([moodRun({})], daemon), {
+		frames: ['(-_-)', '(-.-)'],
+		pitch: 0.4
+	});
+	assert.deepEqual(wordmarkMood(null, daemon), { frames: ['(-_-)', '(-.-)'], pitch: 0.4 });
+});
+
+test('an unknown live mood still tints, because the pitch is not a guess', () => {
+	// Name-only on the wire: no face to show, but the body axis the daemon
+	// reported is still honest telemetry.
+	const runs = [moodRun({ mood: 'sideways', mood_glyph: null, mood_pitch: 0.9 })];
+	assert.deepEqual(wordmarkMood(runs, null), { frames: null, pitch: 0.9 });
+});
+
+test('no mood anywhere leaves the wordmark alone — no frames, no tint', () => {
+	assert.deepEqual(wordmarkMood(null, null), { frames: null, pitch: null });
+	assert.deepEqual(wordmarkMood([moodRun({})], null), { frames: null, pitch: null });
+	// A daemon that published an empty frame list is the same as one that
+	// published none: the wordmark keeps its own wink.
+	assert.deepEqual(
+		wordmarkMood(null, { state: 'idle', name: 'brnrd', glyph: '', frames: [], pitch: 0 }),
+		{ frames: null, pitch: 0 }
+	);
+});
+
+test('a null daemon mood leaves the loom idle seam exactly as it was', () => {
+	// The seam swaps its hollow dot for the resting face only when this is
+	// non-null; a pre-upgrade daemon publishes nothing and gets today's render.
+	const restingFace = (mood: { name: string; glyph: string } | null) =>
+		mood ? moodFace(mood.name, mood.glyph) : null;
+	assert.equal(restingFace(null), null);
+	assert.deepEqual(restingFace({ name: 'brnrd breathing', glyph: '(-_-)' }), {
+		name: 'brnrd breathing',
+		glyph: '(-_-)',
+		pitch: null
+	});
 });

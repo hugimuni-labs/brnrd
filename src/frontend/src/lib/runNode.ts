@@ -399,6 +399,13 @@ export interface NodeDigest {
 	 */
 	produce: string;
 	messageCount: number;
+	/**
+	 * The mood handle the run's own frame recorded (#566), '' when it set
+	 * none. Name only: the frame is a text record, so nothing here resolves a
+	 * glyph — and a closed run's chip renders the bare handle rather than
+	 * looking one up, which is the honest answer anyway.
+	 */
+	mood: string;
 	/** True when expanding would actually reveal something more. */
 	hasMore: boolean;
 }
@@ -421,6 +428,18 @@ export interface NodeIdentity {
 	runner: string | null;
 	spawn: boolean;
 	age: string | null;
+	/**
+	 * The run's mood handle (#566) — from the live packet while it burns, from
+	 * the frame's `mood:` field once it has closed. Null when the run set none.
+	 */
+	mood: string | null;
+	/**
+	 * The glyph the daemon resolved for that handle, and only ever that:
+	 * null for an unknown handle, and null for every closed run (the frame
+	 * records the handle, not the face). A null glyph means the chip renders
+	 * the bare name — it never means "pick a default face".
+	 */
+	moodGlyph: string | null;
 }
 
 export function nodeDigest(node: RunNode): NodeDigest {
@@ -434,6 +453,7 @@ export function nodeDigest(node: RunNode): NodeDigest {
 		runner: frame?.metadata.runner_name ?? '',
 		now,
 		produce: frame ? bodySection(frame.body, 'Produce') : '',
+		mood: frame?.metadata.mood ?? '',
 		messageCount: node.messages.length,
 		// Only offer the expand when it reveals something the reader cannot
 		// already see. Comparing the projection against the raw body is not
