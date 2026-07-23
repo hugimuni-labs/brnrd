@@ -988,9 +988,46 @@ def _source_excerpt(source: KnowledgeSource) -> str:
     return "\n".join(lines)
 
 
+# Directories a knowledge walk must never descend into: dependency trees and
+# build output. Nobody authored what is in them, and there is a great deal of
+# it — this repo's `docs/` is an Astro site, so 505 of its 518 markdown files
+# are vendored `node_modules` READMEs and CHANGELOGs.
+#
+# The cost was not hypothetical. `_source_excerpt` lists the first 20 files it
+# finds, sorted; `node_modules/` sorts ahead of `src/`, so every wake's "repo
+# docs" block was `README.md` followed by nineteen Astro dependency READMEs and
+# "... 530 more" — **not one of the twelve authored pages appeared**, and the
+# resident paid ~800 B of injection budget for the privilege. `search()` walks
+# the same iterator with a 20-hit cap, so `brnrd kb <query>` — the long-tail
+# escape hatch `run.md` points at — could spend its whole budget inside
+# `@babel/parser/CHANGELOG.md`.
+#
+# Dot-directories are skipped for the same reason (`.git`, `.astro`, `.venv`).
+# Only components *below* the source root are tested, so a root that is itself
+# a dotted path — `.brnrd-kb/`, which `search()` walks — is unaffected.
+_SKIP_DIRS = frozenset({
+    "node_modules", "dist", "build", "vendor", "target",
+    "__pycache__", "site-packages",
+})
+
+
+def _is_vendored(path: Path, root: Path) -> bool:
+    """True when *path* sits under a dependency/build directory below *root*."""
+    try:
+        parts = path.relative_to(root).parts[:-1]
+    except ValueError:  # pragma: no cover - defensive
+        return False
+    return any(
+        part in _SKIP_DIRS or part.startswith(".") for part in parts
+    )
+
+
 def _iter_docs(root: Path) -> Iterable[Path]:
     for suffix in ("*.md", "*.txt", "*.rst"):
-        yield from sorted(p for p in root.rglob(suffix) if p.is_file())
+        yield from sorted(
+            p for p in root.rglob(suffix)
+            if p.is_file() and not _is_vendored(p, root)
+        )
 
 
 def _init_git_repo(path: Path) -> bool:
