@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import time
 
 import httpx
 
 from .config import Settings
+
+logger = logging.getLogger(__name__)
 
 _TIMEOUT = 20.0
 # Stripe's recommended default tolerance for webhook timestamp skew.
@@ -43,11 +46,22 @@ def _post(settings: Settings, path: str, data: dict) -> dict:
             timeout=_TIMEOUT,
         )
     except httpx.HTTPError as exc:
-        raise StripeError(f"stripe request failed: {exc}") from exc
+        # Genuine gateway failure — we never reached Stripe. 502 is honest here.
+        logger.warning("stripe %s transport error: %s", path, exc)
+        raise StripeError(f"stripe request failed: {exc}", status_code=502) from exc
     body = response.json() if response.content else {}
     if response.status_code >= 400:
         message = (body.get("error") or {}).get("message") or f"stripe error {response.status_code}"
-        raise StripeError(message)
+        # Always log — Stripe's message is the whole diagnosis (bad price,
+        # missing tax code, unsupported param) and uvicorn's access line alone
+        # never carries it. A 4xx from Stripe is an actionable request/config
+        # error, so surface it with a client-visible status: a 502 body gets
+        # replaced by proxies/CDNs (Cloudflare's "error code: 502" page) and the
+        # message never reaches the browser or the operator. Reserve 502 for
+        # Stripe-side 5xx, which are true upstream faults.
+        logger.warning("stripe %s -> %s: %s", path, response.status_code, message)
+        status_code = 400 if 400 <= response.status_code < 500 else 502
+        raise StripeError(message, status_code=status_code)
     return body
 
 
@@ -81,8 +95,13 @@ def create_subscription_checkout(
             # brnrd-side needs to know they exist.
             "allow_promotion_codes": "true",
             "success_url": success_url,
+            # Tax is handled by the account's Managed Payments (Stripe as
+            # merchant of record), which rejects an explicit automatic_tax
+            # parameter ("Unsupported parameter: automatic_tax"). Tax codes
+            # live on the Stripe Products. To instead run classic Stripe Tax,
+            # pass managed_payments[enabled]=false *and* automatic_tax[enabled]
+            # =true here and set a default tax code in Tax settings.
             "cancel_url": cancel_url,
-            "automatic_tax[enabled]": "true",
             "metadata[brnrd_account_id]": account_id,
             "metadata[brnrd_purpose]": "subscription",
             "subscription_data[metadata][brnrd_account_id]": account_id,
@@ -108,8 +127,9 @@ def create_topup_checkout(
         "line_items[0][price_data][product_data][name]": "Brnrd Wallet Top-up",
         "line_items[0][quantity]": str(credits),
         "success_url": success_url,
+        # See create_subscription_checkout: Managed Payments owns tax and
+        # rejects an explicit automatic_tax parameter.
         "cancel_url": cancel_url,
-        "automatic_tax[enabled]": "true",
         "metadata[brnrd_account_id]": account_id,
         "metadata[brnrd_purpose]": "wallet_topup",
         "metadata[brnrd_credits]": str(credits),
