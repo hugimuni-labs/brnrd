@@ -355,6 +355,30 @@ class OrientationStep:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class OrientationFile:
+    """One file in the wake's **orientation set** (#513 Slice 9).
+
+    Not to be confused with :class:`OrientationStep` / ``BootScore.orientation``
+    — that is the kernel's ``next:`` list, *actions derived from posture*
+    ("read the task", "act").  This is the **orientation ledger's** unit: a
+    file this wake ought to have *read* — the walk the maintainer's MUD-boot
+    steer asked for — observed by the hooks (``brr.hooks``) as ``orient x/y``
+    until the walk completes or the resident declares the skip on ``.card``.
+    The two words coexist because they are two halves of the same steer: the
+    ``next:`` list is what a wake *does first*; the set is what a wake
+    *inhabits by reading*.  Renaming either would orphan its consumers.
+
+    Every entry is deterministic and provably wrong-able: the file existed at
+    derivation time, at this absolute path, at this size.  Nothing here is
+    inferred from what a task "seems related" to — a set member the daemon
+    cannot prove is a set member the daemon does not name.
+    """
+
+    path: str    # absolute path, as the wake would Read it
+    bytes: int   # size on disk at derivation time (the walk's cost)
+
+
 @dataclass
 class BootScore:
     """Typed intermediate representation assembled alongside the prompt.
@@ -376,6 +400,13 @@ class BootScore:
     attention: BootAttention = field(default_factory=BootAttention)
     posture: BootPosture = field(default_factory=BootPosture)
     orientation: list[OrientationStep] = field(default_factory=list)
+    orientation_set: list[OrientationFile] = field(default_factory=list)
+    """The orientation *ledger*'s file set (#513 Slice 9) — distinct from
+    :attr:`orientation`, which is the kernel's ``next:`` action list; see
+    :class:`OrientationFile` for why both words exist.  Empty when nothing
+    deterministic could be named (no ``AGENTS.md``, no active plan, no
+    matched kb hub) — never padded with guesses.  Persisted with the score
+    to ``boot-score.json``, where the hook ledger reads it back."""
     contracts: list[ContractEntry] = field(default_factory=list)
     hooks: list[BootHook] = field(default_factory=list)
 
@@ -450,6 +481,7 @@ def to_dict(score: BootScore) -> dict:
         "attention": asdict(score.attention),
         "posture": asdict(score.posture),
         "orientation": [asdict(o) for o in score.orientation],
+        "orientation_set": [asdict(f) for f in score.orientation_set],
         "contracts": [asdict(c) for c in score.contracts],
         "hooks": [asdict(h) for h in score.hooks],
     }
@@ -594,6 +626,30 @@ def format_kernel(score: BootScore) -> str:
     ]
     if p_bits:
         lines.append(f"posture: {' · '.join(p_bits)}")
+
+    if score.orientation_set:
+        # The orientation ledger's walk (#513 Slice 9). Unlike `attest:` and
+        # `image_stale` above, this line is **not** differential and should not
+        # be read as one: `AGENTS.md` is the set's first candidate and
+        # effectively always exists, so the block effectively always renders.
+        # Measured on this repo — 3 files / 64,092 B, 3 / 51,710 B, and 2 /
+        # 38,782 B with no task text at all. Never zero. That is deliberate:
+        # the kernel names the walk *before* it happens, so it cannot key off a
+        # completion that has not occurred yet. The differential half lives in
+        # the hooks' `orient x/y` segment, which does leave at completion or
+        # skip. Two surfaces, two jobs. Full absolute paths on purpose: the
+        # line exists to be *acted on* (each entry is one Read call), and a
+        # basename the wake would have to resolve first is a walk with a toll
+        # booth. The hooks meter these Reads as `orient x/y` until the walk
+        # completes or the skip is declared; both outcomes are first-class.
+        total = sum(f.bytes for f in score.orientation_set)
+        lines.append(
+            f"orient: {len(score.orientation_set)} file(s) · {total:,}B — "
+            "read them before the work, or declare the skip on .card "
+            "(\"assuming prior knowledge, skipping orientation\")"
+        )
+        for f in score.orientation_set:
+            lines.append(f"  · {f.path} ({f.bytes:,}B)")
 
     if score.orientation:
         lines.append("next:")
