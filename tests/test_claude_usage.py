@@ -394,3 +394,191 @@ def test_carry_heals_a_hole_a_partial_scrape_already_wrote(tmp_path, monkeypatch
 
     assert levels["usage_credits"]["spent_amount"] == 4.2
     assert levels["week_models"]["fable"]["used_percentage"] == 75.0
+
+
+def test_a_total_miss_scrape_does_not_erase_a_prior_quota_reading(tmp_path, monkeypatch):
+    """Issue #561, defect 1: when the PTY scrape renders no session/week rows
+    at all, `parse_usage_text` returns no `quota` key and `capture_levels`
+    stamps `error`. Before this fix `quota` was not in `_ASYNC_SECTIONS`, so
+    that hole got written straight over a complete prior reading and became
+    the newest snapshot on disk — the one
+    `runner_quota.latest_claude_usage_outbox_dir` picks, silently blinding
+    pacing. The scrape proved nothing; the known reading must survive."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    claude_usage.write_snapshot(outbox, _usage_snapshot(_now_stamp()))
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: {
+            "source": "claude /usage PTY",
+            "updated_at": _now_stamp(),
+            "error": "no quota buckets parsed from /usage screen",
+        },
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert levels["quota"]["summary"] == "session 94% left"
+    # …and it says out loud that it wasn't seen this time round, the same
+    # discipline `usage_credits` already uses.
+    assert levels["quota"]["carried_from"]
+
+
+def test_a_partial_but_present_quota_is_left_exactly_as_scraped(tmp_path, monkeypatch):
+    """The boundary that matters: carrying is for the scrape that proved
+    *nothing*, not for one that proved something incomplete. A fresh scrape
+    that parsed even a partial quota block (session only, say) must be left
+    exactly as parsed — patching it from history would let a stale reading
+    silently override a fact the scrape just confirmed."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    claude_usage.write_snapshot(outbox, _usage_snapshot(_now_stamp()))
+    partial_quota = {
+        "summary": "session 10% left",
+        "buckets": {"session": {"remaining_percentage": 10.0}},
+    }
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: {
+            "source": "claude /usage PTY",
+            "updated_at": _now_stamp(),
+            "quota": partial_quota,
+        },
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert levels["quota"] == partial_quota
+    assert "carried_from" not in levels["quota"]
+
+
+def test_quota_carry_stops_once_the_reading_is_stale(tmp_path, monkeypatch):
+    """Same staleness bound the other carried sections respect: a quota
+    reading old enough that the account could plausibly have rolled over
+    underneath it is not carried forward as if it were still true."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    old = datetime.now(timezone.utc) - timedelta(hours=13)
+    claude_usage.write_snapshot(
+        outbox, _usage_snapshot(old.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    )
+    monkeypatch.setattr(
+        claude_usage,
+        "capture_levels",
+        lambda **kw: {
+            "source": "claude /usage PTY",
+            "updated_at": _now_stamp(),
+            "error": "no quota buckets parsed from /usage screen",
+        },
+    )
+
+    levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
+
+    assert "quota" not in levels
+
+
+def test_carried_quota_does_not_import_a_week_models_bucket_from_a_different_source():
+    """`quota` and `week_models` are carried independently — each searches the
+    candidate list for its own newest source, and those sources can differ.
+    If a carried quota's own record lacked a `week_models` pacing bucket, a
+    week_models carry from a *different* snapshot must not be stitched in:
+    that would pair one reading's session/week facts with another reading's
+    per-model bucket, exactly the disagreement carrying is meant to prevent."""
+    now = datetime.now(timezone.utc)
+    quota_stamp = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    models_stamp = (now - timedelta(minutes=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    quota_source = {
+        "updated_at": quota_stamp,
+        "quota": {
+            "summary": "session 94% left",
+            "buckets": {"session": {"remaining_percentage": 94.0}},
+        },
+    }
+    models_source = {
+        "updated_at": models_stamp,
+        "week_models": {"fable": {"used_percentage": 75.0}},
+        "quota": {
+            "summary": "session 90% left",
+            "buckets": {
+                "session": {"remaining_percentage": 90.0},
+                "week_models": {"fable": {"remaining_percentage": 25.0}},
+            },
+        },
+    }
+    fresh = {
+        "updated_at": _now_stamp(),
+        "error": "no quota buckets parsed from /usage screen",
+    }
+
+    healed = claude_usage.carry_forward_sections([quota_source, models_source], fresh)
+
+    assert healed["quota"]["carried_from"] == quota_stamp
+    # quota_source itself had no week_models bucket — must not be patched in
+    # from models_source's disagreeing reading.
+    assert "week_models" not in healed["quota"]["buckets"]
+    # The top-level week_models display section still carries independently.
+    assert healed["week_models"]["fable"]["used_percentage"] == 75.0
+
+
+def test_parse_usage_text_elides_model_reset_that_differs_by_a_minute_across_midnight(
+    monkeypatch,
+):
+    """Issue #561, defect 2: the panel renders one instant two ways across a
+    reset boundary. Live evidence (2026-07-23): `week_resets_at` rendered as
+    "Jul 24, 12am (Europe/Berlin)" (epoch 1784844000) while the Fable
+    per-model bucket rendered the *same* underlying instant as "Jul 23,
+    11:59pm (Europe/Berlin)" (epoch 1784843940) — 60 seconds apart in text,
+    one moment in fact. Comparing rendered strings flickers on this; comparing
+    parsed epochs with tolerance must not."""
+    epochs = {
+        "Jul 24, 12am (Europe/Berlin)": 1784844000.0,
+        "Jul 23, 11:59pm (Europe/Berlin)": 1784843940.0,
+    }
+    monkeypatch.setattr(
+        claude_usage, "_reset_epoch", lambda text, **kw: epochs.get(text)
+    )
+
+    levels = claude_usage.parse_usage_text(
+        "Current session\n0% 0% used\nResets 4:50pm (Europe/Berlin)\n"
+        "Current week (all models)\n5% 5% used\n"
+        "Resets Jul 24, 12am (Europe/Berlin)\n"
+        "Current week (Fable)\n8% 8% used\n"
+        "Resets Jul 23, 11:59pm (Europe/Berlin)\n"
+    )
+
+    assert levels["quota"]["summary"] == (
+        "session 100% left (resets 4:50pm (Europe/Berlin)); "
+        "week 95% left (resets Jul 24, 12am (Europe/Berlin)); "
+        "Fable week 92% left"
+    )
+
+
+def test_parse_usage_text_does_not_elide_a_genuinely_different_model_reset(
+    monkeypatch,
+):
+    """The other half of the same fix: two resets that are actually different
+    (hours or days apart, not a rendering artifact of one instant) must keep
+    showing both, exactly as before."""
+    epochs = {
+        "Jul 10, 12am (Europe/Berlin)": 1000000.0,
+        "Jul 17, 12am (Europe/Berlin)": 1604800.0,  # a week later
+    }
+    monkeypatch.setattr(
+        claude_usage, "_reset_epoch", lambda text, **kw: epochs.get(text)
+    )
+
+    levels = claude_usage.parse_usage_text(
+        "Current session\n0% 0% used\nResets 4:50pm (Europe/Berlin)\n"
+        "Current week (all models)\n5% 5% used\n"
+        "Resets Jul 10, 12am (Europe/Berlin)\n"
+        "Current week (Fable)\n8% 8% used\n"
+        "Resets Jul 17, 12am (Europe/Berlin)\n"
+    )
+
+    assert levels["quota"]["summary"] == (
+        "session 100% left (resets 4:50pm (Europe/Berlin)); "
+        "week 95% left (resets Jul 10, 12am (Europe/Berlin)); "
+        "Fable week 92% left (resets Jul 17, 12am (Europe/Berlin))"
+    )
