@@ -219,7 +219,12 @@ class TestBlockAttestation:
         result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
 
         assert result.newest_item == "2026-07-22"
-        assert result.source_newest == "2026-07-23"
+        # Time rendered on the source side because the entry that *is* the
+        # source's newest carries a corroborated run-id. The tail's own newest
+        # (07-22, whose run-id contradicts its heading) still renders bare —
+        # each side shows only the precision it actually has. The verdict is
+        # the day comparison either way; this is display, not evidence.
+        assert result.source_newest == "2026-07-23 13:42"
         assert result.dropped == 2
         assert result.stale is True
         assert "NOT current" in result.text
@@ -320,6 +325,38 @@ class TestBlockAttestation:
         assert result.precise is False, "one contradicting run-id downgrades the set"
         assert result.stale is False
         assert "day precision" in result.text
+
+    def test_an_untimed_entry_on_an_older_date_does_not_disable_the_same_day_tier(self):
+        """Precision is scoped to the cohort that can decide the tie.
+
+        Time only ever breaks a same-date tie, so an entry dated *earlier*
+        than the source's newest is settled by the day comparison and its
+        missing run-id is irrelevant. Requiring the whole file to be timed was
+        strictly stronger than the proof needs, and it was not a free
+        conservatism: measured on the live decision ledger — 162 entries, 55
+        untimed, but only 1 untimed on the newest date — whole-file scope
+        pinned ``precise`` at ``False`` permanently. Legacy headings cannot be
+        repaired without inventing timestamps, so the same-day tier could
+        never turn on however disciplined later writing became.
+
+        Here the tail keeps the 11:31 entry as "newest" while the 13:42 one
+        sits one heading above the cut — the exact 2026-07-23 inversion this
+        feature is named after. It must fire despite the untimed 2026-07-01
+        entry further down the file.
+        """
+        legacy = "## Legacy, no run-id (2026-07-01)\n\n" + ("w" * 200)
+        newer = "## B (2026-07-23, run-260723-1342-bbbb)\n\n" + ("y" * 200)
+        older = "## A (2026-07-23, run-260723-1131-aaaa)\n\n" + ("z" * 200)
+        content = "\n\n".join([legacy, newer, older]) + "\n"
+
+        result = _tail_trim_entries(
+            content, max_bytes=len(older.encode("utf-8")) + 10, source_hint="`x`"
+        )
+
+        assert result.precise is True, "an older untimed entry cannot decide a tie"
+        assert result.stale is True
+        assert "NOT current" in result.text
+        assert "13:42" in result.text and "11:31" in result.text
 
     def test_undated_headings_not_attestable_no_crash(self):
         """A heading with no parseable date makes the whole trim not-attestable.
@@ -1942,7 +1979,7 @@ class TestWorkSurfaceInjection:
 
         assert result.stale is True
         assert result.newest_item == "2026-07-22"
-        assert result.source_newest == "2026-07-23"
+        assert result.source_newest == "2026-07-23 13:42"
 
     def test_stale_page_flows_through_to_the_contract_entry(self, tmp_path):
         """End-to-end: a stale surface page's attestation reaches the
@@ -1963,7 +2000,7 @@ class TestWorkSurfaceInjection:
 
         assert by_key["work-surface"].stale is True
         assert by_key["work-surface"].newest_item == "2026-07-22"
-        assert by_key["work-surface"].source_newest == "2026-07-23"
+        assert by_key["work-surface"].source_newest == "2026-07-23 13:42"
         # Every other, non-chronological block stays untouched — defaults.
         assert by_key["identity-core"].stale is False
         assert by_key["identity-core"].newest_item is None
