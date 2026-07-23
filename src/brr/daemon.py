@@ -2484,6 +2484,13 @@ def _run_worker(
                 env["BRR_REPO_DIR"] = str(run_root)
                 if env_ctx.branch_plan is not None:
                     env["BRR_SEED_REF"] = env_ctx.branch_plan.seed_ref
+                # Arms the `scm` clause's escape route: it may only name
+                # `gate: forge` when this account can actually deliver it
+                # (see hooks._scm_closeout_clause). HookContext cannot probe
+                # gate config itself, so the daemon hands it the fact.
+                # Absent ⇒ the hook treats it as off (see there).
+                if _gate_can_deliver(brr_dir, "forge"):
+                    env["BRR_FORGE_GATE"] = "1"
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
         if env_ctx.outbox_env:
@@ -5290,7 +5297,10 @@ def _drain_outbox(
                     message_store.PENDING
                     if gate_available else message_store.UNDELIVERABLE
                 ),
-                reason=("" if gate_available else f"gate {gate!r} is not configured"),
+                reason=(
+                    "" if gate_available
+                    else f"gate {gate!r} is not deliverable on this account"
+                ),
             )
             if _deliver_out_of_bound(
                 emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
@@ -5423,15 +5433,15 @@ def _drain_outbox(
     return promoted
 
 
-def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
-    """True when *gate* or its delivery alias is configured here.
+def _gate_is_configured(brr_dir: Path, delivery_gate: str) -> bool:
+    """True when the delivery-loop gate *delivery_gate* is configured here.
 
-    Guards out-of-bound delivery against typos and unconfigured gates: a
-    synthesized event for a gate no thread is polling would sit undelivered
-    forever, so an unknown/unconfigured target is dropped with a note
-    instead.
+    The one probe behind both :func:`_gate_can_deliver` (a single gate,
+    already resolved through its alias) and :func:`_configured_gate_names`
+    (the full deliverable set) — same source, so a refusal notice built
+    from the set can never disagree with the single-gate decision it
+    explains.
     """
-    delivery_gate = _delivery_source_for_gate(gate)
     if delivery_gate not in _BUILTIN_GATES:
         return False
     try:
@@ -5441,6 +5451,28 @@ def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
         return False
     is_configured = getattr(mod, "is_configured", None)
     return bool(is_configured) and bool(is_configured(brr_dir))
+
+
+def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
+    """True when *gate* or its delivery alias is configured here.
+
+    Guards out-of-bound delivery against typos and unconfigured gates: a
+    synthesized event for a gate no thread is polling would sit undelivered
+    forever, so an unknown/unconfigured target is dropped with a note
+    instead.
+    """
+    return _gate_is_configured(brr_dir, _delivery_source_for_gate(gate))
+
+
+def _configured_gate_names(brr_dir: Path) -> list[str]:
+    """Agent-facing gate names deliverable on this account.
+
+    Catalog order (:data:`_BUILTIN_GATES`), built from the same
+    :func:`_gate_is_configured` probe :func:`_gate_can_deliver` uses — a
+    refusal notice quoting this list can never name a set that disagrees
+    with the single-gate decision it explains.
+    """
+    return [name for name in _BUILTIN_GATES if _gate_is_configured(brr_dir, name)]
 
 
 def _gate_owns_source(source: str) -> bool:
@@ -5517,12 +5549,26 @@ def _deliver_out_of_bound(
         )
         return False
     if not _gate_can_deliver(emit.brr_dir, gate):
-        _record_outbox_notice(
-            outbox_dir,
-            f"gate message dropped: {gate!r} is not a configured gate — the "
-            f"`gate:` key takes a bare gate name (e.g. `telegram`), not a "
-            f"thread string; the message was NOT delivered",
-        )
+        if ":" in gate:
+            # Looks like a thread/conversation-key string (the
+            # ``schedule:...`` / ``telegram:...`` shape), not a bare gate
+            # name — this is the one case that fixed-string diagnosis is
+            # actually true for.
+            _record_outbox_notice(
+                outbox_dir,
+                f"gate message dropped: {gate!r} is not a configured gate — "
+                f"the `gate:` key takes a bare gate name (e.g. `telegram`), "
+                f"not a thread string; the message was NOT delivered",
+            )
+        else:
+            configured = _configured_gate_names(emit.brr_dir)
+            _record_outbox_notice(
+                outbox_dir,
+                f"gate message dropped: {gate!r} is not deliverable on this "
+                f"account (configured gates: "
+                f"{', '.join(configured) if configured else 'none'}); the "
+                f"message was NOT delivered",
+            )
         return False
     # Never let agent-written frontmatter override the reserved event keys
     # (a stray `status:` would resurrect the event as pending and spawn a

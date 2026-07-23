@@ -197,6 +197,72 @@ class TestDrainOutbox:
         assert protocol.list_pending(inbox) == []
         assert not (outbox / "ping.md").exists()
 
+    def test_gate_addressed_unconfigured_bare_name_names_the_configured_set(
+        self, tmp_path, monkeypatch,
+    ):
+        """The refusal notice must state the failure that actually occurred
+        (this account can't deliver here) and name what it *can* deliver —
+        not a fixed string diagnosing a different mistake (#568 defect 1).
+        The configured set must come from a real probe, not a hardcoded
+        list, so it is monkeypatched independently of the fixture repo."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text("---\ngate: forge\n---\nhi\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        # Only telegram and cloud are configured on this (fake) account;
+        # forge aliases to github, which is not in the set.
+        monkeypatch.setattr(
+            daemon, "_gate_is_configured",
+            lambda _brr, name: name in {"telegram", "cloud"},
+        )
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert len(notices) == 1
+        text = notices[0]["text"]
+        assert "not deliverable on this account" in text
+        assert "configured gates: telegram, cloud" in text
+        assert "NOT delivered" in text
+        # Must not repeat the thread-string misdiagnosis for a bare name.
+        assert "thread string" not in text
+
+    def test_gate_addressed_thread_string_gets_the_bare_name_hint(
+        self, tmp_path, monkeypatch,
+    ):
+        """A `gate:` value that looks like a thread/conversation-key string
+        (contains `:`) gets the distinct "bare name, not a thread string"
+        hint — the one case the original fixed message was actually true
+        for (#568 defect 1)."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text("---\ngate: telegram:12345\n---\nhi\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert len(notices) == 1
+        text = notices[0]["text"]
+        assert "thread string" in text
+        assert "not a configured gate" in text
+        # Distinct from the unconfigured-bare-name notice above.
+        assert "configured gates:" not in text
+
     def test_missing_outbox_is_noop(self, tmp_path):
         brr_dir = tmp_path / ".brr"
         emit = daemon._WorkerEmit(
