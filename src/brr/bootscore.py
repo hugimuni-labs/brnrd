@@ -110,6 +110,56 @@ class ContractEntry:
     reason this is three-state.
     """
 
+    newest_item: str | None = None
+    """ISO date of the newest dated ``## `` entry actually **included** in
+    this block's rendered text, or ``None``.
+
+    Populated only for the byte-trimmed chronological blocks (the work
+    surface's accreting pages, the recent-activity log tail) and only when a
+    trim actually cut something — see :class:`brr.prompts.TrimResult`, the
+    plumbing this is copied from.  ``None`` means either *no trim happened*
+    (nothing to attest) or *not attestable* (a heading in scope carried no
+    parseable date) — the same three-state discipline as :attr:`bytes`: it
+    never means "the block has no newest entry," only that this field
+    carries no claim either way.
+    """
+
+    oldest_item: str | None = None
+    """ISO date of the oldest dated entry actually included — the other end
+    of :attr:`newest_item`'s range, needed to render "showing X → Y" in the
+    trim marker.  Same ``None`` discipline.
+    """
+
+    dropped: int | None = None
+    """Count of ``## `` entries the budget cut from this block, or ``None``
+    when nothing was cut (the content already fit).  Unlike the date fields,
+    this needs no parseable heading — a count of entries removed is always
+    knowable, so it can be non-``None`` even when :attr:`newest_item` /
+    :attr:`source_newest` are not.
+    """
+
+    source_newest: str | None = None
+    """ISO date of the newest dated entry in the **source** file, whether or
+    not it survived the trim.  The gap between this and :attr:`newest_item`
+    is the whole point: ``_tail_trim_entries`` always knew what it dropped
+    and, before this field existed, threw that fact away.  That discard was
+    the ledger-tail-inversion bug (2026-07-23): an out-of-order source let
+    the trim keep an *older* entry as "newest" while a genuinely newer one
+    sat, unrendered, one heading below the cut.
+    """
+
+    stale: bool = False
+    """``True`` iff a dated source entry is newer than :attr:`newest_item` —
+    i.e. ``source_newest > newest_item``, both present.  Computed once, at
+    the point the trim already holds both numbers (see
+    ``brr.prompts.TrimResult.stale``), and copied onto the manifest row
+    unchanged; :func:`attest_blocks` trusts this flag rather than
+    re-deriving it, so the formula lives in exactly one place.  Defaults to
+    ``False`` so every non-chronological block, and every block that was
+    never trimmed, reads as healthy without asserting anything about dates
+    it never looked at.
+    """
+
 
 @dataclass(frozen=True)
 class BootBody:
@@ -338,6 +388,36 @@ class BootScore:
     """
 
 
+def attest_blocks(contracts: list[ContractEntry]) -> list[str]:
+    """Deterministic block-*content* staleness check — no model in the loop.
+
+    Generalizes the ``kb_preflight`` file-ordering guard (#596) one level
+    up: that guard catches a source file whose entries drifted out of
+    chronological order; this catches the consequence when a *trimmed*
+    block's own tail-cut then keeps the wrong entry as "newest" because of
+    that drift.  Same P1 review finding
+    (``review-boot-prompts-2026-07.md``): a wake block claiming liveness,
+    rendered stale, with nothing checking the claim.
+
+    A block is stale iff its own ``ContractEntry.stale`` is set — computed
+    once, where the trim already holds both dates (see
+    ``brr.prompts.TrimResult.stale``), and trusted here rather than
+    re-derived, so the ``source_newest > newest_item`` formula lives in
+    exactly one place.
+
+    Zero findings on a healthy wake → an empty list, like every other
+    deterministic preflight in this codebase: this function costs nothing
+    to call and the kernel line it feeds costs nothing to render until the
+    day it fires.
+    """
+    return [
+        f"⚠ {entry.label} tail newest {entry.newest_item} — source has "
+        f"{entry.source_newest} (a newer entry was trimmed)"
+        for entry in contracts
+        if entry.stale and entry.newest_item and entry.source_newest
+    ]
+
+
 def replace_bytes(entry: ContractEntry, size: int) -> ContractEntry:
     """Stamp a measured size onto a frozen manifest row.
 
@@ -484,6 +564,14 @@ def format_kernel(score: BootScore) -> str:
             "superseded · prompt .md is current, kernel/orientation code is "
             "NOT · a boot-code change cannot be measured from this wake"
         )
+
+    for finding in attest_blocks(score.contracts):
+        # Differential, like every other kernel line and modelled directly
+        # on `image_stale` above it: costs nothing on a healthy wake (the
+        # common case — most blocks are never trimmed, and a trim in
+        # chronological order stays silent), and on a stale one is among
+        # the first things read.
+        lines.append(f"attest: {finding}")
 
     lines.extend(_format_continuity(score.continuity))
 

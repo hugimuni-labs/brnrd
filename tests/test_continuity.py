@@ -30,6 +30,7 @@ from brr.bootscore import (
     BootContinuity,
     BootHost,
     BootScore,
+    ContractEntry,
     format_kernel,
 )
 
@@ -340,3 +341,92 @@ def test_healthy_image_costs_the_kernel_nothing() -> None:
     out = _kernel(host=BootHost(kind="daemon", environment="host"))
     assert "stale:" not in out
     assert "⚠" not in out
+
+
+# ── P1 — per-block content attestation, the kernel alarm (move 4a) ────────────
+#
+# review-boot-prompts-2026-07.md §P1: a trimmed block that kept an
+# out-of-order "newest" entry used to render full and read as current.
+# `attest_blocks` (bootscore.py) is the deterministic, no-model-in-the-loop
+# check; these pin its one rendering site, modelled directly on
+# `image_stale` above.
+
+
+def _stale_ledger_entry(**overrides) -> ContractEntry:
+    fields = dict(
+        block_key="work-surface",
+        label="Discovered work surface",
+        owner="resident",
+        authority="surface",
+        freshness=None,
+        location="computed",
+        present=True,
+        newest_item="2026-07-22",
+        source_newest="2026-07-23",
+        dropped=2,
+        stale=True,
+    )
+    fields.update(overrides)
+    return ContractEntry(**fields)
+
+
+def test_stale_block_is_announced_in_the_kernel() -> None:
+    """The ledger-tail-inversion class, surfaced where it can't be skimmed.
+
+    Modelled on ``image_stale``: differential, costs nothing healthy, and on
+    a stale wake is among the first things read.
+    """
+    out = _kernel(
+        host=BootHost(kind="daemon", environment="worktree"),
+        contracts=[_stale_ledger_entry()],
+    )
+    lines = [ln for ln in out.splitlines() if ln.startswith("attest:")]
+    assert len(lines) == 1, out
+    line = lines[0]
+    assert "⚠" in line
+    assert "Discovered work surface" in line
+    assert "2026-07-22" in line
+    assert "2026-07-23" in line
+    assert "trimmed" in line
+
+
+def test_healthy_blocks_cost_the_kernel_nothing() -> None:
+    """No block is stale (the common case) → no ``attest:`` line at all."""
+    out = _kernel(
+        host=BootHost(kind="daemon", environment="worktree"),
+        contracts=[_stale_ledger_entry(stale=False, newest_item=None, source_newest=None, dropped=None)],
+    )
+    assert "attest:" not in out
+
+
+def test_undated_or_untrimmed_blocks_never_fire_the_alarm() -> None:
+    """``stale=False`` is the default — every non-chronological block, and
+    every not-attestable trim (undated headings), renders no alarm line.
+    """
+    out = _kernel(
+        host=BootHost(kind="daemon", environment="worktree"),
+        contracts=[ContractEntry(
+            block_key="identity-core", label="Resident identity core",
+            owner="product", authority="identity", freshness=None,
+            location="computed", present=True,
+        )],
+    )
+    assert "attest:" not in out
+
+
+def test_attest_blocks_is_silent_when_nothing_is_stale() -> None:
+    """Zero findings → an empty list, like every other deterministic preflight."""
+    from brr.bootscore import attest_blocks
+
+    assert attest_blocks([_stale_ledger_entry(stale=False, newest_item=None, source_newest=None)]) == []
+    assert attest_blocks([]) == []
+
+
+def test_attest_blocks_names_the_block_and_both_dates() -> None:
+    from brr.bootscore import attest_blocks
+
+    findings = attest_blocks([_stale_ledger_entry()])
+    assert len(findings) == 1
+    assert "Discovered work surface" in findings[0]
+    assert "2026-07-22" in findings[0]
+    assert "2026-07-23" in findings[0]
