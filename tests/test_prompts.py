@@ -1232,6 +1232,30 @@ def test_kb_link_contract_uses_portal_url_with_basename_fallback():
     assert "when none is\n  available, use its basename only" in substrate
 
 
+def test_recent_conversation_renders_dedup_provenance():
+    """Issue #338: a woven turn deduped across mirrored gates must still
+
+    name every pipe it arrived on — `duplicate_conversation_keys`
+    (attached by `conversations._dedupe_woven_records`) renders as
+    `also-on=` alongside the existing `thread=` label, so a reader never
+    loses the fact that both gates carried the exchange.
+    """
+    recent = [
+        {
+            "ts": "2026-07-20T04:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "correspondent_key": "telegram:user-id:42",
+            "conversation_key": "telegram:10:",
+            "duplicate_conversation_keys": ["cloud:telegram:10:"],
+            "body": "hello",
+        },
+    ]
+    block = _format_recent_conversation(recent)
+    assert "thread=telegram:10:" in block
+    assert "also-on=cloud:telegram:10:" in block
+
+
 def _read_bundled_agents_md() -> str:
     from pathlib import Path
 

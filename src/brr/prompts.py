@@ -2922,6 +2922,16 @@ def _conversation_source_label(record: dict[str, Any]) -> str:
     thread = str(record.get("conversation_key") or "").strip()
     if thread:
         parts.append(f"thread={thread}")
+    # Correspondent-weave dedup (conversations._dedupe_woven_records)
+    # collapses an exchange mirrored onto a sibling gate (cloud mirrors
+    # telegram) into one turn on the earliest-arriving thread; this
+    # names the sibling pipe(s) it also arrived on so the collapse never
+    # silently erases which gates carried it.
+    duplicates = record.get("duplicate_conversation_keys")
+    if isinstance(duplicates, list):
+        also = ", ".join(str(d).strip() for d in duplicates if str(d).strip())
+        if also:
+            parts.append(f"also-on={also}")
     return "; ".join(p for p in parts if p)
 
 

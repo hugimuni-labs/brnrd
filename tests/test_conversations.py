@@ -384,6 +384,317 @@ def test_read_recent_for_correspondent_merges_sibling_channels(tmp_path):
     assert [r.get("conversation_key") for r in records] == [native_key, cloud_key]
 
 
+# ── Cross-thread weave dedup (#338) ──────────────────────────────────
+
+
+def _mirrored_event(
+    *, chat=10, user=42, message_id, source="telegram", body,
+):
+    """Build a (native, cloud-mirrored) event pair sharing origin_message_key."""
+    native = {
+        "id": f"evt-native-{message_id}",
+        "source": "telegram",
+        "body": body,
+        "telegram_chat_id": chat,
+        "telegram_user_id": user,
+        "telegram_message_id": message_id,
+    }
+    cloud = {
+        "id": f"evt-cloud-{message_id}",
+        "source": "cloud",
+        "body": body,
+        "cloud_platform": "telegram",
+        "cloud_chat_id": chat,
+        "cloud_user_id": user,
+        "cloud_message_id": message_id,
+    }
+    return native, cloud
+
+
+def test_read_records_for_correspondent_dedupes_mirrored_exchange(tmp_path):
+    """The cloud gate mirrors telegram: one exchange, two conversation keys,
+
+    same `telegram_message_id` / `cloud_message_id` → one origin_message_key.
+    The merged read must show it once, on the earliest-arriving key, with
+    the sibling key preserved as provenance.
+    """
+    native, cloud = _mirrored_event(message_id=555, body="hello from human")
+    native_key = conversations.conversation_key_for_event(native)
+    cloud_key = conversations.conversation_key_for_event(cloud)
+    conversations.append_event(tmp_path, native_key, native)
+    conversations.append_event(tmp_path, cloud_key, cloud)
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, cloud_key, "telegram:user-id:42",
+    )
+
+    assert [r.get("body") for r in records] == ["hello from human"]
+    assert records[0]["conversation_key"] == native_key
+    assert records[0]["duplicate_conversation_keys"] == [cloud_key]
+
+
+def test_read_records_for_correspondent_keeps_distant_identical_bodies(tmp_path):
+    """Two genuinely separate messages that happen to share text, days
+
+    apart, must NOT be collapsed — only a body-hash fallback naive about
+    time would make that mistake. No message id is set here, so identity
+    falls back to the body hash, and the four-day gap must clear the
+    dedup window.
+    """
+    native_key = "telegram:10:"
+    cloud_key = "cloud:telegram:10:"
+    conversations.append_record(
+        tmp_path,
+        native_key,
+        {
+            "ts": "2026-01-01T10:00:00.000000Z",
+            "kind": "event",
+            "event_id": "evt-a",
+            "source": "telegram",
+            "correspondent_key": "telegram:user-id:42",
+            "body": "ping",
+        },
+        event_id="evt-a",
+    )
+    conversations.append_record(
+        tmp_path,
+        cloud_key,
+        {
+            "ts": "2026-01-05T10:00:00.000000Z",
+            "kind": "event",
+            "event_id": "evt-b",
+            "source": "cloud",
+            "correspondent_key": "telegram:user-id:42",
+            "body": "ping",
+        },
+        event_id="evt-b",
+    )
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, cloud_key, "telegram:user-id:42",
+    )
+
+    assert [r.get("body") for r in records] == ["ping", "ping"]
+    assert all("duplicate_conversation_keys" not in r for r in records)
+
+
+def test_read_records_for_correspondent_respawn_reuse_not_collapsed(tmp_path):
+    """`origin_message_key` alone is not a safe dedup handle.
+
+    A respawn-origin event carries its parent's telegram_message_id
+    forward so its eventual reply lands in the same thread (see
+    ``daemon.py``'s ``is_respawn_origin`` handling) — it recomputes to
+    the *same* ``origin_message_key`` as the message that queued it, but
+    it is a new, unrelated turn, not a re-delivery. Checked against the
+    live conversation store (#338), this is not rare: 62 of 1186
+    origin-key groups on one real correspondent were exactly this shape
+    — same key, unrelated bodies. Identity must require the body to
+    match too, or a respawn chain silently eats real turns.
+    """
+    key = "telegram:10:"
+    conversations.append_event(
+        tmp_path,
+        key,
+        {
+            "id": "evt-parent",
+            "source": "telegram",
+            "body": "please respawn on a stronger model",
+            "telegram_chat_id": 10,
+            "telegram_user_id": 42,
+            "telegram_message_id": 900,
+        },
+    )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {
+            "id": "evt-respawn-continuation",
+            "source": "telegram",
+            "body": "Continuation contract: stronger model picking up where we left off",
+            "telegram_chat_id": 10,
+            "telegram_user_id": 42,
+            "telegram_message_id": 900,
+        },
+    )
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, key, "telegram:user-id:42",
+    )
+
+    assert [r.get("body") for r in records] == [
+        "please respawn on a stronger model",
+        "Continuation contract: stronger model picking up where we left off",
+    ]
+
+
+def test_read_records_for_correspondent_same_key_repeat_survives(tmp_path):
+    """A person repeating themselves on one pipe is not a mirror.
+
+    Review fixup on #338: the first draft collapsed any two matching
+    bodies inside the window regardless of which conversation key they
+    arrived on. But a mirror is a *fan-out* — one delivery written to
+    two keys. Two matching bodies on the **same** key are one human
+    saying the same thing twice, which most often happens because
+    nobody answered the first time; that repeat is the highest-signal
+    turn in the thread, and it is the one case where collapsing leaves
+    nothing to record (`duplicate_conversation_keys` has no sibling key
+    to name). Only cross-key pairs collapse.
+    """
+    key = "telegram:11:"
+    for idx, body in ((1, "ping"), (2, "ping")):
+        conversations.append_event(
+            tmp_path,
+            key,
+            {
+                "id": f"evt-repeat-{idx}",
+                "source": "telegram",
+                "body": body,
+                "telegram_chat_id": 11,
+                "telegram_user_id": 43,
+                "telegram_message_id": 500 + idx,
+            },
+        )
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, key, "telegram:user-id:43",
+    )
+
+    assert [r.get("body") for r in records] == ["ping", "ping"]
+    assert not any(r.get("duplicate_conversation_keys") for r in records)
+
+
+def test_read_records_for_correspondent_dedup_keeps_sibling_only_turns(tmp_path):
+    """Dedup must never become a filter that drops turns unique to one pipe."""
+    native, cloud = _mirrored_event(message_id=1, body="shared msg")
+    native_key = conversations.conversation_key_for_event(native)
+    cloud_key = conversations.conversation_key_for_event(cloud)
+    conversations.append_event(tmp_path, native_key, native)
+    conversations.append_event(tmp_path, cloud_key, cloud)
+    # This one only ever arrived on the cloud-mirrored thread.
+    conversations.append_event(
+        tmp_path,
+        cloud_key,
+        {
+            "id": "evt-cloud-only",
+            "source": "cloud",
+            "body": "only on cloud",
+            "cloud_platform": "telegram",
+            "cloud_chat_id": 10,
+            "cloud_user_id": 42,
+            "cloud_message_id": 2,
+        },
+    )
+
+    records = conversations.read_records_for_correspondent(
+        tmp_path, cloud_key, "telegram:user-id:42",
+    )
+
+    assert [r.get("body") for r in records] == ["shared msg", "only on cloud"]
+
+
+def test_read_recent_for_correspondent_limit_applied_after_dedup(tmp_path):
+    """`limit` must count distinct turns, not pre-dedup records — else the
+
+    fixed budget spends a slot on the duplicate and silently drops an
+    older, genuinely distinct turn.
+    """
+    native_key = "telegram:10:"
+    cloud_key = "cloud:telegram:10:"
+    for message_id, body in ((1, "msg one"), (2, "msg two"), (3, "msg three")):
+        native, _ = _mirrored_event(message_id=message_id, body=body)
+        conversations.append_event(tmp_path, native_key, native)
+    # The third message is also mirrored onto the cloud thread.
+    _, cloud_mirror = _mirrored_event(message_id=3, body="msg three")
+    conversations.append_event(tmp_path, cloud_key, cloud_mirror)
+
+    records = conversations.read_recent_for_correspondent(
+        tmp_path, cloud_key, "telegram:user-id:42", limit=3,
+    )
+
+    assert [r.get("body") for r in records] == ["msg one", "msg two", "msg three"]
+
+
+def test_read_records_for_correspondent_none_unchanged(tmp_path):
+    """No correspondent → single-thread path, byte-identical to pre-dedup
+
+    behaviour: even exact-duplicate bodies in the same thread are left
+    alone (this dedup is a cross-thread weave concern, not a general
+    duplicate filter).
+    """
+    key = "telegram:10:"
+    conversations.append_event(
+        tmp_path, key, {"id": "evt-1", "source": "telegram", "body": "same"},
+    )
+    conversations.append_event(
+        tmp_path, key, {"id": "evt-2", "source": "telegram", "body": "same"},
+    )
+
+    records = conversations.read_records_for_correspondent(tmp_path, key, None)
+
+    assert len(records) == 2
+    assert all("duplicate_conversation_keys" not in r for r in records)
+
+
+def test_build_communication_snapshot_dedupes_mirrored_exchange(tmp_path):
+    native, cloud = _mirrored_event(message_id=9, body="same turn")
+    native_key = conversations.conversation_key_for_event(native)
+    cloud_key = conversations.conversation_key_for_event(cloud)
+    conversations.append_event(tmp_path, native_key, native)
+    conversations.append_event(tmp_path, cloud_key, cloud)
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, cloud_key, "telegram:user-id:42", recent_limit=5,
+    )
+
+    turns = snapshot["recent_turns"]
+    assert [t.get("body") for t in turns] == ["same turn"]
+    assert turns[0]["conversation_key"] == native_key
+    assert turns[0]["duplicate_conversation_keys"] == [cloud_key]
+    # Per-thread related_threads counts describe each thread's own raw
+    # store, not the deduped merge — both sides still show their record.
+    related_counts = {
+        t["conversation_key"]: t["record_count"] for t in snapshot["related_threads"]
+    }
+    assert related_counts[native_key] == 1
+    assert related_counts[cloud_key] == 1
+
+
+def test_build_communication_snapshot_none_correspondent_unchanged(tmp_path):
+    """Single-thread wakes (no correspondent_key) must not dedup at all —
+
+    identical bodies in the same thread survive exactly as before.
+    """
+    key = "telegram:10:"
+    conversations.append_record(
+        tmp_path,
+        key,
+        {
+            "ts": "2026-07-01T10:00:00.000000Z",
+            "kind": "event",
+            "event_id": "evt-1",
+            "source": "telegram",
+            "body": "same",
+        },
+        event_id="evt-1",
+    )
+    conversations.append_record(
+        tmp_path,
+        key,
+        {
+            "ts": "2026-07-01T10:00:01.000000Z",
+            "kind": "event",
+            "event_id": "evt-2",
+            "source": "telegram",
+            "body": "same",
+        },
+        event_id="evt-2",
+    )
+
+    snapshot = conversations.build_communication_snapshot(tmp_path, key, recent_limit=5)
+
+    assert [t.get("body") for t in snapshot["recent_turns"]] == ["same", "same"]
+
+
 def test_build_communication_snapshot_groups_related_threads(tmp_path):
     native = {
         "id": "evt-native",
