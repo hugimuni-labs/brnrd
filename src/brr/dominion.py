@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from pathlib import Path
+from typing import Any
 
 from . import gitops
 
@@ -405,6 +406,9 @@ def resolve_self_inject_digest(
     dominion_dir: Path,
     *,
     budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES,
+    schedule_lint_now: float | None = None,
+    schedule_lint_state: dict | None = None,
+    schedule_lint_forge: Any | None = None,
 ) -> tuple[str, InjectOverflow | None]:
     """Resolve the self-inject manifest into a wake-time digest.
 
@@ -427,6 +431,16 @@ def resolve_self_inject_digest(
     boundary rather than a byte offset, and every entry after it still gets
     a rendered marker naming it and its size — nothing is ever dropped to
     zero silently.
+
+    ``schedule_lint_now`` (issue #579): when set, any manifest entry whose
+    ``target`` is the dominion's own ``schedule.md`` gets a mechanical lint
+    block (:func:`brr.schedule.lint_schedule`) appended right after its
+    rendered content — the resident already reading its schedule here is
+    exactly where a stale/overlapping/dangling entry is worth flagging.
+    Omitted (the default) ⇒ zero behavior change: this is additive only
+    when a caller opts in by passing a clock. Zero findings render nothing,
+    so a schedule with nothing wrong renders byte-identical to before this
+    parameter existed.
     """
     manifest = dominion_dir / SELF_INJECT_FILE
     if not manifest.exists():
@@ -451,6 +465,15 @@ def resolve_self_inject_digest(
         rendered = _render_entry(dominion_dir, mode, target)
         if not rendered:
             continue
+        if schedule_lint_now is not None and _targets_schedule_file(dominion_dir, target):
+            lint_block = _render_schedule_lint(
+                dominion_dir,
+                now=schedule_lint_now,
+                state=schedule_lint_state,
+                forge=schedule_lint_forge,
+            )
+            if lint_block:
+                rendered = f"{rendered}\n\n{lint_block}"
         fragment = f"<!-- self-inject: {line} -->\n{rendered}".rstrip()
         sep = 2 if fragments else 0  # fragments are joined with "\n\n"
         frag_bytes = len(fragment.encode("utf-8"))
@@ -514,6 +537,9 @@ def resolve_self_inject(
     dominion_dir: Path,
     *,
     budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES,
+    schedule_lint_now: float | None = None,
+    schedule_lint_state: dict | None = None,
+    schedule_lint_forge: Any | None = None,
 ) -> str:
     """Resolve the self-inject manifest into a wake-time digest.
 
@@ -524,9 +550,55 @@ def resolve_self_inject(
     accounting.
     """
     digest, _overflow = resolve_self_inject_digest(
-        dominion_dir, budget_bytes=budget_bytes,
+        dominion_dir,
+        budget_bytes=budget_bytes,
+        schedule_lint_now=schedule_lint_now,
+        schedule_lint_state=schedule_lint_state,
+        schedule_lint_forge=schedule_lint_forge,
     )
     return digest
+
+
+def _targets_schedule_file(dominion_dir: Path, target: str) -> bool:
+    """Does a self-inject manifest ``target`` resolve to this dominion's own
+    ``schedule.md``? Mirrors the containment check :func:`_render_entry`
+    already applies, so a path outside the dominion never triggers the lint
+    either.
+    """
+    from . import schedule as schedule_mod
+
+    candidate = dominion_dir / target
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(dominion_dir.resolve())
+    except (OSError, ValueError):
+        return False
+    return resolved == (dominion_dir / schedule_mod.SCHEDULE_FILE).resolve()
+
+
+def _render_schedule_lint(
+    dominion_dir: Path,
+    *,
+    now: float,
+    state: dict | None,
+    forge: Any | None,
+) -> str:
+    """The mechanical schedule-lint addendum for this dominion, or ``""``.
+
+    Reparses ``schedule.md`` fresh (independent of whichever render *mode*
+    the manifest line asked for — findings are about the parsed entries,
+    not the literal displayed slice) and runs :func:`brr.schedule.lint_schedule`
+    over them. Never raises: a lint pass is a bonus, not a wake-blocking
+    dependency.
+    """
+    from . import schedule as schedule_mod
+
+    try:
+        entries = schedule_mod.parse_schedule(dominion_dir)
+        findings = schedule_mod.lint_schedule(entries, now=now, state=state, forge=forge)
+        return schedule_mod.render_lint_block(findings)
+    except Exception:  # noqa: BLE001 - a lint pass never blocks a wake
+        return ""
 
 
 def _render_entry(dominion_dir: Path, mode: str, target: str) -> str:

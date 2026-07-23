@@ -29,6 +29,7 @@ commit lock.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -37,6 +38,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 SCHEDULE_FILE = "schedule.md"  # in the dominion
 STATE_DIRNAME = "schedule"  # under the .brr runtime dir
@@ -372,3 +374,211 @@ def due_entries(
     present = {e.id for e in entries}
     new_state = {k: v for k, v in new_state.items() if k in present}
     return due, new_state
+
+
+# ── Mechanical lint (pure, no I/O, no model) ─────────────────────────
+#
+# Issue #579: schedule.md entries are written by runs and never read back
+# by anything except the firing itself, so an entry can go stale, duplicate
+# another entry's remit, or describe a world that no longer exists,
+# indefinitely — the only detector today is a resident noticing mid-wake.
+# This is the "mechanical first, judgement second" half of the issue's
+# proposed rail: detection with no model in the loop. *Resolution*
+# (cancel/postpone/rephrase/merge an entry) stays a resident's judgement
+# call — this module only ever reads ``entries``/``state``/``forge``; it
+# never writes ``schedule.md``.
+
+# Tuned against this account's real ``schedule.md`` (`director tick` /
+# `release-push dispatch tick`, both `every:` entries the maintainer has
+# repeatedly named as overlapping "dispatch grant" authority): their full
+# bodies score a ``SequenceMatcher.ratio()`` of ~0.006 — long, independently
+# narrated histories sharing almost no literal prose, even though their
+# *remit* plainly overlaps. So this threshold is tuned against synthetic
+# near-duplicate text instead (see ``tests/test_schedule.py``): a paraphrased
+# rewrite of the same entry scores ~0.70, a copy with one clause appended
+# scores ~0.86, two genuinely unrelated short entries score ~0.29. 0.6
+# separates paraphrase-or-closer from unrelated with real headroom either
+# side. It will **not** catch this account's own standing example — see the
+# worker report for #579, this is a known, load-bearing limitation, not an
+# oversight: a threshold low enough to catch it would flag most entry pairs
+# and make the linter cry wolf on everything, which the issue itself calls
+# worse than not existing.
+OVERLAP_RATIO_THRESHOLD = 0.6
+
+# An `at:` more than this stale still gets a finding — mechanical detection
+# doesn't need the daemon's surprise-fire grace period (`DEFAULT_STALE_GRACE_S`
+# governs whether the daemon *fires* a very old one-shot, not whether a lint
+# pass should mention it still being listed).
+_ISSUE_PR_REF_RE = re.compile(r"#(\d+)\b")
+
+
+@dataclass(frozen=True)
+class ScheduleFinding:
+    """One mechanical observation about a schedule entry (or a pair).
+
+    Detection only — no verdict on what to do about it. ``entry_ids`` is
+    one id for ``stale-at``/``stale-reference``, two (in file order) for
+    ``overlap``.
+    """
+
+    rule: str  # "stale-at" | "overlap" | "stale-reference"
+    entry_ids: tuple[str, ...]
+    message: str
+
+
+def _format_age(seconds: float) -> str:
+    """``14m`` / ``3h`` / ``2d`` — coarse, enough to judge staleness by."""
+    seconds = max(0.0, seconds)
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{int(seconds // 60)}m"
+    if seconds < 172800:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _lint_stale_at(entries: list[ScheduleEntry], state: dict, now: float) -> list[ScheduleFinding]:
+    findings: list[ScheduleFinding] = []
+    for e in entries:
+        if e.kind != "at" or e.at is None or now < e.at:
+            continue
+        age = _format_age(now - e.at)
+        rec = state.get(e.id) if isinstance(state, dict) else None
+        fired = bool(isinstance(rec, dict) and rec.get("fired"))
+        if fired:
+            message = (
+                f"`at: {e.raw_when}` fired {age} ago and is still listed — "
+                "nobody removed it after it ran."
+            )
+        else:
+            message = f"`at: {e.raw_when}` passed {age} ago."
+        findings.append(ScheduleFinding("stale-at", (e.id,), message))
+    return findings
+
+
+def _lint_overlap(entries: list[ScheduleEntry]) -> list[ScheduleFinding]:
+    findings: list[ScheduleFinding] = []
+    every_entries = [e for e in entries if e.kind == "every" and e.body]
+    for i, a in enumerate(every_entries):
+        for b in every_entries[i + 1 :]:
+            ratio = difflib.SequenceMatcher(None, a.body, b.body).ratio()
+            if ratio >= OVERLAP_RATIO_THRESHOLD:
+                findings.append(
+                    ScheduleFinding(
+                        "overlap",
+                        (a.id, b.id),
+                        f"`{a.id}` and `{b.id}` are {ratio:.0%} similar text — "
+                        "possible duplicate remit.",
+                    )
+                )
+    return findings
+
+
+def _forge_pr_lookup(forge: Any) -> dict[int, str]:
+    """``{pr number: state}`` from a network-free forge PR list, or ``{}``.
+
+    Accepts the shape :func:`brr.forge_pr_cache.read_state` already returns
+    (a dict with a ``"prs"`` list) or a bare list of the same PR dicts —
+    either way, purely a local read on the caller's side; this function
+    itself performs none.
+    """
+    if isinstance(forge, dict):
+        rows = forge.get("prs")
+    else:
+        rows = forge
+    if not isinstance(rows, list):
+        return {}
+    out: dict[int, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            number = int(row.get("number"))
+        except (TypeError, ValueError):
+            continue
+        state = str(row.get("state") or "").strip().upper()
+        if state:
+            out[number] = state
+    return out
+
+
+def _lint_stale_reference(entries: list[ScheduleEntry], forge: Any) -> list[ScheduleFinding]:
+    lookup = _forge_pr_lookup(forge)
+    if not lookup:
+        return []
+    findings: list[ScheduleFinding] = []
+    for e in entries:
+        seen: set[int] = set()
+        for match in _ISSUE_PR_REF_RE.finditer(e.body):
+            number = int(match.group(1))
+            if number in seen:
+                continue
+            seen.add(number)
+            pr_state = lookup.get(number)
+            if pr_state in ("MERGED", "CLOSED"):
+                findings.append(
+                    ScheduleFinding(
+                        "stale-reference",
+                        (e.id,),
+                        f"references #{number}, which is {pr_state} — the "
+                        "entry may describe a world that no longer exists.",
+                    )
+                )
+    return findings
+
+
+def lint_schedule(
+    entries: list[ScheduleEntry],
+    *,
+    now: float,
+    state: dict | None = None,
+    forge: Any | None = None,
+) -> list[ScheduleFinding]:
+    """Mechanical, deterministic findings about ``entries`` — no I/O, no model.
+
+    Three rules, each independent (an entry can trip more than one):
+
+    - ``stale-at`` — an ``at:`` entry whose instant has passed. When *state*
+      (the daemon's firing-state map, :func:`load_state`) shows it already
+      fired, that is named as a *stronger* finding (it fired and nobody
+      removed it), not a weaker one.
+    - ``overlap`` — two ``every:`` entries whose bodies are near-duplicate
+      text (:data:`OVERLAP_RATIO_THRESHOLD`). ``at:`` entries are excluded:
+      a one-shot's overlap with another one-shot is moot once either fires.
+    - ``stale-reference`` — an entry whose body names a ``#<number>`` that
+      *forge* (a network-free PR list/state — see
+      :func:`brr.forge_pr_cache.read_state`) reports ``MERGED`` or
+      ``CLOSED``. Skipped entirely when *forge* is ``None`` or carries no
+      usable rows — this rule only ever reads a local cache, never a forge
+      API, so an absent cache just means this rule finds nothing, not an
+      error.
+
+    Runs on any Core, including an economy one: every comparison here is
+    string/arithmetic, nothing calls out and nothing judges — that
+    determinism is the entire point of this half of issue #579.
+    """
+    findings: list[ScheduleFinding] = []
+    findings.extend(_lint_stale_at(entries, state or {}, now))
+    findings.extend(_lint_overlap(entries))
+    findings.extend(_lint_stale_reference(entries, forge))
+    return findings
+
+
+def render_lint_block(findings: list[ScheduleFinding]) -> str:
+    """Render *findings* as a short flagged block, or ``""`` when there are none.
+
+    Zero findings must render **nothing** — not even a "no findings" line.
+    A clean schedule is not news, and a line printed every wake for the
+    common case is a tax paid forever for a rare event.
+    """
+    if not findings:
+        return ""
+    lines = [
+        "**Schedule lint** (mechanical, no judgement applied — yours to "
+        "resolve: keep / cancel / postpone / rephrase / merge):",
+    ]
+    for f in findings:
+        ids = ", ".join(f"`{i}`" for i in f.entry_ids)
+        lines.append(f"- {f.rule} — {ids}: {f.message}")
+    return "\n".join(lines)
