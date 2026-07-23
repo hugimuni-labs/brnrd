@@ -6413,3 +6413,35 @@ def test_refresh_codex_thread_id_reads_live_jsonl_fail_closed(tmp_path):
     task.meta.pop("codex_thread_id")
     assert daemon._refresh_codex_thread_id(task, events) is None
     assert "codex_thread_id" not in task.meta
+
+
+def test_account_run_state_doc_carries_mood_frontmatter(tmp_path):
+    """#566 slice 0: the resident-authored `.mood` first line rides the
+    run-state frame at every persist — running stage tracks the live face,
+    finished stage keeps the last one worn. Absent file → absent key."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    task = Run(
+        id="run-mood", event_id="evt-mood", body="face check",
+        source="telegram", status="running", meta={},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="running", outbox_dir=outbox,
+    )
+    assert "mood:" not in path.read_text(encoding="utf-8")
+
+    (outbox / ".mood").write_text("fo.cus\nnarration the frame never carries\n")
+    daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished", outbox_dir=outbox,
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "mood: fo.cus" in text
+    assert "narration" not in text

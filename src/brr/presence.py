@@ -139,13 +139,23 @@ def register(
         "runner_shell": runner_shell or "",
         "runner_core": runner_core or "",
         "runner_class": runner_class or "",
+        # Resident-authored mood handle (`.mood` first line), refreshed per
+        # heartbeat like ``name``. Raw handle only — resolution against the
+        # emote library happens at the serving edge (cloud.py), so an
+        # unknown handle degrades to nothing there, never to a guessed face.
+        "mood": "",
     }
     _atomic_write(pdir / f"{eid}.json", json.dumps(entry))
     return entry
 
 
 def heartbeat(
-    brr_dir: Path, entry_id: str, *, name: str | None = None, now: float | None = None
+    brr_dir: Path,
+    entry_id: str,
+    *,
+    name: str | None = None,
+    mood: str | None = None,
+    now: float | None = None,
 ) -> bool:
     """Refresh a participant's ``last_seen``. Returns False if it's gone."""
     path = _presence_dir(brr_dir) / f"{entry_id}.json"
@@ -155,6 +165,8 @@ def heartbeat(
     entry["last_seen"] = now if now is not None else time.time()
     if name is not None:
         entry["name"] = name
+    if mood is not None:
+        entry["mood"] = mood
     try:
         _atomic_write(path, json.dumps(entry))
     except OSError:

@@ -883,3 +883,73 @@ def test_dashboard_disconnect_purges_repo_rows_and_last_repo_clears_surface():
     assert r.status_code == 200, r.text
     with client.app.state.SessionLocal() as db:
         assert db.get(Account, account_id).surface_json == "[]"
+
+
+def test_live_runs_mood_round_trips_daemon_to_dashboard():
+    """#566 slice 0, server half: per-run mood fields survive `LiveRunIn`
+    intake, and the daemon-level face is stored and served beside
+    `spawn_max_concurrent` on the same envelope."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-mood", repo_id=pid, token_id="tok-mood", daemon_name="laptop",
+            live_runs_json=json.dumps([
+                {
+                    "id": "pres-m", "kind": "daemon", "stream": "telegram:x:",
+                    "label": "primary", "run_id": "run-m", "repo_label": "Gurio/brr",
+                    "started_at": "2026-07-24T00:00:00Z",
+                    "last_seen": "2026-07-24T00:05:00Z", "is_subspawn": False,
+                    "mood": "fo.cus", "mood_glyph": "b·_·d", "mood_pitch": 0.45,
+                },
+            ]),
+            live_runs_updated_at=datetime.now(timezone.utc),
+            daemon_mood_json=json.dumps({
+                "state": "running", "name": "rnn>", "glyph": "brnrd",
+                "frames": ["brnrd", "brvrd", "brnrd"], "pitch": 0.5,
+            }),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 200
+    body = r.json()
+    row = next(run for run in body["runs"] if run["run_id"] == "run-m")
+    assert row["mood"] == "fo.cus"
+    assert row["mood_glyph"] == "b·_·d"
+    assert row["mood_pitch"] == 0.45
+    assert body["daemon_mood"]["state"] == "running"
+    assert body["daemon_mood"]["glyph"] == "brnrd"
+
+
+def test_put_live_runs_stores_mood_fields():
+    """Intake half: `LiveRunIn` must carry the new mood fields (an unknown
+    field is dropped by `model_dump`, so schema presence is the load-bearing
+    fact) and `daemon_mood` must persist on the daemon row."""
+    from brnrd import schemas
+
+    run = schemas.LiveRunIn(
+        id="pres-1", mood="fo.cus", mood_glyph="b·_·d", mood_pitch=0.45,
+    )
+    dumped = run.model_dump()
+    assert dumped["mood"] == "fo.cus"
+    assert dumped["mood_glyph"] == "b·_·d"
+    assert dumped["mood_pitch"] == 0.45
+
+    report = schemas.LiveRunsReport(
+        runs=[run],
+        daemon_mood={
+            "state": "idle", "name": "id_l", "glyph": "brnrd",
+            "frames": ["brnrd", "b-n-d", "brnrd"], "pitch": 0.5,
+        },
+    )
+    assert report.daemon_mood.state == "idle"
+    assert report.daemon_mood.frames == ["brnrd", "b-n-d", "brnrd"]

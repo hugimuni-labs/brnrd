@@ -14,11 +14,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import requests
 
-from .. import claude_status, claude_usage, codex_status, codex_usage, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
+from .. import claude_status, claude_usage, codex_status, codex_usage, emotes, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
 from .. import conversations, dominion, run_stop_request, schedule as schedule_mod, wake_request
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -1703,9 +1703,56 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # per-tick git work. ``None`` = nothing attested (ad-hoc
                 # session, no capsule yet); ``{}`` = known, no produce yet.
                 "relics_counts": (view.relics_counts if view is not None else None),
+                # #566 slice 0: resident-authored mood. The raw handle rides
+                # from the presence entry (heartbeat-refreshed from `.mood`);
+                # glyph and pitch are resolved *here*, where `brr.emotes`
+                # exists, so the frontend never owns an emote table and an
+                # unknown handle degrades to name-only — never a guessed
+                # face (the library's honesty bar).
+                **_mood_payload(entry),
             }
         )
     return out
+
+
+def _mood_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a presence entry's mood handle into wire fields.
+
+    ``mood`` is the raw resident-authored handle (or ``None``); ``mood_glyph``
+    and ``mood_pitch`` are present only when the handle resolves in the emote
+    library — absent resolution is absent data, not a default face.
+    """
+    handle = str(entry.get("mood") or "").strip() or None
+    payload: dict[str, Any] = {"mood": handle, "mood_glyph": None, "mood_pitch": None}
+    if handle:
+        emote = emotes.lookup(handle)
+        if emote is not None:
+            payload["mood_glyph"] = emote.frames[0]
+            payload["mood_pitch"] = emote.pitch
+    return payload
+
+
+def _daemon_mood_payload(brr_dir: Path) -> dict[str, Any] | None:
+    """The daemon's own telemetry face: what the board wears at rest.
+
+    Derived, not authored: ``idle`` when nothing is live, ``running`` when
+    any run-kind presence is active. Deliberately the two-state floor —
+    richer states (quota_starved, failing, …) belong to whoever computes
+    them, and inventing them here from partial signals would break the
+    honesty bar the emote library states for itself.
+    """
+    active = [e for e in presence.list_active(brr_dir) if str(e.get("run_id") or "")]
+    state = "running" if active else "idle"
+    emote = emotes.for_telemetry(state)
+    if emote is None:
+        return None
+    return {
+        "state": state,
+        "name": emote.name,
+        "glyph": emote.frames[0],
+        "frames": list(emote.frames),
+        "pitch": emote.pitch,
+    }
 
 
 def _spawn_pool_width(brr_dir: Path) -> int:
@@ -1787,6 +1834,14 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> No
             json={
                 "runs": _live_runs_snapshot(brr_dir),
                 "spawn_max_concurrent": _spawn_pool_width(brr_dir),
+                # #566 slice 0: the daemon-level telemetry face for the
+                # board at rest — the NOW seam and wordmark need a face
+                # precisely when no run exists to carry one. First caller
+                # of `emotes.for_telemetry` (the layer shipped in #601 and
+                # never wired). Same piggyback economics as
+                # `spawn_max_concurrent` above: one field on a publish that
+                # already happens.
+                "daemon_mood": _daemon_mood_payload(brr_dir),
                 "consumed_run_stop_request_ids": acked,
             },
             timeout=10,

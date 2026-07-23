@@ -3069,6 +3069,7 @@ def _run_worker(
                 presence.heartbeat(
                     brr_dir, presence_id,
                     name=run_ledger.read_run_name_control(outbox_dir) or "",
+                    mood=run_ledger.read_run_mood_control(outbox_dir) or "",
                 )
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
@@ -7126,6 +7127,13 @@ def _persist_run_state_doc(
             value = task.meta.get(key)
             if value not in (None, ""):
                 lines.append(f"{key}: {value}")
+    # The resident-authored mood (`.mood` first line, #566 slice 0). Read
+    # fresh at every persist so the running-stage frame tracks the live
+    # face and the finished-stage frame keeps the last one the run wore.
+    # Absent file → absent key: an unset mood is not a fact to invent.
+    mood = run_ledger.read_run_mood_control(outbox_dir)
+    if mood:
+        lines.append(f"mood: {mood}")
     # The body used to restate status/stage/repo/source/event/runner as a
     # bullet list — every fact a verbatim copy of the frontmatter one screen
     # up, and the node renderer showed both (maintainer, 2026-07-19: the ask

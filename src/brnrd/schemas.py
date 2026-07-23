@@ -423,6 +423,15 @@ class LiveRunIn(BaseModel):
     # a conservative identifier shape daemon-side; the cap here only
     # bounds a hostile payload.
     relics_counts: dict[str, int] | None = None
+    # #566 slice 0: resident-authored mood. `mood` is the raw handle from
+    # the run's `.mood` control file; glyph/pitch are resolved daemon-side
+    # against `brr.emotes` (`cloud.py::_mood_payload`) so this API and the
+    # frontend never own an emote table. All three `None` when unset; an
+    # unknown handle arrives name-only (glyph/pitch stay None) and renders
+    # as a bare name, never a guessed face.
+    mood: str | None = Field(default=None, max_length=64)
+    mood_glyph: str | None = Field(default=None, max_length=16)
+    mood_pitch: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("relics_counts")
     @classmethod
@@ -456,6 +465,26 @@ class LiveRunsReport(BaseModel):
     # just a count of `is_subspawn` entries in `runs` above). None when the
     # daemon hasn't reported yet.
     spawn_max_concurrent: int | None = None
+    # #566 slice 0: the daemon-level telemetry face for the board at rest
+    # (`cloud.py::_daemon_mood_payload`) — the NOW seam / wordmark carrier
+    # when no run is live. Same piggyback economics as
+    # `spawn_max_concurrent` above.
+    daemon_mood: DaemonMoodIn | None = None
+
+
+class DaemonMoodIn(BaseModel):
+    """The daemon's derived telemetry face (#566 slice 0)."""
+
+    state: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    glyph: str = Field(min_length=1, max_length=16)
+    frames: list[str] = Field(default_factory=list, max_length=8)
+    pitch: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("frames")
+    @classmethod
+    def _bound_frames(cls, value: list[str]) -> list[str]:
+        return [str(frame)[:16] for frame in value[:8]]
 
 
 class RunStopRequestOut(BaseModel):

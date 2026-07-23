@@ -50,6 +50,14 @@ export interface LiveRun {
 	// attested (ad-hoc session, pre-upgrade daemon); `{}` = known, no
 	// produce yet. Render via `liveRelicChips` below.
 	relics_counts?: Record<string, number> | null;
+	// #566 slice 0: the resident-authored mood — raw handle from the run's
+	// `.mood` control file, glyph/pitch resolved daemon-side against
+	// `brr.emotes` so the frontend owns no emote table. All null/absent when
+	// unset; an unknown handle arrives name-only (render the bare name,
+	// never a guessed face — the emote library's honesty bar).
+	mood?: string | null;
+	mood_glyph?: string | null;
+	mood_pitch?: number | null;
 	// #476 wyrd §3: a stop the account owner has parked for this run, not yet
 	// consumed by the daemon. Server-side (rather than a fact the client holds
 	// in memory) so the cell keeps saying "stopping" across a reload — and so
@@ -68,6 +76,19 @@ export interface LiveRunsResponse {
 	// the slice-1 publish didn't already carry. `null` before any daemon
 	// has reported it (pre-upgrade daemon, or never published yet).
 	spawn_max_concurrent: number | null;
+	// #566 slice 0: the daemon-level telemetry face — what the board wears
+	// when no run is live (`cloud.py::_daemon_mood_payload`; today `idle` |
+	// `running`, richer states later). Feeds the loom NOW seam and the
+	// wordmark at rest. `null` before any daemon has reported it.
+	daemon_mood?: DaemonMood | null;
+}
+
+export interface DaemonMood {
+	state: string;
+	name: string;
+	glyph: string;
+	frames: string[];
+	pitch: number;
 }
 
 /**
