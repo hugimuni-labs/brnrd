@@ -44,6 +44,16 @@ governance, not a reflex.
 taxes every wake; one prevented repeat-mistake pays for itself the first
 time.
 
+Curating ruthlessly needs one thing first: **know whose rule you are
+cutting.** This page will accumulate rules from two sources — things your
+user told you, and things you worked out yourself — and by default it
+records neither. That is fine until the file meets a byte budget, and then
+you are deciding what to drop with no way to tell a standing instruction
+from your own inference. Mark the ones that came from your user, leave
+your own unmarked, and let the clip take the unmarked first. Yours are
+yours to cut; theirs are theirs to change. Two words in the margin buy a
+distinction you cannot reconstruct later.
+
 ## Where the contracts live
 
 This page is the note on the workshop, not the manual to its levers. The
