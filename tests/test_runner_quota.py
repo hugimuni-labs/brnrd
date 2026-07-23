@@ -176,8 +176,11 @@ def test_summary_from_levels_returns_none_without_quota():
 
 
 def test_binding_quota_remaining_pct_reads_claude_shape():
-    # Claude's buckets: session, week, and per-model week buckets — the
-    # binding (lowest) one wins, wherever it sits.
+    # Claude's buckets: session, week, and per-model week buckets. A
+    # week_models bucket only binds when *model* names the Core spending it
+    # (#561) — with no model named (a tick that hasn't committed to a
+    # runner), every per-model bucket is excluded and the account-wide
+    # session/week buckets alone decide the binding percent.
     levels = {
         "quota": {
             "summary": "session 90% left; week 55% left",
@@ -188,7 +191,71 @@ def test_binding_quota_remaining_pct_reads_claude_shape():
             },
         }
     }
-    assert runner_quota.binding_quota_remaining_pct(levels) == 14.2
+    assert runner_quota.binding_quota_remaining_pct(levels) == 55.0
+    # Naming a different Core still excludes Fable's bucket.
+    assert runner_quota.binding_quota_remaining_pct(levels, model="opus") == 55.0
+    # Naming the matching Core (case-insensitively) pulls it back in.
+    assert runner_quota.binding_quota_remaining_pct(levels, model="fable") == 14.2
+    assert runner_quota.binding_quota_remaining_pct(levels, model="Fable") == 14.2
+
+
+def test_binding_quota_remaining_pct_live_shape_561():
+    # The exact live shape from issue #561: a run dispatched to `opus` must
+    # not have its pacing throttled by an unrelated, near-exhausted `fable`
+    # weekly bucket.
+    levels = {
+        "quota": {
+            "summary": "session 96% left; week 44% left; Fable week 4% left",
+            "buckets": {
+                "session": {"remaining_percentage": 96.0},
+                "week": {"remaining_percentage": 44.0},
+                "week_models": {"Fable": {"remaining_percentage": 4.0}},
+            },
+        }
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 44.0
+    assert runner_quota.binding_quota_remaining_pct(levels, model="opus") == 44.0
+    assert runner_quota.binding_quota_remaining_pct(levels, model="fable") == 4.0
+
+
+def test_binding_quota_remaining_pct_session_week_only_unchanged():
+    # A snapshot with no week_models at all is unaffected by the model arg.
+    levels = {
+        "quota": {
+            "buckets": {
+                "session": {"remaining_percentage": 96.0},
+                "week": {"remaining_percentage": 44.0},
+            },
+        }
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 44.0
+    assert runner_quota.binding_quota_remaining_pct(levels, model="opus") == 44.0
+
+
+def test_excluded_week_model_buckets_reports_non_binding_buckets():
+    levels = {
+        "quota": {
+            "buckets": {
+                "session": {"remaining_percentage": 96.0},
+                "week": {"remaining_percentage": 44.0},
+                "week_models": {
+                    "Fable": {"remaining_percentage": 4.0},
+                    "Opus": {"remaining_percentage": 70.0},
+                },
+            },
+        }
+    }
+    assert runner_quota.excluded_week_model_buckets(levels, None) == {
+        "Fable": 4.0, "Opus": 70.0,
+    }
+    assert runner_quota.excluded_week_model_buckets(levels, "fable") == {
+        "Opus": 70.0,
+    }
+    assert runner_quota.excluded_week_model_buckets(levels, "sonnet") == {
+        "Fable": 4.0, "Opus": 70.0,
+    }
+    assert runner_quota.excluded_week_model_buckets(None, None) == {}
+    assert runner_quota.excluded_week_model_buckets({}, None) == {}
 
 
 def test_binding_quota_remaining_pct_reads_codex_shape():
