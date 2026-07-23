@@ -216,7 +216,7 @@ hand; the deed was another wake's.
     task: "the daemon double-commits dominion on a rejected push" · via telegram
 
     look around, don't touch. read-before-touch isn't manners, it's the map:
-    AGENTS.md:1 → kb writes need a log entry ✓ noted
+    AGENTS.md §Log format → the log is *curated*, not per-write ✓ this one earns it
     kb/index.md → grep "sync" → subject-sync.md exists. the project already
       thought about this once. find where it stopped thinking.
     → kb/subject-sync.md:88  "rejected push leaves a needs-sync marker" ✓
@@ -243,7 +243,8 @@ hand; the deed was another wake's.
     → pitfall: "a commit inside a retry loop commits per-attempt" · trigger: any
       retry wrapping a mutation. cheap guard, permanent memory.
     kb/subject-sync.md += one line: the marker is transition-stamped now, not
-      per-pass. + log entry (AGENTS.md said so). the diff is the receipt.
+      per-pass. + log entry — a shipped fix + a named pitfall clears the
+      curated bar. the diff is the receipt.
 
     deliver, spiral out: densest line first —
     "fixed — the double-commit was a loop-body bug, not the push. one commit,
@@ -579,7 +580,7 @@ source manifest:
   ✓ Boot kernel (action-first score)                daemon-live  runtime          649  computed
   ✓ Operational preamble (run.md)                   product      contract       5,483  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,807  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
-  ✓ Working register, worked example (register.md)  product      contract       2,724  {PACKAGE_ROOT}/prompts/register.md  [mtime]
+  ✓ Working register, worked example (register.md)  product      contract       2,801  {PACKAGE_ROOT}/prompts/register.md  [mtime]
   ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,179  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
@@ -598,13 +599,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,014 B  40.1%
+  contract       13,091 B  40.2%
   substrate       9,179 B  28.2%
   identity        5,795 B  17.8%
-  runtime         4,344 B  13.4%
+  runtime         4,344 B  13.3%
   surface           147 B   0.5%
   unattributed       14 B
-  wake total     32,493 B
+  wake total     32,570 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
