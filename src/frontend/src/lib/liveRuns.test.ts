@@ -15,11 +15,31 @@ test('live run display prefers the resident-authored name', () => {
 	);
 });
 
-test('live run display falls back to the waking-message excerpt', () => {
+test('live run display falls back to a deliberate label', () => {
 	assert.equal(
-		liveRunDisplayName({ name: '', label: 'waking message', kind: 'daemon' }),
-		'waking message'
+		liveRunDisplayName({ name: '', label: 'a handle-shaped label', kind: 'daemon' }),
+		'a handle-shaped label'
 	);
+});
+
+// #585 review fixup: the producer stopped putting a run's task body in
+// `label`, so an un-named run's label is now empty. Without `stream` in the
+// chain every card on the board would read "daemon" — the leak closed and
+// the panel's legibility with it.
+test('an un-named run falls back to its conversation key, not its kind', () => {
+	assert.equal(
+		liveRunDisplayName({
+			name: '',
+			label: '',
+			stream: 'schedule:release-push-dispatch-tick',
+			kind: 'daemon'
+		}),
+		'schedule:release-push-dispatch-tick'
+	);
+});
+
+test('kind is the last resort, not the second', () => {
+	assert.equal(liveRunDisplayName({ name: '', label: '', stream: '', kind: 'daemon' }), 'daemon');
 });
 
 // #476: a tap that gets swallowed must never be silent — the caller can only
