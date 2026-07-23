@@ -133,6 +133,44 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_installs_project_repo_run_id_hook(tmp_path, monkeypatch):
+    """#575: a resident's own hand ``git commit`` inside a host run needs
+    the same ``Brnrd-Run-Id`` stamping #565 gave the account-knowledge
+    checkout — installed against ``repo_root`` (the checkout every worktree
+    shares ``.git/hooks`` with), once per run, regardless of env backend."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-1")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    hook_calls: list[Path] = []
+    monkeypatch.setattr(
+        daemon.gitops, "ensure_run_id_hook", lambda root: hook_calls.append(root),
+    )
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert hook_calls == [tmp_path]
+
+
 def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkeypatch):
     """#517: an untrusted event with no isolated env to hold it is refused
     before any runner is prepared — fail closed, visibly."""
@@ -546,6 +584,44 @@ def test_capture_knowledge_derives_relics_from_commit_window_and_dedupes(
         {"kind": "kb", "path": "dirty.md"},
         {"kind": "kb", "path": "windowed.md"},
     ]
+
+
+def test_capture_knowledge_stopped_run_suppresses_shared_window_sweep(
+    tmp_path, monkeypatch,
+):
+    """#575 — the other half of #565: a stopped host run must not sweep the
+    shared account-knowledge checkout. That sweep can both commit a live
+    sibling's dirty edits under the stopped run's identity and credit a
+    sibling's already-committed pages to this run's dashboard node. The
+    owning run's own capture net (which runs this exact path when *it*
+    finishes) still gets credit — nothing here is a permanent loss, only
+    deferred to whoever is actually still working."""
+    task = Run(
+        id="run-stopped-sweep",
+        event_id="evt-stopped-sweep",
+        body="answer",
+        status="stopped",
+        meta={"kb_start_oid": "a" * 40},
+    )
+    outbox = tmp_path / ".brr" / "outbox" / task.event_id
+    outbox.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        daemon.knowledge, "capture",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stopped run must not sweep the shared checkout"),
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.knowledge, "committed_pages_in_window",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stopped run must not read the shared commit window"),
+        ),
+    )
+
+    daemon._capture_knowledge(tmp_path, {}, task, outbox_dir=outbox)
+
+    assert daemon.relics.read_reported(outbox) == []
 
 
 def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
@@ -4294,12 +4370,44 @@ def test_write_live_portal_state_wires_produce_inputs(tmp_path, monkeypatch):
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["produce"]["counts"] == {"issue": 1}
+    # A worktree run's own isolated branch (branch_name set) needs no
+    # identity filter — no sibling can land a commit there (#575).
     assert seen == {
         "repo_root": work_dir,
         "branch": "brr/work",
         "seed_ref": "main",
         "outbox_dir": outbox_dir,
+        "commit_run_id": None,
     }
+
+
+def test_write_live_portal_state_filters_host_run_by_identity(tmp_path, monkeypatch):
+    """#575: a *host* run (no ``branch_name``) measures the shared checkout
+    via ``collection_scope``'s fallback, so the live facet must pass this
+    run's own id through — otherwise a concurrent sibling's mid-run commits
+    would flash as this run's produce before closeout ever applies the
+    filter."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    work_dir = tmp_path / "repo"
+    work_dir.mkdir()
+    task = Run(id="run-host-1", event_id="evt-1", body="", source="telegram")
+    seen = {}
+
+    def fake_live_summary(repo_root, **kwargs):
+        seen.update({"repo_root": repo_root, **kwargs})
+        return {"known": False}
+
+    monkeypatch.setattr(daemon.relics, "live_summary", fake_live_summary)
+    monkeypatch.setattr(daemon.relics, "collection_scope", lambda _meta, _wd: ("main", "abc123"))
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        work_dir=work_dir,
+    )
+
+    assert seen["commit_run_id"] == "run-host-1"
 
 
 # ── _resources_facet (portal-state work-status posture) ──────────────

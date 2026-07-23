@@ -66,6 +66,16 @@ def test_commits_inflight_edits_and_arms_publish(tmp_path):
     assert "salvage" in log and task.id in log
     # ...and publish_branch is armed for the publish() tail.
     assert task.meta["publish_branch"] == "brr/work"
+    # #575: the salvage commit is a project-repo commit path the daemon
+    # owns — it must carry the same Brnrd-Run-Id trailer as the automated
+    # capture commit, so relics.collection_scope's shared-window fallback
+    # (a *different* call site — a host, not worktree, run) can filter on
+    # it consistently.
+    trailer = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailer == task.id
 
 
 def test_already_committed_clean_tree_still_arms_publish(tmp_path):

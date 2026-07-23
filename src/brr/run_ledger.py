@@ -212,13 +212,19 @@ def build_closed_run_row(
     # Scope resolution handles the host-run case: no assigned branch, so the
     # commits are measured from the checkout's run-start HEAD instead
     # (relics.collection_scope) — otherwise a host run that merged its work
-    # into the seed branch books an empty manifest.
+    # into the seed branch books an empty manifest. That fallback scope is
+    # the shared checkout every concurrent run measures from, so it also
+    # needs a run-identity filter (#575) — a worktree run's own isolated
+    # branch (``branch_name`` set) needs none, since no sibling can land a
+    # commit there.
     relic_branch, relic_seed = relics.collection_scope(task.meta, work_dir)
+    commit_run_id = task.id if not task.meta.get("branch_name") else None
     collected_relics = relics.collect(
         work_dir,
         branch=relic_branch,
         seed_ref=relic_seed,
         outbox_dir=outbox_dir,
+        commit_run_id=commit_run_id,
     )
     row = {
         "run_id": task.id,
