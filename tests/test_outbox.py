@@ -11,7 +11,17 @@ from __future__ import annotations
 import json
 import types
 
-from brr import conversations, daemon, hooks, protocol, run_context, run_progress, updates
+from brr import (
+    account,
+    conversations,
+    daemon,
+    hooks,
+    message_store,
+    protocol,
+    run_context,
+    run_progress,
+    updates,
+)
 from brr.envs import RunContext
 from brr.run import Run
 
@@ -291,7 +301,8 @@ class TestDrainOutbox:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        # Same gate as the target (telegram) — the reachable, unchanged path.
+        task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -326,7 +337,8 @@ class TestDrainOutbox:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="telegram:111:", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        # Same gate as the target (telegram) — the reachable, unchanged path.
+        task = types.SimpleNamespace(id="task-A", source="telegram")
 
         daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
@@ -357,7 +369,8 @@ class TestDrainOutbox:
                             lambda brr, pkt: emitted.append(pkt))
         emit = daemon._WorkerEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
-        task = types.SimpleNamespace(id="task-A")
+        # Same gate as the target (telegram) — the reachable, unchanged path.
+        task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
 
         assert n == 1
@@ -419,6 +432,181 @@ class TestDrainOutbox:
         assert n == 0
         assert not (outbox / "reply.md").exists()
         assert protocol.list_partials(responses, "evt-ghost") == []
+
+
+class TestCrossGateReplyRouting:
+    """The three-branch acceptance contract for #578.
+
+    At outbox acceptance of an ``event:``-addressed reply: the target's
+    owning gate is either reachable from this run (same gate, or a
+    different gate that's actually configured/running here — deliver
+    exactly as before), not reachable (a real gate, just not this one and
+    not configured here — redirect to this run's own gate, prefixed with
+    the origin), or no gate at all (a dispatch-tree source like
+    ``schedule``/``spawn`` — retire-and-drop, but as a named, recorded
+    outcome, never a silent partial). Every branch must leave a real
+    delivery status behind — nothing lands in ``.partials`` on a status
+    of nothing-decided.
+    """
+
+    def _account_ctx(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        return account.resolve_context(
+            repo, {"home.path": str(tmp_path / "home"), "repo.label": "Gurio/brr"},
+        )
+
+    def test_reachable_cross_gate_reply_is_delivered_unchanged(
+        self, tmp_path, monkeypatch,
+    ):
+        # Different gate than the run's own, but configured/running here —
+        # branch 1: no behaviour change from the pre-#578 path.
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="cloud", body="quick q")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nthe answer\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram")
+
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, bid)] == ["the answer"]
+        assert protocol.list_partials(responses, "evt-A") == []
+        assert [e["id"] for e in protocol.list_done(inbox, "cloud")] == [bid]
+
+    def test_cross_gate_reply_not_reachable_redirects_to_own_gate(
+        self, tmp_path, monkeypatch,
+    ):
+        # A real gate (cloud) owns the target, but it's neither this run's
+        # own gate (telegram) nor configured/running here — branch 2:
+        # redirect onto this run's own gate, prefixed, target still retired.
+        ctx = self._account_ctx(tmp_path)
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="cloud", body="please check the deploy")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nlooks fine\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: False)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="telegram:1:", event_id="evt-A")
+        task = types.SimpleNamespace(
+            id="task-A", source="telegram", conversation_key="telegram:1:", meta={},
+        )
+
+        n = daemon._drain_outbox(
+            emit, task, responses, "evt-A", outbox, inbox,
+            account_context=ctx,
+        )
+
+        # Delivered — but on this run's own event, not the foreign one.
+        assert n == 1
+        assert protocol.list_partials(responses, bid) == []
+        [redirected] = protocol.list_partials(responses, "evt-A")
+        body = protocol.read_partial(redirected)
+        assert body.startswith("re: please check the deploy — originally on cloud")
+        assert body.endswith("looks fine")
+        # The foreign event is still retired, same as any cross reply.
+        assert [e["id"] for e in protocol.list_done(inbox, "cloud")] == [bid]
+        assert protocol.list_pending(inbox) == []
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("redirected" in n["text"] for n in notices)
+        # Both message-store rows exist and neither is left with no status.
+        messages_dir = message_store.run_messages_dir(ctx, "Gurio/brr", "task-A")
+        rows = message_store.list_messages(messages_dir)
+        assert len(rows) == 2
+        statuses = {row["target_event"]: row["status"] for row in rows}
+        assert statuses[bid] == message_store.UNDELIVERABLE
+        assert statuses["evt-A"] == message_store.PENDING
+
+    def test_cross_target_with_no_gate_at_all_is_recorded_undeliverable(
+        self, tmp_path, monkeypatch,
+    ):
+        # The target belongs to a dispatch-tree pseudo source (no gate owns
+        # it at all, e.g. schedule) — branch 3: keep retire-and-drop, but
+        # it must be a named, recorded outcome, never a silent partial.
+        ctx = self._account_ctx(tmp_path)
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="schedule", body="tick")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nnoted\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
+
+        n = daemon._drain_outbox(
+            emit, task, responses, "evt-A", outbox, inbox,
+            account_context=ctx,
+        )
+
+        # Nothing is delivered anywhere — not to the target, not redirected.
+        assert n == 0
+        assert protocol.list_partials(responses, bid) == []
+        assert protocol.list_partials(responses, "evt-A") == []
+        assert [e["id"] for e in protocol.list_done(inbox, "schedule")] == [bid]
+        notices = daemon._read_outbox_notices(outbox)
+        assert any("NOT delivered" in n["text"] for n in notices)
+        messages_dir = message_store.run_messages_dir(ctx, "Gurio/brr", "task-A")
+        [row] = message_store.list_messages(messages_dir)
+        assert row["status"] == message_store.UNDELIVERABLE
+        assert row["status"]
+
+    def test_no_accepted_path_leaves_an_absent_delivery_status(
+        self, tmp_path, monkeypatch,
+    ):
+        # Sweep the not-reachable (redirect), no-gate-at-all, and
+        # unknown-target-drop branches and assert every message-store row
+        # this run staged carries a real, non-empty status — the "bug
+        # beneath the bug" #578 called out.
+        ctx = self._account_ctx(tmp_path)
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        unreachable_id = protocol.create_event(
+            inbox, source="cloud", body="a").stem
+        no_gate_id = protocol.create_event(
+            inbox, source="schedule", body="b").stem
+        (outbox / "001.md").write_text(f"---\nevent: {unreachable_id}\n---\ny\n")
+        (outbox / "002.md").write_text(f"---\nevent: {no_gate_id}\n---\nz\n")
+        (outbox / "003.md").write_text("---\nevent: evt-ghost\n---\nw\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        # ``cloud`` is a real gate, just not reachable from this run — branch 2.
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: False)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="telegram:1:", event_id="evt-A")
+        task = types.SimpleNamespace(
+            id="task-A", source="telegram", conversation_key="telegram:1:", meta={},
+        )
+
+        daemon._drain_outbox(
+            emit, task, responses, "evt-A", outbox, inbox,
+            account_context=ctx,
+        )
+
+        messages_dir = message_store.run_messages_dir(ctx, "Gurio/brr", "task-A")
+        rows = message_store.list_messages(messages_dir)
+        assert rows, "expected at least one staged message-store row"
+        for row in rows:
+            assert row.get("status"), f"row with no delivery status: {row}"
 
 
 class TestDrainAgentCard:
