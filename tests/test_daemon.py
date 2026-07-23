@@ -81,6 +81,63 @@ def test_merge_level_snapshots_forwards_enriched_quota_subfields():
     assert merged["spend"] == result_levels["spend"]
 
 
+def _live_shape_561_levels():
+    """The exact live shape from issue #561's dispatching run: session/week
+    healthy, a near-exhausted per-model week bucket for a Core (Fable) the
+    run never selects.
+    """
+    return {
+        "quota": {
+            "summary": "session 96% left; week 44% left; Fable week 4% left",
+            "buckets": {
+                "session": {"remaining_percentage": 96.0},
+                "week": {"remaining_percentage": 44.0},
+                "week_models": {"Fable": {"remaining_percentage": 4.0}},
+            },
+        }
+    }
+
+
+def test_quota_pacing_status_not_critical_for_live_shape_561():
+    """#561: a run dispatched to a Core other than the thin week_models
+    bucket's must not read `floor: critical` off that unrelated bucket —
+    the account-wide session/week buckets (96%/44%) are what's live for it.
+    """
+    levels = _live_shape_561_levels()
+
+    status = daemon._quota_pacing_status({}, levels, model="opus")
+
+    assert status["binding_remaining_pct"] == 44.0
+    assert status["floor"] is None
+    assert status["excluded_thin"] == ["Fable"]
+
+
+def test_quota_pacing_status_binds_when_model_matches_thin_bucket():
+    """The same snapshot, for a run actually dispatched to the thin Core,
+    still reads critical — exclusion is scoped to *other* Cores, not
+    blanket immunity for week_models.
+    """
+    levels = _live_shape_561_levels()
+
+    status = daemon._quota_pacing_status({}, levels, model="fable")
+
+    assert status["binding_remaining_pct"] == 4.0
+    assert status["floor"] == "critical"
+    assert "excluded_thin" not in status
+
+
+def test_quota_pacing_status_no_model_excludes_all_week_models():
+    """A scheduling tick with no committed runner: per-model buckets never
+    bind, but a thin one still surfaces informationally."""
+    levels = _live_shape_561_levels()
+
+    status = daemon._quota_pacing_status({}, levels)
+
+    assert status["binding_remaining_pct"] == 44.0
+    assert status["floor"] is None
+    assert status["excluded_thin"] == ["Fable"]
+
+
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-1")
