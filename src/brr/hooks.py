@@ -561,6 +561,63 @@ def _mood_chip(raw: str) -> str:
     return f"{glyph} {name}" if glyph else name
 
 
+# Substrings that mark a tool result as a failure. Deliberately a heuristic:
+# claude's ``PostToolBatch`` payload hands each call over as
+# ``{tool_name, tool_input, tool_use_id, tool_response}`` with **no structured
+# error flag** (verified against a live payload 2026-07-23) — a non-zero Bash
+# exit arrives as the plain string ``"Exit code 1"``. A fuzzy signal is fine
+# here precisely because of what it is allowed to do: this one only ever
+# *annotates* a mood chip. It never blocks, never destroys, and a false
+# positive costs one deictic mark on one boundary.
+# Kept deliberately short and high-precision. A wider net ("error:",
+# "permission denied", "no such file") fires on tool output that merely
+# *contains* those words — a grep over source, a log tail — and every one of
+# those cases already arrives with a non-zero exit anyway, so the wider net
+# buys no recall and costs precision.
+_TOOL_FAILURE_MARKERS = (
+    "exit code ",
+    "<error>",
+    "traceback (most recent call last)",
+    "command not found",
+)
+
+
+def _tool_surprise(payload: dict[str, Any]) -> str | None:
+    """Name the tool whose result just came back wrong, or ``None``.
+
+    The mood channel's whole problem (#566 layer 2, maintainer 2026-07-23) is
+    that an invitation rendered at *every* boundary is an invitation nobody
+    reads — the same habituation this module already names one segment over,
+    where a bare pending count had to grow an action verb because "a dense bar
+    habituates faster than prose". A mood is a *derivative*, not a level: it
+    moves when something unexpected happens, and most boundaries are not that.
+
+    So the ask fires on the edge, and this is the edge detector. Returns a
+    short deictic tag (``"Bash ✗"``) for the first failed call in the batch —
+    enough to point at what happened without re-describing it.
+    """
+    calls = payload.get("tool_calls")
+    if not isinstance(calls, list):
+        return None
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        response = call.get("tool_response")
+        if not isinstance(response, str):
+            # A structured response is the success shape for most tools; a
+            # dict carrying its own error flag is the one exception worth
+            # honouring if a runner ever grows one.
+            if isinstance(response, dict) and response.get("is_error"):
+                name = str(call.get("tool_name") or "tool").strip()
+                return f"{name} ✗"
+            continue
+        head = response[:200].lower()
+        if any(marker in head for marker in _TOOL_FAILURE_MARKERS):
+            name = str(call.get("tool_name") or "tool").strip()
+            return f"{name} ✗"
+    return None
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -575,6 +632,7 @@ def _render_bar(
     resources: dict[str, Any],
     run_name: dict[str, Any],
     mood: str | None,
+    surprise: str | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -609,7 +667,18 @@ def _render_bar(
     if produce_total:
         segments.append(f"⚒{produce_total}")
     if mood:
-        segments.append(f"mood {_mood_chip(mood)}·keep?")
+        # Display every boundary (it is the user's window onto the resident's
+        # own face); *ask* only on an edge. The old unconditional "·keep?"
+        # asked about the artifact — "is this label still the one you'd
+        # write?" — which is answered yes for free and induces nothing. The
+        # edge form asks nothing in words: it sets the mood the resident
+        # claimed beside the thing that just went wrong, and lets the
+        # mismatch do the work. Deictic, per the weave's own measure of a
+        # mark — it points at what both parties just looked at.
+        if surprise:
+            segments.append(f"mood {_mood_chip(mood)} ← {surprise}")
+        else:
+            segments.append(f"mood {_mood_chip(mood)}")
     segments.append(_card_chip(card, card_stale))
 
     details: list[str] = []
@@ -661,9 +730,13 @@ def _render_bar(
 
     resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
     any_delivery = bool(delivery_chip)
+    # A mood edge is laden by definition: something the resident did just came
+    # back wrong. Without this clause the caller's gate opens and this one
+    # closes again — the ask would still be silent on exactly the boundary it
+    # exists for, one layer past where the fix was aimed.
     if (
         pending == 0 and pending_files == 0 and not any_delivery
-        and not resources_laden and not card_stale
+        and not resources_laden and not card_stale and not surprise
     ):
         return None
     bar = " │ ".join(segments)
@@ -677,6 +750,7 @@ def format_delta(
     stop: bool = False,
     run_body: str | None = None,
     mood: str | None = None,
+    surprise: str | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -743,7 +817,7 @@ def format_delta(
             run=run, pending=pending, pending_files=pending_files, events=events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood,
+            mood=mood, surprise=surprise,
         )
 
     lines: list[str] = []
@@ -1019,8 +1093,9 @@ def format_delta(
     # that stay verbose on purpose.
     if mood:
         lines.append(
-            f"- mood: {_mood_chip(mood)} — yours to keep or change; rewrite "
-            ".mood any time."
+            f"- mood: {_mood_chip(mood)} — the face you're wearing on the "
+            "run node right now. Read it against the last few turns, not "
+            "against the file: a mood worth showing is one the work moved."
         )
     # Seed and stop always render — their empty state ("0 pending") is the
     # affirmative signal, not noise (this function only reaches here for
@@ -1412,9 +1487,24 @@ def compute_neutral(
         state["stop_last_token"] = stop_token
         state["last_token"] = stop_token
     else:
+        # A mood *edge*: something in the batch that just ran came back
+        # wrong. Transition-stamped, not per-pass — the same discipline a
+        # commit inside a retry loop needs. A run debugging a red test would
+        # otherwise be told "something broke" at every boundary of the
+        # debugging, which is the habituation this whole change exists to
+        # avoid; the interesting moment is clean → broken, once.
+        surprise = _tool_surprise(payload) if mood else None
+        was_surprised = bool(state.get("mood_surprised"))
+        edge = surprise if (surprise and not was_surprised) else None
+        state["mood_surprised"] = bool(surprise)
         token = portal.get("change_token")
-        if token is not None and token != state.get("last_token"):
-            inject = format_delta(portal, mood=mood)
+        # An edge opens the gate on its own. Gating it on the portal token
+        # would be a contract the signal can't keep: a failing tool call
+        # changes nothing the daemon writes into portal-state, so the one
+        # boundary the ask exists for is exactly the one that would render
+        # nothing.
+        if token is not None and (token != state.get("last_token") or edge):
+            inject = format_delta(portal, mood=mood, surprise=edge)
             state["last_token"] = token
 
     if phase == PHASE_STOP:
