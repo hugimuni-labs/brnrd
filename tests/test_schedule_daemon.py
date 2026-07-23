@@ -219,6 +219,83 @@ def test_fire_due_stretches_every_interval_under_low_quota_floor(tmp_path):
     }
 
 
+def _write_quota_cache_with_week_model(brr_dir, week_pct, model_label, model_pct):
+    """Like `_write_quota_cache`, but with a per-model week bucket alongside
+    the account-wide one — the #561 shape."""
+    outbox_dir = brr_dir / "outbox" / "evt-quota-cache"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    claude_usage.write_snapshot(outbox_dir, {
+        "source": "claude /usage PTY",
+        "quota": {
+            "summary": f"week {week_pct}% left; {model_label} week {model_pct}% left",
+            "buckets": {
+                "week": {"remaining_percentage": week_pct},
+                "week_models": {model_label: {"remaining_percentage": model_pct}},
+            },
+        },
+    })
+
+
+def test_fire_due_ignores_other_core_week_model_bucket(tmp_path, monkeypatch):
+    """#561: a schedule tick pinned to a Shell/Core whose own quota is
+    healthy must not pause `every:` entries off a *different* Core's
+    near-exhausted week_models bucket."""
+    from brr import runner as runner_mod
+    from brr.runner_select import RunnerProfile
+
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 0.0}})
+    # Week is healthy (44%); Fable's week bucket is critical (4%) but this
+    # tick is pinned to opus.
+    _write_quota_cache_with_week_model(brr_dir, 44.0, "Fable", 4.0)
+    monkeypatch.setattr(
+        runner_mod, "runner_profile",
+        lambda name, repo_root=None: RunnerProfile(
+            name=name, profile=name, shell="claude", model="opus",
+        ),
+    )
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude-opus"})
+
+    fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
+    assert fired == {"upkeep"}  # not paused — Fable's bucket doesn't bind opus
+    assert schedule.load_state(brr_dir)["_pacing"] == {"mode": "normal"}
+
+
+def test_fire_due_pauses_on_own_core_week_model_bucket(tmp_path, monkeypatch):
+    """The same snapshot, this time pinned to the Core the thin bucket
+    actually names — it must still bind and pause `every:` entries."""
+    from brr import runner as runner_mod
+    from brr.runner_select import RunnerProfile
+
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 0.0}})
+    _write_quota_cache_with_week_model(brr_dir, 44.0, "Fable", 4.0)
+    monkeypatch.setattr(
+        runner_mod, "runner_profile",
+        lambda name, repo_root=None: RunnerProfile(
+            name=name, profile=name, shell="claude", model="fable",
+        ),
+    )
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude-fable"})
+
+    fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
+    assert fired == set()  # paused — this tick's own Core is the thin bucket
+    assert schedule.load_state(brr_dir)["_pacing"] == {
+        "mode": "quota-paused",
+        "remaining_pct": 4.0,
+    }
+
+
 def test_fire_due_ignores_quota_pacing_without_resolvable_runner(tmp_path):
     """No `shell=`/`runner=` pin resolvable → pacing is skipped, not guessed;
     entries fire exactly as they would with no quota awareness at all."""
