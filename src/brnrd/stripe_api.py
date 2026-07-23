@@ -101,6 +101,16 @@ def create_subscription_checkout(
             # live on the Stripe Products. To instead run classic Stripe Tax,
             # pass managed_payments[enabled]=false *and* automatic_tax[enabled]
             # =true here and set a default tax code in Tax settings.
+            #
+            # tax_id_collection is rejected the same way (probed live
+            # 2026-07-23): under merchant-of-record, Stripe owns VAT
+            # calculation and remittance outright, collects no buyer tax IDs,
+            # and offers no B2B reverse charge. Do not re-add the parameter.
+            # A future business tier that needs VAT-ID invoices means either
+            # separate business-use products or leaving Managed Payments —
+            # a pricing/liability decision, not a checkout flag.
+            # Products carry txcd_10105003 (AIaaS - personal use) as of
+            # 2026-07-23; the business-use sibling is txcd_10105004.
             "cancel_url": cancel_url,
             "metadata[brnrd_account_id]": account_id,
             "metadata[brnrd_purpose]": "subscription",
