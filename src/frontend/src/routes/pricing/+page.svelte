@@ -115,9 +115,9 @@
 				href={resolve('/login')}>sign in to subscribe</a
 			>
 			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-				Early access: checkout is Stripe-hosted and live; entitlements are still landing. You'd
-				be backing the build while it's early — which is exactly when backing shapes it. Priced
-				for the people who show up first.
+				Early access: checkout is Stripe-hosted and live; entitlements are still landing. You'd be
+				backing the build while it's early — which is exactly when backing shapes it. Priced for the
+				people who show up first.
 			</p>
 		</section>
 	</div>
