@@ -107,16 +107,17 @@
 			{/if}
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">
 				<li>everything in hosted free</li>
-				<li>removes the free tier's headroom limits</li>
-				<li>keeps the lights on for the open-source engine</li>
+				<li>headroom limits: off — the resident works as hard as you ask</li>
+				<li>funds the open-source engine it runs on</li>
 			</ul>
 			<a
 				class="mt-5 inline-flex w-full items-center justify-center border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
 				href={resolve('/login')}>sign in to subscribe</a
 			>
 			<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
-				Early access: checkout is Stripe-hosted and live; paid entitlements are still landing
-				incrementally, so today a subscription is mostly patronage — priced like it.
+				Early access: checkout is Stripe-hosted and live; entitlements are still landing. You'd
+				be backing the build while it's early — which is exactly when backing shapes it. Priced
+				for the people who show up first.
 			</p>
 		</section>
 	</div>

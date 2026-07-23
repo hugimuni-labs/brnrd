@@ -138,8 +138,8 @@
 		{#if !hasSubscription}
 			<!-- subscribe CTA -->
 			<p class="mt-2 text-sm leading-relaxed text-stone-400">
-				Subscribing removes the free tier's headroom limits and keeps the lights on for the
-				open-source engine. Early access: mostly patronage today — priced like it.
+				A subscription lifts the free tier's headroom limits and funds the open-source engine.
+				It's early — you'd be one of the people this gets built around.
 			</p>
 			<div class="mt-3 flex flex-wrap items-center gap-3">
 				<div
