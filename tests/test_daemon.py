@@ -1545,6 +1545,22 @@ def test_extract_spawn_contract_ignores_source_paths_masquerading_as_branch():
     assert branch == "brr/real-slug"
 
 
+def test_extract_spawn_contract_ignores_dot_brr_runtime_paths():
+    """`.brr/worktrees/<run-id>` is named in the working rules of every
+    host-environment spawn spec brnrd writes — and it is a `brr/` token
+    reached via a `.`, not a `/`. The first cut of this check extracted
+    `brr/worktrees` from it and would have flagged a compliant worker.
+    Ordering saved the two live dispatches on 2026-07-23; ordering is not
+    a guard."""
+    spec = (
+        "Work ONLY under `/home/gurio/src/misc/brr/.brr/worktrees/<run-id>`;\n"
+        "re-read `.brr/outbox/evt-x/portal-state.json` at plan boundaries.\n"
+        "**Branch: `brr/real-slug`**\n"
+    )
+    branch, _report = daemon._extract_spawn_contract(spec)
+    assert branch == "brr/real-slug"
+
+
 def test_extract_spawn_contract_no_tokens_returns_none_none():
     branch, report = daemon._extract_spawn_contract("just do the thing, no branch here")
     assert branch is None
