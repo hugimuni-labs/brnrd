@@ -430,3 +430,149 @@ def test_attest_blocks_names_the_block_and_both_dates() -> None:
     assert "Discovered work surface" in findings[0]
     assert "2026-07-22" in findings[0]
     assert "2026-07-23" in findings[0]
+
+
+# ── The orientation ledger's score half (#513 Slice 9) ────────────────────────
+#
+# `orientation_set` (files a wake ought to READ, metered by the hooks as
+# `orient x/y`) coexists with `orientation` (the kernel's `next:` action
+# list). They are two halves of one steer — the list is what a wake does
+# first, the set is what it inhabits by reading — and the tests below pin
+# them apart so the naming collision this slice inherited cannot regrow.
+
+
+def test_orientation_set_and_next_actions_are_distinct_kernel_blocks() -> None:
+    from brr.bootscore import OrientationFile, OrientationStep
+
+    kernel = _kernel(
+        orientation=[OrientationStep(action="act", reason="go")],
+        orientation_set=[
+            OrientationFile(path="/repo/AGENTS.md", bytes=4120),
+            OrientationFile(path="/home/kb/subject-envs.md", bytes=9801),
+        ],
+    )
+    # The walk: named files, byte costs, and the skip declared as first-class.
+    assert "orient: 2 file(s) · 13,921B" in kernel
+    assert "  · /repo/AGENTS.md (4,120B)" in kernel
+    assert "  · /home/kb/subject-envs.md (9,801B)" in kernel
+    assert "skipping orientation" in kernel
+    # The next-actions list is still its own block, untouched by the set.
+    assert "next:" in kernel
+    assert "  1. act — go" in kernel
+    # The orient block precedes next: — posture, then the walk, then actions.
+    assert kernel.index("orient:") < kernel.index("next:")
+
+
+def test_empty_orientation_set_costs_the_kernel_nothing() -> None:
+    from brr.bootscore import OrientationStep
+
+    # Differential like every kernel line — and this negative can fail: the
+    # positive twin above proves this same renderer emits `orient:` when the
+    # set is non-empty.
+    kernel = _kernel(orientation=[OrientationStep(action="act")])
+    assert "orient:" not in kernel
+
+
+def test_orientation_set_rides_to_dict() -> None:
+    from brr.bootscore import OrientationFile, to_dict
+
+    score = BootScore(
+        orientation_set=[OrientationFile(path="/repo/AGENTS.md", bytes=7)]
+    )
+    assert to_dict(score)["orientation_set"] == [
+        {"path": "/repo/AGENTS.md", "bytes": 7}
+    ]
+
+
+def test_orientation_set_names_only_provable_files(tmp_path: Path) -> None:
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text("", encoding="utf-8")
+
+    # Nothing provable → an empty set, never a padded one.
+    assert prompts._build_orientation_set(repo) == []
+
+    # An AGENTS.md that exists enters, with its true byte cost.
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    entries = prompts._build_orientation_set(repo)
+    assert [Path(e.path).name for e in entries] == ["AGENTS.md"]
+    assert entries[0].bytes == len("# Agents\n")
+
+    # An empty file orients nobody and is excluded — the meter must never
+    # ask for a Read with no reading.
+    (repo / "AGENTS.md").write_text("", encoding="utf-8")
+    assert prompts._build_orientation_set(repo) == []
+
+
+def test_touched_subject_hub_requires_every_slug_token(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
+    (kb / "subject-envs.md").write_text("# hub\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
+    )
+
+    # Both slug tokens present → the hub is provably touched.
+    touched = prompts._build_orientation_set(
+        repo, task_text="fix the boot sequence meter"
+    )
+    assert [Path(e.path).name for e in touched] == ["subject-boot-sequence.md"]
+
+    # One token alone is a guess wearing a match's clothes — excluded.
+    partial = prompts._build_orientation_set(
+        repo, task_text="the boot kernel line"
+    )
+    assert partial == []
+
+    # No task text → no hub can be *touched*, so none is named.
+    assert prompts._build_orientation_set(repo) == []
+
+
+def test_orientation_set_is_capped_never_padded(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    for i in range(7):
+        (kb / f"subject-boot-{i}.md").write_text("# hub\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
+    )
+
+    entries = prompts._build_orientation_set(
+        repo, task_text="boot 0 1 2 3 4 5 6"
+    )
+    assert len(entries) == prompts._ORIENTATION_SET_MAX
+    # Deterministic order: AGENTS.md first, then hubs in sorted-name order.
+    assert [Path(e.path).name for e in entries] == [
+        "AGENTS.md", "subject-boot-0.md", "subject-boot-1.md",
+        "subject-boot-2.md", "subject-boot-3.md",
+    ]
+
+
+def test_build_boot_score_carries_the_orientation_set(tmp_path: Path) -> None:
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text("", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+    score = prompts.build_boot_score(repo, is_daemon=True, task_text="任务")
+    assert [Path(e.path).name for e in score.orientation_set] == ["AGENTS.md"]
