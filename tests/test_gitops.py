@@ -370,6 +370,46 @@ def test_commit_all_stamps_conversation_trailer(tmp_path):
     assert subject == "brnrd-kb: capture"
 
 
+def test_commit_all_stamps_run_id_trailer(tmp_path):
+    """#565 — the same trailer mechanism as conversation identity, but for
+    the owning run: produce attribution filters a shared commit window by
+    this trailer instead of trusting a bare time range."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+
+    assert commit_all(
+        repo, "brnrd-kb: capture", run_id="run-260722-2337-nig2",
+    ) is True
+
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "run-260722-2337-nig2"
+
+
+def test_commit_all_stamps_both_trailers_together(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+
+    assert commit_all(
+        repo, "brnrd-kb: capture",
+        conversation_id="telegram:-1001234567890:",
+        run_id="run-260722-2337-nig2",
+    ) is True
+
+    body = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers)"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert body == (
+        "Brnrd-Conversation-Id: telegram:-1001234567890:\n"
+        "Brnrd-Run-Id: run-260722-2337-nig2"
+    )
+
+
 def test_commit_all_omits_trailer_without_conversation(tmp_path):
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -377,7 +417,9 @@ def test_commit_all_omits_trailer_without_conversation(tmp_path):
     assert commit_all(repo, "no conversation") is True
 
     (repo / "file.txt").write_text("more\n", encoding="utf-8")
-    assert commit_all(repo, "blank conversation", conversation_id="  ") is True
+    assert commit_all(
+        repo, "blank conversation", conversation_id="  ", run_id="  ",
+    ) is True
 
     for ref in ("HEAD", "HEAD~1"):
         body = subprocess.run(
