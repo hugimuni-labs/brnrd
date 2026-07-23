@@ -171,7 +171,7 @@ class TestPromptBuilding:
         assert "Resident Identity Core" in prompt
         assert "product-owned identity contract" in prompt
         assert "Voice And The Seam" in prompt
-        assert "user_commitment" in prompt
+        assert "fluency: weave | prose" in prompt
         assert "Your dominion (working memory)" in prompt
         assert prompt.index("Resident Identity Core") < prompt.index(
             "Your dominion (working memory)"
@@ -990,10 +990,12 @@ class TestPromptBuilding:
         assert "truncated to the latest" in prompt
 
     def test_daemon_prompt_renders_reader_model_from_snapshot(self, tmp_path):
-        # #217 v1: `user_commitment` in the communication snapshot renders a
-        # Reader model line — `full` licenses weave-density replies; other
-        # values unfold to plain prose; absent means no line (profane is the
-        # default and needs no announcement).
+        # #217 v1: `fluency` in the communication snapshot renders a Reader
+        # fluency line — `weave` licenses register-density replies; other
+        # values unfold to plain language; absent means no line (`prose` is
+        # the default and needs no announcement). Renamed from
+        # `user_commitment: full | profane` 2026-07-23: `full` read as an
+        # amount, and the field names the reader's language, not the volume.
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.")
@@ -1002,25 +1004,28 @@ class TestPromptBuilding:
             "current_thread": "telegram:77:",
             "correspondent_key": "telegram:user-id:42",
         }
-        full = build_daemon_prompt(
+        weave = build_daemon_prompt(
             "hi", "evt-2", "/tmp/resp.md", tmp_path,
-            communication_snapshot={**base, "user_commitment": "full"},
+            communication_snapshot={**base, "fluency": "weave"},
         )
-        assert "Reader model: `user_commitment: full`" in full
-        assert "weave" in full
+        assert "Reader fluency: `fluency: weave`" in weave
+        assert "register" in weave
+        # The line must never read as a licence for length (2026-07-23).
+        assert "still the delta" in weave
 
-        profane = build_daemon_prompt(
+        prose = build_daemon_prompt(
             "hi", "evt-2", "/tmp/resp.md", tmp_path,
-            communication_snapshot={**base, "user_commitment": "profane"},
+            communication_snapshot={**base, "fluency": "prose"},
         )
-        assert "Reader model: `user_commitment: profane`" in profane
-        assert "plain prose" in profane
+        assert "Reader fluency: `fluency: prose`" in prose
+        assert "plain language" in prose
+        assert "never longer" in prose
 
         unset = build_daemon_prompt(
             "hi", "evt-2", "/tmp/resp.md", tmp_path,
             communication_snapshot=dict(base),
         )
-        assert "Reader model" not in unset
+        assert "Reader fluency" not in unset
 
     def test_daemon_prompt_renders_prior_failure_facet(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

@@ -71,7 +71,7 @@ def test_is_security_key_true_for_the_named_set(key):
         "core",
         "runner",
         "spawn.max_concurrent",
-        "user_commitment",
+        "fluency",
         # Locating keys — deliberately repo-readable (see module docstring).
         "home.path",
         "home.kind",
