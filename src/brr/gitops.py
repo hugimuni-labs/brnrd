@@ -503,14 +503,24 @@ def push_branch(
 # ``conversation_key`` string — no separate id scheme.
 CONVERSATION_TRAILER = "Brnrd-Conversation-Id"
 
+# Git trailer stamped on every brr-created commit to the account-knowledge
+# repo, identifying the one run that owns it (#565). Produce derives kb
+# relics by filtering a shared-checkout commit window against this trailer —
+# see ``knowledge.committed_pages_in_window`` — so a stopped run's dashboard
+# node never picks up a concurrent sibling's kb pages.
+RUN_ID_TRAILER = "Brnrd-Run-Id"
+
 
 def commit_all(
-    worktree_path: Path, message: str, *, conversation_id: str | None = None,
+    worktree_path: Path, message: str, *,
+    conversation_id: str | None = None,
+    run_id: str | None = None,
 ) -> bool:
     """Stage everything and commit in *worktree_path*. Best-effort; returns success.
 
     ``conversation_id`` (the task's ``conversation_key``, when known) is
-    stamped as a ``Brnrd-Conversation-Id`` git trailer; empty/None means no
+    stamped as a ``Brnrd-Conversation-Id`` git trailer; ``run_id`` (the
+    task's own id) as a ``Brnrd-Run-Id`` trailer. Either empty/None means no
     trailer — never stamp an empty value.
     """
     add = _git(worktree_path, "add", "-A", check=False)
@@ -520,6 +530,9 @@ def commit_all(
     key = (conversation_id or "").strip()
     if key:
         args += ["--trailer", f"{CONVERSATION_TRAILER}: {key}"]
+    run = (run_id or "").strip()
+    if run:
+        args += ["--trailer", f"{RUN_ID_TRAILER}: {run}"]
     commit = _git(worktree_path, *args, check=False)
     return commit.returncode == 0
 

@@ -393,11 +393,13 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
 
         repo_deed.ensure_deed(home_knowledge, "knowledge")
     _allow_push_to_checkout(home_knowledge)
+    _ensure_run_id_hook(home_knowledge)
 
     checkout = repo_root / CHECKOUT_DIRNAME
     _exclude_from_project_git(repo_root, f"{CHECKOUT_DIRNAME}/")
     if checkout.exists():
         if _checkout_origin_matches(checkout, home_knowledge):
+            _ensure_run_id_hook(checkout)
             return checkout
         shutil.rmtree(checkout, ignore_errors=True)
 
@@ -411,6 +413,7 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     if result.returncode != 0:
         checkout.mkdir(parents=True, exist_ok=True)
         _init_git_repo(checkout)
+    _ensure_run_id_hook(checkout)
     return checkout
 
 
@@ -491,6 +494,7 @@ def capture(
     lock_timeout: float = 30.0,
     captured_pages: list[str] | None = None,
     conversation_id: str | None = None,
+    run_id: str | None = None,
 ) -> bool:
     """Commit and push the knowledge chain. Best-effort; never raises.
 
@@ -524,6 +528,9 @@ def capture(
             if not held:
                 return False
             _allow_push_to_checkout(home_knowledge)
+            _ensure_run_id_hook(home_knowledge)
+            if has_checkout:
+                _ensure_run_id_hook(checkout)
 
             if captured_pages is not None:
                 seen = set(captured_pages)
@@ -537,7 +544,8 @@ def capture(
             # 1. The repo-local checkout, if a resident wrote through it.
             if has_checkout and gitops.worktree_dirty(checkout):
                 moved |= gitops.commit_all(
-                    checkout, message, conversation_id=conversation_id,
+                    checkout, message,
+                    conversation_id=conversation_id, run_id=run_id,
                 )
 
             # 2. Direct writes into the account tree — today's common path,
@@ -546,7 +554,8 @@ def capture(
             #    ``updateInstead`` accept it (it refuses a dirty tree).
             if gitops.worktree_dirty(home_knowledge):
                 moved |= gitops.commit_all(
-                    home_knowledge, message, conversation_id=conversation_id,
+                    home_knowledge, message,
+                    conversation_id=conversation_id, run_id=run_id,
                 )
 
             branch = gitops.current_branch(home_knowledge)
@@ -684,21 +693,28 @@ def committed_pages_in_window(
     start_oid: str | None,
     *,
     cfg: dict | None = None,
+    run_id: str | None = None,
 ) -> list[str]:
-    """Repo-scoped kb pages committed to the knowledge repo in ``start..HEAD``.
+    """Repo-scoped kb pages *this run* committed to the knowledge repo in
+    ``start..HEAD``.
 
     The other half of #538: pages a resident committed mid-run are invisible
     to the dirty-diff capture manifest, so closeout unions this commit-window
-    view in. Deliberately no sibling-overlap gate — under concurrency the
-    window may credit a sibling's page to this run, a misattribution the
-    design accepts ("the main run owns the work").
+    view in. The window is a commit range on the *shared* account-knowledge
+    checkout every concurrent run shares — every commit in it is checked
+    against the ``Brnrd-Run-Id`` trailer :func:`gitops.commit_all` and the
+    knowledge repo's ``commit-msg`` hook both stamp, and only ``run_id``'s
+    own commits contribute pages (#565). A commit with no trailer at all (a
+    maintainer's hand commit, say) is credited to no run — never a fallback
+    to crediting it by time alone.
 
-    Falls back to an empty list on any doubt: no start OID, no knowledge
-    repo, an OID git cannot resolve, or one no longer an ancestor of HEAD
-    (rebase/gc rewrote the window) — each degrades to today's behavior.
+    Falls back to an empty list on any doubt: no ``run_id``, no start OID,
+    no knowledge repo, an OID git cannot resolve, or one no longer an
+    ancestor of HEAD (rebase/gc rewrote the window) — each degrades to
+    today's behavior.
     """
 
-    if not start_oid:
+    if not start_oid or not run_id:
         return []
     try:
         cfg = cfg if cfg is not None else conf.load_config(repo_root)
@@ -717,6 +733,10 @@ def committed_pages_in_window(
     if ancestry.returncode != 0:
         return []
 
+    owned_shas = _commit_shas_owned_by_run(home_knowledge, start_oid, run_id)
+    if not owned_shas:
+        return []
+
     split = (
         ctx.kind == "account"
         and account.knowledge_split_mode(cfg) == "per-repo"
@@ -726,44 +746,79 @@ def committed_pages_in_window(
         account.repo_knowledge_path(ctx, label) if split else home_knowledge
     )
     return sorted(
-        _committed_markdown_paths(home_knowledge, scope, start_oid)
+        _committed_markdown_paths(home_knowledge, scope, owned_shas)
     )
 
 
-def _committed_markdown_paths(
-    git_root: Path, scope: Path, start_oid: str,
-) -> set[str]:
-    """Non-deleted markdown paths committed in ``start_oid..HEAD``, scoped."""
+def _commit_shas_owned_by_run(
+    git_root: Path, start_oid: str, run_id: str,
+) -> list[str]:
+    """Commit SHAs in ``start_oid..HEAD`` whose ``Brnrd-Run-Id`` trailer is
+    exactly ``run_id`` — the identity gate #565 adds in place of the time
+    window alone. A commit with no trailer, or a sibling's trailer, is
+    excluded rather than defaulting into this run's credit."""
 
+    result = subprocess.run(
+        [
+            "git", "log",
+            f"--format=%H%x00%(trailers:key={gitops.RUN_ID_TRAILER},"
+            "valueonly,separator=%x2C)",
+            f"{start_oid}..HEAD",
+        ],
+        cwd=git_root, capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return []
+    owned: list[str] = []
+    for line in result.stdout.split("\n"):
+        if not line:
+            continue
+        sha, _, value = line.partition("\0")
+        if sha and value.strip() == run_id:
+            owned.append(sha)
+    return owned
+
+
+def _committed_markdown_paths(
+    git_root: Path, scope: Path, shas: list[str],
+) -> set[str]:
+    """Non-deleted markdown paths this run's own commits (``shas``) touched,
+    scoped to *scope*. One ``diff-tree`` per commit rather than a single
+    ``start..HEAD`` diff, so a sibling's commit inside the same window never
+    contributes a path (#565)."""
+
+    if not shas:
+        return set()
     try:
         scope_rel = scope.resolve().relative_to(git_root.resolve())
     except (OSError, ValueError):
         return set()
     pathspec = scope_rel.as_posix() or "."
-    result = subprocess.run(
-        [
-            "git", "diff", "--name-only", "--diff-filter=ACMRTUXB", "-z",
-            start_oid, "HEAD", "--", pathspec,
-        ],
-        cwd=git_root, capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        return set()
     changed: set[str] = set()
-    for raw in result.stdout.split("\0"):
-        if not raw:
+    for sha in shas:
+        result = subprocess.run(
+            [
+                "git", "diff-tree", "--no-commit-id", "--name-only", "-r",
+                "-z", "--diff-filter=ACMRTUXB", sha, "--", pathspec,
+            ],
+            cwd=git_root, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
             continue
-        path = git_root / raw
-        try:
-            rel = path.resolve().relative_to(scope.resolve())
-        except (OSError, ValueError):
-            continue
-        if (
-            path.is_file()
-            and path.suffix.lower() == ".md"
-            and (not rel.parts or rel.parts[0] != REPLIES_DIRNAME)
-        ):
-            changed.add(rel.as_posix())
+        for raw in result.stdout.split("\0"):
+            if not raw:
+                continue
+            path = git_root / raw
+            try:
+                rel = path.resolve().relative_to(scope.resolve())
+            except (OSError, ValueError):
+                continue
+            if (
+                path.is_file()
+                and path.suffix.lower() == ".md"
+                and (not rel.parts or rel.parts[0] != REPLIES_DIRNAME)
+            ):
+                changed.add(rel.as_posix())
     return changed
 
 
@@ -844,6 +899,57 @@ def knowledge_file_url(
     ):
         return None
     return forges.view_blob_url(location.remote_url, location.branch, rel)
+
+
+# Marker line inside the installed hook, so a later brnrd version (or a
+# maintainer) can tell "ours, safe to rewrite" from "hand-customized, leave
+# alone" without diffing the whole script.
+_RUN_ID_HOOK_MARKER = "# brnrd: stamp Brnrd-Run-Id trailer (#565) — do not hand-edit"
+
+_RUN_ID_HOOK_SCRIPT = (
+    "#!/bin/sh\n"
+    f"{_RUN_ID_HOOK_MARKER}\n"
+    'if [ -n "$BRR_RUN_ID" ]; then\n'
+    f'  git interpret-trailers --if-exists doNothing '
+    f'--trailer "{gitops.RUN_ID_TRAILER}=$BRR_RUN_ID" --in-place "$1"\n'
+    "fi\n"
+)
+
+
+def _ensure_run_id_hook(repo_root: Path) -> None:
+    """Install a ``commit-msg`` hook stamping ``$BRR_RUN_ID`` as a trailer.
+
+    Residents commit kb pages directly, mid-run, in a shell (`` git commit``
+    typed by hand) — not through :func:`gitops.commit_all`, so a Python-level
+    ``run_id=`` parameter can't reach that commit. brnrd's own runner process
+    already exports ``BRR_RUN_ID`` into every run's environment; this hook is
+    the code-only interception point that turns it into the same
+    ``Brnrd-Run-Id`` trailer :func:`gitops.commit_all` stamps for the
+    automated capture commit — no prompt file has to teach a resident to
+    type ``--trailer`` by hand (#565).
+
+    A hand commit made with no ``BRR_RUN_ID`` in its environment (a
+    maintainer, logged in directly to the shared account-knowledge repo)
+    leaves the message untouched — credited to no run, never misattributed
+    by a fallback. Idempotent and best-effort: only (re)writes the hook when
+    it is absent or still carries this function's own marker, so a hook a
+    maintainer customized by hand is left alone; any OSError is swallowed,
+    matching every other capture-net step.
+    """
+    hooks_dir = repo_root / ".git" / "hooks"
+    try:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook_path = hooks_dir / "commit-msg"
+        if hook_path.exists():
+            existing = hook_path.read_text(encoding="utf-8", errors="replace")
+            if _RUN_ID_HOOK_MARKER not in existing:
+                return
+            if existing == _RUN_ID_HOOK_SCRIPT:
+                return
+        hook_path.write_text(_RUN_ID_HOOK_SCRIPT, encoding="utf-8")
+        hook_path.chmod(0o755)
+    except OSError:
+        pass
 
 
 def _allow_push_to_checkout(home_knowledge: Path) -> None:
