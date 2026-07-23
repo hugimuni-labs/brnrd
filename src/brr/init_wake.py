@@ -213,7 +213,7 @@ def _outbox_messages(outbox_dir: Path) -> list[Path]:
         return []
     out: list[Path] = []
     for path in entries:
-        if path.suffix == ".tmp":
+        if portals.is_staging_name(path.name):
             continue
         if path.name in portals.CONTROL_NAMES or path.name in _CONTROL_FILES:
             continue

@@ -392,6 +392,32 @@ def _prefer_bucket(
     return current
 
 
+# The boot banner's second line, printed once per PTY session before `/usage`
+# is even typed: `<model desc> · Claude <Tier>` (e.g. `Haiku 4.5 · Claude Max`,
+# confirmed live 2026-07-23 against this very account). It is the *only* place
+# in the whole capture that names the account's subscription plan — the
+# `/usage` panel body itself never repeats it (issue #580). Read defensively:
+# an unrecognized banner shape yields `None`, never a guess. `lines` is
+# already whitespace-collapsed by `parse_usage_text`, so the pattern needs no
+# squashed-text tolerance.
+_PLAN_LINE_RE = re.compile(r"·\s*Claude\s+(?P<tier>[A-Za-z][\w]*(?:\s+[\w]+)*)\s*$")
+
+
+def _plan_type_from_lines(lines: list[str]) -> str | None:
+    """The subscription tier named in the boot banner, or ``None``.
+
+    Kept as the tier text exactly as rendered (``"Max"``, not a lowercased or
+    prefixed spelling) — nothing here is invented past what the banner says.
+    """
+    for line in lines:
+        match = _PLAN_LINE_RE.search(line)
+        if match:
+            tier = match.group("tier").strip()
+            if tier:
+                return tier
+    return None
+
+
 _WEEK_LABEL_RE = re.compile(r"current\s*week\s*\(([^)]*)\)", re.IGNORECASE)
 
 
@@ -451,6 +477,9 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         "source": "claude /usage PTY",
         "updated_at": _updated_at(),
     }
+    plan_type = _plan_type_from_lines(lines)
+    if plan_type:
+        levels["plan_type"] = plan_type
     parts: list[str] = []
     # Numeric remaining-percent per bucket, keyed for `pacing.*` policy
     # consumers (`runner_quota.binding_quota_remaining_pct`) — populated
@@ -799,6 +828,18 @@ def _carry_candidates(outbox_dir: Path) -> list[dict[str, Any]]:
 # `week_models` branch below reads `fresh["quota"]`.
 _ASYNC_SECTIONS = ("quota", "usage_credits", "week_models")
 
+# `quota` and `week_models` are percentages of the account's subscription
+# window — a *plan* quantity. `usage_credits` is a separate dollar-denominated
+# pool the issue never named as affected, so it is not plan-scoped here (#580).
+# A candidate whose `plan_type` is a *different, known* identity from the
+# fresh reading's is not a stale copy of the same quantity — it is a reading
+# of a different quantity in the same units, and carrying it forward would
+# reintroduce exactly the units bug #580 reports. Only two *present* and
+# *unequal* identities disqualify a candidate; either side missing a
+# `plan_type` is unknown, not different, and must not block a carry — that is
+# the #561 partial-scrape case this must keep working exactly as before.
+_PLAN_SCOPED_SECTIONS = frozenset({"quota", "week_models"})
+
 # How long a section may be carried across a scrape that didn't render it.
 # Long enough to ride out the panel's rate-limit windows, short enough that a
 # section which is genuinely *gone* (credits turned off, plan changed) leaves
@@ -806,6 +847,20 @@ _ASYNC_SECTIONS = ("quota", "usage_credits", "week_models")
 # "usage credits are off" still overwrites immediately — that is the panel
 # stating a fact, not failing to render one.
 _CARRY_MAX_AGE_SECONDS = 12 * 3600.0
+
+
+def _plan_compatible(fresh_plan: Any, candidate_plan: Any) -> bool:
+    """Whether a candidate's plan identity is safe to carry given the fresh one.
+
+    Absence on either side is unknown, not different (#580's boundary
+    condition) — only two *present* strings that disagree make a candidate
+    incompatible.
+    """
+    if not isinstance(fresh_plan, str) or not fresh_plan.strip():
+        return True
+    if not isinstance(candidate_plan, str) or not candidate_plan.strip():
+        return True
+    return fresh_plan.strip() == candidate_plan.strip()
 
 
 def carry_forward_sections(
@@ -841,6 +896,16 @@ def carry_forward_sections(
     accepted for callers that have only one). Searching per section rather than
     trusting the single newest snapshot is what heals a hole that has already
     been written: the newest snapshot is often the partial one.
+
+    A plan change is a *regime boundary*, not a staleness question (#580): for
+    `quota` and `week_models`, a candidate whose known `plan_type` disagrees
+    with the fresh reading's known `plan_type` is skipped, even if it is
+    otherwise the newest thing that has the section. Skipping it is a refusal,
+    not a downgrade — no warning-annotated carry, because there is no way to
+    annotate a percentage into meaning the right thing again. Logged once per
+    call, at the point a mismatch is *detected*, and the line says which of
+    the two outcomes followed: the section was carried from an older
+    same-plan snapshot, or nothing was carried at all.
     """
     candidates = [previous] if isinstance(previous, dict) else list(previous or [])
     candidates = [
@@ -850,10 +915,42 @@ def carry_forward_sections(
     ]
     if not candidates:
         return fresh
+    plan_change_logged = False
     for section in _ASYNC_SECTIONS:
         if section in fresh:
             continue
-        source = next((s for s in candidates if section in s), None)
+        if section in _PLAN_SCOPED_SECTIONS:
+            fresh_plan = fresh.get("plan_type")
+            source = None
+            blocked_plan: str | None = None
+            for snapshot in candidates:
+                if section not in snapshot:
+                    continue
+                candidate_plan = snapshot.get("plan_type")
+                if _plan_compatible(fresh_plan, candidate_plan):
+                    source = snapshot
+                    break
+                if blocked_plan is None and isinstance(candidate_plan, str) and candidate_plan.strip():
+                    blocked_plan = candidate_plan.strip()
+            if blocked_plan is not None and not plan_change_logged:
+                # Say which of the two things actually happened. A blocked
+                # candidate does not mean a blocked carry — an older snapshot
+                # from the *current* plan can still serve, and a line reading
+                # "refusing to carry" when the section was carried anyway is
+                # the #568 defect: a fixed refusal string describing a
+                # different failure than the one that occurred.
+                logger.info(
+                    "claude_usage: plan changed (%s -> %s); %s for %s",
+                    blocked_plan,
+                    fresh_plan,
+                    "carried from an older same-plan reading instead"
+                    if source is not None
+                    else "refusing to carry across the regime boundary",
+                    section,
+                )
+                plan_change_logged = True
+        else:
+            source = next((s for s in candidates if section in s), None)
         if source is None:
             continue
         carried = source[section]

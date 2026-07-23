@@ -3868,7 +3868,7 @@ def _outbox_message_files(outbox_dir: Path | None) -> list[str]:
     names: list[str] = []
     for path in entries:
         if (
-            path.suffix == ".tmp"
+            portals.is_staging_name(path.name)
             or path.name.startswith(".")
             or path.name in control_names
         ):
@@ -5287,12 +5287,14 @@ def _drain_outbox(
         return 0
     promoted = 0
     for fpath in entries:
-        # ``.tmp`` is the agent's atomic-write staging name; dotfiles are
-        # reserved as control channels (e.g. ``.keepalive`` for the
-        # liveness budget), and the live JSON files are daemon-owned
-        # control state. None are deliverable messages.
+        # ``.tmp`` anywhere in the suffix chain is the agent's atomic-write
+        # staging name (``portals.is_staging_name`` — a bare ``.suffix``
+        # check missed ``note.md.tmp.<pid>.<rand>`` and delivered a message
+        # mid-write, #590); dotfiles are reserved as control channels
+        # (e.g. ``.keepalive`` for the liveness budget), and the live JSON
+        # files are daemon-owned control state. None are deliverable.
         if (
-            fpath.suffix == ".tmp"
+            portals.is_staging_name(fpath.name)
             or fpath.name.startswith(".")
             or fpath.name in {_LIVE_INBOX_NAME, _LIVE_PORTAL_STATE_NAME}
         ):

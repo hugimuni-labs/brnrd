@@ -100,6 +100,41 @@ test('a spawned child nests right after its parent, both age-ordered among peers
 	);
 });
 
+// The tree rail's one input (maintainer ask, 2026-07-23): the offset said
+// "these are children" but never "children *of which*", so the shelf now
+// draws a mirrored rail down the seam edge — and a rail needs to know where
+// to stop.
+test('only the youngest-last child of a brood terminates the rail', () => {
+	const items = [
+		{ runId: 'parent-a', parentRunId: null, isSubspawn: false, ageMs: 500 },
+		{ runId: 'child-a-2', parentRunId: 'parent-a', isSubspawn: true, ageMs: 520 },
+		{ runId: 'child-a-1', parentRunId: 'parent-a', isSubspawn: true, ageMs: 510 },
+		{ runId: 'parent-b', parentRunId: null, isSubspawn: false, ageMs: 100 },
+		{ runId: 'child-b-1', parentRunId: 'parent-b', isSubspawn: true, ageMs: 120 }
+	];
+	assert.deepEqual(
+		nestShelfChildren(items).map((r) => [r.runId, r.lastChild]),
+		[
+			['parent-b', false],
+			['child-b-1', true], // an only child is also a last child
+			['parent-a', false],
+			['child-a-1', false],
+			['child-a-2', true]
+		]
+	);
+});
+
+test('a root row is never a last child — it has no rail to terminate', () => {
+	const items = [
+		{ runId: 'lonely', parentRunId: null, isSubspawn: false, ageMs: 10 },
+		{ runId: 'orphan', parentRunId: 'gone', isSubspawn: true, ageMs: 20 }
+	];
+	assert.equal(
+		nestShelfChildren(items).every((r) => r.lastChild === false),
+		true
+	);
+});
+
 test('a child whose parent is not on the shelf renders as its own root', () => {
 	const items = [
 		{ runId: 'orphan-child', parentRunId: 'scrolled-off-parent', isSubspawn: true, ageMs: 10 },
