@@ -1561,3 +1561,226 @@ def test_no_mood_means_no_surprise_annotation(tmp_path):
     )
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "←" not in ctx and "mood" not in ctx
+
+
+# ── The orientation ledger (#513 Slice 9) ────────────────────────────────
+#
+# Fixture discipline (#611): every negative assertion below lives beside a
+# positive twin on the *same* input shape, so an assertion of absence can
+# never be green against an input that could not have produced the segment.
+
+
+def _orient_files(tmp_path, names=("a.md", "b.md")):
+    files = []
+    for name in names:
+        path = tmp_path / name
+        path.write_text(f"# {name}\n", encoding="utf-8")
+        files.append(path)
+    return files
+
+
+def _boot_score(tmp_path, files):
+    path = tmp_path / "boot-score.json"
+    path.write_text(json.dumps({
+        "orientation_set": [
+            {"path": str(f), "bytes": f.stat().st_size} for f in files
+        ],
+    }), encoding="utf-8")
+    return path
+
+
+def _orient_env(tmp_path):
+    env = _env(tmp_path)
+    env["BRR_BOOT_SCORE"] = str(tmp_path / "boot-score.json")
+    return env
+
+
+def _read_batch(*paths):
+    return json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [
+            {"tool_name": "Read", "tool_input": {"file_path": str(p)},
+             "tool_use_id": f"t{i}", "tool_response": "file contents"}
+            for i, p in enumerate(paths)
+        ],
+    })
+
+
+def _inject_text(out):
+    return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
+
+
+def test_orient_meters_reads_against_the_set_while_the_walk_is_open(tmp_path):
+    a, _b = _orient_files(tmp_path)
+    _boot_score(tmp_path, _orient_files(tmp_path))
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, code = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
+    )
+    assert code == 0
+    assert "orient 1/2" in _inject_text(out).splitlines()[0]
+
+
+def test_orient_segment_leaves_at_completion(tmp_path):
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    env = _orient_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
+    # The positive twin: this exact setup renders the meter while open.
+    assert "orient 1/2" in _inject_text(first)
+    _portal(tmp_path, token="t2", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(b), env)
+    text = _inject_text(second)
+    assert text  # the bar still renders — only the meter has left
+    assert "orient" not in text
+
+
+def test_orient_ignores_reads_outside_the_set(tmp_path):
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    unrelated = tmp_path / "unrelated.md"
+    unrelated.write_text("not in the set\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _read_batch(unrelated), _orient_env(tmp_path)
+    )
+    assert "orient 0/2" in _inject_text(out)
+
+
+def test_orient_skip_on_card_silences_the_meter_but_not_the_ledger(tmp_path):
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    env = _orient_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    open_walk, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    # Positive twin: without the declaration this input renders the meter.
+    assert "orient 0/2" in _inject_text(open_walk)
+
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\nassuming prior knowledge, skipping orientation\n",
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token="t2", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    skipped, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, _read_batch(a), env)
+    assert "orient" not in _inject_text(skipped)
+    # The observation still lands — skip silences the segment, never the
+    # instrument (Slice 4 reads completeness from this state).
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == [str(a.resolve())]
+
+
+def test_orient_skip_needs_a_declaration_not_a_mention(tmp_path):
+    """Prose about skipping and orientation must not silence the meter.
+
+    The first shape of this guard matched any single line carrying both
+    words. That is line-scoped but not *declaration*-scoped, and the resident
+    holds the pen on `.card` — so a line reporting the ledger's own value, or
+    a line about working on this very ticket, turned the ledger off. The
+    second string below is the sharp one: it contains an explicit **negation**
+    and used to declare a skip.
+    """
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\n"
+        "skip the flaky test for now\n"            # words on separate lines
+        "orientation files come next\n"
+        "orient 3/5 rendered; nothing skipped\n"   # same line, and a negation
+        "Reviewed Slice 9: skip is a first-class outcome for orientation\n"
+        "the resident declares the skip for orientation on .card\n",
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient 0/2" in _inject_text(out)
+
+
+def test_orient_skip_accepts_the_terse_declaration(tmp_path):
+    """`orient: skip` heading a line is the terse form, and must still work.
+
+    Narrowing the guard is only correct if the *intended* declarations still
+    land — otherwise the fix trades a false positive for a dead feature.
+    """
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    (tmp_path / hooks.CARD_NAME).write_text(
+        "## Now\n- orient: skip\n", encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient" not in _inject_text(out)
+
+
+def test_orient_is_unassertable_without_an_armed_boot_score(tmp_path):
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])  # on disk, but the daemon never armed it
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    unarmed, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _read_batch(a), _env(tmp_path)
+    )
+    assert "orient" not in _inject_text(unarmed)
+    # Positive twin: the identical input with the env armed does render —
+    # so the absence above is the guard's, not the fixture's.
+    _portal(tmp_path, token="t2", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    armed, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _read_batch(a), _orient_env(tmp_path)
+    )
+    assert "orient 1/2" in _inject_text(armed)
+
+
+def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
+    a, b = _orient_files(tmp_path)
+    _boot_score(tmp_path, [a, b])
+    # A stale ledger entry from a path no longer in the set (say, a prior
+    # run's state file surviving into a re-run) must never inflate the count.
+    (tmp_path / hooks.HOOK_STATE_NAME).write_text(
+        json.dumps({hooks.ORIENTATION_READ_KEY: ["/elsewhere/gone.md"]}),
+        encoding="utf-8",
+    )
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "orient 0/2" in _inject_text(out)
+
+
+def test_orient_bar_position_is_after_quota():
+    rendered = hooks.format_delta(_bar_payload(), mood="stoked", orient=(3, 5))
+    assert rendered.splitlines()[0] == (
+        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
+        "⇡2+3 │ ⚒4 │ mood stoked │ card ok"
+    )
+
+
+def test_orient_never_opens_the_bar_on_its_own():
+    # The same quiet payload test_post_tool_bar_is_quiet_when_nothing_is_laden
+    # pins as None must stay None with an open walk riding along: a meter is
+    # not an obligation, and a segment that could keep the bar alive at every
+    # boundary would train the exact skimming it measures.
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+    )
+    assert hooks.format_delta(payload) is None  # the twin that proves quiet
+    assert hooks.format_delta(payload, orient=(0, 3)) is None

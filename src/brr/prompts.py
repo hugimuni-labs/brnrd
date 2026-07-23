@@ -1659,6 +1659,91 @@ def _build_orientation(
     return steps
 
 
+#: Cap on the orientation set (#513: "3–5 files"). The cap bounds the walk's
+#: cost; the *floor* is deliberately zero — a set the derivation cannot prove
+#: is a set it does not pad ("the set is 3 files, not 5 with two guesses").
+_ORIENTATION_SET_MAX = 5
+
+
+def _kb_hub_matches(slug: str, task_text: str) -> bool:
+    """Deterministic touched-subject test: every token of *slug* in the task.
+
+    A ``subject-<slug>.md`` hub is "touched" iff **all** of the slug's
+    hyphen-separated tokens appear as substrings of the lowercased task text.
+    Deliberately strict — a one-token overlap ("boot" in a task about boots
+    *and* a hub about boot-sequences) is how a guess would sneak in wearing a
+    match's clothes.  Provably wrong-able either way: given the task text and
+    the slug, anyone can recompute the answer.
+    """
+    tokens = [t for t in slug.lower().split("-") if t]
+    if not tokens:
+        return False
+    haystack = task_text.lower()
+    return all(t in haystack for t in tokens)
+
+
+def _build_orientation_set(
+    repo_root: Path, *, task_text: str | None = None
+) -> list[Any]:
+    """The orientation *ledger*'s file set (#513 Slice 9) — never the kernel's
+    ``next:`` list (that is :func:`_build_orientation`; see
+    :class:`brr.bootscore.OrientationFile` for why the two words coexist).
+
+    Deterministic, existence-proven, capped at :data:`_ORIENTATION_SET_MAX`:
+
+    - the repo's ``AGENTS.md``;
+    - the active inter-run plan (``account.active_plan_path``);
+    - every ``subject-*.md`` kb hub whose slug the task text provably touches
+      (:func:`_kb_hub_matches`), from the same home-knowledge dir the recent-
+      activity tail reads (:func:`_home_knowledge_log_path`), in sorted-name
+      order.
+
+    These files a wake ought to read **in addition to** what it was handed —
+    the set never justifies removing a block from injection (#513's guard
+    rail: what must be *known* stays injected; what builds *ownership*
+    becomes the walk).  Anything unresolvable is simply absent: a smaller
+    honest set over a padded one, every time.
+    """
+    from .bootscore import OrientationFile
+
+    candidates: list[Path] = [repo_root / "AGENTS.md"]
+
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        label = account.repo_label(repo_root, cfg)
+        candidates.append(account.active_plan_path(ctx, label))
+    except Exception:  # noqa: BLE001 — orientation must never fail a wake
+        pass
+
+    if task_text and task_text.strip():
+        log_path = _home_knowledge_log_path(repo_root)
+        if log_path is not None:
+            try:
+                hubs = sorted(log_path.parent.glob("subject-*.md"))
+            except OSError:
+                hubs = []
+            for hub in hubs:
+                if _kb_hub_matches(hub.stem[len("subject-"):], task_text):
+                    candidates.append(hub)
+
+    entries: list[Any] = []
+    for path in candidates:
+        if len(entries) >= _ORIENTATION_SET_MAX:
+            break
+        try:
+            resolved = path.resolve()
+            size = resolved.stat().st_size
+        except OSError:
+            continue
+        if not resolved.is_file() or size == 0:
+            # An empty file orients nobody; a meter counting it would be
+            # asking for a Read with no reading.
+            continue
+        entries.append(OrientationFile(path=str(resolved), bytes=size))
+    return entries
+
+
 def probe_shell_hook_capability(shell: str | None) -> bool | None:
     """Can *shell* actually take brr's hook config here?  ``None`` = unknown.
 
@@ -1878,6 +1963,9 @@ def build_boot_score(
             environment=environment,
             pending_count=pending_count,
             has_event_body=has_event_body,
+        ),
+        orientation_set=_build_orientation_set(
+            effective_root, task_text=task_text
         ),
         contracts=all_contracts,
         hooks=hooks_info,
