@@ -157,6 +157,86 @@ export function liveRelicChips(counts: Record<string, number> | null | undefined
 	return chips;
 }
 
+/**
+ * A mood as any surface renders it: a name, and *maybe* a glyph.
+ *
+ * The one house rule, and it comes from the emote library's own docstring: an
+ * unknown or absent mood renders as NOTHING or the bare handle — never a
+ * guessed or default face. So this frontend owns no emote table. The glyph is
+ * whatever the daemon resolved against `brr.emotes` and put on the wire; a
+ * handle the library doesn't know arrives name-only and stays name-only here.
+ * No name at all is not a mood, and the surfaces render nothing.
+ */
+export interface MoodFace {
+	name: string;
+	glyph: string | null;
+	pitch: number | null;
+}
+
+/** Normalize a wire mood triple into a `MoodFace`, or `null` for "no mood". */
+export function moodFace(
+	name: string | null | undefined,
+	glyph?: string | null,
+	pitch?: number | null
+): MoodFace | null {
+	const handle = (name ?? '').trim();
+	if (!handle) return null;
+	return {
+		name: handle,
+		glyph: (glyph ?? '').trim() || null,
+		pitch: typeof pitch === 'number' && Number.isFinite(pitch) ? pitch : null
+	};
+}
+
+/** The mood of the most recently started live run that has one. The wordmark
+ *  wears one face, and a board with several burning runs should show the
+ *  newest thought's — that's the one whose state the reader is watching
+ *  change. Runs with an unparseable `started_at` sort oldest rather than
+ *  winning by accident. */
+export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | null {
+	let best: LiveRun | null = null;
+	let bestAt = -Infinity;
+	for (const run of runs ?? []) {
+		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch)) continue;
+		const started = run.started_at ? Date.parse(run.started_at) : NaN;
+		const at = Number.isNaN(started) ? -Infinity : started;
+		if (best === null || at > bestAt) {
+			best = run;
+			bestAt = at;
+		}
+	}
+	return best ? moodFace(best.mood, best.mood_glyph, best.mood_pitch) : null;
+}
+
+/** What the header wordmark animates: a live run's mood when one is burning,
+ *  else the daemon's resting face, else nothing (pre-upgrade daemon, or a
+ *  resident that never set a mood — the wordmark keeps its built-in wink).
+ *
+ *  A run's mood carries a single resolved glyph rather than a frame list, so
+ *  it plays as a one-frame cycle; only `daemon_mood` has real frames. An
+ *  unknown handle resolves to no glyph at all, which is why this can return a
+ *  pitch with null frames: the tint is still honest telemetry when the face
+ *  isn't. */
+export function wordmarkMood(
+	runs: LiveRun[] | null | undefined,
+	daemonMood: DaemonMood | null | undefined
+): { frames: string[] | null; pitch: number | null } {
+	const live = latestRunMood(runs);
+	if (live) {
+		return { frames: live.glyph ? [live.glyph] : null, pitch: live.pitch };
+	}
+	if (!daemonMood) return { frames: null, pitch: null };
+	// Unlike the chip, the wordmark doesn't need a *name* — it renders the
+	// motion, not the label — so the daemon branch reads frames and pitch
+	// directly. Neither is a guess: both came off the wire already resolved.
+	const frames = (daemonMood.frames ?? []).filter((frame) => frame && frame.trim());
+	const pitch = daemonMood.pitch;
+	return {
+		frames: frames.length > 0 ? frames : null,
+		pitch: typeof pitch === 'number' && Number.isFinite(pitch) ? pitch : null
+	};
+}
+
 export class LiveRunsAuthError extends Error {}
 
 /** Fetches the account-scoped live-runs snapshot. Throws `LiveRunsAuthError`

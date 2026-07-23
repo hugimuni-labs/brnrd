@@ -3,7 +3,7 @@
 	import { glitchReveal } from './transitions';
 	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
 	import { runNodeHref } from './runNode';
-	import { liveRunDisplayName, type LiveRun } from './liveRuns';
+	import { liveRunDisplayName, moodFace, type DaemonMood, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
 	import {
 		LOOM_CENTER_ZONE_PX,
@@ -45,6 +45,13 @@
 		/** The page owns lens state, same as selection: the band reports. */
 		lens?: string;
 		onLensChange?: (lens: string) => void;
+		/**
+		 * The daemon's resting face (#566), for the NOW seam when nothing is
+		 * burning. `null` on a pre-upgrade daemon that publishes no mood — and
+		 * then the idle seam renders exactly what it rendered before this
+		 * existed, hollow dot and all.
+		 */
+		daemonMood?: DaemonMood | null;
 	}
 
 	let {
@@ -57,8 +64,14 @@
 		selectedId = null,
 		reviewCount = 0,
 		lens = LENS_ALL,
-		onLensChange
+		onLensChange,
+		daemonMood = null
 	}: Props = $props();
+
+	// The resting face, normalized once. Null whenever the wire has nothing to
+	// say — no daemon mood, or a mood with no name — and the seam falls back to
+	// its hollow dot rather than inventing a face to fill the space.
+	let restingFace = $derived(daemonMood ? moodFace(daemonMood.name, daemonMood.glyph) : null);
 
 	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
 	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
@@ -457,10 +470,27 @@
 				</div>
 			{:else if liveRuns.length === 0}
 				<div class="absolute inset-0 flex flex-col items-center justify-center gap-1">
-					<span
-						class="h-2.5 w-2.5 rounded-full border border-stone-600 bg-stone-950"
-						aria-hidden="true"
-					></span>
+					<!-- Idle is not empty: the daemon is breathing, and #566 gives that
+					     a face. The resting glyph takes the hollow dot's place rather
+					     than crowding a line beside it — the dot was always the
+					     placeholder for "nothing to show here", and now there is
+					     something. No mood on the wire (pre-upgrade daemon) ⇒ the dot,
+					     exactly as before. -->
+					{#if restingFace}
+						<span class="flex min-w-0 max-w-full items-baseline gap-1 px-1">
+							{#if restingFace.glyph}
+								<span class="shrink-0 font-mono text-[11px] text-amber-200/80" aria-hidden="true"
+									>{restingFace.glyph}</span
+								>
+							{/if}
+							<span class="truncate font-mono text-[8px] text-ink-quiet">{restingFace.name}</span>
+						</span>
+					{:else}
+						<span
+							class="h-2.5 w-2.5 rounded-full border border-stone-600 bg-stone-950"
+							aria-hidden="true"
+						></span>
+					{/if}
 					<span class="font-mono text-[10px] text-stone-400">
 						{new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 					</span>

@@ -8,8 +8,11 @@ import {
 	STATUS_CRITICAL,
 	STATUS_LOW,
 	STATUS_SPENT,
+	PITCH_SCALE,
+	PITCH_STOPS,
 	THERMAL_SCALE,
 	glowFor,
+	pitchAccent,
 	urgencyForLevel
 } from './statusPalette.ts';
 import {
@@ -262,4 +265,45 @@ test('boot waiters run once, in order, and can be cancelled', async () => {
 	whenBooted(() => ran.push('late'));
 	assert.deepEqual(ran, ['a', 'b', 'late']);
 	resetBootForTest();
+});
+
+// ── pitch → hue (#566) ──────────────────────────────────────────────
+//
+// `mood_pitch` ∈ [0,1] is the gut→crown body axis (`brr.emotes`: "the
+// dashboard may map pitch → hue"). Stop-based for the same reason
+// THERMAL_SCALE is — the scale's own comment warns off a naive hue lerp.
+
+test('pitch stops are discrete and deterministic at each stop', () => {
+	// Uniform bands, closed at the top: 0 is the gut end, 1 the crown end, and
+	// the same input always yields the same stop.
+	assert.equal(pitchAccent(0), PITCH_STOPS.gut);
+	assert.equal(pitchAccent(0.1), PITCH_STOPS.gut);
+	assert.equal(pitchAccent(0.2), PITCH_STOPS.belly);
+	assert.equal(pitchAccent(0.5), PITCH_STOPS.chest);
+	assert.equal(pitchAccent(0.7), PITCH_STOPS.throat);
+	assert.equal(pitchAccent(1), PITCH_STOPS.crown);
+	assert.equal(pitchAccent(0.5), pitchAccent(0.5));
+});
+
+test('no pitch means no tint — never a default hue', () => {
+	assert.equal(pitchAccent(null), null);
+	assert.equal(pitchAccent(undefined), null);
+	assert.equal(pitchAccent(Number.NaN), null);
+	assert.equal(pitchAccent(Number.POSITIVE_INFINITY), null);
+});
+
+test('an out-of-contract pitch clamps to the nearest end', () => {
+	assert.equal(pitchAccent(-3), PITCH_STOPS.gut);
+	assert.equal(pitchAccent(42), PITCH_STOPS.crown);
+});
+
+test('every pitch stop clears AA normal text on the canvas', () => {
+	// Same bar the thermal scale holds itself to — a mood tint that can't be
+	// read is a mood that isn't reported.
+	for (const stop of PITCH_SCALE) {
+		assert.ok(
+			contrast(stop.color, '#0c0906') >= 4.5,
+			`${stop.name} (${stop.color}) must clear WCAG AA on the canvas`
+		);
+	}
 });
