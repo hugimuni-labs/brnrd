@@ -377,6 +377,11 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     nothing else reads or writes. Caught live 2026-07-09: a repo's
     ``.brnrd-kb`` still had ``origin`` set to an early decoy account slot
     weeks after ``cloud.json`` started carrying the real one, at 0 commits.
+
+    A surviving checkout is additionally *refreshed* — fetched and
+    best-effort fast-forwarded — before it is returned, so "origin still
+    matches" is never read as "checkout is current" either (#613); see
+    :func:`_refresh_checkout` for the skip posture.
     """
 
     cfg = cfg if cfg is not None else conf.load_config(repo_root)
@@ -399,6 +404,7 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     _exclude_from_project_git(repo_root, f"{CHECKOUT_DIRNAME}/")
     if checkout.exists():
         if _checkout_origin_matches(checkout, home_knowledge):
+            _refresh_checkout(checkout)
             gitops.ensure_run_id_hook(checkout)
             return checkout
         shutil.rmtree(checkout, ignore_errors=True)
@@ -415,6 +421,60 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
         _init_git_repo(checkout)
     gitops.ensure_run_id_hook(checkout)
     return checkout
+
+
+def _refresh_checkout(checkout: Path) -> None:
+    """Fetch ``origin`` and best-effort fast-forward *checkout* to it (#613).
+
+    The knowledge-checkout mirror of ``sync.refresh_before_run``: without
+    it, an existing checkout whose origin still matched was returned
+    untouched forever. No other code path pulls account → checkout —
+    ``capture()`` pushes only when the checkout is *ahead*, and pulls only
+    after a *failed* push, so a behind-and-clean checkout drifts
+    permanently (measured live: 28 commits / 3 days behind, two pages
+    ``brnrd kb`` could not return by any spelling because they had never
+    existed checkout-side).
+
+    Same posture as ``refresh_before_run``: never raise — a kb read must
+    not die because the account repo is mid-write — and skip rather than
+    destroy. The checkout is returned as-is when:
+
+    - the fetch fails or times out (origin unreachable);
+    - tracked files are modified or staged (an in-flight edit outranks
+      freshness; untracked files deliberately don't count — stray files
+      are a checkout's normal state, and treating them as dirty would
+      quietly re-create the never-refreshes bug for any checkout holding
+      one — git itself refuses a merge that would clobber them);
+    - HEAD is detached or ``origin/<branch>`` doesn't exist;
+    - histories diverged (``--ff-only`` refuses; reconciliation belongs
+      to the capture path's pull-rebase, never to a read path).
+    """
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "--quiet", "origin"],
+            cwd=checkout, capture_output=True, text=True, check=False,
+            timeout=60,
+        )
+        if fetch.returncode != 0:
+            return
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=checkout, capture_output=True, text=True, check=False,
+        )
+        if status.returncode != 0 or status.stdout.strip():
+            return
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=checkout, capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if not branch or branch == "HEAD":
+            return
+        subprocess.run(
+            ["git", "merge", "--ff-only", f"origin/{branch}"],
+            cwd=checkout, capture_output=True, text=True, check=False,
+        )
+    except Exception:  # pragma: no cover - defensive, mirrors sync.py
+        return
 
 
 def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
