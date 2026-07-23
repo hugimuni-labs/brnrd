@@ -1,11 +1,15 @@
 """Tests for the prompt-assembly module."""
 
+import difflib
+
 from brr import dominion
 from brr.prompts import (
+    SCHEDULE_TURN_DEDUP_RATIO,
     _build_context_block,
     _build_identity_core_block,
     _build_runner_policy_block,
     _build_work_surface_block,
+    _format_recent_conversation,
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
@@ -1234,6 +1238,196 @@ def _read_bundled_agents_md() -> str:
     import brr
 
     return (Path(brr.__file__).parent / "AGENTS.md").read_text(encoding="utf-8")
+
+
+class TestScheduleTurnDedup:
+    """Issue #576: a recurring `schedule.md` entry re-enters the conversation
+    store as a `source: schedule` turn every time it fires, so an unbounded
+    number of near-identical copies of the same entry accrete into "Recent
+    turns" — and the current firing is *also* rendered separately as
+    "### Original event body". Near-duplicate `schedule` turns collapse to
+    a one-line stub; genuinely different content (schedule or otherwise)
+    is left alone.
+    """
+
+    # Single-line by design: a real entry is markdown with linebreaks, but
+    # `_format_turn` re-indents multi-line bodies, which would break the
+    # exact-substring assertions below without adding coverage of the
+    # ratio-based collapse itself. No leading/trailing whitespace: bodies
+    # are rendered via `.strip()`'d copies (`_conversation_body`), so a
+    # fixture with edge whitespace would never literally appear in the
+    # rendered prompt.
+    _ONE_FIRING = (
+        "director-tick 5h cadence. Dispatch authority granted: spawn "
+        "workers for bounded plan items without waiting for a reply. "
+        "Merge authority history withdrawn 2026-07-05, see decision "
+        "ledger for the incident. Notify bar widened 2026-06-20 to cover "
+        "schedule-sourced turns. Cadence history 30m to 2h on 2026-05-01 "
+        "then 5h on 2026-06-10 after quota pressure."
+    )
+    _ENTRY_BODY = " ".join([_ONE_FIRING] * 3)
+
+    def _prompt(self, tmp_path, *, recent, event_body):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+        return build_daemon_prompt(
+            event_body,
+            "evt-1",
+            "/tmp/resp.md",
+            tmp_path,
+            run_id="task-1",
+            recent_conversation=recent,
+            event_body=event_body,
+        )
+
+    def test_identical_schedule_body_collapses_against_event_body(self, tmp_path):
+        recent = [{
+            "ts": "2026-07-20T04:44:00Z",
+            "kind": "event",
+            "source": "schedule",
+            "schedule_id": "director-tick",
+            "body": self._ENTRY_BODY,
+        }]
+        prompt = self._prompt(tmp_path, recent=recent, event_body=self._ENTRY_BODY)
+
+        # Only the "### Original event body" copy remains in full.
+        assert prompt.count(self._ENTRY_BODY) == 1
+        assert (
+            "identical to this run's event body — not repeated" in prompt
+        )
+        # The firing itself must still be nameable: timestamp survives.
+        assert "2026-07-20T04:44:00Z" in prompt
+
+    def test_genuinely_different_schedule_turn_is_not_collapsed(self, tmp_path):
+        other_entry = "wholly unrelated kb-gc entry: prune stale worktrees nightly."
+        recent = [{
+            "ts": "2026-07-20T04:44:00Z",
+            "kind": "event",
+            "source": "schedule",
+            "schedule_id": "kb-gc",
+            "body": other_entry,
+        }]
+        prompt = self._prompt(tmp_path, recent=recent, event_body=self._ENTRY_BODY)
+
+        assert other_entry in prompt
+        assert "not repeated" not in prompt
+
+    def test_near_miss_under_threshold_is_not_collapsed(self, tmp_path):
+        # Flip enough characters to land just under the dedup ratio; assert
+        # the fixture actually lands there rather than assuming it does, so
+        # a future ratio-formula change can't silently invalidate the test.
+        chars = list(self._ENTRY_BODY)
+        step = max(1, len(chars) // 40)
+        for i in range(0, len(chars), step):
+            chars[i] = "#"
+        near_miss = "".join(chars)
+        ratio = difflib.SequenceMatcher(None, near_miss, self._ENTRY_BODY).ratio()
+        assert ratio < SCHEDULE_TURN_DEDUP_RATIO, (
+            f"fixture ratio {ratio} is not below the threshold; adjust the "
+            "flip density"
+        )
+
+        recent = [{
+            "ts": "2026-07-20T04:44:00Z",
+            "kind": "event",
+            "source": "schedule",
+            "schedule_id": "director-tick",
+            "body": near_miss,
+        }]
+        prompt = self._prompt(tmp_path, recent=recent, event_body=self._ENTRY_BODY)
+
+        assert near_miss in prompt
+        assert "not repeated" not in prompt
+
+    def test_non_schedule_source_is_never_collapsed(self, tmp_path):
+        # A user repeating themselves is signal, not scheduler noise — must
+        # never collapse even when byte-identical to the event body.
+        recent = [{
+            "ts": "2026-07-20T04:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "body": self._ENTRY_BODY,
+        }]
+        prompt = self._prompt(tmp_path, recent=recent, event_body=self._ENTRY_BODY)
+
+        assert prompt.count(self._ENTRY_BODY) == 2
+        assert "not repeated" not in prompt
+
+    def test_repeated_schedule_firings_collapse_against_each_other(self, tmp_path):
+        # Two prior firings, near-identical to each other but not to the
+        # current (unrelated) event body: the first renders in full, the
+        # second collapses against it.
+        firing_1 = self._ENTRY_BODY
+        firing_2 = self._ENTRY_BODY + " Minor accreted note from this firing."
+        current_body = "a wholly different current event, e.g. a telegram ping"
+        recent = [
+            {
+                "ts": "2026-07-15T04:44:00Z",
+                "kind": "event",
+                "source": "schedule",
+                "schedule_id": "director-tick",
+                "body": firing_1,
+            },
+            {
+                "ts": "2026-07-20T04:44:00Z",
+                "kind": "event",
+                "source": "schedule",
+                "schedule_id": "director-tick",
+                "body": firing_2,
+            },
+        ]
+        prompt = self._prompt(tmp_path, recent=recent, event_body=current_body)
+
+        assert firing_1 in prompt
+        assert firing_2 not in prompt
+        assert (
+            "identical to the 2026-07-15T04:44:00Z firing above — not "
+            "repeated" in prompt
+        )
+
+    def test_realistic_fixture_shrinks_and_names_all_firings(self, tmp_path):
+        """Reproduce the #576 shape: two prior firings of one entry plus the
+        same body as the current event. The rendered bundle should shrink
+        substantially relative to a naive three-copy render, while every
+        firing's timestamp is still present.
+        """
+        current_body = self._ENTRY_BODY
+        recent = [
+            {
+                "ts": "2026-07-15T04:44:00Z",
+                "kind": "event",
+                "source": "schedule",
+                "schedule_id": "director-tick",
+                "body": self._ENTRY_BODY,
+            },
+            {
+                "ts": "2026-07-20T04:44:00Z",
+                "kind": "event",
+                "source": "schedule",
+                "schedule_id": "director-tick",
+                "body": self._ENTRY_BODY,
+            },
+        ]
+
+        # Baseline: the same two bodies, but sourced from something other
+        # than `schedule` so nothing collapses — this reproduces the
+        # pre-#576-fix "verbatim every time" rendering for a size
+        # comparison, without needing to disable the fix under test.
+        naive_recent = [dict(r, source="telegram") for r in recent]
+        naive_block = _format_recent_conversation(naive_recent, event_body=current_body)
+        collapsed_block = _format_recent_conversation(recent, event_body=current_body)
+
+        assert len(collapsed_block) < len(naive_block) * 0.1
+        for ts in ("2026-07-15T04:44:00Z", "2026-07-20T04:44:00Z"):
+            assert ts in collapsed_block
+
+        full_prompt = self._prompt(tmp_path, recent=recent, event_body=current_body)
+        assert "Original event body" in full_prompt
+        # All three firings named: two collapsed recent turns (by
+        # timestamp) plus the current firing rendered once, in full, as
+        # the event body.
+        assert full_prompt.count(self._ENTRY_BODY) == 1
 
 
 class TestRevisitSignalGuardrails:
