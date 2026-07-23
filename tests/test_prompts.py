@@ -5,12 +5,17 @@ import difflib
 from brr import dominion
 from brr.prompts import (
     SCHEDULE_TURN_DEDUP_RATIO,
+    TrimResult,
     _build_context_block,
     _build_identity_core_block,
+    _build_injected_blocks_with_contracts,
     _build_runner_policy_block,
     _build_work_surface_block,
+    _build_work_surface_block_scored,
     _format_recent_conversation,
     _read_recent_log,
+    _tail_trim_entries,
+    _worst_trim,
     build_daemon_prompt,
     build_run_prompt,
     diffense_emit_enabled,
@@ -26,7 +31,7 @@ def _seed_pitfalls(repo_root, text: str) -> None:
 
 class TestContextInjection:
     def test_read_recent_log_missing(self, tmp_path):
-        assert _read_recent_log(tmp_path) == ""
+        assert _read_recent_log(tmp_path).text == ""
 
     def test_read_recent_log_falls_back_to_home_knowledge(self, tmp_path):
         """A repo that migrated kb/ out per design-home-scopes-and-knowledge.md
@@ -47,7 +52,7 @@ class TestContextInjection:
             encoding="utf-8",
         )
 
-        result = _read_recent_log(repo)
+        result = _read_recent_log(repo).text
 
         assert "## [2026-07-09]" in result
         assert "Out of the tree" in result
@@ -71,7 +76,7 @@ class TestContextInjection:
             encoding="utf-8",
         )
 
-        result = _read_recent_log(repo)
+        result = _read_recent_log(repo).text
 
         assert "repo copy" in result
         assert "home only" not in result
@@ -84,7 +89,7 @@ class TestContextInjection:
             "## [2026-04-07] implement | Setup\n\nDid setup.\n\n"
             "## [2026-04-08] plan | Design\n\nDesigned stuff.\n"
         )
-        result = _read_recent_log(tmp_path)
+        result = _read_recent_log(tmp_path).text
         assert "## [2026-04-07]" in result
         assert "## [2026-04-08]" in result
 
@@ -96,7 +101,7 @@ class TestContextInjection:
             for i in range(1, 16)
         )
         (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
-        result = _read_recent_log(tmp_path, max_entries=3)
+        result = _read_recent_log(tmp_path, max_entries=3).text
         assert "Entry 13" in result
         assert "Entry 14" in result
         assert "Entry 15" in result
@@ -119,7 +124,7 @@ class TestContextInjection:
         )
         (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
         # ~700 bytes per entry → ~1500-byte budget admits exactly 2.
-        result = _read_recent_log(tmp_path, max_entries=10, max_bytes=1500)
+        result = _read_recent_log(tmp_path, max_entries=10, max_bytes=1500).text
         assert "Entry 5" in result
         assert "Entry 4" in result
         assert "Entry 3" not in result
@@ -139,7 +144,7 @@ class TestContextInjection:
         (kb / "log.md").write_text(
             "# Log\n\n## [2026-05-01] implement | Big\n\n" + huge + "\n"
         )
-        result = _read_recent_log(tmp_path, max_bytes=512)
+        result = _read_recent_log(tmp_path, max_bytes=512).text
         assert "Big" in result
         assert huge in result
 
@@ -155,6 +160,173 @@ class TestContextInjection:
         block = _build_context_block(tmp_path)
         assert "Recent Activity" in block
         assert "## [2026-04-08]" in block
+
+
+# ── P1 — per-block content attestation ──────────────────────────────────
+#
+# review-boot-prompts-2026-07.md §P1: `_tail_trim_entries` already knows
+# which dated entry it kept as "newest" and which it dropped; it used to
+# throw both facts away. These pin the TrimResult it now returns and the
+# in-text provenance stamp (§P1 move 4b) built from it.
+#
+# Date-extraction rule (obeyed exactly, per spec): the first `YYYY-MM-DD`
+# in a heading line, day granularity only — no time-of-day is parsed even
+# when a heading's run-id embeds one. The fixtures below therefore express
+# the ledger-inversion class as a *cross-day* drift (an older-dated entry
+# sitting below a newer-dated one), not the literal same-day 11:31-vs-13:42
+# incident, which day-only granularity cannot distinguish. See the run
+# report for why this is flagged as a spec gap rather than silently
+# "fixed" by parsing time-of-day too.
+
+
+def _ledger_entry(date: str, run_id: str, bulk: int) -> str:
+    """One ``## `` decision-ledger-style entry, padded to a controllable size."""
+    return f"## Decision ({date}, {run_id})\n\n" + ("x" * bulk)
+
+
+class TestBlockAttestation:
+    def test_fits_whole_is_untouched_no_attestation(self):
+        """A block that fits whole is untouched — byte-identical, no claim.
+
+        Pinned hard per the spec: this is the regression that would bite
+        every wake, since almost every injected block never needs trimming.
+        """
+        content = "# Page\n\n## [2026-07-01] note | small\n\nfits fine.\n"
+        result = _tail_trim_entries(content, max_bytes=10_000, source_hint="`x`")
+        assert result.text == content
+        assert result.newest_item is None
+        assert result.oldest_item is None
+        assert result.dropped is None
+        assert result.source_newest is None
+        assert result.stale is False
+
+    def test_drifted_order_is_stale(self):
+        """The real 2026-07-23 ledger-inversion bug, reproduced at day granularity.
+
+        File order top-to-bottom: an entry dated 07-21, one dated 07-23 (the
+        true newest), one dated 07-22 sitting *last* — exactly the ordering
+        the real incident had (a numerically-earlier entry positioned below
+        a later one). The budget admits only the bottom entry, so the trim
+        keeps 07-22 as "newest" while the source's true newest (07-23) sat
+        one heading above the cut.
+        """
+        e1 = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 200)
+        e2 = _ledger_entry("2026-07-23", "run-260723-1342-isd1", 200)
+        e3 = _ledger_entry("2026-07-22", "run-260723-1131-r0h4", 200)
+        content = "\n\n".join([e1, e2, e3]) + "\n"
+        budget = len(e3.encode("utf-8")) + 10  # admits only the bottom entry
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
+
+        assert result.newest_item == "2026-07-22"
+        assert result.source_newest == "2026-07-23"
+        assert result.dropped == 2
+        assert result.stale is True
+        assert "NOT current" in result.text
+        assert "2026-07-23" in result.text  # the drifted-in source date is named
+
+    def test_in_order_is_not_stale(self):
+        """Ascending file order (the healthy, intended shape) never flags stale.
+
+        Budget admits the bottom two entries; the newest kept (07-23) really
+        is the source's newest, so the range stamp renders clean.
+        """
+        e1 = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 200)
+        e2 = _ledger_entry("2026-07-22", "run-260722-1000-bbbb", 200)
+        e3 = _ledger_entry("2026-07-23", "run-260723-1100-cccc", 200)
+        content = "\n\n".join([e1, e2, e3]) + "\n"
+        budget = len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + 10
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
+
+        assert result.newest_item == "2026-07-23"
+        assert result.oldest_item == "2026-07-22"
+        assert result.source_newest == "2026-07-23"
+        assert result.dropped == 1
+        assert result.stale is False
+        assert "the newest entry in the source" in result.text
+        assert "NOT current" not in result.text
+
+    def test_undated_headings_not_attestable_no_crash(self):
+        """A heading with no parseable date makes the whole trim not-attestable.
+
+        Never guessed, never inferred from position (the playbook invariant
+        this feature exists to satisfy). ``dropped`` alone survives — a
+        count needs no date — but no date claim renders, and nothing raises.
+        """
+        e1 = "## Some title\n\n" + ("x" * 200)
+        e2 = "## Another title\n\n" + ("y" * 200)
+        content = e1 + "\n\n" + e2 + "\n"
+        budget = len(e2.encode("utf-8")) + 10
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+
+        assert result.newest_item is None
+        assert result.oldest_item is None
+        assert result.source_newest is None
+        assert result.stale is False
+        assert result.dropped == 1
+        assert "showing" not in result.text
+        assert "cut to fit the wake budget" in result.text
+
+    def test_no_headings_flat_cut_has_no_entry_attestation(self):
+        """The flat byte-cut fallback (no ``## `` at all) carries no entry facts.
+
+        A count of entries removed presupposes entries; a page with none
+        falls back to the pre-existing flat tail cut, untouched by P1.
+        """
+        content = "just prose, no headings, " * 200
+        result = _tail_trim_entries(content, max_bytes=100, source_hint="`x`")
+        assert result.dropped is None
+        assert result.newest_item is None
+        assert result.stale is False
+
+    def test_read_recent_log_reports_dropped_without_going_stale(self, tmp_path):
+        """``_read_recent_log`` computes the same facts, but by construction
+        never flags stale: it always walks newest-first off file *and*
+        picks the true tail, so a healthy ascending log never drifts. (The
+        residual risk this class guards is `_tail_trim_entries`'s pages —
+        see ``review-boot-prompts-2026-07.md`` §P1.)
+        """
+        kb = tmp_path / "kb"
+        kb.mkdir()
+        entries = "\n\n".join(
+            f"## [2026-04-{i:02d}] implement | Entry {i}\n\nDid thing {i}."
+            for i in range(1, 6)
+        )
+        (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
+        result = _read_recent_log(tmp_path, max_entries=2)
+        assert result.dropped == 3
+        assert result.newest_item == "2026-04-05"
+        assert result.source_newest == "2026-04-05"
+        assert result.stale is False
+
+    def test_worst_trim_prefers_stale_over_a_bigger_healthy_drop(self):
+        """A stale page outranks a healthy one even when the healthy page
+        dropped *more* entries — the alarm exists to catch staleness, and a
+        "most dropped" tiebreak alone would silently prefer the wrong page.
+        """
+        healthy = TrimResult(
+            text="h", newest_item="2026-07-23", oldest_item="2026-07-20",
+            dropped=9, source_newest="2026-07-23",
+        )
+        stale = TrimResult(
+            text="s", newest_item="2026-07-22", oldest_item="2026-07-22",
+            dropped=1, source_newest="2026-07-23",
+        )
+        assert _worst_trim([healthy, stale]) is stale
+        assert _worst_trim([stale, healthy]) is stale  # order-independent
+
+    def test_worst_trim_falls_back_to_most_dropped_when_nothing_is_stale(self):
+        small = TrimResult(text="a", dropped=1)
+        big = TrimResult(text="b", dropped=5)
+        assert _worst_trim([small, big]) is big
+
+    def test_worst_trim_empty_when_nothing_was_trimmed(self):
+        untouched = TrimResult(text="whole")
+        result = _worst_trim([untouched])
+        assert result.text == ""
+        assert result.dropped is None
 
 
 class TestPromptBuilding:
@@ -1653,6 +1825,71 @@ class TestWorkSurfaceInjection:
 
         assert "Work surface" in prompt
         assert "One orientation root" in prompt
+
+    def test_scored_variant_attests_the_stale_page_among_several(self, tmp_path):
+        """``work-surface`` aggregates many independently-trimmed pages into
+        one ``ContractEntry`` (P1 move 1). When several pages are cut, the
+        block attests to the **stale** one — the whole point of the alarm —
+        not an arbitrary healthy one that happened to iterate later.
+
+        Each page's own content exceeds ``_MAX_ACCRETING_BLOCK_BYTES``
+        (8192), which caps *that page's* trim allowance regardless of the
+        total surface budget — the default total budget (48000) is left in
+        place so neither page's trimmed block gets skipped for exceeding
+        what's left of the *shared* remainder (the failure mode this test
+        first hit: too tight a shared budget silently drops the stale page
+        instead of attesting to it).
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "index.md").write_text("# Start here", encoding="utf-8")
+
+        # A healthy, in-order, trimmed page.
+        healthy = "\n\n".join([
+            _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 6000),
+            _ledger_entry("2026-07-22", "run-260722-1000-bbbb", 6000),
+        ])
+        (surface / "plan.md").write_text(healthy, encoding="utf-8")
+
+        # A drifted, stale, trimmed page (the ledger-inversion class).
+        drifted = "\n\n".join([
+            _ledger_entry("2026-07-23", "run-260723-1342-isd1", 6000),
+            _ledger_entry("2026-07-22", "run-260723-1131-r0h4", 6000),
+        ])
+        ledger_dir = surface / "ledger"
+        ledger_dir.mkdir()
+        (ledger_dir / "decisions.md").write_text(drifted, encoding="utf-8")
+
+        result = _build_work_surface_block_scored(tmp_path)
+
+        assert result.stale is True
+        assert result.newest_item == "2026-07-22"
+        assert result.source_newest == "2026-07-23"
+
+    def test_stale_page_flows_through_to_the_contract_entry(self, tmp_path):
+        """End-to-end: a stale surface page's attestation reaches the
+        ``ContractEntry`` the kernel alarm (P1 move 4a) reads.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        ledger_dir = surface / "ledger"
+        ledger_dir.mkdir(parents=True)
+        drifted = "\n\n".join([
+            _ledger_entry("2026-07-23", "run-260723-1342-isd1", 6000),
+            _ledger_entry("2026-07-22", "run-260723-1131-r0h4", 6000),
+        ])
+        (ledger_dir / "decisions.md").write_text(drifted, encoding="utf-8")
+
+        _, contracts = _build_injected_blocks_with_contracts(tmp_path)
+        by_key = {c.block_key: c for c in contracts}
+
+        assert by_key["work-surface"].stale is True
+        assert by_key["work-surface"].newest_item == "2026-07-22"
+        assert by_key["work-surface"].source_newest == "2026-07-23"
+        # Every other, non-chronological block stays untouched — defaults.
+        assert by_key["identity-core"].stale is False
+        assert by_key["identity-core"].newest_item is None
 
 
 # ── CS6 — runner policy injection ─────────────────────────────────────
