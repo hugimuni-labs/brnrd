@@ -93,6 +93,8 @@
 		/** 0 = its own root row; 1 = nested under the parent that spawned it
 		 *  (`nestShelfChildren`, #539). Only ever one hop deep. */
 		depth: 0 | 1;
+		/** Last child of its brood — where the tree rail's vertical stops. */
+		lastChild: boolean;
 	}
 
 	function isKb(relic: RelicRecord): boolean {
@@ -178,7 +180,8 @@
 					? `${produce} · ${durationLabel(group.wallSeconds)}`
 					: durationLabel(group.wallSeconds),
 				bare: !produce,
-				depth: group.depth
+				depth: group.depth,
+				lastChild: group.lastChild
 			};
 		});
 	}
@@ -281,13 +284,24 @@
 		'flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5';
 
 	function shelfRowStyle(run: ShelfRun): string {
-		// A nested child recedes from the NOW-seam edge its parent's bar
-		// touches (#539) — the shelf reads right-to-left, anchored at that
-		// edge, so "indented" here means held back from it rather than
-		// pushed in from the far side, which a plain margin-left would do
-		// nothing visible to (the row is already `justify-end`).
-		const indent = run.depth > 0 ? ' margin-right: 10px;' : '';
-		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}${indent}`;
+		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`;
+	}
+
+	// A nested child recedes from the NOW-seam edge its parent's bar touches
+	// (#539) — the shelf reads right-to-left, anchored at that edge, so
+	// "indented" here means held back from it rather than pushed in from the
+	// far side, which a plain margin-left would do nothing visible to (the
+	// row is already `justify-end`).
+	//
+	// The indent alone left the brood ambiguous once the spawn pool grew
+	// past two: four offset rows say "these are children", never "children
+	// *of which*". So the offset now carries a tree rail down the seam edge
+	// — mirrored, because the tree hangs off the right. The `└` terminator
+	// is the whole reason `nestShelfChildren` reports `lastChild`.
+	function shelfRowClass(run: ShelfRun): string {
+		if (run.depth === 0) return SHELF_ROW_CLASS;
+		const last = run.lastChild ? ' shelf-child-last' : '';
+		return `${SHELF_ROW_CLASS} shelf-child${last}`;
 	}
 
 	/** Shared prefix for a shelf row's title/tooltip — the one place both the
@@ -304,7 +318,7 @@
 		class="truncate font-mono text-[9px] leading-none whitespace-nowrap"
 		class:opacity-50={run.bare}
 	>
-		{#if run.depth > 0}<span class="text-ink-mute" aria-hidden="true">↳ </span>{/if}{run.legend}
+		{run.legend}
 	</span>
 	<span
 		class="h-[7px] shrink-0 rounded-l-[1px]"
@@ -408,7 +422,7 @@
 				{#if run.href}
 					<a
 						href={run.href}
-						class={SHELF_ROW_CLASS}
+						class={shelfRowClass(run)}
 						style={shelfRowStyle(run)}
 						title={`${shelfRowTitle(run)} — click to open below, ctrl/⌘-click for the full node`}
 						onclick={(event) => selectFromCell(event, run.id)}
@@ -419,7 +433,7 @@
 				{:else}
 					<button
 						type="button"
-						class={SHELF_ROW_CLASS}
+						class={shelfRowClass(run)}
 						style={shelfRowStyle(run)}
 						title={shelfRowTitle(run)}
 						onclick={() => select('run', run.id)}
@@ -550,5 +564,42 @@
 	.loom-shelf {
 		scrollbar-width: thin;
 		scrollbar-color: var(--color-stone-800, #292524) transparent;
+	}
+
+	/* The dispatch rail. A spawned child's row is held back from the NOW
+	   seam (see `shelfRowClass`); the rail fills that gap with the tree
+	   the offset only implied — mirrored, since the shelf hangs off the
+	   right edge, so it reads `─┤` down to `─┘` rather than the familiar
+	   `├─ └─`. Drawn in CSS rather than box-drawing glyphs on purpose:
+	   rows are 11–22px with a 1px gap, and a 9px glyph cannot join across
+	   that seam without hairline breaks at every row. The vertical starts
+	   1px high to bridge the flex gap into the parent's row above. */
+	.shelf-child {
+		position: relative;
+		margin-right: 10px;
+	}
+	.shelf-child::before,
+	.shelf-child::after {
+		content: '';
+		position: absolute;
+		background-color: var(--color-stone-600, #57534e);
+	}
+	/* the vertical: parent's row edge → this child (→ the next, and on) */
+	.shelf-child::before {
+		top: -1px;
+		bottom: 0;
+		right: -6px;
+		width: 1px;
+	}
+	/* the last child terminates it: the line stops at the elbow */
+	.shelf-child-last::before {
+		bottom: 50%;
+	}
+	/* the elbow's arm, reaching left from the rail to this row's bar */
+	.shelf-child::after {
+		top: 50%;
+		right: -6px;
+		width: 6px;
+		height: 1px;
 	}
 </style>
