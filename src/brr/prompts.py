@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -100,8 +101,225 @@ _MAX_ACCRETING_BLOCK_BYTES = 8192
 _H2_RE = re.compile(r"(?m)^## ")
 _H2_SPLIT_RE = re.compile(r"(?m)(?=^## )")
 
+# The date-extraction rule for a `## ` heading: the *first* `YYYY-MM-DD` in
+# the heading line, nowhere else. Covers both live conventions without
+# needing to know which one a given page uses — `## [2026-07-23] shipped |
+# …` (kb/log.md) and `## Some title (2026-07-23, run-260723-1900-ek9s)` (the
+# decision ledger). A heading with no match is undated; per
+# `review-boot-prompts-2026-07.md` §P1, an undated heading is never guessed
+# at or inferred from file position — it makes the whole trim it belongs to
+# not-attestable (see `_entries_attestation`).
+_HEADING_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
-def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> str:
+
+# A run-id (`run-YYMMDD-HHMM-xxxx`) embedded in a heading carries a *time*,
+# and the incident this whole feature is named after is same-day: an 11:31
+# entry sitting below a 13:42 one, both dated 2026-07-23. Day granularity
+# alone cannot see it — see `_entry_key`.
+_HEADING_RUNID_RE = re.compile(r"run-(\d{2})(\d{2})(\d{2})-(\d{4})")
+
+
+def _heading_date(entry: str) -> str | None:
+    """First ``YYYY-MM-DD`` in a ``## `` entry's heading line, or ``None``.
+
+    Only the heading line (up to the first newline) is searched — a date
+    mentioned in an entry's *body* is not the entry's date.
+    """
+    heading = entry.split("\n", 1)[0]
+    match = _HEADING_DATE_RE.search(heading)
+    return match.group(1) if match else None
+
+
+def _heading_time(entry: str, date: str) -> str | None:
+    """``HHMM`` from a run-id in the heading, but only if it *corroborates*.
+
+    A run-id embeds both a date and a time. The time is trusted only when
+    the run-id's own date matches the heading's date — measured on this
+    account's live ledger, 14 of 160 entries disagree (an entry written
+    after midnight about the previous day's run), and a heading date paired
+    with some other day's clock time is not a timestamp, it is two facts
+    glued together. Returns ``None`` on any disagreement or absence, which
+    downgrades the comparison to day granularity rather than guessing.
+    """
+    match = _HEADING_RUNID_RE.search(entry.split("\n", 1)[0])
+    if not match:
+        return None
+    yy, mm, dd, hhmm = match.groups()
+    return hhmm if f"20{yy}-{mm}-{dd}" == date else None
+
+
+def _entry_key(entry: str) -> tuple[str, str | None] | None:
+    """``(date, time_or_None)`` for a ``## `` entry, or ``None`` if undated."""
+    date = _heading_date(entry)
+    if date is None:
+        return None
+    return date, _heading_time(entry, date)
+
+
+def _entries_attestation(
+    all_entries: list[str], picked_entries: list[str]
+) -> tuple[str | None, str | None, str | None, bool, bool]:
+    """``(newest, oldest, source_newest, stale, precise)`` for a trim.
+
+    *all_entries* is every entry the source held (picked and dropped);
+    *picked_entries* is the subset that survived the trim. Returns
+    ``(None, None, None, False, False)`` — **not attestable** — the moment any
+    entry in *all_entries* carries a heading with no parseable date: the
+    playbook invariant this whole feature exists to satisfy is "a guard may
+    only assert something the run can be proven wrong about," and a date
+    skipped because it couldn't be read is a date that could just as well have
+    been the true newest.
+
+    **The staleness formula lives here and nowhere else**, and it is two-tier
+    on purpose:
+
+    - Dates differ ⇒ compare days. Sound at any precision.
+    - Dates tie ⇒ compare times, but **only when every entry in scope carries
+      a corroborated one** (*precise*). This is the tier that catches the
+      incident the feature is named after — an 11:31 entry sitting below a
+      13:42 one, both dated 2026-07-23, which day granularity reports as
+      healthy.
+    - Dates tie and precision is unavailable ⇒ **not stale, and not certain**.
+      The caller must not claim the tail is current; see ``_trim_marker``.
+      This is the branch that matters most: the honest output there is a
+      narrower claim, never a confident one.
+    """
+    all_keys = [_entry_key(e) for e in all_entries]
+    if any(k is None for k in all_keys):
+        return None, None, None, False, False
+    picked_keys = [_entry_key(e) for e in picked_entries]
+
+    # Precise only if *every* entry in scope carries a corroborated time; one
+    # bare heading makes same-day ordering unknowable for the whole set.
+    precise = all(k[1] is not None for k in all_keys)
+
+    # Normalize the missing time to "" before ordering: a set mixing timed and
+    # untimed headings would otherwise compare str against None and raise.
+    # Safe because staleness only consults the time component when *every*
+    # entry has one (`precise`), so "" is never the deciding term.
+    def _ord(key: tuple[str, str | None]) -> tuple[str, str]:
+        return key[0], key[1] or ""
+
+    newest_key = max(picked_keys, key=_ord)
+    oldest_key = min(picked_keys, key=_ord)
+    source_key = max(all_keys, key=_ord)
+
+    if source_key[0] > newest_key[0]:
+        stale = True
+    elif precise:
+        stale = source_key > newest_key
+    else:
+        stale = False
+
+    def shown(key: tuple[str, str | None]) -> str:
+        """Render a key for human eyes, at the precision actually established.
+
+        When the comparison was precise, the time *must* appear: a same-day
+        alarm that renders as "newest 2026-07-23 — source has 2026-07-23" is
+        correct and unreadable, and an alarm nobody can parse is not much
+        better than the silence it replaced.
+        """
+        if precise and key[1]:
+            return f"{key[0]} {key[1][:2]}:{key[1][2:]}"
+        return key[0]
+
+    return shown(newest_key), shown(oldest_key), shown(source_key), stale, precise
+
+
+@dataclass(frozen=True)
+class TrimResult:
+    """What a chronological-tail trim rendered, and what it can attest to.
+
+    ``text`` is the rendered page — the whole return value of every caller
+    before this class existed. The four attestation fields are the facts
+    ``_tail_trim_entries`` and ``_read_recent_log`` already computed while
+    deciding what to cut, and used to throw away
+    (``review-boot-prompts-2026-07.md`` §P1): which dated entry survived as
+    "newest," how many entries the budget cut, and what the *source's* true
+    newest entry is — the gap between the last two is the ledger-tail
+    inversion bug this class exists to make attestable.
+
+    All four default to ``None`` — **no trim happened** (content already fit
+    the budget, or entry selection needed no cut). ``dropped`` alone can be
+    non-``None`` while the date fields stay ``None``: a count of entries cut
+    needs no parseable heading, but a date claim does, and a heading with no
+    parseable date makes the whole result **not attestable** (see
+    :func:`_entries_attestation`) — never guessed, never inferred from
+    position.
+    """
+
+    text: str
+    newest_item: str | None = None
+    oldest_item: str | None = None
+    dropped: int | None = None
+    source_newest: str | None = None
+    stale: bool = False
+    """``True`` iff the source held an entry newer than what survived the trim.
+
+    A **stored** fact, not a re-derivation: the comparison happens once, in
+    :func:`_entries_attestation`, which is the only place that still holds the
+    times. The displayed ``newest_item`` / ``source_newest`` are dates, and two
+    same-day entries compare equal as dates while being ordered in fact — so a
+    consumer re-deriving ``source_newest > newest_item`` from those two strings
+    would silently lose the same-day case that is the whole reason this feature
+    exists. Every consumer (``ContractEntry.stale``, ``bootscore.attest_blocks``,
+    ``_trim_marker``) reads this flag.
+    """
+
+    precise: bool = False
+    """Whether same-day ordering was actually checkable for this trim.
+
+    ``True`` only when every entry in scope carried a *corroborated* run-id
+    time. When ``False`` and the tail's newest shares a date with the source's
+    newest, this result can say "not known to be stale" but **must not** say
+    the tail is current — a distinction :func:`_trim_marker` renders and
+    ``attest_blocks`` respects by staying silent rather than reassuring.
+    """
+
+
+def _trim_marker(
+    omitted: int, oldest_item: str | None, newest_item: str | None,
+    source_newest: str | None, source_hint: str,
+    *, stale: bool = False, precise: bool = False,
+) -> str:
+    """The truncation notice embedded in a trimmed page's own rendered text.
+
+    Pre-2026-07-23 this said only *how many* entries were cut — never *when*
+    what remains is from, so a reader had no way to tell a current tail from
+    a stale one (the maintainer's own refinement to P1: "if we truncate the
+    log, we should also show the date when it was last modified"). When the
+    trim is attestable (see :func:`_entries_attestation`) the marker now
+    carries the range, and — when the source has drifted past it — says so
+    in words a skimming reader cannot mistake for the healthy case. Falls
+    back to the plain entry-count notice when the trim isn't attestable
+    (undated headings): no date is guessed, so none is shown.
+    """
+    noun = "entry" if omitted == 1 else "entries"
+    base = f"_({omitted} earlier {noun} cut to fit the wake budget"
+    if not (oldest_item and newest_item and source_newest):
+        return f"{base} — full history: {source_hint})_"
+    if stale:
+        return (
+            f"{base} · showing {oldest_item} → {newest_item}, but the source "
+            f"has a newer entry ({source_newest}) — this tail is NOT current "
+            f"· full history: {source_hint})_"
+        )
+    if not precise and source_newest == newest_item:
+        # The honest middle. Same-day ordering was not checkable, so the tail
+        # is not *known* stale — and saying "the newest entry in the source"
+        # here would be the exact false reassurance this feature exists to
+        # abolish, asserted by the guard meant to prevent it.
+        return (
+            f"{base} · showing {oldest_item} → {newest_item} (day precision — "
+            f"same-day ordering unchecked) · full history: {source_hint})_"
+        )
+    return (
+        f"{base} · showing {oldest_item} → {newest_item}, the newest entry "
+        f"in the source · full history: {source_hint})_"
+    )
+
+
+def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimResult:
     """Trim an append-only, chronological-ascending page to fit *max_bytes*.
 
     Accreting surface pages only ever grow — the resident's convention is "add an
@@ -114,19 +332,29 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> str:
     that fits and always keeping at least the newest entry even if it alone
     exceeds budget — the most recent decision never silently disappears.
 
-    Returns *content* unchanged when it already fits. Falls back to a flat
-    tail cut when the page has no ``## `` headings to respect.
+    Returns *content* unchanged when it already fits — no trim, so the
+    returned :class:`TrimResult` carries no attestation (all four extra
+    fields ``None``); a block that fits whole is untouched, not "attested
+    healthy." Falls back to a flat tail cut when the page has no ``## ``
+    headings to respect — also not attestable, for the same reason: there
+    are no entry-dated headings to compare.
+
+    When entries are cut, the returned ``dropped`` / ``newest_item`` /
+    ``oldest_item`` / ``source_newest`` are the facts this function already
+    computes while deciding what to keep (see ``_entries_attestation``) —
+    P1's whole point is that these used to be thrown away here, in the one
+    place that had them.
     """
     encoded = content.encode("utf-8")
     if len(encoded) <= max_bytes:
-        return content
+        return TrimResult(text=content)
     match = _H2_RE.search(content)
     if not match:
         tail = encoded[-max_bytes:].decode("utf-8", errors="ignore")
-        return (
+        return TrimResult(text=(
             f"_(older content cut to fit the wake budget — full page: "
             f"{source_hint})_\n\n{tail}"
-        )
+        ))
     preamble = content[: match.start()].strip()
     entries = [e for e in _H2_SPLIT_RE.split(content[match.start() :]) if e.strip()]
     picked: list[str] = []
@@ -139,34 +367,59 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> str:
         used += entry_bytes
     picked.reverse()
     omitted = len(entries) - len(picked)
+
+    newest_item = oldest_item = source_newest = None
+    stale = precise = False
+    dropped: int | None = None
+    if omitted:
+        dropped = omitted
+        newest_item, oldest_item, source_newest, stale, precise = _entries_attestation(
+            entries, picked
+        )
+
     pieces: list[str] = []
     if preamble:
         pieces.append(preamble)
     if omitted:
-        pieces.append(
-            f"_({omitted} earlier {'entry' if omitted == 1 else 'entries'} cut "
-            f"to fit the wake budget — full history: {source_hint})_"
-        )
+        pieces.append(_trim_marker(
+            omitted, oldest_item, newest_item, source_newest, source_hint,
+            stale=stale, precise=precise,
+        ))
     pieces.append("".join(picked).strip())
-    return "\n\n".join(p for p in pieces if p)
+    text = "\n\n".join(p for p in pieces if p)
+    return TrimResult(
+        text=text,
+        newest_item=newest_item,
+        oldest_item=oldest_item,
+        dropped=dropped,
+        source_newest=source_newest,
+        stale=stale,
+        precise=precise,
+    )
 
 
 def _read_recent_log(
     repo_root: Path,
     max_entries: int = _MAX_LOG_ENTRIES,
     max_bytes: int = _MAX_LOG_BYTES,
-) -> str:
+) -> TrimResult:
     """Read the most recent entries from ``kb/log.md``.
 
     Walks entries newest-first, including each one as long as the
     accumulated UTF-8 byte size stays at or below ``max_bytes`` and we
     haven't hit ``max_entries``. The newest entry is always included
     even if it alone exceeds the budget, so the most recent context
-    never silently disappears.
+    never silently disappears — which also means this trim can never itself
+    go stale-by-trim (``newest_item`` always equals ``source_newest`` when
+    attestable): the residual risk P1 guards is the *other* trim,
+    ``_tail_trim_entries``, whose "newest" is a positional assumption this
+    function's explicit newest-first walk doesn't share.
 
-    Returns the raw markdown of the included entries (oldest of the
-    included set first, for natural reading order), or an empty string
-    if the log is missing or has no entries.
+    Returns a :class:`TrimResult` whose ``text`` is the raw markdown of the
+    included entries (oldest of the included set first, for natural reading
+    order), or ``""`` if the log is missing or has no entries. Attestation
+    fields are populated exactly when something was actually cut — see
+    ``TrimResult`` / ``_entries_attestation``.
 
     Repo ``kb/log.md`` wins when present (today's default for most
     adopters); a repo that migrated its kb out per
@@ -178,11 +431,11 @@ def _read_recent_log(
     if not log_path.exists():
         log_path = _home_knowledge_log_path(repo_root)
         if log_path is None or not log_path.exists():
-            return ""
+            return TrimResult(text="")
     text = log_path.read_text(encoding="utf-8")
     parts = _LOG_ENTRY_RE.split(text)
     if len(parts) <= 1:
-        return ""
+        return TrimResult(text="")
     entries = [f"## [{p}".rstrip() for p in parts[1:]]
     # Walk newest → oldest, accumulate within budget.
     picked: list[str] = []
@@ -198,9 +451,25 @@ def _read_recent_log(
         picked.append(entry)
         used = projected
     if not picked:
-        return ""
+        return TrimResult(text="")
     picked.reverse()
-    return "\n\n".join(picked).strip()
+    rendered = "\n\n".join(picked).strip()
+
+    omitted = len(entries) - len(picked)
+    if not omitted:
+        return TrimResult(text=rendered)
+    newest_item, oldest_item, source_newest, stale, precise = _entries_attestation(
+        entries, picked
+    )
+    return TrimResult(
+        text=rendered,
+        newest_item=newest_item,
+        oldest_item=oldest_item,
+        dropped=omitted,
+        source_newest=source_newest,
+        stale=stale,
+        precise=precise,
+    )
 
 
 def _home_knowledge_log_path(repo_root: Path) -> Path | None:
@@ -223,6 +492,40 @@ def _home_knowledge_log_path(repo_root: Path) -> Path | None:
         return None
 
 
+def _build_context_block_scored(repo_root: Path) -> TrimResult:
+    """The scored implementation behind ``_build_context_block``.
+
+    Same split as ``_build_work_surface_block`` / ``..._scored``: the plain
+    function stays a ``str``-returning wrapper (unchanged signature, so its
+    own tests and every other caller are untouched); this variant also
+    surfaces the attestation ``_read_recent_log`` computed, for
+    ``_build_injected_blocks_with_contracts`` to copy onto the
+    ``recent-activity`` ``ContractEntry``. No extra trimming happens at this
+    layer — the attestation is ``_read_recent_log``'s, passed straight
+    through.
+    """
+    recent = _read_recent_log(repo_root)
+    if not recent.text:
+        return TrimResult(text="")
+    text = (
+        "## Recent Activity (from kb/log.md)\n\n"
+        "From `kb/log.md` — the shared, curated through-line of what's been "
+        "done and learned. brr injects this recent tail every wake; it's what "
+        "your continuity across thoughts (and other hands) rests on, and what "
+        "earlier wakings chose to hand forward:\n\n"
+        f"{recent.text}"
+    )
+    return TrimResult(
+        text=text,
+        newest_item=recent.newest_item,
+        oldest_item=recent.oldest_item,
+        dropped=recent.dropped,
+        source_newest=recent.source_newest,
+        stale=recent.stale,
+        precise=recent.precise,
+    )
+
+
 def _build_context_block(repo_root: Path) -> str:
     """Render recent log entries as the conversation context block.
 
@@ -230,17 +533,7 @@ def _build_context_block(repo_root: Path) -> str:
     proportional. Returns ``""`` when the log is empty or missing —
     the caller drops the block entirely in that case.
     """
-    recent = _read_recent_log(repo_root)
-    if not recent:
-        return ""
-    return (
-        "## Recent Activity (from kb/log.md)\n\n"
-        "From `kb/log.md` — the shared, curated through-line of what's been "
-        "done and learned. brr injects this recent tail every wake; it's what "
-        "your continuity across thoughts (and other hands) rests on, and what "
-        "earlier wakings chose to hand forward:\n\n"
-        f"{recent}"
-    )
+    return _build_context_block_scored(repo_root).text
 
 
 def _build_relabelled_repo_block(repo_root: Path) -> str:
@@ -454,26 +747,53 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     return pitfalls.format_block(matched)
 
 
-def _build_work_surface_block(repo_root: Path) -> str:
-    """Render the discovered shared work surface as one orientation block.
+def _worst_trim(results: list[TrimResult]) -> TrimResult:
+    """Pick one ``TrimResult`` to represent a block made of several trimmed pages.
 
-    Membership is filesystem-authored: every non-hidden Markdown file below
-    ``surface/`` rides the wake without a new prompt mount. ``index.md`` leads;
-    all remaining files follow by relative path. A total budget bounds the
-    surface while preserving each accreting page's newest entries.
+    ``work-surface`` is one ``ContractEntry`` aggregating many independently
+    trimmed pages (the ledger, the plan, ...); the kernel alarm (P1 4a) needs
+    one representative newest/oldest/dropped/source-newest per block, not
+    per page. Priority: a **stale** page outranks a merely-trimmed one — the
+    alarm exists to catch exactly that class, and reporting an arbitrary
+    healthy page while a stale one sits unreported would defeat the point —
+    and among several stale pages, the one whose source has drifted furthest
+    (``source_newest`` compares as an ISO date, so max is latest) wins.
+    Failing any stale page, the page with the most entries dropped
+    represents the block, so a healthy-but-trimmed block still attests
+    something rather than nothing. Returns an empty, all-``None``
+    ``TrimResult`` when no page was trimmed at all.
+    """
+    trimmed = [r for r in results if r.dropped]
+    if not trimmed:
+        return TrimResult(text="")
+    stale = [r for r in trimmed if r.stale]
+    if stale:
+        return max(stale, key=lambda r: r.source_newest)
+    return max(trimmed, key=lambda r: r.dropped)
+
+
+def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
+    """The scored implementation behind ``_build_work_surface_block``.
+
+    Same split as ``_build_context_block`` / ``..._scored``: the plain
+    function stays a ``str``-returning wrapper (unchanged signature —
+    existing callers and tests are untouched); this variant also surfaces
+    one representative attestation (see ``_worst_trim``) for
+    ``_build_injected_blocks_with_contracts`` to copy onto the
+    ``work-surface`` ``ContractEntry``.
     """
     from . import account as acc
     from . import config as conf
 
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
-        return ""
+        return TrimResult(text="")
     try:
         ctx = acc.resolve_context(repo_root, cfg, create=False)
     except Exception:
-        return ""
+        return TrimResult(text="")
     if not ctx.enabled:
-        return ""
+        return TrimResult(text="")
 
     surface = acc.work_surface_path(ctx)
     budget = int(
@@ -483,6 +803,7 @@ def _build_work_surface_block(repo_root: Path) -> str:
         )
     )
     blocks: list[str] = []
+    trims: list[TrimResult] = []
     remaining = max(0, budget)
     for path in acc.work_surface_files(ctx):
         relative = path.relative_to(surface).as_posix()
@@ -490,8 +811,8 @@ def _build_work_surface_block(repo_root: Path) -> str:
         if not content or remaining <= 0:
             continue
         allowance = min(remaining, _MAX_ACCRETING_BLOCK_BYTES)
-        rendered = _tail_trim_entries(content, allowance, f"`surface/{relative}`")
-        block = f"### {relative}\n\n{rendered}"
+        trimmed = _tail_trim_entries(content, allowance, f"`surface/{relative}`")
+        block = f"### {relative}\n\n{trimmed.text}"
         size = len(block.encode("utf-8"))
         if size > remaining:
             # Heading overhead can push a budget-trimmed page just past the
@@ -499,15 +820,17 @@ def _build_work_surface_block(repo_root: Path) -> str:
             # (smaller) file may still fit.
             continue
         blocks.append(block)
+        trims.append(trimmed)
         remaining -= size
 
     if not blocks:
-        return (
+        text = (
             "## Work surface\n\n"
             "No authored surface yet. Start at `surface/index.md`; pages placed "
             "under `surface/` are discovered by the next wake and dashboard."
         )
-    return (
+        return TrimResult(text=text)
+    text = (
         "## Work surface\n\n"
         "The shared user/resident orientation, discovered from one authored "
         f"root: `{surface}`. Add, move, or link Markdown there; do not create "
@@ -515,6 +838,27 @@ def _build_work_surface_block(repo_root: Path) -> str:
         "the same discovered set.\n\n"
         + "\n\n---\n\n".join(blocks)
     )
+    worst = _worst_trim(trims)
+    return TrimResult(
+        text=text,
+        newest_item=worst.newest_item,
+        oldest_item=worst.oldest_item,
+        dropped=worst.dropped,
+        source_newest=worst.source_newest,
+        stale=worst.stale,
+        precise=worst.precise,
+    )
+
+
+def _build_work_surface_block(repo_root: Path) -> str:
+    """Render the discovered shared work surface as one orientation block.
+
+    Membership is filesystem-authored: every non-hidden Markdown file below
+    ``surface/`` rides the wake without a new prompt mount. ``index.md`` leads;
+    all remaining files follow by relative path. A total budget bounds the
+    surface while preserving each accreting page's newest entries.
+    """
+    return _build_work_surface_block_scored(repo_root).text
 
 
 def _build_runner_policy_block(repo_root: Path) -> str:
@@ -860,7 +1204,8 @@ def _build_injected_blocks_with_contracts(
         keyed.append(("dominion", dominion_block))
 
     # 3. One discovered shared orientation root.
-    work_surface = _build_work_surface_block(repo_root)
+    work_surface_trim = _build_work_surface_block_scored(repo_root)
+    work_surface = work_surface_trim.text
     contracts.append(ContractEntry(
         block_key="work-surface",
         label="Discovered work surface",
@@ -870,6 +1215,11 @@ def _build_injected_blocks_with_contracts(
         location="computed",
         present=bool(work_surface),
         bytes=_rendered_bytes(work_surface),
+        newest_item=work_surface_trim.newest_item,
+        oldest_item=work_surface_trim.oldest_item,
+        dropped=work_surface_trim.dropped,
+        source_newest=work_surface_trim.source_newest,
+        stale=work_surface_trim.stale,
     ))
     if work_surface:
         keyed.append(("work-surface", work_surface))
@@ -920,7 +1270,8 @@ def _build_injected_blocks_with_contracts(
         keyed.append(("knowledge-sources", knowledge_block))
 
     # 8. Recent activity log tail
-    context = _build_context_block(repo_root)
+    context_trim = _build_context_block_scored(repo_root)
+    context = context_trim.text
     contracts.append(ContractEntry(
         block_key="recent-activity",
         label="Recent activity (kb/log.md tail)",
@@ -930,6 +1281,11 @@ def _build_injected_blocks_with_contracts(
         location="computed",
         present=bool(context),
         bytes=_rendered_bytes(context),
+        newest_item=context_trim.newest_item,
+        oldest_item=context_trim.oldest_item,
+        dropped=context_trim.dropped,
+        source_newest=context_trim.source_newest,
+        stale=context_trim.stale,
     ))
     if context:
         keyed.append(("recent-activity", context))
