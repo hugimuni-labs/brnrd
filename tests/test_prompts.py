@@ -239,13 +239,87 @@ class TestBlockAttestation:
 
         result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
 
-        assert result.newest_item == "2026-07-23"
-        assert result.oldest_item == "2026-07-22"
-        assert result.source_newest == "2026-07-23"
+        # Every entry carries a corroborated run-id time, so the comparison
+        # ran at full precision and the rendered stamp says so.
+        assert result.newest_item == "2026-07-23 11:00"
+        assert result.oldest_item == "2026-07-22 10:00"
+        assert result.source_newest == "2026-07-23 11:00"
         assert result.dropped == 1
         assert result.stale is False
+        assert result.precise is True
         assert "the newest entry in the source" in result.text
         assert "NOT current" not in result.text
+
+    def test_the_actual_2026_07_23_incident_same_day_inversion(self):
+        """**The incident this whole feature is named after**, pinned literally.
+
+        `run-260723-1131-r0h4` sat *below* `run-260723-1342-isd1` in the
+        decision ledger. Both entries are dated 2026-07-23, so at day
+        granularity `source_newest` and `newest_item` are the identical
+        string and the drift is invisible. The first cut of this feature
+        shipped exactly that blind spot — and worse than blind: its trim
+        marker actively asserted "the newest entry in the source" over a
+        tail that was not. A guard that reassures you about the one bug it
+        was built for is worse than no guard.
+
+        Run-id times make the two entries comparable, so this must be stale.
+        """
+        e1 = _ledger_entry("2026-07-23", "run-260723-1239-aaaa", 200)
+        newer = _ledger_entry("2026-07-23", "run-260723-1342-isd1", 200)
+        older = _ledger_entry("2026-07-23", "run-260723-1131-r0h4", 200)
+        content = "\n\n".join([e1, newer, older]) + "\n"
+        budget = len(older.encode("utf-8")) + 10
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+
+        assert result.stale is True, "the same-day inversion must be caught"
+        assert result.precise is True
+        assert result.newest_item == "2026-07-23 11:31"
+        assert result.source_newest == "2026-07-23 13:42"
+        # The alarm must be *readable*: a correct warning rendered as
+        # "newest 2026-07-23 — source has 2026-07-23" is not much better
+        # than the silence it replaced.
+        assert "NOT current" in result.text
+        assert "13:42" in result.text and "11:31" in result.text
+
+    def test_same_day_without_times_refuses_to_reassure(self):
+        """No corroborated times + a same-day tie ⇒ narrow the claim, don't make it.
+
+        The trim cannot know whether the tail is current, so it says exactly
+        that. It must not print "the newest entry in the source" — asserting
+        something unverified is the defect P1 exists to abolish, and the guard
+        is not exempt from it.
+        """
+        e1 = "## A (2026-07-23)\n\n" + ("x" * 200)
+        e2 = "## B (2026-07-23)\n\n" + ("y" * 200)
+        e3 = "## C (2026-07-23)\n\n" + ("z" * 200)
+        content = "\n\n".join([e1, e2, e3]) + "\n"
+
+        result = _tail_trim_entries(content, max_bytes=len(e3.encode()) + 10, source_hint="`x`")
+
+        assert result.stale is False
+        assert result.precise is False
+        assert "the newest entry in the source" not in result.text
+        assert "day precision" in result.text
+        assert "NOT current" not in result.text
+
+    def test_a_runid_whose_date_contradicts_the_heading_is_not_trusted(self):
+        """A run-id dated differently from its heading is two facts glued together.
+
+        Measured on the live ledger: 14 of 160 entries disagree (written after
+        midnight about the previous day's run). Borrowing that clock time would
+        invent an ordering, so precision is refused for the whole set and the
+        comparison falls back to days.
+        """
+        e1 = "## A (2026-07-23, run-260722-2358-aaaa)\n\n" + ("x" * 200)
+        e2 = "## B (2026-07-23, run-260723-1342-bbbb)\n\n" + ("y" * 200)
+        content = "\n\n".join([e1, e2]) + "\n"
+
+        result = _tail_trim_entries(content, max_bytes=len(e2.encode()) + 10, source_hint="`x`")
+
+        assert result.precise is False, "one contradicting run-id downgrades the set"
+        assert result.stale is False
+        assert "day precision" in result.text
 
     def test_undated_headings_not_attestable_no_crash(self):
         """A heading with no parseable date makes the whole trim not-attestable.
@@ -310,9 +384,12 @@ class TestBlockAttestation:
             text="h", newest_item="2026-07-23", oldest_item="2026-07-20",
             dropped=9, source_newest="2026-07-23",
         )
+        # `stale` is a stored fact, not a re-derivation from these two display
+        # dates — same-day drift is real and invisible at date granularity, so
+        # the flag has to be set by whoever still held the times.
         stale = TrimResult(
             text="s", newest_item="2026-07-22", oldest_item="2026-07-22",
-            dropped=1, source_newest="2026-07-23",
+            dropped=1, source_newest="2026-07-23", stale=True,
         )
         assert _worst_trim([healthy, stale]) is stale
         assert _worst_trim([stale, healthy]) is stale  # order-independent

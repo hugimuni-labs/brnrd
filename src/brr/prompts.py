@@ -112,6 +112,13 @@ _H2_SPLIT_RE = re.compile(r"(?m)(?=^## )")
 _HEADING_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
+# A run-id (`run-YYMMDD-HHMM-xxxx`) embedded in a heading carries a *time*,
+# and the incident this whole feature is named after is same-day: an 11:31
+# entry sitting below a 13:42 one, both dated 2026-07-23. Day granularity
+# alone cannot see it — see `_entry_key`.
+_HEADING_RUNID_RE = re.compile(r"run-(\d{2})(\d{2})(\d{2})-(\d{4})")
+
+
 def _heading_date(entry: str) -> str | None:
     """First ``YYYY-MM-DD`` in a ``## `` entry's heading line, or ``None``.
 
@@ -123,25 +130,100 @@ def _heading_date(entry: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _heading_time(entry: str, date: str) -> str | None:
+    """``HHMM`` from a run-id in the heading, but only if it *corroborates*.
+
+    A run-id embeds both a date and a time. The time is trusted only when
+    the run-id's own date matches the heading's date — measured on this
+    account's live ledger, 14 of 160 entries disagree (an entry written
+    after midnight about the previous day's run), and a heading date paired
+    with some other day's clock time is not a timestamp, it is two facts
+    glued together. Returns ``None`` on any disagreement or absence, which
+    downgrades the comparison to day granularity rather than guessing.
+    """
+    match = _HEADING_RUNID_RE.search(entry.split("\n", 1)[0])
+    if not match:
+        return None
+    yy, mm, dd, hhmm = match.groups()
+    return hhmm if f"20{yy}-{mm}-{dd}" == date else None
+
+
+def _entry_key(entry: str) -> tuple[str, str | None] | None:
+    """``(date, time_or_None)`` for a ``## `` entry, or ``None`` if undated."""
+    date = _heading_date(entry)
+    if date is None:
+        return None
+    return date, _heading_time(entry, date)
+
+
 def _entries_attestation(
     all_entries: list[str], picked_entries: list[str]
-) -> tuple[str | None, str | None, str | None]:
-    """``(newest_item, oldest_item, source_newest)`` for a trim, or all-``None``.
+) -> tuple[str | None, str | None, str | None, bool, bool]:
+    """``(newest, oldest, source_newest, stale, precise)`` for a trim.
 
     *all_entries* is every entry the source held (picked and dropped);
     *picked_entries* is the subset that survived the trim. Returns
-    ``(None, None, None)`` — **not attestable** — the moment any entry in
-    *all_entries* carries a heading with no parseable date: the playbook
-    invariant this whole feature exists to satisfy is "a guard may only
-    assert something the run can be proven wrong about," and a date skipped
-    because it couldn't be read is a date that could just as well have been
-    the true newest.
+    ``(None, None, None, False, False)`` — **not attestable** — the moment any
+    entry in *all_entries* carries a heading with no parseable date: the
+    playbook invariant this whole feature exists to satisfy is "a guard may
+    only assert something the run can be proven wrong about," and a date
+    skipped because it couldn't be read is a date that could just as well have
+    been the true newest.
+
+    **The staleness formula lives here and nowhere else**, and it is two-tier
+    on purpose:
+
+    - Dates differ ⇒ compare days. Sound at any precision.
+    - Dates tie ⇒ compare times, but **only when every entry in scope carries
+      a corroborated one** (*precise*). This is the tier that catches the
+      incident the feature is named after — an 11:31 entry sitting below a
+      13:42 one, both dated 2026-07-23, which day granularity reports as
+      healthy.
+    - Dates tie and precision is unavailable ⇒ **not stale, and not certain**.
+      The caller must not claim the tail is current; see ``_trim_marker``.
+      This is the branch that matters most: the honest output there is a
+      narrower claim, never a confident one.
     """
-    all_dates = [_heading_date(e) for e in all_entries]
-    if any(d is None for d in all_dates):
-        return None, None, None
-    picked_dates = [_heading_date(e) for e in picked_entries]
-    return max(picked_dates), min(picked_dates), max(all_dates)
+    all_keys = [_entry_key(e) for e in all_entries]
+    if any(k is None for k in all_keys):
+        return None, None, None, False, False
+    picked_keys = [_entry_key(e) for e in picked_entries]
+
+    # Precise only if *every* entry in scope carries a corroborated time; one
+    # bare heading makes same-day ordering unknowable for the whole set.
+    precise = all(k[1] is not None for k in all_keys)
+
+    # Normalize the missing time to "" before ordering: a set mixing timed and
+    # untimed headings would otherwise compare str against None and raise.
+    # Safe because staleness only consults the time component when *every*
+    # entry has one (`precise`), so "" is never the deciding term.
+    def _ord(key: tuple[str, str | None]) -> tuple[str, str]:
+        return key[0], key[1] or ""
+
+    newest_key = max(picked_keys, key=_ord)
+    oldest_key = min(picked_keys, key=_ord)
+    source_key = max(all_keys, key=_ord)
+
+    if source_key[0] > newest_key[0]:
+        stale = True
+    elif precise:
+        stale = source_key > newest_key
+    else:
+        stale = False
+
+    def shown(key: tuple[str, str | None]) -> str:
+        """Render a key for human eyes, at the precision actually established.
+
+        When the comparison was precise, the time *must* appear: a same-day
+        alarm that renders as "newest 2026-07-23 — source has 2026-07-23" is
+        correct and unreadable, and an alarm nobody can parse is not much
+        better than the silence it replaced.
+        """
+        if precise and key[1]:
+            return f"{key[0]} {key[1][:2]}:{key[1][2:]}"
+        return key[0]
+
+    return shown(newest_key), shown(oldest_key), shown(source_key), stale, precise
 
 
 @dataclass(frozen=True)
@@ -171,24 +253,34 @@ class TrimResult:
     oldest_item: str | None = None
     dropped: int | None = None
     source_newest: str | None = None
+    stale: bool = False
+    """``True`` iff the source held an entry newer than what survived the trim.
 
-    @property
-    def stale(self) -> bool:
-        """``True`` iff the source held a dated entry newer than what survived.
+    A **stored** fact, not a re-derivation: the comparison happens once, in
+    :func:`_entries_attestation`, which is the only place that still holds the
+    times. The displayed ``newest_item`` / ``source_newest`` are dates, and two
+    same-day entries compare equal as dates while being ordered in fact — so a
+    consumer re-deriving ``source_newest > newest_item`` from those two strings
+    would silently lose the same-day case that is the whole reason this feature
+    exists. Every consumer (``ContractEntry.stale``, ``bootscore.attest_blocks``,
+    ``_trim_marker``) reads this flag.
+    """
 
-        The one formula this whole feature is built on, in the one place it
-        should live — every consumer (``ContractEntry.stale``,
-        ``bootscore.attest_blocks``, the trim marker below) reads this
-        property rather than re-deriving the comparison.
-        """
-        return bool(
-            self.newest_item and self.source_newest and self.source_newest > self.newest_item
-        )
+    precise: bool = False
+    """Whether same-day ordering was actually checkable for this trim.
+
+    ``True`` only when every entry in scope carried a *corroborated* run-id
+    time. When ``False`` and the tail's newest shares a date with the source's
+    newest, this result can say "not known to be stale" but **must not** say
+    the tail is current — a distinction :func:`_trim_marker` renders and
+    ``attest_blocks`` respects by staying silent rather than reassuring.
+    """
 
 
 def _trim_marker(
     omitted: int, oldest_item: str | None, newest_item: str | None,
     source_newest: str | None, source_hint: str,
+    *, stale: bool = False, precise: bool = False,
 ) -> str:
     """The truncation notice embedded in a trimmed page's own rendered text.
 
@@ -206,11 +298,20 @@ def _trim_marker(
     base = f"_({omitted} earlier {noun} cut to fit the wake budget"
     if not (oldest_item and newest_item and source_newest):
         return f"{base} — full history: {source_hint})_"
-    if source_newest > newest_item:
+    if stale:
         return (
             f"{base} · showing {oldest_item} → {newest_item}, but the source "
             f"has a newer entry ({source_newest}) — this tail is NOT current "
             f"· full history: {source_hint})_"
+        )
+    if not precise and source_newest == newest_item:
+        # The honest middle. Same-day ordering was not checkable, so the tail
+        # is not *known* stale — and saying "the newest entry in the source"
+        # here would be the exact false reassurance this feature exists to
+        # abolish, asserted by the guard meant to prevent it.
+        return (
+            f"{base} · showing {oldest_item} → {newest_item} (day precision — "
+            f"same-day ordering unchecked) · full history: {source_hint})_"
         )
     return (
         f"{base} · showing {oldest_item} → {newest_item}, the newest entry "
@@ -268,16 +369,22 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimRe
     omitted = len(entries) - len(picked)
 
     newest_item = oldest_item = source_newest = None
+    stale = precise = False
     dropped: int | None = None
     if omitted:
         dropped = omitted
-        newest_item, oldest_item, source_newest = _entries_attestation(entries, picked)
+        newest_item, oldest_item, source_newest, stale, precise = _entries_attestation(
+            entries, picked
+        )
 
     pieces: list[str] = []
     if preamble:
         pieces.append(preamble)
     if omitted:
-        pieces.append(_trim_marker(omitted, oldest_item, newest_item, source_newest, source_hint))
+        pieces.append(_trim_marker(
+            omitted, oldest_item, newest_item, source_newest, source_hint,
+            stale=stale, precise=precise,
+        ))
     pieces.append("".join(picked).strip())
     text = "\n\n".join(p for p in pieces if p)
     return TrimResult(
@@ -286,6 +393,8 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimRe
         oldest_item=oldest_item,
         dropped=dropped,
         source_newest=source_newest,
+        stale=stale,
+        precise=precise,
     )
 
 
@@ -349,13 +458,17 @@ def _read_recent_log(
     omitted = len(entries) - len(picked)
     if not omitted:
         return TrimResult(text=rendered)
-    newest_item, oldest_item, source_newest = _entries_attestation(entries, picked)
+    newest_item, oldest_item, source_newest, stale, precise = _entries_attestation(
+        entries, picked
+    )
     return TrimResult(
         text=rendered,
         newest_item=newest_item,
         oldest_item=oldest_item,
         dropped=omitted,
         source_newest=source_newest,
+        stale=stale,
+        precise=precise,
     )
 
 
@@ -408,6 +521,8 @@ def _build_context_block_scored(repo_root: Path) -> TrimResult:
         oldest_item=recent.oldest_item,
         dropped=recent.dropped,
         source_newest=recent.source_newest,
+        stale=recent.stale,
+        precise=recent.precise,
     )
 
 
@@ -730,6 +845,8 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
         oldest_item=worst.oldest_item,
         dropped=worst.dropped,
         source_newest=worst.source_newest,
+        stale=worst.stale,
+        precise=worst.precise,
     )
 
 
