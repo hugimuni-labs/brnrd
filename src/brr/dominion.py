@@ -307,31 +307,139 @@ def commit(
         return False
 
 
-def resolve_self_inject(
+@dataclass(frozen=True)
+class InjectOverflow:
+    """Structured accounting for a self-inject render that overran budget.
+
+    Returned alongside the digest by :func:`resolve_self_inject_digest` so a
+    caller (boot score, ``portal-state.json``, …) can surface the shortfall
+    without re-parsing the banner prose. This change wires it no further
+    than the dominion block itself — a later change can thread it further.
+    """
+
+    budget_bytes: int
+    clipped_entry: str  # manifest line clipped at a structural boundary; "" if none was
+    clipped_dropped_bytes: int  # bytes cut from clipped_entry
+    dropped_entries: tuple[tuple[str, int], ...]  # (manifest line, byte size) never rendered at all
+    total_dropped_bytes: int  # clipped_dropped_bytes + every dropped_entries size
+    total_source_bytes: int  # what the manifest would take in full, from this point on
+
+    @property
+    def dropped_entry_count(self) -> int:
+        return len(self.dropped_entries)
+
+    @property
+    def percent_dropped(self) -> float:
+        if not self.total_source_bytes:
+            return 0.0
+        return (self.total_dropped_bytes / self.total_source_bytes) * 100
+
+
+def _clip_to_structural_boundary(fragment: str, max_bytes: int) -> tuple[str, int]:
+    """Clip *fragment* to at most *max_bytes* UTF-8 bytes, backing off to the
+    last full paragraph (blank-line break) or, failing that, the last full
+    line before the limit — never a raw byte offset. A severed sentence
+    reads as a rule whose condition survived and whose remedy didn't, which
+    is worse than the rule being absent; a clean stop at a boundary is
+    legible instead. Not a Markdown parser — just paragraph/line boundaries.
+
+    Returns ``(clipped_text, bytes_dropped)``, where *bytes_dropped* is
+    measured against the original (unclipped) fragment.
+    """
+    total = len(fragment.encode("utf-8"))
+    if max_bytes <= 0:
+        return "", total
+    raw = fragment.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
+    boundary = raw.rfind("\n\n")
+    if boundary == -1:
+        boundary = raw.rfind("\n")
+    clipped = (raw[:boundary] if boundary > 0 else raw).rstrip()
+    dropped = total - len(clipped.encode("utf-8"))
+    return clipped, dropped
+
+
+def _dropped_entry_marker(label: str, frag_bytes: int) -> str:
+    """A rendered stand-in for an entry the budget had no room for at all.
+
+    Requirement: an entry that doesn't fit never drops to zero silently —
+    it gets at least this, naming it and its size, so the resident knows a
+    page exists that this wake cannot see.
+    """
+    return (
+        f"<!-- self-inject: {label} -->\n"
+        f"**[dropped — self-inject budget exhausted]** {frag_bytes:,} B not "
+        "rendered this wake; the entry exists but is currently invisible."
+    )
+
+
+def _render_overflow_banner(overflow: InjectOverflow) -> str:
+    """Loud, resident-facing summary that opens the digest on overflow.
+
+    Never user-facing — this rides only inside the wake's own self-inject
+    block. Actionable, not just factual: the resident can curate a file it
+    is told is over budget; it can't act on a silent haircut.
+    """
+    lines = [
+        "> **self-inject overflow — this wake is not seeing its full memory**",
+        (
+            f"> {overflow.total_dropped_bytes:,} B cut of "
+            f"{overflow.total_source_bytes:,} B "
+            f"({overflow.percent_dropped:.0f}%), budget "
+            f"{overflow.budget_bytes:,} B."
+        ),
+    ]
+    if overflow.clipped_entry:
+        lines.append(
+            f"> clipped at a structural boundary: `{overflow.clipped_entry}` "
+            f"— {overflow.clipped_dropped_bytes:,} B cut."
+        )
+    if overflow.dropped_entries:
+        names = ", ".join(
+            f"`{label}` ({n:,} B)" for label, n in overflow.dropped_entries
+        )
+        lines.append(f"> dropped entirely — never rendered this wake: {names}")
+    return "\n".join(lines)
+
+
+def resolve_self_inject_digest(
     dominion_dir: Path,
     *,
     budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES,
-) -> str:
+) -> tuple[str, InjectOverflow | None]:
     """Resolve the self-inject manifest into a wake-time digest.
 
     Reads the ``self-inject`` manifest (one ``<mode> <path>`` entry per
     line; ``#`` comments and blank lines ignored), renders each entry
     against the dominion's own files, and concatenates the fragments in
     order within *budget_bytes* (UTF-8) — entries past the budget are
-    truncated, so order the manifest by importance.
+    accounted for, not just truncated, so order the manifest by importance.
 
     Modes: ``full`` | ``head:N`` | ``tail:N`` | ``grep:<pattern>``.
     ``exec`` is recognised but **not run** yet — it is the
     integrity-sensitive entry and lands with its guard in a later slice,
-    so such entries are skipped. Returns ``""`` when the manifest is
-    missing, empty, or resolves to nothing.
+    so such entries are skipped.
+
+    Returns ``(digest, overflow)``: *digest* is ``""`` when the manifest is
+    missing, empty, or resolves to nothing. *overflow* is ``None`` on the
+    happy path (everything fit — digest is byte-identical to a budget-less
+    render) and an :class:`InjectOverflow` when something didn't fit: the
+    first entry that overflows the budget is clipped at a structural
+    boundary rather than a byte offset, and every entry after it still gets
+    a rendered marker naming it and its size — nothing is ever dropped to
+    zero silently.
     """
     manifest = dominion_dir / SELF_INJECT_FILE
     if not manifest.exists():
-        return ""
+        return "", None
 
     fragments: list[str] = []
     used = 0
+    overflowed = False
+    clipped_label = ""
+    clipped_dropped = 0
+    clipped_kept_bytes = 0
+    dropped_entries: list[tuple[str, int]] = []
+
     for raw in manifest.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -346,19 +454,79 @@ def resolve_self_inject(
         fragment = f"<!-- self-inject: {line} -->\n{rendered}".rstrip()
         sep = 2 if fragments else 0  # fragments are joined with "\n\n"
         frag_bytes = len(fragment.encode("utf-8"))
-        if used + sep + frag_bytes <= budget_bytes:
+
+        if not overflowed and used + sep + frag_bytes <= budget_bytes:
             fragments.append(fragment)
             used += sep + frag_bytes
             continue
-        remaining = budget_bytes - used - sep
-        if remaining > 0:
-            clipped = fragment.encode("utf-8")[:remaining].decode("utf-8", "ignore")
-            fragments.append(
-                f"{clipped}\n…[truncated to fit dominion inject budget]"
-            )
-        break
 
-    return "\n\n".join(fragments).strip()
+        if not overflowed:
+            # First entry that doesn't fit: clip at a structural boundary
+            # and switch to accounting mode. Nothing past this point gets
+            # real content (the budget is spent), but every entry — this
+            # one included — still gets something rendered.
+            overflowed = True
+            remaining = budget_bytes - used - sep
+            clipped_text = ""
+            clip_drop = frag_bytes
+            if remaining > 0:
+                clipped_text, clip_drop = _clip_to_structural_boundary(
+                    fragment, remaining,
+                )
+            if clipped_text.strip():
+                fragments.append(
+                    f"{clipped_text}\n\n…[truncated to fit dominion inject budget]"
+                )
+                clipped_label = line
+                clipped_dropped = clip_drop
+                clipped_kept_bytes = len(clipped_text.encode("utf-8"))
+            else:
+                # No room even for a boundary-respecting clip — this entry
+                # is fully dropped, exactly like every one after it.
+                dropped_entries.append((line, frag_bytes))
+                fragments.append(_dropped_entry_marker(line, frag_bytes))
+            continue
+
+        # Budget already spent — every later entry is dropped entirely,
+        # but never silently: each still gets a rendered marker.
+        dropped_entries.append((line, frag_bytes))
+        fragments.append(_dropped_entry_marker(line, frag_bytes))
+
+    digest = "\n\n".join(fragments).strip()
+    if not overflowed:
+        return digest, None
+
+    total_dropped = clipped_dropped + sum(n for _, n in dropped_entries)
+    total_source = used + clipped_kept_bytes + total_dropped
+    overflow = InjectOverflow(
+        budget_bytes=budget_bytes,
+        clipped_entry=clipped_label,
+        clipped_dropped_bytes=clipped_dropped,
+        dropped_entries=tuple(dropped_entries),
+        total_dropped_bytes=total_dropped,
+        total_source_bytes=total_source,
+    )
+    banner = _render_overflow_banner(overflow)
+    return (f"{banner}\n\n{digest}" if digest else banner), overflow
+
+
+def resolve_self_inject(
+    dominion_dir: Path,
+    *,
+    budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES,
+) -> str:
+    """Resolve the self-inject manifest into a wake-time digest.
+
+    Thin wrapper over :func:`resolve_self_inject_digest` for callers that
+    only need the rendered text (the overflow banner, when present, rides
+    inline at the top of the returned string). Use
+    :func:`resolve_self_inject_digest` directly for the structured
+    accounting.
+    """
+    digest, _overflow = resolve_self_inject_digest(
+        dominion_dir, budget_bytes=budget_bytes,
+    )
+    return digest
 
 
 def _render_entry(dominion_dir: Path, mode: str, target: str) -> str:
