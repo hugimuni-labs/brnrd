@@ -473,6 +473,99 @@ def test_collection_scope_without_work_dir_is_meta_only():
     assert relics.collection_scope({}, None) == (None, None)
 
 
+# ── run-identity filtering of the shared-checkout window (#575) ────────
+
+
+def test_commits_since_seed_filters_by_run_id_trailer(tmp_path: Path):
+    """The other half of #565: a host run's scope is a checkout shared by
+    every concurrent run, so a commit window alone cannot prove authorship —
+    only the ``Brnrd-Run-Id`` trailer :func:`gitops.commit_all` / the
+    commit-msg hook stamps can. A commit carrying a sibling's id, or no
+    trailer at all, must not surface as this run's produce."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    seed_oid = commit_files(repo, {"a.txt": "1"}, message="seed")
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "run A's commit",
+         "--trailer", "Brnrd-Run-Id: run-A"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "run B's commit",
+         "--trailer", "Brnrd-Run-Id: run-B"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "no trailer at all"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    unfiltered = relics._commits_since_seed(repo, "main", seed_oid)
+    assert [s for _, s, _, _ in unfiltered] == [
+        "no trailer at all", "run B's commit", "run A's commit",
+    ]
+
+    only_a = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-A")
+    assert [s for _, s, _, _ in only_a] == ["run A's commit"]
+
+    only_b = relics._commits_since_seed(repo, "main", seed_oid, run_id="run-B")
+    assert [s for _, s, _, _ in only_b] == ["run B's commit"]
+
+    # No run_id at all also degrades to empty rather than falling back to
+    # the unfiltered window — a caller that means to filter but forgets to
+    # pass an id must not silently get everyone's commits.
+    assert relics._commits_since_seed(repo, "main", seed_oid, run_id="") == []
+
+
+def test_collection_scope_shared_window_credits_only_this_runs_commits(
+    tmp_path: Path,
+):
+    """Guard 2 (#575): ``collection_scope``'s ``host_start_oid..HEAD``
+    fallback is the shared checkout every concurrent host run measures
+    from. Two runs interleaving commits in that window must each see only
+    their own — the same defect #565 fixed for kb pages, now for project
+    commits."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "1"}, message="seed")
+    start_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "run-mine's work",
+         "--trailer", "Brnrd-Run-Id: run-mine"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "sibling's work",
+         "--trailer", "Brnrd-Run-Id: run-sibling"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    branch, seed = relics.collection_scope(
+        {"seed_ref": "main", "host_start_oid": start_oid}, repo,
+    )
+    records = relics.collect(
+        repo, branch=branch, seed_ref=seed, outbox_dir=None,
+        commit_run_id="run-mine",
+    )
+    subjects = [r.get("subject") for r in records if r["kind"] == "commit"]
+    assert subjects == ["run-mine's work"]
+
+    # Unfiltered (``commit_run_id=None``, the worktree-run shape) still sees
+    # both — the filter is opt-in per caller, never a default that could
+    # silently start hiding a worktree run's own isolated-branch commits.
+    unfiltered = relics.collect(
+        repo, branch=branch, seed_ref=seed, outbox_dir=None,
+    )
+    unfiltered_subjects = [
+        r.get("subject") for r in unfiltered if r["kind"] == "commit"
+    ]
+    assert unfiltered_subjects == ["sibling's work", "run-mine's work"]
+
+
 # ── merge relics: merges performed are their own block (2026-07-21) ──
 
 

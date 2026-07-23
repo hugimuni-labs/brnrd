@@ -537,6 +537,65 @@ def commit_all(
     return commit.returncode == 0
 
 
+# Marker line inside every hook this function installs, so a later brnrd
+# version (or a maintainer) can tell "ours, safe to rewrite" from
+# "hand-customized, leave alone" without diffing the whole script. Shared
+# across every repo this hook is installed into (account-knowledge, a
+# project checkout) — one grammar, one marker. Text preserved verbatim from
+# the original account-knowledge-only installer (knowledge.py, #565) so a
+# hook already on disk from that version still self-identifies as ours.
+_RUN_ID_HOOK_MARKER = "# brnrd: stamp Brnrd-Run-Id trailer (#565) — do not hand-edit"
+
+_RUN_ID_HOOK_SCRIPT = (
+    "#!/bin/sh\n"
+    f"{_RUN_ID_HOOK_MARKER}\n"
+    'if [ -n "$BRR_RUN_ID" ]; then\n'
+    f'  git interpret-trailers --if-exists doNothing '
+    f'--trailer "{RUN_ID_TRAILER}=$BRR_RUN_ID" --in-place "$1"\n'
+    "fi\n"
+)
+
+
+def ensure_run_id_hook(repo_root: Path) -> None:
+    """Install a ``commit-msg`` hook stamping ``$BRR_RUN_ID`` as a trailer.
+
+    A resident commits directly, mid-run, in a shell (``git commit`` typed
+    by hand) — not through :func:`commit_all`, so a Python-level ``run_id=``
+    parameter never sees that commit. brnrd's own runner process exports
+    ``BRR_RUN_ID`` into every run's environment; this hook is the
+    code-only interception point that turns it into the same
+    ``Brnrd-Run-Id`` trailer :func:`commit_all` stamps for an automated
+    commit — no prompt file has to teach a resident to type ``--trailer``
+    by hand. Originally installed on the account-knowledge checkout alone
+    (#565); a project checkout needs the identical hook so
+    ``relics.collection_scope``'s shared-window fallback can filter a host
+    run's commits by identity too (#575) — one hook, two checkouts, same
+    grammar.
+
+    A hand commit made with no ``BRR_RUN_ID`` in its environment (a
+    maintainer, logged in directly) leaves the message untouched —
+    credited to no run, never misattributed by a fallback. Idempotent and
+    best-effort: only (re)writes the hook when it is absent or still
+    carries this function's own marker, so a hook a maintainer customized
+    by hand is left alone; any OSError is swallowed, matching every other
+    capture-net step.
+    """
+    hooks_dir = repo_root / ".git" / "hooks"
+    try:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook_path = hooks_dir / "commit-msg"
+        if hook_path.exists():
+            existing = hook_path.read_text(encoding="utf-8", errors="replace")
+            if _RUN_ID_HOOK_MARKER not in existing:
+                return
+            if existing == _RUN_ID_HOOK_SCRIPT:
+                return
+        hook_path.write_text(_RUN_ID_HOOK_SCRIPT, encoding="utf-8")
+        hook_path.chmod(0o755)
+    except OSError:
+        pass
+
+
 def worktree_dirty(worktree_path: Path) -> bool:
     """Return True if *worktree_path* has staged, unstaged, or untracked changes.
 

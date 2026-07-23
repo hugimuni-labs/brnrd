@@ -284,7 +284,11 @@ def collection_scope(
 
 
 def _commits_since_seed(
-    repo_root: Path, branch: str, seed_ref: str | None,
+    repo_root: Path,
+    branch: str,
+    seed_ref: str | None,
+    *,
+    run_id: str | None = None,
 ) -> list[tuple[str, str, int, str]]:
     """Return ``[(short_sha, subject, parent_count, committer_email), ...]``
     for commits on *branch* not on the seed ref, newest first (``git log``'s
@@ -292,32 +296,64 @@ def _commits_since_seed(
     Parent count and committer identify merges (see :func:`derive_auto`).
     Read-only ``git`` calls; any failure (no repo, unknown ref, timeout)
     degrades to ``[]``.
+
+    ``run_id``, when given, gates every commit on its ``Brnrd-Run-Id``
+    trailer (:data:`gitops.RUN_ID_TRAILER`) matching exactly — the guard a
+    **host** run's scope needs (#575): ``collection_scope``'s branchless
+    fallback measures ``host_start_oid..HEAD`` on the checkout every
+    concurrent run shares, so without this a sibling's commits landing in
+    that window would be credited here by proximity in time, the same
+    defect #565 fixed for kb pages. A worktree run's own isolated branch
+    passes ``run_id=None`` — no sibling can land a commit on a branch only
+    this run's worktree has checked out, so nothing needs filtering.
+
+    A commit with no trailer at all (pre-existing history, a repo where the
+    commit-msg hook could not be installed) is excluded exactly like a
+    sibling's commit — never fabricated into this run's credit. It does not
+    vanish from the repository, only from this run's produce relic list:
+    the same "credited to no run, never guessed" choice ``knowledge.py``
+    made for kb pages (#565).
     """
     if not branch:
         return []
     seed = seed_ref or gitops.default_branch(repo_root) or "HEAD"
+    identity = (run_id or "").strip() or None
+    if run_id is not None and identity is None:
+        return []
     try:
         merge_base = subprocess.run(
             ["git", "merge-base", seed, branch],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
         base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else seed
+        log_format = "%h\x1f%P\x1f%ce\x1f%s"
+        if identity is not None:
+            log_format += f"\x1f%(trailers:key={gitops.RUN_ID_TRAILER},valueonly,separator=%x2C)"
         result = subprocess.run(
-            ["git", "log", f"{base_ref}..{branch}", "--format=%h\x1f%P\x1f%ce\x1f%s", "--no-color"],
+            [
+                "git", "log", f"{base_ref}..{branch}",
+                f"--format={log_format}", "--no-color",
+            ],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0:
         return []
+    expect_parts = 5 if identity is not None else 4
     out: list[tuple[str, str, int, str]] = []
     for row in result.stdout.splitlines():
         if "\x1f" not in row:
             continue
-        parts = row.split("\x1f", 3)
-        if len(parts) != 4:
+        parts = row.split("\x1f", expect_parts - 1)
+        if len(parts) != expect_parts:
             continue
-        sha, parents, committer, subject = parts
+        if identity is not None:
+            sha, parents, committer, subject, trailer = parts
+            if trailer.strip() != identity:
+                continue
+        else:
+            sha, parents, committer, subject = parts
         if sha:
             out.append((sha, subject, len(parents.split()), committer.strip()))
     return out
@@ -471,6 +507,7 @@ def derive_auto(
     seed_ref: str | None,
     outbox_dir: Path | None,
     links: _ForgeLinks | None = None,
+    commit_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Zero-resident-effort relics: commits, merges, the pushed branch, and
     the PR.
@@ -502,6 +539,11 @@ def derive_auto(
     Merges the run performed purely on the remote (``gh pr merge`` without
     pulling the result into the local checkout) leave no local commit and
     stay self-reportable — the one case git archaeology cannot attest.
+
+    ``commit_run_id``, when given, is forwarded to :func:`_commits_since_seed`
+    as the ``Brnrd-Run-Id`` identity gate (#575) — pass it exactly when
+    *branch* came from ``collection_scope``'s shared-checkout fallback, never
+    for a worktree run's own isolated branch (see that function's docstring).
     """
     if repo_root is None:
         return []
@@ -511,7 +553,9 @@ def derive_auto(
     _pr_url = links.pull_request
 
     if branch:
-        commits = _commits_since_seed(repo_root, branch, seed_ref)
+        commits = _commits_since_seed(
+            repo_root, branch, seed_ref, run_id=commit_run_id,
+        )
         for sha, subject, parent_count, committer in commits[:_MAX_RECORDS]:
             commit_url = links.commit(sha)
             merge: dict[str, Any] | None = None
@@ -623,12 +667,19 @@ def collect(
     branch: str | None,
     seed_ref: str | None,
     outbox_dir: Path | None,
+    commit_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """The full relic list for one run: summary first, then produce.
 
     Ordering is deliberate for the renderer: a lone ``summary`` relic (if
     the resident wrote one) leads the list so a collapsed receipt's
     expansion reads top-down like a note, not an unordered bag of links.
+
+    ``commit_run_id`` forwards to :func:`derive_auto` — a caller measuring
+    a **host** run's shared-checkout scope passes its own run id so a
+    concurrent sibling's commits in the same window are never counted as
+    this run's produce (#575); a worktree run's isolated branch needs no
+    filter and passes ``None``.
     """
     reported = [
         record for record in read_reported(outbox_dir)
@@ -652,7 +703,7 @@ def collect(
         link_reported(rest_reported, links)
     auto = derive_auto(
         repo_root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-        links=links,
+        links=links, commit_run_id=commit_run_id,
     )
     return dedupe(summary + auto + rest_reported)
 
@@ -779,6 +830,7 @@ def live_summary(
     branch: str | None,
     seed_ref: str | None,
     outbox_dir: Path | None,
+    commit_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Compile the run's attested produce for its live portal facet.
 
@@ -786,6 +838,11 @@ def live_summary(
     records as closeout rather than creating a second accounting path.  It is
     read on the heartbeat, so every failure collapses to an explicit unknown
     facet instead of escaping into daemon liveness.
+
+    ``commit_run_id`` — see :func:`collect`: forward this run's own id for a
+    host run's shared-checkout scope so the live facet cannot flash a
+    sibling's mid-run commits as this run's produce, only to have them
+    disappear at closeout once identity is applied (#575).
     """
     try:
         root = Path(repo_root)
@@ -795,7 +852,7 @@ def live_summary(
         records = dedupe(
             derive_auto(
                 root, branch=branch, seed_ref=seed_ref, outbox_dir=outbox_dir,
-                links=links,
+                links=links, commit_run_id=commit_run_id,
             )
             + link_reported(read_reported(outbox_dir), links)
         )

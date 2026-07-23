@@ -2237,6 +2237,14 @@ def _run_worker(
         emit("failed", run_id=task.id, stage="env", error=str(e))
         return task
 
+    # A resident commits into the project checkout directly, mid-run, in a
+    # shell — same shape as the account-knowledge hand-commit gap #565
+    # closed. ``.git/hooks`` is the *common* dir shared by the checkout and
+    # every worktree spawned from it, so one install here (against
+    # ``repo_root``, never a run's own worktree) covers every env backend
+    # (#575). Idempotent and best-effort — see gitops.ensure_run_id_hook.
+    gitops.ensure_run_id_hook(repo_root)
+
     run_root = env_ctx.cwd
     branch_name = env_ctx.branch_name
     if branch_name:
@@ -4136,12 +4144,20 @@ def _write_live_portal_state(
             relics.collection_scope(task.meta, Path(work_dir))
             if work_dir else (None, None)
         )
+        # A host run's scope is the shared checkout (relics.collection_scope's
+        # host_start_oid fallback); gate it by run identity so the live
+        # facet never flashes a concurrent sibling's commits as this run's
+        # produce (#575). A worktree run's own branch needs no filter.
+        live_commit_run_id = (
+            task.id if not task.meta.get("branch_name") else None
+        )
         produce_facet = (
             relics.live_summary(
                 work_dir,
                 branch=live_branch,
                 seed_ref=live_seed,
                 outbox_dir=outbox_dir,
+                commit_run_id=live_commit_run_id,
             )
             if work_dir else {"known": False}
         )
@@ -6116,6 +6132,20 @@ def _capture_knowledge(
     """Commit + push knowledge edits; replies now belong to the home run store."""
     if not bool(cfg.get("knowledge.capture", True)):
         return
+    if task.status == "stopped":
+        # The account-knowledge checkout is shared by every concurrent run,
+        # live or stopped. A stopped run has no trustworthy ownership
+        # boundary left in it: the dirty-tree sweep below would commit a
+        # still-running sibling's uncommitted edits under *this* run's
+        # identity, and the mid-run commit-window read would credit that
+        # sibling's already-committed pages to this run's dashboard node
+        # (#575, the other half of #565). The owning run's own capture net
+        # still runs this same path when *it* finishes, so nothing here is
+        # lost — only deferred to whoever is actually still working.
+        # ``_capture_worktree`` (this run's own branch/worktree salvage,
+        # already run by ``_finalize_stopped_run`` before this point) is
+        # unaffected: it is not the shared checkout.
+        return
 
     captured_pages: list[str] = []
     moved = knowledge.capture(
@@ -6269,6 +6299,7 @@ def _capture_worktree(
                 run_root,
                 f"brr salvage: in-flight work from interrupted run {task.id}",
                 conversation_id=task.conversation_key or None,
+                run_id=task.id,
             ):
                 print(f"[brnrd] salvage: committed in-flight work for {task.id}")
         seed_ref = getattr(branch_plan, "seed_ref", None)
@@ -6427,11 +6458,16 @@ def _run_state_produce_changed(
         return False
     try:
         branch, seed = relics.collection_scope(task.meta, Path(work_dir))
+        # See run_ledger.build_closed_run_row: the shared-checkout fallback
+        # scope needs a run-identity filter so a sibling's commit never
+        # counts as "this node's produce changed" (#575).
+        commit_run_id = task.id if not task.meta.get("branch_name") else None
         records = relics.collect(
             Path(work_dir),
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
+            commit_run_id=commit_run_id,
         )
     except Exception:
         return False
@@ -6457,11 +6493,13 @@ def _run_state_produce_lines(
         return _existing_produce_lines(path)
     try:
         branch, seed = relics.collection_scope(task.meta, Path(work_dir))
+        commit_run_id = task.id if not task.meta.get("branch_name") else None
         records = relics.collect(
             Path(work_dir),
             branch=branch,
             seed_ref=seed,
             outbox_dir=outbox_dir,
+            commit_run_id=commit_run_id,
         )
     except Exception:
         return _existing_produce_lines(path)
