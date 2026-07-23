@@ -5932,6 +5932,82 @@ def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
 
 _SPAWN_NOTIFY_RESPONSE_MAX_CHARS = 2000
 
+# #574: the first `brr/<slug>` token in a spec is the branch it commits the
+# child to — the convention every dispatch already uses (`_queue_spawn_
+# request`'s own docstring). The lookbehind excludes a `brr/` reached via a
+# preceding word char, `/`, or `.` so nothing in a spec *but* a branch name
+# can masquerade as the branch commitment. All three are load-bearing and
+# each names a token this repo's own spec bodies carry as a matter of course:
+# `src/brr/daemon.py` (source anchors, `/`), and — the one the first cut of
+# this check missed — `.brr/worktrees/<run-id>` and `.brr/outbox/…`, which
+# every *host*-environment spawn spec names in its working rules, and which
+# yielded a confident `brr/worktrees` as the "spec branch". A guard that
+# false-positives on a worker that did everything right is worse than no
+# guard: it teaches the reader to skip the flag, and it is gone the one time
+# it is right (`hooks.py:441-444`, the #562 lesson, one module over).
+_SPAWN_CONTRACT_BRANCH_RE = re.compile(r"(?<![\w/.])brr/[A-Za-z0-9][A-Za-z0-9_.-]*")
+# The first `/tmp/brr-*.md` token is the report path convention every
+# dispatch spec uses; the `/tmp/brr-` prefix is distinctive enough that no
+# lookbehind is needed.
+_SPAWN_CONTRACT_REPORT_RE = re.compile(r"/tmp/brr-[A-Za-z0-9][A-Za-z0-9_.-]*\.md")
+
+
+def _extract_spawn_contract(spec_text: str) -> tuple[str | None, str | None]:
+    """Pull the (branch, report) contract a spawn spec commits its child to.
+
+    Mechanical, no model in the loop — the *first* match of each pattern,
+    nothing smarter. Deliberately does **not** attempt an issue-number
+    extraction: prose like "related: #565" would false-positive, and #574's
+    own live case is a worker *inventing* a justifying reference to a wrong
+    issue — a noisy heuristic there would be one more thing to explain away.
+    Branch + report path are the load-bearing two.
+    """
+    branch_match = _SPAWN_CONTRACT_BRANCH_RE.search(spec_text)
+    report_match = _SPAWN_CONTRACT_REPORT_RE.search(spec_text)
+    return (
+        branch_match.group(0) if branch_match else None,
+        report_match.group(0) if report_match else None,
+    )
+
+
+def _spawn_contract_check(spec_text: str, publish_branch: str | None) -> dict | None:
+    """Compare a spawn spec's contract against what the child actually did.
+
+    Returns ``None`` when there is nothing to check — no ``brr/<slug>``
+    branch named in the spec at all. Absence of a contract is not a
+    mismatch (#574's own constraint): a spawn with no branch commitment
+    behaves exactly as it always has.
+
+    Otherwise returns a dict describing the comparison: ``mismatch`` is
+    True when the published branch differs from the spec's, or a spec-
+    named report path was never written. Pure string/filesystem-existence
+    logic, no model call — a caller wraps this in try/except per the
+    fail-open posture (`_notify_spawn_parent`'s docstring): a bug in this
+    check must never itself read as a worker-run failure.
+
+    Live case, 2026-07-22: run-260722-2337-pqav was specced for #564 on
+    `brr/wake-request-source-gate`, delivered #565 on
+    `brr/stopped-run-kb-credit`, and the completion event still said
+    `status=done` — the parent believed it. This is the check that would
+    have caught it.
+    """
+    spec_branch, spec_report = _extract_spawn_contract(spec_text or "")
+    if not spec_branch:
+        return None
+    published = str(publish_branch or "").strip() or None
+    branch_ok = published == spec_branch
+    report_found: bool | None = None
+    if spec_report:
+        report_found = Path(spec_report).exists()
+    report_ok = report_found is not False
+    return {
+        "mismatch": (not branch_ok) or (not report_ok),
+        "spec_branch": spec_branch,
+        "published_branch": published,
+        "spec_report": spec_report,
+        "report_found": report_found,
+    }
+
 
 def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     """Land a completion note in the spawning parent's own thread.
@@ -5951,7 +6027,9 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     which is a reasonable stand-in for "someone should look at this."
     Best-effort: a spawn without parent linkage (or no inbox) is silently
     skipped rather than raising — a notification bug must never surface
-    as a worker-run failure.
+    as a worker-run failure. Same posture governs the #574 contract check
+    below: extraction/comparison failures are logged and swallowed, never
+    allowed to turn a notify bug into an apparent worker failure.
     """
     if inbox_dir is None:
         return
@@ -5960,7 +6038,47 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         return
     conv = str(task.meta.get("spawn_parent_conversation_key") or "").strip()
     conv = conv or f"run:{parent_run_id}"
-    summary = f"concurrent spawn {task.id} finished: status={task.status}"
+
+    # #574: does what the child actually published match the spec it was
+    # given? ``task.body`` is the spec text as the child saw it — never
+    # rewoven for a worker run (the burst-sibling weave at the top of the
+    # dispatch loop is gated `if not is_worker_run`, and a spawned child is
+    # always `worker: true`) — so it is safe to read straight off the
+    # reaped ``Run`` here, no ``prompt.md`` reread needed.
+    status_label = task.status
+    contract_kwargs: dict = {}
+    contract_block = ""
+    try:
+        contract = _spawn_contract_check(task.body, task.meta.get("publish_branch"))
+    except Exception as exc:  # noqa: BLE001 - fail open, see docstring above
+        print(f"[brnrd] spawn contract check failed for {task.id}: {exc}")
+        contract = None
+    if contract is not None and contract["mismatch"]:
+        status_label = "contract-mismatch"
+        contract_kwargs = {
+            "spawn_contract_mismatch": True,
+            "spawn_contract_spec_branch": contract["spec_branch"],
+            "spawn_contract_published_branch": contract["published_branch"] or "",
+        }
+        if contract["spec_report"]:
+            report_line = (
+                f"spec report:       {contract['spec_report']} "
+                f"({'found' if contract['report_found'] else 'MISSING'})"
+            )
+            contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
+            contract_kwargs["spawn_contract_report_found"] = bool(
+                contract["report_found"]
+            )
+        else:
+            report_line = "spec report:       (none named)"
+        contract_block = (
+            "\n\ncontract mismatch — spec vs published:\n"
+            f"spec branch:       {contract['spec_branch']}\n"
+            f"published branch:  {contract['published_branch'] or '(none)'}\n"
+            f"{report_line}"
+        )
+
+    summary = f"concurrent spawn {task.id} finished: status={status_label}{contract_block}"
     response_path = task.meta.get("response_path")
     if response_path:
         try:
@@ -5979,6 +6097,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             conversation_key=conv,
             spawned_by_run=task.id,
             spawn_parent_run_id=parent_run_id,
+            **contract_kwargs,
         )
     except OSError as exc:
         print(f"[brnrd] spawn-completion notify failed for {task.id}: {exc}")

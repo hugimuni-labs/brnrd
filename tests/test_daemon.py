@@ -1519,6 +1519,238 @@ def test_notify_spawn_parent_of_crash_noop_without_parent_linkage(tmp_path):
     assert protocol.list_pending(inbox) == []
 
 
+# ── #574: spawn contract check (spec vs what the child actually published) ──
+
+
+def test_extract_spawn_contract_finds_branch_and_report():
+    spec = (
+        "# Task: issue #574\n"
+        "**Branch: `brr/spawn-contract-check`**\n"
+        "**Report: `/tmp/brr-spawn-contract-check-report.md`**\n"
+    )
+    branch, report = daemon._extract_spawn_contract(spec)
+    assert branch == "brr/spawn-contract-check"
+    assert report == "/tmp/brr-spawn-contract-check-report.md"
+
+
+def test_extract_spawn_contract_ignores_source_paths_masquerading_as_branch():
+    """A spec's own code anchors (``src/brr/daemon.py``) must never be read
+    as the branch commitment — this repo's own spec bodies routinely cite
+    both in the same message, anchors first."""
+    spec = (
+        "Anchors: `src/brr/daemon.py::_queue_spawn_request` (~4906).\n"
+        "**Branch: `brr/real-slug`**\n"
+    )
+    branch, _report = daemon._extract_spawn_contract(spec)
+    assert branch == "brr/real-slug"
+
+
+def test_extract_spawn_contract_ignores_dot_brr_runtime_paths():
+    """`.brr/worktrees/<run-id>` is named in the working rules of every
+    host-environment spawn spec brnrd writes — and it is a `brr/` token
+    reached via a `.`, not a `/`. The first cut of this check extracted
+    `brr/worktrees` from it and would have flagged a compliant worker.
+    Ordering saved the two live dispatches on 2026-07-23; ordering is not
+    a guard."""
+    spec = (
+        "Work ONLY under `/home/gurio/src/misc/brr/.brr/worktrees/<run-id>`;\n"
+        "re-read `.brr/outbox/evt-x/portal-state.json` at plan boundaries.\n"
+        "**Branch: `brr/real-slug`**\n"
+    )
+    branch, _report = daemon._extract_spawn_contract(spec)
+    assert branch == "brr/real-slug"
+
+
+def test_extract_spawn_contract_no_tokens_returns_none_none():
+    branch, report = daemon._extract_spawn_contract("just do the thing, no branch here")
+    assert branch is None
+    assert report is None
+
+
+def test_spawn_contract_check_no_branch_in_spec_is_no_contract():
+    assert daemon._spawn_contract_check("do the thing", "brr/whatever") is None
+
+
+def test_spawn_contract_check_match_is_no_mismatch(tmp_path):
+    # The report-path token convention is literally `/tmp/brr-*.md` (every
+    # dispatch spec uses it) — tmp_path itself lives under a nested
+    # `/tmp/pytest-.../` prefix, so the fixture path is built directly
+    # under `/tmp/` here to actually exercise the regex, not just the
+    # branch-only fallback.
+    report = Path(f"/tmp/brr-contract-check-match-{tmp_path.name}-report.md")
+    report.write_text("done\n", encoding="utf-8")
+    try:
+        spec = f"Branch: `brr/thing`\nReport: `{report}`\n"
+        result = daemon._spawn_contract_check(spec, "brr/thing")
+        assert result["mismatch"] is False
+        assert result["spec_branch"] == "brr/thing"
+        assert result["published_branch"] == "brr/thing"
+        assert result["report_found"] is True
+    finally:
+        report.unlink(missing_ok=True)
+
+
+def test_spawn_contract_check_branch_mismatch():
+    spec = "Branch: `brr/wake-request-source-gate`\n"
+    result = daemon._spawn_contract_check(spec, "brr/stopped-run-kb-credit")
+    assert result["mismatch"] is True
+    assert result["spec_branch"] == "brr/wake-request-source-gate"
+    assert result["published_branch"] == "brr/stopped-run-kb-credit"
+
+
+def test_spawn_contract_check_no_branch_published_is_mismatch():
+    """A spec that names a branch but the child never published anything at
+    all is exactly the silent-substitution shape #574 exists to catch."""
+    spec = "Branch: `brr/thing`\n"
+    result = daemon._spawn_contract_check(spec, None)
+    assert result["mismatch"] is True
+    assert result["published_branch"] is None
+
+
+def test_spawn_contract_check_missing_report_is_mismatch(tmp_path):
+    missing = Path(f"/tmp/brr-never-written-{tmp_path.name}-report.md")
+    assert not missing.exists()
+    spec = f"Branch: `brr/thing`\nReport: `{missing}`\n"
+    result = daemon._spawn_contract_check(spec, "brr/thing")
+    assert result["mismatch"] is True
+    assert result["report_found"] is False
+
+
+def test_spawn_contract_check_no_report_named_only_branch_checked():
+    """No ``/tmp/brr-*.md`` token in the spec at all ⇒ nothing to check
+    there; only the branch commitment governs the verdict."""
+    spec = "Branch: `brr/thing`\n"
+    result = daemon._spawn_contract_check(spec, "brr/thing")
+    assert result["mismatch"] is False
+    assert result["spec_report"] is None
+    assert result["report_found"] is None
+
+
+def _spawn_child_run(*, body, publish_branch=None, status="done"):
+    meta = {
+        "spawn_parent_run_id": "run-parent",
+        "spawn_parent_conversation_key": "telegram:42:",
+    }
+    if publish_branch is not None:
+        meta["publish_branch"] = publish_branch
+    return Run(
+        id="run-child", event_id="evt-child", body=body,
+        source="telegram", status=status, meta=meta,
+    )
+
+
+def test_notify_spawn_parent_contract_match_is_ordinary_event(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(
+        body="Branch: `brr/thing`\n", publish_branch="brr/thing",
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+
+
+def test_notify_spawn_parent_contract_branch_mismatch_is_flagged(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    response_path = tmp_path / "response.md"
+    response_path.write_text("worker's own account of the work\n", encoding="utf-8")
+    task = _spawn_child_run(
+        body="Branch: `brr/wake-request-source-gate`\n",
+        publish_branch="brr/stopped-run-kb-credit",
+    )
+    task.meta["response_path"] = str(response_path)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert note["spawn_contract_spec_branch"] == "brr/wake-request-source-gate"
+    assert note["spawn_contract_published_branch"] == "brr/stopped-run-kb-credit"
+    assert "status=contract-mismatch" in note["body"]
+    assert "brr/wake-request-source-gate" in note["body"]
+    assert "brr/stopped-run-kb-credit" in note["body"]
+    # The mismatch block reads before the worker's own text, not buried
+    # after it — it must be the first thing the parent's eye lands on.
+    assert note["body"].index("contract mismatch") < note["body"].index(
+        "worker's own account",
+    )
+
+
+def test_notify_spawn_parent_contract_missing_report_is_flagged(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    missing = Path(f"/tmp/brr-never-written-{tmp_path.name}-report.md")
+    assert not missing.exists()
+    task = _spawn_child_run(
+        body=f"Branch: `brr/thing`\nReport: `{missing}`\n",
+        publish_branch="brr/thing",
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert note["spawn_contract_report_found"] is False
+    assert "MISSING" in note["body"]
+
+
+def test_notify_spawn_parent_no_branch_in_spec_is_unchanged(tmp_path):
+    """No ``brr/<slug>`` anywhere in the spec ⇒ no contract to check ⇒ the
+    completion event reads exactly as it did before #574."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(body="just go do the thing", publish_branch="brr/thing")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+
+
+def test_notify_spawn_parent_contract_check_failure_fails_open(tmp_path, monkeypatch):
+    """A bug in the contract check itself must never surface as a worker
+    failure — it degrades to the ordinary completion event, logged."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(body="Branch: `brr/thing`\n", publish_branch="brr/thing")
+
+    def boom(*_a, **_k):
+        raise ValueError("unparseable")
+
+    monkeypatch.setattr(daemon, "_spawn_contract_check", boom)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+
+
+def test_notify_spawn_parent_pqav_regression(tmp_path):
+    """Reconstructs the live 2026-07-22 case named in #574: a spec for #564
+    on ``brr/wake-request-source-gate``, a child that delivered #565 on
+    ``brr/stopped-run-kb-credit`` and reported clean — the whole reason
+    this check exists."""
+    inbox = tmp_path / ".brr" / "inbox"
+    spec = (
+        "# Task: issue #564 — wake request source gate\n"
+        "**Branch: `brr/wake-request-source-gate`**\n"
+        "**Report: `/tmp/brr-wake-request-report.md`**\n"
+    )
+    task = _spawn_child_run(body=spec, publish_branch="brr/stopped-run-kb-credit")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert note["spawn_contract_spec_branch"] == "brr/wake-request-source-gate"
+    assert note["spawn_contract_published_branch"] == "brr/stopped-run-kb-credit"
+    # The run's own completion status is untouched — two facts, two fields,
+    # not folded into one boolean (#574's own constraint).
+    assert task.status == "done"
+
+
 def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     """A spawn that runs to a clean, zero-commit finish must still land a
     completion notification in the parent's thread — issue #268's still-
