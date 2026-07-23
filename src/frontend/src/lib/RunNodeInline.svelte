@@ -7,7 +7,8 @@
 	// standalone `/runs/...` page stays the addressable deep link.
 	import type { ResolvedPathname } from '$app/types';
 	import MarkdownContent from './MarkdownContent.svelte';
-	import { LiveRunsAuthError, requestRunStop, type HeartbeatLevel } from './liveRuns';
+	import MoodChip from './MoodChip.svelte';
+	import { LiveRunsAuthError, moodFace, requestRunStop, type HeartbeatLevel } from './liveRuns';
 	import {
 		messageInstant,
 		messageTarget,
@@ -128,6 +129,12 @@
 	// each fact falling back to the node's own digest when the page's identity
 	// source doesn't know it.
 	let statusWord = $derived(identity?.status || digest?.status || 'unknown');
+	// Same fallback chain as the status word: the page's identity source knows
+	// the mood while the run is live (and carries the resolved glyph), the
+	// node's own frame answers for a closed one (handle only). Both paths run
+	// through `moodFace`, so an unknown handle degrades to the bare name and an
+	// absent mood renders nothing at all.
+	let mood = $derived(moodFace(identity?.mood || digest?.mood, identity?.moodGlyph));
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
@@ -192,6 +199,7 @@
 					>
 						{statusWord}
 					</span>
+					<MoodChip face={mood} />
 				</span>
 				<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: cornerLabel }}>
 					{cornerLabel}

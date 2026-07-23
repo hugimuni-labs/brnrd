@@ -10,6 +10,7 @@
 	import ProduceGauge from '$lib/ProduceGauge.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
+	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import {
 		RunnersAuthError,
@@ -24,6 +25,8 @@
 		fetchLiveRuns,
 		heartbeatLevel,
 		liveRunDisplayName,
+		wordmarkMood,
+		type DaemonMood,
 		type LiveRun
 	} from '$lib/liveRuns';
 	import RunNodeInline from '$lib/RunNodeInline.svelte';
@@ -184,6 +187,11 @@
 	// `runs` list Limits.svelte's sibling `LiveRuns` already renders.
 	let spawnMaxConcurrent = $state<number | null>(null);
 	let activeSpawns = $derived(liveRuns?.filter((r) => r.is_subspawn).length ?? 0);
+	// #566: the daemon's own telemetry face, riding the same live-runs packet.
+	// Two placements read it — the loom's NOW seam when nothing is burning, and
+	// the header wordmark when no live run has a mood of its own.
+	let daemonMood = $state<DaemonMood | null>(null);
+	let wordmark = $derived(wordmarkMood(liveRuns, daemonMood));
 
 	let prReviewQueue = $state<PRReviewItem[] | null>(null);
 	let prReviewQueueStale = $state(false);
@@ -314,11 +322,17 @@
 	// as #480: while loading, the honest render is the node panel's own
 	// "reading the corpus…" placeholder, not a different card that means
 	// something else.
+	// One digest of the selected node, shared by everything that asks the
+	// corpus about it: whether a node answers at all, and (#566) the mood the
+	// run's own frame recorded once it closed.
+	let selectedDigest = $derived.by(() => {
+		if (!selectedNode || !surfaceData) return null;
+		return nodeDigest(runNodeFromSurface(surfaceData, selectedNode.repoSlug, selectedNode.runId));
+	});
 	let selectedNodeState = $derived.by(() => {
 		if (!selectedNode) return 'none';
 		if (!surfaceData) return 'loading';
-		const node = runNodeFromSurface(surfaceData, selectedNode.repoSlug, selectedNode.runId);
-		return nodeDigest(node).mirrored ? 'mirrored' : 'unmirrored';
+		return selectedDigest?.mirrored ? 'mirrored' : 'unmirrored';
 	});
 	let selectedNodeAnswers = $derived(
 		selectedNodeState === 'mirrored' || selectedNodeState === 'loading'
@@ -349,7 +363,12 @@
 					: live.repo_label || 'unknown repo',
 				runner: [live.runner?.shell, live.runner?.core].filter(Boolean).join(' · ') || null,
 				spawn: Boolean(live.is_subspawn),
-				age: ageSince(live.started_at, now)
+				age: ageSince(live.started_at, now),
+				// The live packet is the only source that carries a resolved glyph:
+				// the daemon looked the handle up against `brr.emotes` before
+				// publishing. An unknown handle arrives glyphless and stays that way.
+				mood: live.mood ?? null,
+				moodGlyph: live.mood_glyph ?? null
 			};
 		}
 		const row = selectedLedgerRows.find((candidate) => candidate.run_id) ?? selectedLedgerRows[0];
@@ -362,7 +381,12 @@
 			context: row.repo_label,
 			runner: [row.runner_shell, row.runner_core].filter(Boolean).join(' · ') || null,
 			spawn: Boolean(row.is_subspawn),
-			age: row.wall_clock_seconds ? durationLabel(row.wall_clock_seconds) : null
+			age: row.wall_clock_seconds ? durationLabel(row.wall_clock_seconds) : null,
+			// A closed run's mood comes from its own frame — a text record, so
+			// the handle survives and the glyph does not. The chip renders the
+			// bare name rather than re-resolving a face the frontend can't know.
+			mood: selectedDigest?.mood || null,
+			moodGlyph: null
 		};
 	});
 	// What's left for the vitals row once identity travels structured:
@@ -457,6 +481,7 @@
 			liveRuns = live.runs;
 			liveRunsStale = live.stale;
 			spawnMaxConcurrent = live.spawn_max_concurrent;
+			daemonMood = live.daemon_mood ?? null;
 			liveRunsError = null;
 		} catch (e) {
 			// A 401 here is redundant with the quota fetch's own unauthenticated
@@ -537,7 +562,14 @@
 	<div class="mx-auto max-w-2xl p-6">
 		<header class="ignite" style="--ignite-delay: 0ms">
 			<div class="flex items-start justify-between gap-4">
-				<p class="eyebrow">brnrd</p>
+				<!-- The wordmark wears the board's mood (#566): the newest live run's
+				     face while something is burning, the daemon's resting one when
+				     nothing is. With neither it is the plain wink the landing page
+				     has always shown — the frontend owns no emote table, so "no mood
+				     on the wire" renders as no mood, not as a default face. -->
+				<p class="eyebrow">
+					<WinkWordmark frames={wordmark.frames} pitch={wordmark.pitch} />
+				</p>
 				<!-- Named directly as a real gap (2026-07-08): no way to end a
 			     session short of clearing cookies by hand. Small on purpose
 			     ("a small one somewhere") — a plain link, not a nav bar this
@@ -639,6 +671,7 @@
 					reviewCount={prReviewQueue?.length ?? 0}
 					lens={loomLens}
 					onLensChange={changeLoomLens}
+					{daemonMood}
 				/>
 			</div>
 
