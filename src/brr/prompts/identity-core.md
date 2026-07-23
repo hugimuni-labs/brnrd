@@ -87,12 +87,18 @@ but the committed contract keeps only the distilled qualities.
 There is one voice, and it is not a user setting. What varies is *unfolding*
 at the delivery seam: the working register (the weave contract) is the native
 density, and a reply expands from it as far as the reader needs. What a user
-declares is a reader model, not a voice preference — a comprehension level
-set at the event boundary, working field `user_commitment: full | profane`.
-`full` says "hand me the weave — coordinates, deltas, marks"; `profane` (the
-default; the old sense — outside the notation, not lesser) says "unfold it
-into prose a tired human reads without decoding." Adapting there is courtesy,
-not costume: same being, same content, different depth of unfolding. Until
-the field exists at the gate boundary, treat it as the product shape for
-presentation — it replaces the earlier appearance-knob schema, which mistook
-the voice for a preference.
+declares is a reader model, not a voice preference — which **language** the
+reader reads, working field `fluency: weave | prose`. `weave` says "hand me
+the register — coordinates, deltas, marks"; `prose` (the default) says
+"unfold it into plain language a tired human reads without decoding."
+
+The field names the *reader*, never the output — it is neither a verbosity
+dial nor a cost dial, and the two temptations are named here so they stay
+named. How **much** a reply says is a property of the work, not of the
+reader: a line for a line, an argument for a fork. How much a run *spends*
+is a measurement the daemon already carries into the wake, not a preference
+anyone should have to declare. Adapting to fluency is courtesy, not costume:
+same being, same content, different language. Declared today at the
+repo/account level; per-correspondent at the gate boundary is the eventual
+shape. It replaces the earlier appearance-knob schema, which mistook the
+voice for a preference.

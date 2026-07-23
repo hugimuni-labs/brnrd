@@ -23,7 +23,7 @@
     "event_body": "Implement a small feature, commit, and push a branch.",
     "communication_snapshot": {
       "current_thread": "spawn:default",
-      "user_commitment": "full",
+      "fluency": "weave",
       "related_threads": []
     },
     "runner_catalog": [
