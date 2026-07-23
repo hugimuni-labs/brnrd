@@ -4193,7 +4193,11 @@ def _write_live_portal_state(
                 if hasattr(task, "meta") else None
             ),
         )
-        pacing_status = _quota_pacing_status(cfg or {}, run_levels)
+        # The run boundary knows its own Core (the resolved profile's
+        # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
+        # bucket for a *different* Core doesn't bind this run's pacing (#561).
+        binding_model = str((runner_meta or {}).get("model") or "").strip() or None
+        pacing_status = _quota_pacing_status(cfg or {}, run_levels, model=binding_model)
         coexisting_snapshot: list[dict[str, object]] | None = None
         if brr_dir is not None:
             try:
@@ -5930,7 +5934,19 @@ def _fire_due_schedules(
             sched_levels, _ = _collect_levels(
                 runner_name, levels_dir, None, refresh=False, shared_dir=brr_dir,
             )
-            binding_pct = runner_quota.binding_quota_remaining_pct(sched_levels)
+            # A scheduling tick has a pinned Shell/runner name, not
+            # necessarily a committed Core — resolve it to a profile only to
+            # read the Core it names, and fall back to no model (excluding
+            # every per-model bucket, per binding_quota_remaining_pct's own
+            # rule) rather than let an unresolvable pin wedge this tick.
+            sched_model: str | None = None
+            try:
+                sched_model = runner.runner_profile(runner_name, repo_root).model
+            except Exception:  # noqa: BLE001 - best-effort, never blocks pacing
+                sched_model = None
+            binding_pct = runner_quota.binding_quota_remaining_pct(
+                sched_levels, model=sched_model,
+            )
             if binding_pct is not None:
                 if binding_pct < _quota_critical_floor_pct(cfg):
                     scheduled_entries = [e for e in entries if e.kind != "every"]
@@ -7641,7 +7657,10 @@ def _quota_stretch_factor(cfg: dict) -> float:
 
 
 def _quota_pacing_status(
-    cfg: dict, levels: "dict[str, object] | None",
+    cfg: dict,
+    levels: "dict[str, object] | None",
+    *,
+    model: str | None = None,
 ) -> "dict[str, object] | None":
     """Binding quota remaining-percent + which pacing floor (if any) is live.
 
@@ -7650,16 +7669,32 @@ def _quota_pacing_status(
     boundary (``resources.quota.pacing``) sees the same number the scheduler
     used. ``None`` when the binding percent can't be proven this heartbeat
     (no collector, no numeric buckets) — never a fabricated read.
+
+    *model* is the Core actually spending this bucket (the run's resolved
+    ``core=``, or ``None`` at a scheduling tick that hasn't committed to a
+    runner) — see :func:`runner_quota.binding_quota_remaining_pct` for the
+    binding rule this passes through. A per-model bucket excluded from the
+    floor because it names a different Core is still real information the
+    user wants, so a thin one (below the low floor) rides along as
+    ``excluded_thin`` — visible, non-binding.
     """
-    pct = runner_quota.binding_quota_remaining_pct(levels)
+    pct = runner_quota.binding_quota_remaining_pct(levels, model=model)
     if pct is None:
         return None
+    low_floor = _quota_low_floor_pct(cfg)
     floor = None
     if pct < _quota_critical_floor_pct(cfg):
         floor = "critical"
-    elif pct < _quota_low_floor_pct(cfg):
+    elif pct < low_floor:
         floor = "low"
-    return {"binding_remaining_pct": pct, "floor": floor}
+    status: "dict[str, object]" = {"binding_remaining_pct": pct, "floor": floor}
+    excluded = runner_quota.excluded_week_model_buckets(levels, model)
+    thin = sorted(
+        label for label, remaining in excluded.items() if remaining < low_floor
+    )
+    if thin:
+        status["excluded_thin"] = thin
+    return status
 
 
 def _should_post_delivery_attend(
