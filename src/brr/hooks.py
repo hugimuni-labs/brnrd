@@ -146,6 +146,13 @@ class HookContext:
         ).strip().lower() in {"1", "true", "yes", "on"}
         portal = env.get("BRR_PORTAL_STATE")
         self.portal_state_path = Path(portal) if portal else None
+        # The wake's persisted BootScore (`boot-score.json`), armed by the
+        # daemon — the orientation ledger (#513 Slice 9) reads its
+        # ``orientation_set`` from here. Absent (an older daemon, an ad-hoc
+        # hook run) ⇒ the ledger is unassertable and stays silent — the same
+        # "never a nag on a proxy" doctrine as `BRR_REPO_DIR`.
+        boot_score = env.get("BRR_BOOT_SCORE")
+        self.boot_score_path = Path(boot_score) if boot_score else None
         outbox = env.get("BRR_OUTBOX_DIR")
         if outbox:
             self.outbox_dir: Path | None = Path(outbox)
@@ -286,6 +293,108 @@ def _touch_flush(ctx: HookContext) -> None:
         time.sleep(0.01)
 
 
+# ── The orientation ledger (#513 Slice 9) ────────────────────────────────
+#
+# The BootScore names a deterministic `orientation_set` — files this wake
+# ought to have read (see `bootscore.OrientationFile`; NOT `orientation`,
+# the kernel's next-actions list). The hook observes `Read` calls in the
+# post-tool batch against that set and renders `orient x/y` as a bar segment
+# until the walk completes or the resident declares the skip on `.card`.
+# Observation always runs (it is Slice 4's instrument: orientation
+# completeness vs obligation recall, per core class); only the *segment*
+# is silenced by completion or skip.
+
+ORIENTATION_READ_KEY = "orientation_read"
+
+# What counts as a declared skip: one `.card` line carrying both words,
+# case-insensitively — matches the canonical "assuming prior knowledge,
+# skipping orientation" as well as a terse "orient: skip". Line-scoped so a
+# card that mentions skipping a test here and orientation there does not
+# accidentally declare. A first-class outcome, not a failure state.
+_ORIENT_SKIP_RE = re.compile(r"^(?=.*orient)(?=.*skip).*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _orientation_set_paths(ctx: HookContext) -> list[str]:
+    """The orientation set's resolved absolute paths, from `boot-score.json`.
+
+    Read fresh from the artifact the daemon persisted (same doctrine as every
+    other closeout reader); empty on any absence — no score armed, unreadable
+    file, or a score without the field (an older daemon) — so every consumer
+    degrades to "no ledger" rather than a guess.
+    """
+    if ctx.boot_score_path is None:
+        return []
+    score = _read_json(ctx.boot_score_path)
+    raw = score.get("orientation_set")
+    if not isinstance(raw, list):
+        return []
+    paths: list[str] = []
+    for entry in raw:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            path = entry["path"].strip()
+            if path:
+                paths.append(os.path.realpath(path))
+    return paths
+
+
+def _observe_orientation_reads(
+    payload: dict[str, Any], set_paths: list[str], state: dict[str, Any]
+) -> int:
+    """Fold this batch's `Read` calls into the ledger; return the read count.
+
+    Matches on the resolved absolute path of each `Read`'s ``file_path`` —
+    claude's ``PostToolBatch`` hands calls over as ``{tool_name, tool_input,
+    ...}``. A runner whose payload carries no ``tool_calls`` (codex's
+    ``PostToolUse`` shape differs) simply observes nothing: the ledger under-
+    counts there rather than inferring, and the segment quietly never
+    completes — which the skip declaration resolves, same as prior knowledge.
+    Persisted in `.hook-state.json` under :data:`ORIENTATION_READ_KEY`, and
+    pruned to the current set so a stale path can never inflate the count.
+    """
+    read = {
+        p for p in (state.get(ORIENTATION_READ_KEY) or [])
+        if isinstance(p, str) and p in set_paths
+    }
+    calls = payload.get("tool_calls")
+    if isinstance(calls, list):
+        for call in calls:
+            if not isinstance(call, dict) or call.get("tool_name") != "Read":
+                continue
+            tool_input = call.get("tool_input")
+            if not isinstance(tool_input, dict):
+                continue
+            file_path = tool_input.get("file_path")
+            if not isinstance(file_path, str) or not file_path.strip():
+                continue
+            resolved = os.path.realpath(file_path.strip())
+            if resolved in set_paths:
+                read.add(resolved)
+    state[ORIENTATION_READ_KEY] = sorted(read)
+    return len(read)
+
+
+def _orientation_progress(
+    ctx: HookContext, payload: dict[str, Any], state: dict[str, Any]
+) -> tuple[int, int] | None:
+    """The `orient x/y` segment's value, or ``None`` when it must not render.
+
+    ``None`` on: no set (unassertable), walk complete (the meter *leaves* —
+    a meter that never leaves trains skimming), or a skip declared on `.card`
+    (first-class outcome). Observation into hook state happens regardless, so
+    completeness stays measurable even for a wake that skipped.
+    """
+    set_paths = _orientation_set_paths(ctx)
+    if not set_paths:
+        return None
+    count = _observe_orientation_reads(payload, set_paths, state)
+    if count >= len(set_paths):
+        return None
+    card = _read_card_body(ctx)
+    if card and _ORIENT_SKIP_RE.search(card):
+        return None
+    return count, len(set_paths)
+
+
 # ── Injection rendering (portal-state → compact delta) ───────────────────
 #
 # Slice 8 (#513): the mid-run (``post-tool``) boundary renders as ONE compact
@@ -334,6 +443,16 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "abbreviated to one letter + remaining percent, joined by `·` "
         "(`S57·W50·F27` = session 57%, week 50%, a named per-model bucket "
         "27%). Renders only when quota is `known`.",
+    ),
+    _BarSegment(
+        "orient", "orient",
+        "the orientation ledger (#513 Slice 9): files read from the wake's "
+        "deterministic orientation set (`orient 3/5`). Renders only while "
+        "the walk is open — set non-empty, not every file read, no skip "
+        "declared on `.card` (a line carrying both \"orient\" and \"skip\", "
+        "any case). Disappears at completion or skip, and never opens the "
+        "bar on its own: a meter is not an obligation, and a meter that "
+        "never leaves trains skimming.",
     ),
     _BarSegment(
         "siblings", "▷",
@@ -633,6 +752,7 @@ def _render_bar(
     run_name: dict[str, Any],
     mood: str | None,
     surprise: str | None = None,
+    orient: tuple[int, int] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -654,6 +774,13 @@ def _render_bar(
     quota_chip = _quota_chip(resources)
     if quota_chip:
         segments.append(quota_chip)
+    if orient is not None:
+        # The orientation ledger, open. Deliberately absent from the gate
+        # below: the meter rides boundaries the bar renders anyway and never
+        # manufactures one — an unwalked set is not an obligation (skip is a
+        # first-class outcome), and a segment that could keep the bar alive
+        # at every boundary would train the exact skimming it measures.
+        segments.append(f"orient {orient[0]}/{orient[1]}")
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(siblings_chip)
@@ -751,6 +878,7 @@ def format_delta(
     run_body: str | None = None,
     mood: str | None = None,
     surprise: str | None = None,
+    orient: tuple[int, int] | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -780,6 +908,11 @@ def format_delta(
     ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
     a bar segment mid-run, or its own prose line at seed/stop.
+
+    ``orient`` is the orientation ledger's open value (#513 Slice 9),
+    computed by the caller (:func:`_orientation_progress`) — a mid-run bar
+    segment only, never seed/stop prose: the kernel already names the walk
+    at seed, and by stop the walk is either done, skipped, or moot.
     """
     if not payload:
         return None
@@ -817,7 +950,7 @@ def format_delta(
             run=run, pending=pending, pending_files=pending_files, events=events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood, surprise=surprise,
+            mood=mood, surprise=surprise, orient=orient,
         )
 
     lines: list[str] = []
@@ -1497,6 +1630,12 @@ def compute_neutral(
         was_surprised = bool(state.get("mood_surprised"))
         edge = surprise if (surprise and not was_surprised) else None
         state["mood_surprised"] = bool(surprise)
+        # The orientation ledger (#513 Slice 9): observe this batch's Reads
+        # against the score's orientation set — unconditionally, because the
+        # observation is Slice 4's instrument and must not depend on whether
+        # a bar happens to render this boundary. The returned value is the
+        # segment's, and only when the walk is still open.
+        orient = _orientation_progress(ctx, payload, state)
         token = portal.get("change_token")
         # An edge opens the gate on its own. Gating it on the portal token
         # would be a contract the signal can't keep: a failing tool call
@@ -1504,7 +1643,7 @@ def compute_neutral(
         # boundary the ask exists for is exactly the one that would render
         # nothing.
         if token is not None and (token != state.get("last_token") or edge):
-            inject = format_delta(portal, mood=mood, surprise=edge)
+            inject = format_delta(portal, mood=mood, surprise=edge, orient=orient)
             state["last_token"] = token
 
     if phase == PHASE_STOP:
