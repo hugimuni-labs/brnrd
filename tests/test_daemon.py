@@ -221,6 +221,15 @@ def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatc
     assert prompt_kwargs["runner_medium"] == (
         "codex-mini (requested from the dashboard spool rack)"
     )
+    # #564: consumption leaves a trace — who spent it, from what source.
+    receipt = wake_request_mod.last_receipt(brr_dir)
+    assert receipt["at"]
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
+        "request_id": "wake_9",
+        "source": "telegram",
+        "event_id": "evt-wake",
+        "profile": "codex-mini",
+    }
 
 
 def test_run_worker_event_pin_outranks_wake_request(tmp_path, monkeypatch):
@@ -272,8 +281,11 @@ def test_run_worker_event_pin_outranks_wake_request(tmp_path, monkeypatch):
 
 
 def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch):
-    """A tap naming a profile this daemon doesn't know (stale rack, another
-    daemon's catalog) is spent rather than left to wedge every future wake."""
+    """#564: a tap naming a profile this daemon doesn't know (stale rack,
+    another daemon's catalog) is dropped WITHOUT being spent — a drop never
+    delivered what was asked for, so consuming it too would burn the tap for
+    nothing. It stays pending for a daemon that knows the profile, or for
+    the server to cancel."""
     from brr import wake_request as wake_request_mod
 
     write_repo_scaffold(tmp_path)
@@ -312,10 +324,68 @@ def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch
 
     daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
 
-    # No override applied, but the request is consumed (acked as spent).
+    # No override applied, and the drop does NOT spend the tap.
     assert seen_overrides and seen_overrides[0] is None
-    assert wake_request_mod.pending(brr_dir) is None
-    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_11"]
+    assert wake_request_mod.pending(brr_dir) == {
+        "request_id": "wake_11",
+        "profile": "gemini-ultra-99",
+    }
+    assert wake_request_mod.consumed_ids(brr_dir) == []
+    assert wake_request_mod.last_receipt(brr_dir) is None
+
+
+def test_run_worker_schedule_source_does_not_consume_wake_request(tmp_path, monkeypatch):
+    """#564: a `source: schedule` wake (director tick, `every:`/`at:`
+    firing — nobody watching) must not consume a dashboard tap parked for
+    the interactive wake the maintainer was about to cause. The request
+    stays pending, untouched, for that wake."""
+    from brr import wake_request as wake_request_mod
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-schedule", source="schedule")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+    wake_request_mod.store_pending(
+        brr_dir, {"request_id": "wake_12", "profile": "codex-mini"},
+    )
+
+    seen_overrides: list[dict | None] = []
+
+    def fake_resolve(_root, overrides=None):
+        seen_overrides.append(overrides)
+        return daemon.runner.runner_profile("codex", _root)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
+    monkeypatch.setattr(
+        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
+    )
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    # Untouched: no override, nothing consumed, no receipt.
+    assert seen_overrides and seen_overrides[0] is None
+    assert wake_request_mod.pending(brr_dir) == {
+        "request_id": "wake_12",
+        "profile": "codex-mini",
+    }
+    assert wake_request_mod.consumed_ids(brr_dir) == []
+    assert wake_request_mod.last_receipt(brr_dir) is None
 
 
 def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
@@ -4750,6 +4820,50 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(tmp_path):
     assert applied.event["dashboard_wake_request_id"] == "wake_dispatch"
     assert wake_request_mod.pending(repo_a / ".brr") is None
     assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_dispatch"]
+    # #564: consumption leaves a trace — who spent it, from what source.
+    receipt = wake_request_mod.last_receipt(repo_a / ".brr")
+    assert receipt["at"]
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
+        "request_id": "wake_dispatch",
+        "source": "telegram",
+        "event_id": target.event["id"],
+        "profile": "codex-mini",
+    }
+
+
+def test_dashboard_wake_request_schedule_source_does_not_consume(tmp_path):
+    """#564: a `source: schedule` event at dispatch time (the director tick
+    itself, before any per-run worker fallback runs) must not bind or spend
+    a parked dashboard tap — that tap is a promise to the next *interactive*
+    wake, not to whichever schedule firing happens to dispatch first."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    write_repo_scaffold(repo_a)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "home.path": str(tmp_path / "account-home"),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    protocol.create_event(ctx.dispatch_inbox, "schedule", "director tick")
+    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
+    wake_request_mod.store_pending(
+        repo_a / ".brr",
+        {"request_id": "wake_sched", "profile": "codex-mini"},
+    )
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied is target
+    assert "runner" not in applied.event
+    assert "dashboard_wake_request_id" not in applied.event
+    assert wake_request_mod.pending(repo_a / ".brr") == {
+        "request_id": "wake_sched",
+        "profile": "codex-mini",
+    }
+    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
+    assert wake_request_mod.last_receipt(repo_a / ".brr") is None
 
 
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):

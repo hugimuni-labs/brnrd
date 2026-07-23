@@ -68,6 +68,46 @@ def test_consume_moves_id_to_ack_ledger(tmp_path):
     assert wake_request.pending(brr_dir)["request_id"] == "wake_4"
 
 
+def test_record_receipt_roundtrip_and_overwrite(tmp_path):
+    """#564: the receipt is a separate file from the ack ledger — it must
+    not perturb `consumed_ids()` (that list is wire-format for the
+    publish-tick ack) and it overwrites, since only the latest consumption
+    is live context."""
+    brr_dir = _brr(tmp_path)
+    assert wake_request.last_receipt(brr_dir) is None
+
+    wake_request.record_receipt(
+        brr_dir, "wake_5", source="telegram", event_id="evt-a", profile="codex-mini",
+    )
+    receipt = wake_request.last_receipt(brr_dir)
+    assert receipt["at"]  # stamped, so a stale receipt is legible as stale
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
+        "request_id": "wake_5",
+        "source": "telegram",
+        "event_id": "evt-a",
+        "profile": "codex-mini",
+    }
+    # Doesn't touch the ack ledger the publish tick sends over the wire.
+    assert wake_request.consumed_ids(brr_dir) == []
+
+    wake_request.record_receipt(
+        brr_dir, "wake_6", source="github", event_id="evt-b", profile="claude",
+    )
+    receipt = wake_request.last_receipt(brr_dir)
+    assert {k: v for k, v in receipt.items() if k != "at"} == {
+        "request_id": "wake_6",
+        "source": "github",
+        "event_id": "evt-b",
+        "profile": "claude",
+    }
+
+
+def test_record_receipt_ignores_blank_request_id(tmp_path):
+    brr_dir = _brr(tmp_path)
+    wake_request.record_receipt(brr_dir, "", source="telegram")
+    assert wake_request.last_receipt(brr_dir) is None
+
+
 def test_publish_runners_roundtrips_wake_request(tmp_path, monkeypatch):
     """The catalog publish sends consumed acks, clears them on success, and
     mirrors the response's pending request."""

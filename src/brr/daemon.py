@@ -1667,8 +1667,19 @@ def _apply_dashboard_wake_request(
     registered execution root; ``_run_worker`` is too late because its root
     has already been selected. An event-level runner pin keeps outranking the
     one-shot dashboard choice, preserving the rack's existing semantics.
+
+    #564: consumption used to be source-blind — a ``schedule``-source wake
+    (a director tick, an ``every:``/``at:`` firing, nobody watching) could
+    reach the pending tick's ``pending()`` first and eat a request the
+    maintainer parked from the dashboard while composing his actual
+    message, leaving that message to dispatch on the default profile with
+    no receipt anywhere. The tap is a promise to *the next wake the
+    maintainer is about to cause* — a schedule firing isn't that wake, so it
+    must not spend the tap, whether or not it would otherwise apply.
     """
     if any(target.event.get(key) for key in ("shell", "core", "runner")):
+        return target
+    if str(target.event.get("source") or "") == "schedule":
         return target
     original_target = target
     brr_dir = gitops.shared_brr_dir(default_repo_root)
@@ -1695,7 +1706,12 @@ def _apply_dashboard_wake_request(
             f"[brnrd] wake request {request['request_id']} names unknown "
             f"profile '{requested_profile}' for {target.repo_label}; dropping it"
         )
-        wake_request_mod.consume(brr_dir, request["request_id"])
+        # #564: a drop is not a spend — leave the tap pending. Consuming
+        # here was the second bug: an unknown profile (stale rack, another
+        # daemon's catalog) burned the request without ever applying it,
+        # so the maintainer never got what he asked for *and* the tap was
+        # gone. The server-side cancel path (no longer returning the
+        # request) still reclaims it if it's simply wrong.
         return original_target
 
     updates: dict[str, object] = {
@@ -1710,6 +1726,13 @@ def _apply_dashboard_wake_request(
     protocol.update_event_meta(target.event, **updates)
     target.event.update(updates)
     wake_request_mod.consume(brr_dir, request["request_id"])
+    wake_request_mod.record_receipt(
+        brr_dir,
+        request["request_id"],
+        source=str(target.event.get("source") or ""),
+        event_id=str(target.event.get("id") or "") or None,
+        profile=requested_profile,
+    )
     return target
 
 
@@ -1856,25 +1879,45 @@ def _run_worker(
     # event-level pin (respawn shell:/core:, quality: escalate) is a
     # deliberate per-run choice and wins — the tap then stays pending for
     # the next unpinned wake rather than being silently swallowed.
+    # #564: this is the worker-level fallback for the same tap
+    # `_apply_dashboard_wake_request` already tried to bind at dispatch
+    # time — same blindness applied here too, so it needs the same two
+    # guards: a `schedule`-source wake (director tick, `every:`/`at:`
+    # firing) never spends a tap parked for the interactive wake the
+    # maintainer was about to cause, and a drop (unknown profile) is not a
+    # spend — only an applied profile burns the tap.
     runner_wake_note: str | None = (
         "requested from the dashboard dispatch header"
         if event.get("dashboard_wake_request_id")
         else None
     )
     wake_req = wake_request_mod.pending(brr_dir)
-    if wake_req and not any(
-        runner_overrides.get(key) for key in ("shell", "core", "runner")
+    wake_req_source = str(event.get("source") or "")
+    if (
+        wake_req
+        and wake_req_source != "schedule"
+        and not any(
+            runner_overrides.get(key) for key in ("shell", "core", "runner")
+        )
     ):
         requested_profile = wake_req["profile"]
         if runner.profile_metadata(requested_profile, repo_root) is not None:
             runner_overrides["runner"] = requested_profile
             runner_wake_note = "requested from the dashboard spool rack"
+            wake_request_mod.consume(brr_dir, wake_req["request_id"])
+            wake_request_mod.record_receipt(
+                brr_dir,
+                wake_req["request_id"],
+                source=wake_req_source,
+                event_id=eid,
+                profile=requested_profile,
+            )
         else:
             print(
                 f"[brnrd] wake request {wake_req['request_id']} names unknown "
                 f"profile '{requested_profile}'; dropping it"
             )
-        wake_request_mod.consume(brr_dir, wake_req["request_id"])
+            # #564: don't consume on drop — see _apply_dashboard_wake_request.
     runner_choice = runner.resolve_runner_profile(
         repo_root, runner_overrides or None,
     )
