@@ -859,6 +859,10 @@ def carry_forward_sections(
         carried = source[section]
         if section in ("usage_credits", "quota") and isinstance(carried, dict):
             carried = {**carried, "carried_from": source.get("updated_at")}
+        if section == "quota" and isinstance(carried, dict):
+            carried["summary"] = _mark_carried(
+                carried.get("summary"), source.get("updated_at")
+            )
         fresh[section] = carried
         if section == "quota":
             # A silent heal is how the underlying loss (partial scrape erases
@@ -904,6 +908,31 @@ def carry_forward_sections(
                 buckets = quota.setdefault("buckets", {})
                 buckets.setdefault("week_models", prior_models)
     return fresh
+
+
+_CARRIED_MARK_RE = re.compile(r"\s*\[carried from [^\]]*\]\s*$")
+
+
+def _mark_carried(summary: Any, stamp: Any) -> Any:
+    """Stamp a carried ``quota`` summary so the *rendered* line says so.
+
+    ``carried_from`` alone is not enough. It has exactly one reader in the
+    tree (``gates.cloud`` republishes the *credits* block's copy for the
+    dashboard); nothing reads it for ``quota``. But the ``quota`` summary
+    string is what every surface renders — the wake's posture line, the
+    Runner line, the dashboard — so a carried reading would otherwise appear
+    as a fresh one everywhere a human or a wake actually looks, which is the
+    failure carrying exists to prevent, only quieter.
+
+    Marking the summary itself means every existing consumer inherits the
+    honesty without a new renderer. Idempotent: a re-carried summary is
+    re-stamped with the newer source rather than accumulating marks.
+    """
+    if not isinstance(summary, str) or not summary.strip():
+        return summary
+    base = _CARRIED_MARK_RE.sub("", summary)
+    label = str(stamp).strip() if stamp else ""
+    return f"{base} [carried from {label}]" if label else f"{base} [carried]"
 
 
 def _within_carry_window(stamp: Any, now: float | None = None) -> bool:

@@ -419,10 +419,39 @@ def test_a_total_miss_scrape_does_not_erase_a_prior_quota_reading(tmp_path, monk
 
     levels = claude_usage.load_or_refresh_snapshot(outbox, max_age_seconds=0)
 
-    assert levels["quota"]["summary"] == "session 94% left"
+    assert levels["quota"]["summary"].startswith("session 94% left")
     # …and it says out loud that it wasn't seen this time round, the same
     # discipline `usage_credits` already uses.
     assert levels["quota"]["carried_from"]
+    # Review fixup: `carried_from` alone has no reader for the `quota`
+    # section — `gates.cloud` republishes only the *credits* copy. The
+    # summary string is what the wake's posture line, the Runner line and
+    # the dashboard all render, so the mark has to ride there or a carried
+    # reading looks fresh everywhere anyone actually looks.
+    assert f"[carried from {levels['quota']['carried_from']}]" in (
+        levels["quota"]["summary"]
+    )
+
+
+def test_a_re_carried_quota_summary_is_marked_once_with_the_newest_source(tmp_path):
+    """Two total-miss scrapes in a row must not accumulate marks — the
+    summary carries one `[carried from …]`, naming the source it actually
+    came from this round."""
+    already = {
+        "summary": "session 94% left [carried from 2026-07-23T04:00:00+00:00]",
+        "carried_from": "2026-07-23T04:00:00+00:00",
+        "buckets": {"session": {"remaining_percentage": 94.0}},
+    }
+    source_stamp = _now_stamp()
+    fresh = claude_usage.carry_forward_sections(
+        [{"updated_at": source_stamp, "quota": already}],
+        {"source": "claude /usage PTY", "updated_at": _now_stamp()},
+    )
+
+    assert fresh["quota"]["summary"].count("[carried from") == 1
+    assert "2026-07-23T04:00:00+00:00" not in fresh["quota"]["summary"]
+    assert fresh["quota"]["carried_from"] == source_stamp
+    assert f"[carried from {source_stamp}]" in fresh["quota"]["summary"]
 
 
 def test_a_partial_but_present_quota_is_left_exactly_as_scraped(tmp_path, monkeypatch):
