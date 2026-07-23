@@ -162,6 +162,23 @@ test / lint / hook / code (cannot recur silently).
 A stronger guard exists ⇒ slash the pitfall. A warning the environment
 already prevents is orientation tax on every future wake.
 
+When you build that strongest rung, know the two ways it dies **without
+telling you**. First: a guard gated on a condition the past can no longer
+satisfy — a check that demands a field every historical record would have
+to be rewritten to carry. It reads as caution and is a permanent off
+switch, because the bar it sets can never be cleared by later discipline.
+Second: a broad `except` wrapped around a seam that was still being built
+when the caller was written. It catches precisely the error it was meant
+to survive, so the seam stays broken and silent for as long as anyone
+cares to leave it. Both fail *green*. The only thing that finds either
+one is running the guard against real data and reading what comes back.
+
+Same shape, one layer out: **a negative test whose fixture can become
+legal is a time bomb.** A test asserting some feature stays absent, keyed
+to an input that later ships as valid, keeps passing while quietly
+inverting into a lock on the bug it was written to prevent. Assert that
+the fixture stays illegal, or the test outlives its own meaning.
+
 One class of friction is yours alone to notice: **a wake surface that
 renders is not a wake surface that's current.** The blocks assembled into
 your context — recent activity, injected memory, docs listings, plan
@@ -194,6 +211,15 @@ correspondent, not the one who asked — so write the body to stand on its
 own, without the other thread's context; and a redirect is a rescue, not a
 routing plan. When you know the audience is on another channel, address
 that channel deliberately instead of leaning on the catch.
+
+That rescue has an edge it cannot reach: **no gate owns a
+`spawn_completed`**, so an `event:` reply addressed to one is refused
+outright rather than redirected — there is no channel to redirect it to.
+A worker's completion is a fact for *you*, not a message with a
+correspondent. Fold what it told you into the reply to the user event that
+asked for the work, and check `notices` afterwards either way: a refused
+file is deleted exactly like an accepted one, so the drop leaves no trace
+where you were looking.
 
 ## Keep this place useful
 
