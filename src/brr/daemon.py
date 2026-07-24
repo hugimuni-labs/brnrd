@@ -781,6 +781,29 @@ def _record_task_runner(
         task.meta["runner_class"] = selected.cost_class
 
 
+def _enrich_catalog_quota(
+    catalog: "list[dict[str, Any]]",
+    brr_dir: "Path",
+) -> None:
+    """Stamp each catalog row with its pool's current level (in-place, #632).
+
+    One read per pool: :func:`gates.cloud.quota_shell_labels` calls
+    ``_quota_snapshot`` once, returns a ``{shell: label}`` map, and we apply
+    the same label to every row sharing that shell.  Rows whose shell has no
+    reading are left untouched — the renderer then renders them exactly as
+    before (standing decision 2: unknown stays unknown, never fabricated).
+    """
+    try:
+        from .gates import cloud as _cloud
+        labels = _cloud.quota_shell_labels(brr_dir)
+    except Exception:
+        return
+    for row in catalog:
+        shell = str(row.get("shell") or "").strip()
+        if shell and shell in labels and labels[shell] is not None:
+            row["quota_level"] = labels[shell]
+
+
 def _quality_escalation_meta(
     repo_root: Path,
     runner_name: str | None,
@@ -2794,6 +2817,7 @@ def _run_worker(
     extra_runner_args = runtime.extra_args
     run_hooks_installed = runtime.hooks_installed
     runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
+    _enrich_catalog_quota(runner_catalog, brr_dir)
     _record_task_runner(task, runner_choice)
     run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
     task.save(runs_dir)
@@ -3522,6 +3546,7 @@ def _run_worker(
             runner_catalog = runner.available_runner_catalog(
                 repo_root, selected=runner_name,
             )
+            _enrich_catalog_quota(runner_catalog, brr_dir)
             quality_escalation = _quality_escalation_meta(repo_root, runner_name)
             _record_task_runner(task, runner_choice)
             run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
@@ -6652,6 +6677,29 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         )
         if text:
             summary = f"{summary}\n\n{text}"
+    # #648: produce handles — what the child actually delivered.
+    # Rule 1: absent stays absent. No .pr → no spawn_pr_number at all;
+    # no publish_branch → no spawn_published_branch. Never 0, None, or
+    # empty-string in place of a missing fact. These keys answer "what did
+    # the child deliver?" and are in a distinct namespace from
+    # spawn_contract_* (which answers "did it meet its declared spec?").
+    produce_kwargs: dict = {}
+    published_branch = str(task.meta.get("publish_branch") or "").strip()
+    if published_branch:
+        produce_kwargs["spawn_published_branch"] = published_branch
+    # The PR handle is read from ``task.meta``, captured by
+    # ``_capture_pr_handle`` while the outbox still existed. Reading the
+    # ``.pr`` control *here* cannot work: this function runs after the child's
+    # future resolves, and that future's `finally` has already rmtree'd the
+    # outbox the control lives in. Driven, not assumed — see
+    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``.
+    pr_num = str(task.meta.get("pr_number") or "").strip()
+    if pr_num:
+        produce_kwargs["spawn_pr_number"] = pr_num
+    if contract is not None and contract.get("spec_report"):
+        produce_kwargs["spawn_report_path"] = contract["spec_report"]
+        if contract.get("report_found") is not None:
+            produce_kwargs["spawn_report_found"] = bool(contract["report_found"])
     try:
         completion = protocol.create_event(
             inbox_dir,
@@ -6661,6 +6709,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             spawned_by_run=task.id,
             spawn_parent_run_id=parent_run_id,
             **contract_kwargs,
+            **produce_kwargs,
         )
     except OSError as exc:
         print(f"[brnrd] spawn-completion notify failed for {task.id}: {exc}")
@@ -8604,7 +8653,31 @@ def _run_worker_and_finalize(
                 gitops.shared_brr_dir(repo_root), task.meta["presence_id"],
             )
         if task is not None and task.meta.get("outbox_path"):
+            # #648: the `.pr` control lives *inside* the outbox we are about
+            # to delete, and `_notify_spawn_parent` only runs after this
+            # function's future resolves — i.e. strictly after this `finally`.
+            # Reading `.pr` at notify time therefore always reads a path that
+            # no longer exists. Capture the handle here, while it is still on
+            # disk, so the completion event can carry a fact rather than a
+            # hole. Same reason the node's Produce section already has it: it
+            # is rendered during the run, not after it.
+            _capture_pr_handle(task, Path(str(task.meta["outbox_path"])))
             _remove_outbox(Path(str(task.meta["outbox_path"])))
+
+
+def _capture_pr_handle(task: Run, outbox_dir: Path) -> None:
+    """Stash the run's own ``.pr`` number on ``task.meta`` before teardown.
+
+    Absent stays absent (#648 standing decision 1): no ``.pr`` ⇒ no key, so a
+    consumer can still tell "no PR" from "PR unknown". Never raises — a
+    produce convenience must not be able to fail a run's teardown.
+    """
+    try:
+        pr_number = _read_pr_control(outbox_dir / _PR_CONTROL_NAME)
+    except Exception:  # noqa: BLE001 - teardown must not fail on a convenience
+        return
+    if pr_number:
+        task.meta["pr_number"] = str(pr_number)
 
 
 # ── Burst coalescing (dispatch debounce) ────────────────────────────
