@@ -104,7 +104,11 @@ never escalate the environment a higher tier configured.
   after 90 — the queue is a relay, not an archive), and durable routing metadata
   (sender id/username, chat id, repo name, comment URL). If you run
   `brnrd account connect`, **dashboard publishing** additionally mirrors seven
-  lanes of repo-derived content to brnrd.dev on a ~25-second cadence. That is the
+  lanes of repo-derived content to brnrd.dev every 3 seconds. Read that as
+  continuous mirroring rather than periodic snapshotting: what an agent writes
+  into a published lane is on brnrd.dev seconds later. The cadence bounds how
+  *stale* the mirror can be; it bounds nothing about review, because there is no
+  interval in which you could read what is about to ship and stop it. That is the
   largest outbound surface brnrd has, so it gets its own section below rather than
   a clause here. **No publisher reads your working tree**, so brnrd does not ship
   your checkout or a `git diff` of it. That is a statement about the mechanism,
@@ -135,10 +139,14 @@ lane below exists. The tables were produced by driving each publisher and
 capturing the payload, not by reading the code — where a claim could not be
 driven, it says so.
 
-The daemon PUTs seven snapshots to brnrd.dev roughly every 25 seconds. Each is a
-**render cache**, replaced wholesale on every publish: the repo, dominion, and
-knowledge repos remain the durable copies, and disconnecting your last repo
-deletes the mirror server-side.
+The daemon runs a single publisher thread that walks all seven lanes and then
+sleeps, so the lanes are re-published every 3 seconds plus the time the round
+trips take. Six of them PUT unconditionally on every pass; the corpus lane — the
+largest — PUTs only when its fingerprint has changed, which makes it
+change-driven rather than periodic and puts an edited page on brnrd.dev within
+one pass of the edit. Each snapshot is a **render cache**, replaced wholesale on
+every publish: the repo, dominion, and knowledge repos remain the durable copies,
+and disconnecting your last repo deletes the mirror server-side.
 
 | Lane | Endpoint | What it carries | Free text? |
 |---|---|---|---|
