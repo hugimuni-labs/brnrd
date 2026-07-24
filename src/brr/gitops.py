@@ -559,7 +559,32 @@ _RUN_ID_HOOK_SCRIPT = (
     "#!/bin/sh\n"
     f"{_RUN_ID_HOOK_MARKER}\n"
     'if [ -n "$BRR_RUN_ID" ]; then\n'
+    # Newline guard — load-bearing, see comment above.
     '  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf \'\\n\' >> "$1"; fi\n'
+    # Close-keyword predicate (#652): a run may not use "Closes #NNN qualifier" —
+    # GitHub drops the qualifier silently and the issue closes against the author's
+    # intent.  Refused when BRR_RUN_ID is set (run commits only); a maintainer
+    # typing the same line by hand is not bound here (see issue for the trade-off).
+    # POSIX sh / POSIX ERE — grep -E, no \b, explicit character classes.
+    #
+    # The dirty pattern: keyword + #NNN + whitespace + a char that is not ","
+    # or "#" or whitespace.  The space-then-qualifier shape is what the spec
+    # cases share; "Fix #NNN: description" (colon immediately, no space) and
+    # "does not close #NNN." (period immediately) both lack the leading space
+    # and so pass through cleanly.  A comma signals a multi-close (#413, #414)
+    # and a "#" signals a second issue number — both allowed.
+    '  _BRR_DIRTY=\'(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+[[:space:]]+[^,#[:space:]]\'\n'
+    '  while IFS= read -r _brr_ln; do\n'
+    '    if echo "$_brr_ln" | grep -qiE "${_BRR_DIRTY}"; then\n'
+    '      printf \'commit-msg: close keyword with qualifier (GitHub drops the qualifier and closes the issue).\\n\' >&2\n'
+    '      printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '      printf \'  Use instead:\\n\' >&2\n'
+    '      printf \'    Part of #NNN ...   (scoped ref — does not close)\\n\' >&2\n'
+    '      printf \'    Closes #NNN.       (bare close — no qualifier)\\n\' >&2\n'
+    '      printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
+    '      exit 1\n'
+    '    fi\n'
+    '  done < "$1"\n'
     f'  git interpret-trailers --if-exists doNothing '
     f'--trailer "{RUN_ID_TRAILER}=$BRR_RUN_ID" --in-place "$1"\n'
     "fi\n"
