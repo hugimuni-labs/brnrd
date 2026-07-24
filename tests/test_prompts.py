@@ -12,6 +12,7 @@ from brr.prompts import (
     _build_runner_policy_block,
     _build_work_surface_block,
     _build_work_surface_block_scored,
+    _entry_key,
     _format_recent_conversation,
     _read_recent_log,
     _tail_trim_entries,
@@ -169,14 +170,19 @@ class TestContextInjection:
 # throw both facts away. These pin the TrimResult it now returns and the
 # in-text provenance stamp (§P1 move 4b) built from it.
 #
-# Date-extraction rule (obeyed exactly, per spec): the first `YYYY-MM-DD`
-# in a heading line, day granularity only — no time-of-day is parsed even
-# when a heading's run-id embeds one. The fixtures below therefore express
-# the ledger-inversion class as a *cross-day* drift (an older-dated entry
-# sitting below a newer-dated one), not the literal same-day 11:31-vs-13:42
-# incident, which day-only granularity cannot distinguish. See the run
-# report for why this is flagged as a spec gap rather than silently
-# "fixed" by parsing time-of-day too.
+# Two facts an entry carries, kept apart on purpose (#607 → #610 → #670):
+#
+# - What it is **ordered** by: the run-id's own instant, date and clock
+#   together (`_runid_instant`). A heading with no run-id is orderable to
+#   the day and no finer.
+# - What it **shows**: the first `YYYY-MM-DD` on the heading line — the
+#   editorial date — plus the run-id's clock *only when the run-id's date
+#   agrees*, so a cross-midnight entry never renders as an instant that
+#   never existed.
+#
+# The original spec cut said day granularity only; #607 added run-id times
+# to catch the literal same-day 11:31-vs-13:42 incident, and both are
+# pinned below.
 
 
 def _ledger_entry(date: str, run_id: str, bulk: int) -> str:
@@ -308,21 +314,108 @@ class TestBlockAttestation:
         assert "day precision" in result.text
         assert "NOT current" not in result.text
 
-    def test_a_runid_whose_date_contradicts_the_heading_is_not_trusted(self):
-        """A run-id dated differently from its heading is two facts glued together.
+    # ── #670 — a run-id is a complete instant ────────────────────────────
+    #
+    # `_heading_time` used to return `None` whenever a run-id's date
+    # disagreed with its heading's, so the entry counted as untimed and held
+    # its whole cohort at day precision. The premise was right — "a heading
+    # date paired with some other day's clock time is not a timestamp, it is
+    # two facts glued together" — and the remedy dropped the wrong half:
+    # `run-260723-2353` is *by itself* a complete instant, and ordering wants
+    # the write time. The splice is refused where it was always the hazard
+    # (display), not where it never was (ordering).
+    #
+    # These fixtures are the shape production actually emits: a run that
+    # starts at 23:53 and writes its ledger entry after midnight dates the
+    # heading by the day it is writing about. Driven on the live ledger
+    # 2026-07-24: 15 such entries out of 177.
 
-        Measured on the live ledger: 14 of 160 entries disagree (written after
-        midnight about the previous day's run). Borrowing that clock time would
-        invent an ordering, so precision is refused for the whole set and the
-        comparison falls back to days.
+    def test_a_cross_midnight_runid_orders_by_its_own_instant(self):
+        """The write instant comes from the run-id whole, heading date or not.
+
+        Ordering key, not display: the 23:53 entry sorts *before* the 00:59
+        one though both headings read 2026-07-24, and the heading date is
+        what each still reports.
         """
-        e1 = "## A (2026-07-23, run-260722-2358-aaaa)\n\n" + ("x" * 200)
-        e2 = "## B (2026-07-23, run-260723-1342-bbbb)\n\n" + ("y" * 200)
-        content = "\n\n".join([e1, e2]) + "\n"
+        crossed = _entry_key(_ledger_entry("2026-07-24", "run-260723-2353-4hic", 10))
+        after = _entry_key(_ledger_entry("2026-07-24", "run-260724-0059-pe1x", 10))
 
-        result = _tail_trim_entries(content, max_bytes=len(e2.encode()) + 10, source_hint="`x`")
+        assert (crossed.order_date, crossed.order_time) == ("2026-07-23", "2353")
+        assert (after.order_date, after.order_time) == ("2026-07-24", "0059")
+        assert crossed.order_date < after.order_date, "23:53 was written first"
 
-        assert result.precise is False, "one contradicting run-id downgrades the set"
+        # Display never glues: the heading's date is the editorial fact, and
+        # the run-id's clock may only sit beside a date it belongs to.
+        assert crossed.shown_date == "2026-07-24"
+        assert crossed.shown_time is None
+        assert after.shown_time == "0059"
+
+    def test_cross_midnight_entry_no_longer_holds_the_cohort_at_day_precision(self):
+        """#670's acceptance, at the shape the live ledger has every day.
+
+        Before: the 23:53 entry read as untimed, so the whole 2026-07-24
+        cohort fell to day precision and the marker had to hedge — on an
+        hourly-tick account, most days. After: every entry on the newest
+        *write* date carries a clock, so the strong tier fires.
+        """
+        crossed = _ledger_entry("2026-07-24", "run-260723-2353-4hic", 200)
+        early = _ledger_entry("2026-07-24", "run-260724-0059-pe1x", 200)
+        latest = _ledger_entry("2026-07-24", "run-260724-1220-vzco", 200)
+        content = "\n\n".join([crossed, early, latest]) + "\n"
+        budget = len(early.encode("utf-8")) + len(latest.encode("utf-8")) + 10
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+
+        assert result.precise is True
+        assert result.stale is False
+        assert result.newest_item == "2026-07-24 12:20"
+        assert result.oldest_item == "2026-07-24 00:59"
+        assert "the newest entry in the source" in result.text
+        assert "day precision" not in result.text
+
+    def test_a_cross_midnight_tail_below_a_later_entry_is_caught_as_stale(self):
+        """The inversion the old key was structurally blind to.
+
+        The source's true newest was written at 00:59; the tail kept the
+        entry written at 23:53 the previous evening. Both headings read
+        2026-07-24, and under corroboration-gating the 23:53 entry was
+        untimed — so ``precise`` was ``False``, the same-day tier could not
+        run, and the trim reported "not known to be stale" over a tail that
+        demonstrably was.
+        """
+        newer = _ledger_entry("2026-07-24", "run-260724-0059-pe1x", 200)
+        older = _ledger_entry("2026-07-24", "run-260723-2353-4hic", 200)
+        content = "\n\n".join([newer, older]) + "\n"
+        budget = len(older.encode("utf-8")) + 10  # admits only the bottom entry
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+
+        assert result.precise is True
+        assert result.stale is True, "an ordering the run-ids decide must be decided"
+        assert "NOT current" in result.text
+        # Constraint the fix must not break: the reported item is still the
+        # *heading* date. The tail's newest renders bare — its clock belongs
+        # to 2026-07-23 and may not be printed beside 2026-07-24.
+        assert result.newest_item == "2026-07-24"
+        assert result.source_newest == "2026-07-24 00:59"
+
+    def test_a_heading_with_no_runid_at_all_is_still_untimed(self):
+        """The residual #670 narrows *to*, and deliberately does not close.
+
+        No run-id means no clock was ever recorded, and none may be
+        invented. Such an entry on the newest write date still holds the
+        cohort at day precision — the genuinely unrepairable legacy set the
+        old docstring was describing, now the only thing left in it.
+        """
+        legacy = "## Legacy, no run-id (2026-07-24)\n\n" + ("w" * 200)
+        timed = _ledger_entry("2026-07-24", "run-260724-1220-vzco", 200)
+        content = "\n\n".join([legacy, timed]) + "\n"
+
+        result = _tail_trim_entries(
+            content, max_bytes=len(timed.encode("utf-8")) + 10, source_hint="`x`"
+        )
+
+        assert result.precise is False, "a missing clock is not a recoverable one"
         assert result.stale is False
         assert "day precision" in result.text
 

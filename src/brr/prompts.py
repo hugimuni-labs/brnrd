@@ -20,7 +20,7 @@ import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import account, config as conf, dev_reload, forge_state
 
@@ -130,30 +130,90 @@ def _heading_date(entry: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _heading_time(entry: str, date: str) -> str | None:
-    """``HHMM`` from a run-id in the heading, but only if it *corroborates*.
+def _runid_instant(entry: str) -> tuple[str, str] | None:
+    """``(YYYY-MM-DD, HHMM)`` from a run-id in the heading, or ``None``.
 
-    A run-id embeds both a date and a time. The time is trusted only when
-    the run-id's own date matches the heading's date — measured on this
-    account's live ledger, 14 of 160 entries disagree (an entry written
-    after midnight about the previous day's run), and a heading date paired
-    with some other day's clock time is not a timestamp, it is two facts
-    glued together. Returns ``None`` on any disagreement or absence, which
-    downgrades the comparison to day granularity rather than guessing.
+    A run-id is **one fact, not two**: ``run-260723-2353-4hic`` names the
+    instant a run started, date and clock together, and needs nothing else
+    to be unambiguous.
+
+    That distinction is the correction #670 landed. This used to be
+    ``_heading_time``, which returned the run-id's clock only when the
+    run-id's *date* matched the heading's, on the ground that "a heading
+    date paired with some other day's clock time is not a timestamp, it is
+    two facts glued together." The premise was right and the remedy dropped
+    the wrong half: it discarded a perfectly good instant to protect a
+    splice nobody needed to make. Cross-midnight disagreement is not a
+    legacy-discipline problem that better writing retires — a run that
+    starts at 23:53 and writes its entry after midnight dates the heading
+    by the day it is writing about, structurally, forever — so keying
+    ordering on corroboration held ``precise`` at ``False`` on any day the
+    ledger contained one such entry, which on an hourly-tick account is
+    most days.
+
+    The heading date remains what a reader is *shown* (see
+    ``_EntryKey.shown_time``, which still refuses the splice); the run-id
+    is what the entries are *ordered* by, and ordering wants the write
+    time — which is also what the file's own append order already reflects.
     """
     match = _HEADING_RUNID_RE.search(entry.split("\n", 1)[0])
     if not match:
         return None
     yy, mm, dd, hhmm = match.groups()
-    return hhmm if f"20{yy}-{mm}-{dd}" == date else None
+    return f"20{yy}-{mm}-{dd}", hhmm
 
 
-def _entry_key(entry: str) -> tuple[str, str | None] | None:
-    """``(date, time_or_None)`` for a ``## `` entry, or ``None`` if undated."""
+class _EntryKey(NamedTuple):
+    """What one ``## `` entry contributes to ordering, and what it may show.
+
+    Two roles the pre-#670 key conflated into a single ``(date, time)``
+    pair, which is why it had to discard a time to keep the pair coherent:
+
+    - ``order_date`` / ``order_time`` — the **write instant**, taken whole
+      from the run-id when the heading carries one. ``order_time`` is
+      ``None`` only when there is no run-id at all; that entry is orderable
+      to the day and no finer, and it is the genuinely unrepairable legacy
+      set (no clock was ever recorded, and none may be invented).
+    - ``shown_date`` — the heading's own date, the **editorial** fact a
+      reader wants in the trim marker. Never displaced by the run-id's
+      date: a cross-midnight entry is *about* 2026-07-24 even though it was
+      written at 2026-07-23 23:53.
+    """
+
+    order_date: str
+    order_time: str | None
+    shown_date: str
+
+    @property
+    def shown_time(self) -> str | None:
+        """The clock time it is honest to render *next to* ``shown_date``.
+
+        Only when the run-id corroborates the heading's date — otherwise
+        printing "2026-07-24 23:53" for an entry headed 2026-07-24 and run
+        at 2026-07-23 23:53 would glue two facts into a timestamp that
+        never existed. Ordering does not need this restraint (it reads the
+        run-id's own date alongside its clock); display does, because a
+        rendered ``date time`` pair is read as one instant.
+        """
+        return self.order_time if self.order_date == self.shown_date else None
+
+
+def _entry_key(entry: str) -> _EntryKey | None:
+    """The ordering/display key for a ``## `` entry, or ``None`` if undated.
+
+    ``None`` — not attestable — exactly when the *heading* carries no
+    parseable date, unchanged by #670. A run-id alone does not rescue such
+    an entry: the heading date is what the trim reports, and an entry with
+    nothing to report is one whose date could just as well have been the
+    true newest.
+    """
     date = _heading_date(entry)
     if date is None:
         return None
-    return date, _heading_time(entry, date)
+    instant = _runid_instant(entry)
+    if instant is None:
+        return _EntryKey(order_date=date, order_time=None, shown_date=date)
+    return _EntryKey(order_date=instant[0], order_time=instant[1], shown_date=date)
 
 
 def _entries_attestation(
@@ -175,9 +235,9 @@ def _entries_attestation(
 
     - Dates differ ⇒ compare days. Sound at any precision.
     - Dates tie ⇒ compare times, but **only when every entry sharing the
-      source's newest date carries a corroborated one** (*precise*). That
-      cohort is exactly the set that can decide a tie; an entry on an older
-      date is settled by the day comparison above and its missing time is
+      source's newest write date carries one** (*precise*). That cohort is
+      exactly the set that can decide a tie; an entry on an older date is
+      settled by the day comparison above and its missing time is
       irrelevant. This is the tier that catches the incident the feature is
       named after — an 11:31 entry sitting below a 13:42 one, both dated
       2026-07-23, which day granularity reports as healthy.
@@ -192,50 +252,76 @@ def _entries_attestation(
     picked_keys = [_entry_key(e) for e in picked_entries]
 
     # Precise only if every entry that could *decide* the comparison carries a
-    # corroborated time — and that is the cohort sharing the source's newest
-    # date, not the whole file. Time is only ever the tie-breaker: an entry
-    # dated earlier than the source's newest can never be the source's newest,
-    # so its missing time cannot change the verdict. Scoping this to the whole
-    # file was strictly stronger than the proof needs, and the cost was not
-    # theoretical — measured on this account's live ledger (162 entries, 55
-    # untimed, but only 1 untimed on the newest date), whole-file scope holds
-    # `precise` at False permanently. Legacy headings cannot be repaired
-    # without inventing timestamps, so the strong tier could never turn on,
-    # however disciplined later writing became: a guard gated on a condition
-    # the past can no longer satisfy is a guard that never fires.
-    top_date = max(k[0] for k in all_keys)
-    precise = all(k[1] is not None for k in all_keys if k[0] == top_date)
+    # time — and that is the cohort sharing the source's newest **write** date,
+    # not the whole file. Time is only ever the tie-breaker: an entry written
+    # earlier than the source's newest can never be the source's newest, so its
+    # missing time cannot change the verdict.
+    #
+    # Two narrowings, both driven, both load-bearing:
+    #
+    # - #610 scoped the cohort from whole-file to top-date. Measured then on
+    #   this account's live ledger: 162 entries, 55 untimed, but only 1 untimed
+    #   on the newest date — whole-file scope held `precise` at False
+    #   permanently, since legacy headings cannot be repaired without inventing
+    #   timestamps.
+    # - #670 stopped requiring the run-id's date to *corroborate* the heading's
+    #   before its clock counted (see `_runid_instant`). Top-date scope alone
+    #   still never fired: measured 2026-07-24 on the same ledger — 177 entries,
+    #   56 untimed, 14 on the top date of which exactly 1 untimed, and that one
+    #   a cross-midnight entry (`## … (2026-07-24, run-260723-2353-4hic)`).
+    #   That residual is structural, not legacy: every run that starts before
+    #   midnight and writes after it produces another, so no amount of
+    #   discipline retires it. After #670 the same ledger reports 13 entries on
+    #   the top *write* date, 0 untimed, `precise` True — and 41 untimed
+    #   file-wide rather than 56, the 15 recovered ones being exactly the
+    #   cross-midnight entries whose clocks were previously discarded.
+    #
+    # A guard gated on a condition the future can no longer satisfy is a guard
+    # that never fires. What remains is the genuinely unrepairable set: headings
+    # carrying no run-id at all, for which no clock was ever recorded.
+    top_date = max(k.order_date for k in all_keys)
+    precise = all(
+        k.order_time is not None for k in all_keys if k.order_date == top_date
+    )
 
     # Normalize the missing time to "" before ordering: a set mixing timed and
     # untimed headings would otherwise compare str against None and raise.
     # Safe because staleness only consults the time component when both sides
     # sit on `top_date` (see below), where `precise` guarantees a real time —
     # so "" is never the deciding term.
-    def _ord(key: tuple[str, str | None]) -> tuple[str, str]:
-        return key[0], key[1] or ""
+    def _ord(key: _EntryKey) -> tuple[str, str]:
+        return key.order_date, key.order_time or ""
 
     newest_key = max(picked_keys, key=_ord)
     oldest_key = min(picked_keys, key=_ord)
     source_key = max(all_keys, key=_ord)
 
-    if source_key[0] > newest_key[0]:
+    if source_key.order_date > newest_key.order_date:
         stale = True
     elif precise:
-        stale = source_key > newest_key
+        stale = _ord(source_key) > _ord(newest_key)
     else:
         stale = False
 
-    def shown(key: tuple[str, str | None]) -> str:
+    def shown(key: _EntryKey) -> str:
         """Render a key for human eyes, at the precision actually established.
 
         When the comparison was precise, the time *must* appear: a same-day
         alarm that renders as "newest 2026-07-23 — source has 2026-07-23" is
         correct and unreadable, and an alarm nobody can parse is not much
         better than the silence it replaced.
+
+        ``shown_time`` is ``None`` for a cross-midnight entry even when the
+        comparison ran at full precision — that entry's clock belongs to
+        another day and may not be printed beside this one's date. Ordering
+        used the whole instant; display shows only the half that is this
+        entry's own. Each side of the range renders at the precision it
+        actually has, which is why a marker can legitimately read
+        "showing 2026-07-24 → 2026-07-24 00:59".
         """
-        if precise and key[1]:
-            return f"{key[0]} {key[1][:2]}:{key[1][2:]}"
-        return key[0]
+        if precise and key.shown_time:
+            return f"{key.shown_date} {key.shown_time[:2]}:{key.shown_time[2:]}"
+        return key.shown_date
 
     return shown(newest_key), shown(oldest_key), shown(source_key), stale, precise
 
@@ -283,9 +369,10 @@ class TrimResult:
     precise: bool = False
     """Whether same-day ordering was actually checkable for this trim.
 
-    ``True`` only when every entry sharing the source's newest date — the
-    cohort that can actually decide a same-day tie — carried a *corroborated*
-    run-id time. When ``False`` and the tail's newest shares a date with the source's
+    ``True`` only when every entry sharing the source's newest **write** date
+    — the cohort that can actually decide a same-day tie — carried a run-id,
+    hence a clock (see :func:`_runid_instant`). When ``False`` and the tail's
+    newest shares a date with the source's
     newest, this result can say "not known to be stale" but **must not** say
     the tail is current — a distinction :func:`_trim_marker` renders and
     ``attest_blocks`` respects by staying silent rather than reassuring.
