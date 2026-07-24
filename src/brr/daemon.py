@@ -87,6 +87,7 @@ from . import schedule as schedule_mod
 from . import spending_plan
 from . import sync
 from . import transcript
+from . import trust
 from . import updates
 from . import release_availability
 from . import usage_samples
@@ -1072,6 +1073,12 @@ def _write_control_response(target: _DispatchTarget, body: str) -> None:
     _set_event_status_if_present(target.event, "done")
 
 
+_CONTROL_VERB_REFUSE_MSG = (
+    "This approval was not applied because it did not come from the "
+    "operator's own channel."
+)
+
+
 def _handle_runner_policy_control_event(
     target: _DispatchTarget,
     account_context: account.AccountContext,
@@ -1080,6 +1087,20 @@ def _handle_runner_policy_control_event(
     if parsed is None:
         return False
     action, proposal_id = parsed
+    # Owner-tier gate — must be first, before any proposal lookup.
+    # Checking tier after a lookup would turn this handler into an existence
+    # oracle (a non-owner could distinguish "not found" from "not authorised"
+    # by watching the response wording).
+    tier = trust.resolve_tier(target.event)
+    if tier != trust.OWNER:
+        print(
+            f"[brnrd] control verb refuse "
+            f"event={target.event.get('id', '')} "
+            f"source={target.event.get('source', '')} "
+            f"tier={tier} verb=runner-policy"
+        )
+        _write_control_response(target, _CONTROL_VERB_REFUSE_MSG)
+        return True
     proposal = _read_runner_policy_proposal(account_context, proposal_id)
     if proposal is None:
         _write_control_response(
@@ -1416,11 +1437,33 @@ def _handle_config_change_control_event(
     if parsed is None:
         return False
     action, proposal_id = parsed
+    # Owner-tier gate — must be first, before any proposal lookup, for the
+    # same existence-oracle reason as the runner-policy handler above.
+    tier = trust.resolve_tier(target.event)
+    if tier != trust.OWNER:
+        print(
+            f"[brnrd] control verb refuse "
+            f"event={target.event.get('id', '')} "
+            f"source={target.event.get('source', '')} "
+            f"tier={tier} verb=config-change"
+        )
+        _write_control_response(target, _CONTROL_VERB_REFUSE_MSG)
+        return True
     proposal = _read_config_change_proposal(account_context, proposal_id)
     if proposal is None:
         _write_control_response(
             target,
             f"I couldn't find config-change proposal `{proposal_id}`. No config changed.",
+        )
+        return True
+
+    event_conv = conversations.conversation_key_for_event(target.event) or ""
+    proposal_conv = str(proposal.get("conversation_key") or "").strip()
+    if proposal_conv and event_conv and proposal_conv != event_conv:
+        _write_control_response(
+            target,
+            f"I did not apply config-change proposal `{proposal_id}` because "
+            "the approval came from a different conversation.",
         )
         return True
 
