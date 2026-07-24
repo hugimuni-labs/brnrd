@@ -369,9 +369,18 @@ def _safe_next(value: str) -> str:
 
 
 def _terms_accept_url(next_url: str) -> str:
+    """Where a caller sends someone to *accept* the hosted-execution terms.
+
+    ``/beta-hosted-execution``, not ``/terms``. ``/terms`` is now the
+    service-wide Terms of Service — a document with no acceptance widget on
+    it, because the widget writes ``hosted_terms_accepted_at`` and that
+    record belongs to the hosted-execution addendum alone (#569: do not
+    silently repurpose it as acceptance of the general ToS). The addendum
+    and the checkbox that records it live on the same page.
+    """
     from urllib.parse import quote
 
-    return f"/terms?next={quote(_safe_next(next_url), safe='/')}"
+    return f"/beta-hosted-execution?next={quote(_safe_next(next_url), safe='/')}"
 
 
 def _needs_hosted_terms(account: Account) -> bool:
