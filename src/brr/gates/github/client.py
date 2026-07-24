@@ -10,11 +10,23 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 from . import paths
 from .constants import _API_ROOT, _API_VERSION, _HTTP_TIMEOUT, _USER_AGENT
+
+# Hosts allowed to receive the operator's GitHub token on an attachment
+# fetch. Attachment URLs are extracted from comment bodies — attacker-chosen
+# input — so this is an allowlist, never a blocklist. Subdomains of these
+# are included; unrelated hosts get an unauthenticated request.
+_TOKEN_BEARING_HOSTS = ("github.com", "githubusercontent.com")
+
+# Matches the telegram gate's cap (``gates/telegram.py``). An attachment
+# fetch with no ceiling is an unbounded write into the daemon's temp dir,
+# reachable by anyone who can post a comment.
+_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 # One Session for the gate's single loop thread: keep-alive reuses the
 # TCP/TLS connection across polls (and conditional ETag requests) instead
@@ -133,36 +145,74 @@ def _github_error_message(response: requests.Response) -> str:
     return response.reason or ""
 
 
+def _is_github_host(url: str) -> bool:
+    """Is *url* served by GitHub itself, so the token may ride the request?
+
+    Exact host match or a subdomain of one — never a suffix match, which
+    ``attacker-github.com`` and ``github.com.evil.test`` both satisfy.
+    """
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if not host:
+        return False
+    return any(
+        host == allowed or host.endswith("." + allowed)
+        for allowed in _TOKEN_BEARING_HOSTS
+    )
+
+
 def _download_url(
     token: str, url: str, dest: Path, *, timeout: float = _HTTP_TIMEOUT,
 ) -> bool:
-    """GET an arbitrary URL and write its body to *dest*. Returns success.
+    """GET an attachment URL and write its body to *dest*. Returns success.
 
     For inline image attachments (``user-attachments/assets/...`` links
     embedded in issue/PR/comment bodies) — these live outside the
     ``_API_ROOT``-scoped REST surface ``_request`` targets, so they need
-    a plain GET rather than the JSON API helpers above. ``Authorization``
-    is only honoured by ``requests`` on the first hop: it's stripped
-    automatically on any cross-host redirect (github.com's attachment
-    URL typically 302s to a signed, time-limited S3 object), so this
-    never leaks the token to whatever host actually serves the bytes.
+    a plain GET rather than the JSON API helpers above.
+
+    **The token rides only to GitHub's own hosts.** The URL comes out of a
+    comment body via a regex that matches *any* ``https?://`` link
+    (:func:`brr.gates.github.attachments.extract_image_urls`), so it is
+    attacker-chosen input: without this check, an image embed pointed at
+    any host in the world was served the operator's GitHub token on hop 1.
+    An earlier docstring here reasoned — correctly — that ``requests``
+    strips ``Authorization`` on a *cross-host redirect*, and github.com's
+    attachment URLs do 302 to signed S3 objects. That defence is real and
+    guards the wrong case: a directly-named foreign URL never redirects,
+    so hop 1 *is* the exfiltration. Non-GitHub URLs are still fetched, but
+    unauthenticated — a public image stays readable, a credential does not
+    leave.
+
+    Responses are capped at :data:`_MAX_ATTACHMENT_BYTES`, matching the
+    telegram and cloud gates: the same primitive is otherwise an
+    unbounded write into the daemon's temp dir.
+
     Any non-2xx or transport error returns ``False`` rather than raising —
     a failed attachment download shouldn't drop the whole event.
     """
+    headers = {"User-Agent": _USER_AGENT}
+    if _is_github_host(url):
+        headers["Authorization"] = f"Bearer {token}"
     try:
-        response = _SESSION.get(
-            url,
-            headers={"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT},
-            timeout=timeout,
-            stream=True,
-        )
+        response = _SESSION.get(url, headers=headers, timeout=timeout, stream=True)
     except requests.RequestException:
         return False
     if not 200 <= response.status_code < 300:
         return False
+    written = 0
     try:
         with open(dest, "wb") as fh:
             for chunk in response.iter_content(65536):
+                written += len(chunk)
+                if written > _MAX_ATTACHMENT_BYTES:
+                    # Refuse the whole file rather than keep a truncated
+                    # image: a half-written attachment is worse than none.
+                    fh.close()
+                    dest.unlink(missing_ok=True)
+                    return False
                 fh.write(chunk)
     except OSError:
         return False
