@@ -220,8 +220,9 @@ Customer gives HugiMuni **general written authorisation** to engage the
 sub-processors listed in **Annex III** for the purposes described there.
 
 Before engaging a new sub-processor or replacing an existing one, HugiMuni
-will update Annex III and give Customer notice of the change (by updating
-this document at its published location and dating the change). Customer
+will update the published sub-processors page at
+<https://brnrd.dev/sub-processors> — the authoritative, current list — and
+give Customer notice of the change there, dating the change. Customer
 may object to a new sub-processor on reasonable data-protection grounds
 within a reasonable period after notice; if HugiMuni and Customer cannot
 resolve the objection, Customer's remedy is to stop using the feature of
@@ -468,10 +469,13 @@ evidence.
 
 ## Annex III — Sub-processors
 
-General written authorisation (§9) covers the following sub-processors as
-of the date of this Agreement. "Processes" states which role's data each
-sub-processor actually touches, so the boundary in §0 stays intact through
-this table too — not every entry below handles Customer Content.
+The **authoritative, current sub-processor list is the published page at
+<https://brnrd.dev/sub-processors>** (see §9 for the notice mechanism); the
+table below is a snapshot as of the date of this Agreement and is not
+separately maintained. General written authorisation (§9) covers the listed
+sub-processors. "Processes" states which role's data each sub-processor
+actually touches, so the boundary in §0 stays intact through this table too
+— not every entry below handles Customer Content.
 
 | Sub-processor | Role | Location | Transfer basis | Processes |
 |---|---|---|---|---|
