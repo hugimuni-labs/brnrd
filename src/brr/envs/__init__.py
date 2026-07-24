@@ -825,6 +825,8 @@ class DockerEnv(WorktreeEnv):
         inner_template = runner._cmd_template(
             invocation.selected_runner or runner_name,
             cfg,
+            invocation.repo_root,
+            extra_args=invocation.extra_runner_args,
         )
         inner_cmd = runner._fill_prompt(inner_template, invocation.prompt, cfg)
         # Same contract as the host path (``invoke_runner``): since the

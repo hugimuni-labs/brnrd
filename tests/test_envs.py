@@ -1462,6 +1462,140 @@ def test_docker_github_token_not_duplicated_when_in_daemon_env(tmp_path, monkeyp
 
 
 # ---------------------------------------------------------------------------
+# container path codex hook argv (docker + solitary) — #413 §7 S13
+# ---------------------------------------------------------------------------
+
+def _codex_profile() -> "runner_select.RunnerProfile":
+    """Minimal codex RunnerProfile for argv-hook tests."""
+    return runner_select.RunnerProfile(
+        name="codex", profile="codex", shell="codex",
+    )
+
+
+_FAKE_HOOK_ARGS = ["-c", "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"brnrd hook post-tool\"}]}]"]
+
+
+def _docker_invoke_with_profile(
+    tmp_path,
+    monkeypatch,
+    *,
+    extra_runner_args=None,
+    profile=None,
+):
+    """Prepare a DockerEnv ctx, invoke with a RunnerProfile (not runner_cmd),
+    and return the captured docker run argv."""
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+
+    response_path = tmp_path / ".brr" / "responses" / "evt-hook.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    task = Run(id="task-hook", event_id="evt-hook", body="hook test")
+    cfg = {"docker.image": "brr/test-runner:latest"}
+
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, cfg, branch_plan=_plan(), response_path=response_path,
+    )
+
+    commands = []
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command)
+        or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
+    )
+    _stub_docker_runner(monkeypatch, commands=commands)
+
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-hook-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+        extra_runner_args=extra_runner_args or [],
+        selected_runner=profile or _codex_profile(),
+    )
+    envs.get_env("docker").invoke(ctx, "codex", invocation, cfg)
+    return commands[0]
+
+
+def test_docker_container_path_includes_codex_hook_args(tmp_path, monkeypatch):
+    """Container path (docker) must forward extra_runner_args into inner command.
+
+    Before fix: _cmd_template called without extra_args → hook flags absent.
+    """
+    command = _docker_invoke_with_profile(
+        tmp_path, monkeypatch, extra_runner_args=_FAKE_HOOK_ARGS,
+    )
+    # The inner command sits after the image name.
+    image_idx = command.index("brr/test-runner:latest")
+    inner = command[image_idx + 1:]
+    assert inner[:1] == ["codex"], f"expected codex as inner runner, got {inner}"
+    assert "-c" in inner, f"hook flag -c missing from inner argv: {inner}"
+    assert any("hooks.PostToolUse" in arg for arg in inner), (
+        f"hook arg not in inner argv: {inner}"
+    )
+
+
+def test_solitary_container_path_includes_codex_hook_args(tmp_path, monkeypatch):
+    """SolitaryEnv inherits DockerEnv.invoke; the same fix must reach it.
+
+    Before fix: same _cmd_template call without extra_args.
+    """
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+
+    response_path = tmp_path / ".brr" / "responses" / "evt-sol-hook.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    task = Run(id="task-sol-hook", event_id="evt-sol-hook", body="hook test")
+    cfg = {"docker.image": "brr/test-runner:latest"}
+
+    backend = envs.get_env("solitary")
+    ctx = backend.prepare(
+        task, tmp_path, cfg, branch_plan=_plan(), response_path=response_path,
+    )
+
+    recorder = _DockerRecorder()
+    monkeypatch.setattr(envs.subprocess, "run", recorder)
+    _stub_docker_runner(monkeypatch, commands=recorder.commands)
+
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-sol-hook-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+        extra_runner_args=_FAKE_HOOK_ARGS,
+        selected_runner=_codex_profile(),
+    )
+    backend.invoke(ctx, "codex", invocation, cfg)
+
+    command = recorder.runner_argv()
+    image_idx = command.index("brr/test-runner:latest")
+    inner = command[image_idx + 1:]
+    assert "-c" in inner, f"hook flag -c missing from inner argv: {inner}"
+    assert any("hooks.PostToolUse" in arg for arg in inner), (
+        f"hook arg not in inner argv: {inner}"
+    )
+
+
+def test_docker_container_path_no_stray_args_when_extra_runner_args_empty(
+    tmp_path, monkeypatch,
+):
+    """Empty extra_runner_args must not inject stray tokens into inner argv."""
+    command = _docker_invoke_with_profile(
+        tmp_path, monkeypatch, extra_runner_args=[],
+    )
+    image_idx = command.index("brr/test-runner:latest")
+    inner = command[image_idx + 1:]
+    # Inner argv should be just ["codex"] — no -c, no None leaking in.
+    assert inner == ["codex"], f"unexpected inner argv with empty extra_runner_args: {inner}"
+
+
+# ---------------------------------------------------------------------------
 # solitary — the hardened preset (#508)
 # ---------------------------------------------------------------------------
 
