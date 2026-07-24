@@ -1107,7 +1107,12 @@ def _build_kb_health_block(repo_root: Path) -> str:
     size_pressure = [f for f in findings if f.type in _KB_SIZE_FINDINGS]
     stats = kb_health.compute_graph_stats(repo_root, kb_dir)
     ownership = _kb_ownership_signal(size_pressure, stats)
-    mirror = _kb_mirror_signal(knowledge.mirror_state(repo_root))
+    # `cfg` rather than a bare `repo_root`: the mirror's identity check asks
+    # which account knowledge repo *this wake* reads, and the answer has to be
+    # the one every other line in this block was computed from. Letting
+    # `mirror_state` load its own config would make the check disagree with its
+    # own caller for a reason no reader could see (#676).
+    mirror = _kb_mirror_signal(knowledge.mirror_state(repo_root, cfg))
 
     if not integrity and not ownership and not mirror:
         return ""
@@ -1151,7 +1156,7 @@ def _kb_mirror_signal(state) -> str:
     :func:`knowledge.mirror_state`, so it is never a note about something that
     was true an hour ago.
 
-    Silent in two of three cases, for two different reasons:
+    Silent in two of four cases, for two different reasons:
 
     - **current** — the #623 discipline. A guard that fires every wake for a
       non-reason stops being read, and takes the wakes where it *is* a reason
@@ -1167,9 +1172,28 @@ def _kb_mirror_signal(state) -> str:
     next move is to check it, and it will read clean — that clean status is
     precisely the defect (a mirror's whole problem is that it has no way to
     say it is stale) rather than evidence against this line.
+
+    The fourth case, ``elsewhere`` (#676), speaks *instead of* the counts: a
+    checkout cloned from some other repository is current with respect to the
+    wrong origin, so "0 behind" is true and worthless. Its sentence names both
+    paths, because the reader cannot check this one by hand without them —
+    ``git status`` reads clean there too, and so does the count.
     """
     from . import knowledge
 
+    if state.status == knowledge.MIRROR_ELSEWHERE:
+        return (
+            f"**Mirror** — `{knowledge.CHECKOUT_DIRNAME}/` is a clone of "
+            f"`{state.origin}`, but this repo's account knowledge repo is "
+            f"`{state.expected_origin}`. It is a mirror of the **wrong "
+            "repository**: it can be perfectly up to date and still never "
+            "carry this account's pages, so treat `brnrd kb` results and "
+            f"anything under `{knowledge.CHECKOUT_DIRNAME}/` as somebody "
+            "else's until this is fixed. Nothing on the wake path repairs it "
+            "— running `brnrd kb` does, by re-cloning on exactly this "
+            "mismatch. Check for unpushed work there first; a re-clone "
+            "discards the directory."
+        )
     if state.status != knowledge.MIRROR_BEHIND:
         return ""
     upstream = f"origin/{state.branch}" if state.branch else "origin"
