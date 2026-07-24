@@ -368,7 +368,10 @@
 				// the daemon looked the handle up against `brr.emotes` before
 				// publishing. An unknown handle arrives glyphless and stays that way.
 				mood: live.mood ?? null,
-				moodGlyph: live.mood_glyph ?? null
+				moodGlyph: live.mood_glyph ?? null,
+				moodFrames: live.mood_frames ?? null,
+				moodRest: live.mood_rest ?? null,
+				moodPitch: live.mood_pitch ?? null
 			};
 		}
 		const row = selectedLedgerRows.find((candidate) => candidate.run_id) ?? selectedLedgerRows[0];
@@ -386,7 +389,11 @@
 			// the handle survives and the glyph does not. The chip renders the
 			// bare name rather than re-resolving a face the frontend can't know.
 			mood: selectedDigest?.mood || null,
-			moodGlyph: null
+			// Closed run: the frame kept the handle, never the resolved face.
+			moodGlyph: null,
+			moodFrames: null,
+			moodRest: null,
+			moodPitch: null
 		};
 	});
 	// What's left for the vitals row once identity travels structured:

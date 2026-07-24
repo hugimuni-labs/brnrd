@@ -1943,16 +1943,44 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
 def _mood_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve a presence entry's mood handle into wire fields.
 
-    ``mood`` is the raw resident-authored handle (or ``None``); ``mood_glyph``
-    and ``mood_pitch`` are present only when the handle resolves in the emote
-    library — absent resolution is absent data, not a default face.
+    ``mood`` is the raw resident-authored handle (or ``None``); ``mood_glyph``,
+    ``mood_frames`` and ``mood_pitch`` are present only when the handle resolves
+    in the emote library — absent resolution is absent data, not a default face.
+
+    ``mood_frames`` is every breath the face can take (``Emote.sequences``: the
+    primary cycle first, then any alternates), each a base→expression→base run
+    of equal-width glyphs. It exists because this function used to publish
+    ``frames[0]`` alone while ``_daemon_mood_payload`` four lines below
+    published the whole list — so the daemon's *derived* face animated on the
+    dashboard and the resident's *authored* one could not. Worse than static:
+    ``frames[0]`` is the resting frame by the library's own rule, and across
+    the 98 situational emotes there are 15 distinct resting frames, 61 of them
+    the same ``b·_·d`` — the wire was collapsing the whole palette onto a
+    handful of neutral faces. The expression was never leaving this process.
+
+    ``mood_glyph`` stays for the surfaces that genuinely cannot move (and for a
+    dashboard deployed before this field existed), but it is the *resting*
+    frame and a renderer with ``mood_frames`` should prefer those.
     """
     handle = str(entry.get("mood") or "").strip() or None
-    payload: dict[str, Any] = {"mood": handle, "mood_glyph": None, "mood_pitch": None}
+    payload: dict[str, Any] = {
+        "mood": handle,
+        "mood_glyph": None,
+        "mood_frames": None,
+        "mood_rest": None,
+        "mood_pitch": None,
+    }
     if handle:
         emote = emotes.lookup(handle)
         if emote is not None:
             payload["mood_glyph"] = emote.frames[0]
+            payload["mood_frames"] = [list(seq) for seq in emote.sequences]
+            # What the chip holds between flickers. Not ``frames[0]``: that is
+            # the animation's base and is shared across a whole face family,
+            # so a surface resting on it says "a mood is set here" without
+            # saying which. ``Emote.resting_frame`` is the library's answer to
+            # "what does this face look like while still".
+            payload["mood_rest"] = emote.resting_frame
             payload["mood_pitch"] = emote.pitch
     return payload
 
@@ -1976,6 +2004,11 @@ def _daemon_mood_payload(brr_dir: Path) -> dict[str, Any] | None:
         "name": emote.name,
         "glyph": emote.frames[0],
         "frames": list(emote.frames),
+        # Alternates too, on the same shape the per-run mood now uses: a
+        # board that sits at ``idle`` for hours is exactly where one
+        # repeating cycle reads like a spinner instead of a body.
+        "sequences": [list(seq) for seq in emote.sequences],
+        "rest": emote.resting_frame,
         "pitch": emote.pitch,
     }
 

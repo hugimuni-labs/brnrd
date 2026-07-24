@@ -149,7 +149,13 @@
 					: null}
 				{@const isOpen = expanded.has(run.id)}
 				{@const runner = runnerLabel(run)}
-				{@const mood = moodFace(run.mood, run.mood_glyph, run.mood_pitch)}
+				{@const mood = moodFace(
+					run.mood,
+					run.mood_glyph,
+					run.mood_pitch,
+					run.mood_frames,
+					run.mood_rest
+				)}
 				<div
 					class="subpanel p-2.5 text-xs"
 					data-loom-run={run.run_id || run.id}
@@ -178,7 +184,7 @@
 								>
 									{label(run, lvl)}
 								</span>
-								<MoodChip face={mood} />
+								<MoodChip face={mood} seed={run.run_id || run.id} />
 							</span>
 							<span class="flex shrink-0 items-center gap-1.5 font-mono text-ink-quiet">
 								{ageSince(run.started_at, now) ?? ''}

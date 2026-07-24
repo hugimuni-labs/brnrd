@@ -44,19 +44,34 @@ def test_every_emote_frames_are_equal_width():
     codepoint count; a combining mark would smuggle in a zero-width glyph
     that len() can't see, so those are banned outright."""
     for name, e in EMOTES.items():
-        for f in e.frames:
-            assert not any(unicodedata.combining(c) for c in f), name
-        widths = {len(f) for f in e.frames}
-        assert len(widths) == 1, (name, [(f, len(f)) for f in e.frames])
+        # Every sequence, not just the primary: an alternate that jitters
+        # jitters exactly as visibly, and pinning only `frames` is how a
+        # second cycle would arrive unchecked. `rest` is held between
+        # flickers, so it has to match the width too or the chip twitches
+        # on the way in and out of the animation.
+        for seq in (*e.sequences, (e.resting_frame,)):
+            for f in seq:
+                assert not any(unicodedata.combining(c) for c in f), (name, f)
+        widths = {len(f) for seq in e.sequences for f in seq}
+        widths.add(len(e.resting_frame))
+        assert len(widths) == 1, (
+            name,
+            [(f, len(f)) for seq in e.sequences for f in seq],
+            (e.resting_frame, len(e.resting_frame)),
+        )
 
 
 def test_every_emote_is_a_base_expression_base_animation():
     """2–5 frames, ≤ 12 wide, and the cycle returns to its base so the
     loop is seamless."""
     for name, e in EMOTES.items():
-        assert 2 <= len(e.frames) <= 5, name
-        assert e.frames[0] == e.frames[-1], name
-        assert max(len(f) for f in e.frames) <= 12, name
+        for seq in e.sequences:
+            assert 2 <= len(seq) <= 5, (name, seq)
+            assert seq[0] == seq[-1], (name, seq)
+            assert max(len(f) for f in seq) <= 12, (name, seq)
+        # Alternates are alternates, not duplicates: a second cycle that
+        # plays the same frames costs a wire field and buys no life.
+        assert len({tuple(seq) for seq in e.sequences}) == len(e.sequences), name
         assert e.kind in {"telemetry", "situational"}
         assert e.trigger.strip(), name
 
@@ -233,3 +248,53 @@ def test_cheek_form_carries_the_brand_cheeks():
     assert "bo_·d" in puzzled.frames
     strained = EMOTES["grr_"]       # b>_<d — both eyes shut
     assert "b>_<d" in strained.frames
+
+
+def test_resting_frame_is_wearable_while_still():
+    """`rest` is what a calm surface holds — the dashboard chip sits on it
+    ~5s between flickers. Two things must hold: it is a real frame shape
+    (checked for width above), and it belongs to *this* face rather than
+    being a frame borrowed from the palette at large. The weaker property
+    is the one asserted, because the strong one ("visually distinct from
+    every sibling") is a design judgement no test can make: an authored
+    rest must at least appear in the face's own animation, so the still
+    frame and the moving one are the same body.
+    """
+    for name, e in EMOTES.items():
+        if e.rest is None:
+            continue
+        appears = any(e.rest in seq for seq in e.sequences)
+        assert appears, (name, e.rest, e.sequences)
+
+
+def test_the_resting_palette_gap_is_measured_rather_than_assumed():
+    """The bug this whole slice came from, kept as a number.
+
+    `frames[0]` is shared by design, so resting on it renders most of the
+    situational palette identically. This pins the *direction of travel*:
+    distinct resting frames must never drop below what is authored today.
+    It is deliberately a floor and not an equality — the palette pass that
+    authors the rest of them should make this test pass harder, never
+    edit it.
+    """
+    situational = [e for e in EMOTES.values() if e.kind == "situational"]
+    by_base = {e.frames[0] for e in situational}
+    by_rest = {e.resting_frame for e in situational}
+    assert len(by_rest) >= len(by_base), (len(by_rest), len(by_base))
+    assert len(by_rest) >= 17, (
+        f"{len(by_rest)} distinct resting frames for {len(situational)} faces"
+    )
+
+
+def test_sequences_of_is_the_publish_paths_only_reach_into_frames():
+    """`cloud.py` published `frames[0]` directly and starved the dashboard
+    for it. The library states the frame rules, so the library answers the
+    questions about them: `glyph` (resting, legacy), `resting_frame`, and
+    `sequences_of`. Unknown handles resolve to nothing, never a default.
+    """
+    from brr.emotes import sequences_of
+
+    assert sequences_of("no-such-handle") is None
+    focus = sequences_of("fo.cus")
+    assert focus is not None and len(focus) == 2, focus
+    assert focus[0] != focus[1]

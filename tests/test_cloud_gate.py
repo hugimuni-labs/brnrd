@@ -2400,14 +2400,68 @@ def test_live_runs_snapshot_resolves_mood_at_the_serving_edge(tmp_path):
     assert real["mood"] == "fo.cus"
     assert real["mood_glyph"] == expected.frames[0]
     assert real["mood_pitch"] == expected.pitch
+    # The whole cycle, not one frame. This published `frames[0]` alone
+    # while `_daemon_mood_payload` twelve lines below published the full
+    # list, so the daemon's *derived* face animated on the dashboard and
+    # the resident's *authored* one could not — and `frames[0]` is the
+    # shared animation base, so the wire was collapsing the situational
+    # palette onto a handful of neutral faces on the way out.
+    assert real["mood_frames"] == [list(seq) for seq in expected.sequences]
+    assert len(real["mood_frames"]) >= 1
+    assert real["mood_rest"] == expected.resting_frame
     unknown = rows["run-unknown-mood"]
     assert unknown["mood"] == "not-a-face"
     assert unknown["mood_glyph"] is None
+    assert unknown["mood_frames"] is None
+    assert unknown["mood_rest"] is None
     assert unknown["mood_pitch"] is None
     none = rows["run-no-mood"]
     assert none["mood"] is None
     assert none["mood_glyph"] is None
+    assert none["mood_frames"] is None
+    assert none["mood_rest"] is None
     assert none["mood_pitch"] is None
+
+
+def test_a_runs_mood_reaches_the_wire_as_richly_as_the_daemons_own(tmp_path):
+    """The asymmetry that caused this, asserted as a rule rather than a value.
+
+    Two payload builders sit four lines apart in `cloud.py` and describe the
+    same object: a face. One is derived (the board's), one is authored (the
+    resident's) — and only the authored one was truncated, which is the
+    wrong way round for the channel whose entire purpose is the resident
+    saying something. Pinned as a *comparison* so a future field added to
+    one and not the other goes red here, rather than shipping and being
+    noticed months later by someone watching a dashboard.
+    """
+    import os
+
+    from brr import emotes, presence
+    from brr.gates import cloud
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    presence.register(
+        brr_dir, kind="daemon", stream="t:1:", run_id="run-x",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="e-x",
+    )
+    presence.heartbeat(brr_dir, "e-x", mood="fo.cus")
+
+    run = {row["run_id"]: row for row in cloud._live_runs_snapshot(brr_dir)}["run-x"]
+    board = cloud._daemon_mood_payload(brr_dir)
+    assert board is not None
+
+    # Same three questions answerable of either face: what does it look
+    # like still, what does it do, and where on the body axis does it sit.
+    assert run["mood_rest"] and board["rest"]
+    assert run["mood_frames"] and board["sequences"]
+    assert run["mood_pitch"] is not None and board["pitch"] is not None
+    # And the moving answer is a *list of cycles* on both, not a lone frame.
+    assert all(isinstance(seq, list) and seq for seq in run["mood_frames"])
+    assert all(isinstance(seq, list) and seq for seq in board["sequences"])
+
+    focus = emotes.lookup("fo.cus")
+    assert run["mood_frames"] == [list(s) for s in focus.sequences]
 
 
 def test_daemon_mood_payload_reports_board_state(tmp_path):
