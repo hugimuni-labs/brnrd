@@ -633,6 +633,17 @@ def _try_refresh_publishing_credential(
         _publishing_token_retry_at = 0.0
 
 
+def _sanitize_meta_str(value: str) -> str:
+    """Flatten newlines in a sender-controlled string before it enters frontmatter.
+
+    Cloud events relay Telegram display names / usernames that have passed
+    through the brnrd server but are ultimately sender-controlled.  Newlines
+    in those fields would forge extra frontmatter fields via ``create_event``'s
+    meta injection path (#413 §7 S3).  Replace ``\\n`` / ``\\r`` with a space.
+    """
+    return value.replace("\r", " ").replace("\n", " ")
+
+
 def _origin_meta(reply_to: dict) -> dict:
     platform = reply_to.get("platform") or ""
     meta: dict[str, object] = {"cloud_platform": platform, "cloud_chat_id": "", "cloud_topic_id": ""}
@@ -641,11 +652,25 @@ def _origin_meta(reply_to: dict) -> dict:
         topic_id = reply_to.get("topic_id")
         meta["cloud_chat_id"] = "" if chat_id is None else chat_id
         meta["cloud_topic_id"] = "" if topic_id is None else topic_id
-        copies = {"message_id": "cloud_message_id", "user": "cloud_user", "user_id": "cloud_user_id", "username": "cloud_username"}
-        for src, dst in copies.items():
+        # Sanitize sender-controlled strings — user display name and username
+        # are relayed from Telegram and may contain embedded newlines that
+        # would forge extra frontmatter fields (#413 §7 S3).
+        _TELEGRAM_COPIES = {
+            "message_id": "cloud_message_id",
+            "user_id": "cloud_user_id",
+        }
+        _TELEGRAM_STR_COPIES = {
+            "user": "cloud_user",
+            "username": "cloud_username",
+        }
+        for src, dst in _TELEGRAM_COPIES.items():
             value = reply_to.get(src)
             if value not in (None, ""):
                 meta[dst] = value
+        for src, dst in _TELEGRAM_STR_COPIES.items():
+            value = reply_to.get(src)
+            if value not in (None, ""):
+                meta[dst] = _sanitize_meta_str(str(value))
         return meta
     if platform == "github":
         repo = str(reply_to.get("repo") or "")

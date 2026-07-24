@@ -242,6 +242,54 @@ def _format_meta_value(value: object) -> str:
     return str(value)
 
 
+# Keys that ``create_event`` itself writes — a caller supplying one would
+# produce a duplicate frontmatter line whose parse-time precedence is
+# undefined.  ``trust_tier`` is deliberately *not* in this set: gates and
+# the spawn/respawn inheritance path legitimately pass it, and the newline
+# rule below is what closes the value-injection route.
+_RESERVED_META_KEYS: frozenset[str] = frozenset(
+    {"id", "source", "status", "created", "attachments"}
+)
+
+# Plain identifier: starts with a letter or underscore, followed by
+# letters, digits, or underscores.  All existing meta keys match this.
+_SAFE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_meta(meta: dict[str, object]) -> None:
+    """Raise ``ValueError`` if *meta* contains an unsafe key or value.
+
+    Guards the frontmatter injection path: a value containing ``\\n`` or
+    ``\\r`` emits extra lines that ``parse_frontmatter`` reads as real
+    fields — enough to forge ``trust_tier: owner`` through an unrelated
+    key.  A caller-supplied reserved key would duplicate a field
+    ``create_event`` already writes, with undefined parse precedence.
+
+    This is a programming-error guard, not a sanitizer.  Gates that
+    accept sender-controlled strings (Telegram display names, etc.) must
+    flatten newlines *before* the call so this raise is never reached
+    from live traffic.
+    """
+    for k, v in meta.items():
+        k_str = str(k)
+        if not _SAFE_KEY_RE.match(k_str):
+            raise ValueError(
+                f"create_event: meta key {k!r} is not a valid frontmatter "
+                "identifier (must match [A-Za-z_][A-Za-z0-9_]*)"
+            )
+        if k_str in _RESERVED_META_KEYS:
+            raise ValueError(
+                f"create_event: meta key {k!r} is structurally reserved "
+                "(create_event already writes it)"
+            )
+        sv = str(v)
+        if "\n" in sv or "\r" in sv:
+            raise ValueError(
+                f"create_event: meta key {k!r} value contains a newline; "
+                "newlines in frontmatter values forge additional fields"
+            )
+
+
 def _generate_id() -> str:
     ts = time.time_ns()
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -294,6 +342,7 @@ def create_event(
     the resident's ``Read`` tool can open directly — regardless of which
     channel it arrived on.
     """
+    _validate_meta(meta)
     inbox_dir.mkdir(parents=True, exist_ok=True)
     eid = _generate_id()
     attachment_names: list[str] = []

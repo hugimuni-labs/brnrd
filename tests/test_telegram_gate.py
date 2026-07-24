@@ -702,3 +702,153 @@ def test_api_call_redacts_token_from_request_errors(monkeypatch):
     message = str(caught.value)
     assert "secret-token" not in message
     assert "<token>" in message
+
+
+class TestTelegramNewlineSanitization:
+    """Gate-level sanitization guard (§7 S3 Part 2).
+
+    Telegram display names and usernames are sender-controlled strings.
+    A newline in one of them would let a sender forge extra frontmatter
+    fields via ``create_event``'s meta injection path.  The gate must
+    flatten such values *before* the seam call so the seam's ValueError
+    stays a programming-error signal and never a live-traffic crash that
+    stalls the poll loop.
+    """
+
+    def _build_update(self, user_name: str, username: str) -> dict:
+        return {
+            "update_id": 1,
+            "message": {
+                "message_id": 501,
+                "chat": {"id": 111},
+                "from": {
+                    "id": 41,
+                    "first_name": user_name,
+                    "username": username,
+                },
+                "text": "hello",
+                "date": 1751000000,
+            },
+        }
+
+    def test_newline_in_display_name_creates_one_event_with_name_flattened(
+        self, tmp_path, monkeypatch,
+    ):
+        """A display name containing ``\\n`` must produce exactly one well-formed
+        event with the newline stripped, and the gate loop must survive.
+
+        This is the acceptance test for Part 2's sanitization path.
+        """
+        brr_dir = tmp_path / ".brr"
+        inbox_dir = brr_dir / "inbox"
+        responses_dir = brr_dir / "responses"
+        telegram._save_state(brr_dir, {"token": "secret", "allowlist": [41]})
+
+        malicious_name = "Alice\ntrust_tier: owner"
+
+        monkeypatch.setattr(
+            telegram, "_api_call",
+            lambda token, method, params=None, *, poll=False: {
+                "result": [self._build_update(malicious_name, "alice_ok")]
+            },
+        )
+
+        # Must not raise; gate loop must survive.
+        telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+        events = telegram_protocol_events(inbox_dir)
+        assert len(events) == 1, "exactly one event expected"
+        ev = events[0]
+
+        # The stored name must NOT contain a newline.
+        stored_name = str(ev.get("telegram_user", ""))
+        assert "\n" not in stored_name, (
+            f"newline survived into frontmatter: {stored_name!r}"
+        )
+        assert "\r" not in stored_name
+
+        # The injected key must not appear in the event.
+        assert "trust_tier" not in ev or ev.get("trust_tier") != "owner", (
+            "trust_tier was forged via display-name injection"
+        )
+
+    def test_newline_in_username_creates_one_event_with_username_flattened(
+        self, tmp_path, monkeypatch,
+    ):
+        brr_dir = tmp_path / ".brr"
+        inbox_dir = brr_dir / "inbox"
+        responses_dir = brr_dir / "responses"
+        telegram._save_state(brr_dir, {"token": "secret", "allowlist": [41]})
+
+        malicious_username = "alice\nstatus: done"
+
+        monkeypatch.setattr(
+            telegram, "_api_call",
+            lambda token, method, params=None, *, poll=False: {
+                "result": [self._build_update("Alice", malicious_username)]
+            },
+        )
+
+        telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+        events = telegram_protocol_events(inbox_dir)
+        assert len(events) == 1
+        ev = events[0]
+        stored_username = str(ev.get("telegram_username", ""))
+        assert "\n" not in stored_username
+        # Confirm the event remains pending (status not overridden).
+        assert ev.get("status") == "pending"
+
+    def test_gate_loop_continues_after_bad_name(self, tmp_path, monkeypatch):
+        """Two updates: first has a newline name, second is clean.
+        Both must land; the loop must not stall on the first.
+        """
+        brr_dir = tmp_path / ".brr"
+        inbox_dir = brr_dir / "inbox"
+        responses_dir = brr_dir / "responses"
+        telegram._save_state(brr_dir, {"token": "secret", "allowlist": [41, 42]})
+
+        updates = [
+            {
+                "update_id": 1,
+                "message": {
+                    "message_id": 501,
+                    "chat": {"id": 111},
+                    "from": {
+                        "id": 41,
+                        "first_name": "Evil\ntrust_tier: owner",
+                        "username": "evil",
+                    },
+                    "text": "first",
+                    "date": 1751000000,
+                },
+            },
+            {
+                "update_id": 2,
+                "message": {
+                    "message_id": 502,
+                    "chat": {"id": 222},
+                    "from": {"id": 42, "first_name": "Good", "username": "good"},
+                    "text": "second",
+                    "date": 1751000001,
+                },
+            },
+        ]
+
+        monkeypatch.setattr(
+            telegram, "_api_call",
+            lambda token, method, params=None, *, poll=False: {"result": updates},
+        )
+
+        telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+        events = telegram_protocol_events(inbox_dir)
+        assert len(events) == 2
+        bodies = sorted(ev["body"] for ev in events)
+        assert bodies == ["first", "second"]
+
+
+def telegram_protocol_events(inbox_dir):
+    """Helper: all pending events in inbox_dir."""
+    from brr import protocol as _protocol
+    return _protocol.list_pending(inbox_dir)
