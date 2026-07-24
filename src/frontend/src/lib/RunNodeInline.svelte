@@ -207,7 +207,6 @@
 					>
 						{statusWord}
 					</span>
-					<MoodChip face={mood} seed={identity?.mood ?? ''} />
 				</span>
 				<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: cornerLabel }}>
 					{cornerLabel}
@@ -236,6 +235,13 @@
 				<p class="font-mono text-[10px] text-stone-400" use:typeReveal={{ text: runnerLine }}>
 					{runnerLine}
 				</p>
+			{/if}
+			{#if mood}
+				<!-- The face gets its own stage, centered (evt-…-v7od): at 9px inline
+				     it read as debug text riding the status word, not as a face. -->
+				<div class="mt-2 flex justify-center">
+					<MoodChip face={mood} seed={identity?.mood ?? ''} variant="stage" />
+				</div>
 			{/if}
 		</div>
 
