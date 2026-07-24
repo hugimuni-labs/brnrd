@@ -628,20 +628,25 @@ def format_kernel(score: BootScore) -> str:
         lines.append(f"posture: {' · '.join(p_bits)}")
 
     if score.orientation_set:
-        # The orientation ledger's walk (#513 Slice 9). Unlike `attest:` and
-        # `image_stale` above, this line is **not** differential and should not
-        # be read as one: `AGENTS.md` is the set's first candidate and
-        # effectively always exists, so the block effectively always renders.
-        # Measured on this repo — 3 files / 64,092 B, 3 / 51,710 B, and 2 /
-        # 38,782 B with no task text at all. Never zero. That is deliberate:
-        # the kernel names the walk *before* it happens, so it cannot key off a
-        # completion that has not occurred yet. The differential half lives in
-        # the hooks' `orient x/y` segment, which does leave at completion or
-        # skip. Two surfaces, two jobs. Full absolute paths on purpose: the
-        # line exists to be *acted on* (each entry is one Read call), and a
-        # basename the wake would have to resolve first is a walk with a toll
-        # booth. The hooks meter these Reads as `orient x/y` until the walk
-        # completes or the skip is declared; both outcomes are first-class.
+        # The orientation ledger's walk (#513 Slice 9), genuinely differential
+        # (#628): the set names only what the wake was NOT already handed, so
+        # it renders exactly when there is something left to point at. Before
+        # #628, `AGENTS.md` and/or the active plan were unconditional
+        # candidates and one of the two survived on every Shell, so this line
+        # effectively always rendered regardless of what the wake actually
+        # needed to seek out — documented as differential (#614 item 2) while
+        # behaving like a permanent fixture. On codex, with the plan injected
+        # whole by the work-surface block and no touched `subject-*.md` hub,
+        # the set is now correctly empty and this block is absent — the render
+        # needed no change for that, since an empty list was already falsy
+        # here; only the set itself had never been empty before. The
+        # differential half also lives in the hooks' `orient x/y` segment,
+        # which leaves at completion or skip. Two surfaces, two jobs. Full
+        # absolute paths on purpose: the line exists to be *acted on* (each
+        # entry is one Read call), and a basename the wake would have to
+        # resolve first is a walk with a toll booth. The hooks meter these
+        # Reads as `orient x/y` until the walk completes or the skip is
+        # declared; both outcomes are first-class.
         total = sum(f.bytes for f in score.orientation_set)
         lines.append(
             f"orient: {len(score.orientation_set)} file(s) · {total:,}B — "

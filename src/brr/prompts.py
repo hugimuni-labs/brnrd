@@ -787,7 +787,9 @@ def _worst_trim(results: list[TrimResult]) -> TrimResult:
     return max(trimmed, key=lambda r: r.dropped)
 
 
-def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
+def _build_work_surface_block_scored(
+    repo_root: Path,
+) -> tuple[TrimResult, "frozenset[Path]"]:
     """The scored implementation behind ``_build_work_surface_block``.
 
     Same split as ``_build_context_block`` / ``..._scored``: the plain
@@ -796,19 +798,31 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
     one representative attestation (see ``_worst_trim``) for
     ``_build_injected_blocks_with_contracts`` to copy onto the
     ``work-surface`` ``ContractEntry``.
+
+    The second return value is the set of resolved surface-page paths this
+    call emitted **whole** — byte-identical to the page on disk, no tail
+    trim and no budget skip (see ``_build_orientation_set``'s
+    ``injected_whole``: a page handed over whole here must not also be
+    billed as a walk entry there; #628). A page's content compares
+    byte-identical to ``trimmed.text`` exactly when ``_tail_trim_entries``
+    took its own early-return ("already fits") — the one condition true
+    regardless of whether the page has dated ``## `` headings to attest
+    (a headingless page that got tail-cut has no ``dropped`` count to key
+    off, so comparing rendered text, not just the attestation fields, is
+    what a headingless page's cut cannot hide from).
     """
     from . import account as acc
     from . import config as conf
 
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
-        return TrimResult(text="")
+        return TrimResult(text=""), frozenset()
     try:
         ctx = acc.resolve_context(repo_root, cfg, create=False)
     except Exception:
-        return TrimResult(text="")
+        return TrimResult(text=""), frozenset()
     if not ctx.enabled:
-        return TrimResult(text="")
+        return TrimResult(text=""), frozenset()
 
     surface = acc.work_surface_path(ctx)
     budget = int(
@@ -819,6 +833,7 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
     )
     blocks: list[str] = []
     trims: list[TrimResult] = []
+    whole_paths: set[Path] = set()
     remaining = max(0, budget)
     for path in acc.work_surface_files(ctx):
         relative = path.relative_to(surface).as_posix()
@@ -837,6 +852,8 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
         blocks.append(block)
         trims.append(trimmed)
         remaining -= size
+        if trimmed.text == content:
+            whole_paths.add(path.resolve())
 
     if not blocks:
         text = (
@@ -844,7 +861,7 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
             "No authored surface yet. Start at `surface/index.md`; pages placed "
             "under `surface/` are discovered by the next wake and dashboard."
         )
-        return TrimResult(text=text)
+        return TrimResult(text=text), frozenset()
     text = (
         "## Work surface\n\n"
         "The shared user/resident orientation, discovered from one authored "
@@ -854,14 +871,17 @@ def _build_work_surface_block_scored(repo_root: Path) -> TrimResult:
         + "\n\n---\n\n".join(blocks)
     )
     worst = _worst_trim(trims)
-    return TrimResult(
-        text=text,
-        newest_item=worst.newest_item,
-        oldest_item=worst.oldest_item,
-        dropped=worst.dropped,
-        source_newest=worst.source_newest,
-        stale=worst.stale,
-        precise=worst.precise,
+    return (
+        TrimResult(
+            text=text,
+            newest_item=worst.newest_item,
+            oldest_item=worst.oldest_item,
+            dropped=worst.dropped,
+            source_newest=worst.source_newest,
+            stale=worst.stale,
+            precise=worst.precise,
+        ),
+        frozenset(whole_paths),
     )
 
 
@@ -873,7 +893,7 @@ def _build_work_surface_block(repo_root: Path) -> str:
     all remaining files follow by relative path. A total budget bounds the
     surface while preserving each accreting page's newest entries.
     """
-    return _build_work_surface_block_scored(repo_root).text
+    return _build_work_surface_block_scored(repo_root)[0].text
 
 
 def _build_runner_policy_block(repo_root: Path) -> str:
@@ -1142,14 +1162,18 @@ def _rendered_bytes(block: str) -> int:
 
 def _build_injected_blocks_with_contracts(
     repo_root: Path, *, task_text: str | None = None
-) -> tuple[list[tuple[str, str]], list["ContractEntry"]]:
+) -> tuple[list[tuple[str, str]], list["ContractEntry"], "frozenset[Path]"]:
     """The scored implementation behind ``_build_injected_blocks``.
 
     Returns the rendered blocks **keyed** — ``(block_key, text)`` pairs, in
     prompt order — plus a :class:`ContractEntry` list, the source manifest for
     every block considered.  Blocks that are absent this run (empty file, nothing
     to inject) still appear in the manifest with ``present=False`` so ``brnrd
-    prompts show`` can report the full picture.
+    prompts show`` can report the full picture.  Third: the set of work-surface
+    page paths this call's ``## Work surface`` block emitted **whole** (#628) —
+    see ``_build_work_surface_block_scored``. ``_build_orientation_set`` reads
+    it as ``injected_whole`` so the orientation walk never re-bills a Read the
+    wake was already handed.
 
     The keys are not decoration.  A caller that mounts some blocks as a resumed
     transcript (``boot.mount``) must take exactly those blocks *out of the
@@ -1219,7 +1243,7 @@ def _build_injected_blocks_with_contracts(
         keyed.append(("dominion", dominion_block))
 
     # 3. One discovered shared orientation root.
-    work_surface_trim = _build_work_surface_block_scored(repo_root)
+    work_surface_trim, work_surface_whole = _build_work_surface_block_scored(repo_root)
     work_surface = work_surface_trim.text
     contracts.append(ContractEntry(
         block_key="work-surface",
@@ -1335,7 +1359,7 @@ def _build_injected_blocks_with_contracts(
     if kb_health_block:
         keyed.append(("kb-health", kb_health_block))
 
-    return keyed, contracts
+    return keyed, contracts, work_surface_whole
 
 
 def _build_injected_blocks(
@@ -1366,7 +1390,7 @@ def _build_injected_blocks(
     Delegates to ``_build_injected_blocks_with_contracts`` and discards the
     contracts list and the keys — the scored variant is the single implementation.
     """
-    keyed, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
+    keyed, _, _ = _build_injected_blocks_with_contracts(repo_root, task_text=task_text)
     return [text for _, text in keyed]
 
 
@@ -1704,6 +1728,7 @@ def _build_orientation_set(
     *,
     task_text: str | None = None,
     runner_shell: str | None = None,
+    injected_whole: "frozenset[Path] | set[Path] | None" = None,
 ) -> list[Any]:
     """The orientation *ledger*'s file set (#513 Slice 9) — never the kernel's
     ``next:`` list (that is :func:`_build_orientation`; see
@@ -1731,8 +1756,20 @@ def _build_orientation_set(
     it was holding — the polling tax the identity core names, charged by the
     meter that exists to make orientation honest. What must be known is still
     known; only the walk stops claiming credit for it.
+
+    ``injected_whole`` (#628) applies that same rule to the active plan (and,
+    in principle, any future candidate under the work-surface root): a
+    resolved candidate path present in this set was handed over **whole** by
+    the ``## Work surface`` block earlier in the same prompt, so naming it
+    again here would bill the wake for a Read of a file it is already
+    holding — the exact defect ``AGENTS.md``'s Shell conditional fixed for one
+    file, generalized. A candidate the surface block **trimmed or skipped**
+    (budget-exhausted, oversized) is not in this set and stays in the walk —
+    the one case dropping the plan unconditionally would have broken.
     """
     from .bootscore import OrientationFile
+
+    whole = injected_whole or frozenset()
 
     candidates: list[Path] = []
     if not shell_reads_agents_md_natively(runner_shell):
@@ -1769,6 +1806,10 @@ def _build_orientation_set(
         if not resolved.is_file() or size == 0:
             # An empty file orients nobody; a meter counting it would be
             # asking for a Read with no reading.
+            continue
+        if resolved in whole:
+            # Already handed over whole by the work-surface block — the walk
+            # names only what the wake was NOT already given (#628).
             continue
         entries.append(OrientationFile(path=str(resolved), bytes=size))
     return entries
@@ -1880,6 +1921,7 @@ def build_boot_score(
     has_diffense: bool = False,
     has_introspection: bool = False,
     contracts: list[Any] | None = None,
+    injected_whole: "frozenset[Path] | None" = None,
     hooks_installed: bool | None = None,
     hook_stamps: dict[str, str] | None = None,
     mounted: bool = False,
@@ -1890,6 +1932,20 @@ def build_boot_score(
     test harness.  Deterministic and network-free.  When ``repo_root`` is
     ``None`` the inject-blocks contracts reflect only the bundled product
     templates (no dominion, no plan, no knowledge sources).
+
+    ``injected_whole`` (#628) is the set of work-surface page paths the
+    ``## Work surface`` block handed over **whole** this wake — the fact
+    ``_build_orientation_set`` subtracts so the walk never re-bills a Read
+    the wake already has. A caller that already built the real inject stack
+    (and so already knows this set, byte for byte) should pass it; a caller
+    that supplied ``contracts`` pre-built without it (the kernel's own cheap
+    path in :func:`build_daemon_prompt`, which skips the manifest scan for
+    cost) leaves it ``None`` and this function derives it independently, from
+    the same :func:`_build_work_surface_block_scored` the real render calls —
+    deterministic, so the two calls cannot disagree. This is the fix for the
+    exact drift class the comment above ``build_daemon_prompt``'s kernel call
+    names: *every argument that feeds* ``orientation_set`` *must be supplied
+    (or independently derivable) at every call site that builds one.*
 
     Hook facts are **passed in, never sniffed**: ``hooks_installed`` is the
     caller's known answer (the daemon installed the config, so it reports it;
@@ -1924,11 +1980,15 @@ def build_boot_score(
 
         # Inject-stack blocks (skipped for workers)
         if not is_worker:
-            _, inject_contracts = _build_injected_blocks_with_contracts(
+            _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
         else:
             inject_contracts = []
+            block_whole = frozenset()
+
+        if injected_whole is None:
+            injected_whole = block_whole
 
         # Ordered: preamble blocks first, then inject stack (mirrors prompt
         # order). The runtime trailer comes after the inject stack.
@@ -1937,6 +1997,17 @@ def build_boot_score(
         all_contracts = pre_inject + inject_contracts + runtime_entries
     else:
         all_contracts = contracts
+        if injected_whole is None:
+            # ``contracts`` arrived pre-built (the kernel's cheap path, or a
+            # caller replaying a stamped manifest) without the fact
+            # ``_build_orientation_set`` needs. Derive it independently
+            # rather than skip it — the work-surface pass alone, not the
+            # full inject-stack scan ``contracts=`` was chosen to avoid.
+            injected_whole = (
+                frozenset()
+                if is_worker
+                else _build_work_surface_block_scored(effective_root)[1]
+            )
 
     # Host kind
     kind = "daemon" if is_daemon else "ad-hoc"
@@ -1995,7 +2066,10 @@ def build_boot_score(
             has_event_body=has_event_body,
         ),
         orientation_set=_build_orientation_set(
-            effective_root, task_text=task_text, runner_shell=runner_shell
+            effective_root,
+            task_text=task_text,
+            runner_shell=runner_shell,
+            injected_whole=injected_whole,
         ),
         contracts=all_contracts,
         hooks=hooks_info,
@@ -2055,9 +2129,10 @@ def build_daemon_prompt_with_score(
     if worker:
         injected_keyed: list[tuple[str, str]] = []
         inject_contracts: list[Any] = []
+        injected_whole: frozenset[Path] = frozenset()
         introspection_block = ""
     else:
-        injected_keyed, inject_contracts = _build_injected_blocks_with_contracts(
+        injected_keyed, inject_contracts, injected_whole = _build_injected_blocks_with_contracts(
             repo_root, task_text=pitfall_text or None
         )
         introspection_block = _build_introspection_block(repo_root)
@@ -2146,6 +2221,14 @@ def build_daemon_prompt_with_score(
         has_diffense=has_diff,
         has_introspection=bool(introspection_block),
         contracts=contracts,
+        # The exact set the real inject stack (built above, same call) handed
+        # over whole — not a second, independent derivation. Passing it here
+        # is what keeps this persisted score in lockstep with the kernel's own
+        # `build_boot_score` call in `build_daemon_prompt` (which has no
+        # `contracts` built to read this from and so derives it fresh); see
+        # that call site's comment for the drift class this closes (#628,
+        # same shape as #638's `task_text` omission).
+        injected_whole=injected_whole,
         hooks_installed=hooks_installed,
         # Same derivation the kernel used, from the same `mountable` set — so the
         # block the wake *reads* and the score the daemon *persists* cannot disagree
@@ -2556,7 +2639,15 @@ def build_daemon_prompt(
     #
     # So every argument that feeds ``orientation_set`` must be passed here too.
     # ``contracts=[]`` stays the one deliberate divergence, and it does not
-    # touch the set.
+    # touch the set. ``injected_whole`` (#628 — the orientation walk must not
+    # re-bill a Read the work-surface block already handed over whole) is the
+    # one exception to "must be passed": this call leaves it unset on purpose.
+    # Unlike ``task_text`` above, that is not a second copy of the #638 bug —
+    # ``build_boot_score`` derives it itself from :func:`_build_work_surface_block_scored`
+    # whenever ``contracts`` arrives pre-built without it, so this call and
+    # ``build_daemon_prompt_with_score``'s (which passes the value its own
+    # already-built inject stack produced) land on the same deterministic
+    # answer either way — see that function's docstring.
     from .bootscore import format_kernel
 
     kernel = format_kernel(build_boot_score(
