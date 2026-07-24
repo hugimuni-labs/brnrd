@@ -1874,6 +1874,8 @@ def build_boot_score(
     pending_count: int = 0,
     budget: str | None = None,
     quota: str | None = None,
+    spend: str | None = None,
+    context_window: str | None = None,
     branch: str | None = None,
     task_text: str | None = None,
     has_event_body: bool = False,
@@ -1983,8 +1985,9 @@ def build_boot_score(
         attention=BootAttention(event_ids=event_ids, source_gate=source_gate),
         posture=BootPosture(
             pending_count=pending_count,
-            budget=budget,
             quota=quota,
+            spend=spend,
+            context_window=context_window,
             branch=branch,
         ),
         orientation=_build_orientation(
@@ -2040,6 +2043,7 @@ def build_daemon_prompt_with_score(
     pending_events = kwargs.get("pending_events") or []
     budget_seconds = kwargs.get("budget_seconds")
     runner_quota = kwargs.get("runner_quota")
+    runner_resources = kwargs.get("runner_resources")
     branch_name = kwargs.get("branch_name")
     hooks_installed = kwargs.get("hooks_installed")
 
@@ -2138,8 +2142,11 @@ def build_daemon_prompt_with_score(
         environment=str(environment) if environment else None,
         event_ids=(event_id,),
         pending_count=len(pending_events),
-        budget=f"{budget_seconds // 60}m" if budget_seconds else None,
-        quota=str(runner_quota) if runner_quota else None,
+        quota=_prompt_meter_value(
+            runner_resources, "quota", quota_fallback=runner_quota
+        ),
+        spend=_meter_value(runner_resources, "spend"),
+        context_window=_meter_value(runner_resources, "context_window"),
         branch=str(branch_name) if branch_name else None,
         task_text=pitfall_text or None,
         has_event_body=bool((event_body or task or "").strip()),
@@ -2439,6 +2446,7 @@ def build_daemon_prompt(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    runner_resources: dict[str, Any] | None = None,
     update_available: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     runner_name: str | None = None,
@@ -2502,6 +2510,7 @@ def build_daemon_prompt(
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
         runner_quota=runner_quota,
+        runner_resources=runner_resources,
         update_available=update_available,
         runner_shell=runner_shell,
         runner_catalog=runner_catalog,
@@ -2550,8 +2559,11 @@ def build_daemon_prompt(
         environment=environment,
         event_ids=(event_id,) if event_id else (),
         pending_count=len(pending_events or []),
-        budget=f"{budget_seconds // 60}m" if budget_seconds else None,
-        quota=runner_quota,
+        quota=_prompt_meter_value(
+            runner_resources, "quota", quota_fallback=runner_quota
+        ),
+        spend=_meter_value(runner_resources, "spend"),
+        context_window=_meter_value(runner_resources, "context_window"),
         branch=branch_name,
         has_event_body=bool((event_body or task or "").strip()),
         contracts=[],
@@ -2672,6 +2684,29 @@ def _render_runner_catalog(
     return lines
 
 
+def _meter_value(resources: dict[str, Any] | None, key: str) -> str:
+    """Compact proven level value; every non-known state is ``unknown``."""
+    resources = resources if isinstance(resources, dict) else {}
+    facet = resources.get(key)
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return "unknown"
+    summary = str(facet.get("summary") or "").strip()
+    return summary or "unknown"
+
+
+def _prompt_meter_value(
+    resources: dict[str, Any] | None,
+    key: str,
+    *,
+    quota_fallback: str | None = None,
+) -> str:
+    value = _meter_value(resources, key)
+    if key == "quota" and value == "unknown" and quota_fallback:
+        return str(quota_fallback)
+    return value
+
+
 def _build_run_context_bundle(
     *,
     event_id: str,
@@ -2681,6 +2716,7 @@ def _build_run_context_bundle(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    runner_resources: dict[str, Any] | None = None,
     update_available: str | None = None,
     runner_shell: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
@@ -2750,10 +2786,16 @@ def _build_run_context_bundle(
             "for this thought; the actual Core is attested from the Shell "
             "result. A failure here (quota exhausted, provider error, "
             "substitution) ⇒ the user pays a manual reroute, so chunk work "
-            "and commit early when the budget is tight."
+            "and commit early when the resource meter is tight."
         )
-        if runner_quota:
-            sections.append(f"- Quota: {runner_quota}")
+    sections.append(
+        "- Meter: "
+        f"context={_meter_value(runner_resources, 'context_window')}; "
+        f"quota={_prompt_meter_value(runner_resources, 'quota', quota_fallback=runner_quota)}; "
+        f"spend={_meter_value(runner_resources, 'spend')}. "
+        "These live Shell readings are the resident-facing budget and "
+        "refresh at tool boundaries; unknown means no proven reading yet."
+    )
     if update_available:
         sections.append(f"- {update_available}")
     # Native web-research declaration (issue #411 L0): always present, so a
@@ -2764,14 +2806,6 @@ def _build_run_context_bundle(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
     )
-    if budget_seconds:
-        sections.append(
-            f"- Budget: ~{budget_seconds // 60}m of wall-clock runtime before "
-            "brr kills this thought to reclaim the single-flight slot. Bound "
-            "uncertain long-running commands yourself (own timeout, or "
-            "background + poll); extend the deadline if you genuinely need "
-            "longer (see Delivery contract)."
-        )
     if context_path:
         sections.append(
             f"- Runtime recovery: {context_path} "
@@ -2856,11 +2890,6 @@ def _build_run_context_bundle(
                 "runner-local under brr — user-visible mid-run communication "
                 "goes through `.card` / outbox / `gate:`; stdout stays the "
                 "plain current-thread fallback"
-            )
-        if budget_seconds:
-            sections.append(
-                f"- keepalive: `{outbox_path}/.keepalive` — first line "
-                "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
             )
         sections.append(
             f"- card/run body: `{outbox_path}/.card` — resident-owned Markdown "

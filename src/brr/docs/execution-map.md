@@ -118,7 +118,7 @@ Richer branch-keyed PR desired state remains future portal work.
 The same outbox directory also carries daemon-owned `portal-state.json`
 and `inbox.json` control files refreshed on each heartbeat. The state
 portal is the broad live view (pending events, card/delivery posture,
-budget/keepalive, change token); `inbox.json` is the focused pending-event
+resource meter, change token); `inbox.json` is the focused pending-event
 list. The running agent checks them at plan boundaries and once more
 before terminal closeout to decide whether to fold waiting work in or
 leave it queued.
@@ -135,8 +135,8 @@ create a forge repo by default.
 
 If the runner exits cleanly but produces no satisfying signal, the daemon
 retries up to `response_retries` times before failing the run. Hard failures
-(non-zero exit, timeout — controlled by `runner.timeout_seconds`, default
-3600s) are not retried. In both cases, an addressed event that would
+(non-zero exit, inactivity-watchdog kill — controlled by
+`runner.timeout_seconds`) are not retried. In both cases, an addressed event that would
 otherwise go silent receives an explicit terminal failure note; the run
 record remains `error`, while the inbox event is marked `done` so the gate
 can deliver and clean up.

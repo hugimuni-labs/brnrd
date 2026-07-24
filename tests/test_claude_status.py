@@ -318,6 +318,84 @@ def test_session_transcript_found_by_uuid_not_by_cwd_slug(tmp_path):
     assert claude_status.session_transcript_path("sess-5", projects_root=tmp_path) == path
 
 
+def _usage_row(
+    *,
+    cwd="/repo/worktree",
+    request_id="req-1",
+    message_id="msg-1",
+    model="claude-sonnet-5",
+    input_tokens=10,
+    output_tokens=20,
+    cache_read_input_tokens=30_000,
+    cache_creation_input_tokens=2_000,
+    sidechain=False,
+):
+    return {
+        "type": "assistant",
+        "isSidechain": sidechain,
+        "cwd": cwd,
+        "requestId": request_id,
+        "timestamp": "2026-07-24T10:00:00Z",
+        "message": {
+            "id": message_id,
+            "model": model,
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": cache_creation_input_tokens,
+                    "ephemeral_5m_input_tokens": 0,
+                },
+            },
+        },
+    }
+
+
+def test_live_transcript_correlates_fork_and_meters_main_chain(tmp_path):
+    _transcript(tmp_path, "seed", [{"type": "assistant", "cwd": "/repo/worktree"}])
+    live = _transcript(
+        tmp_path,
+        "continuation",
+        [
+            _usage_row(),
+            # Claude can rewrite one message row; request id deduplicates it.
+            _usage_row(),
+            _usage_row(
+                request_id="req-side",
+                message_id="msg-side",
+                cache_read_input_tokens=900_000,
+                sidechain=True,
+            ),
+        ],
+    )
+
+    found = claude_status.live_session_transcript_path(
+        "seed", cwd="/repo/worktree", projects_root=tmp_path
+    )
+    assert found == live
+    levels = claude_status.load_live_levels(
+        "seed", cwd="/repo/worktree", projects_root=tmp_path
+    )
+    assert levels["source"] == "claude session transcript"
+    assert levels["spend"]["total_cost_usd"] > 0
+    assert 96 < levels["context_window"]["remaining_percentage"] < 97
+    assert levels["context_window"]["occupied_tokens"] == 32_010
+    assert levels["tokens"]["output_tokens"] == 20
+
+
+def test_live_transcript_unknown_model_does_not_guess_meter(tmp_path):
+    path = _transcript(
+        tmp_path,
+        "future",
+        [_usage_row(model="claude-something-new-9")],
+    )
+    levels = claude_status.parse_session_transcript(path)
+    assert "spend" not in levels
+    assert "context_window" not in levels
+
+
 def test_parse_result_merges_the_transcript_refusal_into_signals(tmp_path):
     _transcript(tmp_path, "sess-6", [_REFUSAL_ROW])
     payload = dict(_RESULT, session_id="sess-6")

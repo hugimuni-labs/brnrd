@@ -100,7 +100,6 @@ becomes attention, action, and a reply is yours.
     Markdown as `runs/<repo>/<run>/body.md`. Write it among the run's earliest
     actions: from the watching side, a body that appears only when something
     forces it reads as forgotten.
-  - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.name` — first line is this run's short resident-authored name (60 chars max).
   - `.mood` — first line is an emote handle from `brr.emotes` (e.g. `fo.cus`);
     lines after are private narration. Rides the statusline chip, the run
@@ -125,8 +124,8 @@ becomes attention, action, and a reply is yours.
   a genuine fork (2–4 options + recommendation, at the very end). Done or
   continuing is the common case; **manufactured options are the failure mode.**
   Structural, not a courtesy: check the literal last line before sending.
-- **linger** — conversation clearly live ⇒ deliver via outbox, write
-  `.keepalive`, poll `portal-state.json` with backoff 30s → cap 240s. A
+- **linger** — conversation clearly live ⇒ deliver via outbox, poll
+  `portal-state.json` with backoff 30s → cap 240s. A
   same-thread follow-up folds in and resets the backoff. Any *other* pending
   event ends passive waiting — dispatch it through `spawn:` when worker
   capacity and quota are healthy, or defer with a reason, so the

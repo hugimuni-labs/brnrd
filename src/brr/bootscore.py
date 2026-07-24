@@ -305,8 +305,10 @@ class BootPosture:
     """
 
     pending_count: int = 0
-    budget: str | None = None      # e.g. ``"120m"``
     quota: str | None = None       # e.g. ``"74% weekly"``
+    spend: str | None = None       # e.g. ``"$0.042 this session"``
+    context_window: str | None = None  # e.g. ``"62% context left"``
+    budget: str | None = None      # legacy score compatibility; never rendered
     branch: str | None = None      # e.g. ``"brr/my-work"``
     handoff: str | None = None     # e.g. ``"no PR recorded"``
     delivery_state: str | None = None
@@ -618,8 +620,9 @@ def format_kernel(score: BootScore) -> str:
     p_bits = [
         b for b in (
             posture.branch,
-            posture.quota,
-            f"budget {posture.budget}" if posture.budget else None,
+            f"context {posture.context_window}" if posture.context_window else None,
+            f"quota {posture.quota}" if posture.quota else None,
+            f"spend {posture.spend}" if posture.spend else None,
             f"{posture.pending_count} pending" if posture.pending_count else None,
             posture.handoff,
         ) if b

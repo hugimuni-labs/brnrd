@@ -495,12 +495,9 @@ def test_seed_surfaces_recorded_pr_posture(tmp_path):
 
 
 def test_post_tool_renders_resources_when_injection_fires(tmp_path):
-    # Quota is a live wall, so when a post-tool boundary injects (here,
-    # because of a pending event) the bar carries the `q` quota chip too.
-    # spend/context-window/remote-scm stay out of the bar on purpose (#513
-    # scopes the compact rendering to actionable, glance-worthy facets; the
-    # full facet line remains a seed/stop-only shape — see
-    # test_seed_surfaces_resources_with_known_quota_and_gaps).
+    # The resident-facing meter carries all three resource levels. Sources
+    # that do not exist on this Shell say unknown rather than disappearing or
+    # borrowing a value.
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
@@ -513,7 +510,32 @@ def test_post_tool_renders_resources_when_injection_fires(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "q W42" in ctx
+    assert "ctx unknown" in ctx
+    assert "spend unknown" in ctx
     assert "resources:" not in ctx
+
+
+def test_post_tool_meter_renders_proven_context_and_spend(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+        resources={
+            "quota": {"status": "absent"},
+            "spend": {
+                "status": "known",
+                "summary": "$0.0312 this session (estimated)",
+            },
+            "context_window": {
+                "status": "known",
+                "summary": "41.3% context left (est)",
+            },
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "ctx 41.3%" in ctx
+    assert "q unknown" in ctx
+    assert "spend $0.0312" in ctx
 
 
 def test_post_tool_can_inject_resource_only_update(tmp_path):
@@ -655,7 +677,7 @@ def test_stop_missing_replyable_key_keeps_addressed_behavior(tmp_path):
     assert "no gate owns this waking event" not in ctx
 
 
-def test_long_running_surfaced_when_over_soft_budget(tmp_path):
+def test_wall_clock_is_not_rendered_as_resident_budget(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
         budget={"elapsed_seconds": 4000, "budget_seconds": 3600,
@@ -663,7 +685,8 @@ def test_long_running_surfaced_when_over_soft_budget(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "running long" in ctx
+    assert "running long" not in ctx
+    assert "4000" not in ctx
 
 
 def test_long_running_quiet_within_budget(tmp_path):
@@ -1260,6 +1283,10 @@ def _bar_payload(**overrides):
         "produce": {"known": True, "counts": {"commit": 3, "kb": 1}},
         "card": {"active": True, "stale": False},
         "resources": {
+            "context_window": {
+                "status": "known",
+                "summary": "62% context left (est)",
+            },
             "quota": {
                 "status": "known",
                 "summary": (
@@ -1267,6 +1294,10 @@ def _bar_payload(**overrides):
                     "week 50% left (resets Jul 24, 12am (Europe/Berlin)); "
                     "Fable week 27% left"
                 ),
+            },
+            "spend": {
+                "status": "known",
+                "summary": "$0.042 this session (estimated)",
             },
             "coexisting_runs": {
                 "status": "known",
@@ -1284,7 +1315,7 @@ def test_post_tool_bar_renders_every_segment_when_laden():
     bar = rendered.splitlines()[0]
 
     assert bar == (
-        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4 │ "
+        "⌁ 3jy8 │ ctx 62% │ q S57·W50·F27 │ spend $0.042 │ ▷1 │ ⇡2+3 │ ⚒4 │ "
         "mood stoked │ card ok"
     )
 
@@ -1300,7 +1331,7 @@ def test_post_tool_bar_is_quiet_when_nothing_is_laden():
     assert hooks.format_delta(payload) is None
 
 
-def test_post_tool_bar_short_when_only_run_id_and_budget_move():
+def test_post_tool_bar_short_when_only_one_meter_level_is_known():
     # A boundary with nothing to act on still renders a *short* bar when
     # something genuinely laden triggers it — here, a known quota bucket.
     payload = _bar_payload(
@@ -1312,7 +1343,7 @@ def test_post_tool_bar_short_when_only_run_id_and_budget_move():
     )
     rendered = hooks.format_delta(payload)
     bar = rendered.splitlines()[0]
-    assert bar == "⌁ 3jy8 │ ⏱ 16/120m │ q W80 │ card ok"
+    assert bar == "⌁ 3jy8 │ q W80 │ card ok"
 
 
 def test_post_tool_bar_pending_events_always_get_a_detail_line():
@@ -1765,7 +1796,7 @@ def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
 def test_orient_bar_position_is_after_quota():
     rendered = hooks.format_delta(_bar_payload(), mood="stoked", orient=(3, 5))
     assert rendered.splitlines()[0] == (
-        "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
+        "⌁ 3jy8 │ ctx 62% │ q S57·W50·F27 │ spend $0.042 │ orient 3/5 │ ▷1 │ "
         "⇡2+3 │ ⚒4 │ mood stoked │ card ok"
     )
 

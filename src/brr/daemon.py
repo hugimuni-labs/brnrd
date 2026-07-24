@@ -24,13 +24,12 @@ leaves judgement to the agent it wakes. It:
 There is no general command layer: every event either wakes the agent or
 waits for the living agent, except for the narrow daemon-owned approval
 grammar that applies runner-policy proposals.
-Liveness is enforced from the heartbeat: each tick checks an
-agent-extensible budget (``runner.timeout_seconds``, pushed out by a
-keepalive the agent writes) and kills a runner that outlives it via
-``runner.kill_matching``; the runner's own ``communicate`` timeout is the
-final backstop if the heartbeat path wedges. ``brnrd down`` / SIGTERM flip
-the loop flag and kill the in-flight runner, so the single-flight slot is
-reclaimed promptly rather than waiting out a long budget.
+Liveness is enforced by a daemon-owned inactivity watchdog: hook boundaries,
+runner output, and other observed forward motion reset
+``runner.timeout_seconds``; the daemon kills only a runner that stays silent
+past it via ``runner.kill_matching``. The watchdog is not rendered into the
+resident's resource meter. ``brnrd down`` / SIGTERM flip the loop flag and
+kill the in-flight runner so the single-flight slot is reclaimed promptly.
 """
 
 from __future__ import annotations
@@ -165,7 +164,7 @@ _HEARTBEAT_INTERVAL = 10.0
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
 _FLUSH_POLL_INTERVAL = 1.0
 # Daemon-owned floor under the prompt-level post-delivery linger. The runner
-# can still keep the same thought alive with outbox + .keepalive; this dwell
+# can still keep the same thought alive; this dwell
 # covers the common failure where the runner exits after a reply. It holds the
 # single-flight slot briefly, renders an explicit attending card phase, and
 # yields the moment any pending event appears.
@@ -197,7 +196,7 @@ _CARD_CONTROL_NAME = ".card"
 # GitHub-sourced task already carried in `task.meta['github_pr_number']`)
 # was invisible to the live portal for the rest of that same run — reported
 # live, 2026-07-07 (a same-thread follow-up naming the exact gap from a
-# prior run's own ergonomics note). Same shape as `.card`/`.keepalive`: a
+# prior run's own ergonomics note). Same shape as `.card`/`.pr`: a
 # small control dotfile the daemon reads on the heartbeat cadence, never
 # delivered as a chat message.
 _PR_CONTROL_NAME = ".pr"
@@ -2565,10 +2564,9 @@ def _run_worker(
     last_failure: dict[str, object] | None = None
     output_stats = {"current": 0, "other": 0, "outbound": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
-    # Liveness budget: the heartbeat enforces this soft, agent-extensible
-    # deadline; the runner's communicate() backstops at the hard cap. The
-    # agent extends it by writing the keepalive control dotfile in its
-    # outbox (skipped by the drain — see _drain_outbox).
+    # Daemon-owned inactivity watchdog. ``runner.timeout_seconds`` is silence
+    # since the last observed sign of runner life, not run age and not a
+    # resident-facing budget. The larger cap only bounds legacy keepalives.
     budget_seconds = runner.runner_timeout(cfg)
     hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
     keepalive_path = outbox_dir / ".keepalive"
@@ -2788,6 +2786,7 @@ def _run_worker(
         # would make every running heartbeat report the old thread until the
         # replacement process returned and overwrote it.
         task.meta.pop("codex_thread_id", None)
+        task.meta.pop("claude_seed_session_id", None)
         try:
             codex_events_path.unlink()
         except FileNotFoundError:
@@ -2819,13 +2818,21 @@ def _run_worker(
         else:
             prompt_instruction = task.body
 
-        if attempt == 1:
-            run_levels, _ = _collect_levels(
-                runner_name, outbox_dir, run_root,
-                refresh=False, shared_dir=brr_dir,
-            )
-            level_quota = runner_quota.summary_from_levels(run_levels)
-            quota_summary = level_quota or quota_summary
+        run_levels, run_level_slots = _collect_levels(
+            runner_name, outbox_dir, run_root,
+            refresh=False, shared_dir=brr_dir,
+            require_session_match=True,
+        )
+        level_quota = runner_quota.summary_from_levels(run_levels)
+        quota_summary = level_quota or quota_summary
+        prompt_resources = _resources_facet(
+            quota_summary,
+            levels=run_levels,
+            levels_collector=run_level_slots,
+            branch=branch_name,
+            runner_name=runner_name,
+            runner_meta=runner_meta,
+        )
 
         # ── Boot mount (`boot.mount`, default ON) ────────────────────────
         # On: the file-backed contracts leave the prose and are seeded as `Read`
@@ -2916,6 +2923,7 @@ def _run_worker(
                 ),
             ),
             runner_quota=quota_summary,
+            runner_resources=prompt_resources,
             update_available=(
                 update_observation.render() if update_observation else None
             ),
@@ -2947,8 +2955,10 @@ def _run_worker(
                     *transcript.resume_argv(session_id),
                     *extra_runner_args,
                 ]
+                task.meta["claude_seed_session_id"] = session_id
                 print(f"[brnrd] boot mounted as transcript: session {session_id}")
             except Exception as exc:  # noqa: BLE001 — fail closed, never silently
+                task.meta.pop("claude_seed_session_id", None)
                 # The mounted blocks have already left the prose. If the mount did
                 # not happen, this wake would run with its contracts removed from
                 # the prompt and seeded nowhere — silently, and *caused by the
@@ -3001,18 +3011,18 @@ def _run_worker(
             brr_dir=brr_dir,
         )
 
-        def _emit_heartbeat() -> None:
+        def _emit_heartbeat() -> bool:
             _refresh_codex_thread_id(task, codex_events_path)
             # Drain first: promoting an interim response is the resident's
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
-            _drain_outbox(
+            promoted = _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
                 repo_root=repo_root,
                 account_context=account_context,
                 stats=output_stats,
             )
-            _drain_agent_card(
+            card_moved = _drain_agent_card(
                 emit, task, eid, card_path, card_state,
                 account_context=account_context,
                 repo_label=task.meta.get("repo_label"),
@@ -3079,6 +3089,7 @@ def _run_worker(
                 elapsed_seconds=elapsed,
             )
             _emit_new_containers(emit, task.id, env_ctx, seen_containers)
+            return bool(promoted or card_moved)
 
         def _emit_flush() -> None:
             _refresh_codex_thread_id(task, codex_events_path)
@@ -3139,7 +3150,10 @@ def _run_worker(
                 cwd=run_root,
                 repo_root=repo_root,
                 response_path=str(env_ctx.response_path_host),
-                timeout_seconds=hard_cap_seconds,
+                # The daemon's activity watchdog owns timeout semantics. A
+                # fixed subprocess wait timeout would reintroduce time-since-
+                # start underneath it and kill an active long-lived thought.
+                timeout_seconds=0,
                 env=runner_env,
                 extra_runner_args=extra_runner_args,
                 expected_core=runner_choice.model,
@@ -3154,6 +3168,11 @@ def _run_worker(
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
+            activity_paths=(
+                codex_events_path,
+                outbox_dir / hooks_mod.HOOK_STATE_NAME,
+                card_path,
+            ),
             # Every dispatched run is stoppable since #476, not just a
             # spawned child: the user-side affordance exists precisely for
             # the resident thought no parent run can reach.
@@ -3606,23 +3625,43 @@ def _keepalive_until(keepalive_path: Path | None) -> float | None:
     return schedule_mod.parse_iso(first)
 
 
-def _budget_exceeded(
-    start_mono: float,
-    budget_seconds: float,
+def _watchdog_exceeded(
+    last_activity_mono: float,
+    inactivity_seconds: float,
     hard_cap_seconds: float | None,
     keepalive_path: Path | None,
 ) -> bool:
-    """True when the runner has outlived its extensible, capped budget."""
+    """True when the runner has been silent past the watchdog threshold.
+
+    The clock starts at the last daemon-observed sign of life, not at process
+    start. ``.keepalive`` remains a compatibility input for older residents,
+    but is no longer advertised: the watchdog is daemon-owned and activity
+    normally advances it without resident involvement.
+    """
     now_mono = time.monotonic()
-    deadline = start_mono + budget_seconds
+    deadline = last_activity_mono + inactivity_seconds
     until = _keepalive_until(keepalive_path)
     if until is not None:
-        # Translate the wall-clock extension into the monotonic clock the
-        # loop measures against.
         deadline = max(deadline, now_mono + (until - time.time()))
     if hard_cap_seconds is not None:
-        deadline = min(deadline, start_mono + hard_cap_seconds)
+        deadline = min(deadline, last_activity_mono + hard_cap_seconds)
     return now_mono >= deadline
+
+
+# Compatibility for integrations/tests that imported the old private helper.
+_budget_exceeded = _watchdog_exceeded
+
+
+def _activity_signature(paths: tuple[Path, ...]) -> tuple[tuple[str, int, int], ...]:
+    """Cheap change token for runner-owned files that prove forward motion."""
+    signature: list[tuple[str, int, int]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(signature)
 
 
 def _refresh_codex_thread_id(task: Run, events_path: Path) -> str | None:
@@ -3661,10 +3700,11 @@ def _invoke_with_heartbeat(
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
+    activity_paths: tuple[Path, ...] = (),
     should_abort=None,
 ) -> "runner.RunnerResult":
     """Run *env_backend.invoke* in a thread, ticking *on_heartbeat* every
-    *interval* seconds while it's alive, and enforce the liveness budget.
+    *interval* seconds while alive, and enforce the inactivity watchdog.
 
     *should_abort* (optional callable → bool) is polled at the same flush
     cadence: when it turns true the invocation's own subprocess is killed
@@ -3680,13 +3720,10 @@ def _invoke_with_heartbeat(
     stack that called here), not on the runner's inner thread, so a
     misbehaving callback can't corrupt the in-flight runner.
 
-    When *budget_seconds* is set, the same tick is the liveness authority:
-    past ``start + budget`` the runner is killed via
-    :func:`runner.kill_matching` to reclaim the single-flight slot — unless
-    the agent extended its deadline by writing *keepalive_path*.
-    Extensions are capped at *hard_cap_seconds* so a forgotten keepalive
-    can't pin the daemon forever, and the runner's own ``communicate``
-    timeout (set to the hard cap) is the final backstop.
+    When *budget_seconds* is set, it is an inactivity threshold. Hook flushes,
+    runner-owned file movement, and a truthy heartbeat callback return reset
+    the clock. The daemon's own periodic heartbeat does not: observing that
+    the daemon is alive says nothing about the runner it watches.
     """
     import threading
 
@@ -3707,6 +3744,8 @@ def _invoke_with_heartbeat(
     )
     worker.start()
     start = time.monotonic()
+    last_activity = start
+    activity_signature = _activity_signature(activity_paths)
     last_heartbeat = start
     # When a flush signal is in play, poll at the faster cadence so the
     # boundary-triggered drain lands promptly; the heartbeat itself still
@@ -3731,11 +3770,18 @@ def _invoke_with_heartbeat(
                 break
             # Abort requested but no subprocess registered yet: keep
             # polling — the kill lands on a later pass once it exists.
+        current_activity_signature = _activity_signature(activity_paths)
+        if current_activity_signature != activity_signature:
+            activity_signature = current_activity_signature
+            last_activity = time.monotonic()
         # Event-driven flush: the runner boundary wrote a request token. Drain
         # first, then acknowledge that exact token. A Tier-2 Stop hook waits on
         # the ack, so deleting the signal *before* the callback (the old shape)
         # would falsely claim acceptance while delivery was still racing.
         if flush_path is not None and flush_path.exists():
+            # The runner wrote this at its own boundary. It is a sign of life
+            # even if the best-effort drain callback subsequently fails.
+            last_activity = time.monotonic()
             try:
                 token = flush_path.read_text(encoding="utf-8").strip()
             except OSError:
@@ -3761,12 +3807,14 @@ def _invoke_with_heartbeat(
             continue
         last_heartbeat = time.monotonic()
         try:
-            on_heartbeat()
+            heartbeat_activity = bool(on_heartbeat())
         except Exception:
             # Heartbeat is best-effort; never let it break a real run.
-            pass
-        if budget_seconds is not None and _budget_exceeded(
-            start, budget_seconds, hard_cap_seconds, keepalive_path,
+            heartbeat_activity = False
+        if heartbeat_activity:
+            last_activity = time.monotonic()
+        if budget_seconds is not None and _watchdog_exceeded(
+            last_activity, budget_seconds, hard_cap_seconds, keepalive_path,
         ):
             # Kill only *this* invocation's subprocess (exact-label match) —
             # with concurrent spawns live, the old kill-whatever-registered-
@@ -3780,10 +3828,13 @@ def _invoke_with_heartbeat(
     if isinstance(outcome, BaseException):
         raise outcome
     if deadline_killed and isinstance(outcome, runner.RunnerResult):
-        # Present a budget kill like the wall-clock timeout (124) so the
+        # Present a watchdog kill like other subprocess timeouts (124) so the
         # retry/finalize path and the operator read it the same way.
         outcome.returncode = 124
-        note = f"runner exceeded its {int(budget_seconds)}s liveness budget"
+        note = (
+            f"runner inactive for {int(budget_seconds)}s "
+            "(watchdog observed no sign of life)"
+        )
         outcome.stderr = (outcome.stderr + "\n" if outcome.stderr else "") + note
     return outcome
 
@@ -3947,17 +3998,6 @@ def _outbox_message_files(outbox_dir: Path | None) -> list[str]:
     return names
 
 
-def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
-    exists = bool(keepalive_path and keepalive_path.exists())
-    until = _keepalive_until(keepalive_path)
-    status = "absent"
-    if exists and until is None:
-        status = "unparseable"
-    elif until is not None:
-        status = "active" if until > time.time() else "expired"
-    return {"status": status, "until": _iso_utc(until)}
-
-
 def _merge_level_snapshots(
     *snapshots: dict[str, object] | None,
 ) -> dict[str, object] | None:
@@ -3969,7 +4009,10 @@ def _merge_level_snapshots(
         source = snapshot.get("source")
         if isinstance(source, str) and source.strip():
             sources.append(source.strip())
-        for key in ("quota", "spend", "context_window", "plan_type"):
+        for key in (
+            "quota", "spend", "context_window", "plan_type", "tokens",
+            "model_ids", "fallback_signals",
+        ):
             if key in snapshot:
                 merged[key] = snapshot[key]
     if sources:
@@ -3985,6 +4028,8 @@ def _collect_levels(
     refresh: bool = True,
     shared_dir: Path | None = None,
     codex_thread_id: str | None = None,
+    claude_seed_session_id: str | None = None,
+    require_session_match: bool = False,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
@@ -4010,10 +4055,10 @@ def _collect_levels(
       (#315). No dollar-spend gauge either way, so ``spend`` is deliberately not
       collected.
     - **claude** — a cached, daemon-side PTY scrape of interactive ``/usage``
-      carries subscription quota windows, and the final ``--output-format json``
-      result normalized by :mod:`claude_status` carries spend + context
-      accounting. The TUI scrape is intentionally throttled; hooks read the
-      portal-state snapshot, they do not run the scrape themselves.
+      carries subscription quota windows. The correlated live session
+      transcript carries spend + context while the run is active; the final
+      ``--output-format json`` result is authoritative at closeout. The TUI
+      scrape is throttled; hooks only read the portal-state snapshot.
 
     When *refresh* is ``False`` only the on-disk cache is read — the blocking
     probe (Claude's PTY scrape, Codex's app-server spawn) is skipped entirely.
@@ -4039,9 +4084,12 @@ def _collect_levels(
             codex_usage.load_or_refresh_snapshot(cache_dir)
             if refresh else codex_usage.load_snapshot(cache_dir)
         )
-        merged = codex_usage.merge_levels(
-            probe, codex_status.load_levels(thread_id=codex_thread_id),
+        rollout = (
+            codex_status.load_levels(thread_id=codex_thread_id)
+            if codex_thread_id or not require_session_match
+            else None
         )
+        merged = codex_usage.merge_levels(probe, rollout)
         # Give the point reading a memory: this is the heartbeat cadence, so it
         # is the series trailing burn is measured from (`usage_samples`). A
         # side effect of a read that already happened — never its own poll.
@@ -4056,8 +4104,15 @@ def _collect_levels(
             )
         else:
             usage_levels = claude_usage.load_snapshot(outbox_dir)
+        live_levels = claude_status.load_live_levels(
+            claude_seed_session_id, cwd=work_dir,
+        )
         result_levels = claude_status.load_snapshot(outbox_dir)
-        merged = _merge_level_snapshots(usage_levels, result_levels)
+        # Final result accounting is authoritative once it exists; before that,
+        # the correlated session transcript makes spend/context live.
+        merged = _merge_level_snapshots(
+            usage_levels, live_levels, result_levels,
+        )
         # The seam that makes burn shell-agnostic. Claude's `/usage` scrape is a
         # *point* reading that forgets itself; sampling it here — into the
         # account-shared dir, not the per-run outbox — is what turns it into the
@@ -4305,8 +4360,8 @@ def _write_live_portal_state(
 
     ``inbox.json`` answers only which events are pending. This broader
     capsule answers "what needs my attention now?" for the running
-    resident: input, delivery/card posture, budget state, local SCM posture
-    (unpushed commits / modified files), and compiled produce in one
+    resident: input, delivery/card posture, resource levels, local SCM
+    posture (unpushed commits / modified files), and compiled produce in one
     daemon-owned file refreshed on the heartbeat cadence.
 
     *refresh_levels* controls whether the Claude usage scrape may run:
@@ -4333,10 +4388,6 @@ def _write_live_portal_state(
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
         pending_files = _outbox_message_files(outbox_dir)
-        elapsed = (
-            int(time.monotonic() - start_monotonic)
-            if start_monotonic is not None else None
-        )
         # Card age: seconds since the note last changed (write *or*
         # withdrawal), falling back to the run's own start when the card
         # has never been touched — a wake that never writes a note is, from
@@ -4395,6 +4446,11 @@ def _write_live_portal_state(
                 task.meta.get("codex_thread_id")
                 if hasattr(task, "meta") else None
             ),
+            claude_seed_session_id=(
+                task.meta.get("claude_seed_session_id")
+                if hasattr(task, "meta") else None
+            ),
+            require_session_match=True,
         )
         # The run boundary knows its own Core (the resolved profile's
         # `model`, e.g. "opus"/"fable") — pass it so a thin week_models
@@ -4475,17 +4531,6 @@ def _write_live_portal_state(
                     if state_moved_monotonic is not None else None
                 ),
             },
-            "budget": {
-                "elapsed_seconds": elapsed,
-                "budget_seconds": budget_seconds,
-                "hard_cap_seconds": hard_cap_seconds,
-                "long_running": bool(
-                    elapsed is not None
-                    and budget_seconds is not None
-                    and elapsed > budget_seconds
-                ),
-                "keepalive": _keepalive_state(keepalive_path),
-            },
             "scm": scm_facet,
             "produce": produce_facet,
             "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
@@ -4494,9 +4539,10 @@ def _write_live_portal_state(
                 quota_summary,
                 # Per-Shell level source (see _collect_levels): Codex reads its
                 # subscription quota + context window live from the session
-                # rollout file; Claude gets terminal spend/context accounting
-                # from result JSON. The wired-slot set decides whether an empty
-                # slot reads 'absent' vs 'unimplemented'.
+                # rollout file; Claude gets live spend/context from the
+                # correlated transcript and terminal authority from result
+                # JSON. The wired-slot set decides whether an empty slot reads
+                # 'absent' vs 'unimplemented'.
                 levels=run_levels,
                 levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),
@@ -5361,7 +5407,7 @@ def _drain_outbox(
         # staging name (``portals.is_staging_name`` — a bare ``.suffix``
         # check missed ``note.md.tmp.<pid>.<rand>`` and delivered a message
         # mid-write, #590); dotfiles are reserved as control channels
-        # (e.g. ``.keepalive`` for the liveness budget), and the live JSON
+        # (including the legacy ``.keepalive`` compatibility file), and the live JSON
         # files are daemon-owned control state. None are deliverable.
         if (
             portals.is_staging_name(fpath.name)
@@ -7679,7 +7725,7 @@ def _reconcile_orphaned_spawn_dispatches(
       worker finished; only the reap-notify was lost), or no write to the
       event file / run manifest for longer than *stale_after_seconds*
       (defaults to the janitors' 24h crash-recovery horizon — beyond any
-      runner budget, keepalive-extended or not).
+      inactivity watchdog, even with a legacy keepalive extension).
 
     Idempotent by the status transition itself: the sweep resolves the
     event to ``error``, and a resolved event never appears in
@@ -8725,8 +8771,8 @@ def start(
     # one-slot executor keeps the clean future lifecycle (done / result /
     # drain-on-shutdown) while the loop stays responsive to dev-reload,
     # gate liveness, and signals during a long thought. The runner's own
-    # wall-clock timeout (runner.timeout_seconds) is the liveness
-    # backstop that reclaims the slot if the CLI subprocess wedges.
+    # inactivity watchdog (runner.timeout_seconds) reclaims the slot if the
+    # CLI subprocess wedges.
     # Second pool (kb/design-director-loop.md §"Concurrent sub-spawns";
     # generalized past cap-of-1 in kb/design-multi-workstream-concurrency.md
     # "slice 1"): `current` remains the one resident-stack thought

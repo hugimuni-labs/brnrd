@@ -52,7 +52,7 @@ PHASES = (PHASE_POST_TOOL, PHASE_STOP, PHASE_SESSION_START)
 
 # Control dotfile the post-tool/stop hook touches to ask the daemon to
 # drain now. Lives beside the outbox; the daemon's drain skips dotfiles, so
-# it is never delivered. Matches the ``.keepalive`` / ``.card`` idiom.
+# it is never delivered. Matches the ``.card`` / ``.pr`` idiom.
 FLUSH_SIGNAL_NAME = ".flush"
 FLUSH_ACK_NAME = ".flush.ack"
 _FLUSH_ACK_TIMEOUT_SECONDS = 5.0
@@ -73,7 +73,7 @@ CARD_NAME = ".card"
 FORGE_HANDOFF_NAME = ".forge-handoff"
 # Resident-authored mood glyph/name (#566 layer 2 — the daemon-derived mood
 # is computed elsewhere; this is the resident's own meta-channel). A control
-# dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
+# dotfile beside `.card`, same idiom as `.pr`: never delivered,
 # read fresh at every boundary. First line only — see `_read_mood`.
 MOOD_NAME = ".mood"
 # The run body rides the closeout delta whole. Capped only against a
@@ -451,16 +451,22 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "renders at all.",
     ),
     _BarSegment(
-        "budget", "⏱",
-        "wall-clock posture — elapsed/soft-limit minutes (`16/120m`). "
-        "Renders whenever both numbers are known.",
+        "context_window", "ctx",
+        "live context headroom (`ctx 62%`) or `ctx unknown` when this Shell "
+        "has no correlated reading. This, quota, and spend are the resident-"
+        "facing meter; the daemon's inactivity watchdog is not rendered.",
     ),
     _BarSegment(
         "quota", "q",
         "every subscription quota bucket the `quota` facet knows about, "
         "abbreviated to one letter + remaining percent, joined by `·` "
         "(`S57·W50·F27` = session 57%, week 50%, a named per-model bucket "
-        "27%). Renders only when quota is `known`.",
+        "27%). An unavailable source renders `q unknown`, never zero.",
+    ),
+    _BarSegment(
+        "spend", "spend",
+        "estimated session spend (`spend $0.042`) or `spend unknown` when "
+        "this Shell has no proven gauge.",
     ),
     _BarSegment(
         "orient", "orient",
@@ -479,11 +485,6 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "siblings", "▷",
         "coexisting sibling runs in this dominion (`▷1`). Renders only "
         "when the count is > 0 — an idle dominion says nothing here.",
-    ),
-    _BarSegment(
-        "keepalive", "rb",
-        "keepalive extension remaining, the slot held past budget (`rb3h`). "
-        "Renders only while `.keepalive` is active.",
     ),
     _BarSegment(
         "delivery", "⇡",
@@ -525,17 +526,6 @@ def _run_id_chip(run: dict[str, Any]) -> str | None:
         return None
     tail = run_id.rsplit("-", 1)[-1].strip()
     return f"⌁ {tail}" if tail else None
-
-
-def _budget_chip(budget: dict[str, Any]) -> str | None:
-    elapsed = budget.get("elapsed_seconds")
-    limit = budget.get("budget_seconds")
-    if elapsed is None or limit is None:
-        return None
-    try:
-        return f"⏱ {int(elapsed) // 60}/{int(limit) // 60}m"
-    except (TypeError, ValueError):
-        return None
 
 
 # One quota-bucket phrase within the facet's rendered summary string, e.g.
@@ -585,10 +575,12 @@ def _quota_bucket_letter(label: str, taken: set[str]) -> str:
 
 
 def _quota_chip(resources: dict[str, Any]) -> str | None:
-    facet = resources.get("quota") if isinstance(resources, dict) else None
+    if not isinstance(resources, dict) or "quota" not in resources:
+        return None
+    facet = resources.get("quota")
     facet = facet if isinstance(facet, dict) else {}
     if facet.get("status") != "known":
-        return None
+        return "q unknown"
     summary = str(facet.get("summary") or "").strip()
     if not summary:
         return None
@@ -600,7 +592,40 @@ def _quota_chip(resources: dict[str, Any]) -> str | None:
             continue
         pct = match.group("pct").split(".")[0]
         chips.append(f"{_quota_bucket_letter(match.group('label'), taken)}{pct}")
-    return "q " + "·".join(chips) if chips else None
+    return "q " + "·".join(chips) if chips else "q unknown"
+
+
+_PERCENT_RE = re.compile(r"(?P<pct>\d+(?:\.\d+)?)\s*%")
+_USD_RE = re.compile(r"\$\d+(?:\.\d+)?")
+
+
+def _fmt_meter_pct(value: float) -> str:
+    return str(int(value)) if value.is_integer() else f"{value:.1f}"
+
+
+def _context_chip(resources: dict[str, Any]) -> str | None:
+    if not isinstance(resources, dict) or "context_window" not in resources:
+        return None
+    facet = resources.get("context_window")
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return "ctx unknown"
+    remaining = facet.get("remaining_percentage")
+    if isinstance(remaining, (int, float)) and not isinstance(remaining, bool):
+        return f"ctx {_fmt_meter_pct(float(remaining))}%"
+    match = _PERCENT_RE.search(str(facet.get("summary") or ""))
+    return f"ctx {match.group('pct')}%" if match else "ctx unknown"
+
+
+def _spend_chip(resources: dict[str, Any]) -> str | None:
+    if not isinstance(resources, dict) or "spend" not in resources:
+        return None
+    facet = resources.get("spend")
+    facet = facet if isinstance(facet, dict) else {}
+    if facet.get("status") != "known":
+        return "spend unknown"
+    match = _USD_RE.search(str(facet.get("summary") or ""))
+    return f"spend {match.group(0)}" if match else "spend unknown"
 
 
 def _siblings_chip(resources: dict[str, Any]) -> str | None:
@@ -611,35 +636,6 @@ def _siblings_chip(resources: dict[str, Any]) -> str | None:
     siblings = facet.get("siblings")
     n = len(siblings) if isinstance(siblings, list) else 0
     return f"▷{n}" if n else None
-
-
-def _keepalive_remaining_seconds(until_iso: Any) -> float | None:
-    if not isinstance(until_iso, str) or not until_iso.strip():
-        return None
-    try:
-        dt = datetime.datetime.strptime(until_iso.strip(), "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
-        return None
-    dt = dt.replace(tzinfo=datetime.timezone.utc)
-    remaining = (dt - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()
-    return remaining if remaining > 0 else None
-
-
-def _fmt_short_duration(seconds: float) -> str:
-    seconds = max(0.0, seconds)
-    if seconds >= 3600:
-        return f"{max(1, round(seconds / 3600))}h"
-    return f"{max(1, round(seconds / 60))}m"
-
-
-def _keepalive_chip(budget: dict[str, Any]) -> str | None:
-    keepalive = budget.get("keepalive") if isinstance(budget.get("keepalive"), dict) else {}
-    if keepalive.get("status") != "active":
-        return None
-    remaining = _keepalive_remaining_seconds(keepalive.get("until"))
-    if remaining is None:
-        return None
-    return f"rb{_fmt_short_duration(remaining)}"
 
 
 def _delivery_chip(outbound: dict[str, Any]) -> str | None:
@@ -800,12 +796,15 @@ def _render_bar(
     id_chip = _run_id_chip(run)
     if id_chip:
         segments.append(id_chip)
-    budget_chip = _budget_chip(budget)
-    if budget_chip:
-        segments.append(budget_chip)
+    context_chip = _context_chip(resources)
+    if context_chip:
+        segments.append(context_chip)
     quota_chip = _quota_chip(resources)
     if quota_chip:
         segments.append(quota_chip)
+    spend_chip = _spend_chip(resources)
+    if spend_chip:
+        segments.append(spend_chip)
     if orient is not None:
         # The orientation ledger, open. Deliberately absent from the gate
         # below: the meter rides boundaries the bar renders anyway and never
@@ -816,9 +815,6 @@ def _render_bar(
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(siblings_chip)
-    keepalive_chip = _keepalive_chip(budget)
-    if keepalive_chip:
-        segments.append(keepalive_chip)
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(delivery_chip)
@@ -858,12 +854,6 @@ def _render_bar(
                 f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
                 f"{summary[:200]}"
             )
-    if budget.get("long_running"):
-        limit = budget.get("budget_seconds")
-        details.append(
-            f"- running long: past the {limit}s soft budget — extend via "
-            ".keepalive if the work needs it, else wind down."
-        )
     elapsed = budget.get("elapsed_seconds")
     if not run_name.get("written") and isinstance(elapsed, (int, float)) and elapsed >= 240:
         details.append(
@@ -887,7 +877,9 @@ def _render_bar(
                 "or stale."
             )
 
-    resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
+    resources_laden = bool(
+        context_chip or quota_chip or spend_chip or siblings_chip
+    )
     any_delivery = bool(delivery_chip)
     # A mood edge is laden by definition: something the resident did just came
     # back wrong. Without this clause the caller's gate opens and this one
@@ -1013,19 +1005,6 @@ def format_delta(
             f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
             f"{summary[:200]}"
         )
-    elapsed = budget.get("elapsed_seconds")
-    limit = budget.get("budget_seconds")
-    if elapsed is not None and limit is not None:
-        lines.append(f"- budget: {elapsed}s of {limit}s used.")
-        # "Running so long" is a missing-data signal worth surfacing the
-        # moment it is true (evt-go5z): a run past its soft budget is either
-        # legitimately deep or quietly stuck, and the resident should see the
-        # fact rather than have to compute it from two numbers.
-        if budget.get("long_running"):
-            lines.append(
-                f"- running long: past the {limit}s soft budget — extend via "
-                ".keepalive if the work needs it, else wind down."
-            )
     replied_current = outbound.get("replies_current")
     any_delivery = (
         replied_current
