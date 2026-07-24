@@ -18,6 +18,18 @@ the weekly window as unavailable. ``window_minutes`` is the only thing OpenAI
 actually asserts about a window's identity, so every reader classifies off the
 duration, never the slot.
 
+**And quota does not always arrive as a window at all.** 2026-07-24, this
+account: ``primary`` and ``secondary`` both ``null``, the entire fact in a
+sibling ``credits`` block (``{"has_credits": false, "unlimited": false,
+"balance": "0"}``). The window reader found nothing to summarize, so the
+``quota`` slot came back **absent** — and absent renders everywhere as "no
+reading yet", never as "this Shell cannot run". Two dispatched workers died on
+their first token while the wake's Runner catalog still offered seven Codex
+profiles as selectable. Same class as the slot-identity bug above, one level
+up: that one assumed which slot a window arrives in, this one assumed the
+shape was a window. :func:`_credits_verdict` reads it, and files a zero under
+``buckets`` rather than under a window slot.
+
 So brr reads the *same data ``/status`` would print* by tailing the active run's
 rollout file — no ``/status`` call, no extra subscription credits, no API key.
 This is the Codex half of brr's per-Shell level collection, and it inverts the
@@ -117,6 +129,67 @@ def _window_label(window_minutes: Any) -> str:
     return f"{mins}m"
 
 
+def _credits_verdict(credits: Any) -> dict[str, Any] | None:
+    """The ``rate_limits.credits`` block → a quota verdict, or ``None``.
+
+    Not every Codex plan expresses headroom as *windows*. A credits-based
+    plan reports ``primary``/``secondary`` as ``null`` and puts the whole
+    fact in ``credits``::
+
+        {"has_credits": false, "unlimited": false, "balance": "0"}
+
+    Read live 2026-07-24 on this account, at the moment two dispatched
+    workers died on their first token. The window reader saw two ``null``s,
+    produced no summary, and the ``quota`` slot came back **absent** — which
+    every downstream surface renders as "no reading yet", never as "this
+    Shell cannot run". Seven Codex profiles stayed listed as selectable
+    against a Shell with a zero balance.
+
+    Same class as the 2026-07-13 slot-identity bug in the module docstring
+    above, one level up: that one assumed *which slot* a window arrives in,
+    this one assumed quota arrives as a window **at all**.
+
+    Only ``has_credits is False`` (explicit, and not ``unlimited``) yields
+    an exhaustion verdict — a missing or malformed block returns ``None``
+    and the facet stays honestly absent. A guard may only assert what it can
+    be proven wrong about, and "the key wasn't there" proves nothing.
+
+    A *positive* balance yields a summary line but **no percentage**: a
+    balance has no denominator, and a borrowed ratio is an invented number
+    with better manners.
+    """
+    if not isinstance(credits, dict):
+        return None
+    if credits.get("unlimited") is True:
+        return {"summary": "credits unlimited"}
+    has_credits = credits.get("has_credits")
+    balance = credits.get("balance")
+    balance_text = str(balance).strip() if balance is not None else ""
+    if has_credits is False:
+        text = "credits exhausted"
+        if balance_text:
+            text += f" (balance {balance_text})"
+        return {
+            "summary": text,
+            "credits_exhausted": True,
+            "credits_balance": balance_text or None,
+            # Routed through the generic ``buckets`` seam
+            # (``runner_quota.binding_quota_remaining_pct``) rather than
+            # ``primary_remaining_percent``: zero headroom is a *credits*
+            # fact, and filing it under a window slot would repeat exactly
+            # the mislabelling the docstring above warns about. Zero is the
+            # one percentage a credits plan can actually prove.
+            "buckets": {"credits": {"remaining_percentage": 0.0}},
+        }
+    if has_credits is True and balance_text:
+        return {
+            "summary": f"credits {balance_text}",
+            "credits_exhausted": False,
+            "credits_balance": balance_text,
+        }
+    return None
+
+
 def _window_summary(label_default: str, window: Any) -> str | None:
     """One rate-limit window → 'LABEL NN% left (resets HH:MMZ)'.
 
@@ -189,6 +262,7 @@ def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> d
 
     rate = payload.get("rate_limits")
     if isinstance(rate, dict):
+        credits = _credits_verdict(rate.get("credits"))
         parts = [
             s for s in (
                 _window_summary("5h", rate.get("primary")),
@@ -232,6 +306,20 @@ def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> d
                 "primary_window_minutes": _num(primary.get("window_minutes")),
                 "secondary_window_minutes": _num(secondary.get("window_minutes")),
             }
+            if credits:
+                # Windows won the summary; credits ride along as extra text
+                # and structured fields, never overriding a measured window.
+                levels["quota"]["summary"] += "; " + credits["summary"]
+                for key in ("credits_exhausted", "credits_balance"):
+                    if key in credits:
+                        levels["quota"][key] = credits[key]
+                if "buckets" in credits:
+                    levels["quota"].setdefault("buckets", {}).update(credits["buckets"])
+        elif credits:
+            # No window data at all — the credits block is the *only* quota
+            # fact this plan reports. Without this branch the slot is absent
+            # and an unusable Shell reads as unmeasured.
+            levels["quota"] = dict(credits)
         plan = rate.get("plan_type")
         if isinstance(plan, str) and plan.strip():
             levels["plan_type"] = plan.strip()
