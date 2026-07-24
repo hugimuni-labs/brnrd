@@ -2236,6 +2236,181 @@ def test_notify_spawn_parent_worker_ran_declared_mismatch_still_indicts(tmp_path
     assert "status=contract-mismatch" in note["body"]
 
 
+# ── #648: spawn_completed carries child produce handles ─────────────────────
+
+
+def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
+    """A clean spawn reap emits branch, PR number, and report path/found as
+    structured frontmatter keys on the spawn_completed event.
+
+    Load-bearing: before #648 the healthy path carried none of these.
+    Must be red against unmodified source.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".pr").write_text("647\n", encoding="utf-8")
+    report = tmp_path / "brr-reap-handles-report.md"
+    report.write_text("report content\n", encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body=f"Branch: `brr/orientation-ledger`\nReport: `{report}`\n",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/orientation-ledger",
+            "spawn_contract_branch": "brr/orientation-ledger",
+            "spawn_contract_report": str(report),
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_published_branch") == "brr/orientation-ledger"
+    # parse_frontmatter coerces bare numerics to int; 647 written → 647 read.
+    assert str(note.get("spawn_pr_number")) == "647"
+    assert note.get("spawn_report_path") == str(report)
+    assert note.get("spawn_report_found") is True
+
+
+def test_notify_spawn_parent_no_pr_file_omits_spawn_pr_number(tmp_path):
+    """No .pr file written ⇒ spawn_pr_number absent from the event — never
+    zero, None, or an empty string. 'Absent stays absent' (#648 rule 1).
+
+    spawn_published_branch is still emitted when a branch was published.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    # No .pr file written.
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/some-branch",
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_pr_number" not in note
+    # Branch WAS published, so that key must still appear.
+    assert note.get("spawn_published_branch") == "brr/some-branch"
+
+
+def test_notify_spawn_parent_mismatch_reap_preserves_contract_keys(tmp_path):
+    """A mismatch reap carries the new produce handles AND every
+    spawn_contract_* key exactly as before — the two namespaces are additive.
+
+    Regression pin on the existing mismatch behaviour: nothing in the
+    produce-handle logic may alter, drop, or rename any spawn_contract_* key.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/actually-published",
+            "spawn_contract_branch": "brr/declared-slug",
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    # Existing mismatch keys byte-unchanged.
+    assert note.get("spawn_contract_mismatch") is True
+    assert note.get("spawn_contract_spec_branch") == "brr/declared-slug"
+    assert note.get("spawn_contract_published_branch") == "brr/actually-published"
+    assert "status=contract-mismatch" in note["body"]
+    # New produce handle also present under the distinct namespace.
+    assert note.get("spawn_published_branch") == "brr/actually-published"
+
+
+def test_notify_spawn_parent_report_found_false_carried(tmp_path):
+    """spawn_report_found=False rides through when the worker skipped its
+    declared report. Must be red against unmodified source.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    missing = tmp_path / "brr-never-written-report.md"
+    assert not missing.exists()
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body=f"Branch: `brr/thing`\nReport: `{missing}`\n",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/thing",
+            "spawn_contract_branch": "brr/thing",
+            "spawn_contract_report": str(missing),
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_report_path") == str(missing)
+    assert note.get("spawn_report_found") is False
+
+
+def test_notify_spawn_parent_cancelled_before_start_emits_no_produce_keys(tmp_path):
+    """A spawn cancelled before it started emits spawn_stopped=True but carries
+    no produce handles — no branch, no PR, no report path.
+
+    The child never ran; by rule 1 absent stays absent. Pin on the
+    stopped-before-start create_event call (separate from _notify_spawn_parent)
+    so neither path accidentally acquires produce keys.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    # Create the queued spawn event the stop will cancel.
+    path = protocol.create_event(
+        inbox, "spawn", "do the thing",
+        spawn_immediate=True, spawn_parent_run_id="run-parent",
+    )
+    spawn_eid = path.stem
+    # Register as not-yet-dispatched (run_id=None).
+    control = {
+        "event_id": spawn_eid,
+        "parent_run_id": "run-parent",
+        "run_id": None,
+        "stopped": False,
+    }
+
+    daemon._apply_run_stop(
+        control, inbox, stopped_by="run-parent", conversation_key="telegram:42:",
+    )
+
+    completed = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("source") == "spawn_completed"
+    ]
+    assert len(completed) == 1
+    note = completed[0]
+    assert note.get("spawn_stopped") is True
+    assert "spawn_published_branch" not in note
+    assert "spawn_pr_number" not in note
+    assert "spawn_report_path" not in note
+
+
 def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     """A spawn that runs to a clean, zero-commit finish must still land a
     completion notification in the parent's thread — issue #268's still-

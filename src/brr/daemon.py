@@ -6677,6 +6677,25 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         )
         if text:
             summary = f"{summary}\n\n{text}"
+    # #648: produce handles — what the child actually delivered.
+    # Rule 1: absent stays absent. No .pr → no spawn_pr_number at all;
+    # no publish_branch → no spawn_published_branch. Never 0, None, or
+    # empty-string in place of a missing fact. These keys answer "what did
+    # the child deliver?" and are in a distinct namespace from
+    # spawn_contract_* (which answers "did it meet its declared spec?").
+    produce_kwargs: dict = {}
+    published_branch = str(task.meta.get("publish_branch") or "").strip()
+    if published_branch:
+        produce_kwargs["spawn_published_branch"] = published_branch
+    outbox_path_str = str(task.meta.get("outbox_path") or "").strip()
+    if outbox_path_str:
+        pr_num = _read_pr_control(Path(outbox_path_str) / ".pr")
+        if pr_num:
+            produce_kwargs["spawn_pr_number"] = pr_num
+    if contract is not None and contract.get("spec_report"):
+        produce_kwargs["spawn_report_path"] = contract["spec_report"]
+        if contract.get("report_found") is not None:
+            produce_kwargs["spawn_report_found"] = bool(contract["report_found"])
     try:
         completion = protocol.create_event(
             inbox_dir,
@@ -6686,6 +6705,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             spawned_by_run=task.id,
             spawn_parent_run_id=parent_run_id,
             **contract_kwargs,
+            **produce_kwargs,
         )
     except OSError as exc:
         print(f"[brnrd] spawn-completion notify failed for {task.id}: {exc}")
