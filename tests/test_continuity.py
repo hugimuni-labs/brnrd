@@ -711,3 +711,140 @@ def test_rendered_kernel_names_every_file_the_persisted_score_meters(
     for entry in score.orientation_set:
         assert entry.path in prompt, f"kernel never names {entry.path}"
     assert f"orient: {len(score.orientation_set)} file(s)" in prompt
+
+
+# ── #628 — the walk must name only what the wake was NOT already handed ──
+#
+# The active plan is injected *whole* by the ``## Work surface`` block
+# (`_build_work_surface_block_scored`) earlier in the same prompt, yet
+# `_build_orientation_set` used to list it unconditionally — asking the wake
+# to Read a file it was already holding. After #625 made `AGENTS.md`
+# Shell-conditional, the plan was the walk's only remaining entry on codex,
+# so the whole codex walk was billing a file already in context. Fixed by
+# threading the work-surface block's own "what did I actually hand over
+# whole" fact (`injected_whole`) into the set as a subtraction — never a
+# structural exclusion, so a plan the surface block trimmed or skipped for
+# budget reasons still gets walked (see the budget-exhausted test below).
+
+
+def _seed_account_home_for_orientation(
+    tmp_path: Path, *, extra_config: str = "",
+) -> Path:
+    """Seed a minimal account dominion home for orientation-set tests.
+
+    ``repo.label=local/default`` makes the plan slug ``local__default``
+    predictable, mirroring ``tests/test_prompts.py::_seed_account_home`` —
+    duplicated rather than imported, so this file's fixtures stay
+    self-contained.
+    """
+    home = tmp_path / "acct-home"
+    home.mkdir(parents=True)
+    (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".brr" / "config").write_text(
+        f"home.path={home}\nrepo.label=local/default\n{extra_config}",
+        encoding="utf-8",
+    )
+    return home
+
+
+def test_plan_injected_whole_leaves_the_orientation_walk(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The defect, reproduced and fixed: a plan handed over whole by the
+    work-surface block must not also be billed as a walk entry.
+
+    ``AGENTS.md`` and a touched ``subject-*.md`` hub are seeded alongside the
+    plan so this also pins checks 4 and 5 from the #628 spec: neither
+    mechanism is disturbed by the new subtraction — only the plan (the one
+    candidate the surface block actually handed over whole) leaves the set.
+    """
+    from brr import prompts
+
+    home = _seed_account_home_for_orientation(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+    surface = home / "surface"
+    plan_dir = surface / "plans" / "local__default"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "active.md").write_text("# Plan\n\nship it\n", encoding="utf-8")
+
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
+    )
+
+    score = prompts.build_boot_score(
+        tmp_path,
+        is_daemon=True,
+        runner_shell="claude",
+        task_text="fix the boot sequence meter",
+    )
+
+    names = [Path(e.path).name for e in score.orientation_set]
+    assert "active.md" not in names, (
+        "the plan was injected whole by the work-surface block and must not "
+        "also be billed as a walk entry"
+    )
+    assert names == ["AGENTS.md", "subject-boot-sequence.md"]
+
+
+def test_codex_plan_whole_no_hub_match_empties_the_walk(tmp_path: Path) -> None:
+    """On codex, with the plan injected whole and no touched hub, the walk
+    is genuinely empty — and the rendered kernel must not show an ``orient:``
+    line for it (closes #614 item 2: documented as differential, no longer a
+    permanent fixture).
+    """
+    from brr import prompts
+    from brr.bootscore import format_kernel
+
+    home = _seed_account_home_for_orientation(tmp_path)
+    surface = home / "surface"
+    plan_dir = surface / "plans" / "local__default"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "active.md").write_text("# Plan\n\nship it\n", encoding="utf-8")
+    # No AGENTS.md (codex reads it natively regardless), no subject hub.
+
+    score = prompts.build_boot_score(tmp_path, is_daemon=True, runner_shell="codex")
+
+    assert score.orientation_set == []
+    assert "orient:" not in format_kernel(score)
+
+
+def test_budget_exhausted_plan_stays_in_the_walk(tmp_path: Path) -> None:
+    """The load-bearing case option 1 (structural exclusion) would break:
+    when the surface block's shared budget runs out before it reaches the
+    plan, the plan is never handed over whole, so it must stay in the walk —
+    it is the only remaining pointer to it.
+    """
+    from brr import prompts
+    from brr import account as acc_mod
+    from brr import config as conf_mod
+
+    home = _seed_account_home_for_orientation(
+        tmp_path, extra_config="dominion.surface_inject_budget_bytes=200\n",
+    )
+    surface = home / "surface"
+    surface.mkdir(exist_ok=True)
+    # Sorts before "plans/..." (a < p) and, whole and untrimmed itself,
+    # consumes nearly the entire (tiny) shared budget.
+    (surface / "aaa.md").write_text("x" * 180, encoding="utf-8")
+    plan_dir = surface / "plans" / "local__default"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "active.md").write_text("# Plan\n\nship it\n", encoding="utf-8")
+
+    trim, whole = prompts._build_work_surface_block_scored(tmp_path)
+    cfg = conf_mod.load_config(tmp_path)
+    ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
+    plan_path = acc_mod.active_plan_path(ctx, "local/default").resolve()
+
+    # The fixture's own claim: the plan did NOT make it into the surface
+    # block whole (budget ran out — trimmed or skipped, either counts).
+    assert plan_path not in whole
+    assert "ship it" not in trim.text
+
+    entries = prompts._build_orientation_set(
+        tmp_path, runner_shell="claude", injected_whole=whole,
+    )
+    assert plan_path in {Path(e.path) for e in entries}
