@@ -423,7 +423,7 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     return checkout
 
 
-def _refresh_checkout(checkout: Path) -> None:
+def _refresh_checkout(checkout: Path) -> str | None:
     """Fetch ``origin`` and best-effort fast-forward *checkout* to it (#613).
 
     The knowledge-checkout mirror of ``sync.refresh_before_run``: without
@@ -448,6 +448,14 @@ def _refresh_checkout(checkout: Path) -> None:
     - HEAD is detached or ``origin/<branch>`` doesn't exist;
     - histories diverged (``--ff-only`` refuses; reconciliation belongs
       to the capture path's pull-rebase, never to a read path).
+
+    Returns ``None`` once the checkout is current, or a short reason when
+    it was deliberately left behind (#659). Every skip above is a *correct*
+    decision that still leaves a stale mirror, and a mirror's whole defect
+    is that it has no way to say so: ``git status`` reads clean, the page
+    count matches, and only ``HEAD..origin/<branch>`` — which nothing
+    points a reader at — disagrees. Callers that only want the effect
+    ignore the return.
     """
     try:
         fetch = subprocess.run(
@@ -456,25 +464,36 @@ def _refresh_checkout(checkout: Path) -> None:
             timeout=60,
         )
         if fetch.returncode != 0:
-            return
+            return f"could not fetch origin into the kb checkout ({checkout})"
         status = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=checkout, capture_output=True, text=True, check=False,
         )
-        if status.returncode != 0 or status.stdout.strip():
-            return
+        if status.returncode != 0:
+            return f"could not read the kb checkout's status ({checkout})"
+        if status.stdout.strip():
+            return (
+                f"the kb checkout ({checkout}) has uncommitted work — left "
+                f"untouched, so it may be behind the account knowledge repo"
+            )
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=checkout, capture_output=True, text=True, check=False,
         ).stdout.strip()
         if not branch or branch == "HEAD":
-            return
-        subprocess.run(
+            return f"the kb checkout ({checkout}) has no branch checked out"
+        merge = subprocess.run(
             ["git", "merge", "--ff-only", f"origin/{branch}"],
             cwd=checkout, capture_output=True, text=True, check=False,
         )
+        if merge.returncode != 0:
+            return (
+                f"the kb checkout ({checkout}) could not fast-forward to "
+                f"origin/{branch}; reconcile by hand (fetch / rebase)"
+            )
     except Exception:  # pragma: no cover - defensive, mirrors sync.py
-        return
+        return f"the kb checkout ({checkout}) could not be refreshed"
+    return None
 
 
 def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
@@ -555,6 +574,7 @@ def capture(
     captured_pages: list[str] | None = None,
     conversation_id: str | None = None,
     run_id: str | None = None,
+    mirror_notes: list[str] | None = None,
 ) -> bool:
     """Commit and push the knowledge chain. Best-effort; never raises.
 
@@ -567,6 +587,10 @@ def capture(
     push to the forge sets a ``needs_sync`` marker (the remote diverged —
     reconciling is the resident's judgement, not something to paper over),
     and a successful push clears it.
+
+    ``mirror_notes``, when supplied, is extended with the reason the
+    ``.brnrd-kb/`` mirror was left behind, if it was (#659) — a stale mirror
+    reads clean, so the skip has to be said out loud somewhere.
     """
 
     try:
@@ -639,6 +663,27 @@ def capture(
                 else:
                     moved = True
 
+            # 3b. account → checkout, closing the loop steps 1-3 open. The
+            #     checkout's ``origin`` *is* the account tree on this
+            #     machine, so the honest trigger is "the account branch
+            #     moved" — knowable right here, and nothing to do with the
+            #     forge. Until #659 this lived inside step 4's successful
+            #     forge push and was a bare ``fetch_branch``, which is wrong
+            #     twice over: a fetch advances only the remote-tracking ref,
+            #     leaving the local branch and working tree behind forever
+            #     (clean ``git status``, equal page counts, silent
+            #     divergence), and gating it on the forge meant a repo with
+            #     no forge remote — the early return just below — never
+            #     synced the mirror at all. Placed after step 3 so the
+            #     checkout's own commits have already gone up: a checkout
+            #     that just pushed is a no-op fast-forward, and one whose
+            #     push was rejected has diverged, where ``--ff-only``
+            #     correctly refuses rather than papering over it.
+            if has_checkout:
+                note = _refresh_checkout(checkout)
+                if note and mirror_notes is not None:
+                    mirror_notes.append(note)
+
             # 4. account → forge. The only link that makes the archive
             #    durable off this machine.
             remote = gitops.default_remote(home_knowledge)
@@ -648,8 +693,6 @@ def capture(
                 if gitops.push_branch(home_knowledge, remote, branch):
                     moved = True
                     clear_needs_sync(brr_dir)
-                    if has_checkout:
-                        gitops.fetch_branch(checkout, "origin", branch)
                 else:
                     mark_needs_sync(
                         brr_dir,

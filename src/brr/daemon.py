@@ -6863,14 +6863,20 @@ def _capture_knowledge(
         return
 
     captured_pages: list[str] = []
+    mirror_notes: list[str] = []
     moved = knowledge.capture(
         repo_root, f"brnrd-kb: capture knowledge after run {task.id}", cfg=cfg,
         captured_pages=captured_pages,
         conversation_id=task.conversation_key or None,
         run_id=task.id,
+        mirror_notes=mirror_notes,
     )
     if moved:
         print(f"[brnrd] knowledge: captured kb after {task.id}")
+    # A mirror left behind reads exactly like a current one (#659) — clean
+    # tree, matching page count — so the skip only exists if it is said.
+    for note in mirror_notes:
+        print(f"[brnrd] knowledge: {note}")
     # Union in pages the resident committed mid-run (#538): everything the
     # knowledge repo took between the run-start stamp and now, scoped to
     # this repo's pages *and* this run's own commits (#565) — a sibling's
