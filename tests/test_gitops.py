@@ -619,8 +619,9 @@ def test_hook_refuses_resolves_with_prose_qualifier(tmp_path, monkeypatch):
 # #653 — position (not vocabulary) refuse cases ──────────────────────────────
 #
 # #653 shipped as a mid-run steer, not the closed word list its own spec
-# opened with. Driven against the installed hook, `c91d3866` and `aef7fa11`
-# closed #413 for real from prose that was never at the start of a line, and
+# opened with. Driven against the installed hook, `aef7fa11` closed #413 for
+# real from prose that was never at the start of a line (and `c91d3866`, in
+# the same push, carried the identical hazard in its subject), and
 # `85ed4735` closed #477 for real from "This does not close #477." — a
 # leading word list has no entry for "does not" and would have missed it.
 # GitHub's own keyword scanner does not read position or narrative framing,
@@ -651,9 +652,15 @@ def test_hook_refuses_leading_qualifier_partially_before_closes(tmp_path, monkey
 
 def test_hook_refuses_narrative_close_mid_sentence(tmp_path, monkeypatch):
     """``review: test the merge that actually closed #413, not a stand-in
-    for it`` → refused. This is ``c91d3866`` verbatim — GitHub's timeline
-    confirms it really closed #413 on push, from a past-tense narrative
-    clause with no leading qualifier word at all.
+    for it`` → refused. This is ``c91d3866`` verbatim — a past-tense
+    narrative clause with no leading qualifier word at all.
+
+    The receipt belongs to its sibling: GitHub's timeline credits
+    ``aef7fa11`` (same push) for the re-close, because *its* body quotes
+    ``Closes #413 §7 S13.`` as a documentation example. ``c91d3866`` is the
+    identical hazard that changed nothing only because the issue was already
+    closed by the time git got to it. Do not read "it did no harm" as "it is
+    safe" — the ordering was luck.
     """
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -708,9 +715,16 @@ def test_hook_refuses_this_closes_reversing_the_original_spec(tmp_path, monkeypa
 
 def test_hook_position_refusal_names_the_position_rule(tmp_path, monkeypatch):
     """A not-at-line-start refusal names the position rule and offers
-    ``Part of #NNN`` — not the trailing-qualifier message's ``Closes #NNN.``
-    remedy, which doesn't apply here (there's no line-start close to make
-    bare).
+    **both** remedies.
+
+    Two authors with opposite intents reach this one message: ``Partially
+    closes #NNN`` wants a scoped reference, ``This closes #NNN`` wants the
+    close. Offering only ``Part of #NNN`` silently steers the second into
+    not closing the issue they meant to close — a guard satisfiable only by
+    abandoning the intent is not satisfiable, which is the entire argument
+    #653 rests on. This asserts both forms are present, and is the reason
+    the earlier ``"Closes #NNN." not in stderr`` assertion was wrong: it
+    pinned the omission rather than the rule.
     """
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -722,7 +736,7 @@ def test_hook_position_refusal_names_the_position_rule(tmp_path, monkeypatch):
     assert r.returncode != 0
     assert "start of a line" in r.stderr
     assert "Part of #NNN" in r.stderr
-    assert "Closes #NNN." not in r.stderr
+    assert "Closes #NNN." in r.stderr
     assert "no-verify" in r.stderr
 
 

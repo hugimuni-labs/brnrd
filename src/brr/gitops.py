@@ -576,11 +576,14 @@ _RUN_ID_HOOK_SCRIPT = (
     # mostly, ...).  Dropped: a real commit surfaced mid-run — `85ed4735`,
     # "This does not close #477." — that GitHub's timeline confirms closed
     # #477 two seconds after push, and no finite word list anticipates
-    # "does not" the way a position rule does for free.  A second commit in
-    # the same 300-window, `c91d3866`, likewise closed #413 for real from a
-    # past-tense narrative clause ("...that actually closed #413..."), not a
-    # leading qualifier at all.  Position, not vocabulary, is the actual
-    # discriminator; see kb for the sweep this replaced.
+    # "does not" the way a position rule does for free.  The second real
+    # closure is sharper still: GitHub's timeline credits `aef7fa11` — the
+    # commit that *shipped* #652 — for re-closing #413, because its own body
+    # quotes `Closes #413 §7 S13.` as a documentation example of what the
+    # guard refuses.  The same push also carried `c91d3866`, whose subject
+    # narrates "...that actually closed #413..."; that one changed nothing
+    # only because the issue was already closed by then.  Neither is a
+    # leading qualifier.  Position, not vocabulary, is the discriminator.
     #
     # _BRR_ANY: keyword + #NNN anywhere in the line (word-bounded so it
     # doesn't fire inside a longer word like "disclosed").  A line that
@@ -605,6 +608,13 @@ _RUN_ID_HOOK_SCRIPT = (
     '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
     '        printf \'  A close keyword only closes at the start of a line.\\n\' >&2\n'
     '        printf \'  Use instead:\\n\' >&2\n'
+    # Both remedies, deliberately.  This message is reached by two authors
+    # with opposite intents — "Partially closes #NNN" wants a reference,
+    # "This closes #NNN" wants the close — and offering only the scoped form
+    # steers the second one into silently *not* closing the issue they meant
+    # to close.  A guard that is satisfiable only by abandoning the intent is
+    # not satisfiable.
+    '        printf \'    Closes #NNN.       (at the start of a line — closes it)\\n\' >&2\n'
     '        printf \'    Part of #NNN ...   (scoped reference — does not close)\\n\' >&2\n'
     '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
     '        exit 1\n'
