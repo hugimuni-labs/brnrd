@@ -147,6 +147,20 @@ Follow-through:
   respawn flag (suppress the child's direct delivery, file a
   review-needed event back). Real daemon surface, deliberately unbuilt.
 
+Spec the **task**, never the **room**. A spawned child is not standing
+where you are: worktree isolation is the floor the daemon enforces for
+every spawn, so a child is never in your `host` checkout even when you
+are, and it arrives already holding an isolated tree with a publish lane
+attached. Your own environment rules — pin a worktree, don't touch the
+shared tree, push by hand — are rules for *you*, and copying them into a
+spec sends the child out of the machinery that was built for it: the
+branch never publishes, the produce manifest derives nothing, and the
+dispatch contract check compares against a branch that no longer exists.
+The general form is worth more than the instance: **a spec's prose can
+contradict facts the daemon already attested to the child, and prose
+wins** — a child reads its task as the task. So state what is true of the
+*work*, and let the room be told by the thing that knows it.
+
 Revisit: when a strong core's latency and cost make the resident/worker
 hop invisible, this promotes from policy to default architecture — a
 model-economics date to notice, not a call to pre-make.
