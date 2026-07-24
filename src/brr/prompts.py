@@ -1020,11 +1020,17 @@ def _build_kb_health_block(repo_root: Path) -> str:
     size_pressure = [f for f in findings if f.type in _KB_SIZE_FINDINGS]
     stats = kb_health.compute_graph_stats(repo_root, kb_dir)
     ownership = _kb_ownership_signal(size_pressure, stats)
+    mirror = _kb_mirror_signal(knowledge.mirror_state(repo_root))
 
-    if not integrity and not ownership:
+    if not integrity and not ownership and not mirror:
         return ""
 
     sections: list[str] = []
+    # Mirror first: it is not a page to fix but a statement about whether the
+    # pages below are the whole set. A findings list read against a mirror
+    # three commits behind is a report about yesterday's kb.
+    if mirror:
+        sections.append(mirror)
     if integrity:
         sections.append(
             "**Integrity** — specific inconsistencies with a specific fix; "
@@ -1045,6 +1051,69 @@ def _build_kb_health_block(repo_root: Path) -> str:
 # Size findings are a maintenance *signal*, not per-page work — see
 # :func:`_build_kb_health_block` and :func:`_kb_ownership_signal`.
 _KB_SIZE_FINDINGS = frozenset({"oversized-page", "recent-log-budget-exceeded"})
+
+
+def _kb_mirror_signal(state) -> str:
+    """One line when the ``.brnrd-kb/`` mirror is behind its origin — else "".
+
+    Follows ``_build_knowledge_sources_block``'s precedent (*"a marker nothing
+    surfaces is a guardrail that doesn't guard"*) for the same class of fact:
+    #659 gave every mirror skip a reason and sent it to the daemon log, one
+    layer short of the resident who reads a wake prompt. This renders the
+    *state* instead of replaying the event — read fresh each wake by
+    :func:`knowledge.mirror_state`, so it is never a note about something that
+    was true an hour ago.
+
+    Silent in two of three cases, for two different reasons:
+
+    - **current** — the #623 discipline. A guard that fires every wake for a
+      non-reason stops being read, and takes the wakes where it *is* a reason
+      down with it.
+    - **absent** — no checkout, detached HEAD, no ``origin/<branch>``. A repo
+      with no mirror has no mirror to be stale, and does not want a line every
+      wake saying so. Silence here is *not* the same value as silence above:
+      :class:`knowledge.MirrorState` keeps them apart as distinct statuses, so
+      nothing downstream can read "absent" as "0 behind" and call it healthy.
+      The rendering collapses them; the model does not.
+
+    The sentence names ``git status`` explicitly, because the reader's likely
+    next move is to check it, and it will read clean — that clean status is
+    precisely the defect (a mirror's whole problem is that it has no way to
+    say it is stale) rather than evidence against this line.
+    """
+    from . import knowledge
+
+    if state.status != knowledge.MIRROR_BEHIND:
+        return ""
+    upstream = f"origin/{state.branch}" if state.branch else "origin"
+    plural = "" if state.behind == 1 else "s"
+    head = (
+        f"**Mirror** — `{knowledge.CHECKOUT_DIRNAME}/` is {state.behind} "
+        f"commit{plural} behind `{upstream}`"
+    )
+    # Three tails, three next moves. Ordered most-actionable first: a diverged
+    # mirror will never fast-forward on its own, a dirty one is waiting on you,
+    # a clean one resolves itself and only needs to be known about.
+    if state.ahead:
+        tail = (
+            f", and {state.ahead} ahead of it — the histories have **diverged**, so "
+            "no read path will reconcile this for you (`--ff-only` correctly "
+            "refuses). Fetch and rebase the checkout by hand before you trust "
+            "`brnrd kb` to be complete."
+        )
+    elif state.dirty:
+        tail = (
+            ". The checkout has uncommitted work, which is *why* it was left "
+            "behind — the fast-forward skipped rather than clobber an in-flight "
+            "edit. Commit or discard it and the next capture catches the mirror up."
+        )
+    else:
+        tail = (
+            " — and `git status` there reads clean, which is why nothing else "
+            "told you. The next capture fast-forwards it; until then treat "
+            "`brnrd kb` results as possibly missing recent pages."
+        )
+    return head + tail
 
 
 def _kb_ownership_signal(size_findings: list, stats) -> str:
