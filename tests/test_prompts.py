@@ -2378,3 +2378,193 @@ def test_kb_ownership_signal_zero_orphans_zero_pressure_returns_empty():
 
     stats = _make_stats(peer_orphans=[])
     assert _kb_ownership_signal([], stats) == ""
+
+
+# ── kb mirror state on the wake surface (#667) ───────────────────────
+#
+# Driven through `_build_kb_health_block` — the function the wake actually
+# calls — against real checkouts on disk, not against `_kb_mirror_signal` with
+# a hand-made state object. The defect #667 names lives in what the *wake*
+# does or doesn't say, so the helper in isolation is not the caller that
+# matters. `kb_preflight.scan` is stubbed to `[]` in these so the only thing
+# that can put the block on screen is the mirror; the mirror path itself —
+# checkout, fetch, refs, counts — stays real end to end.
+
+
+class TestKbMirrorSignal:
+    def _repo_with_kb(self, tmp_path, monkeypatch):
+        """A repo whose `.brnrd-kb/` is a real clone of a real account repo."""
+        import subprocess
+
+        from brr import kb_preflight, knowledge
+
+        repo = tmp_path / "repo"
+        (repo / ".brr" / "prompts").mkdir(parents=True)
+        (repo / ".brr" / "prompts" / "run.md").write_text("You are an agent.")
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        home = tmp_path / "home"
+        krepo = home / "knowledge"
+        krepo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=krepo, check=True)
+        (krepo / "index.md").write_text("v1\n", encoding="utf-8")
+        self._commit(krepo, "seed")
+        (repo / ".brr" / "config").write_text(
+            f"home.path={home}\n", encoding="utf-8"
+        )
+        cfg = {"home.path": str(home)}
+        checkout = knowledge.ensure_checkout(repo, cfg)
+        self._only_the_mirror_may_speak(monkeypatch)
+        return repo, krepo, checkout, cfg
+
+    @staticmethod
+    def _only_the_mirror_may_speak(monkeypatch):
+        """Silence this block's *other* two contributors.
+
+        Both are real collaborators of `_build_kb_health_block` and both would
+        otherwise put the block on screen for reasons that have nothing to do
+        with the mirror — the ownership signal in particular fires the moment
+        a fast-forward lands a page nothing links to yet, which is exactly
+        what the current-mirror fixture does on purpose. Stubbing them is what
+        makes "the block is empty" mean "the mirror said nothing"; the mirror's
+        own path stays real from checkout to count.
+        """
+        from brr import kb_health, kb_preflight
+
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root, _kb=None: [])
+        monkeypatch.setattr(
+            kb_health, "compute_graph_stats",
+            lambda _root, _kb=None: kb_health.GraphStats(total_pages=0, total_bytes=0),
+        )
+
+    @staticmethod
+    def _commit(repo, message):
+        import subprocess
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "-m", message],
+            cwd=repo, check=True,
+        )
+
+    def _fall_behind(self, repo, krepo, checkout, cfg, *, clean):
+        """Reach a genuinely-behind mirror the way production reaches it."""
+        import subprocess
+
+        from brr import knowledge
+
+        (krepo / "late-page.md").write_text("account-side\n", encoding="utf-8")
+        self._commit(krepo, "add late-page.md")
+        (checkout / "index.md").write_text("mid-write\n", encoding="utf-8")
+        knowledge.ensure_checkout(repo, cfg)  # real fetch, real ff-skip
+        if clean:
+            subprocess.run(
+                ["git", "checkout", "--", "index.md"], cwd=checkout, check=True
+            )
+        assert not (checkout / "late-page.md").exists()  # guard the fixture
+
+    def test_behind_and_clean_gets_a_line_naming_the_count(
+        self, tmp_path, monkeypatch
+    ):
+        """The headline case: one line, the real count, and why `git status`
+        told the resident nothing."""
+        from brr.prompts import _build_kb_health_block
+
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        self._fall_behind(repo, krepo, checkout, cfg, clean=True)
+
+        block = _build_kb_health_block(repo)
+
+        assert "kb health" in block
+        assert "1 commit behind" in block
+        assert "`origin/main`" in block
+        assert "`git status` there reads clean" in block
+
+    def test_behind_and_dirty_gets_a_different_sentence(
+        self, tmp_path, monkeypatch
+    ):
+        """Dirty is a different next action — commit or discard — so it must
+        not be told with the clean sentence."""
+        from brr.prompts import _build_kb_health_block
+
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        self._fall_behind(repo, krepo, checkout, cfg, clean=False)
+
+        block = _build_kb_health_block(repo)
+
+        assert "1 commit behind" in block
+        assert "uncommitted work" in block
+        assert "reads clean" not in block
+
+    def test_diverged_gets_a_third_sentence(self, tmp_path, monkeypatch):
+        """Behind *and* ahead never fast-forwards on its own; saying "the
+        next capture catches it up" here would be a lie."""
+        from brr import knowledge
+        from brr.prompts import _build_kb_health_block
+
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        (krepo / "account-side.md").write_text("theirs\n", encoding="utf-8")
+        self._commit(krepo, "account-side work")
+        (checkout / "checkout-side.md").write_text("ours\n", encoding="utf-8")
+        self._commit(checkout, "checkout-side work")
+        knowledge.ensure_checkout(repo, cfg)  # fetch, then ff-only refuses
+
+        block = _build_kb_health_block(repo)
+
+        assert "diverged" in block
+        assert "1 ahead" in block
+        assert "uncommitted work" not in block
+
+    def test_current_mirror_is_silent(self, tmp_path, monkeypatch):
+        """**The bar most likely to regress.** A current mirror renders
+        nothing — no line, no empty section, no block at all. #623: a guard
+        that fires every wake for a non-reason stops being read, and takes
+        the wakes where it *is* a reason down with it."""
+        from brr import knowledge
+        from brr.prompts import _build_kb_health_block
+
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        (krepo / "late-page.md").write_text("account-side\n", encoding="utf-8")
+        self._commit(krepo, "add late-page.md")
+        knowledge.ensure_checkout(repo, cfg)  # clean, so it fast-forwards
+        assert (checkout / "late-page.md").exists()  # guard: genuinely current
+        assert knowledge.mirror_state(repo).status == knowledge.MIRROR_CURRENT
+
+        assert _build_kb_health_block(repo) == ""
+
+    def test_absent_mirror_is_silent_but_not_indistinguishable(
+        self, tmp_path, monkeypatch
+    ):
+        """A repo with no `.brnrd-kb/` renders nothing — it has no mirror to
+        be stale. But *silent* is a rendering choice, and the code underneath
+        must still tell "absent" from "0 behind": collapsing them is the
+        exact class of defect (`active_kb_dir`'s `None`) this repo keeps
+        paying for. Assert both halves, or the second one rots."""
+        from brr import knowledge
+        from brr.prompts import _build_kb_health_block, _kb_mirror_signal
+
+        repo = tmp_path / "repo"
+        (repo / ".brr" / "prompts").mkdir(parents=True)
+        (repo / ".brr" / "prompts" / "run.md").write_text("You are an agent.")
+        self._only_the_mirror_may_speak(monkeypatch)
+        assert not (repo / knowledge.CHECKOUT_DIRNAME).exists()
+
+        state = knowledge.mirror_state(repo)
+
+        assert _build_kb_health_block(repo) == ""       # renders as nothing…
+        assert _kb_mirror_signal(state) == ""
+        assert state.status == knowledge.MIRROR_ABSENT  # …but is not "fine"
+        assert state.status != knowledge.MIRROR_CURRENT
+        assert state.absent_reason
+
+    def test_behind_mirror_reaches_the_assembled_wake_prompt(
+        self, tmp_path, monkeypatch
+    ):
+        """End to end through `build_run_prompt`: a block that renders but
+        never gets injected is the same guardrail failure one layer up."""
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        self._fall_behind(repo, krepo, checkout, cfg, clean=True)
+
+        prompt = build_run_prompt("do something", repo)
+
+        assert "1 commit behind" in prompt

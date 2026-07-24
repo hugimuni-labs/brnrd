@@ -1092,3 +1092,198 @@ def test_refresh_checkout_survives_unreachable_origin(tmp_path):
     knowledge._refresh_checkout(checkout)  # must not raise
 
     assert _head(checkout) == old_head
+
+
+# ── mirror state, read fresh each wake (#667) ────────────────────────
+#
+# #659 shipped a per-capture skip *reason* printed to the daemon log; the
+# reader who needs it reads a wake prompt instead. These pin the *state*
+# reading that replaces it. Every fixture below reaches its behind-mirror by
+# driving the real production path (`ensure_checkout` → `_refresh_checkout`
+# fetches, then skips the fast-forward for a real reason) rather than by
+# hand-rolling refs — a count from a stubbed subprocess proves nothing about
+# the command, and a hand-built ref proves nothing about reachability.
+
+
+def _behind_mirror(tmp_path, *, dirty: bool):
+    """A checkout genuinely behind origin, produced by the real skip path.
+
+    Advance the account repo, leave an uncommitted edit in the checkout, and
+    let `ensure_checkout` run: it fetches (so `origin/main` is fresh) and then
+    declines to fast-forward over an in-flight edit. That is exactly the skip
+    #659's prose calls "the one that matters most", and the resulting state is
+    the one the wake has to be able to describe.
+    """
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _advance_home(krepo)
+    (checkout / "index.md").write_text("resident is mid-write\n", encoding="utf-8")
+
+    knowledge.ensure_checkout(repo, cfg)  # real fetch, real ff-skip
+
+    if not dirty:
+        # The resident discarded the in-flight edit. Clean, still behind,
+        # origin refs still fresh from the fetch above.
+        subprocess.run(
+            ["git", "checkout", "--", "index.md"], cwd=checkout, check=True
+        )
+    # Guard the fixture: genuinely behind, or it pins nothing (#611).
+    assert _head(checkout) != _head(krepo)
+    assert not (checkout / "late-page.md").exists()
+    return repo, krepo, checkout, cfg
+
+
+def test_mirror_state_counts_a_real_behind_mirror(tmp_path):
+    """The count comes off `HEAD..origin/<branch>` in a checkout that really
+    is behind — two repos on disk, a real fetch, a real skipped merge."""
+    repo, krepo, checkout, cfg = _behind_mirror(tmp_path, dirty=True)
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_BEHIND
+    assert state.behind == 1
+    assert state.ahead == 0
+    assert state.branch == "main"
+    assert state.dirty is True
+
+
+def test_mirror_state_reports_clean_when_the_edit_was_discarded(tmp_path):
+    """Behind *and* clean is the case the mirror cannot self-report: `git
+    status` says nothing is wrong and only `HEAD..origin/main` disagrees."""
+    repo, krepo, checkout, cfg = _behind_mirror(tmp_path, dirty=False)
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_BEHIND
+    assert state.behind == 1
+    assert state.dirty is False
+    # The point of the whole check, asserted rather than assumed:
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=checkout, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert porcelain == ""
+
+
+def test_mirror_state_counts_multiple_commits(tmp_path):
+    """N is a real count, not a boolean wearing an int."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _advance_home(krepo, "page-a.md")
+    _advance_home(krepo, "page-b.md")
+    _advance_home(krepo, "page-c.md")
+    (checkout / "index.md").write_text("mid-write\n", encoding="utf-8")
+    knowledge.ensure_checkout(repo, cfg)
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_BEHIND
+    assert state.behind == 3
+
+
+def test_mirror_state_is_current_after_a_successful_fast_forward(tmp_path):
+    """The silence case. `ensure_checkout` on a clean behind-checkout brings
+    it current, and a current mirror has nothing to say (#623)."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _advance_home(krepo)
+    knowledge.ensure_checkout(repo, cfg)
+    assert _head(checkout) == _head(krepo)  # guard: really did catch up
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_CURRENT
+    assert state.behind == 0
+
+
+def test_mirror_state_reports_divergence_separately(tmp_path):
+    """Behind *and* ahead is a third next-action: `--ff-only` will refuse
+    forever, so this one never resolves itself on the next capture."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _advance_home(krepo, "account-side.md")
+    (checkout / "checkout-side.md").write_text("local page\n", encoding="utf-8")
+    _commit(checkout, "checkout-side work")
+
+    knowledge.ensure_checkout(repo, cfg)  # fetches, then ff-only refuses
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_BEHIND
+    assert state.behind == 1
+    assert state.ahead == 1
+
+
+def test_mirror_state_is_absent_not_zero_behind_without_a_checkout(tmp_path):
+    """A repo with no `.brnrd-kb/` has no mirror to be stale. That must be a
+    distinguishable *status*, not a falsy count that reads as healthy —
+    `active_kb_dir`/`compute_graph_stats` already cost this project one
+    value carrying two meanings; this is not the second."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    assert not (repo / knowledge.CHECKOUT_DIRNAME).exists()
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_ABSENT
+    assert state.status != knowledge.MIRROR_CURRENT
+    assert state.absent_reason  # says which absence, not just "falsy"
+    # The trap this test exists to hold shut: `behind == 0` is true here and
+    # is *also* true of a healthy mirror. Anything downstream branching on
+    # the count alone cannot tell these apart — so nothing may.
+    healthy = knowledge.MirrorState(knowledge.MIRROR_CURRENT)
+    assert state.behind == healthy.behind
+    assert state.status != healthy.status
+
+
+def test_mirror_state_is_absent_on_detached_head(tmp_path):
+    """Detached HEAD has no `origin/<branch>` to be behind — absent, not 0."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", "HEAD"], cwd=checkout, check=True
+    )
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_ABSENT
+    assert "branch" in state.absent_reason
+
+
+def test_mirror_state_is_absent_without_an_upstream_ref(tmp_path):
+    """A checkout on a branch origin has never heard of: absent, not current."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    subprocess.run(
+        ["git", "checkout", "-q", "-b", "local-only"], cwd=checkout, check=True
+    )
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_ABSENT
+    assert "origin/local-only" in state.absent_reason
+
+
+def test_mirror_state_survives_an_unreadable_checkout(tmp_path):
+    """A directory that is not a git repo must degrade to absent, not raise:
+    a wake prompt does not get to die because a subprocess did."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / knowledge.CHECKOUT_DIRNAME).mkdir()
+
+    state = knowledge.mirror_state(repo)  # must not raise
+
+    assert state.status == knowledge.MIRROR_ABSENT
+
+
+def test_mirror_state_makes_no_network_call(tmp_path, monkeypatch):
+    """Wake path, so local refs only. Pinned by making any fetch fatal —
+    the docstring's promise is load-bearing enough to hold in a test, since
+    the obvious "fix" for a stale count is to add a fetch right here."""
+    repo, krepo, checkout, cfg = _behind_mirror(tmp_path, dirty=True)
+    real_run = subprocess.run
+
+    def _no_fetch(cmd, *a, **kw):
+        if isinstance(cmd, (list, tuple)) and "fetch" in [str(c) for c in cmd]:
+            raise AssertionError(f"mirror_state must not fetch: {cmd}")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(knowledge.subprocess, "run", _no_fetch)
+
+    state = knowledge.mirror_state(repo)
+
+    assert state.status == knowledge.MIRROR_BEHIND

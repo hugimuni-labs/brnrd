@@ -496,6 +496,142 @@ def _refresh_checkout(checkout: Path) -> str | None:
     return None
 
 
+# ── Mirror state (a reading, not a replayed event) ───────────────────
+#
+# #659 gave every *skip* in ``_refresh_checkout`` a reason string and printed
+# it to the daemon log. That is a real channel with the wrong reader: the
+# person who needs to know the mirror is stale is the resident, and residents
+# read a wake prompt. #667's answer is not to thread the note forward — a note
+# is per-capture, and a wake needs *state* — but to give the state its own
+# voice, read fresh every wake from local refs.
+#
+# The discriminator is structural rather than an enumerated list of skip
+# reasons: it fires whenever the mirror is behind, including for reasons
+# nobody enumerated, and goes silent the moment it is current.
+
+MIRROR_CURRENT = "current"
+MIRROR_BEHIND = "behind"
+MIRROR_ABSENT = "absent"
+
+
+@dataclass(frozen=True)
+class MirrorState:
+    """A wake-time reading of the ``.brnrd-kb/`` mirror against its origin.
+
+    ``status`` is always one of :data:`MIRROR_CURRENT`, :data:`MIRROR_BEHIND`,
+    :data:`MIRROR_ABSENT` — never ``None``, and never a bare count. *Absent*
+    (no checkout, not a git repo, detached HEAD, no ``origin/<branch>``) is a
+    genuinely different sentence from "0 behind": a repo with no mirror has no
+    mirror to be stale, and it must not be readable as *fine*. This repo has
+    already paid for the other shape once — ``active_kb_dir`` returns ``None``
+    for "no kb here" and ``kb_health.compute_graph_stats`` reads that same
+    ``None`` as "unspecified, use the default", so one value carries two
+    meanings and the call site in ``cli.cmd_kb`` has to refuse it by hand.
+    A third instance is not worth the bytes it saves.
+
+    ``ahead`` and ``dirty`` are carried because they change the reader's *next
+    action*, not for completeness: behind-and-clean fast-forwards by itself on
+    the next capture, behind-and-dirty is waiting on the resident to commit or
+    discard, and behind-and-ahead has diverged and will never fast-forward at
+    all. Three states, three next moves.
+    """
+
+    status: str
+    behind: int = 0
+    ahead: int = 0
+    branch: str = ""
+    dirty: bool = False
+    absent_reason: str = ""
+
+
+def _git_out(checkout: Path, *args: str) -> tuple[int, str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=checkout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode, result.stdout.strip()
+
+
+def mirror_state(repo_root: Path) -> MirrorState:
+    """Read how far ``.brnrd-kb/`` has fallen behind its origin. Local only.
+
+    **No network, deliberately, and this is not an oversight to be fixed by
+    adding a fetch here.** This runs on the wake path, where a hung or slow
+    remote would delay every thought; the count is taken against the
+    remote-tracking ref that ``_refresh_checkout`` last updated — at the end of
+    the previous run, from ``capture()``'s step 3. So the reading is fresh as
+    of the last capture, not as of this instant.
+
+    That bound matters and it is asymmetric in the safe direction. A stale
+    ``origin/<branch>`` can only make this check **understate**: the commits it
+    counts are already in the local object store, so "behind by N" is true
+    whenever it fires. It cannot cry wolf (#623) — it can only stay quiet about
+    drift that landed since the last capture, which the next capture's fetch
+    then surfaces. False negatives that self-heal, no false positives.
+
+    Never raises: a wake prompt must not die because a git subprocess did.
+    """
+
+    checkout = repo_root / CHECKOUT_DIRNAME
+    try:
+        if not (checkout / ".git").exists():
+            return MirrorState(
+                MIRROR_ABSENT,
+                absent_reason=f"no kb checkout at {checkout}",
+            )
+        code, branch = _git_out(checkout, "rev-parse", "--abbrev-ref", "HEAD")
+        if code != 0 or not branch or branch == "HEAD":
+            return MirrorState(
+                MIRROR_ABSENT,
+                absent_reason=f"the kb checkout ({checkout}) has no branch checked out",
+            )
+        upstream = f"origin/{branch}"
+        code, _ = _git_out(checkout, "rev-parse", "--verify", "--quiet", upstream)
+        if code != 0:
+            return MirrorState(
+                MIRROR_ABSENT,
+                branch=branch,
+                absent_reason=(
+                    f"the kb checkout ({checkout}) has no {upstream} to compare against"
+                ),
+            )
+        # `--left-right` in one call: ahead and behind are read from the same
+        # pair of refs at the same moment, so they cannot disagree with each
+        # other the way two sequential `rev-list --count` calls can.
+        code, counts = _git_out(
+            checkout, "rev-list", "--left-right", "--count", f"HEAD...{upstream}"
+        )
+        parts = counts.split()
+        if code != 0 or len(parts) != 2:
+            return MirrorState(
+                MIRROR_ABSENT,
+                branch=branch,
+                absent_reason=(
+                    f"the kb checkout ({checkout}) could not be compared to {upstream}"
+                ),
+            )
+        ahead, behind = int(parts[0]), int(parts[1])
+        code, porcelain = _git_out(
+            checkout, "status", "--porcelain", "--untracked-files=no"
+        )
+        # Untracked files deliberately do not count as dirty — same posture as
+        # `_refresh_checkout`, which skips on tracked modifications only.
+        dirty = code == 0 and bool(porcelain)
+        status = MIRROR_BEHIND if behind else MIRROR_CURRENT
+        return MirrorState(
+            status, behind=behind, ahead=ahead, branch=branch, dirty=dirty
+        )
+    except Exception:  # pragma: no cover - defensive; a wake must not die here
+        return MirrorState(
+            MIRROR_ABSENT,
+            absent_reason=f"the kb checkout ({checkout}) could not be read",
+        )
+
+
 def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
     """Return whether *checkout*'s ``origin`` remote still resolves to
     *home_knowledge* — the check :func:`ensure_checkout` skipped before
