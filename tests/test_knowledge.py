@@ -6,7 +6,7 @@ import subprocess
 from brr import account, knowledge
 from brr.prompts import _build_knowledge_sources_block
 
-from _helpers import init_git_repo
+from _helpers import commit_files, init_git_repo
 
 
 def _commit(repo: Path, message: str = "commit") -> None:
@@ -311,6 +311,41 @@ def test_active_kb_dir_prefers_home_knowledge_over_repo_kb(tmp_path):
     found = knowledge.active_kb_dir(repo, cfg)
 
     assert found == repo_knowledge
+
+
+def test_active_kb_dir_matches_between_a_worktree_and_its_main_checkout(
+    monkeypatch, tmp_path,
+):
+    """#654: before the fix, `active_kb_dir` from a linked worktree fell
+    back to a project home with nothing checked out (`resolve_context`
+    couldn't find the worktree's own path in the account registry) — so a
+    daemon-provisioned run silently searched the wrong corpus. It must
+    resolve the same directory the main checkout does."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+    label_cfg = {"repo.label": "Gurio/brr"}
+    ctx = account.resolve_context(
+        main_repo,
+        {**label_cfg, "home.kind": "account", "account.id": "acct-1"},
+    )
+    repo_knowledge = account.repo_knowledge_path(ctx, "Gurio/brr")
+    repo_knowledge.mkdir(parents=True)
+
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "wt-branch", str(worktree)],
+        cwd=main_repo, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    from_main = knowledge.active_kb_dir(main_repo, label_cfg)
+    from_worktree = knowledge.active_kb_dir(worktree, label_cfg)
+
+    assert from_worktree == repo_knowledge
+    assert from_worktree == from_main
 
 
 def test_active_kb_dir_falls_back_to_repo_kb(tmp_path):
