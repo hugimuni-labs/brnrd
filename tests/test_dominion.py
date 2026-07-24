@@ -162,9 +162,11 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "Playbook — your standing orientation" in digest
     assert "self-inject: full playbook.md" in digest  # provenance marker
     # The rich seed (not the old stub) shipped and was injected in full.
-    assert "memory palace" in digest  # society-of-mind framing
-    assert "workshop reading" in digest
-    assert "build it like it's yours" in digest
+    # Pin structure, not prose: the first and the last `## ` section both
+    # arriving proves whole-file injection, and survives seed rewordings —
+    # this test's own prose pins rotted on the 2026-07 register rewrite.
+    assert "## Two memories" in digest
+    assert "## Keep this place useful" in digest
 
 
 def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
@@ -182,9 +184,12 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
 
     digest = dominion.resolve_self_inject(path)  # default budget
 
-    # The playbook's closing line survives — nothing was clipped.
-    assert "build it like it's yours" in digest
+    # The playbook's closing section survives — nothing was clipped. Pinned
+    # by heading, not prose: a phrase pin rots on every seed rewording while
+    # asserting nothing more than the heading does.
+    assert "## Keep this place useful" in digest
     assert "truncated to fit dominion inject budget" not in digest
+    assert "collapsed" not in digest.split("\n", 1)[0]  # no collapse banner
 
     # The invariant, numerically: seed + its inject wrapper fit the default
     # budget with real headroom for the agent's own self-inject entries.
