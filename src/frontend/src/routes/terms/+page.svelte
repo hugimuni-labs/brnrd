@@ -348,7 +348,7 @@
 				     `tax_id_collection` too (probed live 2026-07-23): "under
 				     merchant-of-record, Stripe owns VAT calculation and remittance
 				     outright, collects no buyer tax IDs, and offers no B2B reverse
-				     charge." Also src/frontend/src/routes/pricing/+page.svelte:139 —
+				     charge." Also src/frontend/src/routes/pricing/+page.svelte:141 —
 				     "prices at checkout are set by Stripe and shown before you pay". -->
 				<p class="mt-2">
 					Where a paid plan is offered, checkout runs through <strong class="text-amber-100"
