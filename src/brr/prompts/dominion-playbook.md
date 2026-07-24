@@ -173,6 +173,17 @@ to survive, so the seam stays broken and silent for as long as anyone
 cares to leave it. Both fail *green*. The only thing that finds either
 one is running the guard against real data and reading what comes back.
 
+There is a third death, and it is the one that looks healthiest: a guard
+that fires **constantly, for a non-reason**. Every alarm is answered by
+regenerating a fixture or waving the check through, because every alarm
+so far has been noise — and then the tenth one is real and gets the same
+treatment. Nothing about it fails green; it fails *loudly*, which is
+precisely why nobody reads it. The tell is a check whose failure is
+always resolved the same mechanical way. When you find one, fix what the
+check is *about* rather than the fixture it keeps tripping on: usually it
+is asserting something already guaranteed elsewhere, or pinning a value
+that is a pure function of something the change legitimately moved.
+
 Same shape, one layer out: **a negative test whose fixture can become
 legal is a time bomb.** A test asserting some feature stays absent, keyed
 to an input that later ships as valid, keeps passing while quietly
