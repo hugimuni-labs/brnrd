@@ -561,28 +561,62 @@ _RUN_ID_HOOK_SCRIPT = (
     'if [ -n "$BRR_RUN_ID" ]; then\n'
     # Newline guard — load-bearing, see comment above.
     '  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf \'\\n\' >> "$1"; fi\n'
-    # Close-keyword predicate (#652): a run may not use "Closes #NNN qualifier" —
-    # GitHub drops the qualifier silently and the issue closes against the author's
-    # intent.  Refused when BRR_RUN_ID is set (run commits only); a maintainer
-    # typing the same line by hand is not bound here (see issue for the trade-off).
-    # POSIX sh / POSIX ERE — grep -E, no \b, explicit character classes.
+    # Close-keyword predicate (#652, superseded #653): a run may not put a
+    # close keyword + #NNN anywhere but the start of a line, and a line-start
+    # close may not carry a trailing qualifier.  GitHub's own closing-keyword
+    # scanner does not care about narrative framing or position within the
+    # message — it matches "keyword #NNN" wherever it occurs — so both shapes
+    # below are real, independently confirmed closes, not just readability
+    # nits.  Refused when BRR_RUN_ID is set (run commits only); a maintainer
+    # typing the same line by hand is not bound here (see issue for the
+    # trade-off).  POSIX sh / POSIX ERE — grep -E, no \b, explicit character
+    # classes.
     #
-    # The dirty pattern: keyword + #NNN + whitespace + a char that is not ","
-    # or "#" or whitespace.  The space-then-qualifier shape is what the spec
-    # cases share; "Fix #NNN: description" (colon immediately, no space) and
-    # "does not close #NNN." (period immediately) both lack the leading space
-    # and so pass through cleanly.  A comma signals a multi-close (#413, #414)
-    # and a "#" signals a second issue number — both allowed.
-    '  _BRR_DIRTY=\'(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+[[:space:]]+[^,#[:space:]]\'\n'
+    # #653 first tried a closed word list of leading qualifiers (partially,
+    # mostly, ...).  Dropped: a real commit surfaced mid-run — `85ed4735`,
+    # "This does not close #477." — that GitHub's timeline confirms closed
+    # #477 two seconds after push, and no finite word list anticipates
+    # "does not" the way a position rule does for free.  A second commit in
+    # the same 300-window, `c91d3866`, likewise closed #413 for real from a
+    # past-tense narrative clause ("...that actually closed #413..."), not a
+    # leading qualifier at all.  Position, not vocabulary, is the actual
+    # discriminator; see kb for the sweep this replaced.
+    #
+    # _BRR_ANY: keyword + #NNN anywhere in the line (word-bounded so it
+    # doesn't fire inside a longer word like "disclosed").  A line that
+    # doesn't match this at all needs no further check.
+    #
+    # _BRR_LINESTART: the same pair, anchored to the start of the line
+    # (leading whitespace allowed) — the one position GitHub-closing intent
+    # can be stated unambiguously.
+    #
+    # _BRR_TRAILING: line-start close + whitespace + a char that is not ","
+    # or "#" or whitespace — #652's original shape, unchanged, still checked
+    # only once a line has cleared the position gate.  "Fix #NNN: description"
+    # (colon immediately, no space) and "Closes #413, #414" (comma — a
+    # genuine multi-close) both lack that leading space and pass.
+    '  _BRR_ANY=\'(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
+    '  _BRR_LINESTART=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
+    '  _BRR_TRAILING=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+[[:space:]]+[^,#[:space:]]\'\n'
     '  while IFS= read -r _brr_ln; do\n'
-    '    if echo "$_brr_ln" | grep -qiE "${_BRR_DIRTY}"; then\n'
-    '      printf \'commit-msg: close keyword with qualifier (GitHub drops the qualifier and closes the issue).\\n\' >&2\n'
-    '      printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
-    '      printf \'  Use instead:\\n\' >&2\n'
-    '      printf \'    Part of #NNN ...   (scoped ref — does not close)\\n\' >&2\n'
-    '      printf \'    Closes #NNN.       (bare close — no qualifier)\\n\' >&2\n'
-    '      printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
-    '      exit 1\n'
+    '    if echo "$_brr_ln" | grep -qiE "${_BRR_ANY}"; then\n'
+    '      if ! echo "$_brr_ln" | grep -qiE "${_BRR_LINESTART}"; then\n'
+    '        printf \'commit-msg: close keyword not at the start of a line (GitHub still closes on it there).\\n\' >&2\n'
+    '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '        printf \'  A close keyword only closes at the start of a line.\\n\' >&2\n'
+    '        printf \'  Use instead:\\n\' >&2\n'
+    '        printf \'    Part of #NNN ...   (scoped reference — does not close)\\n\' >&2\n'
+    '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
+    '        exit 1\n'
+    '      elif echo "$_brr_ln" | grep -qiE "${_BRR_TRAILING}"; then\n'
+    '        printf \'commit-msg: close keyword with qualifier (GitHub drops the qualifier and closes the issue).\\n\' >&2\n'
+    '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '        printf \'  Use instead:\\n\' >&2\n'
+    '        printf \'    Part of #NNN ...   (scoped ref — does not close)\\n\' >&2\n'
+    '        printf \'    Closes #NNN.       (bare close — no qualifier)\\n\' >&2\n'
+    '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
+    '        exit 1\n'
+    '      fi\n'
     '    fi\n'
     '  done < "$1"\n'
     f'  git interpret-trailers --if-exists doNothing '

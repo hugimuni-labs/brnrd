@@ -616,6 +616,116 @@ def test_hook_refuses_resolves_with_prose_qualifier(tmp_path, monkeypatch):
     assert "no-verify" in r.stderr  # must name the escape hatch
 
 
+# #653 — position (not vocabulary) refuse cases ──────────────────────────────
+#
+# #653 shipped as a mid-run steer, not the closed word list its own spec
+# opened with. Driven against the installed hook, `c91d3866` and `aef7fa11`
+# closed #413 for real from prose that was never at the start of a line, and
+# `85ed4735` closed #477 for real from "This does not close #477." — a
+# leading word list has no entry for "does not" and would have missed it.
+# GitHub's own keyword scanner does not read position or narrative framing,
+# only adjacency, so the guard now matches that: a close keyword only
+# "counts" as a deliberate close at the start of a line; anywhere else in a
+# line it is refused outright, and a line-start close keeps #652's original
+# trailing-qualifier check on top.
+
+
+def test_hook_refuses_leading_qualifier_partially_before_closes(tmp_path, monkeypatch):
+    """``Partially closes #413`` → refused — the canonical #653 defect.
+
+    The ref is bare (nothing follows ``#413``), so #652's trailing-qualifier
+    predicate alone missed this; ``closes`` isn't at the start of the line
+    either, so the position rule catches it independently of any word list.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "Partially closes #413", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "Offending line" in r.stderr and "#413" in r.stderr
+    assert "start of a line" in r.stderr
+
+
+def test_hook_refuses_narrative_close_mid_sentence(tmp_path, monkeypatch):
+    """``review: test the merge that actually closed #413, not a stand-in
+    for it`` → refused. This is ``c91d3866`` verbatim — GitHub's timeline
+    confirms it really closed #413 on push, from a past-tense narrative
+    clause with no leading qualifier word at all.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(
+        hook_path,
+        "review: test the merge that actually closed #413, not a stand-in for it",
+        tmp_path, cwd=repo,
+    )
+    assert r.returncode != 0
+    assert "#413" in r.stderr
+
+
+def test_hook_refuses_negated_close_not_at_line_start(tmp_path, monkeypatch):
+    """``This does not close #477.`` → refused. This is ``85ed4735``
+    verbatim — GitHub's timeline shows it closed #477 two seconds after
+    push despite the explicit "does not". No leading-qualifier word list
+    has an entry for "does not"; position catches it for free.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "This does not close #477.", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "#477" in r.stderr
+
+
+def test_hook_refuses_this_closes_reversing_the_original_spec(tmp_path, monkeypatch):
+    """``This closes #413`` → refused.
+
+    #653's opening spec required this to pass; the mid-run steer reverses
+    it deliberately (see kb) once real GitHub history showed position, not
+    vocabulary, is the actual discriminator — a keyword not at the start of
+    a line still closes, "This" or no "This".
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "This closes #413", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "#413" in r.stderr
+
+
+def test_hook_position_refusal_names_the_position_rule(tmp_path, monkeypatch):
+    """A not-at-line-start refusal names the position rule and offers
+    ``Part of #NNN`` — not the trailing-qualifier message's ``Closes #NNN.``
+    remedy, which doesn't apply here (there's no line-start close to make
+    bare).
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "Mostly fixes #200 now", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "start of a line" in r.stderr
+    assert "Part of #NNN" in r.stderr
+    assert "Closes #NNN." not in r.stderr
+    assert "no-verify" in r.stderr
+
+
 # Pass cases -----------------------------------------------------------------
 
 
@@ -677,6 +787,33 @@ def test_hook_passes_clean_close_in_multiline_body(tmp_path, monkeypatch):
 
     msg = "feat: do the thing\n\nSome prose mentioning #413 in passing.\n\nCloses #413\n"
     r = _run_hook(hook_path, msg, tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_helps_with_remedy_form(tmp_path, monkeypatch):
+    """``Helps with #234`` — the remedy the refusal message now suggests —
+    passes: ``with`` is not a close keyword, so there's no keyword+ref
+    adjacency at all."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "Helps with #234", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_indented_line_start_close(tmp_path, monkeypatch):
+    """A bare close indented under leading whitespace still counts as
+    line-start (#653's position rule explicitly allows it)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-653")
+
+    r = _run_hook(hook_path, "  Closes #413", tmp_path, cwd=repo)
     assert r.returncode == 0
 
 
@@ -816,3 +953,38 @@ def test_hook_refuses_a_real_git_merge_and_creates_no_merge_commit(tmp_path, mon
     body = git("log", "-1", "--format=%B").stdout
     assert "Part of #413" in body
     assert "Brnrd-Run-Id: run-real-merge-652" in body
+
+
+def test_hook_refuses_a_real_git_commit_reproducing_the_477_closure(tmp_path, monkeypatch):
+    """The acceptance test at the level #653's actual defect happened
+    through: a real ``git commit``, not a direct hook invocation, using the
+    exact subject line of ``85ed4735`` — the commit GitHub's own timeline
+    confirms closed #477 despite the "does not" — mirrors
+    ``test_hook_refuses_a_real_git_merge_and_creates_no_merge_commit`` for
+    the ordinary (non-merge) commit path.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-real-commit-653")
+
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    r = subprocess.run(
+        ["git", "commit", "-m", "This does not close #477."],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert r.returncode != 0
+    assert "#477" in r.stderr
+
+    # The corrected message completes the same commit, trailer intact.
+    fixed = subprocess.run(
+        ["git", "commit", "-m", "Part of #477: does not close it"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert fixed.returncode == 0, fixed.stderr
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "run-real-commit-653"
