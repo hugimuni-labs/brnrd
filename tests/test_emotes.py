@@ -298,3 +298,142 @@ def test_sequences_of_is_the_publish_paths_only_reach_into_frames():
     focus = sequences_of("fo.cus")
     assert focus is not None and len(focus) == 2, focus
     assert focus[0] != focus[1]
+
+
+def test_every_situational_face_declares_its_family():
+    """A new face joining with no edit is the tell of an enumerated class.
+
+    The families were ``#`` section comments until 2026-07-25 — a fact the
+    file was *organised by* and did not *store*. So ``search("satisfied")``
+    returned nothing while the module docstring advertised satisfied as part
+    of the palette, and a resident that searched the obvious word, found
+    nothing, and invented a plausible-looking handle got a raw id string
+    published to the dashboard. That is the observed sequence, not a
+    hypothetical one.
+
+    This is the guard that makes the class closed rather than merely known:
+    add a face outside a family and the suite goes red at the moment of the
+    edit, instead of at the moment someone searches for it.
+    """
+    orphans = [
+        e.name for e in EMOTES.values() if e.kind == "situational" and not e.family
+    ]
+    assert not orphans, orphans
+
+
+def test_the_palette_the_docstring_advertises_is_actually_findable():
+    """The claim and the check read the same source, so they cannot drift.
+
+    Six of the ten feeling-words this module's own docstring names as the
+    situational palette — surprised, annoyed, puzzled, satisfied, curious,
+    triumphant — returned *nothing* from ``search``. A document describing a
+    capability the code does not have is worse than silence: it is the
+    reason a resident stops searching and starts guessing.
+
+    The word list is parsed out of the docstring rather than copied here. A
+    word added to the prose is a word this test then demands the palette can
+    answer for.
+    """
+    import re
+
+    doc = emotes.__doc__ or ""
+    m = re.search(r"full range of it:(.+?)\.", doc, re.S)
+    assert m, "the docstring no longer advertises a palette — update this test"
+    advertised = [
+        w.strip()
+        for w in m.group(1).replace("\n", " ").split(",")
+        if w.strip() and "finer shades" not in w and not w.strip().startswith("and ")
+    ]
+    assert len(advertised) >= 8, advertised
+
+    unfindable = [w for w in advertised if not emotes.search(w)]
+    assert not unfindable, unfindable
+
+
+def test_lookup_reads_the_word_for_the_feeling_not_only_the_mark():
+    """``.mood`` is a machine-parsed channel; the handles are coined marks.
+
+    ``weave.md`` is explicit that the register decorates nothing a parser
+    reads — and then the palette minted every handle *as* a mark (``fo.cus``)
+    and matched it byte for byte. A run writing ``focused`` resolved to
+    ``None``, published four ``null``s, and the dashboard fell back to
+    printing the raw string; that fallback was every mood brnrd.dev ever
+    showed. Meanwhile ``search``'s own docstring promised these three
+    spellings were one face, and they were — in the command nobody publishes
+    through. Two resolvers, one contract, and the strict one owned the wire.
+    """
+    focus = EMOTES["fo.cus"]
+    assert emotes.lookup("fo.cus") is focus
+    assert emotes.lookup("focus") is focus
+    assert emotes.lookup("focused") is focus
+
+    # Every handle still resolves to itself — tolerance must not shadow the
+    # exact spelling with a prefix neighbour.
+    for name, emote in EMOTES.items():
+        assert emotes.lookup(name) is emote, name
+
+
+def test_lookup_resolves_names_and_never_families():
+    """Tolerance is not a licence to invent, and the line is *the name*.
+
+    ``lookup`` reads handles, forgivingly. It does not read families, ever —
+    ``satisfied`` names four faces and choosing one would be the lie the
+    honesty bar exists to prevent. The rule is stated as a property rather
+    than a list of words: whatever comes back must be a face whose own name
+    is the query, once the register's punctuation is stripped off both. So
+    ``focused`` → ``fo.cus`` is legal (it *is* that handle, spelled by a
+    human) and ``satisfied`` → ``fine_`` never can be.
+
+    Written after the first draft of this test asserted the sloppier thing —
+    "a crowded family resolves to nothing" — and went red on ``focused``,
+    which is both a five-face family *and* the plain spelling of one handle.
+    The looser claim would have banned the fix's whole point.
+    """
+    norm = emotes._norm
+
+    for e in EMOTES.values():
+        if not e.family:
+            continue
+        hit = emotes.lookup(e.family)
+        if hit is None:
+            assert emotes.near_misses(e.family), e.family
+            continue
+        a, b = norm(hit.name), norm(e.family)
+        assert a.startswith(b) or b.startswith(a), (e.family, hit.name)
+
+    # The families with no handle-shaped spelling stay unresolvable, named
+    # here because they are the ones a resident actually types.
+    for word in ("satisfied", "curious", "triumphant", "annoyed", "puzzled"):
+        assert emotes.lookup(word) is None, word
+        assert emotes.near_misses(word), word
+
+
+def test_one_handle_resolver_serves_every_public_reader():
+    """Three functions asked "what face is this?" and answered separately.
+
+    ``glyph`` and ``sequences_of`` each ran their own ``EMOTES.get``, while
+    ``search`` normalized and ``lookup`` did not — so "is ``focused`` a
+    face?" had two answers depending on who asked, and the wire happened to
+    ask the strict one. A fact stored four times is repaired once and stays
+    broken three times.
+    """
+    for spelling in ("fo.cus", "focus", "focused", "not-a-face-at-all", "satisfied"):
+        emote = emotes.lookup(spelling)
+        if emote is None:
+            assert emotes.glyph(spelling) is None, spelling
+            assert emotes.sequences_of(spelling) is None, spelling
+        else:
+            assert emotes.glyph(spelling) == emote.frames[0], spelling
+            assert emotes.sequences_of(spelling) == emote.sequences, spelling
+
+
+def test_near_misses_is_empty_exactly_when_lookup_succeeds():
+    """The two are one decision, so they may never disagree.
+
+    If a handle resolves there is nothing to suggest; if it doesn't, staying
+    quiet is the failure mode this whole slice is about.
+    """
+    for name in EMOTES:
+        assert emotes.near_misses(name) == []
+    assert emotes.near_misses("sa.tis"), "the maintainer's invented handle must guide"
+    assert emotes.near_misses("xyzzy-not-a-feeling") == []

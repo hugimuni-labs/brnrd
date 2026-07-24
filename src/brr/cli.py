@@ -844,7 +844,13 @@ def cmd_emotes(args):
     for e in rows:
         cycles = " / ".join(" ".join(seq) for seq in e.sequences)
         rest = "" if e.rest is None else f"  rest {e.rest}"
-        print(f"{e.name:<10} {cycles}{rest}  pitch {e.pitch:.2f}  [{e.kind}]")
+        # The family is printed because it is the word the *next* search
+        # should use: a resident that found `fine_` by typing "satisfied"
+        # learns the handle, and one that found it by typing "clean diff"
+        # learns the family it belongs to. Handles are marks; families are
+        # the way back in.
+        family = f"  {e.family}" if e.family else ""
+        print(f"{e.name:<10} {cycles}{rest}  pitch {e.pitch:.2f}  [{e.kind}]{family}")
         print(f"           {e.trigger}")
     if not args.all and len(rows) >= 12:
         print("[brnrd emotes] top matches only — narrow the query, or --all")

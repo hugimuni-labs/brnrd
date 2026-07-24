@@ -108,9 +108,12 @@ becomes attention, action, and a reply is yours.
     113 faces exist — **`brnrd emotes <feeling>`** is the index
     (`focused`, `four hours one regex`, or the handle itself all land).
     Optional, honest-only: write it when the state is real, rewrite it
-    when it changes; an unknown handle renders as a bare name, never a
-    guessed face. A vocabulary of one is how a truthful resident goes
-    mute — look the face up rather than reaching for the same one.
+    when it changes. The **feeling word works here too** (`focused` is
+    `fo.cus`); a word naming a whole family (`satisfied`) is still
+    ambiguous, so it resolves to no face — and the chip says `✗ satisfied
+    → ahh_ · clean_ · fine_` rather than going quiet. A vocabulary of one
+    is how a truthful resident goes mute — look the face up rather than
+    reaching for the same one.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads
     `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured
