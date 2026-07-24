@@ -709,3 +709,27 @@ class BillingLedgerEntryOut(BaseModel):
 
 class BillingLedgerList(BaseModel):
     entries: list[BillingLedgerEntryOut]
+
+
+# --- account deletion (Art 17) ------------------------------------------------
+
+
+class AccountDeletionConfirm(BaseModel):
+    """The re-typed confirmation step — the account's own GitHub login,
+    matched exactly (case-sensitive) server-side. No token round-trip: the
+    typed match *is* the confirmation, the same convention GitHub itself
+    uses for "type the repo name to confirm"."""
+
+    confirm_login: str = Field(min_length=1, max_length=255)
+
+
+class RetainedStoreOut(BaseModel):
+    store: str
+    reason: str
+
+
+class AccountDeletionOut(BaseModel):
+    ok: bool = True
+    deleted_at: datetime
+    stripe_subscription_canceled: bool
+    retained: list[RetainedStoreOut] = Field(default_factory=list)

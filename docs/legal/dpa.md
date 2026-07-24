@@ -246,7 +246,17 @@ their GDPR rights over Customer Content, through:
   When Customer's last connected repository is disconnected, the
   dashboard mirror for that account is emptied as well.
   <!-- src/brnrd/routers/_session.py:353-360 -->
-- **Manual assistance.** For anything the self-service path does not
+- **Account deletion.** Deleting the account itself (dashboard settings,
+  "danger zone") sweeps every Customer Content store the repo-disconnect
+  path above does, for every connected repository at once, plus the
+  account-identity and billing-mirror stores this Agreement's §0 places
+  outside its own Processor scope — that broader erasure is a
+  controller-role undertaking, not this Agreement's, but is named here so
+  the self-service picture is complete. Cancels any live subscription
+  immediately. The append-only billing ledger is retained; see the Art 30
+  record's "Billing and payment" row for the statutory-retention caveat.
+  <!-- src/brnrd/account_deletion.py, POST /v1/accounts/delete (src/brnrd/routers/accounts.py) -->
+- **Manual assistance.** For anything the self-service paths above don't
   cover, HugiMuni responds to requests sent to **security@hugimuni.fr**.
 
 This is a narrower undertaking than HugiMuni's own controller-role rights
