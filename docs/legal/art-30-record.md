@@ -12,8 +12,8 @@ HugiMuni SAS is the **data controller** for the following processing activities.
 
 | Activity | Purpose | Data Subjects | Personal Data Categories | Recipients/Sub-processors | Transfer Mechanism | Retention | Security Measures |
 |----------|---------|---|---|---|---|---|---|
-| Account management | Account creation, authentication, identity persistence | Users (developers, individuals) | GitHub user ID, login, email address (nullable), name (from GitHub) | Internal; Upsun/Platform.sh (hosting, FR); GitHub (identity verification, US; DPF/SCCs) | GitHub OAuth 2.0; data stored on Upsun | Account data retained indefinitely until account deletion; no automatic deletion path currently (Art. 17 gap noted) | Password-free via GitHub OAuth; email stored encrypted in database; session tokens SHA-256 hashed (`models.py:53`) |
-| Billing and payment | Subscription management, invoice generation, payment processing | Account holders (payers) | Email address, Stripe customer ID, billing records (pricing, subscription status, payment events) | Stripe (payments processor, US; DPF/SCCs; Managed Payments – merchant of record) | Stripe REST API; append-only ledger | Billing records retained per French commercial law (~6 years); Stripe retains per its contract | PCI DSS compliance via Stripe (card data does not touch brnrd.dev); HTTPS encryption; audit logging |
+| Account management | Account creation, authentication, identity persistence | Users (developers, individuals) | GitHub user ID, login, email address (nullable), name (from GitHub) | Internal; Upsun/Platform.sh (hosting, FR); GitHub (identity verification, US; DPF/SCCs) | GitHub OAuth 2.0; data stored on Upsun | Account data retained indefinitely until account deletion; no automatic deletion path currently (Art. 17 gap noted) | Password-free via GitHub OAuth; session tokens stored SHA-256-hashed only (`src/brnrd/security.py:12`, `src/brnrd/models.py:63`). **No application-level encryption at rest** — platform-level only (Upsun/PostgreSQL) |
+| Billing and payment | Subscription management, invoice generation, payment processing | Account holders (payers) | Email address, Stripe customer ID, billing records (pricing, subscription status, payment events) | Stripe (payments processor, US; DPF/SCCs; Managed Payments – merchant of record) | Stripe REST API; append-only ledger | Retention not implemented in code; append-only ledger, never pruned. Statutory retention **to be confirmed** with counsel; Stripe retains per its own contract | Card data never reaches brnrd.dev (Stripe Managed Payments, `src/brnrd/stripe_api.py:98-113`); HTTPS in transit |
 | Terms acceptance | Contract formation, consent records for hosted-execution beta | Account holders | Account ID, timestamp of acceptance, terms version accepted | Internal; Upsun/Platform.sh (hosting, FR) | Stored in `Account` row; version checked on session load (`_session.py:377`) | Until account deletion or terms version revocation | Plain-text record in database; version tracking prevents silent changes |
 | Operational telemetry & service diagnostics | System health, daemon connectivity, quota tracking, feature usage | Users (via daemons) | Account ID, daemon runner/quota information, billing figures, timezone, run counts | Internal; Upsun/Platform.sh (hosting, FR) | Stored in `Daemon` model (`models.py:70`); wholesale replaced per publish cycle | Replaced on every publish event (~25s cadence); old records discarded | Database-level access controls |
 
@@ -36,7 +36,7 @@ HugiMuni SAS is a **data processor** acting on the instructions of user-controll
 |------|------|---|---|---|
 | Upsun / Platform.sh | Cloud hosting provider | France (EU) | Data localized within EU; no international transfer | Platform.sh Terms of Service; Uptime SLA |
 | Stripe | Payment processor | United States | Data Protection Framework (DPF); Standard Contractual Clauses (SCCs) | Stripe Data Processing Addendum |
-| GitHub | Identity provider + API partner | United States | Data Protection Framework (DPF); Standard Contractual Clauses (SCCs) | GitHub App terms; GitHub Enterprise Agreement (if applicable) |
+| GitHub | Identity provider + API partner | United States | Data Protection Framework (DPF); Standard Contractual Clauses (SCCs) | GitHub App terms |
 | Telegram | Message transport (user-elected) | United Arab Emirates | User explicitly elects Telegram channel; message transport inherent to service selection | Telegram Terms of Service and Privacy Policy (user responsible) |
 
 ## D. Data Subject Rights
@@ -52,9 +52,14 @@ Data subjects may exercise the following rights:
 
 ## E. Data Security Measures
 
-- **Encryption in transit**: All traffic over HTTPS; TLS 1.2 minimum
+Stated only where verifiable in the code as shipped. Where a control does not
+exist, that is said rather than omitted — an inflated security section is a
+liability in a document written to reduce it. (Convention borrowed from the
+DPA's Annex II, #706.)
+
+- **Encryption in transit**: All traffic over HTTPS. Minimum TLS version is the hosting platform's, not brnrd's — **to be confirmed** with Upsun/Platform.sh rather than asserted here.
 - **Encryption at rest**: PostgreSQL database on Upsun/Platform.sh with platform-level encryption
-- **Access controls**: Role-based access to production database; audit logging
+- **Access controls**: platform-level database access controls (Upsun). No application-level RBAC or audit log exists in `src/brnrd/` — stated as fact, not omitted.
 - **Authentication**: GitHub OAuth 2.0 for user identity; session tokens are SHA-256 hashed
 - **Tokenization**: Session tokens hashed; card data never stored (Stripe Managed Payments)
 - **Incident response**: Contact security@hugimuni.fr for breach reports; internal 72h notification SLA (Art. 33, GDPR)
@@ -67,6 +72,6 @@ Data subjects may exercise the following rights:
 
 ---
 
-**Prepared by**: Automated analysis  
+**Prepared by**: _(to be signed — this record needs a named human owner before it is relied on)_  
 **Last reviewed**: 2026-07-24  
 **Next review**: Upon code changes affecting data handling or sub-processor list
