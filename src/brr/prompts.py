@@ -2530,11 +2530,33 @@ def build_daemon_prompt(
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nRun instruction: {task}"
 
+    # Match pitfalls against the run instruction and the original event text — the
+    # triggers the resident recorded tend to echo how a request is phrased. The
+    # same text selects the orientation set's task-touched kb hubs, so it is
+    # computed *before* the kernel; see the kernel's own note below.
+    pitfall_text = "\n".join(t for t in (task, event_body) if t)
+
     # The action-first kernel (Slice 2).  Built from the same
     # :func:`build_boot_score` the daemon persists, so the block the wake reads
     # and the block the score describes cannot drift — ``contracts=[]`` because
     # the kernel names the *move*, not the map, and skipping the manifest scan
     # keeps this path as cheap as it was.
+    #
+    # "Same function" is not "same value", and that gap shipped: this call
+    # omitted ``task_text`` while ``build_daemon_prompt_with_score`` passed it,
+    # so the *persisted* score's ``orientation_set`` carried the task-touched
+    # ``subject-*.md`` hubs (:func:`_kb_hub_matches`) and the *rendered* kernel
+    # never named them. Two costs, both silent: the hub-matching branch was
+    # unreachable from the only surface that asks for a Read, and the hooks'
+    # ``orient x/y`` meter — which counts against the persisted set — could
+    # never complete, because no listed file would ever close the gap. A meter
+    # that cannot leave is the skimming trainer its own docstring warns about
+    # (`hooks._orientation_progress`). Found 2026-07-24 from a live wake whose
+    # kernel said 2 files and whose ``boot-score.json`` said 4.
+    #
+    # So every argument that feeds ``orientation_set`` must be passed here too.
+    # ``contracts=[]`` stays the one deliberate divergence, and it does not
+    # touch the set.
     from .bootscore import format_kernel
 
     kernel = format_kernel(build_boot_score(
@@ -2555,6 +2577,7 @@ def build_daemon_prompt(
         branch=branch_name,
         has_event_body=bool((event_body or task or "").strip()),
         contracts=[],
+        task_text=pitfall_text or None,
         hooks_installed=hooks_installed,
         # Derived from the *render*: `_mountable` is exactly the set of blocks
         # about to be subtracted from this prose and seeded as perceptions. Not
@@ -2565,9 +2588,6 @@ def build_daemon_prompt(
         mounted=bool(_mountable),
     ))
 
-    # Match pitfalls against the run instruction and the original event text — the
-    # triggers the resident recorded tend to echo how a request is phrased.
-    pitfall_text = "\n".join(t for t in (task, event_body) if t)
     prepared_blocks = (
         None
         if _prepared_injected_keyed is None

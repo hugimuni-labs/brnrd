@@ -660,3 +660,54 @@ def test_build_boot_score_carries_the_orientation_set(tmp_path: Path) -> None:
 
     score = prompts.build_boot_score(repo, is_daemon=True, task_text="任务")
     assert [Path(e.path).name for e in score.orientation_set] == ["AGENTS.md"]
+
+
+def test_rendered_kernel_names_every_file_the_persisted_score_meters(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The walk the wake is *told* to do == the walk the meter counts.
+
+    Two ``build_boot_score`` calls back one wake: the kernel's (inside
+    :func:`build_daemon_prompt`) and the persisted one (returned by
+    :func:`build_daemon_prompt_with_score`, dumped to ``boot-score.json`` and
+    read by ``hooks._orientation_progress`` as the ``orient x/y`` denominator).
+    Until 2026-07-24 only the second was given ``task_text``, so a wake whose
+    task touched a ``subject-*.md`` hub got a kernel naming N files and a meter
+    counting N+k — unreachable hubs, and a meter no compliance could clear.
+
+    Pinned on the *rendered text*, not on a second call to the builder: the
+    kernel is the only surface that asks for a Read, so the assertion has to
+    be about what it actually says.
+    """
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text("", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
+    )
+
+    prompt, score = prompts.build_daemon_prompt_with_score(
+        "fix the boot sequence meter",
+        "evt-orient-001",
+        "/tmp/response.md",
+        repo,
+        runner_shell="claude",
+        environment="worktree",
+    )
+
+    # The hub was selected — otherwise this test proves nothing about drift.
+    assert [Path(e.path).name for e in score.orientation_set] == [
+        "AGENTS.md", "subject-boot-sequence.md",
+    ]
+    # …and every selected file is named in the text the wake reads.
+    for entry in score.orientation_set:
+        assert entry.path in prompt, f"kernel never names {entry.path}"
+    assert f"orient: {len(score.orientation_set)} file(s)" in prompt
