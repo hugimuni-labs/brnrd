@@ -134,7 +134,15 @@
 	// node's own frame answers for a closed one (handle only). Both paths run
 	// through `moodFace`, so an unknown handle degrades to the bare name and an
 	// absent mood renders nothing at all.
-	let mood = $derived(moodFace(identity?.mood || digest?.mood, identity?.moodGlyph));
+	let mood = $derived(
+		moodFace(
+			identity?.mood || digest?.mood,
+			identity?.moodGlyph,
+			identity?.moodPitch,
+			identity?.moodFrames,
+			identity?.moodRest
+		)
+	);
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
@@ -199,7 +207,7 @@
 					>
 						{statusWord}
 					</span>
-					<MoodChip face={mood} />
+					<MoodChip face={mood} seed={identity?.mood ?? ''} />
 				</span>
 				<span class="shrink-0 text-ink-quiet" use:typeReveal={{ text: cornerLabel }}>
 					{cornerLabel}
