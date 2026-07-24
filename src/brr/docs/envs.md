@@ -187,6 +187,29 @@ can `git status`, `git commit`, and `git diff` without per-image
 configuration. This works against any image — including ones you build
 yourself — without requiring you to remember the safe-directory line.
 
+### What the container cannot see
+
+The repo mount carries all of `.brr/` in, and — per the section above —
+the container runs as the *host* UID, so a `0600` file inside the mount
+is as readable inside as out. Two directories are therefore masked with
+an empty tmpfs on every containerised run, `docker` and `solitary`
+alike, unconditionally:
+
+| Path           | Why                                                            |
+| -------------- | -------------------------------------------------------------- |
+| `.brr/gates`   | Gate state holds live tokens (`github.json`, `telegram.json`)   |
+| `.brr/inbox`   | The daemon's event protocol — a writable inbox is self-dispatch |
+
+`solitary` masks `.brr/credentials` as well. `docker` deliberately does
+not: on that path the managed GitHub pointer under it is the credential
+channel the container is *aimed* at (`GH_CONFIG_DIR`), not a leak.
+
+Everything else under `.brr/` stays visible and writable, which is what
+delivery runs on: the agent's own inbox is `<outbox>/inbox.json`, its
+replies land in `.brr/outbox/<event>/`, its response file in
+`.brr/responses/`, and the worktree it executes in lives under
+`.brr/worktrees/`.
+
 ### Runtime knobs
 
 | Key                           | Default      | Purpose                                              |
@@ -311,7 +334,10 @@ agent (see SECURITY.md). What changes relative to `docker`:
   gate-state injection, no git URL rewrite or credential helper. `gh`
   and any in-container push are dead by design; the daemon still
   publishes the run's branch from the host after finalize, so commits
-  ship exactly as they do for `worktree` runs.
+  ship exactly as they do for `worktree` runs. Not injecting is not
+  enough on its own — the gate's stored token and the managed pointer
+  both live under the repo mount, so `.brr/gates` and `.brr/credentials`
+  are masked with an empty tmpfs (see "What the container cannot see").
 - Model API keys (`ANTHROPIC_API_KEY` etc.) still pass through when set
   on the daemon, so API-key auth works; they are only usable against
   allowlisted hosts anyway.

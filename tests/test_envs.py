@@ -1,3 +1,4 @@
+import os
 import subprocess
 import threading
 
@@ -1823,6 +1824,115 @@ def test_solitary_never_gets_github_credential_pointer(tmp_path, monkeypatch):
         if arg == "--tmpfs"
     ]
     assert str(tmp_path / ".brr" / "credentials") in tmpfs_targets
+
+
+def _tmpfs_targets(argv: list[str]) -> list[str]:
+    return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--tmpfs"]
+
+
+def test_docker_shadows_inbox_and_gates_under_the_repo_mount(tmp_path, monkeypatch):
+    """`.brr/gates` and `.brr/inbox` must be masked on the plain docker path.
+
+    This is a *mount-args* assertion, and named as one: it reads the argv
+    ``DockerEnv.invoke`` hands to the docker CLI, not the behaviour of a live
+    container.  It is legitimate coverage because that argv is the whole of
+    the fix — production emits exactly this list, and the acceptance drives
+    (issue #692) confirm the kernel honours it.
+
+    Before the fix the shadow set was the single ``.brr/credentials`` entry
+    on ``solitary`` only, so a plain ``docker`` run had *no* ``--tmpfs`` at
+    all: it could read the gate token out of ``.brr/gates/github.json`` and
+    enqueue its own event by writing ``<repo>/.brr/inbox/x.md``.
+    """
+    argv = _docker_invoke_with_profile(tmp_path, monkeypatch)
+
+    targets = _tmpfs_targets(argv)
+    assert str(tmp_path / ".brr" / "inbox") in targets, targets
+    assert str(tmp_path / ".brr" / "gates") in targets, targets
+
+
+def test_solitary_shadows_inbox_and_gates_as_well_as_credentials(
+    tmp_path, monkeypatch,
+):
+    """Solitary keeps its credentials shadow *and* gains the other two.
+
+    Mount-args assertion (see the docker twin).  Solitary is the path whose
+    entire point is running with no forge credential; leaving
+    ``.brr/gates/github.json`` readable under the bind mount handed one back.
+    """
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    _solitary_invoke(backend, ctx, recorder, cfg, response_path, tmp_path)
+
+    targets = _tmpfs_targets(recorder.runner_argv())
+    assert str(tmp_path / ".brr" / "credentials") in targets, targets
+    assert str(tmp_path / ".brr" / "inbox") in targets, targets
+    assert str(tmp_path / ".brr" / "gates") in targets, targets
+
+
+def test_container_shadow_set_spares_the_delivery_surfaces(tmp_path, monkeypatch):
+    """The shadow must not swallow the seams a run delivers through.
+
+    The agent's inbox is ``<outbox>/inbox.json`` and its reply lands under
+    ``.brr/responses`` / ``.brr/outbox``; the worktree the run executes in
+    lives under ``.brr/worktrees``.  All three ride the same bind mount as
+    the shadowed pair, so widening the set is exactly the change that could
+    have taken delivery out.  Structural guard on that invariant — the
+    end-to-end drives live in the issue's acceptance record.
+    """
+    argv = _docker_invoke_with_profile(tmp_path, monkeypatch)
+
+    targets = _tmpfs_targets(argv)
+    for spared in ("outbox", "responses", "worktrees", "runs", "conversations"):
+        assert str(tmp_path / ".brr" / spared) not in targets, spared
+    # …and nothing shadows the repo root or `.brr` wholesale, which would
+    # mask every one of them at once.
+    assert str(tmp_path) not in targets
+    assert str(tmp_path / ".brr") not in targets
+
+
+def test_shadow_mountpoints_are_created_host_side_as_the_daemon_user(
+    tmp_path, monkeypatch,
+):
+    """A missing shadow target must exist on the host *before* docker sees it.
+
+    Driven 2026-07-24: a ``--tmpfs`` target inside a bind mount whose directory
+    doesn't exist is created by the engine and lands on the host as
+    ``root:root 0755``.  The daemon is unprivileged, so a repo that reached its
+    first containerised run without ``.brr/inbox`` would come back from it
+    unable to accept a single event — a foot-gun *introduced* by making the
+    shadow unconditional.  Pre-creating the mountpoint closes the window.
+    """
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    assert not (repo / ".brr" / "inbox").exists()
+    assert not (repo / ".brr" / "gates").exists()
+
+    args = envs._repo_shadow_tmpfs_args(repo)
+
+    assert (repo / ".brr" / "inbox").is_dir()
+    assert (repo / ".brr" / "gates").is_dir()
+    assert args == [
+        "--tmpfs", str(repo / ".brr" / "inbox"),
+        "--tmpfs", str(repo / ".brr" / "gates"),
+    ]
+
+
+def test_shadow_mountpoint_creation_survives_an_unwritable_repo(tmp_path):
+    """A read-only tree must still get the mounts, not a crashed run."""
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    os.chmod(repo / ".brr", 0o500)
+    try:
+        args = envs._repo_shadow_tmpfs_args(repo)
+    finally:
+        os.chmod(repo / ".brr", 0o700)
+
+    assert args == [
+        "--tmpfs", str(repo / ".brr" / "inbox"),
+        "--tmpfs", str(repo / ".brr" / "gates"),
+    ]
 
 
 def test_solitary_isolated_network_and_proxy_choreography(tmp_path, monkeypatch):

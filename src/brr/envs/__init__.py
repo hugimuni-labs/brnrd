@@ -437,6 +437,60 @@ _DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
 # the daemon hands the container can use it.
 _DOCKER_CONTAINER_HOME = "/brr-home"
 
+# Repo-relative directories masked with an empty tmpfs inside *every*
+# runner container (issue #692, #413 §7 S7).  The repo bind mount carries
+# all of ``.brr`` in, and the container runs as the host UID — so a 0600
+# mode buys nothing inside, exactly as the ``.brr/credentials`` shadow's
+# comment already argues about the managed-token pointer.  Neither of
+# these is only "bytes the agent shouldn't read"; both are the daemon's
+# own control surfaces:
+#   ``.brr/gates``  — gate state holds live tokens (``github.json``,
+#       ``telegram.json``).  ``solitary`` exists to run untrusted work
+#       with *no* forge credential and left one readable on disk.
+#   ``.brr/inbox``  — the daemon's file event protocol.  A run that can
+#       write ``<repo>/.brr/inbox/x.md`` enqueues its own event, and
+#       ``trust.resolve_tier`` reads that event's tier from fields the
+#       writer controls — so the containment boundary the container was
+#       supposed to provide is bypassed from inside it.
+# Unconditional, for the reason the credentials shadow gives: it must
+# mask whatever the daemon may write there *later*, in every credential
+# mode including ``none``.  Safe because nothing writes either directory
+# from inside a container — ``protocol.create_event`` and
+# ``runtime.save_run_card`` are daemon / gate-poller calls on the host,
+# and the agent's own inbox is ``<outbox>/inbox.json``, which lives under
+# ``.brr/outbox`` and is deliberately *not* shadowed.
+_CONTAINER_SHADOW_SUBPATHS: tuple[tuple[str, ...], ...] = (
+    (".brr", "inbox"),
+    (".brr", "gates"),
+)
+
+
+def _repo_shadow_tmpfs_args(repo_root: Path) -> list[str]:
+    """``--tmpfs`` args masking the control surfaces under the repo mount.
+
+    Creates each mountpoint on the host first, as the daemon user.  Not
+    incidental: a ``--tmpfs`` target *inside* a bind mount whose directory
+    doesn't exist yet is created by the engine, and it lands on the host as
+    ``root:root 0755`` (driven 2026-07-24).  The daemon runs unprivileged,
+    so a repo that reached its first containerised run without a
+    ``.brr/inbox`` — pruned, hand-made, adopted before that dir was in
+    ``adopt._setup_brr_dir`` — would come out of it unable to accept a
+    single event.  Making the shadow unconditional is exactly what
+    introduces that window; the ``mkdir`` closes it.  Best-effort: a
+    read-only or racing filesystem must not fail the run, and the tmpfs
+    mounts either way.
+    """
+    root = Path(os.path.abspath(repo_root))
+    args: list[str] = []
+    for parts in _CONTAINER_SHADOW_SUBPATHS:
+        target = root.joinpath(*parts)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        args.extend(["--tmpfs", str(target)])
+    return args
+
 
 def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
     """Return user-supplied env-var names from ``docker.env=KEY1,KEY2,...``."""
@@ -932,6 +986,11 @@ class DockerEnv(WorktreeEnv):
             # `docker.isolation=clone` (design-env-interface.md) is the seam
             # for a no-shared-.git variant if that assumption ever changes.
             "-v", f"{ctx.repo_root}:{ctx.repo_root}",
+            # …and immediately mask the daemon's control surfaces that ride
+            # it in. Adjacent to the mount on purpose: the shadow set is
+            # part of what the mount *means*, and a reader who edits one
+            # line should see the other. See _CONTAINER_SHADOW_SUBPATHS.
+            *_repo_shadow_tmpfs_args(ctx.repo_root),
             "-w", str(invocation.cwd or ctx.cwd),
             image,
             *inner_cmd,
@@ -1369,6 +1428,15 @@ class SolitaryEnv(DockerEnv):
         # so shadow the directory with an empty tmpfs. Unconditional: it
         # masks whatever the daemon may write there later, in every
         # credential mode including ``none``.
+        #
+        # Solitary-only, and deliberately *not* folded into the shared
+        # ``_CONTAINER_SHADOW_SUBPATHS`` set: on the plain ``docker`` path the
+        # pointer under ``.brr/credentials`` is the credential channel — the
+        # container is pointed at it by ``GH_CONFIG_DIR`` and reads the
+        # daemon-refreshed token from that inode (#477). Shadowing it there
+        # would break managed-token publishing. ``.brr/inbox`` and
+        # ``.brr/gates`` have no such reader inside any container, which is
+        # why those two are masked on both paths (#692).
         args: list[str] = [
             "--tmpfs", str(Path(os.path.abspath(ctx.repo_root)) / ".brr" / "credentials"),
         ]
