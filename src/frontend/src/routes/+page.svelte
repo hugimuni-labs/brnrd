@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
@@ -95,6 +96,10 @@
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
+	// Threaded into AccountDeletion's confirmation label — the same
+	// `/v1/dashboard/repos` fetch that populates connectedRepos already
+	// carries it, so this costs no extra round trip.
+	let githubLogin = $state<string | null>(null);
 
 	// #328 tap-to-request: optimistic-free — each action re-fetches the
 	// catalog so the chip always reflects the server's row, not a guess.
@@ -476,7 +481,9 @@
 		}
 		if (connectedRepos === null) {
 			try {
-				connectedRepos = (await fetchRepos()).connected_repos;
+				const repos = await fetchRepos();
+				connectedRepos = repos.connected_repos;
+				githubLogin = repos.account.github_login;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
 					runnersError = e instanceof Error ? e.message : 'project list fetch failed';
@@ -916,6 +923,7 @@
 			<div class="mt-3">
 				<BillingPanel />
 			</div>
+			<AccountDeletion {githubLogin} />
 		</section>
 	</div>
 {/if}

@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import ids, limits, schemas
+from .. import account_deletion, ids, limits, schemas, stripe_api
 from ..activity_records import dedupe_activity_records, fresh_activity_records
-from ..auth import Principal, get_db, require_account
+from ..auth import Principal, get_db, require_account, require_account_or_session
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
 from ..oauth import GitHubIdentity
 from ..security import hash_token
@@ -197,5 +197,39 @@ def list_github_installations(principal: Principal = Depends(require_account), d
                 is_private=r.is_private,
             )
             for r in installed_repos
+        ],
+    )
+
+
+@router.post("/delete", response_model=schemas.AccountDeletionOut)
+def delete_account(
+    payload: schemas.AccountDeletionConfirm,
+    request: Request,
+    principal: Principal = Depends(require_account_or_session),
+    db: Session = Depends(get_db),
+):
+    """Art 17 erasure — see ``account_deletion.py`` for the sweep and what
+    it retains. ``POST``, not ``DELETE``: the re-typed GitHub-login
+    confirmation lives in the JSON body, and this codebase's other
+    destructive account actions (``/v1/repos/{id}/disconnect``,
+    ``/v1/accounts/subscription/cancel``) are POST for the same reason —
+    an explicit body, never a bare verb a link or a GET could trigger.
+    """
+    account = db.get(Account, principal.account_id)
+    if account is None or account.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="account not found")
+    try:
+        account_deletion.confirm_login_matches(account, payload.confirm_login)
+    except account_deletion.ConfirmationMismatch as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        receipt = account_deletion.delete_account(db, request.app.state.settings, account)
+    except stripe_api.StripeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return schemas.AccountDeletionOut(
+        deleted_at=receipt.deleted_at,
+        stripe_subscription_canceled=receipt.stripe_subscription_canceled,
+        retained=[
+            schemas.RetainedStoreOut(store=r.store, reason=r.reason) for r in receipt.retained
         ],
     )

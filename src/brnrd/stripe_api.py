@@ -36,10 +36,19 @@ class StripeError(RuntimeError):
 
 
 def _post(settings: Settings, path: str, data: dict) -> dict:
+    return _request(settings, "POST", path, data)
+
+
+def _delete(settings: Settings, path: str) -> dict:
+    return _request(settings, "DELETE", path, None)
+
+
+def _request(settings: Settings, method: str, path: str, data: dict | None) -> dict:
     if not settings.stripe_api_key:
         raise StripeError("stripe is not configured (BRNRD_STRIPE_API_KEY unset)", status_code=503)
     try:
-        response = httpx.post(
+        response = httpx.request(
+            method,
             f"{settings.stripe_api_base_url}/v1{path}",
             data=data,
             auth=(settings.stripe_api_key, ""),
@@ -167,6 +176,17 @@ def set_subscription_cancel_at_period_end(
         f"/subscriptions/{subscription_id}",
         {"cancel_at_period_end": "true" if cancel else "false"},
     )
+
+
+def cancel_subscription_now(settings: Settings, *, subscription_id: str) -> dict:
+    """Cancel a subscription **immediately** (Stripe's ``DELETE`` verb).
+
+    Distinct from ``set_subscription_cancel_at_period_end``, which only
+    schedules the cancellation for period end: account deletion (Art 17)
+    means access stops now, not at the next renewal. Used by
+    ``account_deletion.py``.
+    """
+    return _delete(settings, f"/subscriptions/{subscription_id}")
 
 
 def verify_webhook_signature(
