@@ -662,6 +662,19 @@ _RUN_ID_HOOK_SCRIPT = (
     # grep.
     '  _BRR_CLEAN=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+'
     '#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*([.]?[[:space:]]*$|:)\'\n'
+    # _BRR_COLONCLOSE: the one hole the ":" allowance opens that is not a
+    # qualifier but a *second close*.  `Fix #533: split config and closes #534`
+    # clears _BRR_CLEAN at the colon and shuts #534 as well — which is the #413
+    # accident's own shape, an unintended close riding a well-formed one.  The
+    # colon exempts a *subject*; it must not exempt another close.  Driven over
+    # this repo's last 300 commits: 10 refusal lines / 5 commits with this
+    # branch on, unchanged.  Zero new refusals — it reaches only a shape the
+    # repo has never written.  Two alternatives after the colon so a keyword
+    # can sit flush against it (`:closes #2`) or anywhere later, and neither
+    # fires inside a longer word ("disclosed").
+    '  _BRR_COLONCLOSE=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+'
+    '#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*:([[:space:]]*|.*[^[:alnum:]_])'
+    '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
     '  while IFS= read -r _brr_ln; do\n'
     '    if echo "$_brr_ln" | grep -qiE "${_BRR_ANY}"; then\n'
     '      if ! echo "$_brr_ln" | grep -qiE "${_BRR_LINESTART}"; then\n'
@@ -696,6 +709,15 @@ _RUN_ID_HOOK_SCRIPT = (
     '        printf \'    Closes #NNN, #MMM       (real multi-close — commas, never "and")\\n\' >&2\n'
     '        printf \'    Fix #NNN: subject       (close plus a subject, after the colon)\\n\' >&2\n'
     '        printf \'    Part of #NNN ...        (scoped reference — does not close)\\n\' >&2\n'
+    '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
+    '        exit 1\n'
+    '      elif echo "$_brr_ln" | grep -qiE "${_BRR_COLONCLOSE}"; then\n'
+    '        printf \'commit-msg: a second close keyword rides the subject after the colon.\\n\' >&2\n'
+    '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '        printf \'  The colon may introduce a subject, never another close.\\n\' >&2\n'
+    '        printf \'  Use instead:\\n\' >&2\n'
+    '        printf \'    Closes #NNN, #MMM       (close both, on the ref list)\\n\' >&2\n'
+    '        printf \'    Fix #NNN: subject       (then "Closes #MMM." on its own line)\\n\' >&2\n'
     '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
     '        exit 1\n'
     '      fi\n'
