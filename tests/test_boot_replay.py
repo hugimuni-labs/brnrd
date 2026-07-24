@@ -23,6 +23,40 @@ The snapshots live in ``tests/fixtures/boot/``:
 A snapshot edited by hand will be replaced on the next regeneration run;
 the diff in ``git show`` shows any change to the rendered output.
 
+What the snapshot pins — and what it deliberately does not
+----------------------------------------------------------
+It pins **assembly**: which blocks enter, in what order, with what glue and
+headers, which are present versus silent, how the computed sections render,
+and where the two runner renderings differ.
+
+It does **not** pin the product prompt *prose*.  Until 2026-07-24 it did:
+about 1,150 of the two snapshots' 1,249 lines were verbatim copies of
+``run.md`` / ``weave.md`` / ``register.md`` / ``daemon-substrate.md`` /
+``identity-core.md``, once per runner — so brnrd's prompt text lived in the
+repo three times and every prose edit had to be applied once and then
+re-applied twice by regeneration.  That is a fixture carrying the payload it
+exists to test the assembly of, and the cost was not the friction: it trained
+the regeneration reflex, so that the one regeneration in ten that hid a real
+assembly change would be waved through with the nine that didn't.
+
+So each product body that entered verbatim is replaced by a
+``{{BODY verbatim: prompts/<name>}}`` marker.  The substitution is a literal
+match against the file on disk, which makes **the marker itself the
+assertion**: it can only appear if that block reached the prompt
+untransformed.  Let a trim or a collapse touch that block
+(``prompts._tail_trim_entries``, ``dominion._collapse_markdown_to_budget`` —
+both live, both applied to other blocks today) and the match fails, the raw
+text lands back in the snapshot, and the diff is enormous and unmissable.
+
+The cost-ledger figures are normalized for the same reason: they are a pure
+function of those file sizes, so they churned on every prose edit while
+asserting nothing the arithmetic tests do not already assert better.  Ledger
+correctness is pinned by ``test_cost_ledger_measures_the_wake_not_the_disk``
+(measured blocks + joins == rendered prompt bytes), which is a real
+invariant rather than a frozen number.  Manifest rows for blocks whose size
+does *not* depend on prompt-file prose — the kernel, the Run Context Bundle,
+the work surface — keep their byte column.
+
 Phase outputs
 -------------
 The harness captures two phases per runner:
@@ -106,14 +140,106 @@ def _run_phases(
     return prompt, manifest, portal_text, json.dumps(hook_payload, sort_keys=True)
 
 
-def _normalize(text: str, repo_root: Path) -> str:
-    """Replace the repo-root path with a stable placeholder.
+_BODY_FLOOR = 512
+"""Minimum bytes for a prompt file to be worth eliding.
+
+Small bundled templates (``kb-index.md``, ``kb-log.md``) are scaffolding
+fragments, not prose blocks; short strings also risk matching incidentally
+somewhere they are not a block body.
+"""
+
+_BODY_MARKER = "{{BODY verbatim: prompts/%s}}"
+
+
+def _elide_product_bodies(
+    text: str, repo_root: Path | None = None
+) -> tuple[str, set[str]]:
+    """Replace verbatim product prompt bodies with a marker.
+
+    Returns the rewritten text and the set of file names actually elided —
+    the caller asserts on that set, so "nothing matched" can never pass as
+    "nothing to match".
+
+    Bodies are read through :func:`prompts.effective_prompt_path`, the same
+    resolver the builder uses, so a per-repo ``.brr/prompts/`` override is
+    elided as the body that actually entered rather than left raw beside a
+    marker for the packaged file it replaced.
+
+    Longest first: if one template's body were ever a substring of another's,
+    eliding the shorter one first would strand a fragment of the longer.
+    """
+    from brr import prompts
+
+    elided: set[str] = set()
+    candidates = []
+    for path in sorted(prompts._PROMPTS_DIR.glob("*.md")):
+        effective = prompts.effective_prompt_path(path.name, repo_root)
+        if not effective.exists():
+            continue
+        body = effective.read_text(encoding="utf-8").strip()
+        if len(body) >= _BODY_FLOOR:
+            candidates.append((path.name, body))
+    for name, body in sorted(candidates, key=lambda pair: -len(pair[1])):
+        if body in text:
+            text = text.replace(body, _BODY_MARKER % name)
+            elided.add(name)
+    return text, elided
+
+
+def _normalize_prose_derived_sizes(text: str, elided: set[str]) -> str:
+    """Blank the byte figures that are a pure function of prompt-file prose.
+
+    Two places carry them, and only these two:
+
+    - the manifest row of an elided block (its ``bytes`` column);
+    - every figure in the ``cost ledger:`` block, since the category totals,
+      the percentages, and the wake total all sum over those bodies.
+
+    Manifest rows for computed blocks (kernel, Run Context Bundle, work
+    surface) keep their real byte column — those sizes move only when the
+    rendering does, which is exactly what this snapshot is for.
+    """
+    def _same_width(match: re.Match[str], token: str) -> str:
+        """Swap a figure for a token without disturbing the column layout.
+
+        These tables are read by eye; a placeholder that shifts every row
+        makes the diff of a *real* assembly change harder to see, which is
+        the one thing this file exists to keep easy.
+        """
+        return token.rjust(len(match.group(0)))
+
+    for name in elided:
+        text = re.sub(
+            r"(?m)(?<=\s)\s*[\d,]+(?=\s+\{PACKAGE_ROOT\}/prompts/%s\s)"
+            % re.escape(name),
+            lambda m: _same_width(m, "[bytes]"),
+            text,
+        )
+
+    def _blank_ledger(match: re.Match[str]) -> str:
+        block = match.group(0)
+        block = re.sub(
+            r"\s*\d[\d,]*(?= B\b)", lambda m: _same_width(m, "[bytes]"), block
+        )
+        block = re.sub(r"\s*\d+\.\d%", lambda m: _same_width(m, "[pct]"), block)
+        return block
+
+    return re.sub(
+        r"(?ms)^cost ledger:$.*?^\s*wake total\s+.*?$", _blank_ledger, text
+    )
+
+
+def _normalize(text: str, repo_root: Path, elided: set[str] | None = None) -> str:
+    """Replace machine- and prose-dependent facts with stable placeholders.
 
     The prompt includes ``repo_root`` in the Run Context Bundle (``Execution
     root:`` line etc.).  Since ``empty_repo`` creates a fresh ``tmp_path``
     per test run, raw paths would make the snapshot non-reproducible.
     Replacing them with ``{REPO_ROOT}`` before storing / comparing makes the
     snapshot stable while still exercising all code paths.
+
+    ``elided`` names the product bodies already replaced in the *prompt*
+    phase; the manifest phase needs it to blank the matching byte columns.
     """
     from brr import prompts
 
@@ -121,7 +247,10 @@ def _normalize(text: str, repo_root: Path) -> str:
     text = text.replace(str(prompts._PROMPTS_DIR.parent), "{PACKAGE_ROOT}")
     # mtimes describe freshness at inspection time; they are intentionally
     # live metadata and cannot make a replay fixture machine-specific.
-    return re.sub(r" \[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\]", " [mtime]", text)
+    text = re.sub(r" \[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\]", " [mtime]", text)
+    if elided:
+        text = _normalize_prose_derived_sizes(text, elided)
+    return text
 
 
 def _snapshot_text(
@@ -141,11 +270,21 @@ def _snapshot_text(
         "# Captured by the boot replay harness; regenerate with:\n"
         "#   BOOT_UPDATE_SNAPSHOTS=1 pytest tests/test_boot_replay.py -v\n"
         "# DO NOT EDIT BY HAND — regeneration is the only sanctioned path.\n"
+        "#\n"
+        "# {{BODY verbatim: prompts/<name>}} — that bundled prompt entered the\n"
+        "#   wake byte-for-byte.  The marker is the assertion: it is written by a\n"
+        "#   literal match against the file, so it cannot appear for a block that\n"
+        "#   was trimmed, collapsed, or reflowed on the way in.  Editing the prose\n"
+        "#   of a bundled prompt does not move this snapshot; changing how that\n"
+        "#   prompt is *assembled* does.\n"
+        "# [bytes] / [pct] — figures that are a pure function of that elided prose.\n"
+        "#   The ledger's arithmetic is pinned by the unit tests, not by here.\n"
         "\n"
     )
+    prompt_text, elided = _elide_product_bodies(prompt, repo_root)
     body = (
-        _normalize(prompt, repo_root) + "\n\n" + _PHASE_SEP + "\n"
-        + _normalize(manifest, repo_root)
+        _normalize(prompt_text, repo_root) + "\n\n" + _PHASE_SEP + "\n"
+        + _normalize(manifest, repo_root, elided)
         + "\n\n--- phase: portal ---\n\n" + _normalize(portal, repo_root)
         + "\n\n--- phase: session-start hook ---\n\n" + _normalize(hook, repo_root)
     )
@@ -249,6 +388,124 @@ class TestBootReplay:
             f"Missing snapshot(s): {[p.name for p in missing]}. "
             "Regenerate with: BOOT_UPDATE_SNAPSHOTS=1 pytest tests/test_boot_replay.py"
         )
+
+    def test_snapshots_carry_markers_not_prompt_prose(self):
+        """The stored snapshot names each product body; it does not copy it.
+
+        Two ways this regresses, and both are silent without this test: the
+        elision stops firing (bodies come back, the fixtures triple in size,
+        every prose edit becomes a regeneration again), or it fires for
+        *everything* (a body arriving transformed would be papered over).
+        Checked against the stored bytes, not the freshly built text, so a
+        stale fixture cannot pass either.
+        """
+        expected = {
+            "run.md",
+            "weave.md",
+            "register.md",
+            "daemon-substrate.md",
+            "identity-core.md",
+        }
+        for path in (SNAPSHOT_CLAUDE, SNAPSHOT_CODEX):
+            stored = path.read_text(encoding="utf-8")
+            for name in expected:
+                assert _BODY_MARKER % name in stored, (
+                    f"{path.name} lost the marker for {name} — either the block "
+                    "stopped entering the wake, or it stopped entering verbatim. "
+                    "Both are real findings; neither is a regeneration."
+                )
+
+    def test_snapshots_do_not_duplicate_prompt_prose(self):
+        """No bundled prompt's body may live in a fixture a second time.
+
+        The rule the marker exists to enforce, asserted against the text
+        rather than the mechanism: a sentence that appears in ``prompts/``
+        must appear there *only*.  A future block added to the wake without
+        going through the elision path fails here, not six prose edits later.
+        """
+        from brr import prompts
+
+        # A literal floor, deliberately not ``_BODY_FLOOR``: raising that
+        # constant is one of the ways the elision gets disabled, and a guard
+        # that reads the same knob it is guarding cannot fire when it should.
+        checked: set[str] = set()
+        for path in (SNAPSHOT_CLAUDE, SNAPSHOT_CODEX):
+            stored = path.read_text(encoding="utf-8")
+            for template in sorted(prompts._PROMPTS_DIR.glob("*.md")):
+                body = template.read_text(encoding="utf-8").strip()
+                if len(body) < 512:
+                    continue
+                checked.add(template.name)
+                assert body not in stored, (
+                    f"{path.name} embeds the full text of {template.name}. "
+                    "The snapshot pins assembly; the prose is already in git "
+                    "once, and a second copy makes every prose edit a "
+                    "three-file change."
+                )
+        assert {"run.md", "daemon-substrate.md", "identity-core.md"} <= checked, (
+            "the templates this test is meant to cover fell below its floor — "
+            "it is passing by checking nothing"
+        )
+
+    def test_a_prose_edit_does_not_move_the_snapshot(self, empty_repo, tmp_path, monkeypatch):
+        """Editing a bundled prompt's wording changes no fixture byte.
+
+        This is the property the rewrite bought, so it gets a test rather than
+        a docstring.  Driven against a *copy* of the prompts directory, edited
+        for real and rebuilt through the production builder — not a simulated
+        one.
+        """
+        from brr import prompts
+
+        pkg = tmp_path / "pkg"
+        shutil.copytree(prompts._PROMPTS_DIR, pkg / "prompts")
+        monkeypatch.setattr(prompts, "_PROMPTS_DIR", pkg / "prompts")
+
+        fixture = _load_fixture()
+        kwargs = _build_kwargs(fixture, "claude")
+        task = kwargs.pop("task", fixture["shared"]["task"])
+
+        def build() -> str:
+            phases = _run_phases(empty_repo, task, dict(kwargs), fixture)
+            return _snapshot_text(*phases, "claude", empty_repo)
+
+        before = build()
+        target = pkg / "prompts" / "daemon-substrate.md"
+        target.write_text(
+            target.read_text(encoding="utf-8")
+            + "\n- a rule invented by this test, worth exactly zero bytes here.\n",
+            encoding="utf-8",
+        )
+        assert build() == before, (
+            "a prose-only edit to a bundled prompt moved the snapshot — the "
+            "elision is no longer covering that block"
+        )
+
+    def test_a_transformed_body_is_not_elided(self):
+        """The marker cannot appear for a block that arrived changed.
+
+        The whole safety argument rests on the substitution being a literal
+        match against the file, so it is asserted directly: one character of
+        drift and the raw text survives into the snapshot, where the diff is
+        impossible to miss.  ``prompts._tail_trim_entries`` and
+        ``dominion._collapse_markdown_to_budget`` are both live and both
+        rewrite block bodies today; this is the alarm for the day one of them
+        starts reaching a product prompt.
+        """
+        from brr import prompts
+
+        body = (prompts._PROMPTS_DIR / "daemon-substrate.md").read_text(
+            encoding="utf-8"
+        ).strip()
+        mangled = body[:-1] + "!"
+
+        elided_text, elided = _elide_product_bodies("head\n" + body + "\ntail")
+        assert "daemon-substrate.md" in elided
+        assert body not in elided_text
+
+        kept_text, kept = _elide_product_bodies("head\n" + mangled + "\ntail")
+        assert "daemon-substrate.md" not in kept
+        assert mangled in kept_text
 
     def test_snapshots_not_hand_edited(self):
         """Snapshots must start with the auto-generated header line."""
