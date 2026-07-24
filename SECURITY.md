@@ -106,16 +106,19 @@ never escalate the environment a higher tier configured.
   `brnrd account connect`, **dashboard publishing** additionally mirrors seven
   lanes of repo-derived content to brnrd.dev on a ~25-second cadence. That is the
   largest outbound surface brnrd has, so it gets its own section below rather than
-  a clause here. **brnrd never transmits your repository or its diffs** — no
-  publisher reads your working tree. But the corpus lane mirrors agent-written
-  pages *verbatim*, and those pages routinely quote the code the agent was working
-  on: measured against a real account, the mirrored run and knowledge pages
-  contained fenced `python`, `diff`, `bash`, `toml` and `yaml` blocks, including
-  unified-diff fragments of repository test files. Treat "we don't ship your
-  source" as a statement about the mechanism, not a guarantee about the content.
+  a clause here. **No publisher reads your working tree**, so brnrd does not ship
+  your checkout or a `git diff` of it. That is a statement about the mechanism,
+  and it is narrower than it sounds: the corpus lane mirrors agent-written pages
+  *verbatim*, and those pages routinely quote the code the agent was working on —
+  measured against a real account, the mirrored run and knowledge pages contained
+  fenced `python`, `diff`, `bash`, `toml` and `yaml` blocks, including
+  unified-diff fragments of repository test files. **Treat "we don't ship your
+  source" as a claim about what brnrd reads, never a guarantee about what leaves.**
   Read the table below before deciding whether that distinction is the one you
-  care about. Diffense review packs transit brnrd.dev in memory only, TTL-bounded,
-  behind an unguessable token, and are never persisted.
+  care about. The same caveat applies to diffense: a review pack carries file
+  paths, line numbers, and agent prose *about* your code rather than a patch, and
+  it transits brnrd.dev in memory only, TTL-bounded, behind an unguessable token,
+  and is never persisted.
 - **Credential scope.** On the managed path the GitHub token handed to the agent
   is a repository-scoped App installation token (1-hour lifetime). Self-hosted
   setups fall back to whatever you configured — typically a PAT or
