@@ -545,3 +545,274 @@ def test_ensure_run_id_hook_is_idempotent_and_respects_hand_edits(tmp_path):
 
     ensure_run_id_hook(repo)
     assert hook_path.read_text(encoding="utf-8") == "#!/bin/sh\necho hand-customized\n"
+
+
+# ── #652 close-keyword predicate ────────────────────────────────────────────
+#
+# Each test drives the *installed sh file on disk* via subprocess — acceptance
+# item 6 prohibits Python re-implementations of the regex.  The helper below
+# writes a message to a temp file and invokes the hook with /bin/sh so POSIX
+# compliance is exercised rather than the bash built into the test runner.
+
+
+def _run_hook(hook_path: Path, message: str, tmp: Path, *, cwd: Path) -> "subprocess.CompletedProcess[str]":
+    """Write *message* to a temp file and invoke *hook_path* against it.
+
+    Returns the CompletedProcess (returncode + stderr) for assertion.
+    *cwd* is passed so ``git interpret-trailers`` runs inside a git repo.
+    """
+    msg_file = tmp / "COMMIT_EDITMSG"
+    msg_file.write_text(message, encoding="utf-8")
+    return subprocess.run(
+        ["/bin/sh", str(hook_path), str(msg_file)],
+        capture_output=True, text=True, cwd=str(cwd),
+    )
+
+
+# Refuse cases ---------------------------------------------------------------
+
+
+def test_hook_refuses_closes_with_section_qualifier(tmp_path, monkeypatch):
+    """``Closes #413 §7 S13.`` → refused — the canonical defect from #652.
+
+    GitHub reads ``Closes #413`` and discards the qualifier, so the hook
+    exits non-zero to surface the ambiguity before the commit lands.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Closes #413 §7 S13.", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "Offending line" in r.stderr and "#413" in r.stderr
+
+
+def test_hook_refuses_fixes_with_parenthetical(tmp_path, monkeypatch):
+    """``Fixes #413 (partially)`` → refused."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Fixes #413 (partially)", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "Offending line" in r.stderr and "#413" in r.stderr
+
+
+def test_hook_refuses_resolves_with_prose_qualifier(tmp_path, monkeypatch):
+    """``Resolves #413 for the daemon path only`` → refused."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Resolves #413 for the daemon path only", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "Part of" in r.stderr  # must name the scoped-ref alternative
+    assert "no-verify" in r.stderr  # must name the escape hatch
+
+
+# Pass cases -----------------------------------------------------------------
+
+
+def test_hook_passes_bare_close_with_period(tmp_path, monkeypatch):
+    """``Closes #413.`` → passes."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Closes #413.", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_bare_close_no_period(tmp_path, monkeypatch):
+    """``Closes #413`` (no trailing period) → passes."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Closes #413", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_scoped_part_of_reference(tmp_path, monkeypatch):
+    """``Part of #413 §7 S13.`` → passes (no close keyword)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Part of #413 §7 S13.", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_multi_close(tmp_path, monkeypatch):
+    """``Closes #413, #414`` → passes (genuine multi-close, no qualifier)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    r = _run_hook(hook_path, "Closes #413, #414", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_passes_clean_close_in_multiline_body(tmp_path, monkeypatch):
+    """``Closes #413`` as one line of a multi-line body → passes (predicate is per-line)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-652")
+
+    msg = "feat: do the thing\n\nSome prose mentioning #413 in passing.\n\nCloses #413\n"
+    r = _run_hook(hook_path, msg, tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+def test_hook_brr_run_id_unset_bypasses_close_check(tmp_path, monkeypatch):
+    """``BRR_RUN_ID`` unset → even a dirty close passes unchanged (#652 §fork)."""
+    monkeypatch.delenv("BRR_RUN_ID", raising=False)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+
+    r = _run_hook(hook_path, "Closes #413 §7 S13.", tmp_path, cwd=repo)
+    assert r.returncode == 0
+
+
+# Regression: #565 still stamps the trailer ──────────────────────────────────
+
+
+def test_hook_still_stamps_trailer_on_clean_close(tmp_path, monkeypatch):
+    """Hook stamps ``Brnrd-Run-Id`` trailer on an accepted message (#565 not broken)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-stamp-652")
+
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_text("Closes #413.\n", encoding="utf-8")
+    subprocess.run(
+        ["/bin/sh", str(hook_path), str(msg_file)],
+        capture_output=True, text=True, check=True, cwd=str(repo),
+    )
+    assert "Brnrd-Run-Id: run-stamp-652" in msg_file.read_text(encoding="utf-8")
+
+
+# Merge-commit shape (no trailing newline) ───────────────────────────────────
+
+
+def test_hook_accepts_merge_commit_no_trailing_newline(tmp_path, monkeypatch):
+    """Merge commit message without trailing newline → accepted, trailer stamped.
+
+    ``git merge -m`` hands the hook a file with no trailing newline; the
+    newline guard is load-bearing here.  Assert the accepted shape still works
+    after adding the close-keyword predicate.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-merge-652")
+
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    msg_file.write_bytes(b"Merge feature")  # deliberately no trailing newline
+    r = subprocess.run(
+        ["/bin/sh", str(hook_path), str(msg_file)],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    assert r.returncode == 0
+    assert "Brnrd-Run-Id: run-merge-652" in msg_file.read_text(encoding="utf-8")
+
+
+def test_hook_refuses_dirty_close_in_merge_commit_no_trailing_newline(tmp_path, monkeypatch):
+    """Merge commit body with a scoped close → refused even without trailing newline."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-merge-refuse-652")
+
+    msg_file = tmp_path / "COMMIT_EDITMSG"
+    # Two-line merge message, no trailing newline — the defect shape
+    msg_file.write_bytes(b"Merge slice S13\nCloses #413 for slice S13.")
+    r = subprocess.run(
+        ["/bin/sh", str(hook_path), str(msg_file)],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    assert r.returncode != 0
+    assert "#413" in r.stderr
+
+
+def test_hook_refuses_a_real_git_merge_and_creates_no_merge_commit(tmp_path, monkeypatch):
+    """The acceptance test at the level the defect actually happened.
+
+    Every other merge test here writes a no-trailing-newline file and invokes
+    the hook script directly. That *simulates* a merge — and a fixture that
+    invokes a function directly has silently chosen a moment. `git merge` is
+    the path that closed #413 (`79abe94e`), and whether git runs `commit-msg`
+    on a non-fast-forward merge at all is the assumption every one of those
+    tests rests on without stating it. State it: drive a real merge.
+
+    Also pins the recovery shape. A refused merge leaves the repo mid-merge
+    with MERGE_HEAD present and the merge staged — standard git behaviour for
+    any commit-msg rejection, but a run that hits it needs to know the merge
+    is half-applied rather than absent.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-real-merge-652")
+
+    def git(*args, **kw):
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, **kw
+        )
+
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "-m", "base")
+    trunk = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+    git("checkout", "-b", "side")
+    (repo / "side.txt").write_text("side\n", encoding="utf-8")
+    git("add", "side.txt")
+    git("commit", "-m", "side work")
+
+    git("checkout", trunk)
+    (repo / "trunk.txt").write_text("trunk\n", encoding="utf-8")
+    git("add", "trunk.txt")
+    git("commit", "-m", "trunk work")
+
+    before = git("rev-parse", "HEAD").stdout.strip()
+    merged = git("merge", "--no-ff", "side", "-m", "Merge side\n\nCloses #413 §7 S13.")
+
+    assert merged.returncode != 0, "a scope-qualified close must not reach a merge commit"
+    assert "#413" in merged.stderr
+    assert git("rev-parse", "HEAD").stdout.strip() == before, "no merge commit was created"
+    assert (repo / ".git" / "MERGE_HEAD").exists(), (
+        "a refused merge stays staged — the recovery path is `git commit` with a "
+        "corrected message, or `git merge --abort`"
+    )
+
+    # And the corrected message completes the same merge, trailer intact.
+    fixed = git("commit", "-m", "Merge side\n\nPart of #413 §7 S13.")
+    assert fixed.returncode == 0, fixed.stderr
+    body = git("log", "-1", "--format=%B").stdout
+    assert "Part of #413" in body
+    assert "Brnrd-Run-Id: run-real-merge-652" in body
