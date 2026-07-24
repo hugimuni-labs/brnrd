@@ -1975,7 +1975,7 @@ class TestWorkSurfaceInjection:
         ledger_dir.mkdir()
         (ledger_dir / "decisions.md").write_text(drifted, encoding="utf-8")
 
-        result = _build_work_surface_block_scored(tmp_path)
+        result, _whole = _build_work_surface_block_scored(tmp_path)
 
         assert result.stale is True
         assert result.newest_item == "2026-07-22"
@@ -1995,7 +1995,7 @@ class TestWorkSurfaceInjection:
         ])
         (ledger_dir / "decisions.md").write_text(drifted, encoding="utf-8")
 
-        _, contracts = _build_injected_blocks_with_contracts(tmp_path)
+        _, contracts, _whole = _build_injected_blocks_with_contracts(tmp_path)
         by_key = {c.block_key: c for c in contracts}
 
         assert by_key["work-surface"].stale is True
