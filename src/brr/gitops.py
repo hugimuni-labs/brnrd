@@ -163,6 +163,31 @@ def shared_brr_dir(repo_root: Path) -> Path:
     return common_dir.parent / ".brr"
 
 
+def main_worktree_root(repo_root: Path) -> Path | None:
+    """Return the **main** working tree for *repo_root*, or ``None``.
+
+    Deliberately not :func:`shared_brr_dir`'s ``.parent``. That function
+    answers *where does runtime state live* and prefers a local ``.brr``,
+    so it reports the worktree itself whenever one exists there — a
+    perfectly good answer to its own question and the wrong one to this.
+    Two questions sharing one derivation is the substitution bug #654 was
+    filed about; asking git directly keeps them apart.
+
+    ``git worktree list`` always prints the main working tree first, and
+    says so in porcelain form. It is also correct under
+    ``--separate-git-dir``, where the common git dir's parent is not a
+    checkout at all. Returns *repo_root* itself for a repo with no linked
+    worktrees, and ``None`` when this is not a git checkout.
+    """
+    result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            return Path(line[len("worktree "):].strip())
+    return None
+
+
 def is_tracked(path: Path) -> bool:
     """Return True if *path* is tracked by Git."""
     try:
