@@ -1061,14 +1061,19 @@ def _kb_ownership_signal(size_findings: list, stats) -> str:
     yet carry; until then the signal is at least a single line, not one per page.
     """
     pressure = len(size_findings)
-    orphans = len(getattr(stats, "peer_orphans", []) or [])
-    if not pressure and not orphans:
+    orphan_list = getattr(stats, "peer_orphans", []) or []
+    if not pressure and not orphan_list:
         return ""
     bits = []
     if pressure:
         bits.append(f"{pressure} page(s)/log over a size threshold")
-    if orphans:
-        bits.append(f"{orphans} indexed page(s) no peer links to")
+    if orphan_list:
+        names = [Path(p).name for p in orphan_list]
+        if len(names) <= 3:
+            label = ", ".join(names)
+        else:
+            label = ", ".join(names[:3]) + f" … and {len(names) - 3} more"
+        bits.append(f"{len(orphan_list)} indexed page(s) no peer links to ({label})")
     return (
         "**Ownership signal** — " + "; ".join(bits) + ". Not a list of pages to "
         "trim: a byte count cannot tell a load-bearing page from bloat — you can. "

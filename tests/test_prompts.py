@@ -2289,3 +2289,92 @@ def test_prior_run_block_stays_inside_this_repo(tmp_path):
     (other / "body.md").write_text("## Now\n\nSomeone else's work.\n", encoding="utf-8")
 
     assert prompts._build_prior_run_block(repo) == ""
+
+
+# ── _kb_ownership_signal — orphan naming (#649) ───────────────────────────────
+
+
+def _make_stats(**kw):
+    """Minimal GraphStats factory so tests don't import the dataclass everywhere."""
+    from brr.kb_health import GraphStats
+
+    defaults = dict(total_pages=10, total_bytes=1000, log_bytes=5000, log_entry_count=100)
+    defaults.update(kw)
+    return GraphStats(**defaults)
+
+
+def test_kb_ownership_signal_names_one_orphan():
+    """A single orphan shows its basename in the signal."""
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(peer_orphans=["kb/distinctive-orphan.md"])
+    out = _kb_ownership_signal([], stats)
+    assert "distinctive-orphan.md" in out
+    # The name must not survive as a host path.
+    assert "/kb/distinctive-orphan.md" not in out
+
+
+def test_kb_ownership_signal_names_from_the_list_not_a_count():
+    """A distinctive filename must appear verbatim — counting alone cannot catch this."""
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(peer_orphans=["kb/xyzzy-sentinel-page.md"])
+    out = _kb_ownership_signal([], stats)
+    assert "xyzzy-sentinel-page.md" in out
+
+
+def test_kb_ownership_signal_three_orphans_no_truncation():
+    """Exactly 3 orphans: all names shown, no ellipsis."""
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(peer_orphans=["kb/alpha.md", "kb/beta.md", "kb/gamma.md"])
+    out = _kb_ownership_signal([], stats)
+    assert "alpha.md" in out
+    assert "beta.md" in out
+    assert "gamma.md" in out
+    assert "more" not in out
+
+
+def test_kb_ownership_signal_five_orphans_truncated():
+    """5 orphans: first 3 basenames shown, then '… and 2 more'; 4th and 5th absent."""
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(
+        peer_orphans=["kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md", "kb/e.md"]
+    )
+    out = _kb_ownership_signal([], stats)
+    assert "a.md" in out
+    assert "b.md" in out
+    assert "c.md" in out
+    assert "… and 2 more" in out
+    assert "d.md" not in out
+    assert "e.md" not in out
+
+
+def test_kb_ownership_signal_zero_orphans_size_pressure_byte_identical():
+    """Zero orphans + size pressure only must produce the exact pre-#649 string.
+
+    Pinned so the orphan-naming change cannot silently widen the common path.
+    """
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(peer_orphans=[])
+    out = _kb_ownership_signal(["x", "y"], stats)
+    expected = (
+        "**Ownership signal** — 2 page(s)/log over a size threshold. Not a list of "
+        "pages to trim: a byte count cannot tell a load-bearing page from bloat — you "
+        "can. The graph is 10 pages, log 5,000 B over 100 entries. Read this as the kb "
+        "asking for a maintenance *round* — promote what's load-bearing, breadcrumb "
+        "what's spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "dedicated pass, not a per-wake reflex to shorten the longest file. Full graph "
+        "shape on demand: `brnrd kb`."
+    )
+    assert out == expected
+
+
+def test_kb_ownership_signal_zero_orphans_zero_pressure_returns_empty():
+    """When there is nothing to report the function must return the empty string."""
+    from brr.prompts import _kb_ownership_signal
+
+    stats = _make_stats(peer_orphans=[])
+    assert _kb_ownership_signal([], stats) == ""
