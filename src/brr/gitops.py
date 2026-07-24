@@ -163,6 +163,41 @@ def shared_brr_dir(repo_root: Path) -> Path:
     return common_dir.parent / ".brr"
 
 
+def _is_working_tree(path: Path) -> bool:
+    """Return True when git considers *path* to sit in a working tree.
+
+    Guards ``_git``'s ``cwd=`` against a path that is not a usable
+    directory — ``git worktree list`` happily names a checkout that has
+    since been deleted, and ``subprocess`` raises ``OSError`` rather than
+    returning a non-zero status for that.
+    """
+    try:
+        result = _git(path, "rev-parse", "--is-inside-work-tree", check=False)
+    except OSError:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _is_linked_worktree(repo_root: Path) -> bool:
+    """Return True when *repo_root* is a linked worktree, not the main one.
+
+    A linked worktree's git dir is ``<common>/worktrees/<name>``; every
+    other checkout's git dir *is* the common dir. Both paths come out of
+    one ``rev-parse``, so they share whatever normalization git applied —
+    comparing them never has to reconcile a caller-supplied path.
+    """
+    result = _git(
+        repo_root, "rev-parse", "--git-dir", "--git-common-dir", check=False,
+    )
+    if result.returncode != 0:
+        return False
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) != 2:
+        return False
+    git_dir, common_dir = ((repo_root / line).resolve() for line in lines)
+    return git_dir != common_dir
+
+
 def main_worktree_root(repo_root: Path) -> Path | None:
     """Return the **main** working tree for *repo_root*, or ``None``.
 
@@ -173,19 +208,51 @@ def main_worktree_root(repo_root: Path) -> Path | None:
     Two questions sharing one derivation is the substitution bug #654 was
     filed about; asking git directly keeps them apart.
 
-    ``git worktree list`` always prints the main working tree first, and
-    says so in porcelain form. It is also correct under
-    ``--separate-git-dir``, where the common git dir's parent is not a
-    checkout at all. Returns *repo_root* itself for a repo with no linked
-    worktrees, and ``None`` when this is not a git checkout.
+    ``git worktree list`` always prints the main working tree first — but
+    it prints it *as git models it*, and that is not always a checkout.
+    Under ``--separate-git-dir`` the head entry is the **git dir**; for a
+    bare repo it is the bare repo. So the head entry is trusted only when
+    git agrees it is a working tree (#663 — the docstring shipped in
+    ``d1af2924`` claimed the opposite, and two other sites cited it).
+
+    When it is not, there is nothing further to ask. Under
+    ``--separate-git-dir`` git records the main working tree's path
+    **nowhere** inside the git dir: ``core.worktree`` is unset, no reverse
+    pointer is written, and ``<checkout>/.git`` is a one-way edge *into*
+    the git dir (driven against git 2.43). The main checkout is therefore
+    recoverable only when *repo_root* is itself that checkout, via
+    ``rev-parse --show-toplevel``. From a **linked** worktree of such a
+    repo the answer does not exist, and this returns ``None``.
+
+    That ``None`` is a named limitation, not an oversight:
+    ``account._connected_account_id`` reads it as "no retry" and degrades
+    to a project home — the same outcome the wrong path produced, minus
+    the lie to the next caller. Closing it needs a repo key that survives
+    the trip from a worktree, which is the registry's design, not this
+    function's.
+
+    Returns *repo_root* itself for an ordinary repo with no linked
+    worktrees, and ``None`` when this is not a git checkout at all.
     """
     result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
     if result.returncode != 0:
         return None
+    head: Path | None = None
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
-            return Path(line[len("worktree "):].strip())
-    return None
+            head = Path(line[len("worktree "):].strip())
+            break
+    if head is None:
+        return None
+    if _is_working_tree(head):
+        return head
+    if _is_linked_worktree(repo_root):
+        return None
+    top = _git(repo_root, "rev-parse", "--show-toplevel", check=False)
+    if top.returncode != 0:
+        return None
+    value = top.stdout.strip()
+    return Path(value) if value else None
 
 
 def is_tracked(path: Path) -> bool:
