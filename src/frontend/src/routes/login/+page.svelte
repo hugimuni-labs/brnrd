@@ -104,11 +104,11 @@
 					<span>sign in with GitHub</span>
 				</a>
 				<p class="mt-3 text-xs text-ink-quiet">
-					New accounts continue through the
+					Execution stays on your machine. The
 					<a class="text-sky-400 underline" href={resolve('/terms')}
 						>brnrd beta hosted-execution terms</a
 					>
-					before using the dashboard.
+					apply only if HugiMuni SAS ever operates hosted compute for your account.
 				</p>
 			{:else}
 				<button

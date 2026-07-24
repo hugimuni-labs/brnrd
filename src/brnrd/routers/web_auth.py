@@ -35,7 +35,6 @@ from ._session import (
     _clear_oauth_cookies,
     _cookie_secure,
     _github_oauth_ready,
-    _needs_hosted_terms,
     _oauth_redirect_uri,
     _repos,
     _safe_next,
@@ -248,8 +247,13 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
         )
     account = account_for_github_identity(db, identity)
     raw = issue_session_token(db, account)
-    target_url = _terms_accept_url(next_url) if _needs_hosted_terms(account) else next_url
-    resp = RedirectResponse(url=target_url, status_code=303)
+    # Authentication does not gate on the hosted-execution beta terms (#664).
+    # Those terms apply "when HugiMuni SAS operates brnrd-hosted compute for
+    # your account" — a condition login cannot evaluate and, for a
+    # local-execution account, never satisfies. Acceptance belongs at the
+    # surface that offers hosted execution; `_terms_status().needs_accept` is
+    # what that surface reads when it exists.
+    resp = RedirectResponse(url=next_url, status_code=303)
     resp.set_cookie(s.session_cookie, raw, httponly=True, samesite="lax", secure=_cookie_secure(request), max_age=int(SESSION_TTL.total_seconds()))
     _clear_oauth_cookies(resp, request)
     return resp

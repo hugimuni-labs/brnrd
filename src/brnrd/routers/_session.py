@@ -375,6 +375,14 @@ def _terms_accept_url(next_url: str) -> str:
 
 
 def _needs_hosted_terms(account: Account) -> bool:
+    """Whether ``account`` still owes acceptance of the hosted-execution beta terms.
+
+    A *point-of-use* predicate, not an authentication gate (#664). It says
+    nothing about whether the account uses, has requested, or could reach
+    hosted compute, so it is only meaningful once something actually offers
+    hosted execution. Read it there — through ``_terms_status``'s
+    ``needs_accept`` — and not on the login path.
+    """
     return account.hosted_terms_accepted_at is None or account.hosted_terms_version != _HOSTED_TERMS_VERSION
 
 

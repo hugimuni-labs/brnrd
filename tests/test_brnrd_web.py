@@ -224,12 +224,17 @@ def test_terms_status_reports_authenticated_acceptance_state(client, monkeypatch
     }
 
 
-def test_github_callback_requires_terms_acceptance_without_seed_repo(
-    client, monkeypatch
-):
+def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch):
+    """#664: the hosted-execution beta terms are not an authentication gate.
+
+    Driven through the real OAuth callback — the caller the defect lived in —
+    not through ``_needs_hosted_terms``. An account that has never accepted
+    (and, per the assertions below, still has not) reaches the destination it
+    asked for.
+    """
     _, callback, seen = _login_web(client, monkeypatch, next="/connect/BR-123")
     assert callback.status_code == 303
-    assert callback.headers["location"] == "/terms?next=/connect/BR-123"
+    assert callback.headers["location"] == "/connect/BR-123"
     assert "brnrd_session" in callback.cookies or "brnrd_session" in client.cookies
     assert seen["code"] == "ok"
     assert seen["redirect_uri"] == "https://brnrd.example/auth/github/callback"
@@ -247,6 +252,44 @@ def test_github_callback_requires_terms_acceptance_without_seed_repo(
             select(Repo).where(Repo.account_id == account.id)
         ).scalars().all()
         assert repos == []
+
+    # The session the un-accepted account got is a working one — a Location
+    # header alone would not prove login "completed".
+    context = client.get("/v1/dashboard/login-context?next=/connect/BR-123")
+    assert context.status_code == 200
+    assert context.json()["authenticated"] is True
+    # …and the server still knows acceptance is outstanding, for whatever
+    # surface eventually offers hosted execution.
+    assert client.get("/v1/dashboard/terms-status").json()["needs_accept"] is True
+
+
+def test_hosted_terms_acceptance_still_records_after_ungated_login(client, monkeypatch):
+    """#664 removes a gate; it must not remove the acceptance path.
+
+    Same lifecycle a point-of-use surface would drive: authenticate through
+    the real OAuth callback without accepting, then accept, and confirm the
+    record lands and ``needs_accept`` flips.
+    """
+    _, callback, _ = _login_web(client, monkeypatch, next="/repos")
+    assert callback.headers["location"] == "/repos"
+    assert client.get("/v1/dashboard/terms-status").json()["needs_accept"] is True
+
+    accept = client.post(
+        "/v1/terms/accept", json={"accept_terms": "yes"}, follow_redirects=False
+    )
+    assert accept.status_code == 200
+    assert accept.json() == {"ok": True}
+
+    with client.app.state.SessionLocal() as db:
+        account = db.execute(
+            select(Account).where(Account.github_id == _GITHUB_ID)
+        ).scalar_one()
+        assert account.hosted_terms_accepted_at is not None
+        assert account.hosted_terms_version == "2026-07-08"
+
+    status = client.get("/v1/dashboard/terms-status").json()
+    assert status["needs_accept"] is False
+    assert status["accepted_at"] is not None
 
 
 def test_terms_acceptance_requires_session(client):
