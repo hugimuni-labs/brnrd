@@ -138,7 +138,7 @@ def test_publish_runners_roundtrips_wake_request(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "_request", _fake_request)
     monkeypatch.setattr(cloud, "_runners_snapshot", lambda _brr_dir: {"profiles": [], "default": None})
 
-    cloud._publish_runners(brr_dir, {"token": "t", "brnrd_url": "https://x"})
+    cloud._publish_runners(brr_dir, None, {"token": "t", "brnrd_url": "https://x"})
 
     assert sent["path"] == "/v1/daemons/runners"
     assert sent["json"]["consumed_wake_request_ids"] == ["wake_old"]
@@ -304,6 +304,6 @@ def test_publish_runners_failure_keeps_ack_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "_request", _boom)
     monkeypatch.setattr(cloud, "_runners_snapshot", lambda _brr_dir: {"profiles": [], "default": None})
 
-    cloud._publish_runners(brr_dir, {"token": "t", "brnrd_url": "https://x"})
+    cloud._publish_runners(brr_dir, None, {"token": "t", "brnrd_url": "https://x"})
 
     assert wake_request.consumed_ids(brr_dir) == ["wake_kept"]
