@@ -413,16 +413,17 @@ def _connected_account_id(repo_root: Path) -> str | None:
 
     # A linked worktree's own path never appears in the registry — repos
     # are registered by their main checkout path, so the lookup above only
-    # ever matches a main checkout (#654). Derive the main root the same
-    # way `shared_brr_dir` locates shared runtime state from a worktree,
-    # and retry the same registries against it. `shared_brr_dir` resolves
-    # to `repo_root/.brr` for a non-worktree checkout, so `resolved_main
-    # == resolved_repo` there and this fallback naturally no-ops — it only
-    # fires when `repo_root` is genuinely a linked worktree.
-    try:
-        resolved_main = gitops.shared_brr_dir(repo_root).parent.resolve()
-    except Exception:
+    # ever matches a main checkout (#654). Ask git for the main working
+    # tree and retry the same registries against it. For a repo with no
+    # linked worktrees git names *repo_root* itself, so the retry no-ops
+    # there; it only does work when `repo_root` is genuinely linked.
+    main_root = gitops.main_worktree_root(repo_root)
+    if main_root is None:
         return None
+    try:
+        resolved_main = main_root.resolve()
+    except OSError:
+        resolved_main = main_root.absolute()
     if resolved_main == resolved_repo:
         return None
     return _reverse_lookup_account_id(candidates, resolved_main)
