@@ -594,6 +594,79 @@ def lint_schedule(
     return findings
 
 
+# ── Schedule-entry trust-tier attribution (#413 §7 S8) ───────────────
+#
+# The daemon attributes authorship of a schedule entry to the run that
+# wrote it, at that run's resolved trust tier.  The record lives in the
+# daemon-owned state file (alongside the existing firing-state) so it
+# survives daemon restarts and is never writable by the entry's author.
+#
+# State keys (prefixed `_` to distinguish from entry-id records):
+#   _tier_by_entry:   {entry_id: tier}  — daemon-observed author tier
+#   _noticed_untiered: [entry_id, ...]  — one-time notice already sent
+#
+# An entry with no _tier_by_entry record fires as owner (``schedule``
+# is in _OWNER_SOURCES) with a one-time notice.  The stamp that S8
+# writes into create_event beats the source-based default because
+# trust.resolve_tier prefers the explicit stamp.
+
+_TIER_BY_ENTRY_KEY = "_tier_by_entry"
+_NOTICED_UNTIERED_KEY = "_noticed_untiered"
+
+
+def entry_ids_from_dominion(dominion_path: Path) -> frozenset[str]:
+    """Return the set of entry IDs currently in *dominion_path*'s schedule.md.
+
+    Used to snapshot the entry set before a run starts so the capture-net
+    seam can diff before/after and attribute new entries to the run's tier.
+    Returns an empty frozenset when the file is absent or unparseable.
+    """
+    return frozenset(e.id for e in parse_schedule(dominion_path))
+
+
+def tier_for_entry(state: dict, entry_id: str) -> str | None:
+    """Return the attributed trust tier for *entry_id*, or ``None`` if unrecorded.
+
+    ``None`` means the entry predates S8 or was written before the
+    daemon began attributing; it fires as ``owner`` with a one-time
+    notice (the source-based default from ``_OWNER_SOURCES``).
+    """
+    tier_map = state.get(_TIER_BY_ENTRY_KEY)
+    if not isinstance(tier_map, dict):
+        return None
+    v = tier_map.get(entry_id)
+    return str(v) if v else None
+
+
+def record_entry_tiers(brr_dir: Path, new_ids: "frozenset[str]", tier: str) -> None:
+    """Persist trust-tier attribution for *new_ids* in the schedule state.
+
+    Called at dominion-capture time: entries that appeared in
+    ``schedule.md`` since the run started are attributed to *tier* (the
+    completing run's resolved trust tier, from
+    ``task.meta["trust_tier"]``).
+
+    Idempotent: existing records are not overwritten — the first
+    attribution wins.  Best-effort: I/O errors are swallowed so the
+    capture step never fails because of attribution.
+    """
+    if not new_ids or not tier:
+        return
+    try:
+        state = load_state(brr_dir)
+        tier_map: dict = dict(state.get(_TIER_BY_ENTRY_KEY) or {})
+        changed = False
+        for eid in sorted(new_ids):  # sorted for deterministic output
+            if eid not in tier_map:
+                tier_map[eid] = tier
+                changed = True
+        if changed:
+            state[_TIER_BY_ENTRY_KEY] = tier_map
+            save_state(brr_dir, state)
+    except OSError:
+        pass
+
+
 def render_lint_block(findings: list[ScheduleFinding]) -> str:
     """Render *findings* as a short flagged block, or ``""`` when there are none.
 
