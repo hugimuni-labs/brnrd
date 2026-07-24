@@ -1784,3 +1784,168 @@ def test_orient_never_opens_the_bar_on_its_own():
     )
     assert hooks.format_delta(payload) is None  # the twin that proves quiet
     assert hooks.format_delta(payload, orient=(0, 3)) is None
+
+
+# ── #616: notices segment and spawn_completed closeout rendering ─────────────
+
+
+def test_notices_chip_present_at_nonzero_count():
+    """!N segment renders when the notices list is non-empty.
+
+    Drive red: comment out the notices chip in _render_bar and confirm this
+    fails; restore to keep.
+    """
+    notices = [{"at": "2026-07-24T03:36:00Z", "text": "reply NOT delivered"}]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_notices_chip_absent_at_zero():
+    """No notices entry means no !N segment — absent at zero.
+
+    Also asserting the fixture is legal at zero (the absence assertion is
+    not a time bomb against a payload that could never have notices).
+    """
+    rendered = hooks.format_delta(_bar_payload())  # no notices key
+    assert rendered is not None  # bar renders for other reasons (laden payload)
+    bar = rendered.splitlines()[0]
+    assert "!" not in bar
+
+    rendered_empty = hooks.format_delta(_bar_payload(notices=[]))
+    assert "!" not in (rendered_empty.splitlines()[0] if rendered_empty else "")
+
+
+def test_notices_chip_position_is_after_produce_before_card():
+    """!N appears after produce (⚒) and before card — absent at zero, present
+    at 1.  Order: ... │ ⚒N │ !N │ mood ... │ card ok
+    """
+    notices = [{"at": "2026-07-24T03:36:00Z", "text": "spawn dropped: no inbox"}]
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="stoked")
+    bar = rendered.splitlines()[0]
+    # !1 is present
+    assert "!1" in bar
+    # Order: ⚒ before !1 before mood before card
+    assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
+
+
+def test_closeout_excludes_spawn_completed_from_obligation_count():
+    """spawn_completed events for the current run are reported as a distinct
+    fact at closeout — not counted in the obligation total, not listed under
+    'Address each'.
+
+    Drive red: remove the finished_spawns partitioning in format_delta and
+    confirm spawn_completed appears in the 'N pending event(s)' count and
+    'Address each' detail; restore to keep.
+    """
+    run_id = "run-260724-0336-u6pi"
+    payload = {
+        "run": {"id": run_id},
+        "attention": {"pending_event_count": 1, "pending_outbox_file_count": 0},
+        "inbound": {
+            "current_event": "evt-parent",
+            "current_event_replyable": True,
+            "events": [
+                {
+                    "id": "evt-spawn-done",
+                    "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id,
+                    "summary": "concurrent spawn run-child done: status=done",
+                },
+            ],
+        },
+        "outbound": {"replies_current": 1, "replies_other": 0, "outbound_messages": 0,
+                     "any_sent": True},
+        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+        "notices": [],
+    }
+    rendered = hooks.format_delta(payload, stop=True)
+    # The header must show 0 obligation events, not 1.
+    assert "0 pending event(s)" in rendered
+    # Must NOT demand address.
+    assert "Address each" not in rendered
+    # spawn_completed must appear as a distinct fact line, not an obligation.
+    assert "1 finished spawn(s) observed" in rendered
+    assert "no address needed" in rendered
+    # The event id should appear (visibility constraint #1).
+    assert "evt-spawn-done" in rendered
+
+
+def test_closeout_still_shows_action_events_alongside_finished_spawns():
+    """When real pending events coexist with spawn_completed, only the real
+    ones appear in the 'Address each' obligation block."""
+    run_id = "run-abc"
+    payload = {
+        "run": {"id": run_id},
+        "attention": {"pending_event_count": 2, "pending_outbox_file_count": 0},
+        "inbound": {
+            "current_event": "evt-lead",
+            "current_event_replyable": True,
+            "events": [
+                {
+                    "id": "evt-followup",
+                    "source": "telegram",
+                    "spawn_parent_run_id": None,
+                    "summary": "a real follow-up",
+                },
+                {
+                    "id": "evt-done",
+                    "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id,
+                    "summary": "child done",
+                },
+            ],
+        },
+        "outbound": {"replies_current": 1, "replies_other": 0, "outbound_messages": 0},
+        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+    }
+    rendered = hooks.format_delta(payload, stop=True)
+    # 1 real obligation, not 2.
+    assert "1 pending event(s)" in rendered
+    assert "Address each" in rendered
+    assert "evt-followup" in rendered
+    # Finished spawn reported separately.
+    assert "1 finished spawn(s)" in rendered
+    assert "evt-done" in rendered
+
+
+def test_spawn_completed_for_different_run_still_counts_as_obligation():
+    """A spawn_completed whose spawn_parent_run_id doesn't match the current
+    run is NOT a fact-for-this-run — it counts as a normal obligation.
+
+    This asserts the fixture stays illegal (spawn_completed for a different
+    parent cannot be mistaken for the current run's child) so the absence
+    assertion below is not a time bomb.
+    """
+    my_run_id = "run-me"
+    other_run_id = "run-other"
+    payload = {
+        "run": {"id": my_run_id},
+        "attention": {"pending_event_count": 1, "pending_outbox_file_count": 0},
+        "inbound": {
+            "current_event": "evt-lead",
+            "current_event_replyable": True,
+            "events": [
+                {
+                    "id": "evt-wrong-parent",
+                    "source": "spawn_completed",
+                    "spawn_parent_run_id": other_run_id,
+                    "summary": "someone else's child done",
+                },
+            ],
+        },
+        "outbound": {"replies_current": 0, "replies_other": 0, "outbound_messages": 0},
+        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+    }
+    # The fixture's spawn_parent_run_id (other) != my_run_id — that's the
+    # condition this test asserts the code respects.
+    assert payload["inbound"]["events"][0]["spawn_parent_run_id"] != my_run_id, (
+        "fixture must carry a different parent id or the absence assertion below "
+        "cannot distinguish a bug from a correct exclusion"
+    )
+    rendered = hooks.format_delta(payload, stop=True)
+    # Treated as a regular obligation — NOT excluded from the count.
+    assert "1 pending event(s)" in rendered
+    assert "Address each" in rendered
+    # Not classified as a finished spawn.
+    assert "finished spawn" not in rendered
