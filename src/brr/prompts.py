@@ -1682,8 +1682,28 @@ def _kb_hub_matches(slug: str, task_text: str) -> bool:
     return all(t in haystack for t in tokens)
 
 
+def shell_reads_agents_md_natively(shell: str | None) -> bool:
+    """Does *shell* put ``AGENTS.md`` in the model's context without being asked?
+
+    One named fact with one home, because two surfaces depend on it and they
+    were drifting apart: ``prompts/run.md`` tells the resident *"Shell-dependent:
+    some Shells read it natively (codex), others don't (claude)"*, while
+    :func:`_build_orientation_set` used to list the file for every Shell alike.
+
+    ``None``/unknown answers ``False`` — the conservative direction. A walk
+    entry for a file already in context costs one redundant Read; a missing
+    entry for a file nobody read costs the orientation.
+    """
+    if not shell or not shell.strip():
+        return False
+    return shell.split()[0].strip() == "codex"
+
+
 def _build_orientation_set(
-    repo_root: Path, *, task_text: str | None = None
+    repo_root: Path,
+    *,
+    task_text: str | None = None,
+    runner_shell: str | None = None,
 ) -> list[Any]:
     """The orientation *ledger*'s file set (#513 Slice 9) — never the kernel's
     ``next:`` list (that is :func:`_build_orientation`; see
@@ -1691,7 +1711,8 @@ def _build_orientation_set(
 
     Deterministic, existence-proven, capped at :data:`_ORIENTATION_SET_MAX`:
 
-    - the repo's ``AGENTS.md``;
+    - the repo's ``AGENTS.md`` — **unless the Shell already read it**, see
+      :func:`shell_reads_agents_md_natively`;
     - the active inter-run plan (``account.active_plan_path``);
     - every ``subject-*.md`` kb hub whose slug the task text provably touches
       (:func:`_kb_hub_matches`), from the same home-knowledge dir the recent-
@@ -1703,10 +1724,19 @@ def _build_orientation_set(
     rail: what must be *known* stays injected; what builds *ownership*
     becomes the walk).  Anything unresolvable is simply absent: a smaller
     honest set over a padded one, every time.
+
+    The Shell conditional serves that same guard rail rather than bending it.
+    On codex, ``AGENTS.md`` is the set's largest entry by far and is already in
+    the model's context, so listing it asked the wake to spend a Read on a file
+    it was holding — the polling tax the identity core names, charged by the
+    meter that exists to make orientation honest. What must be known is still
+    known; only the walk stops claiming credit for it.
     """
     from .bootscore import OrientationFile
 
-    candidates: list[Path] = [repo_root / "AGENTS.md"]
+    candidates: list[Path] = []
+    if not shell_reads_agents_md_natively(runner_shell):
+        candidates.append(repo_root / "AGENTS.md")
 
     try:
         cfg = conf.load_config(repo_root)
@@ -1965,7 +1995,7 @@ def build_boot_score(
             has_event_body=has_event_body,
         ),
         orientation_set=_build_orientation_set(
-            effective_root, task_text=task_text
+            effective_root, task_text=task_text, runner_shell=runner_shell
         ),
         contracts=all_contracts,
         hooks=hooks_info,
