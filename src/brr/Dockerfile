@@ -57,8 +57,26 @@ RUN apt-get update \
 # and there is no second list to keep in step. Every entry of
 # ``pyproject.toml``'s ``license-files`` must be reachable from these lines or
 # the wheel installed below silently drops it (#675); a test enforces that.
+#
+# The two package trees are named one per line rather than copied as ``src``
+# because this list is a statement of what the runner image *is*: a Python
+# environment that can execute agent runs. ``src/`` also holds the dashboard
+# frontend, which the backend serves and the image never imports — copying
+# ``src`` wholesale sent its ``node_modules`` (~188 MB on any checkout that has
+# built it) and any ``*.egg-info`` residue through the temp context and into an
+# image layer, while ``MANIFEST.in``'s ``prune src/frontend`` said the opposite
+# about the sdist and nothing reconciled the two (#680). Naming the packages
+# inverts the cost of forgetting: a new top-level directory under ``src/`` does
+# not silently join the image, it fails to appear until someone adds it here
+# deliberately (#417 — write the value explicitly at the moment of consent).
+#
+# One ``COPY`` per package with its own destination is load-bearing, not style:
+# ``COPY src/brr src/brnrd /opt/brr/src/`` copies each source's *contents* into
+# the destination, flattening both packages together and breaking
+# ``pip install /opt/brr``.
 COPY pyproject.toml README.md LICENSE LICENSE-OVERVIEW.md /opt/brr/
-COPY src /opt/brr/src
+COPY src/brr /opt/brr/src/brr
+COPY src/brnrd /opt/brr/src/brnrd
 RUN pip install --no-cache-dir /opt/brr \
     && brnrd review --help >/dev/null
 
