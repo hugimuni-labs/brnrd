@@ -236,7 +236,8 @@ export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | nu
 	let best: LiveRun | null = null;
 	let bestAt = -Infinity;
 	for (const run of runs ?? []) {
-		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest)) continue;
+		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest))
+			continue;
 		const started = run.started_at ? Date.parse(run.started_at) : NaN;
 		const at = Number.isNaN(started) ? -Infinity : started;
 		if (best === null || at > bestAt) {
@@ -244,7 +245,9 @@ export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | nu
 			bestAt = at;
 		}
 	}
-	return best ? moodFace(best.mood, best.mood_glyph, best.mood_pitch, best.mood_frames, best.mood_rest) : null;
+	return best
+		? moodFace(best.mood, best.mood_glyph, best.mood_pitch, best.mood_frames, best.mood_rest)
+		: null;
 }
 
 /** What the header wordmark animates: a live run's mood when one is burning,
