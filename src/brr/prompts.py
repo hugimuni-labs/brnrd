@@ -2770,7 +2770,11 @@ def _render_runner_catalog(
         if item.get("cost_rank") is not None:
             bits.append(f"cost_rank={item['cost_rank']}")
         if item.get("quota_source"):
-            bits.append(f"quota={item['quota_source']}")
+            quota_str = f"quota={item['quota_source']}"
+            level = str(item.get("quota_level") or "").strip()
+            if level:
+                quota_str += f" ({level})"
+            bits.append(quota_str)
         if item.get("auth_variant"):
             bits.append(f"auth={item['auth_variant']}")
         if availability != "available":
