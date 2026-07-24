@@ -2807,15 +2807,23 @@ def _write_policy_proposal(ctx, proposal_id, *, conversation_key="telegram:42:")
     return proposal
 
 
-def _policy_control_target(tmp_path, body, *, conversation_key="telegram:42:"):
+def _policy_control_target(
+    tmp_path,
+    body,
+    *,
+    conversation_key="telegram:42:",
+    trust_tier="owner",
+    source="telegram",
+):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    path = protocol.create_event(
+    protocol.create_event(
         inbox,
-        "telegram",
+        source,
         body,
         conversation_key=conversation_key,
+        trust_tier=trust_tier,
     )
     event = protocol.list_pending(inbox)[0]
     return daemon._DispatchTarget(
@@ -3210,6 +3218,194 @@ def test_handle_daemon_control_events_routes_config_change(tmp_path):
     remaining = daemon._handle_daemon_control_events([target], ctx)
 
     assert remaining == []
+
+
+# ── Owner-tier gate tests (S2) ─────────────────────────────────────────────
+#
+# Each test below was driven red before keeping: the test was written first,
+# run against unpatched main (without the tier gate), confirmed to fail, then
+# the patch was applied and it turned green.  Red output is quoted in
+# /tmp/brr-control-verbs-owner-only-report.md.
+
+
+def _response_body(target) -> str:
+    return protocol.response_path(
+        target.responses_dir, target.event["id"]
+    ).read_text(encoding="utf-8").strip()
+
+
+def test_config_change_gate_blocks_collaborator(tmp_path):
+    """collaborator tier: event consumed, config unchanged, proposal still pending."""
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-gate-collab"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(
+        tmp_path,
+        f"approve config-change {proposal_id}",
+        trust_tier="collaborator",
+        source="github",
+    )
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True, "event must be consumed (not dispatched as a thought)"
+    assert daemon.conf.load_config(target.repo_root) == {}, "config file must not change"
+    assert "status: pending" in proposal.read_text(encoding="utf-8"), "proposal stays pending"
+    assert _response_body(target) == daemon._CONTROL_VERB_REFUSE_MSG
+
+
+def test_config_change_gate_blocks_untrusted(tmp_path):
+    """Untrusted event (no stamp, github source): same outcome as collaborator.
+
+    This is the case that proves the gate is not collaborator-specific — an
+    unattributed inbox-drop event whose body happens to match the regex must
+    not write config.
+    """
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-gate-untrusted"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    # No trust_tier in the event — resolve_tier sees source=github (not in
+    # _OWNER_SOURCES) and no stamp → UNTRUSTED (fail-closed).
+    target = _policy_control_target(
+        tmp_path,
+        f"approve config-change {proposal_id}",
+        trust_tier="",        # blank — stripped to "", not a valid tier
+        source="github",
+    )
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.conf.load_config(target.repo_root) == {}
+    assert "status: pending" in proposal.read_text(encoding="utf-8")
+    assert _response_body(target) == daemon._CONTROL_VERB_REFUSE_MSG
+
+
+def test_runner_policy_gate_blocks_collaborator(tmp_path):
+    """collaborator tier on runner-policy: event consumed, policy unchanged."""
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "rpol-gate-collab"
+    proposal = _write_policy_proposal(ctx, proposal_id)
+    target = _policy_control_target(
+        tmp_path,
+        f"approve runner-policy {proposal_id}",
+        trust_tier="collaborator",
+        source="github",
+    )
+
+    handled = daemon._handle_runner_policy_control_event(target, ctx)
+
+    assert handled is True
+    assert not daemon.account.runner_policy_path(ctx, "Gurio/brr").exists()
+    assert "status: pending" in proposal.read_text(encoding="utf-8")
+    assert _response_body(target) == daemon._CONTROL_VERB_REFUSE_MSG
+
+
+def test_runner_policy_gate_blocks_untrusted(tmp_path):
+    """Untrusted event (no stamp, github source): runner-policy unchanged."""
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "rpol-gate-untrusted"
+    proposal = _write_policy_proposal(ctx, proposal_id)
+    target = _policy_control_target(
+        tmp_path,
+        f"approve runner-policy {proposal_id}",
+        trust_tier="",
+        source="github",
+    )
+
+    handled = daemon._handle_runner_policy_control_event(target, ctx)
+
+    assert handled is True
+    assert not daemon.account.runner_policy_path(ctx, "Gurio/brr").exists()
+    assert "status: pending" in proposal.read_text(encoding="utf-8")
+    assert _response_body(target) == daemon._CONTROL_VERB_REFUSE_MSG
+
+
+def test_owner_config_change_still_applies(tmp_path):
+    """owner tier: current behaviour is preserved — config still written."""
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-gate-owner-ok"
+    _write_config_change_proposal(ctx, proposal_id)
+    # trust_tier="owner" is the _policy_control_target default; explicit here
+    # for documentation clarity.
+    target = _policy_control_target(
+        tmp_path,
+        f"approve config-change {proposal_id}",
+        trust_tier="owner",
+    )
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.conf.load_config(target.repo_root)["spawn.max_concurrent"] == 8
+
+
+def test_control_verb_existence_oracle_closed(tmp_path):
+    """Non-owner naming a real vs nonexistent proposal gets byte-identical responses.
+
+    Without this invariant, an attacker can enumerate proposal ids by watching
+    whether they get a "not found" or a "not authorised" response.
+    """
+    ctx = _account_context_for_policy(tmp_path)
+    real_id = "cfgchg-oracle-real"
+    _write_config_change_proposal(ctx, real_id)
+    fake_id = "cfgchg-oracle-nonexistent"
+
+    # Both targets land in the same tmp_path so responses are readable after.
+    # The inbox accumulates two events; list_pending returns them in order.
+    # Build real first, run it, then build fake.
+    target_real = _policy_control_target(
+        tmp_path,
+        f"approve config-change {real_id}",
+        trust_tier="collaborator",
+        source="github",
+    )
+    handled_real = daemon._handle_config_change_control_event(target_real, ctx)
+    body_real = _response_body(target_real)
+
+    target_fake = _policy_control_target(
+        tmp_path,
+        f"approve config-change {fake_id}",
+        trust_tier="collaborator",
+        source="github",
+    )
+    handled_fake = daemon._handle_config_change_control_event(target_fake, ctx)
+    body_fake = _response_body(target_fake)
+
+    assert handled_real is True
+    assert handled_fake is True
+    assert body_real == body_fake, (
+        "response bodies must be identical — existence oracle must be closed"
+    )
+
+
+def test_config_change_cross_conversation_blocked_for_owner(tmp_path):
+    """owner event from a different conversation: config unchanged.
+
+    The cross-conversation guard applies after the tier check — an owner in
+    the wrong thread cannot approve someone else's proposal.
+    """
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-cross-conv"
+    proposal = _write_config_change_proposal(
+        ctx,
+        proposal_id,
+        conversation_key="telegram:42:",
+    )
+    target = _policy_control_target(
+        tmp_path,
+        f"approve config-change {proposal_id}",
+        conversation_key="telegram:99:",
+        trust_tier="owner",
+    )
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.conf.load_config(target.repo_root) == {}
+    assert "status: pending" in proposal.read_text(encoding="utf-8")
+    response = _response_body(target)
+    assert "different conversation" in response
 
 
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
