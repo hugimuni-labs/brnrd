@@ -1,6 +1,7 @@
 [project]
 name = "brnrd"
-version = "0.1.0"
+# Derived from src/brr/__init__.py — see [tool.setuptools.dynamic] below.
+dynamic = ["version"]
 description = "Structured guardrails for AI agent work, managed from a chat"
 authors = [ { name = "HugiMuni" } ]
 readme = "README.md"
@@ -31,6 +32,16 @@ Issues = "https://github.com/hugimuni-labs/brnrd/issues"
 [build-system]
 requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
+
+# One version, not three (#674). `brnrd --version`, the dashboard's
+# `daemon_version`, and the self-update banner all read `brr.__version__`; a
+# literal here would be a second copy that can silently disagree with them
+# while `packaging/check_release_version.py` still passes. setuptools reads
+# this attribute statically (`src/brr/__init__.py` is `__all__` plus a literal,
+# no imports), so nothing is executed at build time. The npm manifest is the
+# one remaining mirror and the guard covers it.
+[tool.setuptools.dynamic]
+version = {attr = "brr.__version__"}
 
 # Per-package license split (see LICENSE-OVERVIEW.md): the daemon
 # core (`src/brr/`) is MIT; the brnrd backend (`src/brnrd/`,
