@@ -2,10 +2,13 @@
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 import brr
 
@@ -81,6 +84,48 @@ def test_the_version_agrees_across_every_surface_that_publishes_it():
     # ...and pyproject.toml still derives PyPI's version from that same source
     # rather than restating it.
     assert checker.derivation_mismatch() is None
+
+
+def test_the_backend_publishes_the_same_version_in_its_openapi_schema(tmp_path):
+    """`src/brnrd/app.py` carried a fourth literal — and a published one.
+
+    It is the ``info.version`` of the backend's OpenAPI schema, outside
+    everything #674 enumerated. Driven through the real app factory, not
+    asserted against the source text: the schema is what actually ships.
+
+    The source tree is copied and ``__version__`` moved off ``0.1.0`` first.
+    Asserting agreement while both numbers happen to be ``0.1.0`` proves
+    nothing — a hardcoded literal passes that test right up until the release
+    it is supposed to catch.
+    """
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlalchemy")
+
+    src = tmp_path / "src"
+    shutil.copytree(REPO / "src", src, ignore=shutil.ignore_patterns("*.egg-info", "frontend"))
+    init = src / "brr" / "__init__.py"
+    init.write_text(init.read_text().replace(f'"{brr.__version__}"', '"9.9.9"'))
+
+    published = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from brnrd import create_app\n"
+            "from brnrd.config import Settings\n"
+            "app = create_app(Settings(database_url='sqlite:///:memory:',\n"
+            "    public_base_url='https://brnrd.example',\n"
+            "    github_oauth_client_id='x', github_oauth_client_secret='y'))\n"
+            "print(app.openapi()['info']['version'])\n",
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(src)},
+    )
+
+    assert published.returncode == 0, published.stderr
+    assert published.stdout.strip() == "9.9.9", (
+        "the backend published its own literal instead of brr.__version__"
+    )
 
 
 def test_a_release_that_bumps_the_manifests_but_not_the_source_is_caught(tmp_path):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from brr import __version__
 from fastapi import FastAPI
 from starlette.staticfiles import StaticFiles
 
@@ -55,7 +56,10 @@ def create_app(
         _maybe_register_telegram_webhook(settings)
         yield
 
-    app = FastAPI(title="brnrd", version="0.1.0", lifespan=lifespan)
+    # Same source as `brnrd --version` and the dashboard's `daemon_version`
+    # (#674): this one is published in the OpenAPI schema, so a literal here
+    # is a hand-maintained copy that goes stale in public.
+    app = FastAPI(title="brnrd", version=__version__, lifespan=lifespan)
 
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)
