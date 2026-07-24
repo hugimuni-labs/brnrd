@@ -3,7 +3,7 @@ import subprocess
 
 from brr import account
 
-from _helpers import write_repo_scaffold
+from _helpers import commit_files, init_git_repo, write_repo_scaffold
 
 
 def test_resolve_context_creates_account_home_and_registry(tmp_path):
@@ -309,6 +309,96 @@ def test_home_label_is_reserved_for_the_account_root(tmp_path):
         assert "reserved" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected the reserved label to be rejected")
+
+
+def _add_worktree(main_repo, worktree_path, *, branch: str) -> None:
+    subprocess.run(
+        ["git", "worktree", "add", "-b", branch, str(worktree_path)],
+        cwd=main_repo, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
+def test_linked_worktree_of_a_registered_repo_resolves_account(monkeypatch, tmp_path):
+    """#654: `brnrd kb` (and every other `resolve_context` caller) run from
+    inside a daemon-provisioned worktree — a linked worktree's own path is
+    never in the registry (repos are registered by their main checkout), so
+    the reverse lookup must fall back to the main checkout root."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+
+    # Simulates a prior connect: the registry lists the main checkout path
+    # under the account home, with no `account.id` configured locally.
+    account.resolve_context(
+        main_repo,
+        {"repo.label": "Gurio/brr", "home.kind": "account", "account.id": "acct-1"},
+    )
+
+    worktree = tmp_path / "wt"
+    _add_worktree(main_repo, worktree, branch="wt-branch")
+
+    ctx = account.resolve_context(worktree, {}, create=False)
+
+    assert ctx.kind == "account"
+    assert ctx.account_id == "acct-1"
+
+
+def test_linked_worktree_of_an_unregistered_repo_stays_project_scoped(
+    monkeypatch, tmp_path,
+):
+    """Negative case for #654: a genuinely project-scoped repo (no registry
+    entry anywhere) must keep resolving `project` from a linked worktree —
+    the main-root fallback only fires when the lookup would otherwise find
+    nothing, never as a way to smuggle a worktree into `account` on its
+    own."""
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+
+    worktree = tmp_path / "wt"
+    _add_worktree(main_repo, worktree, branch="wt-branch")
+
+    ctx = account.resolve_context(worktree, {}, create=False)
+
+    assert ctx.kind == "project"
+
+
+def test_linked_worktree_carrying_its_own_brr_dir_still_resolves_account(
+    monkeypatch, tmp_path,
+):
+    """The main-checkout derivation must answer *which working tree is the
+    main one*, not *where does runtime state live*. `gitops.shared_brr_dir`
+    answers the second and prefers a local `.brr`, so deriving the main root
+    from its `.parent` reports the worktree itself the moment one exists
+    there — silently restoring the #654 bug in exactly the environments
+    (docker, solitary) where a worktree is most likely to carry one. This
+    pins the distinction: a `.brr` beside the worktree changes nothing.
+    """
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    main_repo = tmp_path / "main"
+    init_git_repo(main_repo)
+    commit_files(main_repo, {"README.md": "hi\n"})
+    account.resolve_context(
+        main_repo,
+        {"repo.label": "Gurio/brr", "home.kind": "account", "account.id": "acct-1"},
+    )
+
+    worktree = tmp_path / "wt"
+    _add_worktree(main_repo, worktree, branch="wt-branch")
+    (worktree / ".brr").mkdir()
+
+    ctx = account.resolve_context(worktree, {}, create=False)
+
+    assert ctx.kind == "account"
+    assert ctx.account_id == "acct-1"
+
+
 def test_cloud_gate_state_migrates_to_account_home(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

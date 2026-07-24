@@ -406,6 +406,32 @@ def _connected_account_id(repo_root: Path) -> str | None:
         resolved_repo = repo_root.resolve()
     except OSError:
         resolved_repo = repo_root.absolute()
+
+    found = _reverse_lookup_account_id(candidates, resolved_repo)
+    if found is not None:
+        return found
+
+    # A linked worktree's own path never appears in the registry — repos
+    # are registered by their main checkout path, so the lookup above only
+    # ever matches a main checkout (#654). Ask git for the main working
+    # tree and retry the same registries against it. For a repo with no
+    # linked worktrees git names *repo_root* itself, so the retry no-ops
+    # there; it only does work when `repo_root` is genuinely linked.
+    main_root = gitops.main_worktree_root(repo_root)
+    if main_root is None:
+        return None
+    try:
+        resolved_main = main_root.resolve()
+    except OSError:
+        resolved_main = main_root.absolute()
+    if resolved_main == resolved_repo:
+        return None
+    return _reverse_lookup_account_id(candidates, resolved_main)
+
+
+def _reverse_lookup_account_id(candidates: list[Path], target: Path) -> str | None:
+    """Return the account id whose registry lists *target* as a repo path."""
+
     for home_root in candidates:
         registry_path = home_root / REGISTRY_PATH
         try:
@@ -419,9 +445,9 @@ def _connected_account_id(repo_root: Path) -> str | None:
             if registered is None:
                 continue
             try:
-                matches = registered.resolve() == resolved_repo
+                matches = registered.resolve() == target
             except OSError:
-                matches = registered.absolute() == resolved_repo
+                matches = registered.absolute() == target
             if matches:
                 value = str(raw.get("account_id") or raw.get("home_id") or "").strip()
                 if value:
