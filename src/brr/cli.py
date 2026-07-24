@@ -304,8 +304,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="doc topic to print (e.g. portals, execution-map)")
     p.set_defaults(func=cmd_docs)
 
-    p = sub.add_parser("kb", help="search home/repo knowledge")
-    p.add_argument("query", help="search term")
+    p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
+    p.add_argument("query", nargs="?", default=None,
+                   help="search term (omit to print the kb graph shape)")
     p.add_argument("--limit", type=int, default=20,
                    help="maximum matching lines to print")
     p.set_defaults(func=cmd_kb)
@@ -803,6 +804,14 @@ def cmd_kb(args):
     repo_root = _repo_root()
     cfg = conf.load_config(repo_root)
     checkout = knowledge.ensure_checkout(repo_root, cfg)
+
+    if not args.query:
+        from . import kb_health
+        kb_dir = knowledge.active_kb_dir(repo_root, cfg)
+        stats = kb_health.compute_graph_stats(repo_root, kb_dir)
+        print(kb_health.format_graph_stats(stats))
+        return 0
+
     hits = knowledge.search(repo_root, args.query, cfg, limit=args.limit)
     if not hits:
         print(f"[brnrd kb] no matches for {args.query!r}")
