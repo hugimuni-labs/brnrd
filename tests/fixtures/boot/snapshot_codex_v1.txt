@@ -17,7 +17,7 @@ body requested: codex (codex / gpt-5.6-terra) · Tier 2 hooks installed
 host: daemon · worktree · resident-owned
 continuity: ✗ first wake
 attention: evt-fixture-0001
-posture: brr/fixture-branch · week 80% left (resets Sunday) · budget 120m
+posture: brr/fixture-branch · context unknown · quota week 80% left (resets Sunday) · spend unknown
 next:
   1. read the task — the verbatim event body is the last block below
   2. write .card — the card is the surface the user watches while you think
@@ -47,11 +47,10 @@ _From the brnrd daemon: the runtime facts for *this* thought — run metadata, e
 - Stage: brnrd daemon run
 - Source: spawn
 - Environment: worktree
-- Requested Runner: codex — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the budget is tight.
-- Quota: week 80% left (resets Sunday)
+- Requested Runner: codex — the Shell+Core selected for this thought; the actual Core is attested from the Shell result. A failure here (quota exhausted, provider error, substitution) ⇒ the user pays a manual reroute, so chunk work and commit early when the resource meter is tight.
+- Meter: context=unknown; quota=week 80% left (resets Sunday); spend=unknown. These live Shell readings are the resident-facing budget and refresh at tool boundaries; unknown means no proven reading yet.
 - Web research: native via web.run, default-on — search executes server-side (rides the model API, so it is available even under the solitary egress boundary); use it to verify changing facts before asserting them.
 - Delivery: situational outputs captured by brr (see Delivery contract below)
-- Budget: ~120m of wall-clock runtime before brr kills this thought to reclaim the single-flight slot. Bound uncertain long-running commands yourself (own timeout, or background + poll); extend the deadline if you genuinely need longer (see Delivery contract).
 - Runtime recovery: /tmp/brr-fixture-runtime/runs/run-fixture-0001/context.md (open only if a detail you need isn't in this bundle)
 
 ### Runner catalog
@@ -79,7 +78,6 @@ Live values for this run's portals. Standing rules: §How the daemon drives you 
 - inbox: `/tmp/brr-fixture-outbox/inbox.json` — re-read at plan / todo boundaries, and immediately before a terminal closeout
 - portal state: `/tmp/brr-fixture-outbox/portal-state.json` (env `BRR_PORTAL_STATE`) — pending events, posture, `change_token`
 - codex Shell: native progress/final channels are runner-local under brr — user-visible mid-run communication goes through `.card` / outbox / `gate:`; stdout stays the plain current-thread fallback
-- keepalive: `/tmp/brr-fixture-outbox/.keepalive` — first line ISO-8601 or `+<duration>` (`+30m`); rewrite to extend
 - card/run body: `/tmp/brr-fixture-outbox/.card` — resident-owned Markdown write-head; keep `## Now` current for the live projection, preserve the full run story below it; closeout captures it as `body.md`
 - branch: `brr/fixture-branch` ⇐ `main` — commit here; brr publishes the branch you end on; themed work ⇒ rename to a descriptive `brr/<short-slug>` before committing
 
@@ -108,7 +106,7 @@ hooks:
 source manifest:
     block                                           owner        authority      bytes  location / freshness
   ---------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                daemon-live  runtime          574  computed
+  ✓ Boot kernel (action-first score)                daemon-live  runtime          601  computed
   ✓ Operational preamble (run.md)                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
@@ -125,7 +123,7 @@ source manifest:
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · Your last run (node frame + Now + shape)        resident     memory             0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,815  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,608  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
@@ -143,8 +141,7 @@ depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 --- phase: portal ---
 
 [brnrd portal seed] 0 pending event(s), 0 undelivered outbox file(s).
-- budget: 60s of 7200s used.
 
 --- phase: session-start hook ---
 
-{"hookSpecificOutput": {"additionalContext": "[brnrd portal seed] 0 pending event(s), 0 undelivered outbox file(s).\n- budget: 60s of 7200s used.", "hookEventName": "SessionStart"}}
+{"hookSpecificOutput": {"additionalContext": "[brnrd portal seed] 0 pending event(s), 0 undelivered outbox file(s).", "hookEventName": "SessionStart"}}

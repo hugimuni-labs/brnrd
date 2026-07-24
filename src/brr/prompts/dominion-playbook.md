@@ -67,7 +67,7 @@ straight face:
 - `daemon-substrate.md` → this host's machinery: Runner, single-flight,
   capture net, scheduling, portals (`brnrd docs portals`).
 - `AGENTS.md` → project and kb governance.
-- Run Context Bundle → live per-run values: delivery contract, budget,
+- Run Context Bundle → live per-run values: delivery contract, resource meter,
   branch, queued input.
 
 Contradiction? Name it → reconcile against current *code*. A runtime line
@@ -142,7 +142,7 @@ Follow-through:
   Default: linger in
   this same run — poll with backoff until the completion event lands →
   review inline → fold before closeout. The scheduled-wake fallback is
-  for a dying budget or an urgent pre-empt, not the default path.
+  for tight context/quota or an urgent pre-empt, not the default path.
 - If self-wakes prove forgettable, the next rung is a `review: true`
   respawn flag (suppress the child's direct delivery, file a
   review-needed event back). Real daemon surface, deliberately unbuilt.

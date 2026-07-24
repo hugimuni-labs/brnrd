@@ -207,9 +207,8 @@ def _real_sleep_invoke(seconds: int = 30):
     return invoke
 
 
-def test_budget_kills_runner_and_reports_124():
-    """Past its budget the runner is killed via kill_active and the result
-    is presented like the wall-clock timeout (124)."""
+def test_watchdog_kills_silent_runner_and_reports_124():
+    """Past its inactivity threshold a silent runner is reclaimed."""
     backend = SimpleNamespace(invoke=_real_sleep_invoke(30))
     result = daemon._invoke_with_heartbeat(
         backend, None, "codex", _invocation(),
@@ -218,7 +217,35 @@ def test_budget_kills_runner_and_reports_124():
         keepalive_path=None,
     )
     assert result.returncode == 124
-    assert "budget" in result.stderr
+    assert "watchdog" in result.stderr
+    assert "no sign of life" in result.stderr
+
+
+def test_file_activity_resets_watchdog(tmp_path):
+    """A long-lived run survives while its runner-owned state keeps moving."""
+    activity = tmp_path / ".hook-state.json"
+
+    def active_invoke(_ctx, _runner, invocation, cfg, *, trace=False):
+        for index in range(4):
+            time.sleep(0.06)
+            activity.write_text(str(index), encoding="utf-8")
+        return _ok_result(invocation)
+
+    result = daemon._invoke_with_heartbeat(
+        SimpleNamespace(invoke=active_invoke),
+        None,
+        "codex",
+        _invocation(),
+        cfg={},
+        trace=False,
+        on_heartbeat=lambda: None,
+        interval=0.025,
+        budget_seconds=0.1,
+        hard_cap_seconds=5,
+        keepalive_path=None,
+        activity_paths=(activity,),
+    )
+    assert result.returncode == 0
 
 
 def test_keepalive_extends_budget(tmp_path):

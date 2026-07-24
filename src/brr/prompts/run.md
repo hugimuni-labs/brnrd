@@ -28,7 +28,7 @@ orient:
 ## Delivery
 
 The bundle's Delivery contract carries the live values — portals, paths,
-budget. The standing rules live with the host: daemon runs → §How the daemon
+resource meter. The standing rules live with the host: daemon runs → §How the daemon
 drives you → delivery portals (`brnrd docs portals` for choreography). One
 contract, one owner — this section deliberately does not restate it.
 

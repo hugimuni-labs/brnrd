@@ -5877,6 +5877,35 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["source"] == "claude /usage PTY + claude result JSON"
 
 
+def test_collect_levels_for_active_codex_never_borrows_newest_rollout(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        daemon.codex_usage,
+        "load_snapshot",
+        lambda _cache: {
+            "source": "codex app-server",
+            "quota": {"summary": "week 40% left"},
+        },
+    )
+
+    def should_not_read_newest(*, thread_id=None):
+        raise AssertionError("uncorrelated rollout must not be read")
+
+    monkeypatch.setattr(daemon.codex_status, "load_levels", should_not_read_newest)
+    levels, slots = daemon._collect_levels(
+        "codex",
+        tmp_path,
+        tmp_path,
+        refresh=False,
+        shared_dir=tmp_path,
+        require_session_match=True,
+    )
+    assert levels["quota"]["summary"] == "week 40% left"
+    assert "context_window" not in levels
+    assert slots == {"quota", "context_window"}
+
+
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     conv = "telegram:chat:42"

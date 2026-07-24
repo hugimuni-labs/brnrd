@@ -947,8 +947,8 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     assert payload["resources"]["runner"]["quality_escalation"]["name"] == (
         "claude-opus"
     )
-    assert payload["budget"]["keepalive"]["status"] == "active"
-    assert payload["budget"]["elapsed_seconds"] >= 0
+    # The daemon watchdog is not part of the resident-facing portal.
+    assert "budget" not in payload
     assert payload["change_token"]
     assert "_path" not in payload["inbound"]["events"][0]
 
@@ -975,7 +975,7 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     )
     payload2 = json.loads(path.read_text(encoding="utf-8"))
     assert payload2["change_token"] == first_token
-    assert payload2["budget"]["elapsed_seconds"] >= payload["budget"]["elapsed_seconds"]
+    assert "budget" not in payload2
 
 
 def test_live_portal_state_flags_stale_card(tmp_path):

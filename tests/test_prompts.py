@@ -701,7 +701,10 @@ class TestPromptBuilding:
             runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
         )
         assert "- Requested Runner: codex" in prompt
-        assert "- Quota: weekly 0% - resets 2026-06-17T01:29Z" in prompt
+        assert (
+            "- Meter: context=unknown; "
+            "quota=weekly 0% - resets 2026-06-17T01:29Z; spend=unknown."
+        ) in prompt
 
     def test_daemon_prompt_surfaces_repo_label(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -822,17 +825,29 @@ class TestPromptBuilding:
         # bullet the bundle renders only when a path exists.
         assert "- outbox:" not in prompt
 
-    def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
+    def test_daemon_prompt_replaces_wall_clock_with_resource_meter(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
             budget_seconds=3600,
             run_id="task-9",
+            runner_resources={
+                "context_window": {
+                    "status": "known", "summary": "70% context left (est)",
+                },
+                "quota": {"status": "known", "summary": "week 42% left"},
+                "spend": {
+                    "status": "known", "summary": "$0.031 this session",
+                },
+            },
         )
-        assert "Budget:" in prompt
-        assert "60m" in prompt
-        # The extension how-to is anchored on the agent's outbox path.
-        assert "/repo/.brr/outbox/evt-1/.keepalive" in prompt
+        assert (
+            "- Meter: context=70% context left (est); "
+            "quota=week 42% left; spend=$0.031 this session."
+        ) in prompt
+        assert "Budget:" not in prompt
+        assert "60m" not in prompt
+        assert "/repo/.brr/outbox/evt-1/.keepalive" not in prompt
 
     def test_daemon_prompt_omits_budget_without_value(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -840,9 +855,8 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
+        assert "- Meter: context=unknown; quota=unknown; spend=unknown." in prompt
         assert "Budget:" not in prompt
-        # daemon-substrate names `.keepalive` as a standing rule; the
-        # absence pin is the live path bullet, rendered only with a budget.
         assert "/repo/.brr/outbox/evt-1/.keepalive" not in prompt
 
     def test_daemon_prompt_includes_driver_manual(self, tmp_path):

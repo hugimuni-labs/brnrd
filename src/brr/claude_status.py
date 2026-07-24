@@ -1,4 +1,4 @@
-"""Claude Code result-JSON level collector for the Claude Shell.
+"""Claude Code live-transcript and result-JSON levels for the Claude Shell.
 
 Claude Code's interactive ``/usage`` panel shows subscription windows, but that
 is a TUI scrape handled separately by :mod:`brr.claude_usage`. Under the
@@ -7,17 +7,17 @@ The result seam that *does* exist head-less is ``--output-format json``: the
 final result object carries the reply text plus session accounting such as
 ``total_cost_usd`` and ``modelUsage[model].contextWindow``.
 
-This module normalizes that result JSON into the same level snapshot shape the
-portal facets already consume. It deliberately collects only the slots proved by
-the head-less result JSON:
+Claude's session transcript is live while ``--print`` is still running. Its
+main-chain assistant rows carry per-request token usage, which is enough to
+estimate the same two levels before the final result exists. This module
+normalizes both sources into the level snapshot shape the portal facets consume:
 
 - ``spend`` — ``total_cost_usd`` (or the sum of per-model ``costUSD``).
 - ``context_window`` — estimated headroom from per-model token counts and
   ``contextWindow``.
 
-Subscription quota / reset windows remain unavailable from Claude result JSON;
-the daemon merges this snapshot with the cached interactive ``/usage`` snapshot
-when both exist.
+Subscription quota / reset windows remain unavailable from either source; the
+daemon merges these levels with the cached interactive ``/usage`` snapshot.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +209,60 @@ _REFUSAL_SUBTYPE = "model_refusal_fallback"
 _CLAUDE_PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 
 
+@dataclass(frozen=True)
+class _ModelMeter:
+    """Pricing and context facts needed to meter one transcript usage row.
+
+    Prices are USD per million tokens. The table mirrors Anthropic's public
+    model/pricing catalogue as of 2026-07-24. Unknown model ids deliberately
+    have no fallback: an omitted meter is honest; charging a new model at an
+    older model's rate is not.
+    """
+
+    context_window: int
+    input_per_mtok: float
+    output_per_mtok: float
+    cache_write_5m_per_mtok: float
+    cache_write_1h_per_mtok: float
+    cache_read_per_mtok: float
+
+
+_HAIKU_45 = _ModelMeter(200_000, 1, 5, 1.25, 2, 0.1)
+_SONNET_5_INTRO = _ModelMeter(1_000_000, 2, 10, 2.5, 4, 0.2)
+_SONNET_5_STANDARD = _ModelMeter(1_000_000, 3, 15, 3.75, 6, 0.3)
+_SONNET_5_INTRO_END = 1_788_220_800  # 2026-09-01T00:00:00Z
+_SONNET_46 = _ModelMeter(1_000_000, 3, 15, 3.75, 6, 0.3)
+_SONNET_4 = _ModelMeter(200_000, 3, 15, 3.75, 6, 0.3)
+_OPUS_CURRENT = _ModelMeter(1_000_000, 5, 25, 6.25, 10, 0.5)
+_OPUS_LEGACY = _ModelMeter(200_000, 15, 75, 18.75, 30, 1.5)
+_FABLE_5 = _ModelMeter(1_000_000, 10, 50, 12.5, 20, 1)
+
+
+def _model_meter(model: Any) -> _ModelMeter | None:
+    slug = str(model or "").strip().lower()
+    if not slug:
+        return None
+    if "fable-5" in slug:
+        return _FABLE_5
+    if "sonnet-5" in slug:
+        return (
+            _SONNET_5_INTRO
+            if time.time() < _SONNET_5_INTRO_END
+            else _SONNET_5_STANDARD
+        )
+    if "sonnet-4-6" in slug:
+        return _SONNET_46
+    if "sonnet-4" in slug or slug == "sonnet":
+        return _SONNET_4
+    if any(f"opus-4-{minor}" in slug for minor in ("5", "6", "7", "8")):
+        return _OPUS_CURRENT
+    if "opus-4-1" in slug or "opus-4-" in slug or slug == "opus":
+        return _OPUS_LEGACY
+    if "haiku-4-5" in slug or slug == "haiku":
+        return _HAIKU_45
+    return None
+
+
 def session_transcript_path(
     session_id: str | None,
     projects_root: str | os.PathLike[str] | None = None,
@@ -229,6 +284,223 @@ def session_transcript_path(
     except OSError:
         return None
     return matches[0] if matches else None
+
+
+def live_session_transcript_path(
+    seed_session_id: str | None,
+    *,
+    cwd: str | os.PathLike[str] | None = None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> Path | None:
+    """Locate the live continuation of a mounted Claude session.
+
+    brr mounts a forged transcript with ``--resume <seed> --fork-session``.
+    Claude reads the seed but writes the live turn under a fresh UUID in the
+    same project directory. The worktree-backed project directory is unique
+    to the run; choosing the largest post-seed transcript there avoids both a
+    newest-global-session guess and the seed itself. ``cwd`` additionally
+    guards every candidate by its own structured rows, so a stale transcript
+    copied into the directory cannot be borrowed.
+
+    Without a seed id or cwd the continuation is not correlatable and the
+    answer is ``None`` — callers render ``unknown``.
+    """
+    if not seed_session_id or cwd is None:
+        return None
+    seed = session_transcript_path(seed_session_id, projects_root)
+    if seed is None:
+        return None
+    try:
+        seed_mtime = seed.stat().st_mtime_ns
+        candidates = [
+            path
+            for path in seed.parent.glob("*.jsonl")
+            if path != seed
+            and path.is_file()
+            and path.stat().st_mtime_ns >= seed_mtime
+            and _transcript_matches_cwd(path, cwd)
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    try:
+        return max(
+            candidates,
+            key=lambda path: (path.stat().st_size, path.stat().st_mtime_ns),
+        )
+    except OSError:
+        return None
+
+
+def _transcript_matches_cwd(path: Path, cwd: str | os.PathLike[str]) -> bool:
+    expected = os.path.realpath(os.fspath(cwd))
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for index, line in enumerate(handle):
+                if index >= 64:
+                    break
+                if '"cwd"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                raw = row.get("cwd") if isinstance(row, dict) else None
+                if isinstance(raw, str) and os.path.realpath(raw) == expected:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _usage_cost(usage: dict[str, Any], meter: _ModelMeter) -> float:
+    input_tokens = _num(usage.get("input_tokens")) or 0.0
+    output_tokens = _num(usage.get("output_tokens")) or 0.0
+    cache_read = _num(usage.get("cache_read_input_tokens")) or 0.0
+    cache_total = _num(usage.get("cache_creation_input_tokens")) or 0.0
+    cache_detail = usage.get("cache_creation")
+    cache_detail = cache_detail if isinstance(cache_detail, dict) else {}
+    cache_1h = _num(cache_detail.get("ephemeral_1h_input_tokens")) or 0.0
+    cache_5m = _num(cache_detail.get("ephemeral_5m_input_tokens")) or 0.0
+    # Older transcript rows expose only the aggregate. The CLI's default cache
+    # lifetime is 5m, so use that rate for the unclassified remainder.
+    cache_5m += max(0.0, cache_total - cache_1h - cache_5m)
+    return (
+        input_tokens * meter.input_per_mtok
+        + output_tokens * meter.output_per_mtok
+        + cache_read * meter.cache_read_per_mtok
+        + cache_5m * meter.cache_write_5m_per_mtok
+        + cache_1h * meter.cache_write_1h_per_mtok
+    ) / 1_000_000
+
+
+def parse_session_transcript(path: Path | None) -> dict[str, Any] | None:
+    """Normalize a live Claude transcript into spend/context levels.
+
+    Repeated rows for one API message are common while a message is updated in
+    place; ``requestId``/message id deduplicates them. Main-chain rows only:
+    subagent usage is a different context window and must never be presented as
+    the resident's. Any unrecognized model makes spend unknown rather than
+    silently undercounting a partial session.
+    """
+    if path is None:
+        return None
+    messages: dict[str, tuple[int, dict[str, Any], str, Any]] = {}
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for index, line in enumerate(handle):
+                if '"usage"' not in line or '"assistant"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if (
+                    not isinstance(row, dict)
+                    or row.get("type") != "assistant"
+                    or row.get("isSidechain") is True
+                ):
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict):
+                    continue
+                usage = message.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                model = str(message.get("model") or "").strip()
+                key = str(
+                    row.get("requestId") or message.get("id") or f"row-{index}"
+                )
+                messages[key] = (index, usage, model, row.get("timestamp"))
+    except OSError:
+        return None
+    if not messages:
+        return None
+
+    total_cost = 0.0
+    spend_known = True
+    token_totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    last_usage: dict[str, Any] | None = None
+    last_meter: _ModelMeter | None = None
+    last_model: str | None = None
+    updated_at: Any = None
+    # A repeated request keeps its dict insertion position, so sort by the
+    # row where its latest form appeared before choosing the current context.
+    for _, usage, model, timestamp in sorted(messages.values()):
+        meter = _model_meter(model)
+        if meter is None:
+            spend_known = False
+        else:
+            total_cost += _usage_cost(usage, meter)
+        for key in token_totals:
+            value = _num(usage.get(key))
+            if value is not None:
+                token_totals[key] += int(value)
+        occupied = sum(
+            _num(usage.get(key)) or 0.0
+            for key in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            )
+        )
+        if occupied > 0:
+            last_usage = usage
+            last_meter = meter
+            last_model = model
+            updated_at = timestamp
+
+    levels: dict[str, Any] = {
+        "source": "claude session transcript",
+        "updated_at": updated_at
+        or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tokens": token_totals,
+    }
+    if spend_known:
+        levels["spend"] = {
+            "summary": f"{_fmt_usd(total_cost)} this session (estimated)",
+            "total_cost_usd": round(total_cost, 6),
+        }
+    if last_usage is not None and last_meter is not None:
+        occupied = sum(
+            _num(last_usage.get(key)) or 0.0
+            for key in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            )
+        )
+        remaining = max(
+            0.0,
+            min(100.0, 100.0 * (1.0 - occupied / last_meter.context_window)),
+        )
+        levels["context_window"] = {
+            "summary": f"{_fmt_pct(remaining)}% context left (est)",
+            "remaining_percentage": remaining,
+            "window_tokens": last_meter.context_window,
+            "occupied_tokens": int(occupied),
+        }
+    if last_model:
+        levels["model_ids"] = [last_model]
+    return levels
+
+
+def load_live_levels(
+    seed_session_id: str | None,
+    *,
+    cwd: str | os.PathLike[str] | None = None,
+    projects_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any] | None:
+    path = live_session_transcript_path(
+        seed_session_id, cwd=cwd, projects_root=projects_root
+    )
+    return parse_session_transcript(path)
 
 
 def session_refusal(

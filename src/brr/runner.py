@@ -493,9 +493,9 @@ class RunnerInvocation:
     cwd: Path | None = None
     response_path: str | None = None
     required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
-    # Wall-clock backstop for ``proc.communicate``. ``None`` falls back to
-    # ``runner_timeout(cfg)``. The daemon passes a generous hard cap here
-    # and enforces the real (extensible) budget from its heartbeat — see
+    # Wall-clock backstop for the subprocess wait. ``None`` falls back to
+    # ``runner_timeout(cfg)``; ``0`` disables the fixed clock for daemon runs,
+    # whose activity watchdog owns reclamation. See
     # ``daemon._invoke_with_heartbeat`` and ``kill_matching``.
     timeout_seconds: int | None = None
     # Extra environment variables for the runner subprocess. Daemon runs
@@ -1989,7 +1989,12 @@ def invoke_runner(
     # (not the substituted argv) is what decides, so a prompt that itself
     # contains "{prompt}" can never flip the decision.
     prompt_stdin = _prompt_stdin(cfg, invocation.prompt, cmd_template)
-    timeout = invocation.timeout_seconds or runner_timeout(cfg)
+    timeout = (
+        invocation.timeout_seconds
+        if invocation.timeout_seconds is not None
+        else runner_timeout(cfg)
+    )
+    wait_timeout = timeout if timeout and timeout > 0 else None
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
     # disable its hooks); layer the run's own env on top.
@@ -2030,7 +2035,7 @@ def invoke_runner(
                     except BrokenPipeError:
                         pass
             try:
-                returncode = proc.wait(timeout=timeout)
+                returncode = proc.wait(timeout=wait_timeout)
             except subprocess.TimeoutExpired:
                 _kill_procs([proc])
                 proc.wait()

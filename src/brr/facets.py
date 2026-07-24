@@ -15,9 +15,9 @@ A slot earns facet status iff it is one of:
 
 - a **level** — a wall the run approaches, with a distance the resident plans
   against: subscription ``quota``, session ``spend``, ``context_window``
-  headroom. (Wall-clock ``budget`` is a level too, but it has a proven local
-  source and rides its own top-level ``budget`` block, so it is not repeated
-  here.)
+  headroom. Wall clock is deliberately not a level: the daemon owns an
+  inactivity watchdog, while the resident plans against these scarce
+  resources.
 - a **state** — actionable operational posture that changes a decision without
   being a wall: ``coexisting_runs`` (sibling presence), ``remote_scm`` (PR /
   push posture).
@@ -35,10 +35,11 @@ different things the resident must not conflate:
   (coexisting runs while brr stays single-flight per dominion).
 
 The level collectors are **per-Shell** (§8): Codex exposes live quota/context
-through session-rollout ``token_count`` events, while Claude exposes terminal
-spend/context through result JSON and cached subscription quota through the
-interactive ``/usage`` PTY collector. A Shell with no collector for a slot reads
-``unimplemented``. That asymmetry is the design, surfaced honestly, not a bug.
+through session-rollout ``token_count`` events, while Claude exposes live
+spend/context through its correlated session transcript (with final result JSON
+as the terminal authority) and cached subscription quota through the
+interactive ``/usage`` PTY collector. A Shell with no collector for a slot
+reads ``unimplemented``. That asymmetry is the design, surfaced honestly.
 """
 
 from __future__ import annotations

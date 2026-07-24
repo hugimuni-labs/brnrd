@@ -4,7 +4,7 @@ How an average daemon run unfolds under the brnrd daemon, and the
 control-file protocol — the **portals** — you steer it through. This is
 the *manual* — read it when a run's shape is unfamiliar or you need to
 look up a control file. It is **inspected, not injected**: a wake carries
-the live per-run *values* (paths, ids, budget) in its Run Context Bundle
+the live per-run *values* (paths, ids, resource meter) in its Run Context Bundle
 and a one-line pointer here; the choreography and the cheatsheet live in
 this one place so a wake doesn't pay for them in tokens every time.
 
@@ -50,13 +50,12 @@ other so they don't drift.
 | `<name>.md` with `stop: <run-or-event-id>` frontmatter | concurrent ✕ worker stop | Stop a concurrent child **this run** dispatched, addressed by its spawn event id or child run id (wyrd §3: a run controls only its own dispatchees — the daemon enforces the ownership check and does the kill; nothing depends on the child reading anything). A child still queued is cancelled before it ever starts; a running child's runner process is killed, its partial branch work is salvaged, and it finalizes as `stopped` — the completion note (`status=stopped`) returns to this run as a pending event. Optional `reason:` (or the body) is recorded on the child. A refused stop (unknown id, not your dispatchee, already finished) lands in `portal-state.json` → `notices`. |
 | `<name>.md` with `to: <run-or-event-id>` frontmatter | concurrent ▸ worker steer | Message a concurrent child **this run** dispatched (same ownership check as `stop:`). The body lands as a `dispatch_message` event that **only the addressed worker's** `inbox.json` / portal-state surfaces — it never dispatches a run of its own, other runs never see it, and whatever the child has not folded in is retired when the child ends. A steer, not a new contract: the child folds it into its existing work and should not `event:`-address it. Workers are thread-isolated (they get their contract and these edge messages, not the user thread's recent turns or pending events), so this verb is the *only* way words reach a running worker. Refusals land in `notices`. |
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
-| `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `.mood` | slot control | **Your own resident-authored mood** — an almost-free meta-channel from resident to user (#566 layer 2). First line only: an emote name or a free glyph string. The hook boundary re-reads it fresh and folds it into the live delta every boundary — a bar segment mid-run, a plain line at seed/stop. It **displays** every boundary and **asks** only on an edge: when a tool in the batch just came back wrong, the chip renders as `mood fo.cus ← Bash ✗`, setting the face you claimed beside the thing that broke. Transition-stamped, so a run debugging a red test is asked once, not at every pass. A control file, never delivered. |
 | `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
-| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, the context/quota/spend resource meter, worker headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
 ### `notices` — the directives brnrd refused
 
@@ -288,8 +287,7 @@ Runner-owned linger is a named contract, not an improvised while-loop:
    it is the satisfying signal, so the eventual final stdout can stay
    empty (an empty closeout after an outbox delivery is correct, not a
    failure).
-2. **Hold the slot honestly.** Write `.keepalive` for the linger horizon
-   and set `.card` to say you're lingering (e.g. "lingering for
+2. **Name the wait honestly.** Set `.card` to say you're lingering (e.g. "lingering for
    follow-ups; next check in ~2m").
 3. **Back off exponentially.** Start around 30s, double per quiet poll,
    cap at ~240s — inside the ~5-minute provider cache window, so each
@@ -385,7 +383,7 @@ it is rare and true.
 ## The choreography — an average daemon run
 
 1. **Receive.** A wake lands with a Run Context Bundle: the lead event, the
-   delivery contract (paths, budget), recent conversation, the original
+   delivery contract (paths, resource meter), recent conversation, the original
    event body. Read it once and orient from there.
 
 2. **Orient.** Read `kb/index.md` and the injected recent-log tail; pull
@@ -418,8 +416,7 @@ it is rare and true.
    pending-events view when you only need that list. Give every pending event
    a disposition: fold small/related work here; spawn bounded independent
    work when capacity and quota are healthy; defer only with an explicit
-   resource, priority, dependency, or authority reason. Bound long commands; write
-   `.keepalive` if the work will outlast your budget.
+   resource, priority, dependency, or authority reason. Bound long commands.
 
 5. **Deliver.** Leave a satisfying operational signal for this situation.
    If the signal is meant to communicate, send it through stdout or an
@@ -450,7 +447,7 @@ it is rare and true.
 
 ## The robustness ladder
 
-Live state is **injected** (the medium, the budget, this run's paths and
+Live state is **injected** (the medium, the resource meter, this run's paths and
 ids) — you can't miss it. The manual is **inspected** (`brnrd docs
 portals`) — one glance away, not memorized, not re-paid every wake. A
 failure the environment makes impossible (a lint, a test, a baked-in
