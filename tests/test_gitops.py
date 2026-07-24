@@ -10,6 +10,7 @@ from brr.gitops import (
     ensure_run_id_hook,
     fast_forward_branch,
     is_tracked,
+    main_worktree_root,
     shared_brr_dir,
 )
 from brr.worktree import (
@@ -1269,3 +1270,151 @@ def test_hook_residual_colon_qualifier_passes_knowingly(tmp_path, monkeypatch):
 
     r = _run_hook(hook_path, "Closes #413: partially", tmp_path, cwd=repo)
     assert r.returncode == 0, "residual is knowingly accepted — see #657"
+
+
+# ── main_worktree_root ───────────────────────────────────────────────
+#
+# Three cases, discriminated by whether `git worktree list --porcelain`'s
+# head entry names a *working tree*. Driven for #663 against git 2.43.
+
+
+def _separate_git_dir_repo(tmp_path) -> tuple[Path, Path]:
+    """``git init --separate-git-dir``. Returns (checkout, gitdir).
+
+    The checkout's ``.git`` is a *file* pointing at the git dir; the
+    reverse edge does not exist, which is the whole subject of #663.
+    """
+    checkout = tmp_path / "checkout"
+    gitdir = tmp_path / "elsewhere" / "gitdir"
+    gitdir.parent.mkdir(parents=True)
+    checkout.mkdir()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", f"--separate-git-dir={gitdir}",
+         str(checkout)],
+        check=True, capture_output=True,
+    )
+    for key, value in (("user.email", "test@example.com"), ("user.name", "T")):
+        subprocess.run(
+            ["git", "-C", str(checkout), "config", key, value],
+            check=True, capture_output=True,
+        )
+    subprocess.run(
+        ["git", "-C", str(checkout), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+    return checkout, gitdir
+
+
+def test_main_worktree_root_names_the_checkout_under_separate_git_dir(tmp_path):
+    """Case 2: the porcelain head is the git dir, not a checkout.
+
+    ``git worktree list --porcelain`` names the main working tree *as git
+    models it*. Under ``--separate-git-dir`` that model is the git dir, so
+    reading the head entry verbatim hands out a path that is not a checkout
+    at all — the bug #663 was filed for. ``repo_root`` is itself the main
+    working tree here, so the answer is recoverable from it directly.
+    """
+    checkout, gitdir = _separate_git_dir_repo(tmp_path)
+
+    # The trap, pinned: what git actually prints in this configuration.
+    porcelain = subprocess.run(
+        ["git", "-C", str(checkout), "worktree", "list", "--porcelain"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert porcelain.splitlines()[0] == f"worktree {gitdir}"
+
+    assert main_worktree_root(checkout) == checkout
+
+
+def test_main_worktree_root_is_none_from_a_worktree_of_a_separate_git_dir_repo(
+    tmp_path,
+):
+    """Case 3: the main checkout's path is genuinely unrecorded.
+
+    Under ``--separate-git-dir`` git writes the main working tree's path
+    **nowhere** inside the git dir: ``core.worktree`` is unset, no reverse
+    pointer file exists, and ``<checkout>/.git`` is a one-way edge *into*
+    the git dir. From a linked worktree there is therefore no question with
+    the right answer, and the honest return is ``None`` rather than the git
+    dir (which is what shipped, and which reads to the caller as a real
+    checkout).
+    """
+    checkout, gitdir = _separate_git_dir_repo(tmp_path)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(checkout), "worktree", "add", "-q", "-b", "wt",
+         str(linked)],
+        check=True, capture_output=True,
+    )
+
+    # The evidence for "unrecorded", pinned so a future git that starts
+    # recording it turns this red instead of leaving None as folklore.
+    assert not any(
+        gitdir.joinpath(*parts).exists()
+        for parts in (("worktree",), ("main-worktree",))
+    )
+    assert subprocess.run(
+        ["git", f"--git-dir={gitdir}", "config", "core.worktree"],
+        capture_output=True,
+    ).returncode != 0
+    assert str(checkout) not in _grep_r(gitdir)
+
+    assert main_worktree_root(linked) is None
+
+
+def _grep_r(root: Path) -> str:
+    """Concatenate every readable regular file under *root*."""
+    chunks = []
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            try:
+                chunks.append(path.read_bytes().decode("utf-8", "replace"))
+            except OSError:  # pragma: no cover - unreadable in a temp tree
+                pass
+    return "\n".join(chunks)
+
+
+def test_main_worktree_root_returns_an_ordinary_repo_itself(tmp_path):
+    """Case 1, no linked worktrees: today's behaviour, not to be regressed."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+
+    assert main_worktree_root(repo) == repo
+
+
+def test_main_worktree_root_resolves_a_linked_worktree_of_an_ordinary_repo(
+    tmp_path,
+):
+    """Case 1, from a linked worktree: the reason the function exists.
+
+    This is the path ``account._connected_account_id`` depends on to find
+    the registered main checkout from a run's worktree (#654). The
+    ``--separate-git-dir`` handling must not cost it.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "wt",
+         str(linked)],
+        check=True, capture_output=True,
+    )
+
+    assert main_worktree_root(linked) == repo
+    assert main_worktree_root(repo) == repo
+
+
+def test_main_worktree_root_is_none_outside_a_git_checkout(tmp_path):
+    """Not a repo at all — nothing to name."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    assert main_worktree_root(plain) is None

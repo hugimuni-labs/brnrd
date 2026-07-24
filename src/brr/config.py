@@ -194,7 +194,13 @@ def security_config_path(
     the same fact privately from ``shared_brr_dir(...).parent`` (#533),
     which is a different question with a different answer — see
     ``gitops.main_worktree_root``'s docstring for why the two must not
-    share a derivation. Cache keys are therefore the caller's raw path;
+    share a derivation. That resolution is **not total**: under
+    ``--separate-git-dir`` git records the main checkout's path nowhere,
+    so from a linked worktree of such a repo it returns ``None`` and the
+    account home is unreachable from here — the security domain then
+    resolves to a project home and its keys come back unset (#663, and
+    ``test_security_config_from_a_worktree_of_a_separate_git_dir_repo``
+    pins it). Cache keys are therefore the caller's raw path;
     ``write_security_config`` clears the whole cache rather than trying to
     match on one, so nothing here depends on the key domain again.
     """
