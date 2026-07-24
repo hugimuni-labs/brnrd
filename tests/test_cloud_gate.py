@@ -2431,3 +2431,222 @@ def test_daemon_mood_payload_reports_board_state(tmp_path):
     busy = cloud._daemon_mood_payload(brr_dir)
     assert busy["state"] == "running"
     assert busy["name"] == emotes.for_telemetry("running").name
+
+
+# --- #417: the off switch SECURITY.md promises ---------------------------
+#
+# `SECURITY.md` tells a reader that `publish.layers` "opts the mirror down to
+# fewer layers (or `none`)". Until this set landed, `none` bounded exactly one
+# of the seven publish lanes: `_publish_corpus` consulted the config and the
+# other six never did. A security document promising an off switch the code
+# does not implement is the defect these tests pin.
+
+
+def _capture_publish_requests(monkeypatch):
+    """Capture every `_request` the publish path makes, answering nothing."""
+    seen: list[tuple[str, str]] = []
+
+    def _fake(base_url, method, path, *, token=None, json=None, params=None, timeout=None):
+        seen.append((method, path))
+        return {}
+
+    monkeypatch.setattr(cloud, "_request", _fake)
+    return seen
+
+
+def _publishable_daemon(tmp_path, monkeypatch, cfg=None):
+    """A `.brr` that would publish all seven lanes, with `cfg` written out."""
+    from brr import config as conf
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": "tok", "repo_id": "p", "since": 0},
+    )
+    conf.write_config(tmp_path, dict(cfg or {}))
+    # The corpus lane skips the network when it cannot resolve an account and
+    # when the fingerprint is unchanged; neither is the subject here, so give
+    # it one file and a fresh module cache each time.
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
+    cloud._corpus_publish_hash.clear()
+
+    class _F:
+        def __init__(self, layer, path):
+            self.layer = layer
+            self.path = path
+            self.abspath = tmp_path / "corpus.md"
+
+    (tmp_path / "corpus.md").write_text("# mirrored page\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cloud,
+        "_corpus_resolve",
+        lambda _brr_dir: ([_F("authored", "surface/index.md")], tmp_path / "nokb"),
+    )
+    return brr_dir, inbox_dir
+
+
+# Named here as a literal rather than read off the module, so this file pins
+# the expected lane set independently of the code under test — and so the
+# headline test below still *collects* against a tree that has no registry yet.
+_LANE_NAMES = (
+    "runners",
+    "live_runs",
+    "activity",
+    "corpus",
+    "quota",
+    "pr_review_queue",
+    "run_ledger",
+)
+
+_ALL_PUBLISH_PATHS = {
+    "/v1/daemons/runners",
+    "/v1/daemons/live-runs",
+    "/v1/daemons/activity",
+    "/v1/daemons/surface",
+    "/v1/daemons/quota",
+    "/v1/daemons/pr-review-queue",
+    "/v1/daemons/run-ledger",
+}
+
+
+def test_publish_layers_none_silences_every_lane(tmp_path, monkeypatch):
+    """#417: `publish.layers=none` must stop *all seven* publish lanes.
+
+    Red against main for the stated reason: only `_publish_corpus` read the
+    config, so six endpoints (`runners`, `live-runs`, `activity`, `quota`,
+    `pr-review-queue`, `run-ledger`) kept PUTting a daemon's derived content
+    to brnrd.dev after the operator had switched the mirror off. `SECURITY.md`
+    already promises otherwise, so this is repair, not a new product knob.
+    """
+    brr_dir, inbox_dir = _publishable_daemon(
+        tmp_path, monkeypatch, {"publish.layers": "none"}
+    )
+    seen = _capture_publish_requests(monkeypatch)
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    assert seen == [], f"publish.layers=none still shipped: {seen}"
+
+
+def test_publish_layers_absent_still_publishes_every_lane(tmp_path, monkeypatch):
+    """The default is untouched by #417: absent config mirrors everything.
+
+    Guards the fix against over-reach — flipping the mirror to opt-in is a
+    product call (#417's own "make it opt-in" half) and is deliberately not
+    taken here. An absent `publish.layers` must keep publishing all seven.
+    """
+    brr_dir, inbox_dir = _publishable_daemon(tmp_path, monkeypatch, {})
+    seen = _capture_publish_requests(monkeypatch)
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    assert {path for _method, path in seen} == _ALL_PUBLISH_PATHS
+
+
+@pytest.mark.parametrize("lane", _LANE_NAMES)
+def test_each_lane_honours_none_when_called_directly(tmp_path, monkeypatch, lane):
+    """One test per lane, and the gate sits on the lane rather than the tick.
+
+    A publisher reached from anywhere other than `_dashboard_publish_tick`
+    must still refuse to ship — the gate is on each lane's own door, so a
+    future caller cannot route around it by not using the tick.
+    """
+    brr_dir, inbox_dir = _publishable_daemon(
+        tmp_path, monkeypatch, {"publish.layers": "none"}
+    )
+    seen = _capture_publish_requests(monkeypatch)
+    state = cloud._load_state(brr_dir)
+
+    cloud._PUBLISH_LANES[lane](brr_dir, inbox_dir, state)
+
+    assert seen == [], f"lane {lane!r} shipped under publish.layers=none: {seen}"
+
+
+def test_every_publisher_is_a_registered_gated_lane():
+    """Structural: a lane added later cannot escape the gate silently.
+
+    `_publish_lane` is the only way a publisher gets into the tick's
+    registry, and the same decorator that registers it is the one that
+    gates it — you cannot have one without the other. This test closes the
+    remaining hole: a `_publish_*` function that skips the decorator
+    entirely and is called from somewhere else.
+    """
+    helpers = {"_publish_config", "_publish_selection", "_publish_lane"}
+    publishers = {
+        name
+        for name in dir(cloud)
+        if name.startswith("_publish_") and callable(getattr(cloud, name))
+    } - helpers
+    registered = {fn.__name__ for fn in cloud._PUBLISH_LANES.values()}
+    assert publishers == registered, (
+        "every _publish_* function must be registered via @_publish_lane; "
+        f"unregistered: {sorted(publishers - registered)}"
+    )
+    # And the tick must drive every registered lane — a registered-but-unordered
+    # lane would fail closed (never publish), which is safe but still a bug.
+    assert set(cloud._PUBLISH_TICK_ORDER) == set(cloud._PUBLISH_LANES) == set(_LANE_NAMES)
+    # The corpus slice vocabulary is duplicated in `cloud` (account is a
+    # deferred import there); pin the two together so a new corpus layer
+    # cannot ship unnamed by the gate.
+    from brr import account as account_mod
+
+    assert cloud._PUBLISH_CORPUS_SLICES == account_mod.CORPUS_LAYERS
+
+
+def test_publish_layers_subset_bounds_the_other_lanes_too(tmp_path, monkeypatch):
+    """`publish.layers` names the whole publish surface, not just the corpus.
+
+    A reader of `SECURITY.md` who narrows the mirror to `authored` is told
+    the mirror is now that layer. Before #417 they still shipped six other
+    lanes; naming a subset now means the subset.
+    """
+    brr_dir, inbox_dir = _publishable_daemon(
+        tmp_path, monkeypatch, {"publish.layers": "authored"}
+    )
+    seen = _capture_publish_requests(monkeypatch)
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    assert {path for _method, path in seen} == {"/v1/daemons/surface"}
+
+
+def test_publish_layers_unknown_token_fails_closed(tmp_path, monkeypatch, capsys):
+    """A typo must not read as "mirror everything", and must not be silent.
+
+    `publish.layers=knowlege` used to leave the corpus empty and the other
+    six lanes wide open — the misconfiguration was invisible in both
+    directions. It now fails closed *and* names the token it did not
+    recognise.
+    """
+    brr_dir, inbox_dir = _publishable_daemon(
+        tmp_path, monkeypatch, {"publish.layers": "knowlege"}
+    )
+    seen = _capture_publish_requests(monkeypatch)
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    assert seen == []
+    assert "knowlege" in capsys.readouterr().out
+
+
+def test_publish_scopes_resolution():
+    """The one parser both the lane gate and the corpus selection read."""
+    assert cloud._resolve_publish_scopes({}) == (
+        frozenset(cloud._PUBLISH_TICK_ORDER), frozenset(cloud._PUBLISH_CORPUS_SLICES),
+    )
+    assert cloud._resolve_publish_scopes({"publish.layers": "none"}) == (
+        frozenset(), frozenset(),
+    )
+    lanes, slices = cloud._resolve_publish_scopes({"publish.layers": "authored,quota"})
+    assert lanes == {"corpus", "quota"} and slices == {"authored"}
+    # `corpus` names the lane as a whole — all three slices.
+    lanes, slices = cloud._resolve_publish_scopes({"publish.layers": "corpus"})
+    assert lanes == {"corpus"} and slices == frozenset(cloud._PUBLISH_CORPUS_SLICES)
+    # Hyphen and underscore spellings of a lane name both resolve.
+    lanes, _ = cloud._resolve_publish_scopes({"publish.layers": "pr-review-queue"})
+    assert lanes == {"pr_review_queue"}
+    # `none` mixed with real scopes wins: the off switch is not overridable.
+    lanes, slices = cloud._resolve_publish_scopes({"publish.layers": "runs,none"})
+    assert lanes == frozenset() and slices == frozenset()
