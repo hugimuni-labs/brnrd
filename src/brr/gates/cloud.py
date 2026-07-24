@@ -1170,7 +1170,7 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
 # The unified corpus (authored surface + home knowledge + complete run nodes) is
 # published on *change*, not every tick: the old per-tick full-text PUT suited a
 # handful of small authored pages, but the knowledge layer is ~150 files and
-# megabytes (an 890KB log among them) — re-sending that every 25s is waste and,
+# megabytes (an 890KB log among them) — re-sending that every 3s is waste and,
 # on a slow link, a staleness tax. Each mirrored file is also capped so one huge
 # page cannot bloat the payload; a capped file still appears in the listing,
 # marked ``truncated`` rather than silently dropped.
