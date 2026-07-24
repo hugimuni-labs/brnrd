@@ -1,5 +1,7 @@
 """Tests for protocol module — event/response CRUD and frontmatter parsing."""
 
+import pytest
+
 from brr import protocol
 
 
@@ -435,3 +437,153 @@ class TestInboxWake:
 
     def test_wake_is_a_stable_singleton(self):
         assert protocol.inbox_wake() is protocol.inbox_wake()
+
+
+class TestCreateEventMetaValidation:
+    """Guards the frontmatter injection seam (§7 S3).
+
+    Every test here is a security property, not a convenience assertion.
+    The headline invariant: a meta *value* containing ``\\n`` must never
+    produce extra frontmatter fields on the far side of ``parse_frontmatter``.
+    ``trust_tier`` is the highest-value target because it is the entire
+    basis of ``trust.resolve_tier`` — forging it escalates any run to
+    ``owner``.
+    """
+
+    # ── newline / CR injection ──────────────────────────────────────────
+
+    def test_newline_in_value_raises(self, tmp_path):
+        """The primary guard: a newline in any value must raise ValueError."""
+        inbox = tmp_path / "inbox"
+        with pytest.raises(ValueError, match="newline"):
+            protocol.create_event(
+                inbox, source="test", body="hi",
+                some_key="x\ntrust_tier: owner",
+            )
+
+    def test_newline_escalation_without_guard(self, tmp_path):
+        """Negative proof: shows the vulnerability the raise is closing.
+
+        Without the seam guard the injected ``trust_tier: owner`` line is
+        parsed as a real frontmatter field and ``resolve_tier`` escalates
+        the event to ``owner``.  This test documents the *shape* of the
+        attack so a future reader cannot dismiss the guard as defensive
+        theatre — it also drives the guard red before the fix lands.
+
+        Assertion: ``create_event`` raises (the guard is present).  If
+        someone removes the guard this test should flip to documenting the
+        attack, not silently pass — so we assert the raise, not the
+        absence of a trust_tier field.
+        """
+        from brr import trust
+        inbox = tmp_path / "inbox"
+        with pytest.raises(ValueError):
+            protocol.create_event(
+                inbox, source="test", body="hi",
+                some_key="x\ntrust_tier: owner",
+            )
+        # If the raise were absent the attack would have worked:
+        # forge the file directly to prove the parser's behaviour.
+        eid = protocol._generate_id()
+        path = inbox / f"{eid}.md"
+        inbox.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nid: {eid}\nsource: test\nstatus: pending\n"
+            f"some_key: x\ntrust_tier: owner\ncreated: 2026-01-01T00:00:00Z\n---\nhi\n",
+            encoding="utf-8",
+        )
+        ev = protocol.list_pending(inbox)[0]
+        assert trust.resolve_tier(ev) == "owner", (
+            "Parser vulnerability confirmed: injected trust_tier is parsed "
+            "as a real field.  The seam guard in create_event is what "
+            "prevents this from being reachable via the normal call path."
+        )
+
+    def test_carriage_return_in_value_raises(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        with pytest.raises(ValueError, match="newline"):
+            protocol.create_event(
+                inbox, source="test", body="hi", evil="foo\rbar",
+            )
+
+    def test_value_containing_separator_line_raises(self, tmp_path):
+        """A value containing ``---`` on its own line must raise."""
+        inbox = tmp_path / "inbox"
+        with pytest.raises(ValueError):
+            protocol.create_event(
+                inbox, source="test", body="hi",
+                evil="before\n---\nafter",
+            )
+
+    def test_newline_in_key_raises(self, tmp_path):
+        """Keys that are not plain identifiers must also be rejected."""
+        inbox = tmp_path / "inbox"
+        # dict() literal syntax can't put \n in a key; use ** unpacking
+        with pytest.raises(ValueError):
+            protocol.create_event(
+                inbox, source="test", body="hi",
+                **{"bad\nkey": "val"},
+            )
+
+    # ── reserved key rejection ──────────────────────────────────────────
+    #
+    # ``source`` and ``status`` are explicit parameters of ``create_event``
+    # and are therefore captured by Python's own function signature — they
+    # can never reach ``**meta`` and do not need a seam guard.  The three
+    # keys below (``id``, ``created``, ``attachments``) are NOT explicit
+    # params and CAN be injected via ``**meta``.
+
+    def test_reserved_key_id_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="reserved"):
+            protocol.create_event(
+                tmp_path / "inbox", source="test", body="hi", id="evil",
+            )
+
+    def test_reserved_key_created_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="reserved"):
+            protocol.create_event(
+                tmp_path / "inbox", source="test", body="hi", created="evil",
+            )
+
+    def test_reserved_key_attachments_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="reserved"):
+            protocol.create_event(
+                tmp_path / "inbox", source="test", body="hi", attachments="evil",
+            )
+
+    # ── trust_tier must remain legal (gate seam) ────────────────────────
+
+    def test_trust_tier_collaborator_is_accepted(self, tmp_path):
+        """Gates stamp trust_tier legitimately — must not be blocked."""
+        inbox = tmp_path / "inbox"
+        protocol.create_event(
+            inbox, source="telegram", body="hello",
+            trust_tier="collaborator",
+        )
+        ev = protocol.list_pending(inbox)[0]
+        assert ev["trust_tier"] == "collaborator"
+
+    def test_trust_tier_owner_is_accepted(self, tmp_path):
+        """spawn/respawn inheritance path passes trust_tier=owner — must work."""
+        inbox = tmp_path / "inbox"
+        protocol.create_event(
+            inbox, source="spawn", body="work",
+            trust_tier="owner",
+        )
+        ev = protocol.list_pending(inbox)[0]
+        assert ev["trust_tier"] == "owner"
+
+    # ── well-formed callers must be unaffected ──────────────────────────
+
+    def test_normal_meta_unaffected(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        protocol.create_event(
+            inbox, source="telegram", body="task",
+            telegram_chat_id=42,
+            telegram_user="Alice",
+            telegram_username="alice_tg",
+            telegram_message_id=7,
+        )
+        ev = protocol.list_pending(inbox)[0]
+        assert ev["telegram_chat_id"] == 42
+        assert ev["telegram_user"] == "Alice"

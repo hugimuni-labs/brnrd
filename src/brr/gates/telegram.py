@@ -29,6 +29,20 @@ _MAX_TG_LEN = 3900
 _POLL_TIMEOUT = 30
 _DELIVERY_INTERVAL = 1.0
 
+
+def _sanitize_meta_str(value: str) -> str:
+    """Flatten newlines in a sender-controlled string before it enters frontmatter.
+
+    Telegram display names and usernames are sender-controlled and may
+    contain embedded newlines that would otherwise forge extra frontmatter
+    fields via ``create_event``'s meta injection path (#413 §7 S3).
+    Replace ``\\n`` and ``\\r`` with a space.  This must happen at the
+    gate, before the seam call, so ``protocol.create_event``'s ValueError
+    guard is never reached from live traffic — a raise inside the poll
+    loop stalls offset advancement and creates an ingest DoS.
+    """
+    return value.replace("\r", " ").replace("\n", " ")
+
 # Telegram long-polling can hold one HTTP request open for up to
 # _POLL_TIMEOUT seconds. Keep it on a separate session from outbound
 # sends/edits so a progress card or folded-in reply never queues behind
@@ -558,9 +572,12 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             attachment_files=attachment_files or None,
             telegram_chat_id=chat_id,
             telegram_topic_id=topic_id or "",
-            telegram_user=user,
+            # Sanitize sender-controlled strings: display name and username
+            # are attacker-reachable and may contain embedded newlines that
+            # would forge extra frontmatter fields (#413 §7 S3).
+            telegram_user=_sanitize_meta_str(user),
             telegram_user_id=user_id if user_id is not None else "",
-            telegram_username=username,
+            telegram_username=_sanitize_meta_str(username),
             telegram_message_id=message_id if message_id is not None else "",
             telegram_sent_at=sent_at if sent_at is not None else "",
             trust_tier=sender_tier,
