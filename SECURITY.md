@@ -103,19 +103,19 @@ never escalate the environment a higher tier configured.
   delivered; never-answered bodies are nulled after 14 days and event rows pruned
   after 90 — the queue is a relay, not an archive), and durable routing metadata
   (sender id/username, chat id, repo name, comment URL). If you run
-  `brnrd account connect`, dashboard publishing also mirrors a **bounded render
-  cache** of the account corpus to brnrd.dev: the authored work surface, knowledge
-  pages, and run nodes from the last 14 days — run nodes include full run bodies
-  and message text for that window, so "derived summaries only" would be an
-  understatement; the repo, dominion, and knowledge repos remain the durable
-  copies. Bounds are yours to tighten: `publish.runs_window_days` resizes the run
-  window and `publish.layers` opts the mirror down to fewer layers (or `none`).
-  Task-body excerpts in the activity lane are published only for threads the
-  backend already carries (cloud-gated); locally-gated traffic reports status
-  metadata without text. Disconnecting your last repo purges the mirror. Your
-  source code does not leave the machine. Diffense review packs transit brnrd.dev
-  in memory only, TTL-bounded, behind an unguessable token, and are never
-  persisted.
+  `brnrd account connect`, **dashboard publishing** additionally mirrors seven
+  lanes of repo-derived content to brnrd.dev on a ~25-second cadence. That is the
+  largest outbound surface brnrd has, so it gets its own section below rather than
+  a clause here. **brnrd never transmits your repository or its diffs** — no
+  publisher reads your working tree. But the corpus lane mirrors agent-written
+  pages *verbatim*, and those pages routinely quote the code the agent was working
+  on: measured against a real account, the mirrored run and knowledge pages
+  contained fenced `python`, `diff`, `bash`, `toml` and `yaml` blocks, including
+  unified-diff fragments of repository test files. Treat "we don't ship your
+  source" as a statement about the mechanism, not a guarantee about the content.
+  Read the table below before deciding whether that distinction is the one you
+  care about. Diffense review packs transit brnrd.dev in memory only, TTL-bounded,
+  behind an unguessable token, and are never persisted.
 - **Credential scope.** On the managed path the GitHub token handed to the agent
   is a repository-scoped App installation token (1-hour lifetime). Self-hosted
   setups fall back to whatever you configured — typically a PAT or
@@ -124,6 +124,123 @@ never escalate the environment a higher tier configured.
   ([#415](https://github.com/hugimuni-labs/brnrd/issues/415)). The `solitary` environment
   injects no GitHub credential at all. Gate and daemon tokens are stored 0600
   under `.brr/gates/`.
+
+## What dashboard publishing mirrors
+
+This section applies **only** if you ran `brnrd account connect`. Without it, no
+lane below exists. The tables were produced by driving each publisher and
+capturing the payload, not by reading the code — where a claim could not be
+driven, it says so.
+
+The daemon PUTs seven snapshots to brnrd.dev roughly every 25 seconds. Each is a
+**render cache**, replaced wholesale on every publish: the repo, dominion, and
+knowledge repos remain the durable copies, and disconnecting your last repo
+deletes the mirror server-side.
+
+| Lane | Endpoint | What it carries | Free text? |
+|---|---|---|---|
+| Corpus | `PUT /v1/daemons/surface` | Whole Markdown pages, one record each (`path`, `layer`, `markdown`, `truncated`). Three layers: **authored** (your work surface and plan pages), **knowledge** (every kb page), **runs** (per-run `body.md`, `state.md`, and `messages/*.md` — the full text of what was said to the agent and what it replied). Files over 256 KB are cut and flagged `truncated`. | **Yes — whole pages, in full, including any code they quote.** The single largest lane. |
+| Run ledger | `PUT /v1/daemons/run-ledger` | Up to 256 closed-run receipt rows: run/event ids, timestamps, wall-clock, Shell+Core, token counts, quota deltas, cost attribution, plus `external_refs` — commit shas and **subjects**, branch names, PR numbers, report **file paths on your machine**, and a free-prose `summary` the agent wrote about the run. | **Yes** — `summary`, commit subjects, branch names, local paths. |
+| Live runs | `PUT /v1/daemons/live-runs` | One row per running thought: ids, stream, repo label, timestamps, parent/subspawn shape, Shell+Core, phase, relic counts, mood handle, and **`card_text`** — the live progress-card note the agent is writing right now. | **Yes** — `card_text`, `name`, `label`. |
+| Activity | `PUT /v1/daemons/activity` | Pending/running tasks, scheduled entries, and parked respawns: id, kind, source, conversation key, status, phase, branch, PR number, timestamps, and `summary`. | **Conditionally** — see the cloud-gate rule below. |
+| Quota | `PUT /v1/daemons/quota` | Per-Shell quota windows and trailing burn; **real billing figures** (spent/limit amounts and currency) and reset labels that carry **your timezone**; plus gate health rows carrying `last_error` — the **raw error string** from the last failed gate poll, unfiltered. | **Yes** — `last_error`, spend summaries. |
+| PR review queue | `PUT /v1/daemons/pr-review-queue` | Open PRs across the repos in your account: number, **title**, URL, repo label, author login, created-at, draft flag. Collected by shelling out to `gh pr list`. | **Yes** — PR titles. |
+| Runners | `PUT /v1/daemons/runners` | Your locally-discovered Shell+Core catalog: profile names, models, provider, class, cost rank, availability, staleness, plus which environments are usable and why not. No repo content — but it is a **fingerprint of your machine's tooling**: which agent CLIs are installed and authenticated, and whether Docker is present. | No. |
+
+**The activity lane's cloud-gate rule holds — and covers only that lane.** Driven
+with two records side by side: a task from a locally-gated thread
+(`source: telegram`) published its bare event id, and a task from a thread the
+backend already carries (`source: cloud`) published a 140-character body excerpt.
+Self-scheduled entries publish the entry id, never the scheduled task text.
+
+**The live-runs lane applies no such rule.** `card_text`, `name` and `label` are
+published for every active run regardless of which gate it came from, so a
+Telegram- or GitHub-triggered run's progress note is mirrored even though the same
+run's activity-lane `summary` is withheld. If you rely on the cloud-gate bound,
+rely on it for the activity lane only.
+
+**Two lanes are bidirectional.** The `runners` and `live-runs` responses carry
+dashboard-issued wake requests and run-stop requests back to your daemon. They
+are how the dashboard's "wake this runner" and "stop this run" controls reach
+you, not just how it displays them.
+
+**`.mood` narration stays local.** Only the first line — the emote handle — rides
+the presence entry. Anything you write below it is never read by the publisher.
+
+### Bounds you control
+
+`publish.layers` in `.brr/config` names **what may be mirrored at all**. Absent, it
+mirrors everything. Otherwise, only what you name ships, and anything you do not
+name is off:
+
+| Value | Effect |
+|---|---|
+| _(unset)_ | All seven lanes. This is the default. |
+| `none` | **Nothing publishes.** All seven lanes stop — no snapshot is even collected. |
+| `authored` / `knowledge` / `runs` | The corpus lane, carrying only the slices you name. |
+| `corpus` | The corpus lane, all three slices. |
+| `runners`, `live_runs`, `activity`, `quota`, `pr_review_queue`, `run_ledger` | That lane. |
+
+Values combine with commas (`publish.layers=authored,quota`). `none` wins over
+anything named beside it. A value matching no lane mirrors **nothing** and prints
+a warning naming the token — a typo here fails closed, not open.
+
+`publish.runs_window_days` (default 14) bounds the corpus lane's **runs** layer
+and nothing else: run nodes older than the window are trimmed from the mirror at
+the next publish, and `0` drops that layer entirely. Driven with a year-old run in
+the fixture, it was correctly excluded from the corpus.
+
+The corpus lane's other two layers have **no age bound at all**: every page in the
+authored surface and the knowledge base ships, however old, subject only to the
+256 KB per-file cap.
+
+The other two run-shaped lanes are bounded differently, and neither by age:
+
+- The **run ledger** ships its most recent 256 rows regardless of date. Driven
+  with 301 rows, 256 shipped and the oldest carried a 2025 timestamp.
+- The **activity** lane is bounded by run *status*, not age — it publishes tasks
+  that are pending or running. A manifest left in `running` keeps publishing
+  indefinitely.
+
+So the 14-day figure is the retention for run *bodies and message text*. It is not
+the retention for run receipts, their free-prose summaries, or a stuck task.
+
+Turning a lane off stops collection, not merely transmission: with
+`publish.layers=none` the daemon does not build a snapshot and does not shell out
+to `gh` for the PR queue.
+
+One caveat, stated because it bears on how much weight this switch carries:
+`publish.layers` lives in `.brr/config`, which is not one of the daemon-owned
+security keys and is writable by anything with local write access to the checkout
+— including the agent itself. It bounds what brnrd publishes; it is not a control
+an untrusted run cannot reach.
+
+### What this switch does not turn off
+
+`publish.layers` governs the **dashboard mirror**. A connected daemon still talks
+to brnrd.dev for the relay job you connected it for, on paths this switch does not
+touch: inbox polling (`/v1/daemons/inbox`), reply delivery
+(`/v1/daemons/responses`), progress-card updates for conversations that originated
+at brnrd.dev (`/v1/daemons/card`), review-pack relay (`/v1/daemons/pack`), config-change
+proposals, and pairing/registration. If you want no traffic at all, disconnect —
+do not rely on `publish.layers`.
+
+### Provenance, and what was not measured
+
+The seven lanes and their fields above were captured from live publisher
+invocations against a populated daemon state. The retention claims in the
+*Credentials & data flow* bullet that concern the **backend's own** storage —
+inbound bodies nulled after reply, never-answered bodies nulled at 14 days, event
+rows pruned at 90, and the in-memory-only handling of review packs — are
+server-side behaviours that were **not** re-driven here, and are stated on the
+strength of the backend implementation rather than a measured payload.
+
+One interaction worth stating plainly, because the two halves are true separately
+and misleading together: the queue nulls an inbound message body after the reply
+is delivered, **and** the corpus lane's `runs` layer mirrors that same message
+text as part of the run node for the length of `publish.runs_window_days`. The
+window, not the null-after-reply, is the effective retention for message text on a
+cloud-connected daemon.
 
 ## Managed backend
 
