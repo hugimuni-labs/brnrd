@@ -808,8 +808,36 @@ def cmd_kb(args):
     if not args.query:
         from . import kb_health
         kb_dir = knowledge.active_kb_dir(repo_root, cfg)
+        # `active_kb_dir` documents None as a *finding* — "this repo has no kb
+        # at all yet" — but `compute_graph_stats(root, None)` reads the same
+        # value as "unspecified" and quietly defaults to ``repo_root / "kb"``
+        # (kb_health.py, `kb_dir.resolve() if kb_dir is not None else ...`).
+        # One value, two meanings, meeting at this call site: passing the None
+        # straight through converts "there is no kb here" into a confident
+        # report about a different directory. Refuse instead.
+        if kb_dir is None:
+            print("[brnrd kb] no kb resolved for this root — nothing to report")
+            print(f"[brnrd kb] repo root: {repo_root}")
+            print(f"[brnrd kb] checkout: {checkout}")
+            return 1
         stats = kb_health.compute_graph_stats(repo_root, kb_dir)
-        print(kb_health.format_graph_stats(stats))
+        report = kb_health.format_graph_stats(stats)
+        # A zero-page kb renders as the empty string. Printing that and
+        # returning 0 is a silent success — strictly worse than the `exit 2`
+        # this command replaced, which at least said something was wrong.
+        if not report.strip():
+            print(f"[brnrd kb] kb dir holds no pages: {kb_dir}")
+            return 1
+        # Name the directory that was walked. There are several plausible
+        # knowledge roots for one repo — the account-scoped home, a
+        # project-scoped home, the `.brnrd-kb` checkout clone, a committed
+        # `kb/` — and which one wins depends on where this command was run
+        # from. A wake comparing this report against the page counts in its own
+        # kb-health block cannot reconcile the two unless the report says which
+        # corpus it walked. One line, and the ambiguity stops being a
+        # twenty-minute investigation.
+        print(f"[brnrd kb] graph for: {kb_dir}")
+        print(report)
         return 0
 
     hits = knowledge.search(repo_root, args.query, cfg, limit=args.limit)
