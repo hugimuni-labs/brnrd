@@ -1075,6 +1075,87 @@ def test_cmd_kb_no_query_exits_0_and_prints_graph_header(tmp_path, capsys, monke
     assert header in out
 
 
+def test_cmd_kb_no_query_on_unresolvable_kb_is_not_a_silent_success(
+    tmp_path, capsys, monkeypatch
+):
+    """A root with no resolvable kb must say so and exit non-zero.
+
+    `knowledge.active_kb_dir` returns None whenever `sources()` finds neither
+    `home` nor `repo-kb` — a fresh checkout before `brnrd init`, and, far more
+    commonly, **any run worktree**, which is the default `worktree` environment
+    every brnrd run uses. Driven against a live worktree, that path printed
+    zero bytes to stdout, zero to stderr, and exited 0: a silent success, and
+    strictly worse than the `exit 2` usage error this command replaced.
+
+    Note the sibling test above monkeypatches `active_kb_dir` to a real
+    directory. That fixture chooses a resolution the runtime does not produce
+    from a worktree — the same shape as a fixture that chooses a lifecycle
+    moment. This test asserts the resolution the runtime *does* produce there.
+    """
+    repo, kb = _kb_repo(tmp_path)
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: None)
+
+    rc = main(["kb"])
+    captured = capsys.readouterr()
+    assert rc == 1, "an unresolvable kb must not report success"
+    assert captured.out.strip(), "an unresolvable kb must not print nothing"
+    # Name what was looked for and where, so the reader can act on it.
+    assert "[brnrd kb]" in captured.out
+    assert str(repo) in captured.out
+    # The fixture repo *does* have a populated `kb/`. Reporting on it here
+    # would mean None had been read as "unspecified" rather than as "none".
+    assert "Graph stats" not in captured.out
+
+
+def test_cmd_kb_no_query_on_empty_kb_dir_is_not_a_silent_success(
+    tmp_path, capsys, monkeypatch
+):
+    """A resolved-but-pageless kb dir must say so and exit non-zero.
+
+    `format_graph_stats` renders zeroed stats as the empty string, so the
+    unguarded path printed zero bytes and returned 0 — a silent success, and
+    strictly worse than the `exit 2` usage error this command replaced.
+    """
+    repo, _kb = _kb_repo(tmp_path)
+    empty = tmp_path / "empty-kb"
+    empty.mkdir()
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: empty)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: empty)
+
+    rc = main(["kb"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "no pages" in captured.out
+    assert str(empty) in captured.out
+
+
+def test_cmd_kb_no_query_names_the_directory_it_walked(
+    tmp_path, capsys, monkeypatch
+):
+    """The report says which knowledge root it walked.
+
+    One repo has several plausible knowledge roots — an account-scoped home, a
+    project-scoped home, the `.brnrd-kb` checkout clone, a committed `kb/` —
+    and which one `active_kb_dir` returns depends on where the command ran.
+    Driven 2026-07-24: from one worktree it resolved to a project-scoped root
+    holding a single page while the same wake's kb-health block reported 155.
+    Both numbers were stated flatly and neither named its corpus. A report a
+    reader cannot attribute is a report they cannot reconcile.
+    """
+    repo, kb = _kb_repo(tmp_path)
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
+
+    rc = main(["kb"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert str(kb) in out, "the report must name the directory it walked"
+
+
 def test_cmd_kb_with_query_hit_exits_0(tmp_path, capsys, monkeypatch):
     """brnrd kb <query> with a match exits 0 and prints the hit — unchanged."""
     repo, kb = _kb_repo(tmp_path)
