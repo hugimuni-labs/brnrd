@@ -94,13 +94,27 @@ keeping the host's working tree clean.
 
 ### Required configuration
 
+`environment` and `docker.*` are security keys (issue #533) — they belong in
+the daemon-owned `security.config`, not in `.brr/config`. `brnrd init` writes
+them there automatically on a fresh install. To set or change them on an
+existing install, run:
+
+```
+brnrd config promote
+```
+
+or write directly to the `security.config` in the brnrd account home
+(typically `~/.local/state/brnrd/<account>/home/security.config`):
+
 ```ini
-default_env=docker
+environment=docker
 docker.image=ghcr.io/example/your-image:tag
 ```
 
 That's it for required keys. Everything else is automatic or has a
-sensible default.
+sensible default. If you previously wrote these into `.brr/config`, run
+`brnrd config promote` to move them to the right domain — they are silently
+ignored in the repo-writable file.
 
 ### Credentials are wired automatically
 

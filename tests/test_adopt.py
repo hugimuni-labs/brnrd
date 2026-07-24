@@ -398,3 +398,178 @@ class TestShellBridges:
             lambda binary: "/usr/bin/" + binary if binary in ("claude", "codex") else None,
         )
         assert adopt._detect_shells() == ["claude", "codex"]
+
+
+# ── Security domain routing (#413 §7 S4) ────────────────────────────
+#
+# brnrd init must route config keys to their correct trust domain:
+# repo-safe keys → .brr/config, security keys → security.config.
+# Placing security keys in .brr/config silently drops them (load_config
+# ignores them), so the operator's Docker choice is dead on arrival.
+
+
+class TestSecurityDomainRouting:
+    """Five driven tests — each confirmed red before the fix, green after."""
+
+    def _setup_git_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        return repo
+
+    def _mock_post_configure(self, monkeypatch, repo):
+        """Stub out the parts of _init_auto we don't want to exercise."""
+        monkeypatch.setattr(adopt, "_run_setup", lambda *a, **kw: None)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        monkeypatch.setattr(adopt, "_verify", lambda *a, **kw: None)
+        monkeypatch.setattr(adopt.constitution, "write_bridges", lambda *a, **kw: [])
+        # Suppress dominion noise.
+        monkeypatch.setattr(adopt, "_bootstrap_dominion", lambda *a, **kw: None)
+
+    def _docker_init(self, monkeypatch, repo):
+        """Run the config-writing portion of an interactive Docker init."""
+        monkeypatch.setattr(adopt.shutil, "which", lambda _n: "/usr/bin/docker")
+        confirms = iter([True, False])  # accept Docker, decline build
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: next(confirms))
+        monkeypatch.setattr(
+            adopt, "_timed_input",
+            lambda prompt, default, timeout=10: "test-image:v1",
+        )
+        adopt._setup_brr_dir(repo)
+        adopt._init_auto(repo, ["mock-runner"], interactive=True)
+
+    # ── Test 1: fresh Docker init → ignored empty, env resolves ─────
+
+    def test_fresh_docker_init_no_ignored_keys(self, tmp_path, monkeypatch):
+        """After a Docker init, load_config_report must return ignored==[].
+
+        Red on unpatched code: _setup_brr_dir writes environment=auto and
+        _init_auto writes environment=docker + docker.image — all security
+        keys in .brr/config → all in ignored.
+        """
+        from brr import config as conf
+        from brr.run import resolve_env
+
+        repo = self._setup_git_repo(tmp_path)
+        self._mock_post_configure(monkeypatch, repo)
+        # Clear the path cache so this test doesn't inherit a stale None.
+        conf._SECURITY_PATH_CACHE.clear()
+
+        self._docker_init(monkeypatch, repo)
+
+        cfg, ignored = conf.load_config_report(repo)
+        assert ignored == [], f"security keys leaked into .brr/config: {ignored}"
+        assert cfg.get("environment") == "docker", (
+            f"environment not in merged cfg; got {cfg.get('environment')!r}"
+        )
+        assert cfg.get("docker.image") == "test-image:v1", (
+            f"docker.image not in merged cfg; got {cfg.get('docker.image')!r}"
+        )
+
+    # ── Test 2: structural regression guard ─────────────────────────
+
+    def test_write_config_never_receives_security_key_from_adopt(
+        self, tmp_path, monkeypatch
+    ):
+        """Spy on write_config: any call that includes a security key must fail.
+
+        Red on unpatched code: _setup_brr_dir and _init_auto both pass
+        security keys (environment, docker.*) through write_config.
+        """
+        from brr import config as conf
+
+        repo = self._setup_git_repo(tmp_path)
+        self._mock_post_configure(monkeypatch, repo)
+        conf._SECURITY_PATH_CACHE.clear()
+
+        violations: list[str] = []
+        real_write_config = conf.write_config
+
+        def spy_write_config(root, cfg_dict):
+            bad = [k for k in cfg_dict if conf.is_security_key(k)]
+            if bad:
+                violations.extend(bad)
+            return real_write_config(root, cfg_dict)
+
+        monkeypatch.setattr(conf, "write_config", spy_write_config)
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: False)  # decline Docker
+        monkeypatch.setattr(adopt.shutil, "which", lambda _n: "/usr/bin/docker")
+
+        adopt._setup_brr_dir(repo)
+        adopt._init_auto(repo, ["mock-runner"], interactive=True)
+
+        assert violations == [], (
+            f"write_config received security key(s) from adopt path: {violations}"
+        )
+
+    # ── Test 3: write_security_config merges, not truncates ─────────
+
+    def test_write_security_config_merges_existing_keys(self, tmp_path, monkeypatch):
+        """Pre-existing key in security.config survives a second write.
+
+        Red on unpatched code: write_security_config doesn't exist yet.
+        """
+        from brr import config as conf
+
+        repo = self._setup_git_repo(tmp_path)
+        conf._SECURITY_PATH_CACHE.clear()
+
+        # Write an initial security key.
+        conf.write_security_config(repo, {"environment": "docker"})
+        # Write a different key — must not clobber the first.
+        conf.write_security_config(repo, {"docker.image": "new:tag"})
+
+        sec_path = conf.security_config_path(repo)
+        raw = conf._read_flat(sec_path)
+        assert raw.get("environment") == "docker", "pre-existing key was truncated"
+        assert raw.get("docker.image") == "new:tag", "new key not written"
+
+    # ── Test 4: file mode is 0600 ────────────────────────────────────
+
+    def test_write_security_config_creates_0600(self, tmp_path, monkeypatch):
+        """security.config is created with mode 0600.
+
+        Red on unpatched code: write_security_config doesn't exist yet.
+        """
+        import stat
+        from brr import config as conf
+
+        repo = self._setup_git_repo(tmp_path)
+        conf._SECURITY_PATH_CACHE.clear()
+
+        written = conf.write_security_config(repo, {"environment": "worktree"})
+        assert written is not None, "write_security_config returned None"
+        mode = stat.S_IMODE(written.stat().st_mode)
+        assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+    # ── Test 5: declining Docker → worktree resolves, no sec keys in repo cfg
+
+    def test_fresh_worktree_init_no_security_keys_in_repo_config(
+        self, tmp_path, monkeypatch
+    ):
+        """Declining Docker: .brr/config must have no security-shaped keys.
+
+        Red on unpatched code: _setup_brr_dir writes environment=auto
+        (a security key) into .brr/config, so ignored is never empty.
+        """
+        from brr import config as conf
+
+        repo = self._setup_git_repo(tmp_path)
+        self._mock_post_configure(monkeypatch, repo)
+        conf._SECURITY_PATH_CACHE.clear()
+
+        # Docker available but user declines → _configure_environment returns
+        # {"environment": "worktree"}.
+        monkeypatch.setattr(adopt.shutil, "which", lambda _n: "/usr/bin/docker")
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: False)
+
+        adopt._setup_brr_dir(repo)
+        adopt._init_auto(repo, ["mock-runner"], interactive=True)
+
+        cfg, ignored = conf.load_config_report(repo)
+        assert ignored == [], (
+            f"security keys in .brr/config after worktree init: {ignored}"
+        )
+        # environment=worktree must be in security config and readable.
+        assert cfg.get("environment") == "worktree", (
+            f"environment not resolved; got {cfg.get('environment')!r}"
+        )
