@@ -456,6 +456,73 @@ def _offer_home_link(repo_root: Path) -> None:
         print(f"[brnrd] {result.slot}: {result.action} → {result.remote_url} ({state})")
 
 
+def _dockerfile_logical_lines(text: str) -> list[str]:
+    """Dockerfile instructions with backslash continuations folded in."""
+    lines: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not buffer and (not stripped or stripped.startswith("#")):
+            continue
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1].rstrip() + " "
+            continue
+        lines.append((buffer + stripped).strip())
+        buffer = ""
+    if buffer.strip():
+        lines.append(buffer.strip())
+    return lines
+
+
+def dockerfile_context_paths(text: str) -> list[str]:
+    """Context-relative sources a Dockerfile's ``COPY`` instructions read.
+
+    The bundled image is built from a hand-assembled context (see
+    ``_assemble_build_context``), so the context has to contain exactly what
+    the Dockerfile reaches for. Deriving that set *from the Dockerfile* keeps
+    one enumeration where there used to be two: before #675 the ``COPY`` lines
+    and the assembly code were separate literal lists, and the two root
+    license files declared in ``pyproject.toml``'s ``license-files`` were in
+    neither — a gap whose only symptom was a deprecation warning inside a
+    docker build nobody reads.
+
+    ``COPY --from=<stage>`` reads from another build stage rather than the
+    context, so those lines contribute nothing.
+    """
+    paths: list[str] = []
+    for line in _dockerfile_logical_lines(text):
+        if not line.upper().startswith("COPY "):
+            continue
+        tokens = line.split()[1:]
+        if any(token.startswith("--from=") for token in tokens):
+            continue
+        sources = [token for token in tokens if not token.startswith("--")][:-1]
+        for source in sources:
+            if source not in paths:
+                paths.append(source)
+    return paths
+
+
+def _assemble_build_context(dockerfile: Path, repo_root: Path, ctx_path: Path) -> None:
+    """Populate ``ctx_path`` with the Dockerfile and everything it copies.
+
+    Raises ``FileNotFoundError`` naming the first declared source the checkout
+    does not provide, so an incomplete tree fails here rather than deep inside
+    ``docker build``.
+    """
+    shutil.copy(dockerfile, ctx_path / "Dockerfile")
+    for rel in dockerfile_context_paths(dockerfile.read_text(encoding="utf-8")):
+        source = repo_root / rel
+        dest = ctx_path / rel
+        if source.is_dir():
+            shutil.copytree(source, dest)
+        elif source.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source, dest)
+        else:
+            raise FileNotFoundError(rel)
+
+
 def _build_default_docker_image() -> bool:
     """Build brr's bundled runner image into ``brr-runner:local``.
 
@@ -469,12 +536,6 @@ def _build_default_docker_image() -> bool:
         return False
 
     repo_root = Path(__file__).resolve().parent.parent.parent
-    pyproject = repo_root / "pyproject.toml"
-    readme = repo_root / "README.md"
-    src = repo_root / "src"
-    if not pyproject.is_file() or not readme.is_file() or not src.is_dir():
-        print("  [brnrd] checkout layout incomplete; cannot build runner image")
-        return False
 
     print(
         f"  [brnrd] building {_DEFAULT_DOCKER_IMAGE} "
@@ -482,10 +543,14 @@ def _build_default_docker_image() -> bool:
     )
     with tempfile.TemporaryDirectory(prefix="brr-build-") as ctx:
         ctx_path = Path(ctx)
-        shutil.copy(_BUNDLED_DOCKERFILE, ctx_path / "Dockerfile")
-        shutil.copy(pyproject, ctx_path / "pyproject.toml")
-        shutil.copy(readme, ctx_path / "README.md")
-        shutil.copytree(src, ctx_path / "src")
+        try:
+            _assemble_build_context(_BUNDLED_DOCKERFILE, repo_root, ctx_path)
+        except FileNotFoundError as exc:
+            print(
+                f"  [brnrd] checkout layout incomplete ({exc}); "
+                "cannot build runner image"
+            )
+            return False
         result = subprocess.run(
             ["docker", "build", "-t", _DEFAULT_DOCKER_IMAGE, str(ctx_path)],
             check=False,
