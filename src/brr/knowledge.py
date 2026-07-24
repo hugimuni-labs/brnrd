@@ -423,6 +423,44 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     return checkout
 
 
+def _git_out(checkout: Path, *args: str) -> tuple[int, str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=checkout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode, result.stdout.strip()
+
+
+def _checkout_is_dirty(checkout: Path) -> bool | None:
+    """Whether *checkout* holds tracked modifications. One reading, two readers.
+
+    ``_refresh_checkout`` decides whether to **skip** on this; ``mirror_state``
+    decides what to **say** about it. They were written independently against
+    the same command and agreed only by coincidence, so a later change to the
+    skip condition would have left the wake confidently reporting "clean" about
+    a checkout that was skipped for being dirty (#676). A fact stored twice is
+    repaired once.
+
+    Untracked files deliberately do not count. Stray files are a checkout's
+    normal state, and treating them as dirty would quietly re-create the
+    never-refreshes bug (#613) for any checkout holding one — git itself
+    refuses only the merge that would actually clobber them.
+
+    ``None`` is a third answer, not a quiet "clean": the status could not be
+    read at all, and the refresh path turns that into its own skip reason
+    rather than proceeding as if the tree were known-clean.
+    """
+
+    code, porcelain = _git_out(
+        checkout, "status", "--porcelain", "--untracked-files=no"
+    )
+    return bool(porcelain) if code == 0 else None
+
+
 def _refresh_checkout(checkout: Path) -> str | None:
     """Fetch ``origin`` and best-effort fast-forward *checkout* to it (#613).
 
@@ -440,11 +478,9 @@ def _refresh_checkout(checkout: Path) -> str | None:
     destroy. The checkout is returned as-is when:
 
     - the fetch fails or times out (origin unreachable);
-    - tracked files are modified or staged (an in-flight edit outranks
-      freshness; untracked files deliberately don't count — stray files
-      are a checkout's normal state, and treating them as dirty would
-      quietly re-create the never-refreshes bug for any checkout holding
-      one — git itself refuses a merge that would clobber them);
+    - tracked files are modified or staged — an in-flight edit outranks
+      freshness (see :func:`_checkout_is_dirty`, the shared reading, for
+      why untracked files deliberately don't count);
     - HEAD is detached or ``origin/<branch>`` doesn't exist;
     - histories diverged (``--ff-only`` refuses; reconciliation belongs
       to the capture path's pull-rebase, never to a read path).
@@ -465,13 +501,10 @@ def _refresh_checkout(checkout: Path) -> str | None:
         )
         if fetch.returncode != 0:
             return f"could not fetch origin into the kb checkout ({checkout})"
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=checkout, capture_output=True, text=True, check=False,
-        )
-        if status.returncode != 0:
+        dirty = _checkout_is_dirty(checkout)
+        if dirty is None:
             return f"could not read the kb checkout's status ({checkout})"
-        if status.stdout.strip():
+        if dirty:
             return (
                 f"the kb checkout ({checkout}) has uncommitted work — left "
                 f"untouched, so it may be behind the account knowledge repo"
@@ -512,6 +545,12 @@ def _refresh_checkout(checkout: Path) -> str | None:
 MIRROR_CURRENT = "current"
 MIRROR_BEHIND = "behind"
 MIRROR_ABSENT = "absent"
+# #676: the three above answer *how far behind*, which silently presumes the
+# checkout is a clone of this account's knowledge repo at all. A checkout
+# pointed at some other repository is current with respect to the wrong origin
+# — the same "a clean mirror reads as a current mirror" defect one layer over,
+# and a fourth status rather than a fourth way to be silent.
+MIRROR_ELSEWHERE = "elsewhere"
 
 
 @dataclass(frozen=True)
@@ -519,7 +558,8 @@ class MirrorState:
     """A wake-time reading of the ``.brnrd-kb/`` mirror against its origin.
 
     ``status`` is always one of :data:`MIRROR_CURRENT`, :data:`MIRROR_BEHIND`,
-    :data:`MIRROR_ABSENT` — never ``None``, and never a bare count. *Absent*
+    :data:`MIRROR_ELSEWHERE`, :data:`MIRROR_ABSENT` — never ``None``, and never
+    a bare count. *Absent*
     (no checkout, not a git repo, detached HEAD, no ``origin/<branch>``) is a
     genuinely different sentence from "0 behind": a repo with no mirror has no
     mirror to be stale, and it must not be readable as *fine*. This repo has
@@ -534,6 +574,11 @@ class MirrorState:
     the next capture, behind-and-dirty is waiting on the resident to commit or
     discard, and behind-and-ahead has diverged and will never fast-forward at
     all. Three states, three next moves.
+
+    ``origin`` and ``expected_origin`` are the same discipline for
+    :data:`MIRROR_ELSEWHERE`: the next move there is a re-clone, and a reader
+    cannot judge that from "the mirror is wrong" — only from the two paths,
+    named, side by side. They are empty for every other status.
     """
 
     status: str
@@ -542,22 +587,66 @@ class MirrorState:
     branch: str = ""
     dirty: bool = False
     absent_reason: str = ""
+    origin: str = ""
+    expected_origin: str = ""
 
 
-def _git_out(checkout: Path, *args: str) -> tuple[int, str]:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=checkout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    return result.returncode, result.stdout.strip()
+def _checkout_origin_url(checkout: Path) -> str:
+    """*checkout*'s ``origin`` URL, or ``""`` when it has none / git refused.
+
+    Local, and one process: ``git remote get-url`` reads ``.git/config``, so
+    it is safe on the wake path in the way a ``fetch`` would not be.
+    """
+
+    code, url = _git_out(checkout, "remote", "get-url", "origin")
+    return url if code == 0 else ""
 
 
-def mirror_state(repo_root: Path) -> MirrorState:
-    """Read how far ``.brnrd-kb/`` has fallen behind its origin. Local only.
+def _same_git_location(origin: str, home_knowledge: Path) -> bool:
+    """Whether an ``origin`` URL and a home-knowledge path name one repo.
+
+    The single comparison behind both identity readers —
+    :func:`_checkout_origin_matches` (which gates :func:`ensure_checkout`'s
+    re-clone) and :func:`mirror_state` (which reports). Both sides are
+    resolved, so a symlinked or non-normalised spelling of the same repo is
+    the *same* repo: the difference between a check that fires for a reason
+    and one that fires for a spelling (#623).
+    """
+
+    try:
+        return Path(origin).resolve() == home_knowledge.resolve()
+    except OSError:
+        return origin == str(home_knowledge)
+
+
+def _home_knowledge_root(repo_root: Path, cfg: dict | None = None) -> Path | None:
+    """The account knowledge repo this repo's checkout should be a clone of.
+
+    ``None`` when account resolution cannot answer — never an exception, and
+    never a guess. An unresolvable account makes the *question* of identity
+    unanswerable, and an unanswerable check must go quiet rather than accuse a
+    checkout of pointing elsewhere on no evidence (#623).
+
+    Local file reads only (config, the cloud-gate JSON, the home registry):
+    measured at ~4 ms on the brnrd repo, against the ~880 ms the kb-health
+    block it runs inside already costs. Nothing here can block on a network.
+    """
+
+    try:
+        cfg = cfg if cfg is not None else conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        return account.knowledge_path(ctx)
+    except Exception:  # pragma: no cover - defensive; a wake must not die here
+        return None
+
+
+def mirror_state(
+    repo_root: Path,
+    cfg: dict | None = None,
+    *,
+    home_knowledge: Path | None = None,
+) -> MirrorState:
+    """Read where ``.brnrd-kb/`` points and how far behind it is. Local only.
 
     **No network, deliberately, and this is not an oversight to be fixed by
     adding a fetch here.** This runs on the wake path, where a hung or slow
@@ -573,6 +662,15 @@ def mirror_state(repo_root: Path) -> MirrorState:
     drift that landed since the last capture, which the next capture's fetch
     then surfaces. False negatives that self-heal, no false positives.
 
+    **Identity is read before staleness** (#676), because a count is only
+    meaningful once the thing counted against is the right repository. The
+    expected origin comes from *this* wake's account resolution — pass ``cfg``
+    (or a already-resolved ``home_knowledge``) rather than letting a second,
+    independently-loaded config decide what "right" means. When neither is
+    available and resolution fails, the identity question is skipped entirely
+    and the reading falls back to the staleness statuses: an unanswerable
+    check stays silent instead of firing.
+
     Never raises: a wake prompt must not die because a git subprocess did.
     """
 
@@ -582,6 +680,21 @@ def mirror_state(repo_root: Path) -> MirrorState:
             return MirrorState(
                 MIRROR_ABSENT,
                 absent_reason=f"no kb checkout at {checkout}",
+            )
+        expected = (
+            home_knowledge if home_knowledge is not None
+            else _home_knowledge_root(repo_root, cfg)
+        )
+        origin = _checkout_origin_url(checkout)
+        # Three guards, each closing a way to fire for a non-reason: no
+        # resolvable account (nothing to compare against), no ``origin`` at all
+        # (that is an *absent* upstream, reported as such further down), and a
+        # merely differently-spelled path to the same repo.
+        if expected is not None and origin and not _same_git_location(origin, expected):
+            return MirrorState(
+                MIRROR_ELSEWHERE,
+                origin=origin,
+                expected_origin=str(expected),
             )
         code, branch = _git_out(checkout, "rev-parse", "--abbrev-ref", "HEAD")
         if code != 0 or not branch or branch == "HEAD":
@@ -615,12 +728,10 @@ def mirror_state(repo_root: Path) -> MirrorState:
                 ),
             )
         ahead, behind = int(parts[0]), int(parts[1])
-        code, porcelain = _git_out(
-            checkout, "status", "--porcelain", "--untracked-files=no"
-        )
-        # Untracked files deliberately do not count as dirty — same posture as
-        # `_refresh_checkout`, which skips on tracked modifications only.
-        dirty = code == 0 and bool(porcelain)
+        # The same reading `_refresh_checkout` skips on — one predicate, so the
+        # wake cannot report "clean" about a checkout the refresh called dirty.
+        # An unreadable status (`None`) is not dirtiness; it says nothing here.
+        dirty = _checkout_is_dirty(checkout) is True
         status = MIRROR_BEHIND if behind else MIRROR_CURRENT
         return MirrorState(
             status, behind=behind, ahead=ahead, branch=branch, dirty=dirty
@@ -636,25 +747,16 @@ def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
     """Return whether *checkout*'s ``origin`` remote still resolves to
     *home_knowledge* — the check :func:`ensure_checkout` skipped before
     2026-07-09, letting a stale clone survive an account-resolution change
-    indefinitely."""
+    indefinitely.
 
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=checkout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    origin = result.stdout.strip()
-    if not origin:
-        return False
-    try:
-        return Path(origin).resolve() == home_knowledge.resolve()
-    except OSError:
-        return origin == str(home_knowledge)
+    A checkout with no ``origin`` at all answers ``False`` here, because the
+    caller's next move — re-clone — is right for it either way. That collapse
+    is a *repair* path's privilege: :func:`mirror_state`, which only reports,
+    keeps the two apart (no origin is an absent upstream, not a mis-pointed
+    one) and shares the comparison rather than repeating it."""
+
+    origin = _checkout_origin_url(checkout)
+    return bool(origin) and _same_git_location(origin, home_knowledge)
 
 
 # ── Capture net (checkout → account knowledge → forge) ───────────────
