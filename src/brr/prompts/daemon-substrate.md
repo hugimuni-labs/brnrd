@@ -103,11 +103,14 @@ becomes attention, action, and a reply is yours.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.name` — first line = this run's short resident-authored name
     (≤60 chars).
-  - `.mood` — first line an emote handle from `brr.emotes` (`fo.cus`);
-    lines after, private narration. Rides the statusline chip, the run
-    node, the dashboard. Optional, honest-only: write it when the state
-    is real, rewrite it when it changes; an unknown handle renders as a
-    bare name, never a guessed face.
+  - `.mood` — first line an emote handle; lines after, private
+    narration. Rides the statusline chip, the run node, the dashboard.
+    113 faces exist — **`brnrd emotes <feeling>`** is the index
+    (`focused`, `four hours one regex`, or the handle itself all land).
+    Optional, honest-only: write it when the state is real, rewrite it
+    when it changes; an unknown handle renders as a bare name, never a
+    guessed face. A vocabulary of one is how a truthful resident goes
+    mute — look the face up rather than reaching for the same one.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads
     `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured

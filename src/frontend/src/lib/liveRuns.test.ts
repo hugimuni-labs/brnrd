@@ -150,8 +150,43 @@ test('an unknown mood handle degrades to the bare name, never a face', () => {
 	assert.deepEqual(moodFace('sideways', null, null), {
 		name: 'sideways',
 		glyph: null,
+		sequences: null,
+		rest: null,
 		pitch: null
 	});
+});
+
+test('a resolved mood carries its whole cycle, not one frame', () => {
+	// The starvation this slice fixed: `mood_glyph` is the animation's *base*
+	// and is shared across a whole face family, so a surface with only that
+	// renders most of the palette identically. `sequences` is what moves and
+	// `rest` is what identifies while still — both come off the wire already
+	// resolved, because this frontend owns no emote table.
+	const face = moodFace(
+		'fo.cus',
+		'b·_·d',
+		0.45,
+		[
+			['b·_·d', 'b-_-d', 'b·_·d'],
+			['b·_·d', 'bx_xd', 'b·_·d']
+		],
+		'b·_·d'
+	);
+	assert.equal(face?.sequences?.length, 2);
+	assert.deepEqual(face?.sequences?.[1], ['b·_·d', 'bx_xd', 'b·_·d']);
+	assert.equal(face?.rest, 'b·_·d');
+});
+
+test('meaningless frame payloads are dropped, not passed on as empty cycles', () => {
+	// A caller checking `sequences?.length` should never have to also know
+	// that `[[]]` means nothing. Bounds at the wire stop a hostile payload;
+	// this stops a merely useless one.
+	assert.equal(moodFace('id_l', '(-_-)', 0.2, [])?.sequences, null);
+	assert.equal(moodFace('id_l', '(-_-)', 0.2, [[]])?.sequences, null);
+	assert.equal(moodFace('id_l', '(-_-)', 0.2, [['  ', '']])?.sequences, null);
+	assert.deepEqual(moodFace('id_l', '(-_-)', 0.2, [['a'], []])?.sequences, [['a']]);
+	// A whitespace-only rest is absent, same rule as the glyph.
+	assert.equal(moodFace('id_l', '(-_-)', 0.2, null, '   ')?.rest, null);
 });
 
 test('an absent mood is not a mood — the surfaces render nothing', () => {
@@ -164,6 +199,8 @@ test('a glyph is worn only when the wire carried one', () => {
 	assert.deepEqual(moodFace('id_l', '(-_-)', 0.25), {
 		name: 'id_l',
 		glyph: '(-_-)',
+		sequences: null,
+		rest: null,
 		pitch: 0.25
 	});
 	// Whitespace-only is the same as absent; a pitch that isn't a real number
@@ -178,6 +215,32 @@ test('the wordmark wears the newest live mood, not the first one it finds', () =
 		moodRun({ id: 'new', started_at: '2026-07-23T22:30:00Z', mood: 'id_l', mood_glyph: '(-_-)' })
 	];
 	assert.deepEqual(wordmarkMood(runs, null), { frames: ['(-_-)'], pitch: null });
+});
+
+test('a live run with real frames drives the wordmark with them, not its glyph', () => {
+	// Before `mood_frames` the live branch could only hand over `[glyph]` —
+	// a one-frame "cycle", i.e. a still image where the daemon's own face
+	// animated. The single-glyph path below is now only the pre-upgrade
+	// fallback.
+	const runs = [
+		moodRun({
+			id: 'live',
+			started_at: '2026-07-23T22:30:00Z',
+			mood: 'fo.cus',
+			mood_glyph: 'b·_·d',
+			mood_frames: [
+				['b·_·d', 'b-_-d', 'b·_·d'],
+				['b·_·d', 'bx_xd', 'b·_·d']
+			],
+			mood_pitch: 0.45
+		})
+	];
+	// The mark wears one face at a time: the primary cycle, alternates are
+	// the chip's business.
+	assert.deepEqual(wordmarkMood(runs, null), {
+		frames: ['b·_·d', 'b-_-d', 'b·_·d'],
+		pitch: 0.45
+	});
 });
 
 test('runs without a mood are skipped, and a moodless board falls to the daemon', () => {
@@ -222,6 +285,8 @@ test('a null daemon mood leaves the loom idle seam exactly as it was', () => {
 	assert.deepEqual(restingFace({ name: 'brnrd breathing', glyph: '(-_-)' }), {
 		name: 'brnrd breathing',
 		glyph: '(-_-)',
+		sequences: null,
+		rest: null,
 		pitch: null
 	});
 });

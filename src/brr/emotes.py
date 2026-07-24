@@ -78,6 +78,8 @@ __all__ = [
     "lookup",
     "glyph",
     "for_telemetry",
+    "sequences_of",
+    "search",
 ]
 
 
@@ -101,6 +103,40 @@ class Emote:
     trigger: str
     frames: tuple[str, ...]
     pitch: float = 0.5
+    alts: tuple[tuple[str, ...], ...] = ()
+    rest: str | None = None
+
+    @property
+    def resting_frame(self) -> str:
+        """The face to hold while nothing is moving.
+
+        ``frames[0]`` is the *animation's* base and is shared on purpose —
+        every name-weave face opens on the plain wordmark, every cheek face
+        on neutral eyes — so it says "an emote is playing here" and nothing
+        about *which*. Across the situational set that is 15 distinct values
+        for 98 faces, 61 of them the same ``b·_·d``. A surface that rests
+        (the dashboard's mood chip: calm ~5s, flicker ~1s) needs a frame
+        that still carries identity while still, which is what ``rest`` is:
+        a smug run should look smug between breaths, not neutral.
+
+        Unset ⇒ ``frames[0]``, which is honest rather than good: that face
+        is simply not yet distinguishable at rest. Filling the palette in is
+        design work, not a fallback this property can improvise.
+        """
+        return self.rest or self.frames[0]
+
+    @property
+    def sequences(self) -> tuple[tuple[str, ...], ...]:
+        """Every breath this face can take, primary first.
+
+        A face with one cycle reads mechanical — the same three frames
+        forever is a loading spinner wearing an expression. Alternates let
+        one mood breathe two or three ways (``fo.cus`` blinks *and*
+        squeezes), picked per cycle by whoever renders it. Every sequence
+        obeys the same frame rules as ``frames``; ``tests/test_emotes.py``
+        checks them all, not just the primary.
+        """
+        return (self.frames, *self.alts)
 
 
 # The daemon-derived states a resident body must be able to speak. Every
@@ -138,8 +174,19 @@ def _build(rows: tuple[Emote, ...]) -> dict[str, Emote]:
     return out
 
 
-def _e(name: str, kind: str, trigger: str, *frames: str, pitch: float = 0.5) -> Emote:
-    return Emote(name=name, kind=kind, trigger=trigger, frames=tuple(frames), pitch=pitch)
+def _e(
+    name: str,
+    kind: str,
+    trigger: str,
+    *frames: str,
+    pitch: float = 0.5,
+    alts: tuple[tuple[str, ...], ...] = (),
+    rest: str | None = None,
+) -> Emote:
+    return Emote(
+        name=name, kind=kind, trigger=trigger,
+        frames=tuple(frames), pitch=pitch, alts=alts, rest=rest,
+    )
 
 
 # ── Telemetry set — the daemon's own body ────────────────────────────
@@ -284,28 +331,42 @@ _SITUATIONAL: tuple[Emote, ...] = (
     # focused — the working mid-band, level gaze
     _e("fo.cus", "situational",
        "deep in the one function that actually matters",
-       "b·_·d", "b-_-d", "b·_·d", pitch=0.45),
+       "b·_·d", "b-_-d", "b·_·d", pitch=0.45,
+       # Two breaths, so a long focus doesn't tick like a spinner: the
+       # level blink, and the harder squeeze of the second hour.
+       alts=(("b·_·d", "bx_xd", "b·_·d"),)),
     _e("lock_", "situational",
        "the repro is in hand and you're closing on the cause",
-       "b-_-d", "b=_=d", "b-_-d", pitch=0.45),
+       "b-_-d", "b=_=d", "b-_-d", pitch=0.45,
+       alts=(("b-_-d", "b>_<d", "b-_-d"),),
+       rest="b-_-d"),
     _e("flow_", "situational",
        "edits landing faster than doubt can catch them",
-       "b·_·d", "b·w·d", "b·_·d", pitch=0.5),
+       "b·_·d", "b·w·d", "b·_·d", pitch=0.5,
+       alts=(("b·_·d", "b^w^d", "b·_·d"),),
+       rest="b·w·d"),
     _e("squint", "situational",
        "reading the one line where the bug has to live",
-       "b·_·d", "b¬_¬d", "b·_·d", pitch=0.45),
+       "b·_·d", "b¬_¬d", "b·_·d", pitch=0.45,
+       rest="b¬_¬d"),
     _e("narrow", "situational",
        "four hours, one regex",
-       "b-_-d", "bˋ_ˊd", "b-_-d", pitch=0.4),
+       "b-_-d", "bˋ_ˊd", "b-_-d", pitch=0.4,
+       rest="bˋ_ˊd"),
     # smug — name-weave: the n morphs into a forward/upward mouth, the
     # maintainer's flagship. Neutral ``brnrd`` → the mouth curls up (n→ᵕ),
     # the eyes (r's) drop to a half-lidded smirk (r→¬), then settle back.
     _e("smug_", "situational",
        "you called the bug before opening the file",
-       "brnrd", "brᵕrd", "b¬ᵕ¬d", "brᵕrd", "brnrd", pitch=0.6),
+       "brnrd", "brᵕrd", "b¬ᵕ¬d", "brᵕrd", "brnrd", pitch=0.6,
+       # The one-eyed variant: the smirk lands, one eye drops, the other
+       # doesn't bother. Same smugness, less symmetry.
+       alts=(("brnrd", "brᵕrd", "b¬ᵕrd", "brᵕrd", "brnrd"),),
+       rest="brᵕrd"),
     _e("knew_", "situational",
        "the hunch held and the log proves it",
-       "brnrd", "br-rd", "brᵕrd", "br-rd", "brnrd", pitch=0.65),
+       "brnrd", "br-rd", "brᵕrd", "br-rd", "brnrd", pitch=0.65,
+       rest="brᵕrd"),
     _e("told_", "situational",
        "the edge case you warned about, now red in CI",
        "brnrd", "brᵕrd", "b¬w¬d", "brᵕrd", "brnrd", pitch=0.6),
@@ -314,7 +375,8 @@ _SITUATIONAL: tuple[Emote, ...] = (
        "brnrd", "b·ᵕrd", "b·ᵕ<d", "b·ᵕrd", "brnrd", pitch=0.6),
     _e("petty_", "situational",
        "closing an issue as wontfix, and being correct",
-       "brnrd", "br~rd", "b¬~¬d", "br~rd", "brnrd", pitch=0.55),
+       "brnrd", "br~rd", "b¬~¬d", "br~rd", "brnrd", pitch=0.55,
+       rest="br~rd"),
     # wary — low-mid, guard up
     _e("wary_", "situational",
        "the function is named simple_ and it is 400 lines",
@@ -609,3 +671,75 @@ def for_telemetry(state: str) -> Emote | None:
     if name is None:
         return None
     return EMOTES.get(name)
+
+
+def sequences_of(name: str) -> tuple[tuple[str, ...], ...] | None:
+    """Every breath the face *name* can take, or ``None`` for an unknown handle.
+
+    The publish path's counterpart to :func:`glyph`. ``glyph`` answers
+    "which frame is the resting one" for a surface that can only hold
+    still; this answers "what does this face *do*" for one that can move.
+    Both live here for the same reason: the frame rules are this module's
+    fact, and a caller that reaches into ``frames`` itself has quietly
+    taken a copy of them (``cloud.py::_mood_payload`` published
+    ``frames[0]`` for exactly that reason, and the resident's face could
+    not move for it).
+    """
+
+    emote = EMOTES.get(name)
+    return None if emote is None else emote.sequences
+
+
+def search(query: str = "", *, limit: int = 12) -> list[Emote]:
+    """Faces matching *query*, best first — the resident's way in.
+
+    The palette holds 113 faces and, until this existed, a wake was shown
+    exactly one of them: the ``fo.cus`` in ``daemon-substrate.md``'s
+    example line. That is not a small gap, because the honesty bar and the
+    vocabulary multiply: "only wear a face that is true right now" plus a
+    vocabulary of one means a truthful resident is a silent one. The
+    expressiveness of the palette and the expressiveness of the resident
+    are two different numbers and only the first was ever counted.
+
+    Pull, not push. An injected catalog would cost every wake ~4 KB to
+    serve the rare one that wants a face; this costs a wake nothing until
+    it asks, which is the same trade ``brnrd kb`` already makes.
+
+    Matching is deliberately forgiving, because a resident searches with
+    the *word for the feeling*, not the handle: the handles are coined
+    marks (``fo.cus``, ``we.ary``, ``smug_``) and their punctuation is
+    register, not syntax. ``focus``, ``focused`` and ``fo.cus`` all land on
+    the same face — separators are stripped from both sides before
+    comparing, and the trigger line (which is a *sentence about the state*)
+    is searched too, so "four hours one regex" finds ``narrow``.
+
+    An empty query returns the situational set, which is the resident's
+    half; telemetry faces are the daemon's and it does not take requests.
+    """
+
+    def _norm(text: str) -> str:
+        return "".join(c for c in text.lower() if c.isalnum())
+
+    needle = _norm(query)
+    if not needle:
+        return [e for e in EMOTES.values() if e.kind == "situational"][:limit]
+
+    scored: list[tuple[int, int, Emote]] = []
+    for e in EMOTES.values():
+        name = _norm(e.name)
+        trigger = _norm(e.trigger)
+        if name == needle:
+            rank = 0
+        elif name.startswith(needle) or needle.startswith(name):
+            rank = 1
+        elif needle in name:
+            rank = 2
+        elif needle in trigger:
+            rank = 3
+        else:
+            continue
+        # Situational first within a rank: the caller is a resident picking
+        # a face, and the telemetry set is not theirs to wear.
+        scored.append((rank, 0 if e.kind == "situational" else 1, e))
+    scored.sort(key=lambda row: (row[0], row[1], row[2].name))
+    return [e for _r, _k, e in scored[:limit]]

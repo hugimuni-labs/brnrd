@@ -57,6 +57,17 @@ export interface LiveRun {
 	// never a guessed face — the emote library's honesty bar).
 	mood?: string | null;
 	mood_glyph?: string | null;
+	// Every breath the face can take: base→expression→base sequences, primary
+	// first (`Emote.sequences`). `mood_glyph` is only the *resting* frame —
+	// which is why a run's mood used to be unanimatable here, and why 61 of
+	// the 98 situational emotes arrived looking identical. Absent on a
+	// pre-upgrade daemon; render `mood_glyph` still, just without motion.
+	mood_frames?: string[][] | null;
+	/** The frame a resting surface holds. Per emote, unlike `mood_glyph`
+	 *  (= the animation's base, shared across a face family). Absent on a
+	 *  pre-upgrade daemon, and absent for a face whose distinct resting
+	 *  frame hasn't been authored yet — both fall back to the base. */
+	mood_rest?: string | null;
 	mood_pitch?: number | null;
 	// #476 wyrd §3: a stop the account owner has parked for this run, not yet
 	// consumed by the daemon. Server-side (rather than a fact the client holds
@@ -88,6 +99,10 @@ export interface DaemonMood {
 	name: string;
 	glyph: string;
 	frames: string[];
+	/** Alternates, same shape as `LiveRun.mood_frames`. Absent pre-upgrade,
+	 *  in which case `frames` is the only cycle there is. */
+	sequences?: string[][] | null;
+	rest?: string | null;
 	pitch: number;
 }
 
@@ -170,20 +185,44 @@ export function liveRelicChips(counts: Record<string, number> | null | undefined
 export interface MoodFace {
 	name: string;
 	glyph: string | null;
+	/** The face's breaths, primary first — each `base → expression → base`.
+	 *  Null when the wire carried none (unknown handle, or a daemon older
+	 *  than `mood_frames`), and then the face simply doesn't move. */
+	sequences: string[][] | null;
+	/** The frame to hold while still — see `MoodChip`. Null ⇒ the surface
+	 *  falls back to the animation's base, which is shared, which is why
+	 *  this field exists. */
+	rest: string | null;
 	pitch: number | null;
 }
 
-/** Normalize a wire mood triple into a `MoodFace`, or `null` for "no mood". */
+/** Drop empties at both levels so a caller can trust `sequences?.length`.
+ *  The wire bounds hostile payloads; this bounds *meaningless* ones — a
+ *  `[[]]` is not a cycle, and a renderer shouldn't have to know that. */
+function cleanSequences(raw: string[][] | null | undefined): string[][] | null {
+	if (!Array.isArray(raw)) return null;
+	const out = raw
+		.filter((seq): seq is string[] => Array.isArray(seq))
+		.map((seq) => seq.filter((frame) => typeof frame === 'string' && frame.trim()))
+		.filter((seq) => seq.length > 0);
+	return out.length > 0 ? out : null;
+}
+
+/** Normalize a wire mood into a `MoodFace`, or `null` for "no mood". */
 export function moodFace(
 	name: string | null | undefined,
 	glyph?: string | null,
-	pitch?: number | null
+	pitch?: number | null,
+	frames?: string[][] | null,
+	rest?: string | null
 ): MoodFace | null {
 	const handle = (name ?? '').trim();
 	if (!handle) return null;
 	return {
 		name: handle,
 		glyph: (glyph ?? '').trim() || null,
+		sequences: cleanSequences(frames),
+		rest: (rest ?? '').trim() || null,
 		pitch: typeof pitch === 'number' && Number.isFinite(pitch) ? pitch : null
 	};
 }
@@ -197,7 +236,7 @@ export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | nu
 	let best: LiveRun | null = null;
 	let bestAt = -Infinity;
 	for (const run of runs ?? []) {
-		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch)) continue;
+		if (!moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest)) continue;
 		const started = run.started_at ? Date.parse(run.started_at) : NaN;
 		const at = Number.isNaN(started) ? -Infinity : started;
 		if (best === null || at > bestAt) {
@@ -205,25 +244,30 @@ export function latestRunMood(runs: LiveRun[] | null | undefined): MoodFace | nu
 			bestAt = at;
 		}
 	}
-	return best ? moodFace(best.mood, best.mood_glyph, best.mood_pitch) : null;
+	return best ? moodFace(best.mood, best.mood_glyph, best.mood_pitch, best.mood_frames, best.mood_rest) : null;
 }
 
 /** What the header wordmark animates: a live run's mood when one is burning,
  *  else the daemon's resting face, else nothing (pre-upgrade daemon, or a
  *  resident that never set a mood — the wordmark keeps its built-in wink).
  *
- *  A run's mood carries a single resolved glyph rather than a frame list, so
- *  it plays as a one-frame cycle; only `daemon_mood` has real frames. An
- *  unknown handle resolves to no glyph at all, which is why this can return a
- *  pitch with null frames: the tint is still honest telemetry when the face
- *  isn't. */
+ *  A run's mood now carries its whole cycle (`mood_frames`), so the resident's
+ *  authored face animates here exactly as the daemon's derived one always did;
+ *  the single-glyph path below is the pre-upgrade-daemon fallback, not the
+ *  normal case. An unknown handle resolves to no frames at all, which is why
+ *  this can return a pitch with null frames: the tint is still honest
+ *  telemetry when the face isn't. */
 export function wordmarkMood(
 	runs: LiveRun[] | null | undefined,
 	daemonMood: DaemonMood | null | undefined
 ): { frames: string[] | null; pitch: number | null } {
 	const live = latestRunMood(runs);
 	if (live) {
-		return { frames: live.glyph ? [live.glyph] : null, pitch: live.pitch };
+		// The primary cycle. The wordmark wears one face at a time and its own
+		// choreography already varies the hold, so alternates are the chip's
+		// business, not the mark's.
+		const cycle = live.sequences?.[0] ?? (live.glyph ? [live.glyph] : null);
+		return { frames: cycle, pitch: live.pitch };
 	}
 	if (!daemonMood) return { frames: null, pitch: null };
 	// Unlike the chip, the wordmark doesn't need a *name* — it renders the

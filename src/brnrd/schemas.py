@@ -431,7 +431,44 @@ class LiveRunIn(BaseModel):
     # as a bare name, never a guessed face.
     mood: str | None = Field(default=None, max_length=64)
     mood_glyph: str | None = Field(default=None, max_length=16)
+    # Every breath the face can take: a list of base->expression->base
+    # sequences (`Emote.sequences` - primary cycle first, then alternates).
+    # `mood_glyph` is only the *resting* frame, which is why it could never
+    # animate and, across 98 situational emotes, collapsed onto 15 distinct
+    # values; a renderer with `mood_frames` should prefer these and keep
+    # `mood_glyph` for surfaces that cannot move. None when unset or when the
+    # handle didn't resolve daemon-side - absent resolution stays absent data.
+    mood_frames: list[list[str]] | None = Field(default=None, max_length=4)
+    # The frame a resting surface holds — per emote, unlike `mood_glyph`
+    # (= `frames[0]`, shared across a face family by design).
+    mood_rest: str | None = Field(default=None, max_length=16)
     mood_pitch: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("mood_frames")
+    @classmethod
+    def _bound_mood_frames(
+        cls, value: list[list[str]] | None,
+    ) -> list[list[str]] | None:
+        """Clamp a hostile payload; an empty result is no frames at all.
+
+        Nested lists need their own bound - `max_length=4` only counts the
+        outer one, so without this a daemon could hand over four sequences
+        of a million glyphs each. Same shape as `DaemonMoodIn._bound_frames`
+        one level down. A sequence that clamps to nothing is dropped rather
+        than kept as `[]`, and no sequences left means `None`: the whole
+        mood contract is that absent data renders as nothing, never as a
+        default face, and `[]` is a value a renderer has to remember to
+        treat as absent.
+        """
+        if value is None:
+            return None
+        bounded = [
+            [str(frame)[:16] for frame in seq[:8]]
+            for seq in value[:4]
+            if isinstance(seq, list) and seq
+        ]
+        bounded = [seq for seq in bounded if seq]
+        return bounded or None
 
     @field_validator("relics_counts")
     @classmethod
@@ -479,12 +516,30 @@ class DaemonMoodIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     glyph: str = Field(min_length=1, max_length=16)
     frames: list[str] = Field(default_factory=list, max_length=8)
+    # The alternates, on the same shape `LiveRunIn.mood_frames` uses. `frames`
+    # stays the primary cycle for a dashboard deployed before this existed.
+    sequences: list[list[str]] | None = Field(default=None, max_length=4)
+    rest: str | None = Field(default=None, max_length=16)
     pitch: float = Field(ge=0.0, le=1.0)
 
     @field_validator("frames")
     @classmethod
     def _bound_frames(cls, value: list[str]) -> list[str]:
         return [str(frame)[:16] for frame in value[:8]]
+
+    @field_validator("sequences")
+    @classmethod
+    def _bound_sequences(
+        cls, value: list[list[str]] | None,
+    ) -> list[list[str]] | None:
+        if value is None:
+            return None
+        bounded = [
+            [str(frame)[:16] for frame in seq[:8]]
+            for seq in value[:4]
+            if isinstance(seq, list) and seq
+        ]
+        return [seq for seq in bounded if seq] or None
 
 
 class RunStopRequestOut(BaseModel):

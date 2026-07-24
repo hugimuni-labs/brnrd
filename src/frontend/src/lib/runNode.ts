@@ -440,6 +440,18 @@ export interface NodeIdentity {
 	 * the bare name — it never means "pick a default face".
 	 */
 	moodGlyph: string | null;
+	/**
+	 * The face's cycles and its resting frame, live-packet only. A closed run
+	 * has neither: its frame records the handle the resident wrote and nothing
+	 * the daemon resolved from it, and this frontend owns no emote table by
+	 * design — so a closed run's chip is the bare name. That is honest, not
+	 * good; fixing it means the daemon writing the resolved face into the run
+	 * frame at closeout, which is a daemon-side change, not one this file can
+	 * make by guessing.
+	 */
+	moodFrames: string[][] | null;
+	moodRest: string | null;
+	moodPitch: number | null;
 }
 
 export function nodeDigest(node: RunNode): NodeDigest {
