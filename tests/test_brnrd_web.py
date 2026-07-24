@@ -339,10 +339,35 @@ def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
     assert status.json()["accepted_at"] is not None
 
 
-def test_terms_acceptance_shim_redirects_to_spa(client):
+def test_terms_acceptance_shim_redirects_to_the_hosted_execution_page(client):
+    """The shim lands on /beta-hosted-execution, not /terms.
+
+    /terms is the service-wide Terms of Service and carries no acceptance
+    widget: the widget writes ``hosted_terms_accepted_at``, which is the
+    hosted-execution addendum's record and must not stand in for acceptance
+    of the general ToS (#569). The document and the checkbox that records it
+    live on one page, and every accept-URL producer points there.
+    """
     r = client.get("/terms/accept?next=/connect/BR-123", follow_redirects=False)
     assert r.status_code == 308
-    assert r.headers["location"] == "/terms?next=/connect/BR-123"
+    assert r.headers["location"] == "/beta-hosted-execution?next=/connect/BR-123"
+
+
+def test_hosted_terms_accept_url_is_not_the_general_terms_page(client):
+    """Guards the split at its producer, not just at the shim.
+
+    A future caller that reintroduces ``/terms`` as the acceptance target
+    would silently make the ToS page the thing a user "accepts" — the exact
+    repurpose #569 forbids — without failing the shim test above if the shim
+    were also changed to match.
+    """
+    from brnrd.routers._session import _terms_accept_url
+
+    url = _terms_accept_url("/repos")
+    assert url.startswith("/beta-hosted-execution?")
+    assert not url.startswith("/terms")
+    # The existing safe-next contract is unchanged by the move.
+    assert _terms_accept_url("//evil.example").startswith("/beta-hosted-execution?next=/")
 
 
 def test_github_login_is_not_the_identity_key(client):

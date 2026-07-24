@@ -187,7 +187,10 @@ def terms_accept_api(
 
 @router.get("/terms/accept")
 def terms_accept_redirect(next: str = "/") -> RedirectResponse:
-    # In-flight OAuth/login links used the old Jinja acceptance URL.
+    # In-flight OAuth/login links used the old Jinja acceptance URL. It now
+    # lands on /beta-hosted-execution, which is where the hosted-execution
+    # document and its acceptance checkbox moved when /terms became the
+    # service-wide Terms of Service (#569).
     return RedirectResponse(url=_terms_accept_url(next), status_code=308)
 
 

@@ -105,10 +105,11 @@
 				</a>
 				<p class="mt-3 text-xs text-ink-quiet">
 					Execution stays on your machine. The
-					<a class="text-sky-400 underline" href={resolve('/terms')}
+					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>brnrd beta hosted-execution terms</a
 					>
-					apply only if HugiMuni SAS ever operates hosted compute for your account.
+					apply only if HugiMuni SAS ever operates hosted compute for your account; the
+					<a class="text-sky-400 underline" href={resolve('/terms')}>terms of service</a> cover the rest.
 				</p>
 			{:else}
 				<button
