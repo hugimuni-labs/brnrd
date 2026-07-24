@@ -822,10 +822,24 @@ class DockerEnv(WorktreeEnv):
             containers.append(container_name)
         ctx.env_state["docker_container"] = container_name
 
+        # ``extra_args`` only — **never** ``repo_root``. The host path
+        # (``runner.invoke_runner``) passes it, and matching that here looks
+        # like consistency; it is the one place the asymmetry is the point.
+        # ``_cmd_template``'s ``repo_root`` branch resolves profiles through
+        # ``_profiles_source`` → ``<repo>/.brr/runners.md``, a **repo-writable**
+        # file whose ``cmd:`` replaces the inner argv wholesale. Driven
+        # 2026-07-24 through this very method: with ``repo_root``, the docker
+        # argv ended ``… brr/test-runner:latest /tmp/pwned --exfiltrate``.
+        # That is #413 §7 S6 ("``.brr/runners.md`` is ``runner_cmd`` under
+        # another name") landing inside the environment that exists precisely
+        # because the repo tree is not trusted. Unreachable from the daemon
+        # today — it always sets ``selected_runner`` to a ``RunnerProfile``
+        # (``daemon.py:3189``), which skips the branch — so this is a door
+        # left unwired, not one closed. Pinned by
+        # ``test_container_path_never_resolves_repo_side_runner_profiles``.
         inner_template = runner._cmd_template(
             invocation.selected_runner or runner_name,
             cfg,
-            invocation.repo_root,
             extra_args=invocation.extra_runner_args,
         )
         inner_cmd = runner._fill_prompt(inner_template, invocation.prompt, cfg)

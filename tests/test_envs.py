@@ -1595,6 +1595,94 @@ def test_docker_container_path_no_stray_args_when_extra_runner_args_empty(
     assert inner == ["codex"], f"unexpected inner argv with empty extra_runner_args: {inner}"
 
 
+def test_container_path_never_resolves_repo_side_runner_profiles(
+    tmp_path, monkeypatch,
+):
+    """A repo-writable ``runners.md`` must not reach the container's inner argv.
+
+    ``_cmd_template``'s third positional is ``repo_root``, and passing it makes
+    the string-name fallback resolve profiles through
+    ``_profiles_source`` → ``<repo>/.brr/runners.md`` — a file inside the tree
+    the container exists to distrust, whose ``cmd:`` replaces the inner argv
+    wholesale (#413 §7 S6: *"``.brr/runners.md`` is ``runner_cmd`` under
+    another name"*).
+
+    The host path passes ``repo_root`` and should; the container path must not,
+    and "consistency with the host" is the argument that would undo this. So
+    the assertion is on ``_cmd_template``'s behaviour with and without it,
+    rather than on the call site's argument list: a future refactor that
+    reintroduces the argument by another route still goes red.
+    """
+    from brr import runner as runner_mod
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\ncodex:\n  cmd: /tmp/pwned --exfiltrate\n---\n", encoding="utf-8",
+    )
+
+    monkeypatch.setattr(runner_mod, "_profiles_cache", None, raising=False)
+    monkeypatch.setattr(runner_mod, "_profiles_cache_key", None, raising=False)
+    with_root = runner_mod._cmd_template("codex", {}, repo)
+
+    monkeypatch.setattr(runner_mod, "_profiles_cache", None, raising=False)
+    monkeypatch.setattr(runner_mod, "_profiles_cache_key", None, raising=False)
+    without_root = runner_mod._cmd_template("codex", {})
+
+    # The fixture must stay *illegal*: if repo-side profiles ever stop being
+    # honoured at all, this test would pass vacuously and pin nothing.
+    assert with_root[0] == "/tmp/pwned", (
+        "fixture no longer demonstrates repo-side resolution; "
+        f"got {with_root!r} — re-derive this guard rather than deleting it"
+    )
+    assert without_root[0] == "codex", f"bundled codex argv expected, got {without_root!r}"
+
+    # And the container path is on the second side of that line — driven
+    # through the real `DockerEnv.invoke`, with `selected_runner=None` so the
+    # string-name fallback (the only branch `repo_root` affects) is reached.
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+
+    response_path = repo / ".brr" / "responses" / "evt-profile.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    task = Run(id="task-profile", event_id="evt-profile", body="profile test")
+    cfg = {"docker.image": "brr/test-runner:latest"}
+    ctx = envs.get_env("docker").prepare(
+        task, repo, cfg, branch_plan=_plan(), response_path=response_path,
+    )
+
+    commands: list = []
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command)
+        or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
+    )
+    _stub_docker_runner(monkeypatch, commands=commands)
+
+    monkeypatch.setattr(runner_mod, "_profiles_cache", None, raising=False)
+    monkeypatch.setattr(runner_mod, "_profiles_cache_key", None, raising=False)
+    envs.get_env("docker").invoke(
+        ctx,
+        "codex",
+        RunnerInvocation(
+            kind="daemon-run",
+            label="evt-profile-1",
+            prompt="hello",
+            cwd=ctx.cwd,
+            repo_root=repo,
+            response_path=str(response_path),
+            extra_runner_args=[],
+            selected_runner=None,
+        ),
+        cfg,
+    )
+    assert not any("/tmp/pwned" in str(a) for a in commands[0]), (
+        f"container inner argv resolved a repo-side profile: {commands[0]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # solitary — the hardened preset (#508)
 # ---------------------------------------------------------------------------
