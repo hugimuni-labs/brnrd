@@ -22,10 +22,13 @@ Write-if-absent, checked only at true birth (a fresh ``git init``) or at
 the link seam: an owner who edits or deletes their deed is exercising
 exactly the ownership the deed asserts, and is never overwritten.
 
-The bounded-mirror wording below mirrors ``SECURITY.md`` § Credentials &
-data flow (the authority): a connected account mirrors a bounded render
-cache — work surface, knowledge pages, run nodes from the last 14 days —
-while these repos remain the durable copies.
+The bounded-mirror wording below mirrors ``SECURITY.md`` § What dashboard
+publishing mirrors (the authority): a connected account mirrors a bounded
+render cache of this content — work surface, knowledge pages, run nodes
+from the last 14 days — plus six further publish lanes, while these repos
+remain the durable copies. It used to say the dashboard kept *only* the
+corpus cache; that was one of seven lanes (#417), and a deed written into
+an owner's own repo is the wrong place to under-state what leaves.
 """
 
 from __future__ import annotations
@@ -84,11 +87,13 @@ Local-first: the durable copy is this repo, on your machine. If you link
 it to GitHub (`brnrd home link`), the remote is a **private** repo under
 *your* GitHub login, created with *your* credentials — brnrd's GitHub App
 never owns or holds it, and brnrd refuses to push this content to a
-public repo. If you connect a brnrd account, the hosted dashboard keeps
-only a **bounded render cache** of the account corpus — the authored work
-surface, knowledge pages, and run nodes from the last 14 days — and
-disconnecting purges it; this repo remains the durable copy either way.
-`SECURITY.md` in the brnrd source repo is the authority on those bounds.
+public repo. If you connect a brnrd account, the hosted dashboard keeps a
+**bounded render cache** of this content — the authored work surface,
+knowledge pages, and run nodes from the last 14 days — alongside other
+publish lanes covering runs, quota and review state, and disconnecting
+purges it; this repo remains the durable copy either way. `SECURITY.md`
+in the brnrd source repo has the full lane-by-lane inventory and is the
+authority on those bounds.
 
 ## How to leave
 
