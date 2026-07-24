@@ -30,6 +30,7 @@ commit lock.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -164,7 +165,18 @@ def parse_schedule(dominion_dir: Path) -> list[ScheduleEntry]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
+    return parse_schedule_text(text)
 
+
+def parse_schedule_text(text: str) -> list[ScheduleEntry]:
+    """Parse ``schedule.md`` *content* into entries — the file-free half of
+    :func:`parse_schedule`.
+
+    Split out because trust-tier attribution (#413 §7 S8) parses the
+    schedule as it stood at a *git blob*, not as it sits on disk: the
+    daemon reads both sides of its own dominion commit through
+    ``git show`` and never materialises either one as a file.
+    """
     entries: list[ScheduleEntry] = []
     title: str | None = None
     fields: dict[str, str] = {}
@@ -599,72 +611,178 @@ def lint_schedule(
 # The daemon attributes authorship of a schedule entry to the run that
 # wrote it, at that run's resolved trust tier.  The record lives in the
 # daemon-owned state file (alongside the existing firing-state) so it
-# survives daemon restarts and is never writable by the entry's author.
+# survives daemon restarts and is not written by the run's own agent —
+# the daemon derives it from a git diff rather than accepting a claim.
+# It is *not* beyond the reach of a collaborator run: see the forgeability
+# limit named at the attribution seam in ``daemon.py`` (S7's slice, not
+# S8's) — a `worktree`-env run can reach this state file directly.
 #
 # State keys (prefixed `_` to distinguish from entry-id records):
-#   _tier_by_entry:   {entry_id: tier}  — daemon-observed author tier
+#   _tier_by_entry:   {entry_id: {"tier": ..., "fp": ...}}
 #   _noticed_untiered: [entry_id, ...]  — one-time notice already sent
 #
-# An entry with no _tier_by_entry record fires as owner (``schedule``
-# is in _OWNER_SOURCES) with a one-time notice.  The stamp that S8
-# writes into create_event beats the source-based default because
-# trust.resolve_tier prefers the explicit stamp.
+# **The record has a lifecycle**, which is the whole of the #644 rework:
+#
+#   created / re-recorded — when a run's *own dominion commit* changes
+#       that entry's fingerprint.  Not "when the id is new": rewriting an
+#       entry's body leaves the id untouched, and that edit is the exact
+#       escalation the id-set predicate could not see.
+#   read — only when the recorded fingerprint still matches the entry on
+#       disk.  A drifted fingerprint means the entry changed with no
+#       attributing commit (an operator hand-edit, which is how the
+#       schedule is actually maintained day to day); that falls through to
+#       unrecorded → owner + the one-time notice, which is the right
+#       answer for the operator and a demotion, never an escalation, for
+#       anyone else.
+#   pruned — at the fire site, for ids no longer in the schedule at all,
+#       so a deleted entry's tier cannot be inherited by a later entry
+#       that reuses its id, and neither map grows without bound.
+#
+# An entry with no usable record fires as owner (``schedule`` is in
+# _OWNER_SOURCES) with a one-time notice.  The stamp S8 writes into
+# create_event beats that source-based default because trust.resolve_tier
+# prefers the explicit stamp.
 
 _TIER_BY_ENTRY_KEY = "_tier_by_entry"
 _NOTICED_UNTIERED_KEY = "_noticed_untiered"
 
 
-def entry_ids_from_dominion(dominion_path: Path) -> frozenset[str]:
-    """Return the set of entry IDs currently in *dominion_path*'s schedule.md.
+def entry_fingerprint(entry: ScheduleEntry) -> str:
+    """Return a stable content fingerprint for *entry*.
 
-    Used to snapshot the entry set before a run starts so the capture-net
-    seam can diff before/after and attribute new entries to the run's tier.
-    Returns an empty frozenset when the file is absent or unparseable.
+    Covers everything that decides *what gets said and when* — kind,
+    trigger, ``conversation_key``, ``reset_on``, body — so that editing an
+    entry in place is a visible event to attribution.  The id is
+    deliberately excluded: the fingerprint is the record's *value*, keyed
+    by id, and folding the key into the value buys nothing.
+
+    The trigger is taken from ``raw_when`` (the authored string) rather
+    than the parsed ``at``/``interval``.  That is not cosmetic: quota
+    pacing rebuilds entries with ``replace(e, interval=...)`` before
+    firing, so a fingerprint over the parsed interval would change under
+    the daemon's own hand every time quota dipped, and every ``every:``
+    entry would drift out of its record on a paced tick.
     """
-    return frozenset(e.id for e in parse_schedule(dominion_path))
+    payload = json.dumps(
+        [
+            entry.kind,
+            entry.raw_when,
+            entry.conversation_key or "",
+            entry.reset_on or "",
+            entry.body,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def tier_for_entry(state: dict, entry_id: str) -> str | None:
-    """Return the attributed trust tier for *entry_id*, or ``None`` if unrecorded.
+def fingerprints_from_text(text: str) -> dict[str, str]:
+    """Return ``{entry_id: fingerprint}`` for a ``schedule.md`` *content* string."""
+    return {e.id: entry_fingerprint(e) for e in parse_schedule_text(text)}
 
-    ``None`` means the entry predates S8 or was written before the
-    daemon began attributing; it fires as ``owner`` with a one-time
-    notice (the source-based default from ``_OWNER_SOURCES``).
+
+def _read_record(state: dict, entry_id: str) -> tuple[str, str] | None:
+    """Return ``(tier, fp)`` for *entry_id*, or ``None`` when unrecorded.
+
+    Tolerates the pre-rework record shape (a bare tier string) by reading
+    it as an empty fingerprint — which matches no real entry, so such a
+    record resolves to unrecorded → owner.  That is the safe direction: a
+    record written by the id-set predicate cannot prove *which body* it
+    attributed, so it is not evidence for anything.
     """
     tier_map = state.get(_TIER_BY_ENTRY_KEY)
     if not isinstance(tier_map, dict):
         return None
-    v = tier_map.get(entry_id)
-    return str(v) if v else None
+    rec = tier_map.get(entry_id)
+    if isinstance(rec, str):
+        return (rec, "") if rec else None
+    if isinstance(rec, dict):
+        tier = str(rec.get("tier") or "")
+        return (tier, str(rec.get("fp") or "")) if tier else None
+    return None
 
 
-def record_entry_tiers(brr_dir: Path, new_ids: "frozenset[str]", tier: str) -> None:
-    """Persist trust-tier attribution for *new_ids* in the schedule state.
+def tier_for_entry(state: dict, entry_id: str, fingerprint: str) -> str | None:
+    """Return the attributed tier for *entry_id*, or ``None`` if unusable.
 
-    Called at dominion-capture time: entries that appeared in
-    ``schedule.md`` since the run started are attributed to *tier* (the
-    completing run's resolved trust tier, from
-    ``task.meta["trust_tier"]``).
+    ``None`` means "no run is known to have authored *this* text": the
+    entry predates S8, or it has been edited since it was attributed with
+    no commit to attribute the edit to.  Either way it fires as ``owner``
+    with a one-time notice (the source-based default from
+    ``_OWNER_SOURCES``).
 
-    Idempotent: existing records are not overwritten — the first
-    attribution wins.  Best-effort: I/O errors are swallowed so the
-    capture step never fails because of attribution.
+    *fingerprint* is required, not optional.  An optional one would let a
+    caller silently skip the check that makes the record mean anything,
+    and the fire site is the only caller that matters.
     """
-    if not new_ids or not tier:
+    rec = _read_record(state, entry_id)
+    if rec is None:
+        return None
+    tier, fp = rec
+    return tier if fp and fp == fingerprint else None
+
+
+def record_entry_tiers(brr_dir: Path, touched: dict[str, str], tier: str) -> None:
+    """Persist trust-tier attribution for *touched* (``{id: fingerprint}``).
+
+    Called at the capture-net seam with the entries **this run's own
+    dominion commit changed** — added, or edited in place — at the run's
+    resolved trust tier (``task.meta["trust_tier"]``).
+
+    **Last write wins, deliberately**, reversing the first-wins rule the
+    id-set predicate needed.  Under that predicate re-recording was
+    unsound: a global before/after snapshot cannot say *who* changed an
+    entry, so a concurrent owner run finalizing after a collaborator's
+    edit would re-attribute that edit to owner.  Sourcing *touched* from
+    the run's own commit removes the ambiguity — this run changed these
+    entries, at this tier — so overwriting is now the correct rule and the
+    only one that can follow an entry through an edit.
+
+    Best-effort: I/O errors are swallowed so capture never fails because
+    of attribution.
+    """
+    if not touched or not tier:
         return
     try:
         state = load_state(brr_dir)
         tier_map: dict = dict(state.get(_TIER_BY_ENTRY_KEY) or {})
-        changed = False
-        for eid in sorted(new_ids):  # sorted for deterministic output
-            if eid not in tier_map:
-                tier_map[eid] = tier
-                changed = True
-        if changed:
-            state[_TIER_BY_ENTRY_KEY] = tier_map
-            save_state(brr_dir, state)
+        for eid in sorted(touched):  # sorted for deterministic output
+            tier_map[eid] = {"tier": tier, "fp": touched[eid]}
+        state[_TIER_BY_ENTRY_KEY] = tier_map
+        save_state(brr_dir, state)
     except OSError:
         pass
+
+
+def prune_entry_records(state: dict, present_ids: "set[str] | frozenset[str]") -> bool:
+    """Drop tier records and notice marks for ids no longer in the schedule.
+
+    Mutates *state* in place; returns whether anything changed.
+
+    **Call this against the full parsed entry list, never against the
+    pacing-filtered one.**  A quota-critical tick drops every ``every:``
+    entry from the list handed to :func:`due_entries`, and pruning against
+    *that* would delete the tier record of every recurring entry the
+    moment quota dipped — after which each one would fire as ``owner``.
+    It is the same hazard ``dropped_ids`` already exists to prevent for
+    firing state, in the one direction where the cost is an escalation
+    rather than a missed beat.
+    """
+    changed = False
+    tier_map = state.get(_TIER_BY_ENTRY_KEY)
+    if isinstance(tier_map, dict):
+        kept = {k: v for k, v in tier_map.items() if k in present_ids}
+        if kept != tier_map:
+            state[_TIER_BY_ENTRY_KEY] = kept
+            changed = True
+    noticed = state.get(_NOTICED_UNTIERED_KEY)
+    if isinstance(noticed, list):
+        kept_notices = [k for k in noticed if k in present_ids]
+        if kept_notices != noticed:
+            state[_NOTICED_UNTIERED_KEY] = kept_notices
+            changed = True
+    return changed
 
 
 def render_lint_block(findings: list[ScheduleFinding]) -> str:

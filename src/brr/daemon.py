@@ -6206,13 +6206,25 @@ def _schedule_enabled(cfg: dict) -> bool:
 
 # ── Schedule-entry trust-tier attribution (#413 §7 S8) ───────────────
 #
-# A run may write new ## headings to its dominion's schedule.md during a
-# thought.  The capture net (dominion.commit after every run) is the seam
-# where the daemon compares the entry-id set before/after and attributes
-# new entries to the completing run's trust tier.  The tier is stored in
-# the daemon-owned schedule state file (schedule._TIER_BY_ENTRY_KEY) so:
-#   • it is a daemon-observed fact, not a self-attestation by the run;
-#   • it is not inside any worktree the authoring tier can write.
+# A run may write its dominion's schedule.md during a thought — add a ##
+# heading, or rewrite the body under one that is already there.  The
+# capture net (dominion.commit after every run) is the seam where the
+# daemon attributes those writes to the completing run's trust tier.
+#
+# It reads **the run's own commit**, not a before/after snapshot of the
+# live file.  A snapshot answers "did this change?"; attribution has to
+# answer "who changed it?", and with concurrent runs at different tiers
+# those are different questions — an owner run finalizing after a
+# collaborator's edit finds that edit in its own "after" and claims it.
+# A commit is one run's writes by construction, so the question the
+# snapshot could not answer does not arise.  The unit compared is the
+# entry's *fingerprint* (schedule.entry_fingerprint), not its id: an id
+# is a slugified heading, guessable and stable across a body rewrite,
+# and the rewrite is the escalation worth having.
+#
+# The tier is stored in the daemon-owned schedule state file
+# (schedule._TIER_BY_ENTRY_KEY), so it is a daemon-observed fact derived
+# from git history rather than a self-attestation by the run.
 #
 # NOTE — forgeability limit (§2.3 clause 1, S7's scope): a collaborator
 # run in *worktree* env can reach .brr/ (the shared runtime dir that holds
@@ -6221,28 +6233,35 @@ def _schedule_enabled(cfg: dict) -> bool:
 # its own tier record.  Fixing that (moving state outside every collaborator-
 # writable mount) is S7's slice, not S8's.  This implementation names the
 # gap so reviewers know the invariant S8 provides and the one it does not.
+#
+# The fingerprint does not narrow that gap and is not offered as doing so:
+# it is an integrity check against *drift*, not a signature.  A run that
+# can write the state file can also compute the fingerprint of the entry
+# it just wrote.  Reachability of the file is the whole of the limit.
 
 
-def _primary_schedule_dir(
+def _primary_dominion_candidate(
     repo_root: Path,
     cfg: dict,
     account_context: "account.AccountContext | None",
-) -> "Path | None":
-    """Return the dominion dir that ``_fire_due_schedules`` reads schedule.md from.
+) -> "dominion.ResidentDominion | None":
+    """Return the dominion candidate ``_fire_due_schedules`` reads schedule.md from.
 
     Mirrors the candidate-search logic in ``_fire_due_schedules`` so that
-    attribution and firing always agree on which schedule.md is the canonical
-    one.  Returns the first candidate whose path is a directory, or ``None``.
+    attribution and firing always agree on which schedule.md is the
+    canonical one.  Returns the whole candidate rather than just its path
+    because attribution needs the ``capture_root`` — the git repo
+    ``_capture_dominion`` commits — and the schedule lives at a *path
+    inside* that repo, not at its root.
     """
     candidates = dominion.resident_dominion_candidates(repo_root, cfg)
     if account_context is not None and account_context.enabled:
         try:
             repo_label = account.repo_label(repo_root, cfg)
-            account_path = account.repo_dominion_path(account_context, repo_label)
             candidates.insert(
                 0,
                 dominion.ResidentDominion(
-                    path=account_path,
+                    path=account.repo_dominion_path(account_context, repo_label),
                     capture_root=account_context.dominion_repo,
                     label="account",
                 ),
@@ -6251,47 +6270,114 @@ def _primary_schedule_dir(
             pass
     for c in candidates:
         if c.path.is_dir():
-            return c.path
+            return c
     return None
 
 
-def _snapshot_dominion_schedule_ids(
+def _run_dominion_commits(capture_root: Path, run_id: str) -> list[str]:
+    """Return the dominion commits *run_id* authored, oldest first.
+
+    Identified by the message ``_capture_dominion`` writes ("... after run
+    <id>", in both the account and legacy wordings), matched as a fixed
+    string.  A run id is unique, so this finds this run's commits and no
+    other's — which is the entire reason attribution moved here from a
+    global before/after snapshot.  A run may produce more than one (the
+    capture is called on the run path *and* on retry), so all of them are
+    returned rather than just the tip.
+
+    Empty when the run committed nothing to the dominion — including the
+    case that matters most, an operator hand-editing ``schedule.md``
+    outside any run at all.
+    """
+    if not run_id:
+        return []
+    res = gitops._git(
+        capture_root,
+        "log",
+        "--format=%H",
+        "--fixed-strings",
+        f"--grep=after run {run_id}",
+        "--max-count=20",
+        check=False,
+    )
+    if res.returncode != 0:
+        return []
+    return [line.strip() for line in res.stdout.splitlines() if line.strip()][::-1]
+
+
+def _schedule_at_commit(capture_root: Path, ref: str, rel_path: str) -> dict[str, str]:
+    """Return ``{entry_id: fingerprint}`` for ``schedule.md`` as of *ref*.
+
+    Empty when the path did not exist there — which is the honest reading
+    for a commit that *created* the schedule, and for ``<sha>^`` on a root
+    commit.
+    """
+    res = gitops._git(capture_root, "show", f"{ref}:{rel_path}", check=False)
+    if res.returncode != 0:
+        return {}
+    return schedule_mod.fingerprints_from_text(res.stdout)
+
+
+def _schedule_entries_touched_by_run(
+    task: "Run",
     repo_root: Path,
     cfg: dict,
     account_context: "account.AccountContext | None",
-) -> "frozenset[str]":
-    """Snapshot the entry IDs in the dominion's schedule.md before a run starts.
+) -> dict[str, str]:
+    """Return ``{entry_id: fingerprint}`` for entries *this run's own commit* changed.
 
-    Returns an empty frozenset on any error — attribution degrades to
-    "nothing attributed" rather than blocking the run.
+    The mechanism the #644 review asked for, and the reason it is not a
+    before/after snapshot of the live schedule: a snapshot can say *that*
+    an entry changed between two instants, never *who* changed it.  With
+    concurrent runs at different tiers — the ordinary case, not the exotic
+    one — an owner run finalizing after a collaborator's edit would find
+    that edit in its own "after" and claim it.  A commit does not have
+    that ambiguity: it names exactly one run's writes.
+
+    "Changed" means the fingerprint differs from the commit's parent, so
+    it covers an entry added, an entry rewritten in place, and an id
+    deleted and recreated — the three shapes an authored entry can take.
+    An entry the commit merely carried along unchanged is not touched by
+    this run and keeps whatever record it had.
     """
+    candidate = _primary_dominion_candidate(repo_root, cfg, account_context)
+    if candidate is None:
+        return {}
+    capture_root = candidate.capture_root
+    if not (capture_root / ".git").exists():
+        return {}
     try:
-        dom = _primary_schedule_dir(repo_root, cfg, account_context)
-        if dom is None:
-            return frozenset()
-        return schedule_mod.entry_ids_from_dominion(dom)
-    except Exception:  # noqa: BLE001
-        return frozenset()
+        rel = candidate.path.resolve().relative_to(capture_root.resolve())
+    except (OSError, ValueError):
+        return {}
+    rel_path = str(rel / schedule_mod.SCHEDULE_FILE).lstrip("./") or schedule_mod.SCHEDULE_FILE
+    touched: dict[str, str] = {}
+    for sha in _run_dominion_commits(capture_root, task.id):
+        after = _schedule_at_commit(capture_root, sha, rel_path)
+        before = _schedule_at_commit(capture_root, f"{sha}^", rel_path)
+        for eid, fp in after.items():
+            if before.get(eid) != fp:
+                touched[eid] = fp
+    return touched
 
 
-def _attribute_new_schedule_entries(
+def _attribute_schedule_entries(
     task: "Run",
-    before_ids: "frozenset[str]",
     brr_dir: Path,
     repo_root: Path,
     cfg: dict,
     account_context: "account.AccountContext | None",
 ) -> None:
-    """Attribute schedule entries added by this run to its trust tier.
+    """Attribute schedule entries this run authored or edited to its trust tier.
 
-    Called after ``_capture_dominion`` so the dominion's schedule.md
-    already reflects the run's writes.  Entries that are new relative to
-    *before_ids* are recorded in the schedule state at the run's resolved
-    trust tier (``task.meta["trust_tier"]``).
-
-    Pre-existing entries (*before_ids*) are never touched — they either
-    already have a record, or they are pre-S8 entries that fire as owner
-    with a one-time notice (see ``_fire_due_schedules``).
+    Runs from the finalize ``finally:`` block, not the happy path.  The
+    dominion commit this reads from is written by ``_capture_dominion``
+    inside ``_run_worker`` — deliberately "one call site covers success,
+    retry, and hard failure" — so the evidence is already on disk by the
+    time anything later in finalize can raise.  Leaving attribution on the
+    happy path meant any exception in that stretch (publish, ledger, run
+    body, state doc) silently dropped it, and an unattributed entry fires
+    ``owner``: fail-open in the one direction that matters.
 
     Best-effort: all exceptions are swallowed so attribution never blocks
     delivery.
@@ -6300,13 +6386,11 @@ def _attribute_new_schedule_entries(
     if not tier:
         return
     try:
-        dom = _primary_schedule_dir(repo_root, cfg, account_context)
-        if dom is None:
-            return
-        after_ids = schedule_mod.entry_ids_from_dominion(dom)
-        new_ids = after_ids - before_ids
-        if new_ids:
-            schedule_mod.record_entry_tiers(brr_dir, new_ids, tier)
+        touched = _schedule_entries_touched_by_run(
+            task, repo_root, cfg, account_context,
+        )
+        if touched:
+            schedule_mod.record_entry_tiers(brr_dir, touched, tier)
     except Exception:  # noqa: BLE001 - attribution must not block delivery
         pass
 
@@ -6454,8 +6538,20 @@ def _fire_due_schedules(
         ):
             if _meta_key in loaded_state:
                 new_state[_meta_key] = loaded_state[_meta_key]
-        # Tier map for this tick's firing (read once, not per-entry).
-        _tier_by_entry: dict = new_state.get(schedule_mod._TIER_BY_ENTRY_KEY) or {}
+        # ...then give those carried-forward records a lifecycle: an entry
+        # the resident deleted must not leave its tier behind for whatever
+        # later entry reuses the id, and _noticed_untiered must not grow
+        # forever.  Pruned against `entries` — every entry actually in the
+        # schedule — and *never* against `scheduled_entries`, which a
+        # quota-critical tick has already stripped of every `every:` entry.
+        # Pruning against the paced list would delete the tier record of
+        # every recurring entry the moment quota dipped, and each would
+        # come back as owner: the same hazard `dropped_ids` above exists to
+        # prevent for firing state, pointed at the security property.
+        schedule_mod.prune_entry_records(new_state, {e.id for e in entries})
+        # Fingerprints come from `entries` for the same reason: the paced
+        # list has had `replace(e, interval=...)` applied to it.
+        _fingerprints = {e.id: schedule_mod.entry_fingerprint(e) for e in entries}
         _noticed_untiered: list = list(new_state.get(schedule_mod._NOTICED_UNTIERED_KEY) or [])
         for entry in due:
             body = entry.body or f"(self-scheduled thought: {entry.id})"
@@ -6468,7 +6564,16 @@ def _fire_due_schedules(
             # _OWNER_SOURCES["schedule"].  When no record exists the event
             # carries no stamp → falls back to owner via source, per the
             # acceptance criteria for pre-existing / pre-S8 entries.
-            entry_tier = _tier_by_entry.get(entry.id)
+            #
+            # The record is only honoured while its fingerprint still
+            # matches what is on disk.  A drifted fingerprint means this
+            # text was never attributed to anyone — an operator hand-edit,
+            # which is how the schedule is actually maintained day to day,
+            # leaves no commit to attribute — so it takes the same
+            # unrecorded path: owner, with the one-time notice.
+            entry_tier = schedule_mod.tier_for_entry(
+                new_state, entry.id, _fingerprints.get(entry.id, ""),
+            )
             if entry_tier is None and entry.id not in _noticed_untiered:
                 print(
                     f"[brnrd] schedule: {entry.id} has no tier record — "
@@ -8680,12 +8785,7 @@ def _run_worker_and_finalize(
     failure_defer_seconds = float(
         cfg.get("dispatch.failure_defer_seconds", _FAILURE_DEFER_SECONDS_DEFAULT)
     )
-    # S8: snapshot the schedule entry IDs *before* the run so the
-    # capture-net seam can attribute only entries the run itself added.
     brr_dir = gitops.shared_brr_dir(repo_root)
-    _schedule_before_ids = _snapshot_dominion_schedule_ids(
-        repo_root, cfg, account_context,
-    )
     task = None
     try:
         try:
@@ -8785,17 +8885,6 @@ def _run_worker_and_finalize(
             task,
             account_context=account_context,
         )
-        # S8: attribute any new schedule entries to the run's trust tier.
-        # Runs after _capture_dominion so the dominion's schedule.md
-        # already reflects the run's writes.
-        _attribute_new_schedule_entries(
-            task,
-            _schedule_before_ids,
-            brr_dir,
-            repo_root,
-            cfg,
-            account_context,
-        )
         _retire_internal_event(
             event, responses_dir,
             inbox_dir=inbox_dir,
@@ -8803,6 +8892,18 @@ def _run_worker_and_finalize(
         )
         return task
     finally:
+        # #413 §7 S8: attribute the schedule entries this run authored or
+        # edited, before anything else in teardown.  In `finally:` on
+        # purpose — the whole stretch above (knowledge capture, ledger,
+        # publish, run body, state doc) can raise, and an entry that never
+        # got attributed fires as `owner`.  Fail-open in the one direction
+        # that matters, so it does not get to depend on the happy path.
+        # The evidence it reads is a dominion commit `_run_worker` already
+        # wrote, on success and on failure alike.
+        if task is not None:
+            _attribute_schedule_entries(
+                task, brr_dir, repo_root, cfg, account_context,
+            )
         # Leave the presence registry — the thought is no longer awake.
         # The registry self-prunes on read too, but an explicit deregister
         # keeps it tidy and immediate.
