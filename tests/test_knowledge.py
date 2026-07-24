@@ -968,6 +968,13 @@ def _seeded_checkout(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=krepo, check=True)
     (krepo / "index.md").write_text("v1\n", encoding="utf-8")
     _commit(krepo, "seed")
+    # The home is written to `.brr/config` as well as passed as a dict (#676):
+    # `mirror_state` now asks *which account* this checkout should mirror, and a
+    # repo whose home exists only in a caller's dict is a fixture shape
+    # production never has — it would make an honest identity check read as a
+    # false positive.
+    (repo / ".brr").mkdir(parents=True, exist_ok=True)
+    (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
     cfg = {"home.path": str(home)}
     checkout = knowledge.ensure_checkout(repo, cfg)
     assert (checkout / "index.md").exists()
@@ -1287,3 +1294,235 @@ def test_mirror_state_makes_no_network_call(tmp_path, monkeypatch):
     state = knowledge.mirror_state(repo)
 
     assert state.status == knowledge.MIRROR_BEHIND
+
+
+# ── mirror identity: which repository is this a mirror *of*? (#676) ──
+#
+# The counts above answer "how far behind", which presumes the checkout is a
+# clone of *this account's* knowledge repo at all. It was 0-behind and read as
+# `current` when it was not: on 2026-07-09 a repo's `.brnrd-kb` still pointed
+# at an early decoy account slot, at 0 commits, weeks after `cloud.json`
+# started carrying the real one. `ensure_checkout` re-clones on that mismatch,
+# but its only caller is `cli.cmd_kb` — nothing on the wake path looks.
+#
+# Every fixture below reaches the mis-pointed checkout the way production
+# reaches it: the account resolution moves and the checkout does not.
+
+
+def _second_home(tmp_path, name="real-home"):
+    """A second, real account knowledge repo — the one the account now names."""
+    home = tmp_path / name
+    krepo = home / "knowledge"
+    krepo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=krepo, check=True)
+    (krepo / "index.md").write_text("v1\n", encoding="utf-8")
+    (krepo / "real-page.md").write_text("the real account's pages\n", encoding="utf-8")
+    _commit(krepo, "seed the real account")
+    return home, krepo
+
+
+def _account_moves_to(repo, home):
+    """Repoint this repo's account resolution; the checkout is left alone."""
+    (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
+    return {"home.path": str(home)}
+
+
+def test_mirror_state_names_a_checkout_of_the_wrong_repository(tmp_path):
+    """The 2026-07-09 shape, replayed: a checkout perfectly current with a
+    decoy account slot after resolution moved to the real one. The status must
+    be its own — neither `current` (the old, confident lie) nor `absent`."""
+    repo, decoy, checkout, _stale_cfg = _seeded_checkout(tmp_path)
+    real_home, real_krepo = _second_home(tmp_path)
+    cfg = _account_moves_to(repo, real_home)
+    # Guard the fixture: a real clone of the decoy, up to date with it, and it
+    # has never heard of the real account's pages.
+    assert _head(checkout) == _head(decoy)
+    assert not (checkout / "real-page.md").exists()
+    behind = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD..origin/main"],
+        cwd=checkout, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert behind == "0"  # the exact reading that used to be reported as fine
+
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert state.status == knowledge.MIRROR_ELSEWHERE
+    assert state.status != knowledge.MIRROR_CURRENT
+    assert state.status != knowledge.MIRROR_ABSENT
+    # Both paths, resolved — the reader cannot judge the next move from either
+    # one alone.
+    assert Path(state.origin).resolve() == decoy.resolve()
+    assert Path(state.expected_origin).resolve() == real_krepo.resolve()
+
+
+def test_mirror_state_names_an_origin_rewritten_under_a_stable_account(tmp_path):
+    """The same defect reached from the other side: the account stayed put and
+    the remote was rewritten. Identity is a property of the pair, so either
+    half moving has to be readable."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    _other_home, other_krepo = _second_home(tmp_path, name="other-home")
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", str(other_krepo)],
+        cwd=checkout, check=True,
+    )
+
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert state.status == knowledge.MIRROR_ELSEWHERE
+    assert Path(state.origin).resolve() == other_krepo.resolve()
+    assert Path(state.expected_origin).resolve() == krepo.resolve()
+
+
+def test_mirror_state_is_silent_when_only_the_spelling_differs(tmp_path):
+    """#623, held shut. A symlinked or non-normalised path to the *same* repo
+    is the same repo; a check that fires on spelling fires every wake for a
+    non-reason and takes the wakes that mattered down with it."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    link = tmp_path / "home-via-link"
+    link.symlink_to(tmp_path / "home", target_is_directory=True)
+    spellings = [
+        str(link / "knowledge"),                             # through a symlink
+        str(tmp_path / "home" / "." / "knowledge"),          # non-normalised
+        f"{tmp_path}/home/knowledge/../knowledge",           # …and again
+    ]
+
+    for spelling in spellings:
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", spelling],
+            cwd=checkout, check=True,
+        )
+        # Guard the fixture: git stores the URL verbatim, so the odd spelling
+        # really does reach the comparison. Without this the test could pass
+        # because git normalised it, proving nothing.
+        assert knowledge._checkout_origin_url(checkout) == spelling
+
+        state = knowledge.mirror_state(repo, cfg)
+        assert state.status == knowledge.MIRROR_CURRENT, spelling
+        assert not state.origin, spelling  # carried only when it is the story
+
+
+def test_mirror_state_without_an_origin_is_absent_not_elsewhere(tmp_path):
+    """`ensure_checkout`'s fallback (clone failed → bare `git init`) leaves a
+    checkout with no `origin` at all. That is an absent upstream, not a
+    mis-pointed one: there is no second path to name, and inventing an
+    accusation out of a missing remote is the same non-reason firing."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    subprocess.run(["git", "remote", "remove", "origin"], cwd=checkout, check=True)
+
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert state.status == knowledge.MIRROR_ABSENT
+    assert state.status != knowledge.MIRROR_ELSEWHERE
+    assert not state.origin
+
+
+def test_mirror_state_skips_identity_when_the_account_will_not_resolve(
+    tmp_path, monkeypatch
+):
+    """An unanswerable question must go quiet, not answer. When account
+    resolution fails there is no expected origin to compare against, so the
+    reading falls back to the staleness statuses rather than accusing the
+    checkout of pointing elsewhere on no evidence."""
+    repo, krepo, checkout, cfg = _behind_mirror(tmp_path, dirty=False)
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("account resolution is down")
+
+    monkeypatch.setattr(knowledge.account, "resolve_context", _boom)
+
+    state = knowledge.mirror_state(repo, cfg)  # must not raise
+
+    assert state.status == knowledge.MIRROR_BEHIND
+    assert state.behind == 1
+
+
+def test_mirror_state_takes_an_already_resolved_home(tmp_path, monkeypatch):
+    """A caller holding the resolved account path hands it in rather than
+    paying for a seventh resolution — a fact stored twice is repaired once.
+    Pinned by making a re-resolution fatal."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+
+    def _never(*_a, **_kw):
+        raise AssertionError("home_knowledge was supplied; do not resolve again")
+
+    monkeypatch.setattr(knowledge.account, "resolve_context", _never)
+
+    state = knowledge.mirror_state(repo, home_knowledge=krepo)
+
+    assert state.status == knowledge.MIRROR_CURRENT
+
+
+def test_mirror_state_identity_makes_no_network_call(tmp_path, monkeypatch):
+    """The identity read is one local `git remote get-url` — it reads
+    `.git/config`. The wake path's no-network promise covers the new question
+    as much as the old one, so pin it where the mismatch actually fires."""
+    repo, _decoy, _checkout, _stale = _seeded_checkout(tmp_path)
+    real_home, _real = _second_home(tmp_path)
+    cfg = _account_moves_to(repo, real_home)
+    real_run = subprocess.run
+
+    def _no_network(cmd, *a, **kw):
+        names = [str(c) for c in cmd] if isinstance(cmd, (list, tuple)) else [str(cmd)]
+        if {"fetch", "ls-remote", "clone", "pull"} & set(names):
+            raise AssertionError(f"mirror_state must not touch the network: {cmd}")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(knowledge.subprocess, "run", _no_network)
+
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert state.status == knowledge.MIRROR_ELSEWHERE
+
+
+# ── one dirty reading, two readers (#676) ────────────────────────────
+#
+# `_refresh_checkout` decides whether to *skip* on tracked modifications;
+# `mirror_state` decides what to *say* about them. They were two independently
+# written copies of the same `git status`, agreeing by coincidence — so a
+# change to the skip condition would have left the wake confidently reporting
+# "clean" about a checkout that was skipped for being dirty.
+
+
+def test_the_dirty_reading_is_one_predicate_for_both_readers(tmp_path, monkeypatch):
+    """Move the shared predicate and both readers move. If either one grows
+    its own `git status` back, it stops seeing this and the test goes red —
+    which is the drift the duplication made invisible."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    assert knowledge._checkout_is_dirty(checkout) is False  # guard: really clean
+
+    monkeypatch.setattr(knowledge, "_checkout_is_dirty", lambda _checkout: True)
+    reason = knowledge._refresh_checkout(checkout)
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert reason is not None and "uncommitted work" in reason
+    assert state.dirty is True
+
+
+def test_an_unreadable_status_is_a_third_answer_not_a_clean_one(
+    tmp_path, monkeypatch
+):
+    """`None` is "could not read", and the two readers are allowed to differ
+    on what to do with it — the refresh skips with its own reason, the wake
+    says nothing about dirtiness — but only because the predicate hands them
+    the same third answer instead of each inventing a default."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+
+    monkeypatch.setattr(knowledge, "_checkout_is_dirty", lambda _checkout: None)
+    reason = knowledge._refresh_checkout(checkout)
+    state = knowledge.mirror_state(repo, cfg)
+
+    assert reason is not None and "could not read" in reason
+    assert state.dirty is False
+
+
+def test_untracked_files_are_clean_to_both_readers(tmp_path):
+    """The rationale that used to be commented twice, asserted once: a stray
+    untracked file is a checkout's normal state, so it neither blocks the
+    fast-forward (#613) nor shows up in the wake's dirty reading."""
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    (checkout / "scratch-note.md").write_text("untracked\n", encoding="utf-8")
+    _advance_home(krepo)
+
+    assert knowledge._checkout_is_dirty(checkout) is False
+    assert knowledge._refresh_checkout(checkout) is None  # did not skip
+    assert knowledge.mirror_state(repo, cfg).dirty is False
