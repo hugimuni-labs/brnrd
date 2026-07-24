@@ -298,6 +298,54 @@ def write_config(repo_root: Path, cfg: dict[str, Any]) -> None:
     _write_flat(repo_config_path(repo_root), cfg)
 
 
+def write_security_config(
+    repo_root: Path, cfg: dict[str, Any], *, merge: bool = True
+) -> Path | None:
+    """Write *cfg* to the daemon-owned ``security.config``, merging by default.
+
+    Returns the path written, or ``None`` when the security domain can't be
+    resolved (reserved repo label, mid-init odd state — same fail-closed
+    direction as ``security_config_path`` itself).
+
+    ``merge=True`` (the default): existing keys survive; *cfg* values win on
+    overlap. Callers should always use the default — a second repo on the same
+    account home must not lose its keys, and an install that already has a
+    ``security.config`` (a second repo on the same account home) must not
+    lose keys written by the first.
+
+    File is created with mode ``0600``, matching ``apply_promote``'s own write.
+    Parent directories are created if absent — so a security domain that doesn't
+    exist yet is materialised on the first write rather than silently dropping
+    the keys.
+
+    Cache note: invalidates ``_SECURITY_PATH_CACHE`` entries for *repo_root*
+    after a successful write. A previous ``security_config_path()`` call in the
+    same long-lived process (the daemon) may have cached the path resolution
+    when the home wasn't reachable yet; once the file is written and its parent
+    created, the next lookup must re-resolve rather than perpetuating a stale
+    cached value. See the ``_SECURITY_PATH_CACHE`` comment for the cost model
+    that motivated the cache; invalidating on write is free compared to that.
+    """
+    repo_cfg = _read_flat(repo_config_path(repo_root))
+    sec_path = security_config_path(repo_root, repo_cfg)
+    if sec_path is None:
+        return None
+    if merge:
+        existing = _read_flat(sec_path)
+        merged = dict(existing)
+        merged.update(cfg)
+    else:
+        merged = dict(cfg)
+    _write_flat(sec_path, merged, mode=0o600)
+    # Invalidate all cache entries for this repo_root — the canonical path
+    # is used as the first element of every cache key (see security_config_path).
+    canonical = str(_canonical_repo_root(repo_root))
+    stale = [k for k in _SECURITY_PATH_CACHE if k[0] == canonical]
+    for k in stale:
+        del _SECURITY_PATH_CACHE[k]
+    return sec_path
+
+
 # ── ``brnrd config promote`` — the one-time repo→security migration ────
 
 
