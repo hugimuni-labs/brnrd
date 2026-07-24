@@ -1439,17 +1439,25 @@ def test_mirror_state_skips_identity_when_the_account_will_not_resolve(
 def test_mirror_state_takes_an_already_resolved_home(tmp_path, monkeypatch):
     """A caller holding the resolved account path hands it in rather than
     paying for a seventh resolution — a fact stored twice is repaired once.
-    Pinned by making a re-resolution fatal."""
-    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
 
-    def _never(*_a, **_kw):
+    Pinned by *counting* the resolutions rather than by raising inside one:
+    `mirror_state`'s fail-open `except` would swallow the raise and hand back
+    a plausible status, so the fatal version of this test passed even when the
+    supplied home was ignored entirely. (Found by re-driving the red, 2026-07-24.)
+    """
+    repo, krepo, checkout, cfg = _seeded_checkout(tmp_path)
+    resolutions = []
+
+    def _record(*_a, **_kw):
+        resolutions.append(_a)
         raise AssertionError("home_knowledge was supplied; do not resolve again")
 
-    monkeypatch.setattr(knowledge.account, "resolve_context", _never)
+    monkeypatch.setattr(knowledge.account, "resolve_context", _record)
 
     state = knowledge.mirror_state(repo, home_knowledge=krepo)
 
     assert state.status == knowledge.MIRROR_CURRENT
+    assert resolutions == []
 
 
 def test_mirror_state_identity_makes_no_network_call(tmp_path, monkeypatch):

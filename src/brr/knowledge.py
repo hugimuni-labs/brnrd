@@ -559,8 +559,8 @@ class MirrorState:
 
     ``status`` is always one of :data:`MIRROR_CURRENT`, :data:`MIRROR_BEHIND`,
     :data:`MIRROR_ELSEWHERE`, :data:`MIRROR_ABSENT` — never ``None``, and never
-    a bare count. *Absent*
-    (no checkout, not a git repo, detached HEAD, no ``origin/<branch>``) is a
+    a bare count. *Absent* (no checkout, not a git repo, detached HEAD, no
+    ``origin/<branch>``) is a
     genuinely different sentence from "0 behind": a repo with no mirror has no
     mirror to be stale, and it must not be readable as *fine*. This repo has
     already paid for the other shape once — ``active_kb_dir`` returns ``None``
@@ -628,7 +628,7 @@ def _home_knowledge_root(repo_root: Path, cfg: dict | None = None) -> Path | Non
     checkout of pointing elsewhere on no evidence (#623).
 
     Local file reads only (config, the cloud-gate JSON, the home registry):
-    measured at ~4 ms on the brnrd repo, against the ~880 ms the kb-health
+    measured at ~5 ms on the brnrd repo, against the ~870 ms the kb-health
     block it runs inside already costs. Nothing here can block on a network.
     """
 
@@ -665,7 +665,7 @@ def mirror_state(
     **Identity is read before staleness** (#676), because a count is only
     meaningful once the thing counted against is the right repository. The
     expected origin comes from *this* wake's account resolution — pass ``cfg``
-    (or a already-resolved ``home_knowledge``) rather than letting a second,
+    (or an already-resolved ``home_knowledge``) rather than letting a second,
     independently-loaded config decide what "right" means. When neither is
     available and resolution fails, the identity question is skipped entirely
     and the reading falls back to the staleness statuses: an unanswerable
