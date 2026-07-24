@@ -206,7 +206,7 @@
 				{/if}
 			</div>
 			<p class="mt-2 font-mono text-[10px] text-ink-quiet">
-				thank you — this subscription keeps the lights on for the open-source engine
+				thank you — this funds the engine you're running, and you're early enough to shape it
 			</p>
 		{/if}
 
