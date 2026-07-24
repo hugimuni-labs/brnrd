@@ -55,6 +55,22 @@ from typing import Any
 
 SECURITY_CONFIG_FILENAME = "security.config"
 
+#: Runner profiles (``runners.md``) live in the security domain too, beside
+#: ``security.config`` and read from the same daemon-owned home (#693). A
+#: profile entry carries ``cmd:`` — the argv the daemon execs — so the file
+#: does ``runner_cmd``'s job under another name, and #533's argument for the
+#: key is the argument for the file. Not a *flat config* file, so it never
+#: passes through ``_read_flat``/``is_security_key``; what it shares with
+#: ``security.config`` is the trust domain and the promote path, which is
+#: why its filename is pinned here rather than in ``runner.py``.
+PROFILES_FILENAME = "runners.md"
+
+#: Repo-side locations a ``runners.md`` used to be honoured from, newest
+#: first, relative to the shared ``.brr`` dir. Kept as a list because both
+#: must be *ignored and reported*: a user who is on the legacy path is the
+#: one least likely to notice a silent change.
+_REPO_PROFILE_RELPATHS = ("runners.md", "prompts/runners.md")
+
 # Resolved ``security.config`` paths, keyed by (repo root, raw repo-config
 # contents). Review fixup on the first #533 draft, which resolved the home
 # on *every* ``load_config`` call. Measured on an otherwise-idle machine,
@@ -223,6 +239,44 @@ def security_config_path(
     return resolved
 
 
+def home_profiles_path(repo_root: Path) -> Path | None:
+    """Return the daemon-owned ``<home root>/runners.md`` path, or ``None``.
+
+    Same resolution, same cache, same fail-closed direction as
+    :func:`security_config_path` — deliberately derived from it rather than
+    re-deriving the home, so the profile file cannot end up resolving to a
+    *different* home than the security config beside it (the class of bug
+    ``security_config_path``'s own docstring records for
+    ``shared_brr_dir(...).parent``).
+
+    ``None`` means "no daemon-owned profile source available"; callers fall
+    back to the bundled catalog, never to a repo tree.
+    """
+    sec_path = security_config_path(repo_root, _read_flat(repo_config_path(repo_root)))
+    return None if sec_path is None else sec_path.parent / PROFILES_FILENAME
+
+
+def ignored_repo_profile_files(repo_root: Path) -> list[str]:
+    """Return repo-side ``runners.md`` paths that exist and are ignored (#693).
+
+    Display strings relative to the shared ``.brr`` dir (``.brr/runners.md``),
+    not absolute host paths: this list is read out to a remote operator in a
+    chat notice, where a host path renders as noise.
+
+    The visibility half of #693, mirroring ``load_config_report``'s
+    ``ignored_keys``. A user with a working custom profile is exactly the
+    user this change breaks, and "the daemon quietly ran a different runner"
+    is not an acceptable way to find out.
+    """
+    from . import gitops
+
+    try:
+        brr_dir = gitops.shared_brr_dir(repo_root)
+    except Exception:  # noqa: BLE001 - non-repo invocations have nothing to ignore
+        brr_dir = repo_root / ".brr"
+    return [rel for rel in _REPO_PROFILE_RELPATHS if (brr_dir / rel).exists()]
+
+
 def load_config_report(repo_root: Path) -> tuple[dict[str, Any], list[str]]:
     """Load the merged config view, and report ignored repo-side security keys.
 
@@ -346,12 +400,28 @@ class PromotePlan:
     ``conflicts`` names every key that's already in ``security.config``
     with a *different* value than ``.brr/config`` holds; applying over a
     conflict requires ``force=True``.
+
+    ``profiles_move`` is the ``(source, destination)`` pair for a repo-side
+    ``runners.md`` (#693) — the *file* half of the same migration, carried
+    on this plan rather than a second command because an operator whose
+    profile stopped working should not have to learn two verbs to fix it.
+    ``None`` when there is no repo-side profile file, or no home to move it
+    into. ``profiles_conflict`` is the file analogue of ``conflicts``: a
+    ``runners.md`` already sitting in the home, which ``force=True``
+    overwrites and a bare run refuses.
     """
 
     security_path: Path | None
     moves: dict[str, Any] = field(default_factory=dict)
     conflicts: dict[str, tuple[Any, Any]] = field(default_factory=dict)
     remaining_repo_cfg: dict[str, Any] = field(default_factory=dict)
+    profiles_move: tuple[Path, Path] | None = None
+    profiles_conflict: bool = False
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this plan would change nothing at all."""
+        return not self.moves and self.profiles_move is None
 
 
 def plan_promote(repo_root: Path) -> PromotePlan:
@@ -366,11 +436,33 @@ def plan_promote(repo_root: Path) -> PromotePlan:
         if k in existing and existing[k] != v
     }
     remaining = {k: v for k, v in repo_cfg.items() if k not in to_move}
+
+    # The file half (#693). Only the modern location is *promoted*: the
+    # legacy `.brr/prompts/runners.md` is still reported as ignored, but
+    # moving it silently would mean promoting a file the user may have
+    # forgotten they wrote, into the one domain nothing else may write.
+    profiles_move: tuple[Path, Path] | None = None
+    profiles_conflict = False
+    if sec_path is not None:
+        from . import gitops
+
+        try:
+            brr_dir = gitops.shared_brr_dir(repo_root)
+        except Exception:  # noqa: BLE001 - non-repo invocations have nothing to move
+            brr_dir = repo_root / ".brr"
+        repo_profiles = brr_dir / PROFILES_FILENAME
+        if repo_profiles.exists():
+            dest = sec_path.parent / PROFILES_FILENAME
+            profiles_move = (repo_profiles, dest)
+            profiles_conflict = dest.exists()
+
     return PromotePlan(
         security_path=sec_path,
         moves=to_move,
         conflicts=conflicts,
         remaining_repo_cfg=remaining,
+        profiles_move=profiles_move,
+        profiles_conflict=profiles_conflict,
     )
 
 
@@ -378,12 +470,20 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
     """Apply *plan* (from :func:`plan_promote`).
 
     Idempotent: rerunning after a successful promote recomputes an empty
-    ``plan.moves`` (the keys are gone from ``.brr/config``), so applying
-    it is a no-op. Raises :class:`ConfigPromoteError` rather than
-    clobbering an existing differing ``security.config`` value — the CLI
-    surfaces this as the ``--force``-required refusal.
+    ``plan.moves`` and a ``None`` ``profiles_move`` (the keys are gone from
+    ``.brr/config``, the file is gone from ``.brr/``), so applying it is a
+    no-op. Raises :class:`ConfigPromoteError` rather than clobbering an
+    existing differing ``security.config`` value or an existing home-side
+    ``runners.md`` — the CLI surfaces both as the ``--force``-required
+    refusal.
+
+    Both halves are validated before *either* is written, so a refused
+    profile move cannot leave the keys already promoted and the operator
+    guessing which half took.
     """
-    if not plan.moves:
+    import os
+
+    if plan.is_empty:
         # Nothing to move: correct even if `security_path` is also
         # unresolved — there's no destination to need in that case.
         return
@@ -397,8 +497,28 @@ def apply_promote(repo_root: Path, plan: PromotePlan, *, force: bool = False) ->
             "security.config already has differing value(s) for: "
             + ", ".join(sorted(plan.conflicts))
         )
-    existing = _read_flat(plan.security_path)
-    merged_security = dict(existing)
-    merged_security.update(plan.moves)
-    _write_flat(plan.security_path, merged_security, mode=0o600)
-    write_config(repo_root, plan.remaining_repo_cfg)
+    if plan.profiles_conflict and not force:
+        raise ConfigPromoteError(
+            f"{plan.security_path.parent / PROFILES_FILENAME} already exists — "
+            "merge the two profile catalogs by hand, or re-run with --force to "
+            "replace the home copy with the repo one"
+        )
+
+    if plan.moves:
+        existing = _read_flat(plan.security_path)
+        merged_security = dict(existing)
+        merged_security.update(plan.moves)
+        _write_flat(plan.security_path, merged_security, mode=0o600)
+        write_config(repo_root, plan.remaining_repo_cfg)
+
+    if plan.profiles_move is not None:
+        source, dest = plan.profiles_move
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Copy-then-unlink rather than ``rename``: the repo and the account
+        # home are routinely on different filesystems (the home is outside
+        # every run's mount by construction), where ``rename`` raises
+        # ``EXDEV``. Mode 0600 matches ``security.config`` — same domain,
+        # same reason.
+        dest.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(dest, 0o600)
+        source.unlink()

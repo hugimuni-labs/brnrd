@@ -36,8 +36,8 @@ the logical tier name. Codex entries use exact IDs (no alias family exists);
 their staleness is handled by :func:`stale_entries`.
 
 **TTL / staleness:** the registry is static within a brr release. Operators
-who need to add a model before the next brr release add an entry to their
-project ``runners.md`` — those profile records override and extend this
+who need to add a model before the next brr release add an entry to their own
+``<account home>/runners.md`` — those profile records override and extend this
 registry. A ``freshness_date`` field records when an entry was last verified;
 :func:`stale_entries` flags entries older than a configurable threshold.
 """
@@ -365,9 +365,9 @@ def generated_profile_entries(
     registry; the profile supplies only the authentication/command variant.
 
     A registry Core is generated only when its Shell has a declared base profile
-    in the active ``runners.md`` source. That keeps a project-owned
-    ``.brr/runners.md`` from unexpectedly reintroducing bundled Shells it chose
-    not to declare.
+    in the active ``runners.md`` source. That keeps an operator's own
+    ``<account home>/runners.md`` from unexpectedly reintroducing bundled
+    Shells it chose not to declare.
 
     CLI-help model probing (and the ``<name>-<model>`` profiles it
     fabricates) runs only for bundled Shells (:data:`BUNDLED_SHELLS`) and

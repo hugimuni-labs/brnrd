@@ -2,8 +2,10 @@
 
 brr doesn't do AI work itself. It delegates to whatever runner CLI the
 user has installed (claude, codex, or any command on PATH).
-Profiles are project-owned data (``.brr/runners.md``), with bundled
-defaults kept for first-run convenience. Prompt assembly lives in
+Profiles are **daemon-owned** data (``<account home>/runners.md``, beside
+``security.config``), with bundled defaults kept for first-run
+convenience — a profile carries ``cmd:``, so a repo-writable catalog is
+``runner_cmd`` under another name (#693). Prompt assembly lives in
 :mod:`brr.prompts`. This module is the plumbing: runner detection,
 ``RunnerInvocation`` and ``RunnerResult`` types, subprocess execution,
 trace persistence, and the ``TaskRunner`` class for serial execution in
@@ -669,33 +671,49 @@ class RunnerResult:
 
 
 def _profiles_source(repo_root: Path | None = None) -> tuple[str, str]:
-    """Return ``(cache_key, frontmatter)``, preferring project-owned data."""
+    """Return ``(cache_key, frontmatter)`` from the *daemon-owned* catalog.
+
+    Two sources, in order: the account home's ``runners.md``
+    (``config.home_profiles_path`` — the same daemon-owned directory
+    ``security.config`` lives in), then the bundled defaults. **Never a
+    repo tree.**
+
+    Issue #693: a profile entry carries ``cmd:``, the argv the daemon
+    execs, so ``.brr/runners.md`` is ``runner_cmd`` under another name and
+    belongs in the domain #533 built for ``runner_cmd``. Until this change
+    it was preferred *over* the bundle, which made every repo-writable
+    checkout — including an untrusted-tier run's own bind mount, and any
+    prompt-injected agent that reaches the tree — able to name the binary
+    the next run would execute. A repo-side copy is now ignored, and
+    ``config.ignored_repo_profile_files`` is what makes that visible
+    (``daemon.py``'s ``_run_worker``, beside the #533 key notice); the
+    migration is ``brnrd config promote``.
+
+    The **cache key** is part of the guarantee, not bookkeeping. It was a
+    resolved repo path, so a poisoned repo file minted its own cache entry
+    and was then served to every caller in the process. The two shapes it
+    can take now — ``home:<abs path>`` and ``bundled:runners.md`` — are
+    both outside any repo tree, so there is no key a checkout can mint.
+    """
     from . import prompts
 
     if repo_root:
-        from . import gitops
+        from . import config as conf
 
         try:
-            brr_dir = gitops.shared_brr_dir(repo_root)
-        except Exception:  # noqa: BLE001 - non-repo invocations use bundled defaults
-            brr_dir = repo_root / ".brr"
-        project_profiles = brr_dir / "runners.md"
-        if project_profiles.exists():
+            home_profiles = conf.home_profiles_path(repo_root)
+        except Exception:  # noqa: BLE001 - unresolvable home ⇒ bundled defaults
+            home_profiles = None
+        if home_profiles is not None and home_profiles.exists():
             return (
-                str(project_profiles.resolve()),
-                project_profiles.read_text(encoding="utf-8"),
-            )
-        legacy_prompt_profiles = brr_dir / "prompts" / "runners.md"
-        if legacy_prompt_profiles.exists():
-            return (
-                str(legacy_prompt_profiles.resolve()),
-                legacy_prompt_profiles.read_text(encoding="utf-8"),
+                f"home:{home_profiles.resolve()}",
+                home_profiles.read_text(encoding="utf-8"),
             )
     return ("bundled:runners.md", prompts.read_prompt("runners.md", None))
 
 
 def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Load runner profiles from project data or bundled defaults."""
+    """Load runner profiles from the daemon-owned home or bundled defaults."""
     global _profiles_cache, _profiles_cache_key
     key, text = _profiles_source(repo_root)
     if _profiles_cache is not None and (

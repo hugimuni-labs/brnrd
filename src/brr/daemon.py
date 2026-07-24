@@ -2395,6 +2395,33 @@ def _run_worker(
             "there).",
         )
 
+    # #693: the *file* half of the same domain. A runner profile carries
+    # `cmd:` — the argv this daemon execs — so a repo-side `runners.md` is
+    # `runner_cmd` under another name and is ignored exactly like one.
+    # Same channel as above deliberately: an operator learning that a
+    # security-defining input was dropped should not have to learn a
+    # second place to look depending on whether it was a key or a file.
+    # Unlike the key case this one is *load-bearing for a working setup* —
+    # a user with a custom profile loses it here — so the notice names the
+    # migration command, not just the refusal.
+    ignored_profile_files = conf.ignored_repo_profile_files(repo_root)
+    if ignored_profile_files:
+        joined = ", ".join(f".brr/{rel}" for rel in ignored_profile_files)
+        print(
+            f"[brnrd] WARNING: run {task.id} (event {eid}): repo-side runner "
+            f"profile file(s) {joined} — ignored, not loaded (profiles load "
+            "only from the daemon-owned home or the bundled catalog; run "
+            "`brnrd config promote` to migrate them)"
+        )
+        _record_outbox_notice(
+            outbox_dir,
+            f"repo-side runner profile file(s) {joined} — ignored, not "
+            "loaded. A profile carries `cmd:`, the command brnrd executes, "
+            "so profiles load only from the daemon-owned home or the "
+            "bundled catalog. Run `brnrd config promote` to move them "
+            "there.",
+        )
+
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)

@@ -116,13 +116,17 @@ top-level run. `--setting-sources local` is kept for settings **isolation**: it
 excludes the user's global and the project's committed settings without the
 collateral damage of `--safe-mode`.
 
-These bundled profiles are defaults, not the user's source of truth. To
-manage runner profiles for a project, create `.brr/runners.md` with the
-same frontmatter shape; brnrd reads that before the bundled defaults. The
-legacy `.brr/prompts/runners.md` override is still accepted, but new
-configuration should use `.brr/runners.md` because runner profiles are
-Shell+Core execution config, not prompt templates. For a one-off command,
-`runner_cmd` in `.brr/config` remains the smallest override.
+These bundled profiles are defaults, not the operator's source of truth. To
+manage your own, create `runners.md` in the **daemon-owned account home**
+(beside `security.config`) with the same frontmatter shape; brnrd reads that
+before the bundled defaults. For a one-off command, `runner_cmd` in that
+home's `security.config` remains the smallest override.
+
+Neither lives in the repo. A profile entry carries `cmd:`, the argv brnrd
+executes, so a repo-writable catalog decides what the daemon runs — the same
+reason `runner_cmd` left `.brr/config` in #533. A `runners.md` under `.brr/`
+(or the legacy `.brr/prompts/runners.md`) is ignored and reported; `brnrd
+config promote` migrates an existing one in a single command.
 
 Each frontmatter key is a runner name. During detection brnrd checks
 whether the profile's CLI is on PATH — either the key itself (`claude`,
@@ -166,7 +170,7 @@ with none is an uncosted Runner the selector uses as-is:
   paid brnrd-owned fallback (never auto-selected; needs spend-plan consent).
 - `cost_rank` — a coarse, **tunable relative ordering hint** (cheapest first),
   *not* a dollar figure and not a promise of price. The selector sorts by it
-  within a class; projects retune it freely in their own `.brr/runners.md`.
+  within a class; operators retune it freely in their own `runners.md`.
 - `quota_source` — which collector reads this Core's quota (`codex-local`
   reads the session rollout; `claude-local` is terminal spend/context only).
 - `capability_score` / `capability_source` / `capability_freshness` — optional
@@ -200,10 +204,9 @@ the active `runners.md`, brnrd materializes registry rows such as `claude-haiku`
 or `codex-mini` as invokable profiles by inserting the Core's model flag into
 the base Shell command and inheriting hook/quota metadata from that Shell.
 Those generated profiles let `core=haiku` and cost-aware auto-selection choose a
-concrete Core without requiring a static profile entry for every model. A
-project-owned `.brr/runners.md` remains authoritative: registry profiles are
-generated only for Shells that file declares, and any declared profile with the
-same name wins.
+concrete Core without requiring a static profile entry for every model. The
+active `runners.md` remains authoritative: registry profiles are generated only
+for Shells that file declares, and any declared profile with the same name wins.
 
 Alias profiles with `binary` and `auth_variant` are for authentication variants
 of the same CLI. For example `claude-bare-api-only` uses `--bare` and requires
@@ -220,10 +223,25 @@ outbox / gate / commit / noop portals named in the run prompt. Progress,
 traces, and tool output should go to stderr (which is the convention for
 both runners above).
 
-Users can override `cmd` per-repo by setting `runner_cmd` in
-`.brr/config`. The same stdout capture rules apply. A `runner_cmd` always
-owns its argv: `{prompt}` is substituted before exec (embedded occurrences
-included, for backward compatibility) and nothing is piped on stdin.
+**Where profiles and `cmd` overrides load from.** Both decide what binary
+brnrd executes, so both live in the daemon-owned account home, outside every
+run's mount — never in the repo tree, which any run (including an
+untrusted-tier one, inside its own containment) can write:
+
+- the profile catalog is `<account home>/runners.md`, falling back to the
+  bundled one above;
+- a whole-argv override is `runner_cmd` in `<account home>/security.config`.
+
+A `runner_cmd` always owns its argv: `{prompt}` is substituted before exec
+(embedded occurrences included, for backward compatibility) and nothing is
+piped on stdin. The same stdout capture rules apply.
+
+A `runner_cmd` in `.brr/config`, or a `runners.md` in `.brr/`, is **ignored**
+— not honoured, and not silently: each run reports it as a notice naming
+`brnrd config promote`, the one command that migrates both into the home.
+(`runner_cmd` moved for #533; the profile catalog followed for #693, on the
+same argument — a profile entry carries `cmd:`, so a repo-writable catalog
+*is* a `runner_cmd`.)
 
 Quota and price signals are metadata about a Core, not part of the
 command string. Today brnrd reads them from `runner.quota.*`,
