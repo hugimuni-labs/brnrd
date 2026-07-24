@@ -309,17 +309,17 @@
 					data — you decide, and we process it on your behalf and on your instructions.
 				</p>
 				<!-- OPEN, and stated rather than papered over: /privacy (#569
-				     document 3) and an Art 28 DPA do not exist in this repository.
-				     Both are owed; the DPA is non-negotiable before any organisation
-				     customer. Not linked here because linking a page that 404s is
-				     worse than naming the gap. The 2026-07-24 legal review also
-				     records: no account-deletion path exists — repo disconnect
-				     clears repo-scoped data (_session.py:347-359) but the Account
-				     row survives, so Art 17 erasure is manual today. -->
+				     document 3) is still in preparation; a DPA now exists
+				     (docs/legal/dpa.md, #706) but has no public route yet — a
+				     Customer can request it directly. Not linked here because
+				     linking a page that 404s is worse than naming the gap.
+				     Art 17 erasure *is* self-service as of 2026-07-25: dashboard
+				     settings, "danger zone" button, POST /v1/accounts/delete
+				     (src/brnrd/account_deletion.py). -->
 				<p class="mt-2">
-					A privacy notice and a data-processing agreement are in preparation and are not yet
-					published. Until they are, the measured description of what the service holds and for how
-					long is on the
+					A privacy notice is in preparation and not yet published; a data-processing agreement
+					exists and is available to any Customer on request. Until the privacy notice is published,
+					the measured description of what the service holds and for how long is on the
 					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>hosted-execution page</a
 					>
@@ -328,8 +328,12 @@
 						class="text-sky-400 underline"
 						href="https://github.com/hugimuni-labs/brnrd/blob/main/SECURITY.md"
 						rel="external">SECURITY.md</a
-					>, and you can ask us anything about it at the address in section 16. To have your account
-					data deleted, write to that address; there is no self-service deletion button yet.
+					>, and you can ask us anything about it at the address in section 16. To delete your
+					account, use the "delete account" control in dashboard settings — it asks you to re-type
+					your GitHub login to confirm, then deletes everything except the append-only billing
+					ledger, which the deletion confirmation itself states is retained and why (the
+					data-processing agreement carries the same statement). Anything the self-service control
+					doesn't cover, write to the address in section 16.
 				</p>
 				<p class="mt-2">
 					The service relies on providers: our host, our payment processor, GitHub for sign-in and
@@ -524,12 +528,16 @@
 				</h2>
 				<!-- Driven: src/brnrd/routers/_session.py:347-359 — disconnect deletes
 				     every repo-scoped row, and when no repo remains
-				     `account.surface_json = "[]"` empties the mirror. The Account row
-				     itself survives, which is why deletion is by request. -->
+				     `account.surface_json = "[]"` empties the mirror. Full account
+				     deletion (src/brnrd/account_deletion.py, dashboard settings
+				     "danger zone") is the broader, self-service action: it does not
+				     require disconnecting repos first. -->
 				<p class="mt-2">
 					You can stop using brnrd.dev at any time: disconnect your repositories and stop signing
-					in. Disconnecting your last repository deletes the mirrored copy of your pages from our
-					servers. To have the account itself deleted, write to the address in section 16.
+					in, or delete your account outright from dashboard settings. Disconnecting your last
+					repository deletes the mirrored copy of your pages from our servers; deleting the account
+					does that and everything else described in section 9, immediately, without a support
+					request.
 				</p>
 				<p class="mt-2">
 					We may suspend or terminate your access if you breach these terms, if your use is harming

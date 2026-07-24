@@ -102,6 +102,9 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(64)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_stripe_customer_id ON accounts (stripe_customer_id)"))
 
+    # Art 17 erasure tombstone (account_deletion.py) — see models.Account.deleted_at.
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+
     _tighten_required_account_columns(conn)
 
 
