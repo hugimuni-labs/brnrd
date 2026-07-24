@@ -68,7 +68,8 @@ const PUBLISHER: readonly LegalField[] = [
 		en: 'Share capital of HugiMuni SAS',
 		block: 'publisher',
 		whereToFind: 'K-bis — capital social',
-		value: null
+		value: '500,00 €',
+		source: 'K-bis, supplied by the maintainer 2026-07-24 (evt-…-c4db)'
 	},
 	{
 		key: 'publisher.siren',
@@ -76,7 +77,8 @@ const PUBLISHER: readonly LegalField[] = [
 		en: 'SIREN number (9 digits)',
 		block: 'publisher',
 		whereToFind: 'K-bis — numéro d’identification / SIREN',
-		value: null
+		value: '104 156 260',
+		source: 'K-bis, supplied 2026-07-24; Luhn checksum verified'
 	},
 	{
 		key: 'publisher.rcs',
@@ -84,7 +86,8 @@ const PUBLISHER: readonly LegalField[] = [
 		en: 'RCS registration — registry city plus number, e.g. "RCS Paris 123 456 789"',
 		block: 'publisher',
 		whereToFind: 'K-bis — greffe du tribunal de commerce + numéro RCS',
-		value: null
+		value: 'RCS Tarascon 104 156 260',
+		source: 'K-bis, supplied 2026-07-24'
 	},
 	{
 		key: 'publisher.registeredOffice',
@@ -92,7 +95,8 @@ const PUBLISHER: readonly LegalField[] = [
 		en: 'Registered office — full postal address',
 		block: 'publisher',
 		whereToFind: 'K-bis — adresse du siège social',
-		value: null
+		value: '6 rue de la Verdière, 13200 Arles, France',
+		source: 'K-bis, supplied 2026-07-24'
 	},
 	{
 		key: 'publisher.vat',
@@ -101,7 +105,8 @@ const PUBLISHER: readonly LegalField[] = [
 		block: 'publisher',
 		whereToFind:
 			'not on the K-bis — the mémento fiscal / impots.gouv.fr professional account (it is FR + a 2-digit key + the SIREN, but the key must be read, not computed by hand)',
-		value: null
+		value: 'FR 73 104 156 260',
+		source: 'mémento fiscal, supplied 2026-07-24; key 73 cross-checked against (12 + 3·(SIREN mod 97)) mod 97 — read from the document, the check only confirms it'
 	},
 	{
 		key: 'publisher.publicationDirector',
@@ -128,14 +133,16 @@ const PUBLISHER: readonly LegalField[] = [
 		block: 'publisher',
 		whereToFind:
 			'maintainer’s choice; the hugimuni.fr domain already publishes security@hugimuni.fr (SECURITY.md), so this is likely contact@hugimuni.fr',
-		value: null
+		value: 'alexandra@hugimuni.fr',
+		source: 'supplied 2026-07-24; the company address in the professional tax documentation'
 	},
 	{
 		key: 'publisher.phone',
 		fr: 'Téléphone',
 		en: 'Telephone number — LCEN art. 6-III-1-b requires one for a legal person, so this is not optional',
 		block: 'publisher',
-		whereToFind: 'maintainer’s choice — any number that reaches the company',
+		whereToFind:
+			'maintainer’s choice — a number that reaches HugiMuni SAS. NOT the SIE: the value offered 2026-07-24, 04 90 99 12 60, is the switchboard of the Service des impôts des entreprises de Tarascon (verified against lannuaire.service-public.gouv.fr). LCEN art. 6-III-1-b wants a line to the publisher, and publishing a tax office’s number as the company’s own is both a false statement of contact details and an unasked-for redirection of the public onto a government office.',
 		value: null
 	}
 ];
