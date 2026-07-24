@@ -1957,7 +1957,14 @@ def test_notify_spawn_parent_contract_match_is_ordinary_event(tmp_path):
     assert "contract-mismatch" not in note["body"]
 
 
-def test_notify_spawn_parent_contract_branch_mismatch_is_flagged(tmp_path):
+def test_notify_spawn_parent_scanned_branch_mismatch_annotates_not_indicts(tmp_path):
+    """#640: a *scanned* (undeclared) contract — no ``branch:``/``report:``
+    frontmatter, just the first ``brr/<slug>`` matched in spec prose — is a
+    fuzzy read. A mismatch there must annotate the completion note, not
+    stamp the worker's real status as ``contract-mismatch`` nor set the
+    event-layer flag; only a *declared* contract may indict (guarded by
+    ``test_notify_spawn_parent_declared_branch_mismatch_still_indicts``
+    below, #640-negative)."""
     inbox = tmp_path / ".brr" / "inbox"
     response_path = tmp_path / "response.md"
     response_path.write_text("worker's own account of the work\n", encoding="utf-8")
@@ -1970,20 +1977,17 @@ def test_notify_spawn_parent_contract_branch_mismatch_is_flagged(tmp_path):
     daemon._notify_spawn_parent(inbox, task)
 
     note = protocol.list_pending(inbox)[0]
-    assert note["spawn_contract_mismatch"] is True
-    assert note["spawn_contract_spec_branch"] == "brr/wake-request-source-gate"
-    assert note["spawn_contract_published_branch"] == "brr/stopped-run-kb-credit"
-    assert "status=contract-mismatch" in note["body"]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+    assert "advisory" in note["body"]
     assert "brr/wake-request-source-gate" in note["body"]
     assert "brr/stopped-run-kb-credit" in note["body"]
-    # The mismatch block reads before the worker's own text, not buried
-    # after it — it must be the first thing the parent's eye lands on.
-    assert note["body"].index("contract mismatch") < note["body"].index(
-        "worker's own account",
-    )
 
 
-def test_notify_spawn_parent_contract_missing_report_is_flagged(tmp_path):
+def test_notify_spawn_parent_scanned_missing_report_annotates_not_indicts(tmp_path):
+    """Same #640 rule for the report-path half of a scanned contract: a
+    missing report scanned from prose annotates, it doesn't indict."""
     inbox = tmp_path / ".brr" / "inbox"
     missing = Path(f"/tmp/brr-never-written-{tmp_path.name}-report.md")
     assert not missing.exists()
@@ -1995,9 +1999,9 @@ def test_notify_spawn_parent_contract_missing_report_is_flagged(tmp_path):
     daemon._notify_spawn_parent(inbox, task)
 
     note = protocol.list_pending(inbox)[0]
-    assert note["spawn_contract_mismatch"] is True
-    assert note["spawn_contract_report_found"] is False
-    assert "MISSING" in note["body"]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "was never written" in note["body"]
 
 
 def test_notify_spawn_parent_no_branch_in_spec_is_unchanged(tmp_path):
@@ -2034,8 +2038,15 @@ def test_notify_spawn_parent_contract_check_failure_fails_open(tmp_path, monkeyp
 def test_notify_spawn_parent_pqav_regression(tmp_path):
     """Reconstructs the live 2026-07-22 case named in #574: a spec for #564
     on ``brr/wake-request-source-gate``, a child that delivered #565 on
-    ``brr/stopped-run-kb-credit`` and reported clean — the whole reason
-    this check exists."""
+    ``brr/stopped-run-kb-credit`` and reported clean.
+
+    Under #640 this reconstructs as a *scanned* contract — 2026-07-22 predates
+    the declared ``branch:``/``report:`` frontmatter, so nothing here was
+    ever declared. The scan still catches the divergence (the whole reason
+    the check exists), but per #640 a scanned read may only annotate, not
+    indict: the mismatch flag stays unset and the run's own completion
+    status is untouched. A dispatcher that wants this caught as a hard
+    verdict now has to *declare* the contract."""
     inbox = tmp_path / ".brr" / "inbox"
     spec = (
         "# Task: issue #564 — wake request source gate\n"
@@ -2047,12 +2058,182 @@ def test_notify_spawn_parent_pqav_regression(tmp_path):
     daemon._notify_spawn_parent(inbox, task)
 
     note = protocol.list_pending(inbox)[0]
-    assert note["spawn_contract_mismatch"] is True
-    assert note["spawn_contract_spec_branch"] == "brr/wake-request-source-gate"
-    assert note["spawn_contract_published_branch"] == "brr/stopped-run-kb-credit"
-    # The run's own completion status is untouched — two facts, two fields,
-    # not folded into one boolean (#574's own constraint).
+    assert "spawn_contract_mismatch" not in note
+    assert "advisory" in note["body"]
+    assert "brr/wake-request-source-gate" in note["body"]
+    assert "brr/stopped-run-kb-credit" in note["body"]
+    # The run's own completion status is untouched.
     assert task.status == "done"
+
+
+# ── #640: declared contract beats scanned prose ─────────────────────
+
+
+def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
+    """``branch:``/``report:`` in the spawn frontmatter carry onto the
+    child's own meta as ``spawn_contract_branch``/``spawn_contract_report``
+    — the wiring ``_notify_spawn_parent`` later prefers over the prose
+    scan (#640)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {
+            "spawn": True,
+            "branch": "brr/declared-slug",
+            "report": "/tmp/brr-declared-slug-report.md",
+        },
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child = protocol._read_event(spawned[0])
+    assert child["spawn_contract_branch"] == "brr/declared-slug"
+    assert child["spawn_contract_report"] == "/tmp/brr-declared-slug-report.md"
+
+
+def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
+    """#640a: a spec whose prose responsibly names a *sibling* worker's
+    branch ahead of its own (the worktree-discipline "don't collide with
+    the run on X" note) must not have that sibling mention read as the
+    contract when a ``branch:`` was declared. Declared + published match
+    ⇒ no mismatch, status untouched — even though the first ``brr/<slug>``
+    in the prose is the sibling's, not this worker's own."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body=(
+            "A sibling worker is live on `brr/sibling-branch` — do not "
+            "collide with it.\n\n"
+            "## Deliverable\nBranch: `brr/real-slug`\n"
+        ),
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/real-slug",
+            "spawn_contract_branch": "brr/real-slug",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=done" in note["body"]
+    assert "contract-mismatch" not in note["body"]
+
+
+def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
+    """#640-negative (guard the guard): a *declared* branch that genuinely
+    differs from published must still stamp contract-mismatch — the
+    declared/scanned distinction is not a blanket amnesty."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="Branch: `brr/declared-slug`\n",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/actually-published",
+            "spawn_contract_branch": "brr/declared-slug",
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert note["spawn_contract_spec_branch"] == "brr/declared-slug"
+    assert note["spawn_contract_published_branch"] == "brr/actually-published"
+    assert "status=contract-mismatch" in note["body"]
+
+
+# ── #633: contract-mismatch requires evidence the worker ran ────────
+
+
+def test_notify_spawn_parent_no_evidence_is_runner_failed_not_mismatch(tmp_path):
+    """#633a: a completion with no transcript/commits/worktree changes and a
+    runner error must read as ``runner-failed``, with the provider's own
+    message promoted to the first line and the spec/published comparison
+    dropped entirely — even though the spec declared a branch commitment
+    the child never had a chance to meet. The event-layer mismatch flag
+    must not be set either."""
+    inbox = tmp_path / ".brr" / "inbox"
+    response_path = tmp_path / "response.md"
+    response_path.write_text(
+        "I couldn't complete this run.\n\n"
+        "brr is surfacing this because runner failed after 1 attempt(s): "
+        "ERROR: You've hit your usage limit. Try again at Jul 28th, 2026.",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="Branch: `brr/control-verbs-owner-only`\n",
+        source="telegram", status="error",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/control-verbs-owner-only",
+            "response_path": str(response_path),
+            # No has_new_commit, no trace_dirs — nothing the worker did.
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_contract_mismatch" not in note
+    assert "status=runner-failed" in note["body"]
+    assert "contract mismatch" not in note["body"]
+    assert "spec branch" not in note["body"]
+    assert "published branch" not in note["body"]
+    # The provider's own message is the first thing in the note, not
+    # buried after a status/contract preamble.
+    assert note["body"].startswith("I couldn't complete this run.")
+    assert note["body"].index("usage limit") < note["body"].index(
+        "status=runner-failed",
+    )
+
+
+def test_notify_spawn_parent_worker_ran_declared_mismatch_still_indicts(tmp_path):
+    """#633-negative: a worker that *ran* (real commit on the branch) and
+    published the wrong declared branch must still be stamped
+    contract-mismatch — the #633 evidence gate must not swallow a genuine
+    violation just because the run's own terminal status was ``error``."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="Branch: `brr/declared-slug`\n",
+        source="telegram", status="error",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/wrong-branch",
+            "spawn_contract_branch": "brr/declared-slug",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert note["spawn_contract_spec_branch"] == "brr/declared-slug"
+    assert note["spawn_contract_published_branch"] == "brr/wrong-branch"
+    assert "status=contract-mismatch" in note["body"]
 
 
 def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
