@@ -1002,3 +1002,229 @@ def test_hook_refuses_a_real_git_commit_reproducing_the_477_closure(tmp_path, mo
         cwd=repo, check=True, capture_output=True, text=True,
     ).stdout.strip()
     assert trailers == "run-real-commit-653"
+
+
+# ── #657 the tail after the ref ──────────────────────────────────────────────
+#
+# #652 checked the tail *negatively*: line-start close + whitespace + a char
+# that is not ","/"#"/space.  The "," exemption was the deliberate multi-close
+# carve-out — and it exempted everything after the comma with it, prose
+# included; a "." bought the same exemption from the other side, since the
+# rule wanted whitespace right after the digits.  Fourth face of the class,
+# and, like the third, the hole was in the carve-out rather than in the rule.  _BRR_CLEAN replaces it with a
+# positive one: after the ref, only a repeatable ", #MMM" list, then end of
+# line or ":".
+#
+# The ":" allowance is measured, not assumed.  Driving the installed hook over
+# this repo's last 300 commit messages: shipped 10 refusal lines / 5 commits;
+# strict (no ":") 18 lines / 13 commits, the 8 extras all `Fix #NNN: <subject>`
+# on line 1; this rule 10 lines / 5 commits — byte-identical to shipped, plus
+# the two holes below closed.
+
+
+def test_hook_refuses_prose_tail_after_a_comma_via_real_git_commit(tmp_path, monkeypatch):
+    """``Closes #413, not really`` → refused, through a real ``git commit``.
+
+    The canonical #657 defect.  The comma landed *immediately* after the ref,
+    so #652's negative predicate never engaged and the line passed — while
+    GitHub read ``Closes #413`` and shut the issue, the sentence's own denial
+    notwithstanding.  Driven through ``git commit`` rather than the hook
+    script directly, because a direct call only simulates the caller the
+    defect travelled through (#653's review).
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-real-commit-657")
+
+    (repo / "file.txt").write_text("data\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    r = subprocess.run(
+        ["git", "commit", "-m", "Closes #413, not really"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert r.returncode != 0
+    assert "#413" in r.stderr
+
+    # The corrected message completes the same commit, trailer intact.
+    fixed = subprocess.run(
+        ["git", "commit", "-m", "Part of #413, and it does not close it"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert fixed.returncode == 0, fixed.stderr
+    trailers = subprocess.run(
+        ["git", "log", "-1", "--format=%(trailers:key=Brnrd-Run-Id,valueonly)"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert trailers == "run-real-commit-657"
+
+
+def test_hook_refuses_second_close_on_one_line_via_real_git_merge(tmp_path, monkeypatch):
+    """``Closes #413 and closes #414`` → refused, through a real
+    ``git merge --no-ff``.
+
+    #657 cites this as the shape "judged on the first ref only" — measured
+    against the shipped hook, it is not: ``#413`` is followed by whitespace
+    and then ``a``, which is not one of ``,``/``#``/space, so #652's negative
+    predicate did engage and already refused it.  Kept anyway, for two
+    reasons.  The positive rule must keep catching it (a broader rule is the
+    easy place to lose a narrow one), and this is the new block's merge-path
+    driver: ``git merge`` is how ``79abe94e`` put a dirty close on the record,
+    and whether git runs ``commit-msg`` on a non-fast-forward merge at all is
+    the assumption a direct hook call leaves unstated.
+
+    The genuinely-new tail holes are the two tests either side of this one.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-real-merge-657")
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True
+        )
+
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "-m", "base")
+    trunk = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+    git("checkout", "-b", "side")
+    (repo / "side.txt").write_text("side\n", encoding="utf-8")
+    git("add", "side.txt")
+    git("commit", "-m", "side work")
+
+    git("checkout", trunk)
+    (repo / "trunk.txt").write_text("trunk\n", encoding="utf-8")
+    git("add", "trunk.txt")
+    git("commit", "-m", "trunk work")
+
+    before = git("rev-parse", "HEAD").stdout.strip()
+    merged = git(
+        "merge", "--no-ff", "side", "-m",
+        "Merge side\n\nCloses #413 and closes #414",
+    )
+
+    assert merged.returncode != 0, "a second close on one line must not reach a merge commit"
+    assert "#413" in merged.stderr
+    assert git("rev-parse", "HEAD").stdout.strip() == before, "no merge commit was created"
+
+    # The comma-list remedy — the one the message offers — completes the merge.
+    fixed = git("commit", "-m", "Merge side\n\nCloses #413, #414")
+    assert fixed.returncode == 0, fixed.stderr
+    body = git("log", "-1", "--format=%B").stdout
+    assert "Closes #413, #414" in body
+    assert "Brnrd-Run-Id: run-real-merge-657" in body
+
+
+def test_hook_refuses_and_inside_a_comma_list(tmp_path, monkeypatch):
+    """``Closes #413, #414, and #415`` → refused.
+
+    A serial comma before ``and`` is ordinary English and an ordinary way to
+    write a three-issue close.  It is still prose after a ref, and the
+    predicate cannot distinguish "and #415" from "and this reverses the
+    sentence" without becoming a word list again — which is exactly what #653
+    proved doesn't hold.  Remedy is one character: drop the ``and``.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    r = _run_hook(hook_path, "Closes #413, #414, and #415", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "#413" in r.stderr
+
+
+def test_hook_refuses_sentence_continuing_after_a_terminated_close(tmp_path, monkeypatch):
+    """``Closes #413. Also this fixes #414`` → refused.
+
+    #652's negative rule required whitespace immediately after the digits, so
+    a period bought the rest of the line for free.  The positive rule ends the
+    line at the period.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    r = _run_hook(hook_path, "Closes #413. Also this fixes #414", tmp_path, cwd=repo)
+    assert r.returncode != 0
+
+
+def test_hook_tail_refusal_offers_the_multi_close_remedy(tmp_path, monkeypatch):
+    """The refusal must name the comma-list form, not only ``Part of``.
+
+    Three intents reach this branch: a qualifier author wants a scoped
+    reference, a list author wants *both* closes, a subject author wants the
+    close plus a title.  Show a list author only ``Part of #NNN`` and the
+    guard is satisfiable only by abandoning what they meant — which is the
+    argument the whole predicate rests on, so it has to hold for its own
+    message too.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    r = _run_hook(hook_path, "Closes #413 and closes #414", tmp_path, cwd=repo)
+    assert r.returncode != 0
+    assert "Closes #NNN, #MMM" in r.stderr, r.stderr
+    assert "Part of #NNN" in r.stderr, r.stderr
+    assert "Closes #NNN." in r.stderr, r.stderr
+
+
+def test_hook_passes_three_ref_multi_close(tmp_path, monkeypatch):
+    """``Closes #413, #414, #415`` → passes: the list is repeatable."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    assert _run_hook(hook_path, "Closes #413, #414, #415", tmp_path, cwd=repo).returncode == 0
+    assert _run_hook(hook_path, "Closes #413,#414", tmp_path, cwd=repo).returncode == 0
+
+
+def test_hook_passes_colon_subject_form(tmp_path, monkeypatch):
+    """``Fix #NNN: <subject>`` → passes, and this is load-bearing.
+
+    It is this repo's standard fix-commit subject: 8 of the last 300 commit
+    messages use it, all on line 1, all genuine closes whose effect matches
+    their intent.  A strict rule refusing the colon takes the sweep from 10
+    refusal lines to 18 and fires on nearly every fix commit — a guard that
+    cries wolf stops being read (#623).  Pinned so a later tightening has to
+    argue with the measurement.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    msg = "Fix #533: split config into repo and daemon-owned security trust domains"
+    assert _run_hook(hook_path, msg, tmp_path, cwd=repo).returncode == 0
+
+
+def test_hook_residual_colon_qualifier_passes_knowingly(tmp_path, monkeypatch):
+    """``Closes #413: partially`` → **passes**. Stated out loud, not covered.
+
+    This is the price of the colon allowance: once ``:`` is legal, the
+    predicate cannot tell a subject from a qualifier.  The test exists so the
+    gap is a recorded decision rather than an unnoticed hole — invert this
+    assertion only alongside a measurement showing the subject form survives.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    r = _run_hook(hook_path, "Closes #413: partially", tmp_path, cwd=repo)
+    assert r.returncode == 0, "residual is knowingly accepted — see #657"
