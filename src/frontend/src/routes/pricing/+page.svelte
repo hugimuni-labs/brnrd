@@ -140,6 +140,8 @@
 		<p class="font-mono text-[10px] text-ink-mute">
 			prices at checkout are set by Stripe and shown before you pay ·
 			<a class="hover:text-stone-300" href={resolve('/terms')}>terms</a>
+			·
+			<a class="hover:text-stone-300" href={resolve('/privacy')}>privacy</a>
 		</p>
 	</footer>
 </div>

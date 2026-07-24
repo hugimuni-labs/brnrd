@@ -170,6 +170,8 @@
 			open source · runs on your hardware ·
 			<a class="hover:text-stone-300" href={resolve('/terms')}>terms</a>
 			·
+			<a class="hover:text-stone-300" href={resolve('/privacy')}>privacy</a>
+			·
 			<a
 				class="hover:text-stone-300"
 				href={`https://github.com/${GITHUB_REPO}/blob/main/SECURITY.md`}
