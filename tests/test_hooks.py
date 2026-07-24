@@ -1280,12 +1280,12 @@ def _bar_payload(**overrides):
 
 
 def test_post_tool_bar_renders_every_segment_when_laden():
-    rendered = hooks.format_delta(_bar_payload(), mood="stoked")
+    rendered = hooks.format_delta(_bar_payload(), mood="smug_")
     bar = rendered.splitlines()[0]
 
     assert bar == (
         "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ ▷1 │ rb3h │ ⇡2+3 │ ⚒4 │ "
-        "mood stoked │ card ok"
+        "mood brnrd smug_ │ card ok"
     )
 
 
@@ -1381,12 +1381,32 @@ def test_post_tool_mood_absent_renders_no_segment(tmp_path):
 def test_seed_and_stop_render_mood_as_a_plain_prose_line(tmp_path):
     # Seed/stop stay affirmative prose (#513) — mood still rides every
     # boundary (#566), just not compressed into a bar segment there.
+    #
+    # The fixture used to be "curious", which is a *family* word and not a
+    # handle — so this pinned the unresolved rendering as if it were the
+    # normal one, which is precisely how the whole channel shipped broken:
+    # every mood test in this file named a face that does not exist, and
+    # "no glyph" was therefore the expected output everywhere.
+    _portal(tmp_path, token="t1", pending=0)
+    (tmp_path / hooks.MOOD_NAME).write_text("hmn_", encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "- mood: b·_·d hmn_" in ctx
+    assert "a mood worth showing is one the work moved" in ctx
+
+
+def test_seed_says_so_when_the_mood_handle_did_not_resolve(tmp_path):
+    """The boundary that can still fix it is the boundary that says so.
+
+    ``curious`` is the word; ``hmn_``/``ooh_``/``peek_`` are the faces. A
+    resident writing the word believed it wore one for the whole run, and
+    the dashboard published the word as an id. Now the seed answers back.
+    """
     _portal(tmp_path, token="t1", pending=0)
     (tmp_path / hooks.MOOD_NAME).write_text("curious", encoding="utf-8")
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "- mood: curious" in ctx
-    assert "a mood worth showing is one the work moved" in ctx
+    assert "- mood: ✗ curious → " in ctx
 
 
 def test_mood_malformed_file_is_read_defensively(tmp_path):
@@ -1411,9 +1431,17 @@ def test_mood_blank_file_renders_no_segment(tmp_path):
 
 
 def test_mood_chip_truncates_a_long_name():
+    """The cap is on the *name*, and the miss mark rides outside it.
+
+    An overlong handle is by definition not a face, so the chip marks it —
+    but the truncation is what keeps the statusline a line. The ``✗`` and
+    any suggestions are the payload of a broken state: loud exactly when
+    something is wrong, absent the rest of the time.
+    """
     chip = hooks._mood_chip("a-very-long-mood-name-that-overflows-the-chip")
-    assert chip == "a-very-long-mood…"
-    assert len(chip) <= hooks._MOOD_DISPLAY_MAX_CHARS + 1
+    assert chip == "✗ a-very-long-mood…"
+    name = chip.removeprefix("✗ ")
+    assert len(name) <= hooks._MOOD_DISPLAY_MAX_CHARS + 1
 
 
 def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
@@ -1430,8 +1458,55 @@ def test_emote_glyph_degrades_to_none_for_an_unresolvable_name():
 
     name = "not_an_emote_xyz"
     assert name not in emotes.EMOTES, "fixture must stay unresolvable"
+    assert emotes.lookup(name) is None, "fixture must stay unresolvable"
     assert hooks._emote_glyph(name) is None
-    assert hooks._mood_chip(name) == name
+    # Degrades, but no longer *silently*: the chip used to render the bare
+    # word, which is indistinguishable from a face that simply has no glyph.
+    # A run reading its own boundary could not tell the two apart, and on the
+    # dashboard the same ambiguity shipped to the public page.
+    assert hooks._mood_chip(name) == f"✗ {name}"
+
+
+def test_a_missed_handle_names_what_it_was_reaching_for():
+    """The silence, not the miss, was the defect.
+
+    ``satisfied`` is a family word — four faces — so ``lookup`` declines to
+    guess and always will; that part is the honesty bar working. What was
+    broken is that declining looked *exactly* like succeeding: four ``null``s
+    on the wire, a bare word in the chip, and a run that believed it was
+    wearing a face until a human looked at brnrd.dev and said otherwise.
+
+    So the chip names the candidates. The run can fix it at the next
+    boundary, which is the only moment fixing it is cheap.
+    """
+    from brr import emotes
+
+    name = "satisfied"
+    assert emotes.lookup(name) is None, "a family word must not resolve to one face"
+
+    chip = hooks._mood_chip(name)
+    assert chip.startswith("✗ satisfied → "), chip
+    named = chip.split(" → ", 1)[1].split(" · ")
+    assert named, chip
+    for handle in named:
+        assert emotes.lookup(handle) is not None, f"{handle!r} must be a real handle"
+        assert emotes.EMOTES[handle].family == "satisfied", handle
+
+
+def test_the_word_for_the_feeling_renders_the_same_chip_as_the_handle():
+    """``focused`` is what a run writes; ``fo.cus`` is what the file calls it.
+
+    This is the whole reported bug in one assertion. ``.mood`` is a
+    machine-parsed channel, the handles were minted as weave marks, and the
+    parser matched them byte for byte — so the obvious spelling published
+    nothing and the dashboard printed the raw string. Both spellings are one
+    face now, and the chip proves it end to end rather than at the library
+    boundary where the mismatch was invisible.
+    """
+    from brr import emotes
+
+    assert emotes.lookup("focused") is emotes.EMOTES["fo.cus"]
+    assert hooks._mood_chip("focused") == f"{emotes.glyph('fo.cus')} focused"
 
 
 def test_a_real_emote_handle_renders_its_face_in_the_chip():
@@ -1763,10 +1838,10 @@ def test_orient_prunes_state_paths_that_left_the_set(tmp_path):
 
 
 def test_orient_bar_position_is_after_quota():
-    rendered = hooks.format_delta(_bar_payload(), mood="stoked", orient=(3, 5))
+    rendered = hooks.format_delta(_bar_payload(), mood="smug_", orient=(3, 5))
     assert rendered.splitlines()[0] == (
         "⌁ 3jy8 │ ⏱ 16/120m │ q S57·W50·F27 │ orient 3/5 │ ▷1 │ rb3h │ "
-        "⇡2+3 │ ⚒4 │ mood stoked │ card ok"
+        "⇡2+3 │ ⚒4 │ mood brnrd smug_ │ card ok"
     )
 
 
@@ -1821,7 +1896,7 @@ def test_notices_chip_position_is_after_produce_before_card():
     at 1.  Order: ... │ ⚒N │ !N │ mood ... │ card ok
     """
     notices = [{"at": "2026-07-24T03:36:00Z", "text": "spawn dropped: no inbox"}]
-    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="stoked")
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
     bar = rendered.splitlines()[0]
     # !1 is present
     assert "!1" in bar

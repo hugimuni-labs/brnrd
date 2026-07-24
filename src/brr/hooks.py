@@ -725,13 +725,50 @@ def _emote_glyph(name: str) -> str | None:
     return glyph or None
 
 
+def _emote_near_misses(name: str) -> list[str]:
+    """Handles a failed ``.mood`` write was probably reaching for.
+
+    Same tolerance shape as ``_emote_glyph``: a hook boundary never dies for
+    a face. Empty list ⇒ say nothing.
+    """
+    try:
+        from . import emotes  # type: ignore
+    except ImportError:
+        return []
+    try:
+        return [e.name for e in emotes.near_misses(name, limit=3)]
+    except Exception:
+        return []
+
+
 def _mood_chip(raw: str) -> str:
-    """The resident's `.mood` first line, rendered as a short chip."""
+    """The resident's `.mood` first line, rendered as a short chip.
+
+    **An unresolved handle says so.** Until 2026-07-25 a `.mood` line that
+    matched no emote rendered as the bare word here and as four ``null``s on
+    the wire, and the dashboard printed the raw string — so a run that wrote
+    ``focused`` (the handle is ``fo.cus``) believed it was wearing a face,
+    published an id, and had no way to find out. The whole first week of the
+    mood channel went out that way; the human looking at brnrd.dev was the
+    only reader who could catch it, and did.
+
+    ``lookup`` is tolerant now, so most of that class resolves. What is left
+    is the honest miss — a family word (``satisfied`` is four faces; picking
+    one would be the guess the honesty bar forbids) or an invented handle —
+    and the fix for a miss is never to guess, it is to **not be silent**.
+    The chip names the nearest faces, at the boundary, while the run can
+    still rewrite the file.
+    """
     name = raw.strip()
     if len(name) > _MOOD_DISPLAY_MAX_CHARS:
         name = name[:_MOOD_DISPLAY_MAX_CHARS].rstrip() + "…"
     glyph = _emote_glyph(name)
-    return f"{glyph} {name}" if glyph else name
+    if glyph:
+        return f"{glyph} {name}"
+    near = _emote_near_misses(name)
+    if near:
+        return f"✗ {name} → " + " · ".join(near)
+    return f"✗ {name}"
 
 
 # Substrings that mark a tool result as a failure. Deliberately a heuristic:
