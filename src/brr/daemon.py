@@ -6687,11 +6687,15 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     published_branch = str(task.meta.get("publish_branch") or "").strip()
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
-    outbox_path_str = str(task.meta.get("outbox_path") or "").strip()
-    if outbox_path_str:
-        pr_num = _read_pr_control(Path(outbox_path_str) / ".pr")
-        if pr_num:
-            produce_kwargs["spawn_pr_number"] = pr_num
+    # The PR handle is read from ``task.meta``, captured by
+    # ``_capture_pr_handle`` while the outbox still existed. Reading the
+    # ``.pr`` control *here* cannot work: this function runs after the child's
+    # future resolves, and that future's `finally` has already rmtree'd the
+    # outbox the control lives in. Driven, not assumed — see
+    # ``test_notify_spawn_parent_pr_survives_outbox_teardown``.
+    pr_num = str(task.meta.get("pr_number") or "").strip()
+    if pr_num:
+        produce_kwargs["spawn_pr_number"] = pr_num
     if contract is not None and contract.get("spec_report"):
         produce_kwargs["spawn_report_path"] = contract["spec_report"]
         if contract.get("report_found") is not None:
@@ -8649,7 +8653,31 @@ def _run_worker_and_finalize(
                 gitops.shared_brr_dir(repo_root), task.meta["presence_id"],
             )
         if task is not None and task.meta.get("outbox_path"):
+            # #648: the `.pr` control lives *inside* the outbox we are about
+            # to delete, and `_notify_spawn_parent` only runs after this
+            # function's future resolves — i.e. strictly after this `finally`.
+            # Reading `.pr` at notify time therefore always reads a path that
+            # no longer exists. Capture the handle here, while it is still on
+            # disk, so the completion event can carry a fact rather than a
+            # hole. Same reason the node's Produce section already has it: it
+            # is rendered during the run, not after it.
+            _capture_pr_handle(task, Path(str(task.meta["outbox_path"])))
             _remove_outbox(Path(str(task.meta["outbox_path"])))
+
+
+def _capture_pr_handle(task: Run, outbox_dir: Path) -> None:
+    """Stash the run's own ``.pr`` number on ``task.meta`` before teardown.
+
+    Absent stays absent (#648 standing decision 1): no ``.pr`` ⇒ no key, so a
+    consumer can still tell "no PR" from "PR unknown". Never raises — a
+    produce convenience must not be able to fail a run's teardown.
+    """
+    try:
+        pr_number = _read_pr_control(outbox_dir / _PR_CONTROL_NAME)
+    except Exception:  # noqa: BLE001 - teardown must not fail on a convenience
+        return
+    if pr_number:
+        task.meta["pr_number"] = str(pr_number)
 
 
 # ── Burst coalescing (dispatch debounce) ────────────────────────────

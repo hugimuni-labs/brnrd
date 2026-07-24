@@ -2266,6 +2266,14 @@ def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
         },
     )
 
+    # Production order, not a convenient one: the child's `finally` captures
+    # the PR handle and then rmtree's the outbox, and only afterwards does the
+    # parent's loop reap the future and notify. A fixture that skips the
+    # teardown tests a lifecycle the runtime cannot produce.
+    daemon._capture_pr_handle(task, outbox_dir)
+    daemon._remove_outbox(outbox_dir)
+    assert not outbox_dir.exists()
+
     daemon._notify_spawn_parent(inbox, task)
 
     note = protocol.list_pending(inbox)[0]
@@ -2274,6 +2282,66 @@ def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
     assert str(note.get("spawn_pr_number")) == "647"
     assert note.get("spawn_report_path") == str(report)
     assert note.get("spawn_report_found") is True
+
+
+def test_notify_spawn_parent_pr_survives_outbox_teardown(tmp_path):
+    """The `.pr` control is gone by the time the parent reaps — the handle
+    must have been captured before teardown, or it is lost by construction.
+
+    Regression pin for the defect this fix closes (#648, caught in review):
+    `_notify_spawn_parent` runs after the child's future resolves, and that
+    future's `finally` has already `shutil.rmtree`'d the outbox the `.pr`
+    control lives in. Reading `.pr` at notify time therefore *always* reads a
+    path that no longer exists, so the one field the ticket was filed to save
+    was the one that could never arrive.
+
+    Asserted the way the failure actually shows up: the outbox is destroyed
+    first, and the handle must still be on the event. Deleting
+    `_capture_pr_handle` turns this red; no fixture tweak can make it pass
+    while the read stays on the deleted path.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-child"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / ".pr").write_text("651\n", encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/catalog-carries-the-price",
+            "outbox_path": str(outbox_dir),
+        },
+    )
+
+    daemon._capture_pr_handle(task, outbox_dir)
+    daemon._remove_outbox(outbox_dir)
+    assert not (outbox_dir / ".pr").exists()
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert str(note.get("spawn_pr_number")) == "651"
+
+
+def test_capture_pr_handle_absent_control_sets_no_key(tmp_path):
+    """No `.pr` ⇒ no `pr_number` on meta, so 'no PR' stays distinguishable
+    from 'PR unknown' (#648 rule 1). The fixture cannot become legal: it
+    asserts the key is *absent*, not that it holds a placeholder."""
+    outbox_dir = tmp_path / "outbox"
+    outbox_dir.mkdir()
+    task = Run(id="r", event_id="e", body="", source="telegram", status="done", meta={})
+
+    daemon._capture_pr_handle(task, outbox_dir)
+
+    assert "pr_number" not in task.meta
+
+    # A missing outbox directory entirely must also be survivable: teardown
+    # ordering is not something a produce convenience may assume.
+    daemon._capture_pr_handle(task, tmp_path / "never-existed")
+    assert "pr_number" not in task.meta
 
 
 def test_notify_spawn_parent_no_pr_file_omits_spawn_pr_number(tmp_path):
@@ -6997,3 +7065,107 @@ def test_account_run_state_doc_carries_mood_frontmatter(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "mood: fo.cus" in text
     assert "narration" not in text
+
+
+# ── #632 review additions: the layers the PR's own tests never reached ──
+#
+# The shipped tests all drive ``_render_runner_catalog`` with hand-built rows
+# that already carry ``quota_level``. That covers the renderer and nothing
+# else: the percent *direction*, the one-read-per-pool invariant, and the two
+# daemon call sites were all uncovered, so the wiring could be deleted with
+# the suite green. Added in review (run-260724-0546-jnhk), each driven red
+# against the shipped source first.
+
+
+def test_shell_level_label_percent_is_remaining_not_used(tmp_path):
+    """``percent`` is REMAINING quota, so 89 renders "89%" — not "11%".
+
+    The whole feature inverts if this ever flips, and inverting it is silent:
+    every healthy pool would read exhausted and every dead one healthy. Pinned
+    against the live shape ``_quota_snapshot`` actually returns.
+    """
+    from brr.gates import cloud
+
+    label = cloud._shell_level_label([
+        {"label": "5h window", "percent": 89.0, "reset": "11:20am"},
+        {"label": "weekly", "percent": 88.0, "reset": "Jul 31"},
+    ])
+    # Most-constraining window wins, and it is read as remaining.
+    assert label == "88%"
+
+
+def test_shell_level_label_absent_reading_is_none_not_healthy(tmp_path):
+    """No window carries a percent ⇒ ``None``, never a fabricated level.
+
+    This is #632's whole point restated at the producer: an absent reading
+    that renders as a value is worse than one that renders as nothing.
+    Asserts identity with ``None`` so no placeholder string can satisfy it.
+    """
+    from brr.gates import cloud
+
+    assert cloud._shell_level_label([]) is None
+    assert cloud._shell_level_label([{"label": "weekly", "percent": None}]) is None
+
+
+def test_shell_level_label_zero_remaining_is_exhausted(tmp_path):
+    from brr.gates import cloud
+
+    assert cloud._shell_level_label(
+        [{"label": "weekly", "percent": 0.0, "reset": "Jul 28"}]
+    ) == "exhausted, resets Jul 28"
+
+
+def test_quota_shell_labels_reads_each_pool_once(tmp_path, monkeypatch):
+    """One snapshot read per catalog build, however many profiles share a pool.
+
+    The shipped suite claimed to pin this by setting the same ``quota_level``
+    on three fixture rows — which pins the renderer's propagation and would
+    pass identically if the snapshot were re-read per profile. This counts the
+    reads instead.
+    """
+    from brr.gates import cloud
+
+    calls = []
+
+    def _fake_snapshot(brr_dir):
+        calls.append(brr_dir)
+        return [
+            {"shell": "codex", "windows": [{"percent": 0.0, "reset": "Jul 28"}]},
+            {"shell": "claude", "windows": [{"percent": 88.0}]},
+        ]
+
+    monkeypatch.setattr(cloud, "_quota_snapshot", _fake_snapshot)
+    labels = cloud.quota_shell_labels(tmp_path)
+
+    assert len(calls) == 1
+    assert labels == {"codex": "exhausted, resets Jul 28", "claude": "88%"}
+
+
+def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
+    tmp_path, monkeypatch,
+):
+    """The daemon-side wiring, which had no test at all.
+
+    Without this, either ``_enrich_catalog_quota`` call site in ``_run_worker``
+    could be deleted and the suite would stay green — the exact "the number
+    exists, the chooser cannot see it" failure #632 was filed about.
+    """
+    from brr.gates import cloud
+
+    monkeypatch.setattr(
+        cloud, "_quota_snapshot",
+        lambda brr_dir: [{"shell": "codex", "windows": [{"percent": 0.0}]}],
+    )
+    catalog = [
+        {"name": "codex", "shell": "codex", "quota_source": "codex-local"},
+        {"name": "codex-full", "shell": "codex", "quota_source": "codex-local"},
+        {"name": "claude", "shell": "claude", "quota_source": "claude-local"},
+    ]
+
+    daemon._enrich_catalog_quota(catalog, tmp_path)
+
+    assert catalog[0]["quota_level"] == "exhausted"
+    assert catalog[1]["quota_level"] == "exhausted"
+    # claude had no reading in this snapshot — unknown stays unknown, and the
+    # key must be absent rather than empty so the renderer emits nothing.
+    assert "quota_level" not in catalog[2]
