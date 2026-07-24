@@ -2661,3 +2661,76 @@ class TestKbMirrorSignal:
         prompt = build_run_prompt("do something", repo)
 
         assert "1 commit behind" in prompt
+    # ── the mirror of the wrong repository (#676) ────────────────────
+    #
+    # A checkout cloned from another repo is 0-behind and used to render as
+    # nothing at all. The wake needs the *pair* of paths, because that is the
+    # only reading that distinguishes this from a healthy mirror — `git
+    # status` reads clean there, and so does the count.
+
+    def _account_moves_to(self, repo, tmp_path, name="real-home"):
+        """Resolution moves to a second real account repo; checkout untouched.
+
+        This is the live 2026-07-09 shape (a `.brnrd-kb` left pointing at an
+        early decoy account slot after `cloud.json` started carrying the real
+        one), and it is reached the way production reaches it — nothing here
+        rewrites the checkout's remote by hand.
+        """
+        import subprocess
+
+        home = tmp_path / name
+        krepo = home / "knowledge"
+        krepo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=krepo, check=True)
+        (krepo / "index.md").write_text("the real account\n", encoding="utf-8")
+        self._commit(krepo, "seed the real account")
+        (repo / ".brr" / "config").write_text(
+            f"home.path={home}\n", encoding="utf-8"
+        )
+        return krepo
+
+    def test_a_mirror_of_another_repo_names_both_paths(self, tmp_path, monkeypatch):
+        """Both paths, or the line is unactionable: "the mirror is wrong" is
+        not a next move, and the reader cannot recover either path from a
+        checkout that reads healthy by every other handle."""
+        from brr.prompts import _build_kb_health_block
+
+        repo, decoy, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        real = self._account_moves_to(repo, tmp_path)
+
+        block = _build_kb_health_block(repo)
+
+        assert str(decoy) in block   # where it actually points
+        assert str(real) in block    # where this account's pages live
+        assert "wrong repository" in block
+        assert "brnrd kb" in block   # the one path that repairs it
+        assert "behind" not in block  # a count here would be true and useless
+
+    def test_a_mirror_of_another_repo_reaches_the_assembled_wake_prompt(
+        self, tmp_path, monkeypatch
+    ):
+        """Same one-layer-up guardrail as the behind case: rendered is not
+        injected."""
+        repo, decoy, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        real = self._account_moves_to(repo, tmp_path)
+
+        prompt = build_run_prompt("do something", repo)
+
+        assert str(decoy) in prompt
+        assert str(real) in prompt
+
+    def test_a_correctly_pointed_mirror_still_says_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """The identity check's own #623 bar, on the surface that matters: the
+        wake sees an empty block for a checkout that is where it belongs, even
+        though the block now asks one more question than it used to."""
+        from brr import knowledge
+        from brr.prompts import _build_kb_health_block
+
+        repo, krepo, checkout, cfg = self._repo_with_kb(tmp_path, monkeypatch)
+        state = knowledge.mirror_state(repo, cfg)
+        assert state.status == knowledge.MIRROR_CURRENT  # guard: identity asked
+        assert state.status != knowledge.MIRROR_ELSEWHERE
+
+        assert _build_kb_health_block(repo) == ""
