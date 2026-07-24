@@ -5231,6 +5231,15 @@ def _queue_spawn_request(
     # it — this run's own setup-assist spawn vanished that way.
     proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
     core = str(fm.get("core") or "").strip()
+    # #640: optional declared contract. When the dispatcher states the
+    # branch/report the child is committed to, that is the contract — no
+    # scan of the spec prose needed, and no risk of a sibling-branch
+    # mention (named responsibly, elsewhere in the same spec) being read
+    # as the commitment. Carried onto the child's own meta so
+    # `_notify_spawn_parent` can read it straight off the reaped `Run`,
+    # the same way it already reads `publish_branch`.
+    contract_branch = str(fm.get("branch") or "").strip()
+    contract_report = str(fm.get("report") or "").strip()
     new_body = body.strip()
     if not new_body:
         _record_outbox_notice(outbox_dir, "spawn dropped: the request had no body")
@@ -5276,6 +5285,10 @@ def _queue_spawn_request(
         meta["shell"] = proposed
     if core:
         meta["core"] = core
+    if contract_branch:
+        meta["spawn_contract_branch"] = contract_branch
+    if contract_report:
+        meta["spawn_contract_report"] = contract_report
     if task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
     reason = str(fm.get("reason") or "").strip()
@@ -6404,28 +6417,58 @@ def _extract_spawn_contract(spec_text: str) -> tuple[str | None, str | None]:
     )
 
 
-def _spawn_contract_check(spec_text: str, publish_branch: str | None) -> dict | None:
-    """Compare a spawn spec's contract against what the child actually did.
+def _spawn_contract_check(
+    spec_text: str,
+    publish_branch: str | None,
+    *,
+    declared_branch: str | None = None,
+    declared_report: str | None = None,
+) -> dict | None:
+    """Compare a spawn's contract against what the child actually did.
 
-    Returns ``None`` when there is nothing to check — no ``brr/<slug>``
-    branch named in the spec at all. Absence of a contract is not a
-    mismatch (#574's own constraint): a spawn with no branch commitment
+    Two ways to arrive at the contract, in strict preference order
+    (#640):
+
+    - **declared** — the dispatcher stated ``branch:``/``report:`` in the
+      spawn's own frontmatter (``_queue_spawn_request``), carried onto the
+      child's meta. A stated fact, not an inference.
+    - **scanned** — falls back to :func:`_extract_spawn_contract`'s first-
+      match-in-prose read of ``spec_text`` when nothing was declared. A
+      spec responsibly naming a *sibling* worker's branch (worktree-
+      discipline prose, ahead of its own Deliverable section) can match
+      here first — a real false-positive mode, not a hypothetical one
+      (found live 2026-07-23/24, #640). The caller is the one that decides
+      what a *scanned* mismatch is allowed to do to the worker's status;
+      this function only reports where the contract came from.
+
+    Returns ``None`` when there is nothing to check — no branch declared
+    and none named in the spec prose either. Absence of a contract is not
+    a mismatch (#574's own constraint): a spawn with no branch commitment
     behaves exactly as it always has.
 
     Otherwise returns a dict describing the comparison: ``mismatch`` is
-    True when the published branch differs from the spec's, or a spec-
-    named report path was never written. Pure string/filesystem-existence
-    logic, no model call — a caller wraps this in try/except per the
-    fail-open posture (`_notify_spawn_parent`'s docstring): a bug in this
-    check must never itself read as a worker-run failure.
+    True when the published branch differs from the contract's, or a
+    named report path was never written. ``source`` is ``"declared"`` or
+    ``"scanned"``. Pure string/filesystem-existence logic, no model call —
+    a caller wraps this in try/except per the fail-open posture
+    (`_notify_spawn_parent`'s docstring): a bug in this check must never
+    itself read as a worker-run failure.
 
     Live case, 2026-07-22: run-260722-2337-pqav was specced for #564 on
     `brr/wake-request-source-gate`, delivered #565 on
     `brr/stopped-run-kb-credit`, and the completion event still said
     `status=done` — the parent believed it. This is the check that would
-    have caught it.
+    have caught it (as a scanned contract — no declared frontmatter was in
+    play that night).
     """
-    spec_branch, spec_report = _extract_spawn_contract(spec_text or "")
+    declared_branch = (declared_branch or "").strip() or None
+    declared_report = (declared_report or "").strip() or None
+    if declared_branch:
+        spec_branch, spec_report = declared_branch, declared_report
+        source = "declared"
+    else:
+        spec_branch, spec_report = _extract_spawn_contract(spec_text or "")
+        source = "scanned"
     if not spec_branch:
         return None
     published = str(publish_branch or "").strip() or None
@@ -6436,11 +6479,41 @@ def _spawn_contract_check(spec_text: str, publish_branch: str | None) -> dict | 
     report_ok = report_found is not False
     return {
         "mismatch": (not branch_ok) or (not report_ok),
+        "source": source,
         "spec_branch": spec_branch,
         "published_branch": published,
         "spec_report": spec_report,
         "report_found": report_found,
     }
+
+
+def _spawn_worker_ran(task: Run) -> bool:
+    """True when there's direct evidence the spawned child executed a turn.
+
+    #633: a Shell that errors before the agent gets a single turn (auth
+    failure, provider quota exhausted before the first token) leaves
+    ``task.status == "error"`` exactly like a worker that made several
+    attempts and still gave up — but there was no worker to have a
+    *contract* with in the former case. Reuses signals the daemon already
+    computed rather than inventing a new probe:
+
+    - ``has_new_commit`` mirrors real git state
+      (``worktree.has_commits_beyond`` against the seed ref), checked
+      *after* ``_capture_worktree`` has folded any dirty tree into a
+      salvage commit — so this also covers "worktree changes" that were
+      never explicitly committed by the agent itself.
+    - ``trace_dirs`` is only ever appended once a runner attempt actually
+      returned a transcript (the attempt loop in ``_run_worker``) — a
+      Shell that never invoked the runner leaves it empty.
+
+    Either one present is enough: this is an "did anything happen at
+    all" floor, not a quality bar.
+    """
+    if task.meta.get("has_new_commit"):
+        return True
+    if str(task.meta.get("trace_dirs") or "").strip():
+        return True
+    return False
 
 
 def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
@@ -6473,55 +6546,111 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     conv = str(task.meta.get("spawn_parent_conversation_key") or "").strip()
     conv = conv or f"run:{parent_run_id}"
 
-    # #574: does what the child actually published match the spec it was
-    # given? ``task.body`` is the spec text as the child saw it — never
+    # #574: does what the child actually published match the contract it
+    # was given? ``task.body`` is the spec text as the child saw it — never
     # rewoven for a worker run (the burst-sibling weave at the top of the
     # dispatch loop is gated `if not is_worker_run`, and a spawned child is
     # always `worker: true`) — so it is safe to read straight off the
-    # reaped ``Run`` here, no ``prompt.md`` reread needed.
+    # reaped ``Run`` here, no ``prompt.md`` reread needed. ``spawn_contract_
+    # branch``/``spawn_contract_report`` are the declared contract, carried
+    # onto the child's meta by ``_queue_spawn_request`` when the dispatcher
+    # stated one (#640) — preferred over the prose scan every time.
     status_label = task.status
     contract_kwargs: dict = {}
     contract_block = ""
     try:
-        contract = _spawn_contract_check(task.body, task.meta.get("publish_branch"))
+        contract = _spawn_contract_check(
+            task.body,
+            task.meta.get("publish_branch"),
+            declared_branch=task.meta.get("spawn_contract_branch"),
+            declared_report=task.meta.get("spawn_contract_report"),
+        )
     except Exception as exc:  # noqa: BLE001 - fail open, see docstring above
         print(f"[brnrd] spawn contract check failed for {task.id}: {exc}")
         contract = None
-    if contract is not None and contract["mismatch"]:
-        status_label = "contract-mismatch"
-        contract_kwargs = {
-            "spawn_contract_mismatch": True,
-            "spawn_contract_spec_branch": contract["spec_branch"],
-            "spawn_contract_published_branch": contract["published_branch"] or "",
-        }
-        if contract["spec_report"]:
-            report_line = (
-                f"spec report:       {contract['spec_report']} "
-                f"({'found' if contract['report_found'] else 'MISSING'})"
-            )
-            contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
-            contract_kwargs["spawn_contract_report_found"] = bool(
-                contract["report_found"]
+
+    # #633: a contract violation is only ever a *behavioural* accusation —
+    # it requires evidence a worker existed to violate it. A Shell that
+    # errored before the agent's first turn leaves ``task.status ==
+    # "error"`` with nothing else to show for it; that is a runner
+    # failure, not a contract failure, and the #574 check must never
+    # relabel it as one. This check outranks the contract check entirely:
+    # when it fires, there is nothing left to compare, so no contract
+    # block, no mismatch flag, regardless of what the (possibly still
+    # correct) contract check above found.
+    runner_failed = task.status == "error" and not _spawn_worker_ran(task)
+
+    if runner_failed:
+        status_label = "runner-failed"
+    elif contract is not None and contract["mismatch"]:
+        if contract["source"] == "declared":
+            # Exact contract, exact violation — indict.
+            status_label = "contract-mismatch"
+            contract_kwargs = {
+                "spawn_contract_mismatch": True,
+                "spawn_contract_spec_branch": contract["spec_branch"],
+                "spawn_contract_published_branch": contract["published_branch"] or "",
+            }
+            if contract["spec_report"]:
+                report_line = (
+                    f"spec report:       {contract['spec_report']} "
+                    f"({'found' if contract['report_found'] else 'MISSING'})"
+                )
+                contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
+                contract_kwargs["spawn_contract_report_found"] = bool(
+                    contract["report_found"]
+                )
+            else:
+                report_line = "spec report:       (none named)"
+            contract_block = (
+                "\n\ncontract mismatch — spec vs published:\n"
+                f"spec branch:       {contract['spec_branch']}\n"
+                f"published branch:  {contract['published_branch'] or '(none)'}\n"
+                f"{report_line}"
             )
         else:
-            report_line = "spec report:       (none named)"
-        contract_block = (
-            "\n\ncontract mismatch — spec vs published:\n"
-            f"spec branch:       {contract['spec_branch']}\n"
-            f"published branch:  {contract['published_branch'] or '(none)'}\n"
-            f"{report_line}"
-        )
+            # Fuzzy read (first `brr/<slug>` in prose) — annotate only.
+            # Status and the mismatch flag stay untouched: a scanned read
+            # may flag, only a declared one may indict (#640).
+            report_note = ""
+            if contract["spec_report"] and contract["report_found"] is False:
+                report_note = (
+                    f" (a scanned report path, {contract['spec_report']}, "
+                    "was never written)"
+                )
+            contract_block = (
+                "\n\nadvisory — a `brr/<slug>` scanned from the spec prose "
+                f"({contract['spec_branch']}) doesn't match the published "
+                f"branch ({contract['published_branch'] or '(none)'}). This "
+                "is a fuzzy read, not a declared contract, so the worker's "
+                f"own status is unaffected.{report_note}"
+            )
 
-    summary = f"concurrent spawn {task.id} finished: status={status_label}{contract_block}"
     response_path = task.meta.get("response_path")
+    text = ""
     if response_path:
         try:
             text = Path(str(response_path)).read_text(encoding="utf-8").strip()
         except OSError:
             text = ""
+        if text and len(text) > _SPAWN_NOTIFY_RESPONSE_MAX_CHARS:
+            text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
+
+    if runner_failed:
+        # #633: the provider's own message is the finding here — promote
+        # it ahead of the status line rather than burying it in the tail,
+        # where a triaging wake reads only the first line and moves on.
+        summary = (
+            f"{text}\n\n(concurrent spawn {task.id}: status=runner-failed)"
+            if text
+            else f"concurrent spawn {task.id} finished: status=runner-failed"
+        )
+    else:
+        summary = (
+            f"concurrent spawn {task.id} finished: status={status_label}"
+            f"{contract_block}"
+        )
         if text:
-            if len(text) > _SPAWN_NOTIFY_RESPONSE_MAX_CHARS:
-                text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
             summary = f"{summary}\n\n{text}"
     try:
         completion = protocol.create_event(
