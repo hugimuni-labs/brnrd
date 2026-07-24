@@ -6204,6 +6204,113 @@ def _schedule_enabled(cfg: dict) -> bool:
     return bool(cfg.get("schedule.enabled", cfg.get("schedule_enabled", True)))
 
 
+# ── Schedule-entry trust-tier attribution (#413 §7 S8) ───────────────
+#
+# A run may write new ## headings to its dominion's schedule.md during a
+# thought.  The capture net (dominion.commit after every run) is the seam
+# where the daemon compares the entry-id set before/after and attributes
+# new entries to the completing run's trust tier.  The tier is stored in
+# the daemon-owned schedule state file (schedule._TIER_BY_ENTRY_KEY) so:
+#   • it is a daemon-observed fact, not a self-attestation by the run;
+#   • it is not inside any worktree the authoring tier can write.
+#
+# NOTE — forgeability limit (§2.3 clause 1, S7's scope): a collaborator
+# run in *worktree* env can reach .brr/ (the shared runtime dir that holds
+# the schedule state file) because the dominion worktree mount includes it.
+# That means a collaborator run can directly edit _tier_by_entry to upgrade
+# its own tier record.  Fixing that (moving state outside every collaborator-
+# writable mount) is S7's slice, not S8's.  This implementation names the
+# gap so reviewers know the invariant S8 provides and the one it does not.
+
+
+def _primary_schedule_dir(
+    repo_root: Path,
+    cfg: dict,
+    account_context: "account.AccountContext | None",
+) -> "Path | None":
+    """Return the dominion dir that ``_fire_due_schedules`` reads schedule.md from.
+
+    Mirrors the candidate-search logic in ``_fire_due_schedules`` so that
+    attribution and firing always agree on which schedule.md is the canonical
+    one.  Returns the first candidate whose path is a directory, or ``None``.
+    """
+    candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+    if account_context is not None and account_context.enabled:
+        try:
+            repo_label = account.repo_label(repo_root, cfg)
+            account_path = account.repo_dominion_path(account_context, repo_label)
+            candidates.insert(
+                0,
+                dominion.ResidentDominion(
+                    path=account_path,
+                    capture_root=account_context.dominion_repo,
+                    label="account",
+                ),
+            )
+        except Exception:  # noqa: BLE001 - account resolution is best-effort here
+            pass
+    for c in candidates:
+        if c.path.is_dir():
+            return c.path
+    return None
+
+
+def _snapshot_dominion_schedule_ids(
+    repo_root: Path,
+    cfg: dict,
+    account_context: "account.AccountContext | None",
+) -> "frozenset[str]":
+    """Snapshot the entry IDs in the dominion's schedule.md before a run starts.
+
+    Returns an empty frozenset on any error — attribution degrades to
+    "nothing attributed" rather than blocking the run.
+    """
+    try:
+        dom = _primary_schedule_dir(repo_root, cfg, account_context)
+        if dom is None:
+            return frozenset()
+        return schedule_mod.entry_ids_from_dominion(dom)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def _attribute_new_schedule_entries(
+    task: "Run",
+    before_ids: "frozenset[str]",
+    brr_dir: Path,
+    repo_root: Path,
+    cfg: dict,
+    account_context: "account.AccountContext | None",
+) -> None:
+    """Attribute schedule entries added by this run to its trust tier.
+
+    Called after ``_capture_dominion`` so the dominion's schedule.md
+    already reflects the run's writes.  Entries that are new relative to
+    *before_ids* are recorded in the schedule state at the run's resolved
+    trust tier (``task.meta["trust_tier"]``).
+
+    Pre-existing entries (*before_ids*) are never touched — they either
+    already have a record, or they are pre-S8 entries that fire as owner
+    with a one-time notice (see ``_fire_due_schedules``).
+
+    Best-effort: all exceptions are swallowed so attribution never blocks
+    delivery.
+    """
+    tier = str(task.meta.get("trust_tier") or "").strip()
+    if not tier:
+        return
+    try:
+        dom = _primary_schedule_dir(repo_root, cfg, account_context)
+        if dom is None:
+            return
+        after_ids = schedule_mod.entry_ids_from_dominion(dom)
+        new_ids = after_ids - before_ids
+        if new_ids:
+            schedule_mod.record_entry_tiers(brr_dir, new_ids, tier)
+    except Exception:  # noqa: BLE001 - attribution must not block delivery
+        pass
+
+
 def _fire_due_schedules(
     repo_root: Path,
     brr_dir: Path,
@@ -6338,21 +6445,49 @@ def _fire_due_schedules(
         # used. Without this receipt it applies the authored interval and can
         # call a deliberately stretched/paused wake "overdue".
         new_state["_pacing"] = pacing_snapshot
+        # #413 §7 S8: carry forward tier-attribution metadata that
+        # due_entries prunes (it only keeps entry-id records, not these
+        # underscore-prefixed daemon-managed keys).
+        for _meta_key in (
+            schedule_mod._TIER_BY_ENTRY_KEY,
+            schedule_mod._NOTICED_UNTIERED_KEY,
+        ):
+            if _meta_key in loaded_state:
+                new_state[_meta_key] = loaded_state[_meta_key]
+        # Tier map for this tick's firing (read once, not per-entry).
+        _tier_by_entry: dict = new_state.get(schedule_mod._TIER_BY_ENTRY_KEY) or {}
+        _noticed_untiered: list = list(new_state.get(schedule_mod._NOTICED_UNTIERED_KEY) or [])
         for entry in due:
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
             # readable history; default per-entry, overridable to an
             # existing gate conversation.
             conv = entry.conversation_key or f"schedule:{entry.id}"
-            protocol.create_event(
-                inbox_dir, "schedule", body,
-                schedule_id=entry.id, conversation_key=conv,
+            # S8: stamp the attributed tier onto the event so resolve_tier
+            # returns the authoring tier rather than the owner default from
+            # _OWNER_SOURCES["schedule"].  When no record exists the event
+            # carries no stamp → falls back to owner via source, per the
+            # acceptance criteria for pre-existing / pre-S8 entries.
+            entry_tier = _tier_by_entry.get(entry.id)
+            if entry_tier is None and entry.id not in _noticed_untiered:
+                print(
+                    f"[brnrd] schedule: {entry.id} has no tier record — "
+                    "fires as owner (pre-existing entry; #413 §7 S8)"
+                )
+                _noticed_untiered.append(entry.id)
+                new_state[schedule_mod._NOTICED_UNTIERED_KEY] = _noticed_untiered
+            event_meta: dict[str, object] = dict(
+                schedule_id=entry.id,
+                conversation_key=conv,
                 repo_label=(
                     account_context.default_repo.label
                     if account_context is not None and account_context.enabled
                     else _repo_label(repo_root, {}, cfg)
                 ),
             )
+            if entry_tier is not None:
+                event_meta["trust_tier"] = entry_tier
+            protocol.create_event(inbox_dir, "schedule", body, **event_meta)
             print(f"[brnrd] schedule: fired {entry.id}")
         if new_state != loaded_state:
             schedule_mod.save_state(brr_dir, new_state)
@@ -8545,6 +8680,12 @@ def _run_worker_and_finalize(
     failure_defer_seconds = float(
         cfg.get("dispatch.failure_defer_seconds", _FAILURE_DEFER_SECONDS_DEFAULT)
     )
+    # S8: snapshot the schedule entry IDs *before* the run so the
+    # capture-net seam can attribute only entries the run itself added.
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    _schedule_before_ids = _snapshot_dominion_schedule_ids(
+        repo_root, cfg, account_context,
+    )
     task = None
     try:
         try:
@@ -8643,6 +8784,17 @@ def _run_worker_and_finalize(
             cfg,
             task,
             account_context=account_context,
+        )
+        # S8: attribute any new schedule entries to the run's trust tier.
+        # Runs after _capture_dominion so the dominion's schedule.md
+        # already reflects the run's writes.
+        _attribute_new_schedule_entries(
+            task,
+            _schedule_before_ids,
+            brr_dir,
+            repo_root,
+            cfg,
+            account_context,
         )
         _retire_internal_event(
             event, responses_dir,
