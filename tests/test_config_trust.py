@@ -765,11 +765,18 @@ def test_write_security_config_invalidates_a_sibling_worktrees_cache_entry(
 
     Cache keys are the caller's raw ``repo_root`` (#658 dropped the
     canonicalization that used to collapse every worktree onto one key), so
-    two worktrees of one repo hold two entries. ``security_config_path``
-    caches ``None`` when the home can't be resolved yet — so an entry cached
-    from A *before* the security domain exists is exactly the value that
-    must not survive a write from B. A per-repo_root prefix scan would only
-    ever have reached the writer's own key; the full clear reaches both.
+    two worktrees of one repo hold two entries. A per-``repo_root`` prefix
+    scan would only ever have reached the writer's own key, so A's entry
+    would survive a write it knows nothing about; the full clear reaches
+    both.
+
+    The assertion is that **no** entry survives, not that a particular one
+    does — deliberately wider than the scenario driven here. The sharpest
+    case is an entry cached from A *before* the security domain existed,
+    where the stale value is ``None`` and the write is precisely what makes
+    it wrong; that one needs a home that resolves and a ``security.config``
+    that does not yet exist, which this fixture does not build. Pinning
+    "the cache is empty" covers it and every sibling of it.
     """
     import subprocess
 
