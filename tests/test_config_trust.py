@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from brr import config as conf
-from brr import daemon, envs, trust
+from brr import daemon, envs, gitops, trust
 from brr.cli import main
 from brr.runner import RunnerResult
 
@@ -574,16 +574,23 @@ def test_security_config_resolves_the_same_from_a_linked_worktree(
 ):
     """A run in a worktree must find the *same* security.config.
 
-    Review fixup, and the one defect that would have shipped dark.
     ``account._connected_account_id``'s durable lookup matches the account
     repo registry by **exact path** (``registered.resolve() ==
     resolved_repo``). A linked worktree — which is where every run in a
-    ``worktree`` environment executes — never matches, so
-    ``resolve_context`` falls through to a ``project`` home and the
-    security config is looked for somewhere nobody writes it. Every
-    security key then comes back unset: the split failing open in exactly
-    the environment that needs it, while passing on a ``host``-environment
-    account, which is what this one is.
+    ``worktree`` environment executes — never matches on that first pass,
+    and without a fallback ``resolve_context`` falls through to a
+    ``project`` home and the security config is looked for somewhere
+    nobody writes it. Every security key then comes back unset: the split
+    failing open in exactly the environment that needs it, while passing
+    on a ``host``-environment account.
+
+    The resolution lives in **one** place — ``_connected_account_id``'s
+    ``gitops.main_worktree_root`` retry (#654). ``config`` used to hold a
+    second, private derivation of the same fact for this one call site
+    (``_canonical_repo_root``, #533); it was deleted in #658, so this test
+    is now driving the general fix rather than a local patch. Neuter
+    ``gitops.main_worktree_root`` and this must go red — if it stays
+    green, it is not testing the resolution.
 
     Deliberately does **not** set ``home.path``: an explicit home
     short-circuits the registry lookup entirely, so a test that sets one
@@ -632,3 +639,166 @@ def test_security_config_resolves_the_same_from_a_linked_worktree(
     # And the value survives the trip from inside the worktree, which is
     # the behaviour, not just the path.
     assert conf.load_config(linked).get("docker.image") == "from-security"
+
+
+def _account_repo(tmp_path, monkeypatch, *, separate_git_dir=False):
+    """A git repo registered to a fake account home. Returns (repo, home).
+
+    No ``home.path`` anywhere: an explicit home short-circuits the registry
+    lookup, which is the resolution these tests exist to exercise.
+    """
+    import json
+    import subprocess
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    if separate_git_dir:
+        repo.mkdir()
+        gitdir = tmp_path / "elsewhere" / "gitdir"
+        gitdir.parent.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "-q", f"--separate-git-dir={gitdir}", str(repo)],
+            check=True, capture_output=True,
+        )
+        for key, value in (("user.email", "t@t"), ("user.name", "t")):
+            subprocess.run(
+                ["git", "-C", str(repo), "config", key, value],
+                check=True, capture_output=True,
+            )
+    else:
+        init_git_repo(repo)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+
+    home = tmp_path / "state" / "brnrd" / "accounts" / "acc_test" / "home"
+    (home / "account").mkdir(parents=True)
+    (home / "account" / "repos.json").write_text(
+        json.dumps({"account_id": "acc_test", "repos": [{"path": str(repo)}]}),
+        encoding="utf-8",
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+    return repo, home
+
+
+def test_security_config_resolves_from_a_worktree_that_has_its_own_brr(
+    tmp_path, monkeypatch
+):
+    """The provisioning shape #533's private derivation silently no-opped in.
+
+    ``_canonical_repo_root`` derived the main checkout as
+    ``gitops.shared_brr_dir(repo_root).parent``. ``shared_brr_dir`` answers
+    a *different* question — where runtime state lives — and returns
+    ``repo_root/.brr`` unconditionally whenever that directory exists
+    (``gitops.py``). So in a worktree carrying its own ``.brr`` — which is
+    exactly the provisioning shape the patch was written for — it returned
+    the worktree, and the "fix" was a no-op.
+
+    Post-#654 the resolution is ``main_worktree_root``'s, which asks git and
+    is unaffected by a local ``.brr``. This pins that: give the worktree its
+    own ``.brr`` and the account home must still resolve.
+    """
+    import subprocess
+
+    repo, home = _account_repo(tmp_path, monkeypatch)
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "docker.image=from-security\n", encoding="utf-8"
+    )
+    conf.write_config(repo, {"docker.image": "from-repo"})
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    # The shape that defeated the old derivation.
+    (linked / ".brr").mkdir()
+    assert gitops.shared_brr_dir(linked) == linked / ".brr"
+    assert gitops.main_worktree_root(linked) == repo
+    conf._SECURITY_PATH_CACHE.clear()
+
+    assert conf.security_config_path(linked, {}) == (
+        home / conf.SECURITY_CONFIG_FILENAME
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+    assert conf.load_config(linked).get("docker.image") == "from-security"
+
+
+def test_security_config_resolves_under_separate_git_dir(tmp_path, monkeypatch):
+    """A ``--separate-git-dir`` checkout resolves its own account home.
+
+    This is the case the deleted ``_canonical_repo_root`` got *actively*
+    wrong rather than merely redundantly right. ``shared_brr_dir`` walks
+    ``--git-common-dir`` and takes its parent — which under
+    ``--separate-git-dir`` is not a checkout at all, just the directory the
+    git dir happens to sit in. The old code handed that non-checkout path to
+    ``resolve_context``, the registry (which lists the real checkout) could
+    not match it, and the security domain resolved to a *project* home:
+    every security key silently unset, the #533 split failing open.
+
+    Nothing has to resolve a worktree here — the raw path matches the
+    registry directly. It only fails if something mangles the path first.
+    """
+    repo, home = _account_repo(tmp_path, monkeypatch, separate_git_dir=True)
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "docker.image=from-security\n", encoding="utf-8"
+    )
+    conf.write_config(repo, {"docker.image": "from-repo"})
+    conf._SECURITY_PATH_CACHE.clear()
+
+    # The trap, pinned: shared_brr_dir's parent is not the checkout.
+    assert gitops.shared_brr_dir(repo).parent != repo
+
+    assert conf.security_config_path(repo, {}) == (
+        home / conf.SECURITY_CONFIG_FILENAME
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+    assert conf.load_config(repo).get("docker.image") == "from-security"
+
+
+def test_write_security_config_invalidates_a_sibling_worktrees_cache_entry(
+    tmp_path, monkeypatch
+):
+    """A write from worktree B must not leave worktree A's entry stale.
+
+    Cache keys are the caller's raw ``repo_root`` (#658 dropped the
+    canonicalization that used to collapse every worktree onto one key), so
+    two worktrees of one repo hold two entries. A per-``repo_root`` prefix
+    scan would only ever have reached the writer's own key, so A's entry
+    would survive a write it knows nothing about; the full clear reaches
+    both.
+
+    The assertion is that **no** entry survives, not that a particular one
+    does — deliberately wider than the scenario driven here. The sharpest
+    case is an entry cached from A *before* the security domain existed,
+    where the stale value is ``None`` and the write is precisely what makes
+    it wrong; that one needs a home that resolves and a ``security.config``
+    that does not yet exist, which this fixture does not build. Pinning
+    "the cache is empty" covers it and every sibling of it.
+    """
+    import subprocess
+
+    repo, home = _account_repo(tmp_path, monkeypatch)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    # A caches its resolution first — two distinct keys, by raw path.
+    from_a = conf.security_config_path(linked, {})
+    assert from_a == home / conf.SECURITY_CONFIG_FILENAME
+    keys_before = set(conf._SECURITY_PATH_CACHE)
+    assert any(k[0] == str(linked) for k in keys_before)
+
+    # B writes. Nothing about that write mentions A's key.
+    written = conf.write_security_config(repo, {"docker.image": "from-security"})
+    assert written == home / conf.SECURITY_CONFIG_FILENAME
+
+    assert conf._SECURITY_PATH_CACHE == {}, (
+        "a write must not leave any cached resolution behind — a sibling "
+        "worktree's entry is unreachable by a prefix match on the writer"
+    )
