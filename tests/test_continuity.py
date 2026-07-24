@@ -507,6 +507,90 @@ def test_orientation_set_names_only_provable_files(tmp_path: Path) -> None:
     assert prompts._build_orientation_set(repo) == []
 
 
+def test_agents_md_leaves_the_walk_for_a_shell_that_already_read_it(
+    tmp_path: Path,
+) -> None:
+    """codex holds ``AGENTS.md`` natively; the walk must not bill it for a Read.
+
+    ``run.md`` has always said the file is Shell-dependent — *"some Shells read
+    it natively (codex), others don't (claude)"* — while the set named it for
+    every Shell alike.  On this repo ``AGENTS.md`` is 33 KB of a 38–64 KB set,
+    so on codex the meter's largest entry was a file already in context: the
+    polling tax the identity core names, charged by the instrument built to
+    make orientation honest.
+    """
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+    def names(shell: str | None) -> list[str]:
+        return [
+            Path(e.path).name
+            for e in prompts._build_orientation_set(repo, runner_shell=shell)
+        ]
+
+    assert names("codex") == []
+    assert names("codex exec --sandbox danger-full-access") == []
+
+    # Every other Shell still walks it, and so does an unknown one: a walk
+    # entry for a file already in context costs one redundant Read, a missing
+    # entry for a file nobody read costs the orientation.  The cheap error is
+    # the one to make.
+    assert names("claude") == ["AGENTS.md"]
+    assert names(None) == ["AGENTS.md"]
+    assert names("") == ["AGENTS.md"]
+    assert names("some-future-shell") == ["AGENTS.md"]
+
+
+def test_shell_conditional_removes_only_agents_md(tmp_path: Path, monkeypatch) -> None:
+    """The rest of the walk is Shell-independent and must stay.
+
+    Guards the obvious over-correction: a Shell that reads one file natively
+    has not read the plan or the kb hubs, and a codex wake that lost its whole
+    orientation set would look exactly like this feature working.
+    """
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "subject-boot-sequence.md").write_text("# hub\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prompts, "_home_knowledge_log_path", lambda _root: kb / "log.md"
+    )
+
+    entries = prompts._build_orientation_set(
+        repo, task_text="fix the boot sequence meter", runner_shell="codex"
+    )
+    assert [Path(e.path).name for e in entries] == ["subject-boot-sequence.md"]
+
+
+def test_build_boot_score_threads_the_shell_into_the_walk(tmp_path: Path) -> None:
+    """The conditional is worthless if the caller never passes the Shell.
+
+    The score already knew which body it was in; the set simply was not asked.
+    Pinned end to end through the production builder so the wiring cannot be
+    quietly dropped while the unit above stays green.
+    """
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".brr").mkdir()
+    (repo / ".brr" / "config").write_text("", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+    claude = prompts.build_boot_score(repo, is_daemon=True, runner_shell="claude")
+    codex = prompts.build_boot_score(repo, is_daemon=True, runner_shell="codex")
+
+    assert [Path(e.path).name for e in claude.orientation_set] == ["AGENTS.md"]
+    assert codex.orientation_set == []
+
+
 def test_touched_subject_hub_requires_every_slug_token(
     tmp_path: Path, monkeypatch,
 ) -> None:
