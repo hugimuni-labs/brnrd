@@ -6031,7 +6031,7 @@ def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "publish", lambda _repo, _task: None)
     monkeypatch.setattr(daemon, "_persist_run_state_doc", fake_persist)
     monkeypatch.setattr(daemon, "_capture_dominion", fake_capture)
-    monkeypatch.setattr(daemon, "_retire_internal_event", lambda _event, _responses: False)
+    monkeypatch.setattr(daemon, "_retire_internal_event", lambda _event, _responses, **_kw: False)
 
     daemon._run_worker_and_finalize(
         event,

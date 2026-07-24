@@ -6322,14 +6322,43 @@ def _fire_due_schedules(
         print(f"[brnrd] schedule: skipped tick ({exc})")
 
 
-def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
-    """Retire a gateless (``schedule``-source) event after it completes.
+def _retire_internal_event(
+    event: dict,
+    responses_dir: Path,
+    *,
+    inbox_dir: Path | None = None,
+    run_id: str = "",
+) -> bool:
+    """Retire a gateless (``schedule`` / ``spawn_completed``) event after it completes.
 
-    A self-scheduled thought has no delivery gate. Its terminal message is
-    retained as ``undeliverable`` in the run store and the dispatch event is
-    closed in place, preserving the same audit shape as every other target.
+    A self-scheduled thought or a completed-spawn notification has no delivery
+    gate.  Its terminal message is retained as ``undeliverable`` in the run
+    store and the dispatch event is closed in place, preserving the same audit
+    shape as every other target.
+
+    When *inbox_dir* and *run_id* are supplied, also retires all
+    ``spawn_completed`` events in the inbox whose ``spawn_parent_run_id``
+    matches *run_id* — these were observed by the owning (parent) run during
+    its lifetime.  A ``spawn_completed`` is a **fact for the parent**, not a
+    message with a correspondent: the daemon's own refusal text says as much.
+    The parent run ending is the observation point that closes them so they
+    never dispatch a fresh run or appear as an un-clearable obligation.
     """
-    if event.get("source") != "schedule" or not event.get("_path"):
+    # Retire every spawn_completed event this run observed as the parent.
+    # Best-effort: a failed write on one event must not abort the rest.
+    if inbox_dir is not None and run_id:
+        for ev in protocol.list_pending(inbox_dir):
+            if (
+                ev.get("source") == "spawn_completed"
+                and ev.get("spawn_parent_run_id") == run_id
+                and ev.get("_path")
+            ):
+                try:
+                    protocol.set_status(ev, "delivered")
+                except OSError:
+                    pass
+    source = event.get("source")
+    if source not in ("schedule", "spawn_completed") or not event.get("_path"):
         return False
     protocol.set_status(event, "delivered")
     return True
@@ -8431,7 +8460,11 @@ def _run_worker_and_finalize(
             task,
             account_context=account_context,
         )
-        _retire_internal_event(event, responses_dir)
+        _retire_internal_event(
+            event, responses_dir,
+            inbox_dir=inbox_dir,
+            run_id=task.id if task is not None else "",
+        )
         return task
     finally:
         # Leave the presence registry — the thought is no longer awake.
