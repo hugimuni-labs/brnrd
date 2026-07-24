@@ -51,7 +51,9 @@ PUBLIC_COMMANDS = (
 # docstring, and is named explicitly in onboarding docs; if a future
 # maintainer wants it front-and-center, retiring or folding another verb
 # to make room is the tradeoff to make deliberately, not by accident here.
-HIDDEN_COMMANDS = ("prompts", "hook", "statusline", "worktree-hygiene", "config")
+HIDDEN_COMMANDS = (
+    "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
+)
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
 ALL_COMMANDS = tuple(
@@ -303,6 +305,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("topic", nargs="?", default=None,
                    help="doc topic to print (e.g. portals, execution-map)")
     p.set_defaults(func=cmd_docs)
+
+    # No `help=`: hidden commands stay off `--help` (pinned by
+    # `test_hidden_commands_parse_but_are_not_listed`), which is the whole
+    # point — this one is the resident's, and `daemon-substrate.md` points
+    # it there directly.
+    p = sub.add_parser("emotes")
+    p.add_argument("query", nargs="*", help="a feeling, a handle, or words from a trigger")
+    p.add_argument("--all", action="store_true", help="every face, not the top matches")
+    p.add_argument("--telemetry", action="store_true", help="the daemon's derived set too")
+    p.set_defaults(func=cmd_emotes)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -794,6 +806,47 @@ def cmd_docs(args):
         print(docs.format_listing(repo_root), file=sys.stderr)
         return 1
     print(text)
+    return 0
+
+
+def cmd_emotes(args):
+    """Print matching faces — the palette's index (#566).
+
+    A resident writes one handle into `.mood` and until now had no way to
+    learn a second one: the boot names `brr.emotes` and gives a single
+    example. Pull-not-push on purpose (see `emotes.search`), so this costs
+    a wake nothing until it wants a face.
+
+    One line per face: handle, the frames it plays, its resting frame when
+    that differs, the body-axis pitch, and the trigger — which is the part
+    that actually matters, because the honesty bar is "wear it only when
+    the trigger line is true right now", and a handle without its trigger
+    is an invitation to lie politely.
+    """
+    from . import emotes as emo
+
+    query = " ".join(args.query or [])
+    if args.all:
+        rows = [
+            e for e in emo.EMOTES.values()
+            if args.telemetry or e.kind == "situational"
+        ]
+    else:
+        rows = emo.search(query, limit=200 if args.telemetry else 12)
+        if not args.telemetry:
+            rows = [e for e in rows if e.kind == "situational"] or rows
+
+    if not rows:
+        print(f"[brnrd emotes] no face matches {query!r} — try a feeling, not a handle")
+        return 1
+
+    for e in rows:
+        cycles = " / ".join(" ".join(seq) for seq in e.sequences)
+        rest = "" if e.rest is None else f"  rest {e.rest}"
+        print(f"{e.name:<10} {cycles}{rest}  pitch {e.pitch:.2f}  [{e.kind}]")
+        print(f"           {e.trigger}")
+    if not args.all and len(rows) >= 12:
+        print("[brnrd emotes] top matches only — narrow the query, or --all")
     return 0
 
 

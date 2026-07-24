@@ -79,6 +79,7 @@ __all__ = [
     "glyph",
     "for_telemetry",
     "sequences_of",
+    "search",
 ]
 
 
@@ -687,3 +688,58 @@ def sequences_of(name: str) -> tuple[tuple[str, ...], ...] | None:
 
     emote = EMOTES.get(name)
     return None if emote is None else emote.sequences
+
+
+def search(query: str = "", *, limit: int = 12) -> list[Emote]:
+    """Faces matching *query*, best first — the resident's way in.
+
+    The palette holds 113 faces and, until this existed, a wake was shown
+    exactly one of them: the ``fo.cus`` in ``daemon-substrate.md``'s
+    example line. That is not a small gap, because the honesty bar and the
+    vocabulary multiply: "only wear a face that is true right now" plus a
+    vocabulary of one means a truthful resident is a silent one. The
+    expressiveness of the palette and the expressiveness of the resident
+    are two different numbers and only the first was ever counted.
+
+    Pull, not push. An injected catalog would cost every wake ~4 KB to
+    serve the rare one that wants a face; this costs a wake nothing until
+    it asks, which is the same trade ``brnrd kb`` already makes.
+
+    Matching is deliberately forgiving, because a resident searches with
+    the *word for the feeling*, not the handle: the handles are coined
+    marks (``fo.cus``, ``we.ary``, ``smug_``) and their punctuation is
+    register, not syntax. ``focus``, ``focused`` and ``fo.cus`` all land on
+    the same face — separators are stripped from both sides before
+    comparing, and the trigger line (which is a *sentence about the state*)
+    is searched too, so "four hours one regex" finds ``narrow``.
+
+    An empty query returns the situational set, which is the resident's
+    half; telemetry faces are the daemon's and it does not take requests.
+    """
+
+    def _norm(text: str) -> str:
+        return "".join(c for c in text.lower() if c.isalnum())
+
+    needle = _norm(query)
+    if not needle:
+        return [e for e in EMOTES.values() if e.kind == "situational"][:limit]
+
+    scored: list[tuple[int, int, Emote]] = []
+    for e in EMOTES.values():
+        name = _norm(e.name)
+        trigger = _norm(e.trigger)
+        if name == needle:
+            rank = 0
+        elif name.startswith(needle) or needle.startswith(name):
+            rank = 1
+        elif needle in name:
+            rank = 2
+        elif needle in trigger:
+            rank = 3
+        else:
+            continue
+        # Situational first within a rank: the caller is a resident picking
+        # a face, and the telemetry set is not theirs to wear.
+        scored.append((rank, 0 if e.kind == "situational" else 1, e))
+    scored.sort(key=lambda row: (row[0], row[1], row[2].name))
+    return [e for _r, _k, e in scored[:limit]]
