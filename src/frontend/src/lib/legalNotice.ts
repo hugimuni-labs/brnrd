@@ -143,7 +143,9 @@ const PUBLISHER: readonly LegalField[] = [
 		block: 'publisher',
 		whereToFind:
 			'maintainer’s choice — a number that reaches HugiMuni SAS. NOT the SIE: the value offered 2026-07-24, 04 90 99 12 60, is the switchboard of the Service des impôts des entreprises de Tarascon (verified against lannuaire.service-public.gouv.fr). LCEN art. 6-III-1-b wants a line to the publisher, and publishing a tax office’s number as the company’s own is both a false statement of contact details and an unasked-for redirection of the public onto a government office.',
-		value: null
+		value: '+33 6 85 74 01 04',
+		source:
+			'supplied by the maintainer 2026-07-24 (evt-1784908134204366478-bjgm), after the first candidate was identified as the tax office’s line'
 	}
 ];
 
