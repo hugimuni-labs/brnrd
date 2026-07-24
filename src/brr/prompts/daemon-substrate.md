@@ -102,6 +102,11 @@ becomes attention, action, and a reply is yours.
     forces it reads as forgotten.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.name` — first line is this run's short resident-authored name (60 chars max).
+  - `.mood` — first line is an emote handle from `brr.emotes` (e.g. `fo.cus`);
+    lines after are private narration. Rides the statusline chip, the run
+    node, and the dashboard. Optional, honest-only: write it when the state
+    is real, rewrite it when the state changes; an unknown handle renders as
+    a bare name, never a guessed face.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
     pages, and your terminal reply auto-derive; add `issue` / `comment` /
