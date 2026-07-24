@@ -169,43 +169,6 @@ def repo_config_path(repo_root: Path) -> Path:
     return gitops.shared_brr_dir(repo_root) / "config"
 
 
-def _canonical_repo_root(repo_root: Path) -> Path:
-    """The repo's *main* worktree root, given any of its worktrees.
-
-    Review fixup on the first #533 draft, and the one defect that would
-    have shipped dark. ``account._connected_account_id`` falls back to
-    matching the account repo registry by **exact path**
-    (``registered.resolve() == resolved_repo``). A linked worktree lives
-    at a different path, so it never matches, ``resolve_context`` falls
-    through to ``kind="project"``, and the home resolves to
-    ``…/state/brnrd/projects/<slug>-<hash>/home`` instead of the
-    account's. Measured on this account:
-
-        host checkout  → …/accounts/acc_bdda…/home     (kind=account)
-        linked worktree→ …/projects/hugimuni-labs__brnrd-2521ecb6a9/home
-
-    Both resolve the *same* ``shared_brr_dir``, so the repo identity was
-    never in doubt — only the path used to look it up. Left unfixed,
-    every run in a ``worktree`` environment would look for
-    ``security.config`` in a home nobody writes, find nothing, and run
-    with every security key silently unset — the split failing open in
-    exactly the environment it matters most. It passes tests and passes a
-    live check on a ``host``-environment account, which is this one.
-
-    ``shared_brr_dir`` already resolves a worktree to the main checkout's
-    ``.brr``, so its parent is the canonical root. Falls back to
-    *repo_root* unchanged if that lookup fails or doesn't look like a
-    repo root.
-    """
-    from . import gitops
-
-    try:
-        candidate = gitops.shared_brr_dir(repo_root).parent
-    except Exception:
-        return repo_root
-    return candidate if candidate.is_dir() else repo_root
-
-
 def security_config_path(
     repo_root: Path, repo_cfg: dict[str, Any] | None = None
 ) -> Path | None:
@@ -223,10 +186,20 @@ def security_config_path(
     reserved label, mid-init odd states, ...); callers treat that as "no
     security overrides available", which is the fail-closed direction —
     a repo-side security key is still ignored either way.
+
+    *repo_root* is passed to ``resolve_context`` **exactly as given**.
+    Resolving a linked worktree to its main checkout is
+    ``account._connected_account_id``'s job and it does it by asking git
+    (``gitops.main_worktree_root``, #654); this function used to re-derive
+    the same fact privately from ``shared_brr_dir(...).parent`` (#533),
+    which is a different question with a different answer — see
+    ``gitops.main_worktree_root``'s docstring for why the two must not
+    share a derivation. Cache keys are therefore the caller's raw path;
+    ``write_security_config`` clears the whole cache rather than trying to
+    match on one, so nothing here depends on the key domain again.
     """
     from . import account
 
-    repo_root = _canonical_repo_root(repo_root)
     cache_key = (
         str(repo_root),
         tuple(sorted((str(k), str(v)) for k, v in (repo_cfg or {}).items())),
@@ -318,13 +291,22 @@ def write_security_config(
     exist yet is materialised on the first write rather than silently dropping
     the keys.
 
-    Cache note: invalidates ``_SECURITY_PATH_CACHE`` entries for *repo_root*
-    after a successful write. A previous ``security_config_path()`` call in the
-    same long-lived process (the daemon) may have cached the path resolution
-    when the home wasn't reachable yet; once the file is written and its parent
-    created, the next lookup must re-resolve rather than perpetuating a stale
-    cached value. See the ``_SECURITY_PATH_CACHE`` comment for the cost model
-    that motivated the cache; invalidating on write is free compared to that.
+    Cache note: clears ``_SECURITY_PATH_CACHE`` **entirely** after a successful
+    write. A previous ``security_config_path()`` call in the same long-lived
+    process (the daemon) may have cached the path resolution when the home
+    wasn't reachable yet; once the file is written and its parent created, the
+    next lookup must re-resolve rather than perpetuating a stale cached value.
+
+    Clearing all of it, rather than scanning for keys under this *repo_root*,
+    is deliberate. Cache keys are the caller's raw path (see
+    ``security_config_path``), so two worktrees of one repo hold two entries
+    that a prefix match on the writer's own path would not reach — a stale
+    ``None`` cached from a sibling worktree would survive the very write that
+    made it wrong, silently. A full clear cannot have that bug, and it cannot
+    acquire it later by drifting out of step with the key domain. It is also
+    free against the cost model that motivated the cache (see the
+    ``_SECURITY_PATH_CACHE`` comment): the cache spares a per-*lookup*
+    ``resolve_context``, and writes happen at init/promote — rare.
     """
     repo_cfg = _read_flat(repo_config_path(repo_root))
     sec_path = security_config_path(repo_root, repo_cfg)
@@ -337,12 +319,7 @@ def write_security_config(
     else:
         merged = dict(cfg)
     _write_flat(sec_path, merged, mode=0o600)
-    # Invalidate all cache entries for this repo_root — the canonical path
-    # is used as the first element of every cache key (see security_config_path).
-    canonical = str(_canonical_repo_root(repo_root))
-    stale = [k for k in _SECURITY_PATH_CACHE if k[0] == canonical]
-    for k in stale:
-        del _SECURITY_PATH_CACHE[k]
+    _SECURITY_PATH_CACHE.clear()
     return sec_path
 
 
