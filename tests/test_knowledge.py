@@ -638,6 +638,103 @@ def test_capture_marks_needs_sync_when_the_forge_diverged(tmp_path):
     assert _forge_has(forge, "repos/Gurio__brr/mine.md")
 
 
+# ── The mirror reads current (#659) ──────────────────────────────────
+
+
+def _head(repo: Path) -> str:
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_capture_fast_forwards_the_checkout_mirror_after_a_direct_account_write(
+    tmp_path,
+):
+    """#659 — capture used to ``fetch`` the checkout and stop one command
+    short. The remote-tracking ref advanced; the *local* branch and working
+    tree never did, so every direct account write (step 2's own comment
+    calls that "today's common path") left ``.brnrd-kb/`` one commit further
+    behind with ``git status`` clean and page counts equal. The only file
+    that diverges is the append-heavy ``log.md``, and a whole-file rewrite
+    there — which log compaction and the state-first discipline call for —
+    regresses it silently."""
+    repo, cfg, _forge = _capture_chain(tmp_path)
+    checkout = repo / ".brnrd-kb"
+    before = _head(checkout)
+    log = tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "log.md"
+    log.write_text(
+        "## [2026-07-24] fix | written straight into the account\n",
+        encoding="utf-8",
+    )
+
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+
+    # The local branch moved — not just ``origin/main``.
+    assert _head(checkout) != before
+    # The one honest handle a resident could have checked, now empty.
+    assert _git(
+        checkout, "rev-list", "--count", "HEAD..origin/main",
+    ).stdout.strip() == "0"
+    # And the *file on disk* matches, byte for byte: a ref that advanced
+    # without the worktree following would read just as clean.
+    mirrored = checkout / "repos" / "Gurio__brr" / "log.md"
+    assert mirrored.read_bytes() == log.read_bytes()
+    assert _git(checkout, "status", "--porcelain").stdout == ""
+
+
+def test_capture_syncs_the_mirror_when_there_is_no_forge_remote(tmp_path):
+    """The sync's honest trigger is "the account branch moved", which is
+    knowable without a forge. Gated on the forge push (where #659 found it),
+    a repo with no forge remote returns early and never syncs the mirror at
+    all — the case the old placement could not reach."""
+    repo, cfg, _forge = _capture_chain(tmp_path)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    _git(knowledge_repo, "remote", "remove", "origin")
+    checkout = repo / ".brnrd-kb"
+    before = _head(checkout)
+    page = knowledge_repo / "repos" / "Gurio__brr" / "offline.md"
+    page.write_text("no forge on this machine\n", encoding="utf-8")
+
+    assert knowledge.capture(repo, "kb: capture", cfg=cfg) is True
+
+    assert _head(checkout) != before
+    assert (
+        checkout / "repos" / "Gurio__brr" / "offline.md"
+    ).read_bytes() == page.read_bytes()
+
+
+def test_capture_leaves_a_dirty_checkout_alone_and_reports_the_skip(tmp_path):
+    """The one case where standing back is right — and it still has to say
+    so. A silent skip reproduces the bug #659 is about: a surface with no
+    way to say "I am stale".
+
+    The ``pre-commit`` hook stands in for the production window where a
+    checkout is dirty at sync time even though step 1 tried to commit it:
+    the shared checkout is dirtied by a concurrent sibling run, or step 1's
+    own commit is refused (the installed ``commit-msg`` close-keyword guard
+    does exactly that)."""
+    repo, cfg, _forge = _capture_chain(tmp_path)
+    checkout = repo / ".brnrd-kb"
+    hook = checkout / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    in_flight = checkout / "repos" / "Gurio__brr" / "index.md"
+    in_flight.write_text("half a thought, not ready\n", encoding="utf-8")
+    before = _head(checkout)
+    (tmp_path / "home" / "knowledge" / "repos" / "Gurio__brr" / "log.md").write_text(
+        "the account moved meanwhile\n", encoding="utf-8",
+    )
+
+    notes: list[str] = []
+    knowledge.capture(repo, "kb: capture", cfg=cfg, mirror_notes=notes)
+
+    # Untouched: no merge, no reset, the resident's bytes still there.
+    assert _head(checkout) == before
+    assert in_flight.read_text(encoding="utf-8") == "half a thought, not ready\n"
+    # Observable: the run can tell the mirror was left behind, and why.
+    assert notes and "uncommitted" in notes[0]
+    assert str(checkout) in notes[0]
+
+
 # ── Reply archive ────────────────────────────────────────────────────
 
 
