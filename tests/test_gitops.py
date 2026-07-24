@@ -755,3 +755,64 @@ def test_hook_refuses_dirty_close_in_merge_commit_no_trailing_newline(tmp_path, 
     )
     assert r.returncode != 0
     assert "#413" in r.stderr
+
+
+def test_hook_refuses_a_real_git_merge_and_creates_no_merge_commit(tmp_path, monkeypatch):
+    """The acceptance test at the level the defect actually happened.
+
+    Every other merge test here writes a no-trailing-newline file and invokes
+    the hook script directly. That *simulates* a merge — and a fixture that
+    invokes a function directly has silently chosen a moment. `git merge` is
+    the path that closed #413 (`79abe94e`), and whether git runs `commit-msg`
+    on a non-fast-forward merge at all is the assumption every one of those
+    tests rests on without stating it. State it: drive a real merge.
+
+    Also pins the recovery shape. A refused merge leaves the repo mid-merge
+    with MERGE_HEAD present and the merge staged — standard git behaviour for
+    any commit-msg rejection, but a run that hits it needs to know the merge
+    is half-applied rather than absent.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    monkeypatch.setenv("BRR_RUN_ID", "run-real-merge-652")
+
+    def git(*args, **kw):
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, **kw
+        )
+
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "-m", "base")
+    trunk = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+    git("checkout", "-b", "side")
+    (repo / "side.txt").write_text("side\n", encoding="utf-8")
+    git("add", "side.txt")
+    git("commit", "-m", "side work")
+
+    git("checkout", trunk)
+    (repo / "trunk.txt").write_text("trunk\n", encoding="utf-8")
+    git("add", "trunk.txt")
+    git("commit", "-m", "trunk work")
+
+    before = git("rev-parse", "HEAD").stdout.strip()
+    merged = git("merge", "--no-ff", "side", "-m", "Merge side\n\nCloses #413 §7 S13.")
+
+    assert merged.returncode != 0, "a scope-qualified close must not reach a merge commit"
+    assert "#413" in merged.stderr
+    assert git("rev-parse", "HEAD").stdout.strip() == before, "no merge commit was created"
+    assert (repo / ".git" / "MERGE_HEAD").exists(), (
+        "a refused merge stays staged — the recovery path is `git commit` with a "
+        "corrected message, or `git merge --abort`"
+    )
+
+    # And the corrected message completes the same merge, trailer intact.
+    fixed = git("commit", "-m", "Merge side\n\nPart of #413 §7 S13.")
+    assert fixed.returncode == 0, fixed.stderr
+    body = git("log", "-1", "--format=%B").stdout
+    assert "Part of #413" in body
+    assert "Brnrd-Run-Id: run-real-merge-652" in body
