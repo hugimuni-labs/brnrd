@@ -586,15 +586,15 @@ _RUN_ID_HOOK_SCRIPT = (
     'if [ -n "$BRR_RUN_ID" ]; then\n'
     # Newline guard — load-bearing, see comment above.
     '  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf \'\\n\' >> "$1"; fi\n'
-    # Close-keyword predicate (#652, superseded #653): a run may not put a
+    # Close-keyword predicate (#652 → #653 → #657): a run may not put a
     # close keyword + #NNN anywhere but the start of a line, and a line-start
-    # close may not carry a trailing qualifier.  GitHub's own closing-keyword
-    # scanner does not care about narrative framing or position within the
-    # message — it matches "keyword #NNN" wherever it occurs — so both shapes
-    # below are real, independently confirmed closes, not just readability
-    # nits.  Refused when BRR_RUN_ID is set (run commits only); a maintainer
-    # typing the same line by hand is not bound here (see issue for the
-    # trade-off).  POSIX sh / POSIX ERE — grep -E, no \b, explicit character
+    # close may carry nothing after the ref except more refs.  GitHub's own
+    # closing-keyword scanner does not care about narrative framing or
+    # position within the message — it matches "keyword #NNN" wherever it
+    # occurs — so both shapes below are real, independently confirmed
+    # closes, not just readability nits.  Refused when BRR_RUN_ID is set (run
+    # commits only); a maintainer typing the same line by hand is not bound
+    # here (see issue for the trade-off).  POSIX sh / POSIX ERE — grep -E, no \b, explicit character
     # classes.
     #
     # #653 first tried a closed word list of leading qualifiers (partially,
@@ -618,14 +618,63 @@ _RUN_ID_HOOK_SCRIPT = (
     # (leading whitespace allowed) — the one position GitHub-closing intent
     # can be stated unambiguously.
     #
-    # _BRR_TRAILING: line-start close + whitespace + a char that is not ","
-    # or "#" or whitespace — #652's original shape, unchanged, still checked
-    # only once a line has cleared the position gate.  "Fix #NNN: description"
-    # (colon immediately, no space) and "Closes #413, #414" (comma — a
-    # genuine multi-close) both lack that leading space and pass.
+    # _BRR_CLEAN: what a line-start close is *allowed* to look like, whole —
+    # a positive rule (#657), replacing #652's negative _BRR_TRAILING.  The
+    # negative shape asked "is the character after the ref disqualifying?"
+    # and exempted "," to let a genuine multi-close through.  That carve-out
+    # exempted the entire rest of the line with it: `Closes #413, not really`
+    # and `Closes #413, #414, and #415` both passed while GitHub closed #413
+    # anyway.  A "." bought the same exemption a different way — the negative
+    # rule wanted whitespace right after the digits, so `Closes #413. Also
+    # this fixes #414` passed on both counts, the second close shielded by
+    # the first one being well-formed.  Fourth face of the same class, and —
+    # like the third — the hole was in the carve-out, not in the rule.
+    #
+    # So: once a line has cleared the position gate, the only legal
+    # continuation after the ref is a repeatable `, #NNN` list, then either
+    # end of line (optional "." and trailing space) or ":" — the subject
+    # separator.  Anything else is prose, and prose after a close keyword is
+    # what this guard exists to catch.
+    #
+    # The ":" allowance is load-bearing and it is *not* a return to
+    # vocabulary.  Measured over this repo's last 300 commit messages, driving
+    # the installed hook:
+    #
+    #     shipped (negative _BRR_TRAILING)   10 refusal lines / 5 commits
+    #     strict  (no ":" allowed)           18 refusal lines / 13 commits
+    #     this rule (":" allowed)            10 refusal lines / 5 commits
+    #
+    # The 8 extra strict refusals are all `Fix #NNN: <subject>` — this repo's
+    # standard fix-commit subject, where the close is intended, the effect
+    # matches the intent, and nothing on the line narrows it.  Refusing those
+    # would make the guard fire on nearly every fix commit, and a guard that
+    # cries wolf stops being read (#623).  Identical refusal set to what
+    # shipped, plus the holes above closed.
+    #
+    # Residual, knowingly accepted: `Closes #413: partially` passes.  It is
+    # the price of the ":" allowance — the guard cannot tell a subject from a
+    # qualifier once a colon is legal.  Not covered.  Do not read the rule as
+    # covering it.
     '  _BRR_ANY=\'(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
     '  _BRR_LINESTART=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
-    '  _BRR_TRAILING=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+[[:space:]]+[^,#[:space:]]\'\n'
+    # "[.]?" rather than "\.?": same POSIX ERE meaning, no backslash to
+    # survive Python source escaping *and* sh single-quoting on the way to
+    # grep.
+    '  _BRR_CLEAN=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+'
+    '#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*([.]?[[:space:]]*$|:)\'\n'
+    # _BRR_COLONCLOSE: the one hole the ":" allowance opens that is not a
+    # qualifier but a *second close*.  `Fix #533: split config and closes #534`
+    # clears _BRR_CLEAN at the colon and shuts #534 as well — which is the #413
+    # accident's own shape, an unintended close riding a well-formed one.  The
+    # colon exempts a *subject*; it must not exempt another close.  Driven over
+    # this repo's last 300 commits: 10 refusal lines / 5 commits with this
+    # branch on, unchanged.  Zero new refusals — it reaches only a shape the
+    # repo has never written.  Two alternatives after the colon so a keyword
+    # can sit flush against it (`:closes #2`) or anywhere later, and neither
+    # fires inside a longer word ("disclosed").
+    '  _BRR_COLONCLOSE=\'^[[:space:]]*(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+'
+    '#[[:digit:]]+(,[[:space:]]*#[[:digit:]]+)*:([[:space:]]*|.*[^[:alnum:]_])'
+    '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[[:digit:]]+\'\n'
     '  while IFS= read -r _brr_ln; do\n'
     '    if echo "$_brr_ln" | grep -qiE "${_BRR_ANY}"; then\n'
     '      if ! echo "$_brr_ln" | grep -qiE "${_BRR_LINESTART}"; then\n'
@@ -643,12 +692,32 @@ _RUN_ID_HOOK_SCRIPT = (
     '        printf \'    Part of #NNN ...   (scoped reference — does not close)\\n\' >&2\n'
     '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
     '        exit 1\n'
-    '      elif echo "$_brr_ln" | grep -qiE "${_BRR_TRAILING}"; then\n'
-    '        printf \'commit-msg: close keyword with qualifier (GitHub drops the qualifier and closes the issue).\\n\' >&2\n'
+    '      elif ! echo "$_brr_ln" | grep -qiE "${_BRR_CLEAN}"; then\n'
+    '        printf \'commit-msg: close keyword with a tail (GitHub ignores the tail and closes the issue).\\n\' >&2\n'
     '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '        printf \'  After the ref, only more refs may follow: ", #MMM", then end of line or ": subject".\\n\' >&2\n'
+    # Every remedy, deliberately.  This branch is now reached by three authors
+    # with different intents — a qualifier ("Fixes #NNN (partially)") wants a
+    # scoped reference, a list ("Closes #NNN and #MMM") wants both closes, a
+    # subject ("Fix #NNN - subject") wants the close plus a title — and an
+    # author who is shown only the scoped form is steered into silently *not*
+    # closing what they meant to close.  A guard satisfiable only by
+    # abandoning the intent is not satisfiable; that is the whole argument
+    # this predicate rests on.
     '        printf \'  Use instead:\\n\' >&2\n'
-    '        printf \'    Part of #NNN ...   (scoped ref — does not close)\\n\' >&2\n'
-    '        printf \'    Closes #NNN.       (bare close — no qualifier)\\n\' >&2\n'
+    '        printf \'    Closes #NNN.            (bare close — no tail)\\n\' >&2\n'
+    '        printf \'    Closes #NNN, #MMM       (real multi-close — commas, never "and")\\n\' >&2\n'
+    '        printf \'    Fix #NNN: subject       (close plus a subject, after the colon)\\n\' >&2\n'
+    '        printf \'    Part of #NNN ...        (scoped reference — does not close)\\n\' >&2\n'
+    '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
+    '        exit 1\n'
+    '      elif echo "$_brr_ln" | grep -qiE "${_BRR_COLONCLOSE}"; then\n'
+    '        printf \'commit-msg: a second close keyword rides the subject after the colon.\\n\' >&2\n'
+    '        printf \'  Offending line: %s\\n\' "$_brr_ln" >&2\n'
+    '        printf \'  The colon may introduce a subject, never another close.\\n\' >&2\n'
+    '        printf \'  Use instead:\\n\' >&2\n'
+    '        printf \'    Closes #NNN, #MMM       (close both, on the ref list)\\n\' >&2\n'
+    '        printf \'    Fix #NNN: subject       (then "Closes #MMM." on its own line)\\n\' >&2\n'
     '        printf \'  Bypass: git commit --no-verify\\n\' >&2\n'
     '        exit 1\n'
     '      fi\n'
