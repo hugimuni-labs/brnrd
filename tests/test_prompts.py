@@ -768,6 +768,134 @@ class TestPromptBuilding:
         )
         assert "availability=missing-auth" in prompt
 
+    # ── quota level on catalog rows (#632) ───────────────────────────────
+
+    def test_catalog_known_level_appended_after_quota_source(self, tmp_path):
+        """A catalog row with quota_level renders it parenthetically after the pool name."""
+        from brr.prompts import _render_runner_catalog
+
+        rows = [
+            {
+                "name": "claude-sonnet",
+                "shell": "claude",
+                "model": "claude-sonnet-4-7",
+                "class": "balanced",
+                "cost_rank": 30,
+                "quota_source": "claude-local",
+                "quota_level": "82%",
+                "availability": "available",
+            }
+        ]
+        rendered = _render_runner_catalog(rows)
+        assert len(rendered) == 1
+        assert "quota=claude-local (82%)" in rendered[0]
+
+    def test_catalog_absent_level_renders_byte_identically(self, tmp_path):
+        """A row without quota_level renders exactly as before — no suffix, no placeholder.
+
+        Assert on *absence of* a parenthesised suffix after the pool name, not on a
+        specific placeholder string: any placeholder would also fail this test, which
+        is the point (the fixture must not silently become 'legal').
+        """
+        from brr.prompts import _render_runner_catalog
+
+        rows = [
+            {
+                "name": "codex-full",
+                "shell": "codex",
+                "model": "gpt-5.6-sol",
+                "class": "strong",
+                "cost_rank": 45,
+                "quota_source": "codex-local",
+                "availability": "available",
+            }
+        ]
+        rendered = _render_runner_catalog(rows)
+        assert len(rendered) == 1
+        line = rendered[0]
+        assert "quota=codex-local" in line
+        # No parenthesised suffix after the pool name in any form.
+        assert "quota=codex-local (" not in line
+
+    def test_catalog_exhausted_pool_no_availability_change_no_x_mark(self, tmp_path):
+        """Exhausted quota_level is informational only — availability= must not flip."""
+        from brr.prompts import _render_runner_catalog
+
+        rows = [
+            {
+                "name": "codex-full",
+                "shell": "codex",
+                "model": "gpt-5.6-sol",
+                "class": "strong",
+                "cost_rank": 45,
+                "quota_source": "codex-local",
+                "quota_level": "exhausted, resets Jul 28",
+                "availability": "available",
+            }
+        ]
+        rendered = _render_runner_catalog(rows)
+        assert len(rendered) == 1
+        line = rendered[0]
+        # Level is rendered inline
+        assert "quota=codex-local (exhausted, resets Jul 28)" in line
+        # availability="available" stays suppressed → no ✗ prefix
+        assert not line.startswith("- ✗")
+        # No availability= field at all
+        assert "availability=" not in line
+
+    def test_catalog_mixed_known_and_absent_pool(self, tmp_path):
+        """Mixed catalog: known level on one pool, absent on another — each renders correctly."""
+        from brr.prompts import _render_runner_catalog
+
+        rows = [
+            {
+                "name": "codex-full",
+                "shell": "codex",
+                "quota_source": "codex-local",
+                "quota_level": "exhausted, resets Jul 28",
+                "availability": "available",
+            },
+            {
+                "name": "claude-sonnet",
+                "shell": "claude",
+                "quota_source": "claude-local",
+                # No quota_level — reading absent for this pool
+                "availability": "available",
+            },
+        ]
+        rendered = _render_runner_catalog(rows)
+        assert len(rendered) == 2
+        codex_line = next(l for l in rendered if "codex-full" in l)
+        claude_line = next(l for l in rendered if "claude-sonnet" in l)
+        assert "quota=codex-local (exhausted, resets Jul 28)" in codex_line
+        assert "quota=claude-local" in claude_line
+        assert "quota=claude-local (" not in claude_line
+
+    def test_catalog_multiple_profiles_same_pool_all_carry_level(self, tmp_path):
+        """Multiple profiles on the same pool all render with the same level label.
+
+        This pins the 'one read per pool, not per profile' invariant: the fixture
+        sets the same quota_level on all rows (as the enrichment would), and the
+        renderer must propagate it to each rendered line.
+        """
+        from brr.prompts import _render_runner_catalog
+
+        level = "53%"
+        rows = [
+            {
+                "name": f"codex-model-{i}",
+                "shell": "codex",
+                "quota_source": "codex-local",
+                "quota_level": level,
+                "availability": "available",
+            }
+            for i in range(3)
+        ]
+        rendered = _render_runner_catalog(rows)
+        assert len(rendered) == 3
+        for line in rendered:
+            assert f"quota=codex-local ({level})" in line
+
     def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,

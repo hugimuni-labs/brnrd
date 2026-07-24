@@ -781,6 +781,29 @@ def _record_task_runner(
         task.meta["runner_class"] = selected.cost_class
 
 
+def _enrich_catalog_quota(
+    catalog: "list[dict[str, Any]]",
+    brr_dir: "Path",
+) -> None:
+    """Stamp each catalog row with its pool's current level (in-place, #632).
+
+    One read per pool: :func:`gates.cloud.quota_shell_labels` calls
+    ``_quota_snapshot`` once, returns a ``{shell: label}`` map, and we apply
+    the same label to every row sharing that shell.  Rows whose shell has no
+    reading are left untouched — the renderer then renders them exactly as
+    before (standing decision 2: unknown stays unknown, never fabricated).
+    """
+    try:
+        from .gates import cloud as _cloud
+        labels = _cloud.quota_shell_labels(brr_dir)
+    except Exception:
+        return
+    for row in catalog:
+        shell = str(row.get("shell") or "").strip()
+        if shell and shell in labels and labels[shell] is not None:
+            row["quota_level"] = labels[shell]
+
+
 def _quality_escalation_meta(
     repo_root: Path,
     runner_name: str | None,
@@ -2794,6 +2817,7 @@ def _run_worker(
     extra_runner_args = runtime.extra_args
     run_hooks_installed = runtime.hooks_installed
     runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
+    _enrich_catalog_quota(runner_catalog, brr_dir)
     _record_task_runner(task, runner_choice)
     run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)
     task.save(runs_dir)
@@ -3522,6 +3546,7 @@ def _run_worker(
             runner_catalog = runner.available_runner_catalog(
                 repo_root, selected=runner_name,
             )
+            _enrich_catalog_quota(runner_catalog, brr_dir)
             quality_escalation = _quality_escalation_meta(repo_root, runner_name)
             _record_task_runner(task, runner_choice)
             run_ledger.mark_run_started(task, runner_name, outbox_dir, run_root)

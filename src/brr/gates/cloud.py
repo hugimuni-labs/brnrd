@@ -1535,6 +1535,59 @@ def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return [shell for shell in shells if shell is not None]
 
 
+def _shell_level_label(windows: list[dict[str, Any]]) -> str | None:
+    """Compact level string from a quota-window list, or ``None`` when unknown.
+
+    Finds the most-constraining (lowest-percent) window among those with a
+    known percentage.  Returns ``None`` rather than any placeholder when no
+    window has a reading — the caller must render nothing, not a fake healthy
+    label (#632 standing decision 2).
+    """
+    known: list[tuple[float, str | None, float | None]] = [
+        (float(w["percent"]), w.get("reset"), w.get("resets_at"))
+        for w in windows
+        if isinstance(w.get("percent"), (int, float))
+    ]
+    if not known:
+        return None
+    min_pct, min_reset, min_resets_at = min(known, key=lambda x: x[0])
+    if min_pct < 1.0:
+        if min_reset:
+            return f"exhausted, resets {min_reset}"
+        if min_resets_at is not None:
+            import datetime
+            dt = datetime.datetime.fromtimestamp(
+                float(min_resets_at), tz=datetime.timezone.utc
+            )
+            return "exhausted, resets " + dt.strftime("%b %-d")
+        return "exhausted"
+    return f"{round(min_pct)}%"
+
+
+def quota_shell_labels(brr_dir: Path) -> dict[str, str | None]:
+    """Compact level label per shell from cached quota readings.
+
+    Returns ``{"claude": "82%", "codex": "exhausted, resets Jul 28"}`` etc.
+    Calls ``_quota_snapshot`` once (one read per pool, not per profile) and
+    extracts a single label per shell.  Shells with no known reading are
+    omitted entirely — callers must treat a missing key as unknown, never as
+    healthy (#632 standing decision 2).  Errors are absorbed and return ``{}``.
+    """
+    try:
+        shells = _quota_snapshot(brr_dir)
+    except Exception:
+        return {}
+    result: dict[str, str | None] = {}
+    for shell_data in shells:
+        shell = str(shell_data.get("shell") or "").strip()
+        if not shell:
+            continue
+        label = _shell_level_label(list(shell_data.get("windows") or []))
+        if label is not None:
+            result[shell] = label
+    return result
+
+
 def _gate_health_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """Configured ingestion paths, including quiet paths with no poll yet."""
     return runtime.gate_health_rows(brr_dir)
