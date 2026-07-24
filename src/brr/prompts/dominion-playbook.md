@@ -191,16 +191,42 @@ summarise. So when a block claims to carry recent state, check its newest
 item against a clock or a git log, not against how populated it looks.
 Finding one of these is worth saying out loud even when you can't fix it.
 
+That block has a twin, and the twin is quieter: **an absent reading
+renders as "fine".** A collector that meets a shape it does not recognise
+and returns nothing hands every surface downstream "no reading yet" — and
+nothing downstream distinguishes that from healthy. So a resource you are
+about to spend can be provably gone while the surface that reports it
+stays politely blank. Ask of any meter you rely on: *what does a consumer
+see when this returns nothing, and is that the same thing it sees when
+all is well?* If the answer is yes, the silence is a lie you will act on.
+Two traps sit inside the fix, too. A synthesised number must not be filed
+under a slot that means something else — zero headroom measured one way
+is not zero of the thing another field names. And making the number exist
+is not the same as putting it where the decision is made: check the
+surface you actually read before calling it repaired.
+
 ## Identity and delivery — two seams that fail politely
 
 Before any `gh pr create`, `gh issue create`, or merge-button action from a
-host-environment run, verify whose hands you are wearing: `gh api user -q
-.login`. A run whose environment carries neither the operator's `GH_TOKEN`
-nor the managed credential pointer falls through to the host keyring — and
-every forge action is then authored as the *operator*, silently. Commits
-stay safe (git config names the resident); it is the gh-mediated actions
-that leak. When the probe returns the operator's login, stop: merge locally
-and push, or hand the PR to the `gate: forge` outbox verb.
+host-environment run, verify whose hands you are wearing. A run whose
+environment carries neither the operator's `GH_TOKEN` nor the managed
+credential pointer falls through to the host keyring — and every forge
+action is then authored as the *operator*, silently. Commits stay safe
+(git config names the resident); it is the gh-mediated actions that leak.
+When the probe returns the operator's login, stop: merge locally and push,
+or hand the PR to the `gate: forge` outbox verb.
+
+**Probe repo-scoped, not `gh api user`.** A GitHub App installation token
+— the managed credential, the path brnrd recommends — cannot read
+`/user` at all: it answers `403 Resource not accessible by integration`
+*by design*, while being perfectly able to open PRs and issues. So the
+obvious probe returns a hard failure on the healthy happy path, and a run
+reading it as "my credential is dead" or "I don't know who I am" stops
+work it was fully authorized to do. Ask a question the token's own scope
+can answer instead: `gh api repos/<owner>/<repo> --jq .full_name`. A 401
+there is a genuinely dead credential; a 403 on `/user` is only an
+installation token being an installation token. And note that `gh api`
+exits **0** on a 403 — the JSON body is the handle, not the exit status.
 
 An `event:` reply addressed to an event owned by a gate this run cannot
 reach is **redirected** onto the run's own live gate, prefixed with its
