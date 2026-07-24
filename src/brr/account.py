@@ -406,6 +406,31 @@ def _connected_account_id(repo_root: Path) -> str | None:
         resolved_repo = repo_root.resolve()
     except OSError:
         resolved_repo = repo_root.absolute()
+
+    found = _reverse_lookup_account_id(candidates, resolved_repo)
+    if found is not None:
+        return found
+
+    # A linked worktree's own path never appears in the registry — repos
+    # are registered by their main checkout path, so the lookup above only
+    # ever matches a main checkout (#654). Derive the main root the same
+    # way `shared_brr_dir` locates shared runtime state from a worktree,
+    # and retry the same registries against it. `shared_brr_dir` resolves
+    # to `repo_root/.brr` for a non-worktree checkout, so `resolved_main
+    # == resolved_repo` there and this fallback naturally no-ops — it only
+    # fires when `repo_root` is genuinely a linked worktree.
+    try:
+        resolved_main = gitops.shared_brr_dir(repo_root).parent.resolve()
+    except Exception:
+        return None
+    if resolved_main == resolved_repo:
+        return None
+    return _reverse_lookup_account_id(candidates, resolved_main)
+
+
+def _reverse_lookup_account_id(candidates: list[Path], target: Path) -> str | None:
+    """Return the account id whose registry lists *target* as a repo path."""
+
     for home_root in candidates:
         registry_path = home_root / REGISTRY_PATH
         try:
@@ -419,9 +444,9 @@ def _connected_account_id(repo_root: Path) -> str | None:
             if registered is None:
                 continue
             try:
-                matches = registered.resolve() == resolved_repo
+                matches = registered.resolve() == target
             except OSError:
-                matches = registered.absolute() == resolved_repo
+                matches = registered.absolute() == target
             if matches:
                 value = str(raw.get("account_id") or raw.get("home_id") or "").strip()
                 if value:
