@@ -1,7 +1,12 @@
 from pathlib import Path
 
+import pytest
 
-DOCKERFILE = Path(__file__).resolve().parents[1] / "src" / "brr" / "Dockerfile"
+from brr import adopt
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DOCKERFILE = REPO_ROOT / "src" / "brr" / "Dockerfile"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
 def _apt_install_packages(text: str) -> set[str]:
@@ -59,8 +64,10 @@ def test_bundled_runner_image_installs_brr_cli_and_runtime_deps():
     terminal image renderer).
     """
     text = DOCKERFILE.read_text(encoding="utf-8")
-    assert "COPY pyproject.toml README.md /opt/brr/" in text
-    assert "COPY src /opt/brr/src" in text
+    # Derived, not a literal COPY line: the packaging tree must reach the
+    # context, but *which* extra files ride along is allowed to grow (#675).
+    sources = adopt.dockerfile_context_paths(text)
+    assert {"pyproject.toml", "README.md", "src"} <= set(sources)
     assert "pip install --no-cache-dir /opt/brr" in text
     assert "'requests>=2.31,<3'" in text
     assert "brnrd review --help" in text
@@ -111,3 +118,52 @@ def test_bundled_runner_image_exposes_user_local_bin_on_path():
     """
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "ENV PATH=/brr-home/.local/bin:$PATH" in text
+
+
+# ── Build context vs. declared license files (#675) ──────────────────
+#
+# ``pyproject.toml``'s ``license-files`` and the Dockerfile's ``COPY``
+# sources are two enumerated lists, and before #675 nothing checked that
+# the second contained the first: the root ``LICENSE`` and
+# ``LICENSE-OVERVIEW.md`` were declared but never copied, so the wheel
+# installed into the runner image carried two of the four licenses and
+# said so only through a ``SetuptoolsDeprecationWarning`` buried in a
+# docker build. Both sides below are *read* rather than restated — adding
+# a fifth license file turns this red until the context carries it, and
+# needs no edit here.
+
+
+def _declared_license_files() -> list[str]:
+    tomllib = pytest.importorskip(
+        "tomllib",  # stdlib on 3.11+; CI runs 3.12, so the check is enforced there
+        reason="tomllib needs Python 3.11+",
+    )
+    declared = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    return declared["project"]["license-files"]
+
+
+def test_declared_license_files_reach_the_runner_build_context(tmp_path):
+    """Every ``license-files`` entry must survive context assembly.
+
+    Assembles the real build context ``brnrd init -i`` would hand to
+    ``docker build`` and looks for each declared license inside it. A
+    declared-but-uncopied license makes the wheel built in the image drop
+    that license file.
+    """
+    adopt._assemble_build_context(DOCKERFILE, REPO_ROOT, tmp_path)
+
+    missing = [
+        rel for rel in _declared_license_files()
+        if not (tmp_path / rel).is_file()
+    ]
+    assert not missing, (
+        f"pyproject declares {missing} in license-files, but the runner image's "
+        f"build context never receives them — add them to a COPY source in "
+        f"{DOCKERFILE.name}"
+    )
+
+
+def test_declared_license_files_exist_in_the_checkout():
+    """A declared license that isn't in the tree is the same bug, one step earlier."""
+    missing = [rel for rel in _declared_license_files() if not (REPO_ROOT / rel).is_file()]
+    assert not missing, f"license-files names paths that do not exist: {missing}"
