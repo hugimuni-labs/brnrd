@@ -8,6 +8,7 @@
 		type PublicStats,
 		type RepoStats
 	} from '$lib/publicStats';
+	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 
@@ -19,6 +20,8 @@
 	let stats = $state<PublicStats | null>(null);
 	let repo = $state<RepoStats | null>(null);
 	let countersLoaded = $state(false);
+
+	const legalNoticeReady = legalNoticeIsComplete();
 
 	onMount(async () => {
 		// One shot each, no polling — counters are proof of life, not telemetry.
@@ -172,6 +175,15 @@
 			·
 			<a class="hover:text-stone-300" href={resolve('/privacy')}>privacy</a>
 			·
+			<!-- The link is gated on the notice being complete, from the same
+			     registry the page renders ($lib/legalNotice): pointing the public
+			     at a mentions légales that still shows ⟨à compléter⟩ would be a
+			     worse claim than not linking it. Fill the K-bis values and the
+			     link appears — nothing to remember here. -->
+			{#if legalNoticeReady}
+				<a class="hover:text-stone-300" href={resolve('/legal-notice')}>mentions légales</a>
+				·
+			{/if}
 			<a
 				class="hover:text-stone-300"
 				href={`https://github.com/${GITHUB_REPO}/blob/main/SECURITY.md`}

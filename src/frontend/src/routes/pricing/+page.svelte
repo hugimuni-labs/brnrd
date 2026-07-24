@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { GITHUB_REPO, fetchPublicStats, type PublicStats } from '$lib/publicStats';
 
 	// Pricing (#509): one click off the landing, never on it. Numbers are
@@ -12,6 +13,8 @@
 	// removes the free tier's headroom limits — no credit product exists
 	// yet, so the page doesn't promise one.
 	let stats = $state<PublicStats | null>(null);
+
+	const legalNoticeReady = legalNoticeIsComplete();
 
 	onMount(async () => {
 		stats = await fetchPublicStats();
@@ -142,6 +145,11 @@
 			<a class="hover:text-stone-300" href={resolve('/terms')}>terms</a>
 			·
 			<a class="hover:text-stone-300" href={resolve('/privacy')}>privacy</a>
+			<!-- Same gate as the landing footer: linked only once the notice
+			     actually identifies the publisher (see $lib/legalNotice). -->
+			{#if legalNoticeReady}
+				· <a class="hover:text-stone-300" href={resolve('/legal-notice')}>mentions légales</a>
+			{/if}
 		</p>
 	</footer>
 </div>
