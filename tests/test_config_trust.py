@@ -739,7 +739,15 @@ def test_security_config_resolves_under_separate_git_dir(tmp_path, monkeypatch):
     every security key silently unset, the #533 split failing open.
 
     Nothing has to resolve a worktree here — the raw path matches the
-    registry directly. It only fails if something mangles the path first.
+    registry directly, on ``_connected_account_id``'s **first** pass. It
+    only fails if something mangles the path first, which is the whole of
+    what this pins: the raw path passing through unmangled.
+
+    It therefore does **not** cover ``gitops.main_worktree_root`` — the
+    retry never fires, so the function whose docstring this test used to
+    cite is not called at all here (#663). The configuration that does
+    exercise it is ``--separate-git-dir`` *plus* a linked worktree; see
+    ``test_security_config_from_a_worktree_of_a_separate_git_dir_repo``.
     """
     repo, home = _account_repo(tmp_path, monkeypatch, separate_git_dir=True)
     (home / conf.SECURITY_CONFIG_FILENAME).write_text(
@@ -756,6 +764,66 @@ def test_security_config_resolves_under_separate_git_dir(tmp_path, monkeypatch):
     )
     conf._SECURITY_PATH_CACHE.clear()
     assert conf.load_config(repo).get("docker.image") == "from-security"
+
+
+def test_security_config_from_a_worktree_of_a_separate_git_dir_repo(
+    tmp_path, monkeypatch
+):
+    """The one configuration where the account home is unreachable.
+
+    ``--separate-git-dir`` **plus** a linked worktree. The registry lists
+    the main checkout, the worktree's own path never matches it, and the
+    retry has nothing to retry *with*: git records the main working tree's
+    path nowhere inside the git dir, so ``main_worktree_root`` returns
+    ``None`` (driven for #663 — see its docstring and
+    ``test_main_worktree_root_is_none_from_a_worktree_of_a_separate_git_dir_repo``).
+
+    **Known limitation, asserted rather than hidden.** ``resolve_context``
+    falls through to a *project* home and every security key comes back
+    unset — the #533 split failing open, one configuration over. The fix in
+    #663 does not close this; it stops the function inventing a checkout
+    path to hide it behind. Closing it needs a second registry key that
+    survives the trip (the shared git *common dir* is the obvious
+    candidate, since both the checkout and its worktrees agree on it) —
+    ``account``'s call, not ``gitops``', and out of #663's scope.
+
+    Assert-what-ships: if a later change makes this resolve the account
+    home, this test goes red and *that* is the good news — retire it and
+    pin the account home instead.
+    """
+    import subprocess
+
+    repo, home = _account_repo(tmp_path, monkeypatch, separate_git_dir=True)
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "docker.image=from-security\n", encoding="utf-8"
+    )
+    conf.write_config(repo, {"docker.image": "from-repo"})
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    # The main checkout still resolves — only the worktree is stranded.
+    assert conf.security_config_path(repo, {}) == (
+        home / conf.SECURITY_CONFIG_FILENAME
+    )
+
+    # No path exists to it from here, and the function says so.
+    assert gitops.main_worktree_root(linked) is None
+    conf._SECURITY_PATH_CACHE.clear()
+    stranded = conf.security_config_path(linked, {})
+    assert stranded != home / conf.SECURITY_CONFIG_FILENAME
+    assert not (stranded and stranded.exists())
+    # And the degradation, spelled out at the value: the security key is
+    # simply **unset** from here. Not "from-security" (the home is
+    # unreachable) and not "from-repo" either — the #533 split still
+    # ignores a repo-side security key, so what a caller gets is whatever
+    # its own default is. Degraded honestly: before #663 the same unset
+    # value was reached by way of a path that claimed to be a checkout.
+    conf._SECURITY_PATH_CACHE.clear()
+    assert conf.load_config(linked).get("docker.image") is None
 
 
 def test_write_security_config_invalidates_a_sibling_worktrees_cache_entry(
