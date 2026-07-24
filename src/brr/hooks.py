@@ -509,6 +509,15 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "removed with that change.",
     ),
     _BarSegment(
+        "notices", "!",
+        "refusal count — directives brr dropped this run (`!1`). Renders only "
+        "when the count is > 0: a refused outbox file is deleted exactly like "
+        "an accepted one, so the only thing between a dropped reply and silence "
+        "is the resident opening `portal-state.json → notices`. This segment "
+        "surfaces a non-zero count without demanding a read. Absent at zero so "
+        "it earns its ink the same way every other differential segment does.",
+    ),
+    _BarSegment(
         "card", "card",
         "the live `.card` surface's own health: `ok` / `stale` / `blank`. "
         "Always the last segment when the bar renders at all — the cheap, "
@@ -665,6 +674,19 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
     return "card ok" if card.get("active") else "card blank"
 
 
+def _notices_chip(notices: list) -> str | None:
+    """``!N`` when *notices* is non-empty; absent at zero.
+
+    A refused outbox file is deleted exactly like an accepted one — the only
+    thing between a dropped reply and silence is a resident habitually opening
+    ``portal-state.json``.  ``!N`` on the bar makes a non-zero refusal count
+    visible without demanding that read.  Absent at zero so it earns its ink
+    the same way every other differential segment does.
+    """
+    n = len(notices) if isinstance(notices, list) else 0
+    return f"!{n}" if n else None
+
+
 # Rendered chip length for a `.mood` name — short enough that a verbose mood
 # can't dominate a boundary, long enough that a real emote name reads whole
 # (e.g. "quietly_stuck").
@@ -785,6 +807,8 @@ def _render_bar(
     mood: str | None,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
+    notices: list[Any] | None = None,
+    finished_spawn_count: int = 0,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -795,6 +819,11 @@ def _render_bar(
     obligation in a glyph"). Returns ``None`` when nothing here is worth a
     turn, mirroring the mid-run gate the old prose form kept: mere resource
     or produce chatter must not manufacture an injection by itself.
+
+    *notices* drives the ``!N`` segment: non-zero refusal count only.
+    *finished_spawn_count* is the number of ``spawn_completed`` events the
+    parent already observed; they are facts, not obligations, and are
+    reported separately rather than counted against *pending*.
     """
     segments: list[str] = []
     id_chip = _run_id_chip(run)
@@ -825,6 +854,9 @@ def _render_bar(
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(f"⚒{produce_total}")
+    notices_chip = _notices_chip(notices or [])
+    if notices_chip:
+        segments.append(notices_chip)
     if mood:
         # Display every boundary (it is the user's window onto the resident's
         # own face); *ask* only on an edge. The old unconditional "·keep?"
@@ -858,6 +890,15 @@ def _render_bar(
                 f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
                 f"{summary[:200]}"
             )
+    if finished_spawn_count:
+        # Finished spawns are facts, not obligations — the parent already
+        # observed them; they will self-retire at run end. Reported as a
+        # distinct line so the run body can name them without any "address each"
+        # pressure.
+        details.append(
+            f"- ▷ {finished_spawn_count} finished spawn(s) observed — "
+            "no address needed; will retire at run end."
+        )
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -896,6 +937,7 @@ def _render_bar(
     if (
         pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
+        and not notices_chip and not finished_spawn_count
     ):
         return None
     bar = " │ ".join(segments)
@@ -974,15 +1016,32 @@ def format_delta(
     pending = int(attention.get("pending_event_count", 0) or 0)
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
     events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    notices = payload.get("notices") if isinstance(payload.get("notices"), list) else []
+
+    # Partition pending events into obligations vs finished-spawn facts.
+    # spawn_completed events whose spawn_parent_run_id matches this run are
+    # facts — the parent observed them; they will self-retire at run end.
+    # They must not count toward the obligation total or demand an "address".
+    run_id = str(run.get("id") or "")
+    finished_spawns = [
+        e for e in events
+        if isinstance(e, dict)
+        and e.get("source") == "spawn_completed"
+        and e.get("spawn_parent_run_id") == run_id
+    ] if run_id else []
+    action_events = [e for e in events if e not in finished_spawns]
+    action_pending = max(0, pending - len(finished_spawns))
 
     if not seed and not stop:
         card_stale = bool(card.get("stale"))
         run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
         return _render_bar(
-            run=run, pending=pending, pending_files=pending_files, events=events,
+            run=run, pending=action_pending, pending_files=pending_files,
+            events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
             mood=mood, surprise=surprise, orient=orient,
+            notices=notices, finished_spawn_count=len(finished_spawns),
         )
 
     lines: list[str] = []
@@ -995,17 +1054,19 @@ def format_delta(
     # despite the count appearing in every batch. Non-zero pending events get
     # an explicit action verb so the line reads as something to do, not
     # something to note; zero stays the plain affirmative-clear line.
+    # Finished spawns are excluded from the obligation count — they are facts,
+    # not messages with correspondents.
     header_line = (
-        f"[{header}] {pending} pending event(s), "
+        f"[{header}] {action_pending} pending event(s), "
         f"{pending_files} undelivered outbox file(s)."
     )
-    if pending:
+    if action_pending:
         header_line += (
             " Address each below — fold in, or say on .card why it stays "
             "queued — before your next plan boundary or closeout."
         )
     lines.append(header_line)
-    for ev in events:
+    for ev in action_events:
         if not isinstance(ev, dict):
             continue
         summary = str(ev.get("summary") or "").strip()
@@ -1013,6 +1074,17 @@ def format_delta(
             f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
             f"{summary[:200]}"
         )
+    if finished_spawns:
+        # Distinct fact line: not obligations, but visible to the parent.
+        lines.append(
+            f"- ▷ {len(finished_spawns)} finished spawn(s) observed — "
+            "no address needed; will retire at run end."
+        )
+        for ev in finished_spawns:
+            summary = str(ev.get("summary") or "").strip()
+            lines.append(
+                f"  · {ev.get('id') or '-'}: {summary[:200]}"
+            )
     elapsed = budget.get("elapsed_seconds")
     limit = budget.get("budget_seconds")
     if elapsed is not None and limit is not None:
