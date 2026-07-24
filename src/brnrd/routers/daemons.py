@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import ids, inbox as inbox_service, run_stop_requests, schemas, wake_requests
+from .. import ids, inbox as inbox_service, publish_scope, run_stop_requests, schemas, wake_requests
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
 from ..models import Account, ActivityRecord, Daemon, Event, GitHubInstallation, GitHubInstalledRepo, Repo
@@ -234,9 +234,20 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
             ActivityRecord.reported_at < now - ACTIVITY_STALE_TTL,
         )
     )
+    # Server-side enforcement at the publish seam (#417 legal pack item 2) —
+    # not only the daemon's own `.brr/config` gate. A repo with a recorded
+    # consent that excludes this lane gets its rows deleted above and no new
+    # ones inserted below, the same "nothing this tick" shape as the
+    # daemon-side gate; a repo with no recorded consent (legacy) is
+    # unaffected.
+    records = (
+        payload.records
+        if publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="activity")
+        else []
+    )
     rows: list[ActivityRecord] = []
     seen: set[str] = set()
-    for record in payload.records:
+    for record in records:
         if record.id in seen:
             continue
         seen.add(record.id)
@@ -292,9 +303,21 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
     parts exactly as it did for the surface-relative convention.
     """
 
+    # Server-side enforcement at the publish seam (#417 legal pack item 2).
+    # Corpus is account-wide by construction (one home, shared across every
+    # repo the account connects), so no single repo's consent can own it
+    # alone — `corpus_slices_permitted` intersects every connected repo's
+    # recorded consent and returns `None` (unenforced) unless every one of
+    # them has recorded one. A slice this account has not jointly consented
+    # to is dropped here, before it ever reaches storage.
+    allowed_slices = publish_scope.corpus_slices_permitted(db, principal.account_id)
+
     seen: set[str] = set()
     files: list[dict[str, object]] = []
+    accepted: list = []
     for item in payload.files:
+        if allowed_slices is not None and item.layer not in allowed_slices:
+            continue
         path = PurePosixPath(item.path)
         if path.is_absolute() or ".." in path.parts or any(part.startswith(".") for part in path.parts):
             raise HTTPException(status_code=422, detail=f"invalid surface path: {item.path}")
@@ -303,6 +326,7 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
             raise HTTPException(status_code=422, detail=f"duplicate surface path: {normalized}")
         seen.add(normalized)
         files.append({"path": normalized, "markdown": item.markdown, "layer": item.layer, "truncated": item.truncated})
+        accepted.append(item)
 
     now = datetime.now(timezone.utc)
     account = db.get(Account, principal.account_id)
@@ -310,7 +334,7 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
         account.surface_json = json.dumps(files, separators=(",", ":"))
         account.surface_updated_at = now
     db.commit()
-    return schemas.SurfaceOut(files=payload.files, surface_updated_at=now)
+    return schemas.SurfaceOut(files=accepted, surface_updated_at=now)
 
 
 @router.put("/quota", response_model=schemas.QuotaOut)
@@ -326,17 +350,23 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    daemon.quota_json = json.dumps([shell.model_dump() for shell in payload.shells], separators=(",", ":"))
+    # Server-side enforcement at the publish seam (#417 legal pack item 2):
+    # a repo with a recorded consent excluding "quota" stores nothing this
+    # tick — same shape as the daemon-side gate, one hop further out.
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="quota")
+    shells = payload.shells if permitted else []
+    gates = payload.gates if permitted else []
+    daemon.quota_json = json.dumps([shell.model_dump() for shell in shells], separators=(",", ":"))
     daemon.gate_health_json = json.dumps(
-        [gate.model_dump() for gate in payload.gates], separators=(",", ":")
+        [gate.model_dump() for gate in gates], separators=(",", ":")
     )
     daemon.quota_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
     return schemas.QuotaOut(
-        shells=payload.shells,
-        gates=payload.gates,
+        shells=shells,
+        gates=gates,
         quota_updated_at=now,
     )
 
@@ -355,14 +385,22 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
+    # Server-side enforcement at the publish seam (#417 legal pack item 2).
+    # Content only — the wake-request piggyback below is the dashboard's
+    # inbound control channel, not outbound repo-derived content, and #417
+    # already flagged that channel as bidirectional and unresolved; this
+    # consent step narrows what leaks, not whether "wake this runner" works.
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="runners")
+    profiles = payload.profiles if permitted else []
+    environments = payload.environments if permitted else []
     daemon.runners_json = json.dumps(
-        [profile.model_dump(by_alias=True, exclude_none=True) for profile in payload.profiles],
+        [profile.model_dump(by_alias=True, exclude_none=True) for profile in profiles],
         separators=(",", ":"),
     )
-    daemon.runners_default = payload.default
-    daemon.environment_default = payload.environment_default
+    daemon.runners_default = payload.default if permitted else None
+    daemon.environment_default = payload.environment_default if permitted else None
     daemon.environments_json = json.dumps(
-        [option.model_dump(exclude_none=True) for option in payload.environments],
+        [option.model_dump(exclude_none=True) for option in environments],
         separators=(",", ":"),
     )
     daemon.runners_updated_at = now
@@ -377,10 +415,10 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     )
     pending = wake_requests.pending_for_account(db, principal.account_id)
     return schemas.RunnersOut(
-        profiles=payload.profiles,
-        default=payload.default,
-        environment_default=payload.environment_default,
-        environments=payload.environments,
+        profiles=profiles,
+        default=payload.default if permitted else None,
+        environment_default=payload.environment_default if permitted else None,
+        environments=environments,
         runners_updated_at=now,
         pending_wake_request=(
             schemas.RunnerWakeRequestOut(**wake_requests.view(pending))
@@ -402,12 +440,18 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    daemon.live_runs_json = json.dumps([run.model_dump() for run in payload.runs], separators=(",", ":"))
+    # Server-side enforcement at the publish seam (#417 legal pack item 2).
+    # Content only (`card_text` is the sharpest fact in this whole lane) —
+    # the run-stop piggyback below is the dashboard's inbound control
+    # channel, same unresolved-bidirectionality note as `put_runners`.
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="live_runs")
+    runs = payload.runs if permitted else []
+    daemon.live_runs_json = json.dumps([run.model_dump() for run in runs], separators=(",", ":"))
     daemon.live_runs_updated_at = now
     daemon.spawn_max_concurrent = payload.spawn_max_concurrent
     daemon.daemon_mood_json = (
         json.dumps(payload.daemon_mood.model_dump(), separators=(",", ":"))
-        if payload.daemon_mood is not None
+        if permitted and payload.daemon_mood is not None
         else None
     )
     daemon.online = True
@@ -422,7 +466,7 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     )
     pending_stops = run_stop_requests.pending_for_account(db, principal.account_id)
     return schemas.LiveRunsOut(
-        runs=payload.runs,
+        runs=runs,
         live_runs_updated_at=now,
         spawn_max_concurrent=payload.spawn_max_concurrent,
         pending_run_stop_requests=[
@@ -444,12 +488,15 @@ def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Princip
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    daemon.pr_review_queue_json = json.dumps([pr.model_dump() for pr in payload.prs], separators=(",", ":"))
+    # Server-side enforcement at the publish seam (#417 legal pack item 2).
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="pr_review_queue")
+    prs = payload.prs if permitted else []
+    daemon.pr_review_queue_json = json.dumps([pr.model_dump() for pr in prs], separators=(",", ":"))
     daemon.pr_review_queue_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.PRReviewQueueOut(prs=payload.prs, pr_review_queue_updated_at=now)
+    return schemas.PRReviewQueueOut(prs=prs, pr_review_queue_updated_at=now)
 
 
 @router.put("/run-ledger", response_model=schemas.RunLedgerOut)
@@ -459,12 +506,15 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    daemon.run_ledger_json = json.dumps([row.model_dump() for row in payload.rows], separators=(",", ":"))
+    # Server-side enforcement at the publish seam (#417 legal pack item 2).
+    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="run_ledger")
+    rows = payload.rows if permitted else []
+    daemon.run_ledger_json = json.dumps([row.model_dump() for row in rows], separators=(",", ":"))
     daemon.run_ledger_updated_at = now
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.RunLedgerOut(rows=payload.rows, run_ledger_updated_at=now)
+    return schemas.RunLedgerOut(rows=rows, run_ledger_updated_at=now)
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)

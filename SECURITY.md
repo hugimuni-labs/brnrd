@@ -226,6 +226,40 @@ security keys and is writable by anything with local write access to the checkou
 — including the agent itself. It bounds what brnrd publishes; it is not a control
 an untrusted run cannot reach.
 
+### The connect-time consent, and how it relates to `publish.layers`
+
+Repos connected on brnrd.dev after this section was written record a second,
+**server-side** publish-scope consent at connect time (`/repos`, the "publish
+scope" step) — a repo-level choice from the same vocabulary as
+`publish.layers` above (any mix of the seven lanes, the three corpus slices,
+or `none`), stored on the account's `Repo` row and re-checked at every
+`PUT /v1/daemons/*` the paired daemon makes, not only shown once in the
+connect UI. **The product default for a brand-new connect is `none`** — the
+opposite of `publish.layers`'s own unset-means-everything default — so
+connecting a repo mirrors nothing until you explicitly widen it, either at
+connect or later from the repo's settings row.
+
+This is deliberately a *second* gate, not a replacement for the one above:
+`.brr/config`'s `publish.layers` is still the daemon's own, locally-writable
+control and still governs collection (an off daemon config means no snapshot
+is even built, as stated above); the connect-time consent is an independent
+ceiling enforced by the server that receives the PUT, so a narrower repo
+consent holds even if the local config were changed or bypassed. A lane the
+repo's consent excludes is dropped at the server before storage — the
+wake/stop control channel on the bidirectional `runners` and `live_runs`
+lanes (see above) is unaffected, since that traffic is inbound to your
+daemon, not repo content leaving it.
+
+One lane, **corpus**, cannot be scoped to a single repo: the knowledge mirror
+is account-wide by construction, so the server only ships a corpus slice once
+**every** repo the account has connected has consented to it — a single
+narrower repo silences that slice for the whole account.
+
+**Repos connected before this consent existed carry no recorded value at
+all** (distinct from an explicit `none`) and are, by design, unaffected: the
+server enforces nothing extra for them, and `publish.layers` remains their
+only control, exactly as it was before this section existed.
+
 ### What this switch does not turn off
 
 `publish.layers` governs the **dashboard mirror**. A connected daemon still talks

@@ -30,6 +30,10 @@ export interface ConnectedRepo {
 	telegram_pair_enabled: boolean;
 	environment_default: string | null;
 	environments: EnvironmentOption[];
+	// Explicit publish-scope consent (legal pack item 2, #417 follow-on).
+	// `null` = no consent recorded — this repo connected before the setting
+	// existed, and nothing server-side is enforced for it.
+	publish_layers: string | null;
 }
 
 export interface EnvironmentOption {
@@ -92,6 +96,10 @@ export interface ConnectRepoPayload {
 	repo_full_name: string;
 	forge_repo_id?: string | null;
 	default_branch?: string | null;
+	// Explicit publish-scope consent captured at connect (legal pack item 2).
+	// Omitted or empty both mean "off" server-side — there is no separate
+	// not-provided branch: absence of a choice is nothing publishing.
+	publish_layers?: string;
 }
 
 export interface RepoActionResponse {
@@ -154,8 +162,21 @@ export function connectRepo(
 		{
 			repo_full_name: payload.repo_full_name,
 			forge_repo_id: payload.forge_repo_id ?? '',
-			default_branch: payload.default_branch ?? ''
+			default_branch: payload.default_branch ?? '',
+			publish_layers: payload.publish_layers ?? ''
 		},
+		fetchImpl
+	);
+}
+
+export function setPublishLayers(
+	repoId: string,
+	publishLayers: string,
+	fetchImpl: typeof fetch = fetch
+): Promise<RepoActionResponse> {
+	return postRepoAction(
+		`/v1/repos/${encodeURIComponent(repoId)}/publish-layers`,
+		{ publish_layers: publishLayers },
 		fetchImpl
 	);
 }

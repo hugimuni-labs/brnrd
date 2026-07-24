@@ -677,6 +677,10 @@ def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
         "environments": row.get("environments", []),
         "setup_command": row["setup_command"],
         "telegram_pair_enabled": True,
+        # None = no consent recorded (legacy repo, connected before the
+        # publish-scope consent step shipped) — the settings UI renders that
+        # distinctly from an explicit "none".
+        "publish_layers": repo.publish_layers,
     }
 
 

@@ -21,6 +21,7 @@ from ._session import (
     _payload_str,
     _repo_action_response,
     _repo_error_response,
+    _set_repo_publish_layers_core,
 )
 from fastapi import HTTPException
 
@@ -39,6 +40,25 @@ async def connect_repo_api(request: Request, db: Session = Depends(get_db)):
             repo_full_name=_payload_str(payload, "repo_full_name"),
             forge_repo_id=_payload_str(payload, "forge_repo_id"),
             default_branch=_payload_str(payload, "default_branch"),
+            # Consent, not routing metadata: an omitted field is the same as
+            # an explicitly empty one (both normalize to "off") — "absence of
+            # a choice = nothing publishes" is the whole point (#417 legal
+            # pack item 2), so there is no separate not-provided branch here.
+            publish_layers=_payload_str(payload, "publish_layers"),
+        )
+    except HTTPException as exc:
+        return _repo_error_response(exc)
+    return _repo_action_response(notice)
+
+
+@router.post("/v1/repos/{repo_id}/publish-layers")
+async def set_repo_publish_layers_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    """Revisit a repo's publish-scope consent (settings surface, #417 legal pack item 2)."""
+    account = _json_account(request, db)
+    payload = await _json_body(request)
+    try:
+        notice = _set_repo_publish_layers_core(
+            db, account.id, repo_id, _payload_str(payload, "publish_layers")
         )
     except HTTPException as exc:
         return _repo_error_response(exc)

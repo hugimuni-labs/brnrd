@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from brnrd import ids, limits, oauth
+from brnrd import ids, limits, oauth, publish_scope
 from brnrd.auth import get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
@@ -66,6 +66,7 @@ __all__ = [
     "_repo_views",
     "_repos",
     "_safe_next",
+    "_set_repo_publish_layers_core",
     "_terms_accept_url",
     "_terms_status",
     "_time_label",
@@ -235,6 +236,7 @@ def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo enabled. Set up a local brnrd daemon to start draining work.",
         "repo-disconnected": "Repo disconnected from brnrd.",
+        "repo-publish-scope-updated": "Publish scope updated.",
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
         "github-sync-empty": "No GitHub App installations were found for this app.",
@@ -314,6 +316,7 @@ def _connect_repo_core(
     repo_full_name: str,
     forge_repo_id: str = "",
     default_branch: str = "",
+    publish_layers: str | None = None,
 ) -> str:
     repo_full_name = repo_full_name.strip()
     owner, name = _repo_parts(repo_full_name)
@@ -323,13 +326,49 @@ def _connect_repo_core(
         limits.raise_if_denied(
             limits.check_repo_connect(db, request.app.state.settings, account)
         )
-        repo = Repo(id=ids.repo_id(), account_id=account.id, forge="github", repo_full_name=repo_full_name, repo_owner=owner, repo_name=name)
+        # Explicit publish-scope consent (legal pack item 2, #417 follow-on):
+        # captured once, at creation, never silently touched by a later
+        # idempotent reconnect. The product default for a brand-new connect
+        # is off (`publish_scope.DEFAULT_NEW_CONNECT`) — a client that omits
+        # the field gets the safe default, not the daemon-config "absent
+        # means everything" rule, which is a legacy convenience, not consent.
+        # `normalize_publish_layers` 4xxes on an unrecognised token rather
+        # than silently accepting it — the whole point of a schema-validated
+        # consent is that a typo cannot pass as a choice.
+        repo = Repo(
+            id=ids.repo_id(),
+            account_id=account.id,
+            forge="github",
+            repo_full_name=repo_full_name,
+            repo_owner=owner,
+            repo_name=name,
+            publish_layers=publish_scope.normalize_publish_layers(
+                publish_layers if publish_layers is not None else publish_scope.DEFAULT_NEW_CONNECT
+            ),
+        )
         db.add(repo)
     repo.forge_repo_id = forge_repo_id or repo.forge_repo_id
     repo.default_branch = default_branch or repo.default_branch
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
     return "repo-connected"
+
+
+def _set_repo_publish_layers_core(db: Session, account_id: str, repo_id: str, publish_layers: str) -> str:
+    """Revisit a repo's publish-scope consent after connect (settings surface).
+
+    Same validator as connect, so the same token vocabulary and the same
+    loud 4xx on a typo apply whether the choice is made at connect time or
+    later. Account-scoped lookup: a 404 here, not a silent no-op, on any
+    other account's repo id.
+    """
+    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    repo.publish_layers = publish_scope.normalize_publish_layers(publish_layers)
+    repo.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return "repo-publish-scope-updated"
 
 
 def _pair_repo_telegram_core(request: Request, db: Session, account_id: str, repo_id: str):

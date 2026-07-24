@@ -47,6 +47,15 @@ class Repo(Base):
     default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Explicit publish-scope consent, captured at connect (legal pack item 2,
+    # #417 follow-on). ``None`` = no consent recorded — a repo connected
+    # before this column existed; current behaviour is untouched for it and
+    # nothing here is enforced. A recorded value (including the sentinel
+    # ``"none"``) uses ``publish.layers``'s own grammar
+    # (`brnrd.publish_scope`, reusing `brr.gates.cloud`'s parser) and is
+    # enforced server-side at the `PUT /v1/daemons/*` publish seam, not only
+    # hidden in the connect UI.
+    publish_layers: Mapped[str | None] = mapped_column(String(255), nullable=True)
     account: Mapped["Account"] = relationship(back_populates="repos")
 
 
