@@ -361,6 +361,11 @@ becomes attention, action, and a reply is yours.
     forces it reads as forgotten.
   - `.keepalive` — outlast the budget; first line ISO-8601 or `+30m`.
   - `.name` — first line is this run's short resident-authored name (60 chars max).
+  - `.mood` — first line is an emote handle from `brr.emotes` (e.g. `fo.cus`);
+    lines after are private narration. Rides the statusline chip, the run
+    node, and the dashboard. Optional, honest-only: write it when the state
+    is real, rewrite it when the state changes; an unknown handle renders as
+    a bare name, never a guessed face.
   - `.pr` — a PR *this run created*; without it `remote_scm` reads `absent`.
   - `.relics.jsonl` — the produce manifest. Commits, branch, PR, captured kb
     pages, and your terminal reply auto-derive; add `issue` / `comment` /
@@ -583,7 +588,7 @@ source manifest:
   ✓ Operational preamble (run.md)                   product      contract       5,521  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract       4,807  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract       2,801  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,179  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate      9,526  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
   · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
   · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
   ✓ Resident identity core                          product      identity       5,795  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
@@ -601,13 +606,13 @@ source manifest:
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
 cost ledger:
-  contract       13,129 B  40.2%
-  substrate       9,179 B  28.1%
-  identity        5,795 B  17.7%
-  runtime         4,389 B  13.4%
-  surface           147 B   0.5%
+  contract       13,129 B  39.8%
+  substrate       9,526 B  28.9%
+  identity        5,795 B  17.6%
+  runtime         4,389 B  13.3%
+  surface           147 B   0.4%
   unattributed       14 B
-  wake total     32,653 B
+  wake total     33,000 B
 
 depth: compact · refs available via `brnrd prompts show` / `brnrd kb <query>`
 
