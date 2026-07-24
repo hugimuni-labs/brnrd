@@ -61,7 +61,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								<strong class="text-stone-200">Upsun / Platform.sh</strong>
 								<br />
-								<span class="text-xs text-stone-500">France (EU)</span>
+								<span class="text-xs text-ink-quiet">France (EU)</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Cloud hosting infrastructure; PostgreSQL database
@@ -77,7 +77,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								<strong class="text-stone-200">Stripe</strong>
 								<br />
-								<span class="text-xs text-stone-500">United States</span>
+								<span class="text-xs text-ink-quiet">United States</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Payment processing and billing; Stripe Managed Payments (merchant of record)
@@ -85,7 +85,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								Email address, account identifiers (Stripe customer ID)
 								<br />
-								<span class="text-xs text-stone-500"
+								<span class="text-xs text-ink-quiet"
 									>Note: card data does not pass through brnrd.dev</span
 								>
 							</td>
@@ -98,7 +98,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								<strong class="text-stone-200">GitHub</strong>
 								<br />
-								<span class="text-xs text-stone-500">United States</span>
+								<span class="text-xs text-ink-quiet">United States</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Identity provider (OAuth 2.0) and repository API integration
@@ -115,7 +115,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								<strong class="text-stone-200">Telegram</strong>
 								<br />
-								<span class="text-xs text-stone-500">United Arab Emirates</span>
+								<span class="text-xs text-ink-quiet">United Arab Emirates</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Message transport channel (optional, user-elected)
