@@ -1041,3 +1041,58 @@ def test_completions_rejects_an_unknown_shell():
     with pytest.raises(SystemExit) as exc:
         main(["completions", "nushell"])
     assert exc.value.code == 2
+
+
+# ── brnrd kb — optional query (#649) ─────────────────────────────────────────
+
+
+def _kb_repo(tmp_path):
+    """Set up a minimal repo+kb dir for cmd_kb tests."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    kb = repo / "kb"
+    kb.mkdir()
+    # Two pages so compute_graph_stats returns a non-empty GraphStats.
+    (kb / "index.md").write_text("# Index\n", encoding="utf-8")
+    (kb / "subject-test.md").write_text("# Test subject\n", encoding="utf-8")
+    return repo, kb
+
+
+def test_cmd_kb_no_query_exits_0_and_prints_graph_header(tmp_path, capsys, monkeypatch):
+    """brnrd kb with no query prints the graph report and exits 0."""
+    repo, kb = _kb_repo(tmp_path)
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+    monkeypatch.setattr("brr.knowledge.active_kb_dir", lambda root, cfg=None: kb)
+
+    rc = main(["kb"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Assert on a real section header from format_graph_stats, not a hardcoded guess.
+    from brr.kb_health import format_graph_stats, GraphStats
+    sample = format_graph_stats(GraphStats(total_pages=1, total_bytes=1))
+    header = sample.splitlines()[0]
+    assert header in out
+
+
+def test_cmd_kb_with_query_hit_exits_0(tmp_path, capsys, monkeypatch):
+    """brnrd kb <query> with a match exits 0 and prints the hit — unchanged."""
+    repo, kb = _kb_repo(tmp_path)
+    (kb / "needle-page.md").write_text("the needle is here\n", encoding="utf-8")
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+
+    rc = main(["kb", "needle"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "needle" in out
+
+
+def test_cmd_kb_with_query_no_match_exits_1(tmp_path, capsys, monkeypatch):
+    """brnrd kb <query> with no match exits 1 — unchanged behaviour."""
+    repo, kb = _kb_repo(tmp_path)
+    monkeypatch.setattr("brr.cli._repo_root", lambda: repo)
+    monkeypatch.setattr("brr.knowledge.ensure_checkout", lambda root, cfg=None: kb)
+
+    rc = main(["kb", "xyzzy-no-such-term-8675309"])
+    assert rc == 1
