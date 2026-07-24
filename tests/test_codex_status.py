@@ -2,6 +2,7 @@
 source for the Codex Shell (§8). Verified live 2026-06-28: ``token_count``
 events in a rollout JSONL carry ``rate_limits`` (5h + weekly)."""
 
+import pytest
 import json
 
 from brr import codex_status, facets
@@ -285,3 +286,134 @@ def test_safe_thread_id_rejects_traversal_and_separators():
     )
     for bad in ("../etc", "a/b", "a\\b", "", None, 123, "x" * 200, "abc-123"):
         assert codex_status._safe_thread_id(bad) is None
+
+
+# ── credits-based plans (2026-07-24) ──────────────────────────────────
+#
+# The payload below is verbatim from this account's rollout at the moment
+# two dispatched Codex workers died on their first token: no windows at
+# all, the whole quota fact in ``credits``. The window reader produced no
+# summary, the ``quota`` slot came back absent, and absent renders
+# everywhere as "no reading yet" rather than "this Shell cannot run".
+
+_EXHAUSTED_CREDITS = {
+    "limit_id": "premium",
+    "limit_name": None,
+    "primary": None,
+    "secondary": None,
+    "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+    "individual_limit": None,
+    "plan_type": None,
+    "rate_limit_reached_type": None,
+}
+
+
+def test_exhausted_credits_produce_a_quota_slot_not_silence():
+    """A zero-balance plan must be *readable*, not absent.
+
+    This is the regression that cost two worker dispatches: with no
+    ``primary``/``secondary`` windows the collector emitted no ``quota``
+    key at all, so every downstream surface reported the Shell as
+    unmeasured while it was in fact unusable.
+    """
+    levels = codex_status.parse_token_count({"rate_limits": _EXHAUSTED_CREDITS})
+    quota = levels.get("quota")
+    assert quota is not None, "an exhausted Shell must not read as unmeasured"
+    assert quota["credits_exhausted"] is True
+    assert "exhausted" in quota["summary"]
+    assert quota["credits_balance"] == "0"
+
+
+def test_exhausted_credits_bind_pacing_at_zero():
+    """The verdict has to reach the seam that acts on it.
+
+    ``runner_quota.binding_quota_remaining_pct`` is what pacing, the
+    schedule cadence, and the wake's posture line read. A ``quota`` slot
+    that no consumer can turn into a number is a meter shipped dark.
+    """
+    from brr import runner_quota
+
+    levels = codex_status.parse_token_count({"rate_limits": _EXHAUSTED_CREDITS})
+    assert runner_quota.binding_quota_remaining_pct(levels) == 0.0
+
+
+def test_exhausted_credits_are_not_filed_under_a_window_slot():
+    """Zero headroom is a *credits* fact, not a 5h/weekly one.
+
+    The module docstring's 2026-07-13 lesson — the slot a number arrives
+    in is not its identity — applies to the fix as much as to the bug.
+    """
+    levels = codex_status.parse_token_count({"rate_limits": _EXHAUSTED_CREDITS})
+    quota = levels["quota"]
+    for key in (
+        "primary_used_percent",
+        "secondary_used_percent",
+        "primary_remaining_percent",
+        "secondary_remaining_percent",
+        "primary_window_minutes",
+        "secondary_window_minutes",
+    ):
+        assert key not in quota, f"{key} would mislabel a credits fact as a window"
+
+
+def test_measured_windows_are_never_overridden_by_credits():
+    """Credits ride along; a measured window still binds."""
+    from brr import runner_quota
+
+    levels = codex_status.parse_token_count({
+        "rate_limits": {
+            "primary": {"used_percent": 20.0, "window_minutes": 300},
+            "secondary": {"used_percent": 8.0, "window_minutes": 10080},
+            "credits": {"has_credits": True, "unlimited": False, "balance": "42"},
+        }
+    })
+    quota = levels["quota"]
+    assert quota["primary_remaining_percent"] == 80.0
+    assert "credits 42" in quota["summary"]
+    assert quota["credits_exhausted"] is False
+    assert runner_quota.binding_quota_remaining_pct(levels) == 80.0
+
+
+def test_a_positive_balance_never_becomes_a_percentage():
+    """A balance has no denominator. Null beats a borrowed ratio."""
+    from brr import runner_quota
+
+    levels = codex_status.parse_token_count({
+        "rate_limits": {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": True, "unlimited": False, "balance": "1200"},
+        }
+    })
+    assert levels["quota"]["summary"] == "credits 1200"
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+
+
+def test_unlimited_credits_report_no_constraint():
+    from brr import runner_quota
+
+    levels = codex_status.parse_token_count({
+        "rate_limits": {"primary": None, "secondary": None,
+                        "credits": {"unlimited": True, "has_credits": False}},
+    })
+    assert levels["quota"]["summary"] == "credits unlimited"
+    assert "credits_exhausted" not in levels["quota"]
+    assert runner_quota.binding_quota_remaining_pct(levels) is None
+
+
+@pytest.mark.parametrize(
+    "credits",
+    [None, {}, "garbage", 7, {"has_credits": None}, {"balance": "0"}],
+)
+def test_an_unprovable_credits_block_stays_absent(credits):
+    """A guard may only assert what it can be proven wrong about.
+
+    ``has_credits`` missing or ``None`` is not evidence of exhaustion —
+    it is evidence of a shape this reader does not understand. Silence is
+    the correct output; a false 'exhausted' would pause every Codex
+    dispatch on a schema change.
+    """
+    levels = codex_status.parse_token_count(
+        {"rate_limits": {"primary": None, "secondary": None, "credits": credits}}
+    )
+    assert "quota" not in levels
