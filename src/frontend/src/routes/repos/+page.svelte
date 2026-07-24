@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import {
 		ReposAuthError,
@@ -7,11 +8,21 @@
 		disconnectRepo,
 		fetchRepos,
 		pairRepoTelegram,
+		setPublishLayers,
 		type ConnectedRepo,
 		type InstalledRepo,
 		type RepoActionResponse,
 		type ReposResponse
 	} from '$lib/repos';
+	import {
+		PUBLISH_LANES,
+		PUBLISH_SCOPE_EVERYTHING,
+		PUBLISH_SCOPE_OFF,
+		parsePublishLayers,
+		publishScopeSummary,
+		serializePublishLayers,
+		type PublishScopePreset
+	} from '$lib/publishScope';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 
 	let data = $state<ReposResponse | null>(null);
@@ -22,6 +33,56 @@
 	let confirmingDisconnect = $state<string | null>(null);
 	let manualRepo = $state('');
 	let manualBranch = $state('');
+
+	// Publish-scope consent for the *next* repo this page connects (legal
+	// pack item 2, #417 follow-on) — one shared control above both connect
+	// paths (installed-repo buttons + the manual form), since the choice is
+	// the same question either way and this page never connects two repos
+	// in the same click.
+	let connectScopePreset = $state<PublishScopePreset>('none');
+	let connectScopeCustom = new SvelteSet<string>();
+
+	function connectPublishLayersValue(): string {
+		if (connectScopePreset === 'none') return PUBLISH_SCOPE_OFF;
+		if (connectScopePreset === 'everything') return PUBLISH_SCOPE_EVERYTHING;
+		return serializePublishLayers(connectScopeCustom);
+	}
+
+	function toggleConnectScopeLane(lane: string) {
+		if (connectScopeCustom.has(lane)) connectScopeCustom.delete(lane);
+		else connectScopeCustom.add(lane);
+	}
+
+	// Revisiting a connected repo's consent later (the ticket's "settings
+	// surface" requirement) — which repo's editor is open, and its draft
+	// selection before "save" commits it.
+	let editingScopeRepo = $state<string | null>(null);
+	let editScopeCustom = new SvelteSet<string>();
+
+	function startEditingScope(repo: ConnectedRepo) {
+		editingScopeRepo = repo.id;
+		editScopeCustom.clear();
+		for (const lane of parsePublishLayers(repo.publish_layers)) editScopeCustom.add(lane);
+	}
+
+	function toggleEditScopeLane(lane: string) {
+		if (editScopeCustom.has(lane)) editScopeCustom.delete(lane);
+		else editScopeCustom.add(lane);
+	}
+
+	function saveScope(repo: ConnectedRepo) {
+		runAction(`scope:${repo.id}`, async () => {
+			const result = await setPublishLayers(repo.id, serializePublishLayers(editScopeCustom));
+			if (result.ok) editingScopeRepo = null;
+			return result;
+		});
+	}
+
+	const CONNECT_SCOPE_PRESETS: { value: PublishScopePreset; label: string }[] = [
+		{ value: 'none', label: 'Nothing (default, most private)' },
+		{ value: 'custom', label: 'Choose lanes' },
+		{ value: 'everything', label: 'Everything (all seven lanes)' }
+	];
 
 	const connectedRepos = $derived(data?.connected_repos ?? []);
 	const availableInstalled = $derived(
@@ -74,7 +135,8 @@
 			connectRepo({
 				repo_full_name: repo.repo_full_name,
 				forge_repo_id: repo.forge_repo_id,
-				default_branch: repo.default_branch
+				default_branch: repo.default_branch,
+				publish_layers: connectPublishLayersValue()
 			})
 		);
 	}
@@ -89,7 +151,8 @@
 		runAction('connect:manual', async () => {
 			const result = await connectRepo({
 				repo_full_name: repo,
-				default_branch: manualBranch.trim()
+				default_branch: manualBranch.trim(),
+				publish_layers: connectPublishLayersValue()
 			});
 			if (result.ok) {
 				manualRepo = '';
@@ -287,6 +350,48 @@
 											Pair a local daemon from a checkout when this repo should drain work.
 										</p>
 									{/if}
+									<div class="mt-2 border-t border-stone-800/70 pt-2">
+										<p class="font-mono text-[11px] text-ink-quiet">
+											<span class="text-ink-mute uppercase tracking-wide">publish scope</span>
+											— {publishScopeSummary(repo.publish_layers)}
+										</p>
+										{#if editingScopeRepo === repo.id}
+											<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+												{#each PUBLISH_LANES as lane (lane.value)}
+													<label class="flex items-start gap-2 text-[11px] text-stone-300">
+														<input
+															type="checkbox"
+															class="mt-0.5"
+															checked={editScopeCustom.has(lane.value)}
+															onchange={() => toggleEditScopeLane(lane.value)}
+														/>
+														<span>{lane.label}</span>
+													</label>
+												{/each}
+											</div>
+											<div class="mt-2 flex gap-2">
+												<button
+													type="button"
+													class="cursor-pointer border border-amber-700 bg-amber-950/40 px-2 py-1 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-wait disabled:opacity-50"
+													disabled={pendingAction !== null}
+													onclick={() => saveScope(repo)}
+													>{actionBusy(`scope:${repo.id}`) ? 'saving' : 'save scope'}</button
+												>
+												<button
+													type="button"
+													class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+													disabled={pendingAction !== null}
+													onclick={() => (editingScopeRepo = null)}>cancel</button
+												>
+											</div>
+										{:else}
+											<button
+												type="button"
+												class="mt-1 cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300"
+												onclick={() => startEditingScope(repo)}>revisit scope</button
+											>
+										{/if}
+									</div>
 									{#if repo.gates.length > 0}
 										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">
 											{#each repo.gates as gate (gate.gate)}
@@ -368,6 +473,48 @@
 								</div>
 							</div>
 						</div>
+					{/each}
+				</div>
+			{/if}
+		</section>
+
+		<section class="panel mt-6 p-4">
+			<p class="eyebrow">before you connect</p>
+			<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">publish scope</h2>
+			<p class="mt-2 max-w-2xl text-sm text-stone-400">
+				If you run <code class="font-mono text-amber-200">brnrd account connect</code>, a paired
+				daemon mirrors data to this dashboard every few seconds. The sharpest fact: the live
+				progress card (<code class="font-mono text-amber-200">.card</code>) mirrors here
+				<strong class="text-stone-200">unredacted, within seconds, while a run is live</strong> —
+				see <code class="font-mono text-amber-200">SECURITY.md</code> for the full per-lane table. Pick
+				what the next repo you connect may mirror; nothing you don't name here ships. You can revisit
+				this per repo below at any time.
+			</p>
+			<div class="mt-3 flex flex-wrap gap-2">
+				{#each CONNECT_SCOPE_PRESETS as option (option.value)}
+					<button
+						type="button"
+						class={`cursor-pointer border px-2 py-1 font-mono text-[11px] tracking-wide uppercase ${
+							connectScopePreset === option.value
+								? 'border-amber-700 bg-amber-950/40 text-amber-100'
+								: 'border-stone-800 text-stone-400 hover:text-stone-200'
+						}`}
+						onclick={() => (connectScopePreset = option.value)}>{option.label}</button
+					>
+				{/each}
+			</div>
+			{#if connectScopePreset === 'custom'}
+				<div class="subpanel mt-3 grid grid-cols-1 gap-1 p-3 sm:grid-cols-2">
+					{#each PUBLISH_LANES as lane (lane.value)}
+						<label class="flex items-start gap-2 text-[11px] text-stone-300">
+							<input
+								type="checkbox"
+								class="mt-0.5"
+								checked={connectScopeCustom.has(lane.value)}
+								onchange={() => toggleConnectScopeLane(lane.value)}
+							/>
+							<span>{lane.label}</span>
+						</label>
 					{/each}
 				</div>
 			{/if}

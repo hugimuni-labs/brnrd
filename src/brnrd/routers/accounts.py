@@ -118,6 +118,15 @@ def create_repo(payload: schemas.RepoCreate, request: Request, principal: Princi
             db, request.app.state.settings, db.get(Account, principal.account_id)
         )
     )
+    # NOTE: unlike `_connect_repo_core` (the browser `/repos` connect flow,
+    # legal pack item 2), a repo minted through this account-API-key surface
+    # is left with no recorded consent (`publish_layers` stays `NULL`) —
+    # this endpoint has no attached consent UI (no `src/frontend/` surface
+    # asked for one) and is exercised throughout the existing daemon/cloud
+    # test fixtures on the assumption that a freshly connected repo publishes
+    # normally. Reported, not silently left: this is a real gap in the new
+    # consent gate (an API-key client bypasses it entirely) that a follow-up
+    # should close once this surface has its own explicit-consent story.
     repo = Repo(
         id=ids.repo_id(),
         account_id=principal.account_id,

@@ -33,6 +33,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_channel_routes(conn)
         if _table_exists(conn, "events"):
             _migrate_events(conn)
+        if _table_exists(conn, "repos"):
+            _migrate_repos(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -203,6 +205,14 @@ def _migrate_events(conn: Connection) -> None:
     # model's ``index=True`` for installs that migrate instead of create.
     conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_conversation_id ON events (conversation_id)"))
+
+
+def _migrate_repos(conn: Connection) -> None:
+    # Explicit publish-scope consent, captured at connect (legal pack item
+    # 2, #417 follow-on). NULL on existing rows is deliberate: a repo
+    # connected before this column existed carries no consent to enforce,
+    # so it keeps its current (daemon-config-only) behaviour untouched.
+    conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS publish_layers VARCHAR(255)"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
