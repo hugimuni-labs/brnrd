@@ -88,12 +88,18 @@ supervisor if you want restart policy outside local development.
 
 brnrd ships prompts, docs, and default runner profiles with the package.
 Lightweight runtime choices belong in `.brr/config`, especially `runner`,
-`runner_cmd`, and environment policy. Project-owned runner profiles live
-in `.brr/runners.md`; the legacy `.brr/prompts/runners.md` path is still
-accepted as a compatibility override, but runner profiles are execution
-medium data rather than prompt templates. Deep prompt or orchestration
-customization is done by using a local checkout, editable install, or fork
-of brnrd.
+`shell`/`core`, and timeouts.
+
+Anything that decides *what brnrd executes or how isolated it is* lives in
+the daemon-owned account home instead, outside every run's mount: the
+`runner_cmd` / `trust.*` / `docker.*` / `solitary.*` / `environment` keys in
+`security.config` (#533), and your own runner profile catalog in
+`runners.md` beside it (#693 — a profile carries `cmd:`, so a repo-writable
+catalog is a `runner_cmd`). Repo-side copies of either are ignored, reported
+as a run notice, and migrated by `brnrd config promote`.
+
+Deep prompt or orchestration customization is done by using a local
+checkout, editable install, or fork of brnrd.
 
 Use `environment` for the user-facing execution policy:
 

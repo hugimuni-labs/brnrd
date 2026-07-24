@@ -1600,18 +1600,25 @@ def test_container_path_never_resolves_repo_side_runner_profiles(
 ):
     """A repo-writable ``runners.md`` must not reach the container's inner argv.
 
-    ``_cmd_template``'s third positional is ``repo_root``, and passing it makes
-    the string-name fallback resolve profiles through
-    ``_profiles_source`` → ``<repo>/.brr/runners.md`` — a file inside the tree
-    the container exists to distrust, whose ``cmd:`` replaces the inner argv
-    wholesale (#413 §7 S6: *"``.brr/runners.md`` is ``runner_cmd`` under
-    another name"*).
+    History, because this test changed shape once and the reason matters.
+    Originally ``_cmd_template``'s third positional (``repo_root``) made the
+    string-name fallback resolve profiles through ``_profiles_source`` →
+    ``<repo>/.brr/runners.md`` — a file inside the tree the container exists
+    to distrust, whose ``cmd:`` replaces the inner argv wholesale. The guard
+    was therefore *asymmetric*: the host path passed ``repo_root``, the
+    container path must not, and the fixture had to stay illegal — the
+    original note read "if repo-side profiles ever stop being honoured at
+    all, this test would pass vacuously and pin nothing, so re-derive this
+    guard rather than deleting it."
 
-    The host path passes ``repo_root`` and should; the container path must not,
-    and "consistency with the host" is the argument that would undo this. So
-    the assertion is on ``_cmd_template``'s behaviour with and without it,
-    rather than on the call site's argument list: a future refactor that
-    reintroduces the argument by another route still goes red.
+    #693 is that event: profiles now load only from the daemon-owned account
+    home or the bundle, so the asymmetry is gone and passing ``repo_root`` is
+    no longer the dangerous act it was. Re-derived, per that instruction,
+    onto the claim that outlives the mechanism: **a ``cmd:`` written into the
+    bind-mounted repo never reaches the argv that runs inside the
+    container** — asserted with ``repo_root`` supplied on *both* sides, so a
+    future change that re-honours repo-side profiles by any route goes red
+    here regardless of which argument carries it.
     """
     from brr import runner as runner_mod
 
@@ -1619,6 +1626,11 @@ def test_container_path_never_resolves_repo_side_runner_profiles(
     (repo / ".brr").mkdir(parents=True)
     (repo / ".brr" / "runners.md").write_text(
         "---\ncodex:\n  cmd: /tmp/pwned --exfiltrate\n---\n", encoding="utf-8",
+    )
+    legacy = repo / ".brr" / "prompts" / "runners.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        "---\ncodex:\n  cmd: /tmp/pwned-legacy --exfiltrate\n---\n", encoding="utf-8",
     )
 
     monkeypatch.setattr(runner_mod, "_profiles_cache", None, raising=False)
@@ -1629,17 +1641,14 @@ def test_container_path_never_resolves_repo_side_runner_profiles(
     monkeypatch.setattr(runner_mod, "_profiles_cache_key", None, raising=False)
     without_root = runner_mod._cmd_template("codex", {})
 
-    # The fixture must stay *illegal*: if repo-side profiles ever stop being
-    # honoured at all, this test would pass vacuously and pin nothing.
-    assert with_root[0] == "/tmp/pwned", (
-        "fixture no longer demonstrates repo-side resolution; "
-        f"got {with_root!r} — re-derive this guard rather than deleting it"
+    assert with_root[0] == "codex", (
+        f"a repo-side runners.md reached the argv builder: {with_root!r}"
     )
     assert without_root[0] == "codex", f"bundled codex argv expected, got {without_root!r}"
 
-    # And the container path is on the second side of that line — driven
-    # through the real `DockerEnv.invoke`, with `selected_runner=None` so the
-    # string-name fallback (the only branch `repo_root` affects) is reached.
+    # And the container path too — driven through the real `DockerEnv.invoke`,
+    # with `selected_runner=None` so the string-name fallback (the only branch
+    # `repo_root` affects) is reached.
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)

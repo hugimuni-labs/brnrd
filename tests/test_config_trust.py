@@ -870,3 +870,368 @@ def test_write_security_config_invalidates_a_sibling_worktrees_cache_entry(
         "a write must not leave any cached resolution behind — a sibling "
         "worktree's entry is unreachable by a prefix match on the writer"
     )
+
+
+# ── #693: runner profiles join the security domain ──────────────────────
+#
+# `.brr/runners.md` is `runner_cmd` under another name: a profile entry
+# carries `cmd:`, the argv brnrd execs. #533 moved the *key* into the
+# daemon-owned domain and left the *file that does the same job* in the
+# repo tree. These tests pin the file following the key.
+#
+# The load-bearing assertion in every one of them is on **what would be
+# executed** — the argv the exec site builds, or the side effect of the
+# process it starts — never on `_profiles_source` returning a particular
+# string. A guard on the resolver that never reaches the exec site is the
+# shape this whole slice is about.
+
+import shlex as _shlex
+import sys as _sys
+
+from brr import runner as runner_mod
+from brr.runner import RunnerInvocation, _build_cmd, invoke_runner
+
+
+@pytest.fixture
+def cold_profiles(monkeypatch):
+    """Force every profile read in the test body to hit disk.
+
+    ``runner._profiles_cache`` is a module global that outlives a test; a
+    warm entry from an earlier test would make these pass without reading
+    anything.
+    """
+    monkeypatch.setattr(runner_mod, "_profiles_cache", None, raising=False)
+    monkeypatch.setattr(runner_mod, "_profiles_cache_key", None, raising=False)
+
+
+def _pwn_profile(tmp_path: Path, marker: Path, name: str = "pwn-runner") -> str:
+    """Frontmatter declaring *name* with a ``cmd:`` that leaves a marker file.
+
+    Deliberately not a bundled profile name: after the fix the resolver
+    finds no entry and falls back to the bare name, so the marker's absence
+    and the argv both testify. A real executable (not a stub) because the
+    claim under test is "this was never executed", and only a process that
+    *would* have left evidence can prove it didn't.
+    """
+    script = tmp_path / "pwn.py"
+    script.write_text(
+        "import sys\nopen(sys.argv[1], 'w').write('pwned')\n", encoding="utf-8"
+    )
+    argv = " ".join(
+        _shlex.quote(part) for part in [_sys.executable, str(script), str(marker)]
+    )
+    return f"---\n{name}:\n  cmd: '{argv}'\n---\n"
+
+
+def _repo_and_home(tmp_path: Path) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    conf.write_config(repo, {"home.path": str(home)})
+    return repo, home
+
+
+def _invocation(repo: Path, label: str) -> RunnerInvocation:
+    return RunnerInvocation(
+        kind="daemon-run",
+        label=label,
+        prompt="hello",
+        cwd=repo,
+        repo_root=repo,
+        response_path=str(repo / ".brr" / "responses" / f"{label}.md"),
+    )
+
+
+def test_repo_side_runners_md_cmd_is_never_executed(tmp_path, cold_profiles):
+    """THE test: a ``cmd:`` in ``<repo>/.brr/runners.md`` must not run.
+
+    Driven through ``invoke_runner`` — the path that actually builds the
+    runner command and starts the process — so a resolver-only guard
+    cannot make it pass.
+    """
+    repo, _home = _repo_and_home(tmp_path)
+    marker = tmp_path / "pwned.txt"
+    (repo / ".brr" / "runners.md").write_text(
+        _pwn_profile(tmp_path, marker), encoding="utf-8"
+    )
+
+    result = invoke_runner("pwn-runner", _invocation(repo, "evt-693-repo"), cfg={})
+
+    assert not marker.exists(), (
+        "a cmd: from the repo-writable .brr/runners.md was executed"
+    )
+    assert result.command == ["pwn-runner"], (
+        f"repo-side profile reached the exec site: {result.command!r}"
+    )
+
+
+def test_legacy_repo_side_prompts_runners_md_cmd_is_never_executed(
+    tmp_path, cold_profiles,
+):
+    """Same for the legacy ``<repo>/.brr/prompts/runners.md`` location."""
+    repo, _home = _repo_and_home(tmp_path)
+    marker = tmp_path / "pwned-legacy.txt"
+    legacy = repo / ".brr" / "prompts" / "runners.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(_pwn_profile(tmp_path, marker), encoding="utf-8")
+
+    result = invoke_runner("pwn-runner", _invocation(repo, "evt-693-legacy"), cfg={})
+
+    assert not marker.exists(), (
+        "a cmd: from the legacy repo-side .brr/prompts/runners.md was executed"
+    )
+    assert result.command == ["pwn-runner"], (
+        f"legacy repo-side profile reached the exec site: {result.command!r}"
+    )
+
+
+def test_home_owned_runners_md_resolves_and_is_used(tmp_path, cold_profiles):
+    """The daemon-owned ``<home>/runners.md`` is the custom-profile home."""
+    repo, home = _repo_and_home(tmp_path)
+    (home / conf.PROFILES_FILENAME).write_text(
+        "---\nhome-runner:\n  cmd: 'home-runner --go'\n---\n", encoding="utf-8"
+    )
+
+    assert _build_cmd("home-runner", "fix it", {}, repo) == ["home-runner", "--go"]
+
+
+def test_bundled_profiles_still_resolve_with_no_home_file(tmp_path, cold_profiles):
+    repo, _home = _repo_and_home(tmp_path)
+    assert _build_cmd("codex", "fix it", {}, repo)[0] == "codex"
+
+
+def test_security_config_runner_cmd_still_wins_over_a_home_profile(
+    tmp_path, cold_profiles,
+):
+    """``runner_cmd`` is the operator's pin and outranks any profile ``cmd``."""
+    repo, home = _repo_and_home(tmp_path)
+    conf.write_config(repo, {"home.path": str(home)})
+    (home / conf.SECURITY_CONFIG_FILENAME).write_text(
+        "runner_cmd=pinned-runner --go\n", encoding="utf-8"
+    )
+    (home / conf.PROFILES_FILENAME).write_text(
+        "---\ncodex:\n  cmd: 'from-home-profile'\n---\n", encoding="utf-8"
+    )
+
+    cfg = conf.load_config(repo)
+    assert _build_cmd("codex", "fix it", cfg, repo) == ["pinned-runner", "--go"]
+
+
+def test_wake_runner_catalog_renders_home_profiles_and_not_repo_ones(
+    tmp_path, monkeypatch, cold_profiles,
+):
+    """Selection is not the only reader — the catalog the wake is shown
+    must move to the new source too, or the visible half stays poisoned."""
+    repo, home = _repo_and_home(tmp_path)
+    (home / conf.PROFILES_FILENAME).write_text(
+        "---\nhome-shell:\n  cmd: 'home-shell run'\n---\n", encoding="utf-8"
+    )
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nrepo-shell:\n  cmd: 'repo-shell run'\n---\n", encoding="utf-8"
+    )
+    # No Shell binary resolves — keeps the catalog probe IO-free. Rows for
+    # unavailable profiles are still emitted, which is what this asserts on.
+    monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
+
+    names = {row["name"] for row in runner_mod.available_runner_catalog(repo)}
+
+    assert "home-shell" in names, f"home profile missing from the catalog: {names}"
+    assert "repo-shell" not in names, f"repo profile rendered in the catalog: {names}"
+
+
+def test_profiles_cache_key_can_never_name_a_repo_path(tmp_path, cold_profiles):
+    """The cache key is part of the fix.
+
+    Keyed on a resolved repo path, a poisoned repo file gets its own cache
+    entry and is served for the rest of the process. After this change the
+    key can only be the daemon-owned home or the bundle, so there is no
+    key shape a repo tree can mint.
+    """
+    repo, _home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nrepo-shell:\n  cmd: 'repo-shell run'\n---\n", encoding="utf-8"
+    )
+    legacy = repo / ".brr" / "prompts" / "runners.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        "---\nlegacy-shell:\n  cmd: 'legacy-shell run'\n---\n", encoding="utf-8"
+    )
+
+    key, _text = runner_mod._profiles_source(repo)
+
+    assert str(repo) not in key, f"cache key names a repo path: {key!r}"
+
+
+def test_ignored_repo_side_profile_file_surfaces_as_a_run_notice_and_warning(
+    tmp_path, monkeypatch, capsys,
+):
+    """A silent ignore is not acceptable: a user with a working custom
+    profile must be told, not surprised. Same notice channel as #533."""
+    write_repo_scaffold(tmp_path)
+    (tmp_path / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+    )
+    event = make_event(tmp_path, eid="evt-693-notice")
+    _stub_worktree_env(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    notices = daemon._read_outbox_notices(
+        tmp_path / ".brr" / "outbox" / "evt-693-notice"
+    )
+    assert any(".brr/runners.md" in n["text"] for n in notices), notices
+    assert any("brnrd config promote" in n["text"] for n in notices), notices
+
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert ".brr/runners.md" in captured.out
+
+
+def test_no_profile_notice_when_the_repo_has_no_runners_file(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-693-clean")
+    _stub_worktree_env(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    notices = daemon._read_outbox_notices(
+        tmp_path / ".brr" / "outbox" / "evt-693-clean"
+    )
+    assert not any("runners.md" in n["text"] for n in notices), notices
+
+
+# ── ``brnrd config promote`` picks the profile file up ──────────────────
+
+
+def test_plan_promote_carries_the_repo_side_profiles_file(tmp_path):
+    repo, home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+    )
+
+    plan = conf.plan_promote(repo)
+
+    assert plan.profiles_move == (
+        repo / ".brr" / "runners.md",
+        home / conf.PROFILES_FILENAME,
+    )
+    assert plan.profiles_conflict is False
+
+
+def test_apply_promote_moves_the_profiles_file_and_the_profile_is_then_used(
+    tmp_path, cold_profiles,
+):
+    """One command migrates an existing custom-profile user.
+
+    Asserts the *effect* — the promoted profile is the one the command
+    builder resolves afterwards — not just that a file moved.
+    """
+    repo, home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run --yes'\n---\n", encoding="utf-8"
+    )
+
+    conf.apply_promote(repo, conf.plan_promote(repo))
+
+    assert not (repo / ".brr" / "runners.md").exists()
+    assert (home / conf.PROFILES_FILENAME).exists()
+    assert _build_cmd("local-agent", "fix it", {}, repo) == [
+        "local-agent", "run", "--yes",
+    ]
+
+
+def test_apply_promote_refuses_to_clobber_an_existing_home_profiles_file(tmp_path):
+    repo, home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nrepo-agent:\n  cmd: 'repo-agent'\n---\n", encoding="utf-8"
+    )
+    (home / conf.PROFILES_FILENAME).write_text(
+        "---\nhome-agent:\n  cmd: 'home-agent'\n---\n", encoding="utf-8"
+    )
+
+    plan = conf.plan_promote(repo)
+    assert plan.profiles_conflict is True
+
+    with pytest.raises(conf.ConfigPromoteError):
+        conf.apply_promote(repo, plan, force=False)
+
+    assert "home-agent" in (home / conf.PROFILES_FILENAME).read_text(encoding="utf-8")
+    assert (repo / ".brr" / "runners.md").exists()
+
+
+def test_apply_promote_is_idempotent_for_the_profiles_file(tmp_path):
+    repo, home = _repo_and_home(tmp_path)
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+    )
+
+    conf.apply_promote(repo, conf.plan_promote(repo))
+    second = conf.plan_promote(repo)
+    assert second.profiles_move is None
+    conf.apply_promote(repo, second)  # no-op, must not raise
+
+    assert "local-agent" in (home / conf.PROFILES_FILENAME).read_text(encoding="utf-8")
+
+
+def test_cli_config_promote_reports_and_moves_the_profiles_file(
+    monkeypatch, tmp_path, capsys,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    conf.write_config(repo, {"home.path": str(home)})
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+    )
+
+    rc = main(["config", "promote"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "runners.md" in out
+    assert (home / conf.PROFILES_FILENAME).exists()
+    assert not (repo / ".brr" / "runners.md").exists()
+
+
+def test_cli_config_promote_dry_run_leaves_the_profiles_file_alone(
+    monkeypatch, tmp_path, capsys,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    conf.write_config(repo, {"home.path": str(home)})
+    (repo / ".brr" / "runners.md").write_text(
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+    )
+
+    rc = main(["config", "promote", "--dry-run"])
+
+    assert rc == 0
+    assert "runners.md" in capsys.readouterr().out
+    assert (repo / ".brr" / "runners.md").exists()
+    assert not (home / conf.PROFILES_FILENAME).exists()

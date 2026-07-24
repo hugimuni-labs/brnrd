@@ -257,7 +257,8 @@ def implicit_runner(runner_name: str) -> RunnerProfile:
 
 
 def load_runners(repo_root: Path | None = None) -> dict[str, RunnerProfile]:
-    """All declared profiles, keyed by name (bundled + project ``runners.md``)."""
+    """All declared profiles, keyed by name (the daemon-owned ``runners.md``
+    if the account home has one, else the bundled catalog — #693)."""
     from . import runner
 
     profiles = runner._load_profiles(repo_root)
