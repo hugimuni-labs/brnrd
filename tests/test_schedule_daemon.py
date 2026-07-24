@@ -335,3 +335,156 @@ def test_retire_internal_event_leaves_gate_events_alone(tmp_path):
 
     assert daemon._retire_internal_event(event, responses) is False
     assert path.exists()  # the gate owns delivery + cleanup
+
+
+# ── #616: spawn_completed self-retirement ───────────────────────────────────
+
+
+def test_retire_internal_event_closes_spawn_completed_waking_source(tmp_path):
+    """A spawn_completed waking event (parent died before observing) closes
+    in place, the same way a schedule wake does.
+
+    Drive red: comment out the `spawn_completed` branch in
+    _retire_internal_event and confirm this fails; restore to keep.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    path = protocol.create_event(
+        inbox, "spawn_completed", "child run-x done: status=done",
+        spawn_parent_run_id="run-parent",
+    )
+    event = {"source": "spawn_completed", "id": path.stem, "_path": path}
+
+    assert daemon._retire_internal_event(event, responses) is True
+    assert protocol._read_event(path)["status"] == "delivered"
+
+
+def test_retire_internal_event_retires_observed_spawn_completeds_for_parent(tmp_path):
+    """Passing inbox_dir + run_id retires all spawn_completed events whose
+    spawn_parent_run_id matches run_id, even when the waking event is a gate
+    event (the common case: parent woke from user message, child finishes
+    mid-run).
+
+    Drive red: comment out the inbox-scan block in _retire_internal_event and
+    confirm this fails; restore to keep.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    # Two spawn_completed events for this parent.
+    c1 = protocol.create_event(
+        inbox, "spawn_completed", "child-1 done",
+        spawn_parent_run_id="run-parent-A",
+    )
+    c2 = protocol.create_event(
+        inbox, "spawn_completed", "child-2 done",
+        spawn_parent_run_id="run-parent-A",
+    )
+    # One spawn_completed for a *different* parent — must stay pending.
+    c_other = protocol.create_event(
+        inbox, "spawn_completed", "unrelated child done",
+        spawn_parent_run_id="run-parent-B",
+    )
+    # The waking event is a normal gate event (telegram), not a spawn_completed.
+    gate_path = protocol.create_event(inbox, "telegram", "hello", chat_id="42")
+    gate_event = {"source": "telegram", "id": gate_path.stem, "_path": gate_path}
+
+    result = daemon._retire_internal_event(
+        gate_event, responses,
+        inbox_dir=inbox,
+        run_id="run-parent-A",
+    )
+    # Returns False because the waking event is a telegram event, not internal.
+    assert result is False
+    # But our two spawn_completed events are now delivered.
+    assert protocol._read_event(c1)["status"] == "delivered"
+    assert protocol._read_event(c2)["status"] == "delivered"
+    # The unrelated spawn_completed is untouched.
+    assert protocol._read_event(c_other)["status"] == "pending"
+    # The gate event itself is untouched (gate owns it).
+    assert protocol._read_event(gate_path)["status"] == "pending"
+
+
+def test_spawn_completed_not_dispatched_after_parent_observed(tmp_path):
+    """A spawn_completed event whose parent has ended is retired and must not
+    appear in _dispatchable_targets after the parent run finishes.
+
+    Drive red: remove the inbox-scan block in _retire_internal_event and
+    confirm that spawn_completed events survive the run-end path and reappear
+    in list_dispatchable; restore to keep.
+
+    Behaviour test — does not grep source for any token.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    # Simulate: parent woke from telegram, child finished, completion note landed.
+    gate_path = protocol.create_event(
+        inbox, "telegram", "parent task", chat_id="99",
+    )
+    gate_event = {"source": "telegram", "id": gate_path.stem, "_path": gate_path}
+    protocol.set_status(gate_event, "processing")
+
+    completion = protocol.create_event(
+        inbox, "spawn_completed", "child run-x done: status=done",
+        spawn_parent_run_id="run-parent-X",
+    )
+
+    # Confirm the completion IS in list_pending before retirement.
+    pending_before = [e for e in protocol.list_pending(inbox)]
+    assert any(e.get("id") == completion.stem for e in pending_before), (
+        "fixture must produce a pending spawn_completed before the fix runs"
+    )
+
+    # Parent run ends — retire_internal_event retires the completion.
+    daemon._retire_internal_event(
+        gate_event, responses,
+        inbox_dir=inbox,
+        run_id="run-parent-X",
+    )
+
+    # The spawn_completed is no longer dispatchable.
+    remaining = [e for e in protocol.list_pending(inbox) if e.get("status") == "pending"]
+    assert not any(e.get("source") == "spawn_completed" for e in remaining), (
+        "spawn_completed must not remain pending after parent run's retire step"
+    )
+
+
+def test_spawn_completed_still_pending_until_parent_retires(tmp_path):
+    """A spawn_completed event that has NOT been observed (parent not yet
+    ended) stays pending and visible — constraint #1.
+
+    The fixture must be one that production can actually emit, so we use the
+    real _notify_spawn_parent notifier. A fixture the daemon never writes is
+    not coverage.
+    """
+    from brr.run import Run
+
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+
+    task = Run(
+        id="run-child-Y", event_id="evt-child-Y", body="", source="telegram",
+        status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent-Y",
+            "spawn_parent_conversation_key": "telegram:42:",
+        },
+    )
+    daemon._notify_spawn_parent(inbox, task)
+
+    # Without calling _retire_internal_event, the completion is still pending.
+    pending = protocol.list_pending(inbox)
+    assert len(pending) == 1
+    note = pending[0]
+    assert note["source"] == "spawn_completed"
+    assert note["spawn_parent_run_id"] == "run-parent-Y"
+    assert note["status"] == "pending"
+    # Stays dispatchable (a parent-died-before-observing case can wake a run).
+    assert any(
+        e.get("id") == note["id"]
+        for e in protocol.list_dispatchable(inbox)
+    )
