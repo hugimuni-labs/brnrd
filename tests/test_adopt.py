@@ -1,6 +1,7 @@
 """Tests for adopt module."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -292,6 +293,79 @@ class TestBuildDefaultDockerImage:
             lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", ""),
         )
         assert adopt._build_default_docker_image() is False
+
+    def test_context_carries_every_copy_source_including_licenses(
+        self, monkeypatch, tmp_path
+    ):
+        """The assembled context is derived from the Dockerfile, not restated.
+
+        Before #675 this function held its own literal list of paths, so a
+        ``COPY`` source the Dockerfile gained (the root license files) never
+        reached the context and the wheel built inside the image quietly
+        dropped it.
+        """
+        repo = tmp_path / "repo"
+        (repo / "src" / "brr").mkdir(parents=True)
+        for rel in ("pyproject.toml", "README.md", "LICENSE", "LICENSE-OVERVIEW.md"):
+            (repo / rel).write_text(rel, encoding="utf-8")
+        (repo / "src" / "brr" / "LICENSE").write_text("pkg", encoding="utf-8")
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text(
+            "FROM alpine\n"
+            "COPY pyproject.toml README.md LICENSE LICENSE-OVERVIEW.md /opt/brr/\n"
+            "COPY src /opt/brr/src\n",
+            encoding="utf-8",
+        )
+
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+        adopt._assemble_build_context(dockerfile, repo, ctx)
+
+        assert (ctx / "Dockerfile").is_file()
+        for rel in ("pyproject.toml", "README.md", "LICENSE", "LICENSE-OVERVIEW.md"):
+            assert (ctx / rel).is_file(), rel
+        assert (ctx / "src" / "brr" / "LICENSE").is_file()
+
+    def test_missing_copy_source_is_reported_not_silently_skipped(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\nCOPY LICENSE /opt/brr/\n", encoding="utf-8")
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+
+        with pytest.raises(FileNotFoundError, match="LICENSE"):
+            adopt._assemble_build_context(dockerfile, repo, ctx)
+
+
+class TestDockerfileContextPaths:
+    def test_last_token_is_the_destination(self):
+        paths = adopt.dockerfile_context_paths("COPY a.txt b.txt /opt/brr/\n")
+        assert paths == ["a.txt", "b.txt"]
+
+    def test_backslash_continuations_are_folded(self):
+        paths = adopt.dockerfile_context_paths(
+            "COPY pyproject.toml \\\n    LICENSE \\\n    /opt/brr/\n"
+        )
+        assert paths == ["pyproject.toml", "LICENSE"]
+
+    def test_stage_copies_and_flags_are_not_context_sources(self):
+        text = (
+            "# COPY commented.txt /opt/\n"
+            "COPY --from=builder /out /opt/brr/out\n"
+            "COPY --chown=1000:1000 src /opt/brr/src\n"
+        )
+        assert adopt.dockerfile_context_paths(text) == ["src"]
+
+    def test_the_bundled_dockerfile_parses_to_real_checkout_paths(self):
+        repo_root = Path(adopt.__file__).resolve().parent.parent.parent
+        paths = adopt.dockerfile_context_paths(
+            adopt._BUNDLED_DOCKERFILE.read_text(encoding="utf-8")
+        )
+        assert paths, "bundled Dockerfile must copy something into the context"
+        for rel in paths:
+            assert (repo_root / rel).exists(), rel
 
 
 # ── L0–L2: template split, kb-not-required, shell bridges ────────────

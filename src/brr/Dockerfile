@@ -16,8 +16,8 @@
 # ``GITHUB_TOKEN`` env var rather than a bind mount, because gh's keyring
 # backend isn't reachable from inside the container.
 #
-# ``brnrd init -i`` copies ``pyproject.toml``, ``README.md``, and ``src/`` into
-# the build context and installs this checkout with ``pip install /opt/brr``.
+# ``brnrd init -i`` assembles the build context from this file's own ``COPY``
+# sources and installs this checkout with ``pip install /opt/brr``.
 # Do **not** ``pip install brr`` from PyPI here — that name is an unrelated
 # terminal image renderer.
 
@@ -51,7 +51,13 @@ RUN apt-get update \
         'requests>=2.31,<3' \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md /opt/brr/
+# These COPY sources *are* the build context: ``brnrd init -i`` assembles the
+# temp context by reading them back out of this file (adopt.py →
+# ``dockerfile_context_paths``), so a path added here is copied automatically
+# and there is no second list to keep in step. Every entry of
+# ``pyproject.toml``'s ``license-files`` must be reachable from these lines or
+# the wheel installed below silently drops it (#675); a test enforces that.
+COPY pyproject.toml README.md LICENSE LICENSE-OVERVIEW.md /opt/brr/
 COPY src /opt/brr/src
 RUN pip install --no-cache-dir /opt/brr \
     && brnrd review --help >/dev/null
