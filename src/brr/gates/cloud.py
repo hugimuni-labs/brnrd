@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import functools
 import hashlib
 import json
 import os
@@ -388,32 +389,169 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             backoff = min(backoff * 2, 120)
 
 
+# --- publish scopes: the one gate over every dashboard lane (#417) ---------
+#
+# ``publish.layers`` names *what may be mirrored to brnrd.dev*, and
+# ``SECURITY.md`` promises a reader that it "opts the mirror down to fewer
+# layers (or ``none``)". Until #417 that promise held for exactly one of the
+# seven lanes: ``_publish_corpus`` read the config and the other six did not,
+# so ``none`` left runners, live-runs, activity, quota, the PR review queue and
+# the run ledger publishing exactly as before. The vocabulary below is what
+# makes the sentence true — it names every lane, not only the corpus lane's own
+# three slices.
+#
+# Resolution rules, all fail-closed:
+#
+# - **absent / empty** → everything. This is the shipped default and #417
+#   deliberately does not change it; flipping the mirror to opt-in is a product
+#   call, not a repair.
+# - ``none`` → nothing at all, on every lane. It wins over any scope named
+#   beside it: an off switch that another token can override is not an off
+#   switch.
+# - **any other token** → only what is named ships. A token that matches no
+#   scope is a typo, and a typo must not read as "mirror everything" — it fails
+#   closed and says so once on stderr, because a misconfiguration silent in both
+#   directions is how this class of bug survives.
+#
+# Naming a corpus slice (``authored`` / ``knowledge`` / ``runs``) enables the
+# corpus lane carrying just that slice; naming ``corpus`` enables all three.
+
+# Mirrors ``account.CORPUS_LAYERS`` — the corpus lane's own slices, which are
+# sub-scopes of one lane rather than lanes in their own right. Duplicated
+# rather than imported because ``account`` is a deferred import everywhere else
+# in this module; ``test_every_publisher_is_a_registered_gated_lane`` pins the
+# two together.
+_PUBLISH_CORPUS_SLICES = ("authored", "knowledge", "runs")
+
+# Every publish lane, in the order the tick drives them. Order is load-bearing
+# for the first two — see the comments in ``_dashboard_publish_tick``.
+_PUBLISH_TICK_ORDER = (
+    "runners",
+    "live_runs",
+    "activity",
+    "corpus",
+    "quota",
+    "pr_review_queue",
+    "run_ledger",
+)
+
+# lane name -> the gated publisher, populated by ``@_publish_lane``.
+_PUBLISH_LANES: dict[str, Callable[..., None]] = {}
+
+_PUBLISH_OFF = "none"
+
+# Raw ``publish.layers`` values already warned about, so a standing typo costs
+# one line at startup rather than one every ``_DASHBOARD_PUBLISH_INTERVAL_S``.
+# A guard that fires constantly stops being read.
+_publish_scope_warned: set[str] = set()
+
+
+def _resolve_publish_scopes(cfg: dict) -> tuple[frozenset[str], frozenset[str]]:
+    """Parse ``publish.layers`` into ``(enabled lanes, enabled corpus slices)``.
+
+    The single parser behind both the per-lane gate and ``_publish_selection``
+    — one derivation of "what may leave this machine", so the two cannot drift
+    into disagreeing about what the operator asked for.
+    """
+    raw = str(cfg.get("publish.layers") or "").strip()
+    if not raw:
+        return frozenset(_PUBLISH_TICK_ORDER), frozenset(_PUBLISH_CORPUS_SLICES)
+
+    tokens = {part.strip().lower().replace("-", "_") for part in raw.split(",")}
+    tokens.discard("")
+    if _PUBLISH_OFF in tokens:
+        return frozenset(), frozenset()
+
+    known = set(_PUBLISH_TICK_ORDER) | set(_PUBLISH_CORPUS_SLICES)
+    unknown = sorted(tokens - known)
+    if unknown and raw not in _publish_scope_warned:
+        _publish_scope_warned.add(raw)
+        print(
+            "[brnrd:cloud] publish.layers names unrecognised scope(s): "
+            f"{', '.join(unknown)} — they mirror nothing. Valid scopes: "
+            f"{', '.join(sorted(known))}, or '{_PUBLISH_OFF}'."
+        )
+
+    slices = tokens & set(_PUBLISH_CORPUS_SLICES)
+    if "corpus" in tokens:
+        slices = set(_PUBLISH_CORPUS_SLICES)
+    lanes = tokens & set(_PUBLISH_TICK_ORDER)
+    if slices:
+        lanes.add("corpus")
+    else:
+        lanes.discard("corpus")
+    return frozenset(lanes), frozenset(slices)
+
+
+def _publish_lane(name: str) -> Callable:
+    """Register a publish lane *and* gate it, in one indivisible act.
+
+    This is the structural half of #417: a publisher becomes reachable from
+    ``_dashboard_publish_tick`` only by entering ``_PUBLISH_LANES``, and the
+    only thing that puts it there is the decorator that also refuses to run it
+    when the operator has switched its scope off. There is no way to acquire
+    the registration without the gate, so a lane added later cannot silently
+    escape ``publish.layers`` the way six of the original seven did.
+
+    The gate sits on the lane's own door rather than on the tick's loop so
+    that a caller reaching a publisher from anywhere else is bound by it too.
+    ``lanes`` is threaded in by the tick, which resolves the config once per
+    pass instead of once per lane.
+    """
+
+    def register(fn: Callable[[Path, Path | None, dict], None]) -> Callable:
+        @functools.wraps(fn)
+        def guarded(
+            brr_dir: Path,
+            inbox_dir: Path | None,
+            state: dict,
+            *,
+            lanes: frozenset[str] | None = None,
+        ) -> None:
+            if lanes is None:
+                lanes, _slices = _resolve_publish_scopes(_publish_config(brr_dir))
+            if name not in lanes:
+                return
+            fn(brr_dir, inbox_dir, state)
+
+        guarded.lane = name  # type: ignore[attr-defined]
+        _PUBLISH_LANES[name] = guarded
+        return guarded
+
+    return register
+
+
 def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     """One publish pass — see ``_dashboard_publish_loop`` for why it exists.
 
     Split out from the loop so a test can drive a single tick without
     threading or monkeypatching ``time.sleep`` on a ``while True``.
+
+    The tick has no per-lane call sites left: it walks ``_PUBLISH_TICK_ORDER``
+    and every entry is gated by construction (#417). Order still matters at
+    the head of that tuple —
+
+    - **Runners first**: its response piggybacks the pending wake request
+      (#328 tap-to-request), the one dispatch-relevant datum in this tick.
+      Behind the others, a slow or 502-retrying dashboard PUT stretched the
+      mirror's staleness to tens of seconds — long enough for a tap racing
+      its own follow-up message to lose (found live 2026-07-11).
+    - **Live runs second**, for the same reason: since #476 its response
+      piggybacks the account's pending run stops, and a stop is the most
+      latency-sensitive datum in the tick — the user is watching the run burn
+      while they wait. Behind the slower publishes it inherits exactly the
+      staleness that ate a tap on 2026-07-11.
     """
     state = _load_state(brr_dir)
     if not (state.get("token") and state.get("brnrd_url")):
         return
-    # Runners first: its response piggybacks the pending wake request
-    # (#328 tap-to-request), the one dispatch-relevant datum in this tick.
-    # Behind the others, a slow or 502-retrying dashboard PUT stretched the
-    # mirror's staleness to tens of seconds — long enough for a tap racing
-    # its own follow-up message to lose (found live 2026-07-11).
-    _publish_runners(brr_dir, state)
-    # Live runs second, for the same reason runners is first: since #476 its
-    # response piggybacks the account's pending run stops, and a stop is the
-    # most latency-sensitive datum in the tick — the user is watching the run
-    # burn while they wait. Behind the slower publishes it inherits exactly
-    # the staleness that ate a tap on 2026-07-11.
-    _publish_live_runs(brr_dir, inbox_dir, state)
-    _publish_activity(brr_dir, inbox_dir, state)
-    _publish_corpus(brr_dir, state)
-    _publish_quota(brr_dir, state)
-    _publish_pr_review_queue(brr_dir, state)
-    _publish_run_ledger(brr_dir, state)
+    # Resolved once per pass, not once per lane: `publish.layers` is a file
+    # read, and this loop runs every `_DASHBOARD_PUBLISH_INTERVAL_S`.
+    lanes, _slices = _resolve_publish_scopes(_publish_config(brr_dir))
+    if not lanes:
+        return
+    for lane in _PUBLISH_TICK_ORDER:
+        _PUBLISH_LANES[lane](brr_dir, inbox_dir, state, lanes=lanes)
 
 
 def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
@@ -1012,6 +1150,7 @@ def _activity_snapshot(brr_dir: Path, inbox_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
+@_publish_lane("activity")
 def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
@@ -1041,8 +1180,11 @@ _CORPUS_FILE_CAP_BYTES = 256 * 1024
 # never a second system of record — the repo, dominion, and knowledge repos
 # stay the durable copies. Two publish levers bound what leaves the machine:
 #
-# - ``publish.layers`` (``.brr/config``): comma-separated subset of
-#   ``authored,knowledge,runs`` (or ``none``); absent means all three.
+# - ``publish.layers`` (``.brr/config``): names what may be mirrored at all —
+#   any mix of the corpus slices ``authored,knowledge,runs`` and the other
+#   publish lanes, or ``none``; absent means everything. Parsed once by
+#   ``_resolve_publish_scopes`` (see the #417 block above the tick), which is
+#   also what gates the six non-corpus lanes.
 # - ``publish.runs_window_days``: only run nodes younger than this ship
 #   (default 14). ``0`` drops the runs layer, a negative value removes the
 #   bound. The window is derived from the run-directory name
@@ -1076,12 +1218,14 @@ def _run_file_date(path: str) -> datetime | None:
 
 
 def _publish_selection(files: list, cfg: dict, *, now: datetime | None = None) -> list:
-    """Apply the #502 publish bounds to the discovered corpus."""
-    raw_layers = str(cfg.get("publish.layers") or "").strip()
-    if raw_layers:
-        layers = {part.strip() for part in raw_layers.split(",") if part.strip()}
-    else:
-        layers = {"authored", "knowledge", "runs"}
+    """Apply the #502 publish bounds to the discovered corpus.
+
+    The slice set comes from ``_resolve_publish_scopes`` — the same parser the
+    per-lane gate reads — so "which corpus slices may ship" and "may the corpus
+    lane ship at all" cannot answer the operator's config differently (#417).
+    """
+    _lanes, layers = _resolve_publish_scopes(cfg)
+    layers = set(layers)
     try:
         window_days = int(cfg.get("publish.runs_window_days", _RUNS_WINDOW_DAYS_DEFAULT))
     except (TypeError, ValueError):
@@ -1181,7 +1325,8 @@ def _corpus_payload(files: list) -> list[dict]:
     return payload
 
 
-def _publish_corpus(brr_dir: Path, state: dict) -> None:
+@_publish_lane("corpus")
+def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     resolved = _corpus_resolve(brr_dir)
@@ -1593,7 +1738,8 @@ def _gate_health_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return runtime.gate_health_rows(brr_dir)
 
 
-def _publish_quota(brr_dir: Path, state: dict) -> None:
+@_publish_lane("quota")
+def _publish_quota(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
@@ -1663,7 +1809,8 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
     }
 
 
-def _publish_runners(brr_dir: Path, state: dict) -> None:
+@_publish_lane("runners")
+def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     payload = _runners_snapshot(brr_dir)
@@ -1895,6 +2042,7 @@ def _dispatch_run_stops(brr_dir: Path, inbox_dir: Path | None, requests: list) -
         print(f"[brnrd:cloud] stop {run_id} ({stage}) by account owner")
 
 
+@_publish_lane("live_runs")
 def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
@@ -2045,7 +2193,8 @@ def _pr_review_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return prs
 
 
-def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
+@_publish_lane("pr_review_queue")
+def _publish_pr_review_queue(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
@@ -2090,7 +2239,8 @@ def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return list(rows)
 
 
-def _publish_run_ledger(brr_dir: Path, state: dict) -> None:
+@_publish_lane("run_ledger")
+def _publish_run_ledger(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
     try:
