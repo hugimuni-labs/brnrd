@@ -1212,6 +1212,47 @@ def test_hook_passes_colon_subject_form(tmp_path, monkeypatch):
     assert _run_hook(hook_path, msg, tmp_path, cwd=repo).returncode == 0
 
 
+def test_hook_refuses_a_second_close_riding_the_colon_subject(tmp_path, monkeypatch):
+    """``Fix #533: split config and closes #534`` → refused.
+
+    Review find, #657.  The colon allowance exists so a subject can follow the
+    ref — but a subject can carry another close, and that one clears
+    ``_BRR_CLEAN`` at the colon and shuts ``#534`` too.  It is the #413
+    accident's own shape: an unintended close riding a well-formed one, which
+    is the thing this whole predicate exists to stop.  The colon may introduce
+    a subject; it must not introduce another close.
+
+    Driven over the last 300 commit messages with this branch installed: 5
+    refused commits, the same 5, zero new refusals — the rule reaches only a
+    shape the repo has never written.  Distinct from
+    ``test_hook_residual_colon_qualifier_passes_knowingly``: a *qualifier*
+    after the colon is still an accepted residual, because it narrows a close
+    the author meant; a second *close* is a close the author did not.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ensure_run_id_hook(repo)
+    hook_path = repo / ".git" / "hooks" / "commit-msg"
+    monkeypatch.setenv("BRR_RUN_ID", "run-test-657")
+
+    r = _run_hook(
+        hook_path, "Fix #533: split config and closes #534", tmp_path, cwd=repo
+    )
+    assert r.returncode != 0
+    assert "#534" in r.stderr
+    # Both remedies, per the same argument the tail branch rests on.
+    assert "Closes #NNN, #MMM" in r.stderr, r.stderr
+    assert "Fix #NNN: subject" in r.stderr, r.stderr
+
+    # Flush against the colon is the same defect.
+    assert _run_hook(hook_path, "Fix #1:closes #2", tmp_path, cwd=repo).returncode != 0
+
+    # And it must not fire inside a longer word — the reason the pattern keeps
+    # a boundary alternative rather than a bare ``.*``.
+    ok = _run_hook(hook_path, "Fix #1: this disclosed #2 already", tmp_path, cwd=repo)
+    assert ok.returncode == 0, ok.stderr
+
+
 def test_hook_residual_colon_qualifier_passes_knowingly(tmp_path, monkeypatch):
     """``Closes #413: partially`` → **passes**. Stated out loud, not covered.
 
