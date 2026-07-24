@@ -41,6 +41,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import trust
+
 SCHEDULE_FILE = "schedule.md"  # in the dominion
 STATE_DIRNAME = "schedule"  # under the .brr runtime dir
 STATE_FILE = "state.json"
@@ -618,8 +620,9 @@ def lint_schedule(
 # S8's) — a `worktree`-env run can reach this state file directly.
 #
 # State keys (prefixed `_` to distinguish from entry-id records):
-#   _tier_by_entry:   {entry_id: {"tier": ..., "fp": ...}}
-#   _noticed_untiered: [entry_id, ...]  — one-time notice already sent
+#   _tier_by_entry:      {entry_id: {"tier": ..., "fp": ...}}
+#   _noticed_untiered:   [entry_id, ...]  — one-time notice already sent
+#   _tier_grandfathered: true  — the one-time grandfather pass has run
 #
 # **The record has a lifecycle**, which is the whole of the #644 rework:
 #
@@ -627,24 +630,43 @@ def lint_schedule(
 #       that entry's fingerprint.  Not "when the id is new": rewriting an
 #       entry's body leaves the id untouched, and that edit is the exact
 #       escalation the id-set predicate could not see.
+#   grandfathered — once, at the first tick after upgrade, for every entry
+#       present in schedule.md at that moment: stamped `owner`, explicitly.
+#       Those entries predate S8 and there is no evidence to attribute them
+#       with; recording the value *at the moment of consent* is what lets
+#       absence mean something afterwards.
 #   read — only when the recorded fingerprint still matches the entry on
 #       disk.  A drifted fingerprint means the entry changed with no
-#       attributing commit (an operator hand-edit, which is how the
-#       schedule is actually maintained day to day); that falls through to
-#       unrecorded → owner + the one-time notice, which is the right
-#       answer for the operator and a demotion, never an escalation, for
-#       anyone else.
+#       attributing commit, so the record no longer speaks for this text.
 #   pruned — at the fire site, for ids no longer in the schedule at all,
 #       so a deleted entry's tier cannot be inherited by a later entry
 #       that reuses its id, and neither map grows without bound.
 #
-# An entry with no usable record fires as owner (``schedule`` is in
-# _OWNER_SOURCES) with a one-time notice.  The stamp S8 writes into
-# create_event beats that source-based default because trust.resolve_tier
-# prefers the explicit stamp.
+# **Absence fails closed.**  After the grandfather pass, an entry with no
+# usable record fires at ``UNRECORDED_TIER_FLOOR`` (collaborator), with a
+# one-time notice naming it — never at owner.  The old behaviour (fall
+# through to the ``schedule`` entry in trust._OWNER_SOURCES) made *not
+# being attributed* the most authoritative state an entry could be in, so
+# every path that dodged attribution — a run committing its own dominion
+# so the capture net finds a clean tree, a crash before the seam, a future
+# seam nobody thought of — escalated instead of demoting.  The floor is a
+# structural property, not an enumeration of those paths: declining to be
+# attributed can only ever *lower* what an entry may do.
+#
+# The stamp S8 writes into create_event beats the source-based default
+# because trust.resolve_tier prefers the explicit stamp; with the floor,
+# the fire site now always stamps, so _OWNER_SOURCES["schedule"] is no
+# longer reachable for an entry that fires through this path.
 
 _TIER_BY_ENTRY_KEY = "_tier_by_entry"
 _NOTICED_UNTIERED_KEY = "_noticed_untiered"
+_TIER_GRANDFATHERED_KEY = "_tier_grandfathered"
+
+# The tier an entry fires at when nothing is known about who authored it.
+# Named here rather than inlined at the fire site: it is the security
+# property this slice exists for, and F4 on #644 was two comments
+# disagreeing about one.
+UNRECORDED_TIER_FLOOR = trust.COLLABORATOR
 
 
 def entry_fingerprint(entry: ScheduleEntry) -> str:
@@ -685,18 +707,17 @@ def fingerprints_from_text(text: str) -> dict[str, str]:
 def _read_record(state: dict, entry_id: str) -> tuple[str, str] | None:
     """Return ``(tier, fp)`` for *entry_id*, or ``None`` when unrecorded.
 
-    Tolerates the pre-rework record shape (a bare tier string) by reading
-    it as an empty fingerprint — which matches no real entry, so such a
-    record resolves to unrecorded → owner.  That is the safe direction: a
-    record written by the id-set predicate cannot prove *which body* it
-    attributed, so it is not evidence for anything.
+    Only the ``{"tier": ..., "fp": ...}`` shape is a record.  Anything else
+    — a bare string, a truncated dict, hand-written junk — is not evidence
+    about who wrote which body, so it reads as unrecorded and the entry
+    takes the floor.  (There is no compatibility shim for the pre-rework
+    bare-string shape: S8 has never been on ``main``, so no such record
+    exists in the world.)
     """
     tier_map = state.get(_TIER_BY_ENTRY_KEY)
     if not isinstance(tier_map, dict):
         return None
     rec = tier_map.get(entry_id)
-    if isinstance(rec, str):
-        return (rec, "") if rec else None
     if isinstance(rec, dict):
         tier = str(rec.get("tier") or "")
         return (tier, str(rec.get("fp") or "")) if tier else None
@@ -707,10 +728,10 @@ def tier_for_entry(state: dict, entry_id: str, fingerprint: str) -> str | None:
     """Return the attributed tier for *entry_id*, or ``None`` if unusable.
 
     ``None`` means "no run is known to have authored *this* text": the
-    entry predates S8, or it has been edited since it was attributed with
-    no commit to attribute the edit to.  Either way it fires as ``owner``
-    with a one-time notice (the source-based default from
-    ``_OWNER_SOURCES``).
+    entry appeared with no attributing commit, or it has been edited since
+    it was attributed with no commit to attribute the edit to.  Either way
+    the fire site fires it at ``UNRECORDED_TIER_FLOOR`` with a one-time
+    notice — never at owner.
 
     *fingerprint* is required, not optional.  An optional one would let a
     caller silently skip the check that makes the record mean anything,
@@ -753,6 +774,47 @@ def record_entry_tiers(brr_dir: Path, touched: dict[str, str], tier: str) -> Non
         save_state(brr_dir, state)
     except OSError:
         pass
+
+
+def grandfather_entry_tiers(
+    state: dict, fingerprints: dict[str, str]
+) -> list[str] | None:
+    """Stamp every currently-present entry as ``owner``, once.
+
+    Returns the ids stamped (possibly empty — an upgrade onto an empty
+    schedule still closes the window), or ``None`` when the pass has
+    already run and *state* was not touched.
+
+    The migration that makes the floor safe to introduce.  Entries written
+    before S8 have no attributing commit and never will; without this pass
+    the floor would silently demote the operator's whole existing schedule
+    on upgrade, and *with* the old fall-through-to-owner rule absence stays
+    an escalation forever.  So the value is written at the one moment the
+    operator's consent to it is real — the schedule as it stands at
+    upgrade — and recorded explicitly, like every other record.
+
+    Runs on the **first tick after upgrade and no later**, which is why the
+    marker is set even when there is nothing to stamp.  A pass that waited
+    for the first tick that happened to see a schedule would grandfather
+    whatever was written in the meantime — including by a run that declined
+    attribution, which is the exact hole the floor closes.
+
+    Entries that already carry a record are left alone: a run may have
+    finalized between daemon start and this tick, and its attribution is
+    evidence where the grandfather is only a default.
+    """
+    if state.get(_TIER_GRANDFATHERED_KEY):
+        return None
+    tier_map: dict = dict(state.get(_TIER_BY_ENTRY_KEY) or {})
+    stamped: list[str] = []
+    for eid in sorted(fingerprints):  # sorted for deterministic output
+        if eid not in tier_map:
+            tier_map[eid] = {"tier": trust.OWNER, "fp": fingerprints[eid]}
+            stamped.append(eid)
+    if tier_map:
+        state[_TIER_BY_ENTRY_KEY] = tier_map
+    state[_TIER_GRANDFATHERED_KEY] = True
+    return stamped
 
 
 def prune_entry_records(state: dict, present_ids: "set[str] | frozenset[str]") -> bool:

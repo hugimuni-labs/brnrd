@@ -6226,6 +6226,15 @@ def _schedule_enabled(cfg: dict) -> bool:
 # (schedule._TIER_BY_ENTRY_KEY), so it is a daemon-observed fact derived
 # from git history rather than a self-attestation by the run.
 #
+# Attribution is best-effort by construction — a commit message can be
+# declined, a seam can be dodged, a crash can land between the write and
+# the record.  What makes that survivable is the *other* half, at the fire
+# site: an entry with no usable record fires at
+# schedule.UNRECORDED_TIER_FLOOR, never at owner.  Attribution can only
+# ever raise an entry from the floor to the tier of a run demonstrably
+# seen writing it; failing to attribute costs authority instead of
+# granting it.  Read the two together — neither is the guarantee alone.
+#
 # NOTE — forgeability limit (§2.3 clause 1, S7's scope): a collaborator
 # run in *worktree* env can reach .brr/ (the shared runtime dir that holds
 # the schedule state file) because the dominion worktree mount includes it.
@@ -6429,10 +6438,32 @@ def _fire_due_schedules(
             if entries:
                 dom = candidate.path
                 break
+        loaded_state = schedule_mod.load_state(brr_dir)
+        # #413 §7 S8 — the one-time grandfather pass, deliberately *before*
+        # the early return.  It has to run on the first tick after upgrade
+        # whether or not there is a schedule to stamp: the marker it sets is
+        # what makes an unrecorded entry mean "fires at the floor" from here
+        # on.  Deferred to the first tick that happened to see a schedule, it
+        # would grandfather whatever appeared in between — including an entry
+        # written by a run that declined attribution, which is precisely the
+        # escalation the floor exists to close.
+        _grandfathered = schedule_mod.grandfather_entry_tiers(
+            loaded_state,
+            {e.id: schedule_mod.entry_fingerprint(e) for e in entries},
+        )
+        if _grandfathered is not None:
+            schedule_mod.save_state(brr_dir, loaded_state)
+            if _grandfathered:
+                print(
+                    f"[brnrd] schedule: recorded {len(_grandfathered)} existing "
+                    + ("entry" if len(_grandfathered) == 1 else "entries")
+                    + " as owner (one-time); an entry with no recorded author "
+                    f"now fires at {schedule_mod.UNRECORDED_TIER_FLOOR} "
+                    "(#413 §7 S8)"
+                )
         if dom is None or not entries:
             return
         now = time.time()
-        loaded_state = schedule_mod.load_state(brr_dir)
         signals = schedule_mod.load_signals(brr_dir)
         state = schedule_mod.apply_reset_signals(entries, loaded_state, signals, now)
         grace = float(
@@ -6532,9 +6563,13 @@ def _fire_due_schedules(
         # #413 §7 S8: carry forward tier-attribution metadata that
         # due_entries prunes (it only keeps entry-id records, not these
         # underscore-prefixed daemon-managed keys).
+        # The grandfather marker rides here too, and it is the load-bearing
+        # one: drop it and the pass re-runs every tick, re-stamping `owner`
+        # onto every entry that has since been written without attribution.
         for _meta_key in (
             schedule_mod._TIER_BY_ENTRY_KEY,
             schedule_mod._NOTICED_UNTIERED_KEY,
+            schedule_mod._TIER_GRANDFATHERED_KEY,
         ):
             if _meta_key in loaded_state:
                 new_state[_meta_key] = loaded_state[_meta_key]
@@ -6561,26 +6596,33 @@ def _fire_due_schedules(
             conv = entry.conversation_key or f"schedule:{entry.id}"
             # S8: stamp the attributed tier onto the event so resolve_tier
             # returns the authoring tier rather than the owner default from
-            # _OWNER_SOURCES["schedule"].  When no record exists the event
-            # carries no stamp → falls back to owner via source, per the
-            # acceptance criteria for pre-existing / pre-S8 entries.
+            # _OWNER_SOURCES["schedule"].  Every entry that fires through
+            # here is stamped — including the unattributed ones, which take
+            # the floor.  Leaving them unstamped is what made *absence* the
+            # most authoritative state an entry could be in.
             #
             # The record is only honoured while its fingerprint still
             # matches what is on disk.  A drifted fingerprint means this
             # text was never attributed to anyone — an operator hand-edit,
             # which is how the schedule is actually maintained day to day,
             # leaves no commit to attribute — so it takes the same
-            # unrecorded path: owner, with the one-time notice.
+            # unrecorded path: the floor, with the one-time notice.  For the
+            # operator that is a demotion they can see and undo (the next
+            # owner-tier run's capture net commits the hand-edit and
+            # attributes it); the alternative was every dodge of the
+            # attribution seam, present and future, resolving to owner.
             entry_tier = schedule_mod.tier_for_entry(
                 new_state, entry.id, _fingerprints.get(entry.id, ""),
             )
-            if entry_tier is None and entry.id not in _noticed_untiered:
-                print(
-                    f"[brnrd] schedule: {entry.id} has no tier record — "
-                    "fires as owner (pre-existing entry; #413 §7 S8)"
-                )
-                _noticed_untiered.append(entry.id)
-                new_state[schedule_mod._NOTICED_UNTIERED_KEY] = _noticed_untiered
+            if entry_tier is None:
+                entry_tier = schedule_mod.UNRECORDED_TIER_FLOOR
+                if entry.id not in _noticed_untiered:
+                    print(
+                        f"[brnrd] schedule: {entry.id} has no recorded author "
+                        f"— fires at {entry_tier}, not owner (#413 §7 S8)"
+                    )
+                    _noticed_untiered.append(entry.id)
+                    new_state[schedule_mod._NOTICED_UNTIERED_KEY] = _noticed_untiered
             event_meta: dict[str, object] = dict(
                 schedule_id=entry.id,
                 conversation_key=conv,
@@ -6590,8 +6632,7 @@ def _fire_due_schedules(
                     else _repo_label(repo_root, {}, cfg)
                 ),
             )
-            if entry_tier is not None:
-                event_meta["trust_tier"] = entry_tier
+            event_meta["trust_tier"] = entry_tier
             protocol.create_event(inbox_dir, "schedule", body, **event_meta)
             print(f"[brnrd] schedule: fired {entry.id}")
         if new_state != loaded_state:

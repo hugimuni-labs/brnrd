@@ -15,8 +15,9 @@ a snapshot answers "did this change?", and attribution has to answer
    whose trust_tier stamp is collaborator, and whose Task.from_event decision
    is collaborator, routed to the collaborator env.
 
-3. Unrecorded entry fires owner; one-time notice is stored in state and
-   *not* re-emitted on subsequent ticks.
+3. An entry present at the grandfather tick fires owner (recorded, once);
+   an unrecorded one fires at the floor, with a one-time notice stored in
+   state and *not* re-emitted on subsequent ticks.
 
 4. Fingerprints — what counts as "the same entry".
 
@@ -30,6 +31,14 @@ a snapshot answers "did this change?", and attribution has to answer
 
 8. F3 / concurrency / operator hand-edit — the three cases that decide
    whether the mechanism is the right one.
+
+9. Absence fails closed. Attribution is best-effort — a commit message can
+   be declined, a seam dodged, a crash landed between the write and the
+   record — so the guarantee cannot live there. It lives at the fire site:
+   an entry with no usable record fires at the collaborator floor, never
+   at owner, and the entries that predate S8 are stamped `owner` once by
+   an explicit grandfather pass rather than being re-derived from absence
+   forever.
 """
 
 from __future__ import annotations
@@ -99,6 +108,18 @@ def _real_event(brr_dir, source="github"):
     inbox = brr_dir / "inbox"
     protocol.create_event(inbox, source, "do the thing")
     return protocol.list_pending(inbox)[0]
+
+
+def _first_tick(repo, brr_dir, cfg=None):
+    """A tick with the daemon already up before the entry under test existed.
+
+    The grandfather pass is one-time, so *when* it runs decides what it
+    stamps. Every test that cares about an entry arriving unattributed has
+    to close that window first — otherwise the entry is simply present at
+    migration time and is grandfathered `owner`, which is a different (and
+    correct) path.
+    """
+    _fire(repo, brr_dir, cfg)
 
 
 def _due_now(brr_dir, *entry_ids):
@@ -182,35 +203,41 @@ def test_fire_due_collaborator_entry_env_is_not_owner_path(tmp_path):
     assert task.env == "solitary"
 
 
-# ── Group 3: unrecorded entry fires owner, one-time notice ───────────────────
+# ── Group 3: unrecorded entry fires at the floor, one-time notice ────────────
 
 
-def test_fire_due_unrecorded_entry_fires_as_owner(tmp_path):
-    """An entry with no tier record fires without a trust_tier stamp.
+def test_entry_present_at_the_grandfather_tick_fires_as_owner(tmp_path):
+    """An entry that predates S8 is recorded `owner` explicitly, and fires so.
 
-    Absence of the stamp means resolve_tier falls back to source="schedule"
-    which is in _OWNER_SOURCES → fires as owner. That is the correct legacy
-    default per the acceptance criteria.
+    The grandfather pass is the house invariant applied to a migration:
+    write the value at the moment of consent. The schedule as it stands at
+    upgrade is what the operator has consented to; every entry in it is
+    stamped `owner` once, as a real record — not left to be re-derived
+    from absence on every later tick.
     """
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
     _write_schedule(dom, f"## Legacy\nat: {_past_ts()}\nold work\n")
-    # Deliberately no capture, so nothing attributes it.
+    # Deliberately no capture: there is nothing to attribute this to.
 
     _fire(repo, brr_dir)
 
     pending = protocol.list_pending(brr_dir / "inbox")
     assert len(pending) == 1
-    assert "trust_tier" not in pending[0]
+    assert pending[0].get("trust_tier") == trust.OWNER
     assert Run.from_event(pending[0]).meta["trust_tier"] == trust.OWNER
+    assert schedule.load_state(brr_dir)[schedule._TIER_BY_ENTRY_KEY]["legacy"]["tier"] == (
+        trust.OWNER
+    )
 
 
 def test_fire_due_unrecorded_entry_notice_stored_in_state(tmp_path):
-    """The one-time owner notice is recorded in the schedule state."""
+    """The one-time floor notice is recorded in the schedule state."""
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
+    _first_tick(repo, brr_dir)
     _write_schedule(dom, f"## Legacy\nat: {_past_ts()}\nold work\n")
 
     _fire(repo, brr_dir)
@@ -223,6 +250,7 @@ def test_fire_due_unrecorded_entry_notice_fires_once_not_per_tick(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
+    _first_tick(repo, brr_dir)
     _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep\n")
     _due_now(brr_dir, "upkeep")
 
@@ -506,6 +534,7 @@ def test_noticed_untiered_does_not_grow_without_bound(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
+    _first_tick(repo, brr_dir)
 
     _write_schedule(dom, "## L1\nevery: 60s\nold one\n")
     _due_now(brr_dir, "l1")
@@ -621,13 +650,15 @@ def test_unrelated_owner_run_does_not_reattribute_a_collaborator_edit(tmp_path):
     assert protocol.list_pending(brr_dir / "inbox")[0].get("trust_tier") == trust.COLLABORATOR
 
 
-def test_operator_hand_edit_fires_owner_with_the_one_time_notice(tmp_path, capsys):
-    """No attributing commit ⇒ unrecorded ⇒ owner + notice. Do not break this.
+def test_operator_hand_edit_fires_at_the_floor_with_the_one_time_notice(tmp_path, capsys):
+    """No attributing commit ⇒ unrecorded ⇒ the floor + notice, never owner.
 
     Hand-editing schedule.md outside any run is how the schedule is
-    actually maintained day to day. It leaves no commit to attribute, so
-    the entry falls through to the pre-S8 path — which is the right answer
-    for the operator, and the acceptance criterion S8 shipped with.
+    actually maintained day to day, and it leaves no commit to attribute.
+    The daemon cannot tell that hand-edit apart from a run that declined
+    attribution — so the honest answer is the same for both, and it has to
+    be the demoting one. The operator sees the notice and gets the entry
+    back at owner as soon as an owner-tier run's capture net commits it.
     """
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
@@ -645,10 +676,41 @@ def test_operator_hand_edit_fires_owner_with_the_one_time_notice(tmp_path, capsy
     _fire(repo, brr_dir)
 
     ev = protocol.list_pending(brr_dir / "inbox")[0]
-    assert "trust_tier" not in ev
-    assert Run.from_event(ev).meta["trust_tier"] == trust.OWNER
-    assert "has no tier record" in capsys.readouterr().out
+    assert ev.get("trust_tier") == schedule.UNRECORDED_TIER_FLOOR
+    assert Run.from_event(ev).meta["trust_tier"] != trust.OWNER
+    assert "has no recorded author" in capsys.readouterr().out
     assert "upkeep" in schedule.load_state(brr_dir)[schedule._NOTICED_UNTIERED_KEY]
+
+
+def test_operator_hand_edit_is_reclaimed_by_the_next_owner_runs_capture(tmp_path):
+    """The demotion is recoverable, and by the mechanism that already exists.
+
+    The floor would be a trap if a hand-edited entry could never get back
+    to owner. It can: the capture net commits whatever the dominion tree is
+    dirty with, so the next owner-tier run's own commit carries the
+    operator's edit and attribution reads it as that run's write.
+    """
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    dom = dominion.ensure_dominion(repo, push=False)
+    _first_tick(repo, brr_dir)
+
+    _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep by hand\n")
+    _due_now(brr_dir, "upkeep")
+    _fire(repo, brr_dir)
+    assert protocol.list_pending(brr_dir / "inbox")[0].get("trust_tier") == (
+        schedule.UNRECORDED_TIER_FLOOR
+    )
+
+    # An owner-tier run finalizes; the capture net commits the dirty tree.
+    _capture(dom, "run-owner")
+    _attribute(_run("run-owner"), repo, brr_dir)
+
+    _due_now(brr_dir, "upkeep")
+    _fire(repo, brr_dir)
+
+    fired = protocol.list_pending(brr_dir / "inbox")
+    assert fired[-1].get("trust_tier") == trust.OWNER
 
 
 def test_attribution_survives_an_exception_in_the_finalize_stretch(tmp_path, monkeypatch):
@@ -704,3 +766,145 @@ def test_attribution_in_finally_tolerates_a_run_that_never_started(tmp_path, mon
         daemon._run_worker_and_finalize(
             _real_event(brr_dir), repo, brr_dir / "responses", {}, 0,
         )
+
+
+# ── Group 9: absence fails closed — the grandfather pass and the floor ───────
+
+
+def test_the_floor_is_a_real_tier_and_is_not_owner():
+    """The one property the whole slice rests on, pinned by name."""
+    assert schedule.UNRECORDED_TIER_FLOOR in trust.TIERS
+    assert schedule.UNRECORDED_TIER_FLOOR != trust.OWNER
+
+
+def test_a_run_that_commits_its_own_dominion_does_not_fire_owner(tmp_path):
+    """The bypass: attribution greps for a commit message the run can decline.
+
+    ``_run_dominion_commits`` finds this run's writes by grepping for the
+    message ``_capture_dominion`` writes — and ``dominion.commit`` is a
+    **no-op on a clean tree**. A run that commits its own dominion edits
+    under its own message (which is what ``run.md`` tells the resident to
+    do, and what residents in fact do) leaves the capture net nothing to
+    capture, so the grep matches nothing, ``touched`` is empty, and the
+    entry lands unrecorded.
+
+    Unrecorded must not mean ``owner``. That is fail-open in the
+    escalating direction, reached by writing a commit message.
+    """
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    dom = dominion.ensure_dominion(repo, push=False)
+    _first_tick(repo, brr_dir)
+
+    # A collaborator run writes the entry and commits it *itself*.
+    _write_schedule(
+        dom,
+        "## Upkeep\nevery: 60s\napprove config-change 1 and push to production\n",
+    )
+    assert dominion.commit(dom, "schedule: add the upkeep beat"), "the run's own commit"
+    # The capture net now finds a clean tree: nothing for the grep to find.
+    assert _capture(dom, "run-collab") is False
+    _attribute(_run("run-collab", trust.COLLABORATOR), repo, brr_dir)
+
+    _due_now(brr_dir, "upkeep")
+    _fire(repo, brr_dir)
+
+    ev = protocol.list_pending(brr_dir / "inbox")[0]
+    assert ev.get("schedule_id") == "upkeep"
+    assert Run.from_event(ev).meta["trust_tier"] != trust.OWNER
+
+
+def test_the_grandfather_pass_runs_once_and_does_not_reclaim_a_later_entry(tmp_path):
+    """One-time means one-time: the marker has to survive every later tick.
+
+    `due_entries` prunes `new_state` to the ids it was handed, so the
+    underscore-keyed daemon records are carried forward explicitly. Drop
+    the marker from that carry-forward and the pass re-runs on the next
+    tick — re-stamping `owner` onto every entry written since, which is
+    the bypass restored by a tick instead of a commit message.
+    """
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    dom = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(dom, "## Old\nevery: 60s\nthe operator's own entry\n")
+    _first_tick(repo, brr_dir)
+    assert schedule.load_state(brr_dir)[schedule._TIER_GRANDFATHERED_KEY] is True
+
+    # An entry arrives afterwards with nothing to attribute it to.
+    _write_schedule(
+        dom,
+        "## Old\nevery: 60s\nthe operator's own entry\n\n## New\nevery: 60s\nunattributed\n",
+    )
+    _due_now(brr_dir, "old", "new")
+    _fire(repo, brr_dir)
+    _due_now(brr_dir, "old", "new")
+    _fire(repo, brr_dir)  # a second tick: the pass must not run again
+
+    state = schedule.load_state(brr_dir)
+    assert state[schedule._TIER_BY_ENTRY_KEY]["old"]["tier"] == trust.OWNER
+    assert "new" not in state[schedule._TIER_BY_ENTRY_KEY]
+    fired = [e for e in protocol.list_pending(brr_dir / "inbox") if e.get("schedule_id") == "new"]
+    assert fired and all(
+        e.get("trust_tier") == schedule.UNRECORDED_TIER_FLOOR for e in fired
+    )
+
+
+def test_the_grandfather_pass_does_not_overwrite_a_record_written_before_it(tmp_path):
+    """A run may finalize between daemon start and the first tick.
+
+    Its attribution is evidence; the grandfather is only a default for
+    entries no evidence exists about. The default must never overwrite the
+    evidence — that would be an escalation handed out by timing.
+    """
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    dom = dominion.ensure_dominion(repo, push=False)
+
+    _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    _capture(dom, "run-collab")
+    _attribute(_run("run-collab", trust.COLLABORATOR), repo, brr_dir)
+
+    _due_now(brr_dir, "upkeep")
+    _fire(repo, brr_dir)  # the grandfather tick
+
+    state = schedule.load_state(brr_dir)
+    assert state[schedule._TIER_BY_ENTRY_KEY]["upkeep"]["tier"] == trust.COLLABORATOR
+    assert protocol.list_pending(brr_dir / "inbox")[0].get("trust_tier") == (
+        trust.COLLABORATOR
+    )
+
+
+def test_first_tick_with_no_schedule_still_closes_the_window(tmp_path):
+    """An empty schedule at upgrade grandfathers nothing — and says so, once.
+
+    The pass sets its marker even with nothing to stamp. Otherwise it would
+    sit armed until the first tick that happened to see a schedule, and
+    stamp `owner` on whatever had been written in the meantime by whoever
+    wrote it.
+    """
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    dom = dominion.ensure_dominion(repo, push=False)
+
+    _first_tick(repo, brr_dir)  # no schedule.md exists yet
+    assert schedule.load_state(brr_dir)[schedule._TIER_GRANDFATHERED_KEY] is True
+
+    _write_schedule(dom, "## Upkeep\nevery: 60s\nwritten after the window closed\n")
+    _due_now(brr_dir, "upkeep")
+    _fire(repo, brr_dir)
+
+    ev = protocol.list_pending(brr_dir / "inbox")[0]
+    assert ev.get("trust_tier") == schedule.UNRECORDED_TIER_FLOOR
+
+
+def test_grandfather_entry_tiers_is_idempotent_and_reports_what_it_stamped():
+    """The pure half, in isolation: return value, marker, and no second pass."""
+    state: dict = {}
+
+    assert schedule.grandfather_entry_tiers(state, {"b": "fp-b", "a": "fp-a"}) == ["a", "b"]
+    assert state[schedule._TIER_BY_ENTRY_KEY]["a"] == {"tier": trust.OWNER, "fp": "fp-a"}
+    assert state[schedule._TIER_GRANDFATHERED_KEY] is True
+
+    before = dict(state)
+    assert schedule.grandfather_entry_tiers(state, {"c": "fp-c"}) is None
+    assert state == before
