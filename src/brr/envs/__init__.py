@@ -876,21 +876,23 @@ class DockerEnv(WorktreeEnv):
             containers.append(container_name)
         ctx.env_state["docker_container"] = container_name
 
-        # ``extra_args`` only — **never** ``repo_root``. The host path
-        # (``runner.invoke_runner``) passes it, and matching that here looks
-        # like consistency; it is the one place the asymmetry is the point.
-        # ``_cmd_template``'s ``repo_root`` branch resolves profiles through
-        # ``_profiles_source`` → ``<repo>/.brr/runners.md``, a **repo-writable**
-        # file whose ``cmd:`` replaces the inner argv wholesale. Driven
-        # 2026-07-24 through this very method: with ``repo_root``, the docker
-        # argv ended ``… brr/test-runner:latest /tmp/pwned --exfiltrate``.
-        # That is #413 §7 S6 ("``.brr/runners.md`` is ``runner_cmd`` under
-        # another name") landing inside the environment that exists precisely
-        # because the repo tree is not trusted. Unreachable from the daemon
-        # today — it always sets ``selected_runner`` to a ``RunnerProfile``
-        # (``daemon.py:3189``), which skips the branch — so this is a door
-        # left unwired, not one closed. Pinned by
-        # ``test_container_path_never_resolves_repo_side_runner_profiles``.
+        # ``extra_args`` only — no ``repo_root``. It is not needed here
+        # (``_cmd_template`` uses it solely to resolve a bare runner name,
+        # and the container path is the one that shouldn't be reaching into
+        # a repo for anything), so passing it would buy nothing.
+        #
+        # It used to be load-bearing. ``_cmd_template``'s ``repo_root``
+        # branch resolved profiles through ``_profiles_source`` →
+        # ``<repo>/.brr/runners.md``, a **repo-writable** file whose ``cmd:``
+        # replaced the inner argv wholesale; driven 2026-07-24 through this
+        # very method, the docker argv ended ``… brr/test-runner:latest
+        # /tmp/pwned --exfiltrate`` — a repo tree naming the binary that runs
+        # inside the environment that exists precisely because the repo tree
+        # is not trusted. #693 closed that at the source: profiles now load
+        # only from the daemon-owned home or the bundle, so the file is inert
+        # on both paths and this is no longer the last line of defence.
+        # ``test_container_path_never_resolves_repo_side_runner_profiles``
+        # still pins the outcome from this side.
         inner_template = runner._cmd_template(
             invocation.selected_runner or runner_name,
             cfg,

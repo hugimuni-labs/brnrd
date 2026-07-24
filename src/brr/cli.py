@@ -206,8 +206,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = config_sub.add_parser(
         "promote",
         help="move security-defining keys (runner_cmd, trust.*, docker.*, "
-             "solitary.*, environment/env/default_env) out of the "
-             "repo-writable .brr/config into the daemon-owned security.config",
+             "solitary.*, environment/env/default_env) and the runner "
+             "profile catalog (.brr/runners.md) out of the repo-writable "
+             ".brr/ into the daemon-owned home",
     )
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan; change nothing")
@@ -1449,16 +1450,23 @@ def cmd_config_promote(args):
     carries any already sitting there into the daemon-owned
     ``security.config``, once. Always prints the plan before touching
     anything; ``--dry-run`` stops there.
+
+    Issue #693 added the *file* half: a repo-side ``.brr/runners.md``
+    declares runner profiles, and a profile carries ``cmd:`` — the argv
+    brnrd executes — so it joined the same domain and moves in the same
+    command. One verb, because the two are one migration from the
+    operator's side: "the things my repo used to decide about execution,
+    moved to where only the daemon can write them."
     """
     from . import config as conf
 
     repo_root = _repo_root()
     plan = conf.plan_promote(repo_root)
 
-    if not plan.moves:
+    if plan.is_empty:
         print(
-            "[brnrd config promote] no security-defining keys in "
-            ".brr/config — nothing to do"
+            "[brnrd config promote] no security-defining keys or runner "
+            "profile file in .brr/ — nothing to do"
         )
         return 0
 
@@ -1469,10 +1477,11 @@ def cmd_config_promote(args):
         )
         return 2
 
-    print(
-        f"[brnrd config promote] moving {len(plan.moves)} key(s) from "
-        f".brr/config to {plan.security_path}:"
-    )
+    if plan.moves:
+        print(
+            f"[brnrd config promote] moving {len(plan.moves)} key(s) from "
+            f".brr/config to {plan.security_path}:"
+        )
     for key in sorted(plan.moves):
         if key in plan.conflicts:
             old, new = plan.conflicts[key]
@@ -1485,10 +1494,24 @@ def cmd_config_promote(args):
             tag = ""
         print(f"  {key}={plan.moves[key]!r}{tag}")
 
-    if plan.conflicts and not args.force:
+    if plan.profiles_move is not None:
+        source, dest = plan.profiles_move
+        if plan.profiles_conflict:
+            tag = (
+                "  (--force: replaces the existing home copy)"
+                if args.force
+                else "  (CONFLICTS with the existing home copy — needs --force)"
+            )
+        else:
+            tag = ""
+        print("[brnrd config promote] moving runner profiles:")
+        print(f"  {source} -> {dest}{tag}")
+
+    if (plan.conflicts or plan.profiles_conflict) and not args.force:
         print(
             "[brnrd config promote] refusing to overwrite differing "
-            "security.config value(s) without --force"
+            "security.config value(s) or an existing home runners.md "
+            "without --force"
         )
         return 2
 
@@ -1502,9 +1525,14 @@ def cmd_config_promote(args):
         print(f"[brnrd config promote] {exc}")
         return 2
 
+    done = []
+    if plan.moves:
+        done.append(f"{len(plan.moves)} promoted key(s)")
+    if plan.profiles_move is not None:
+        done.append("the runner profile catalog")
     print(
-        f"[brnrd config promote] done — {plan.security_path} holds "
-        f"{len(plan.moves)} promoted key(s), mode 0600"
+        f"[brnrd config promote] done — {plan.security_path.parent} holds "
+        f"{' and '.join(done)}, mode 0600"
     )
     return 0
 

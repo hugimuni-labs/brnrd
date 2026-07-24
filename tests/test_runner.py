@@ -945,10 +945,19 @@ def test_catalog_consumers_see_same_row_names(tmp_path, monkeypatch):
     assert catalog_names == rendered_names
 
 
-def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
+def test_home_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
+    """A custom profile catalog still wins over the bundled one — from the
+    daemon-owned home, which is where it lives since #693."""
+    from brr import config as conf
+
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+    home = tmp_path / "account-home"
+    home.mkdir()
     (tmp_path / ".brr").mkdir()
-    (tmp_path / ".brr" / "config").write_text("runner=local-agent\n")
-    (tmp_path / ".brr" / "runners.md").write_text(
+    (tmp_path / ".brr" / "config").write_text(
+        f"runner=local-agent\nhome.path={home}\n"
+    )
+    (home / conf.PROFILES_FILENAME).write_text(
         "---\n"
         "local-agent:\n"
         "  binary: local-agent\n"
@@ -957,7 +966,7 @@ def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     # Simulate an earlier bundled-profile read in the same daemon
-    # process. A project-owned profile must still get its own cache key.
+    # process. A home-owned profile must still get its own cache key.
     runner_mod._profiles_cache = {"codex": {"cmd": "codex exec"}}
     runner_mod._profiles_cache_key = "bundled:runners.md"
     monkeypatch.setattr(
@@ -1358,13 +1367,24 @@ class TestInvocationTracing:
         The probe cache is cleared first so this stays deterministic under
         `-k` subsets, standalone runs, and full runs alike — the sibling
         invoke-path tests were green for months only because earlier tests
-        happened to warm that cache. The local `.brr` exists so profile-source
-        resolution needs no `git rev-parse` child either.
+        happened to warm that cache.
+
+        Since #693 the profile catalog loads from the daemon-owned account
+        home, and *locating* that home costs `account.resolve_context` — 3-4
+        `git` children, once per (repo root, repo config) per process, cached
+        in `config._SECURITY_PATH_CACHE` thereafter. That is a once-per-process
+        cost, not the per-invocation leak this test exists to catch, and every
+        real caller has already paid it before invoking: selection resolves a
+        profile first (`daemon.py` hands `invoke_runner` a `RunnerProfile`).
+        So the source is warmed here, *outside* the assertion window, in the
+        same order production warms it. The assertion is unchanged and still
+        goes red for anything born inside the invocation itself.
         """
         from brr import runner_cores
 
         runner_cores.probe_shell_models.cache_clear()
         (tmp_path / ".brr").mkdir()
+        runner_mod._load_profiles(tmp_path)  # warm, as selection does
         calls = []
 
         def _fake_popen(*_args, **kwargs):
@@ -1979,15 +1999,24 @@ class TestDeclaredCmdOnlyRunnerEndToEnd:
     def _declare(self, repo_root, monkeypatch, cmd):
         import shlex as _shlex
 
+        from brr import config as conf
+
+        # #693: a declared profile carries `cmd:`, so its catalog lives in
+        # the daemon-owned account home, never in the repo tree. `home.path`
+        # pins that home deterministically for the test.
+        monkeypatch.delenv("BRNRD_HOME", raising=False)
         brr_dir = repo_root / ".brr"
         brr_dir.mkdir(exist_ok=True)
+        home = repo_root / "account-home"
+        home.mkdir(exist_ok=True)
+        conf.write_config(repo_root, {"home.path": str(home)})
         quoted = " ".join(_shlex.quote(part) for part in cmd)
-        (brr_dir / "runners.md").write_text(
+        (home / conf.PROFILES_FILENAME).write_text(
             f"---\nscript-runner:\n  cmd: '{quoted}'\n---\n",
             encoding="utf-8",
         )
-        # Force a reload from this repo's runners.md (monkeypatch restores
-        # the original cache afterwards).
+        # Force a reload from that file (monkeypatch restores the original
+        # cache afterwards).
         monkeypatch.setattr(runner_mod, "_profiles_cache", None)
         monkeypatch.setattr(runner_mod, "_profiles_cache_key", None)
 
