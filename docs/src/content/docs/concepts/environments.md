@@ -16,7 +16,9 @@ different kinds of friction; none is a cage for a hostile agent.
 | `worktree` | A separate worktree and branch. It still shares `.git`, credentials, network, and the host filesystem. | You want code runs kept off the main working tree. |
 | `docker` | Dependencies and network; host-file visibility is narrowed to the repo and mounted credential paths. The repo is read-write, credentials cross in, and network is on by default. | You want a clean toolchain or network control as defense in depth. |
 
-Select the mode in `.brr/config`:
+Select the mode in `security.config` (the daemon-owned file in the brnrd
+account home, typically
+`~/.local/state/brnrd/<account>/home/security.config`):
 
 ```ini
 environment=worktree
@@ -29,6 +31,11 @@ environment=docker
 docker.image=your-runner-image:tag
 docker.network=none
 ```
+
+`environment` and `docker.*` are security keys — they are ignored if placed in
+`.brr/config`. `brnrd init` writes them to the right place automatically.
+For an existing install that has them in `.brr/config`, run
+`brnrd config promote` to migrate them.
 
 ## Durability
 
@@ -66,7 +73,9 @@ executes with the same authority as your own. Three tiers:
 An event's own `environment` key can never lift an untrusted event out of its
 tier: the tier wins.
 
-Config keys (in `.brr/config`):
+Config keys — these are security keys and belong in `security.config`
+(daemon-owned, not repo-writable). Use `brnrd config promote` to migrate
+any that ended up in `.brr/config`:
 
 ```
 trust.collaborator_env=solitary   # optional: tighten the collaborator env

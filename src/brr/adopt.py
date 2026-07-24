@@ -261,9 +261,19 @@ def _init_auto(
     print(f"[brnrd] runner: {runner_name}")
 
     if cfg_overrides:
-        cfg = conf.load_config(repo_root)
-        cfg.update(cfg_overrides)
-        conf.write_config(repo_root, cfg)
+        # Split by trust domain (issue #533 / #413 §7 S4): security keys
+        # (environment, docker.*, trust.*, ...) go to the daemon-owned
+        # security.config; everything else stays in .brr/config.
+        sec_keys = {k: v for k, v in cfg_overrides.items() if conf.is_security_key(k)}
+        repo_keys = {k: v for k, v in cfg_overrides.items() if not conf.is_security_key(k)}
+        if repo_keys:
+            cfg = conf.load_config(repo_root)
+            cfg.update(repo_keys)
+            conf.write_config(repo_root, cfg)
+        if sec_keys:
+            written = conf.write_security_config(repo_root, sec_keys)
+            if written:
+                print(f"[brnrd] security config: {written}")
 
     # D2: the adopter's knowledge shape is *asked*, not defaulted — and it is
     # asked *before* the contract is written, so setup authors the shape the
@@ -518,7 +528,11 @@ def _setup_brr_dir(repo_root: Path) -> None:
 
         conf.write_config(repo_root, {
             "runner": "auto",
-            "environment": "auto",
+            # "environment" is a security key (issue #533) — omitted here so
+            # it never lands in the repo-writable domain that load_config
+            # ignores.  The default behaviour (auto → worktree when no docker
+            # image is configured) is the fall-through; callers that need a
+            # concrete env write it via conf.write_security_config instead.
             "response_retries": 1,
             "dominion.enabled": True,
             "dominion.branch": dominion.DEFAULT_BRANCH,
