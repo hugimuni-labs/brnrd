@@ -57,6 +57,7 @@ from . import branching
 from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
+from . import card
 from . import dominion
 from . import envs
 from . import facets
@@ -6099,24 +6100,18 @@ def _card_now_projection(body: str) -> str:
     """Project a sectioned run body onto the compact live card.
 
     Existing one-note cards remain valid. A sectioned body exposes only its
-    ``## Now`` section; the rest belongs to the permanent runfile, not the
+    ``Now`` section; the rest belongs to the permanent runfile, not the
     cramped live status card.
+
+    The rule itself lives in :mod:`brr.card` — shared with ``prompts`` and
+    ``hooks`` since #722, when three hand-copies drifted into an outage. This
+    is the copy that reaches the wire, so it is the one that passes a *limit*:
+    ``card_text`` is declared ``max_length=4096``, and a projection over that
+    422s the entire live-runs PUT, darkening every run on the daemon rather
+    than only the one whose card overflowed.
     """
 
-    lines = body.splitlines()
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if line.strip().casefold() == "## now":
-            start = index + 1
-            break
-    if start is None:
-        return body
-    projected: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
-            break
-        projected.append(line)
-    return "\n".join(projected).strip()
+    return card.now_projection(body, limit=card.CARD_TEXT_MAX_CHARS)
 
 
 _MIRROR_CARD_GATES = ("telegram",)
@@ -6159,7 +6154,13 @@ def _emit_mirror_cards(
         mirrors = card_state.setdefault("mirrors", {})
         if not isinstance(mirrors, dict):  # pragma: no cover - state abuse
             return
-        narration = str(card_state.get("projection") or card_state.get("last") or "")
+        # `last` is the *whole* card, so this fallback is the same fail-open
+        # #722 fixed on the main publish path: an empty projection sends the
+        # entire body into a correspondent's thread. Project the fallback too
+        # rather than trusting that `projection` is always populated first.
+        narration = str(card_state.get("projection") or "")
+        if not narration:
+            narration = _card_now_projection(str(card_state.get("last") or ""))
         seen: set[str] = set()
         for ev in protocol.list_pending(inbox_dir):
             eid = str(ev.get("id") or "")

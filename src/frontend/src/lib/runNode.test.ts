@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
 	bodySection,
 	dispatchEdges,
 	frameFields,
 	frontmatterDocument,
+	hasSectionsBeyondNow,
 	messageInstant,
 	messageTarget,
 	messageTone,
@@ -260,10 +262,55 @@ test('nowProjection mirrors the daemon card projection, including its fallback',
 	assert.equal(nowProjection('Plain legacy note'), 'Plain legacy note');
 	assert.equal(nowProjection(''), '');
 	assert.equal(nowProjection('## NOW\nx\n'), 'x');
-	// A double-spaced heading is not a match — on this side or the Python one
-	// (`line.strip().casefold() == "## now"` leaves the inner space too), so
-	// the whole body is the now. Pinned because the two must agree even here.
-	assert.equal(nowProjection('##  now\nx'), '##  now\nx');
+	// A double-spaced heading used to be pinned here as a *miss* on both sides,
+	// because both matched the anchor line as a literal string. Since #722 the
+	// anchor is a pattern (`#{1,6}\s*now\b`) and the inner space is tolerated —
+	// the pin flipped deliberately. It was never a property worth preserving:
+	// it existed only because two hand-copies happened to be wrong the same way.
+	assert.equal(nowProjection('##  now\nx'), 'x');
+});
+
+// The contract both languages answer to. Adding a case to the JSON obliges the
+// Python implementation and this one; a case only one side passes is a
+// divergence the gate catches instead of a 422 four hours later. See
+// `tests/test_card.py`, which parametrizes over the same file.
+const table = JSON.parse(
+	readFileSync(
+		new URL('../../../../tests/fixtures/card_now_projection.json', import.meta.url),
+		'utf8'
+	)
+) as {
+	cases: {
+		name: string;
+		body: (string | [string, number])[];
+		limit?: number;
+		expected: (string | [string, number])[];
+	}[];
+};
+
+const expand = (parts: (string | [string, number])[]): string =>
+	parts.map((part) => (typeof part === 'string' ? part : part[0].repeat(part[1]))).join('');
+
+for (const projectionCase of table.cases) {
+	test(`shared projection table: ${projectionCase.name}`, () => {
+		assert.equal(
+			nowProjection(expand(projectionCase.body), projectionCase.limit),
+			expand(projectionCase.expected)
+		);
+	});
+}
+
+test('hasSectionsBeyondNow reads an H1-sectioned card as sectioned', () => {
+	// The expand affordance ran on the same H2 assumption as the projection, so
+	// an H1 card hid its whole arc behind a control that never appeared (#722).
+	assert.equal(hasSectionsBeyondNow('# Now\nx\n\n# Arc\ny'), true);
+	assert.equal(hasSectionsBeyondNow('### Now\nx\n\n### Arc\ny'), true);
+	assert.equal(hasSectionsBeyondNow('## Now\nx'), false);
+	assert.equal(hasSectionsBeyondNow('no sections'), false);
+	// A deeper heading is inside the Now section, not a sibling of it.
+	assert.equal(hasSectionsBeyondNow('## Now\nx\n\n### Sub\ny'), false);
+	// Anything above the first heading is body the projection dropped.
+	assert.equal(hasSectionsBeyondNow('preamble\n\n## Now\nx'), true);
 });
 
 test('nodeDigest offers the expand only when expanding reveals something', () => {

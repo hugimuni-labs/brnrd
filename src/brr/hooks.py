@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import card as card_rule
 from . import facets
 from . import relics
 
@@ -519,7 +520,10 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
     ),
     _BarSegment(
         "card", "card",
-        "the live `.card` surface's own health: `ok` / `stale` / `blank`. "
+        "the live `.card` surface's own health: `ok` / `stale` / `blank` / "
+        "`cut N>4096`. The last measures the *projection* the transport "
+        "publishes, not the file — a long card with a well-formed `Now` is "
+        "fine; `cut` means the live surface is losing the tail. "
         "Always the last segment when the bar renders at all — the cheap, "
         "always-current anchor. A `stale` value also gets its own detail "
         "line naming why (see above) — the chip alone is never the whole "
@@ -669,9 +673,32 @@ def _produce_total(produce: dict[str, Any]) -> int:
 
 
 def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
+    """The live `.card` surface's health — measured, not assumed.
+
+    This chip said ``card ok`` throughout #685: it checked that the file was
+    non-empty, which is not the question the transport asks. What publishes is
+    the *projection*, against a 4096-char field, so a 30 KB card with a
+    well-formed ``Now`` is safe and a 4.1 KB one is not — and the resident
+    cannot tell those apart from any other surface it can see.
+
+    So the meter runs the function the transport runs. Since #722 the daemon
+    bounds the projection rather than overflowing it, which means this no
+    longer warns of an imminent 422 — it warns that the live card is being
+    *truncated*, which is the same fact arriving early enough to act on.
+    """
     if card_stale:
         return "card stale"
-    return "card ok" if card.get("active") else "card blank"
+    if not card.get("active"):
+        return "card blank"
+    text = card.get("text")
+    if isinstance(text, str):
+        size = len(card_rule.now_projection(text))
+        if size > card_rule.CARD_TEXT_MAX_CHARS:
+            return f"card cut {size}>{card_rule.CARD_TEXT_MAX_CHARS}"
+    # No body in the capsule to measure — an older capsule shape, not a
+    # verdict. Report what the chip has always reported rather than inventing
+    # a failure out of a missing field.
+    return "card ok"
 
 
 def _notices_chip(notices: list) -> str | None:
