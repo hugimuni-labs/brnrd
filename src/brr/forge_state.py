@@ -109,7 +109,16 @@ def _worktrees_facet(
     remote_url: str | None,
     overrides: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Enumerate brr worktrees with branch, unpushed, and dirty state."""
+    """Enumerate this repo's worktrees with branch, unpushed, and dirty state.
+
+    Deliberately the **wide** set (:func:`worktree.list_worktrees`), not just
+    the ones under ``.brr/worktrees/``. Noticing uncommitted and unpushed work
+    is this facet's entire job, and the worktrees most likely to lose it are
+    exactly the ones brnrd did not mint: the ``/tmp/brr-wt-<slug>`` trees the
+    ``host`` environment mandates live in a directory that a reboot clears
+    (#721). An external worktree carries its ``path`` because that path is
+    both its identity — it has no run id — and the warning.
+    """
     try:
         infos = worktree.list_worktrees(repo_root)
     except Exception:
@@ -120,8 +129,11 @@ def _worktrees_facet(
         entry: dict[str, Any] = {
             "run_id": info.run_id,
             "branch": info.branch,
+            "kind": info.kind,
             "current": bool(current_run_id) and info.run_id == current_run_id,
         }
+        if info.kind != "brr":
+            entry["path"] = str(info.path)
         try:
             entry["unpushed"] = worktree.unpushed_commit_count(info.path)
         except Exception:
@@ -130,7 +142,17 @@ def _worktrees_facet(
             entry["dirty"] = worktree.has_uncommitted_changes(info.path)
         except Exception:
             entry["dirty"] = False
-        if remote_url and info.branch and _run_has_new_commit(repo_root, info.run_id):
+        # ``_run_has_new_commit`` resolves ``.brr/runs/<run_id>/run.md``, so it
+        # is only askable of a worktree that *has* a run id. An external tree
+        # has none; joining its directory name into that path would find no
+        # manifest and report "no new commit" — a right answer for a wrong
+        # reason, and one that would start lying the day a name collided.
+        if (
+            remote_url
+            and info.branch
+            and info.run_id
+            and _run_has_new_commit(repo_root, info.run_id)
+        ):
             url = forges.view_branch_url(remote_url, info.branch, **overrides)
             if url:
                 entry["branch_url"] = url
@@ -411,6 +433,16 @@ def _unpushed_commits(worktree_entry: dict[str, Any]) -> int:
     return 0
 
 
+def _is_external(worktree_entry: dict[str, Any]) -> bool:
+    """Does this entry describe a worktree outside ``.brr/worktrees/``?
+
+    A missing ``kind`` reads as brr-managed. Every entry this facet carried
+    before #721 was one by construction, so silence must not reclassify a
+    legacy or hand-built entry into the population that draws attention.
+    """
+    return str(worktree_entry.get("kind") or "brr") == "external"
+
+
 def summarize_worktrees(worktrees: Any) -> dict[str, Any]:
     """Summarize worktree facet entries for compact wake rendering.
 
@@ -420,10 +452,26 @@ def summarize_worktrees(worktrees: Any) -> dict[str, Any]:
     conversation could still be wrong about it). Clean pushed branches with
     nothing in flight still matter as inventory, but listing every one makes
     the forge facet a firehose.
+
+    ``total`` counts the honest population — every worktree of this repo bar
+    the main checkout. Since #721 that population has two halves, so the
+    summary carries the split (``brr_total`` / ``external_total``) and, for
+    the external half, how many are carrying work that could be lost
+    (``external_at_risk``). Rendering a narrowed count as an unqualified
+    total was the actual defect: the function filtered honestly and the line
+    it fed said ``10 total`` while 17 existed.
+
+    ``attention`` deliberately spans **both** halves. A dirty or unpushed
+    external worktree is the single entry whose loss is silent — brnrd never
+    minted it, so brnrd never preserves it, and under the ``host`` invariant
+    it lives in ``/tmp``. This summary is the one place that can say so.
     """
     if not isinstance(worktrees, list):
         return {
             "total": 0,
+            "brr_total": 0,
+            "external_total": 0,
+            "external_at_risk": 0,
             "dirty_branches": 0,
             "unpushed_branches": 0,
             "unpushed_commits": 0,
@@ -441,8 +489,14 @@ def summarize_worktrees(worktrees: Any) -> dict[str, Any]:
         or pr_needs_attention(wt)
     ]
     unpushed_commits = sum(_unpushed_commits(wt) for wt in entries)
+    external = [wt for wt in entries if _is_external(wt)]
     return {
         "total": len(entries),
+        "brr_total": len(entries) - len(external),
+        "external_total": len(external),
+        "external_at_risk": sum(
+            1 for wt in external if wt.get("dirty") or _unpushed_commits(wt) > 0
+        ),
         "dirty_branches": sum(1 for wt in entries if wt.get("dirty")),
         "unpushed_branches": sum(1 for wt in entries if _unpushed_commits(wt) > 0),
         "unpushed_commits": unpushed_commits,
@@ -450,6 +504,44 @@ def summarize_worktrees(worktrees: Any) -> dict[str, Any]:
         "attention": attention,
         "omitted": len(entries) - len(attention),
     }
+
+
+def external_worktree_note(summary: Any) -> str:
+    """``6 outside .brr/worktrees (1 with uncommitted or unpushed work)``.
+
+    The count #721 was missing, as one bit for the compact inventory line.
+    Empty string when every worktree is brr-managed — then the line is
+    exactly what it always was, and the fix costs a reader nothing until it
+    has something to say.
+
+    Shared by both renderers, for the reason :func:`standalone_prs` is: the
+    prompt and the context file render this block from two near-identical
+    copies, and a fact added to one copy only re-creates the defect it was
+    added to fix.
+    """
+    if not isinstance(summary, dict):
+        return ""
+    total = summary.get("external_total") or 0
+    if not total:
+        return ""
+    note = f"{total} outside .brr/worktrees"
+    at_risk = summary.get("external_at_risk") or 0
+    if at_risk:
+        note += f" ({at_risk} with uncommitted or unpushed work)"
+    return note
+
+
+def worktree_label(worktree_entry: dict[str, Any]) -> str:
+    """The bracketed identity for one worktree's attention line.
+
+    A brr worktree is named by its run id. An external one has none, so its
+    path is the identity — and for the ``/tmp`` trees the ``host``
+    environment mandates, the path is also the whole warning.
+    """
+    if not isinstance(worktree_entry, dict):
+        return ""
+    run_id = str(worktree_entry.get("run_id") or "").strip()
+    return run_id or str(worktree_entry.get("path") or "").strip()
 
 
 def build_forge_state(

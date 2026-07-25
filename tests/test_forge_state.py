@@ -388,3 +388,162 @@ def test_format_forge_state_empty():
     assert prompts._format_forge_state(None) == ""
     assert prompts._format_forge_state({}) == ""
     assert prompts._format_forge_state({"worktrees": [], "threads": []}) == ""
+
+
+# ── #721: worktrees of this repo outside .brr/worktrees/ ─────────────
+
+
+def test_summarize_splits_brr_from_external_worktrees():
+    summary = forge_state.summarize_worktrees([
+        {"run_id": "run-a", "branch": "brr/a", "kind": "brr", "current": False},
+        {"branch": "brr/mood", "kind": "external", "path": "/tmp/brr-wt-mood",
+         "dirty": True, "unpushed": 0, "current": False, "run_id": None},
+        {"branch": "brr/other", "kind": "external", "path": "/tmp/brr-wt-other",
+         "dirty": False, "unpushed": 0, "current": False, "run_id": None},
+    ])
+
+    assert summary["total"] == 3
+    assert summary["brr_total"] == 1
+    assert summary["external_total"] == 2
+    # Only the one carrying work that would be lost with the directory.
+    assert summary["external_at_risk"] == 1
+
+
+def test_summarize_reads_a_missing_kind_as_brr_managed():
+    """Silence must not reclassify. Every pre-#721 entry was brr-managed."""
+    summary = forge_state.summarize_worktrees([
+        {"run_id": "run-a", "branch": "brr/a", "current": False},
+    ])
+    assert summary["brr_total"] == 1
+    assert summary["external_total"] == 0
+    assert forge_state.external_worktree_note(summary) == ""
+
+
+def _pushed_repo(tmp_path: Path) -> Path:
+    """A repo whose one commit is reachable from a remote.
+
+    Without this, ``unpushed_commit_count`` counts the seed commit itself —
+    a repo with no remote has everything unpushed — and every worktree in the
+    fixture would be "at risk" for a reason the test did not intend.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(remote)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"file.txt": "init\n"})
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(remote)],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return repo
+
+
+def _add_worktree(repo: Path, path: Path, branch: str) -> None:
+    subprocess.run(
+        ["git", "worktree", "add", "-b", branch, str(path)],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
+def test_dirty_worktree_outside_brr_reaches_attention(tmp_path):
+    """#721's whole point, driven through the real producer.
+
+    A worktree of this repo that brnrd did not mint, holding uncommitted
+    work. brnrd never created it, so brnrd never preserves it; under the
+    ``host`` invariant it lives in ``/tmp``, which a reboot clears. It was
+    invisible to this facet, and the facet's entire job is noticing exactly
+    this.
+    """
+    repo = _pushed_repo(tmp_path)
+    worktree.create(repo, "run-clean")
+
+    foreign = tmp_path / "tmp-like" / "brr-wt-mood"
+    _add_worktree(repo, foreign, "brr/mood")
+    (foreign / "unsaved.txt").write_text("work nobody can see\n", encoding="utf-8")
+
+    facet = forge_state.build_forge_state(repo, current_run_id="run-clean")
+    summary = forge_state.summarize_worktrees(facet["worktrees"])
+
+    assert summary["external_total"] == 1
+    assert summary["external_at_risk"] == 1
+
+    external = [wt for wt in summary["attention"] if wt.get("kind") == "external"]
+    assert len(external) == 1
+    assert external[0]["dirty"] is True
+    # No run id to name it by, so the path is the identity — and the warning.
+    assert external[0]["run_id"] is None
+    assert forge_state.worktree_label(external[0]) == str(foreign)
+
+
+def test_clean_worktree_outside_brr_stays_collapsed(tmp_path):
+    """Widening the count must not widen the noise: only work at risk speaks."""
+    repo = _pushed_repo(tmp_path)
+    foreign = tmp_path / "tmp-like" / "brr-wt-quiet"
+    _add_worktree(repo, foreign, "brr/quiet")
+
+    facet = forge_state.build_forge_state(repo, current_run_id="run-none")
+    summary = forge_state.summarize_worktrees(facet["worktrees"])
+
+    assert summary["external_total"] == 1
+    assert summary["external_at_risk"] == 0
+    assert summary["attention"] == []
+    assert summary["omitted"] == 1
+
+
+_EXTERNAL_FACET = {
+    "worktrees": [
+        {"run_id": "run-a", "branch": "brr/a", "kind": "brr",
+         "unpushed": 0, "dirty": False, "current": True},
+        {"run_id": None, "branch": "brr/mood", "kind": "external",
+         "path": "/tmp/brr-wt-mood", "unpushed": 0, "dirty": True,
+         "current": False},
+    ],
+    "threads": [],
+}
+
+
+@pytest.mark.parametrize(
+    "render",
+    [prompts._format_forge_state, run_context._render_forge_state],
+    ids=["wake-prompt", "run-context-file"],
+)
+def test_both_renderers_carry_the_outside_brr_count(render):
+    """The two renderers are near-byte-identical copies of one block.
+
+    A fact added to one of them only re-creates the defect it was added to
+    fix — the count would go honest in the wake prompt and stay narrowed in
+    the context file. Pin both from one rule so a third copy has to join it.
+    """
+    rendered = render(_EXTERNAL_FACET)
+
+    assert "1 outside .brr/worktrees (1 with uncommitted or unpushed work)" in rendered
+    # And the entry itself is reachable: named by path, since it has no run id.
+    assert "/tmp/brr-wt-mood" in rendered
+    assert "uncommitted changes" in rendered
+
+
+@pytest.mark.parametrize(
+    "render",
+    [prompts._format_forge_state, run_context._render_forge_state],
+    ids=["wake-prompt", "run-context-file"],
+)
+def test_neither_renderer_mentions_outside_brr_when_there_is_none(render):
+    """All-brr is the common case; then the line is exactly what it always was."""
+    facet = {
+        "worktrees": [
+            {"run_id": "run-a", "branch": "brr/a", "unpushed": 0,
+             "dirty": False, "current": True},
+        ],
+        "threads": [],
+    }
+    rendered = render(facet)
+
+    assert "Worktrees / branches: 1 total" in rendered
+    assert "outside .brr/worktrees" not in rendered
