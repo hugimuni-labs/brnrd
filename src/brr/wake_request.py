@@ -6,7 +6,10 @@ two daemon threads that touch it locally:
 
 - the **cloud gate** publish tick (`gates/cloud.py::_publish_runners`)
   mirrors the server's pending request into ``.brr/wake-request.json`` and
-  reports consumed ids back on the next ``PUT /v1/daemons/runners``;
+  reports decided ids back on the next ``PUT /v1/daemons/runners`` — spent
+  ones as ``consumed_wake_request_ids``, expired ones as
+  ``lapsed_wake_request_ids`` (#733: one list used to carry both, so every
+  expiry was reported as a spend);
 - the **dispatch loop** (`daemon.py`) applies the pending request as a
   one-shot runner override on the next wake — gated to non-``schedule``
   sources (#564: a scheduled wake is never the interactive one a tap was
@@ -35,6 +38,18 @@ request whose payload carries no ``requested_at`` (an older server, a
 daemon that predates this field) mirrors with no ``parked_at``, and
 ``claimable_for_event`` treats that as unconditionally claimable — the
 pre-#577 behaviour, never a silently dropped tap.
+
+#733: staleness has exactly one owner, and it is the server. The row's
+``expires_at`` rides the wire beside ``requested_at``, mirrors into the
+pending file, and ``expired()`` is the only thing that reads it. Previously
+this module kept its own 900 s horizon while the server's row lived 24 h and
+the dashboard chip reported pending against *that* — so the surface the
+maintainer reloaded to confirm his tap had held was not the surface that
+decided, and the two disagreed by 96x. The claim window's upper bound was a
+third copy of the same judgement (120 s), and being the smallest number it was
+the one that actually fired; it is gone. What survives of #577 is the
+direction that answers a different question — "was this tap parked after the
+event already existed?" — which no expiry can answer.
 """
 
 from __future__ import annotations
@@ -46,24 +61,30 @@ from typing import Any
 
 _PENDING_NAME = "wake-request.json"
 _CONSUMED_NAME = "wake-request-consumed.json"
+_LAPSED_NAME = "wake-request-lapsed.json"
 _RECEIPT_NAME = "wake-request-receipt.json"
 
-# #577: how far *before* an event's ``created`` stamp a tap's ``parked_at``
-# may fall and still be claimed by that event. Wide enough to absorb the
-# cloud gate's publish-tick lag (seconds) plus normal dashboard-to-message
-# composing time; narrow enough that a tap parked for an earlier wake
-# doesn't ambush one the maintainer has stopped thinking about.
-DEFAULT_CLAIM_WINDOW_S = 120.0
 # A tap parked slightly *after* the event's ``created`` stamp is still the
 # same tap-and-message "breath" more often than it is clock skew — small
-# tolerance in that direction, not the full window.
+# tolerance in that direction.
+#
+# #733: this is all that is left of what #577 called the *claim window*, and
+# the surviving half is the one that was ever doing work. The two directions
+# answer different questions:
+#
+# - *after* the event: "was this tap parked when the event already existed?"
+#   A tap minted while a wake is already queued was not parked for that wake
+#   and must wait for the next one. Structural, cheap, and kept.
+# - *before* the event: "is this tap too old for this event?" — which is the
+#   same question the tap's own expiry answers, and it was answered with a
+#   second, much smaller number: 120 s against the server's 24 h. A human who
+#   taps the rack and then composes a message takes longer than two minutes,
+#   so the guard fired on the exact behaviour the feature exists to serve. It
+#   ate a real tap 16 minutes after minting (#733) while the dashboard the
+#   maintainer reloaded truthfully reported it pending. Deleted, not widened:
+#   staleness now has exactly one owner, ``expires_at``, checked in
+#   :func:`expired`.
 _CLAIM_SKEW_TOLERANCE_S = 5.0
-
-# #577: absolute staleness backstop, checked lazily on read (mirrors the
-# server's own ``pending_for_account`` lazy-expiry pattern) — independent of
-# whether any event ever tries to claim the tap. A tap nobody dispatches
-# against for this long has outlived the wake it was parked for.
-DEFAULT_TTL_S = 900.0
 
 
 def _pending_path(brr_dir: Path) -> Path:
@@ -72,6 +93,10 @@ def _pending_path(brr_dir: Path) -> Path:
 
 def _consumed_path(brr_dir: Path) -> Path:
     return brr_dir / _CONSUMED_NAME
+
+
+def _lapsed_path(brr_dir: Path) -> Path:
+    return brr_dir / _LAPSED_NAME
 
 
 def _receipt_path(brr_dir: Path) -> Path:
@@ -92,19 +117,18 @@ def _read_json(path: Path) -> Any:
         return None
 
 
-def pending(
-    brr_dir: Path, *, ttl_seconds: float | None = None
-) -> dict[str, Any] | None:
+def pending(brr_dir: Path) -> dict[str, Any] | None:
     """The mirrored pending wake request, or None.
 
-    #577: when ``ttl_seconds`` is given and the request carries a
-    ``parked_at`` older than that, it has outlived any wake it could
-    plausibly have been meant for — lazily lapse it (mirrors the server's
-    own lazy-expiry-on-read in ``wake_requests.pending_for_account``) and
-    return ``None`` instead of handing back a tap that would otherwise
-    ambush whatever unrelated wake reads next. ``ttl_seconds=None`` (the
-    default) skips the check entirely — existing callers that don't pass it
-    get the pre-#577 behaviour unchanged.
+    A read, and only a read. #733: this used to take a ``ttl_seconds`` and
+    lapse a stale request *inside* the accessor, which made every miss
+    invisible to the surface built to report it — a lapse returned ``None``,
+    so ``daemon.py``'s ``wake_request_report`` was never built and
+    ``body_provenance`` stayed ``None``. #577's "you asked for X, got Y,
+    because Z" line was structurally blind to its single most common outcome.
+
+    Staleness now belongs to :func:`expired`, which the callers ask
+    explicitly, so the tap is still in hand when the report is composed.
     """
     data = _read_json(_pending_path(brr_dir))
     if not isinstance(data, dict):
@@ -118,20 +142,38 @@ def pending(
         value = str(data.get(key) or "").strip()
         if value:
             out[key] = value
-    parked_at = str(data.get("parked_at") or "").strip()
-    if parked_at:
-        out["parked_at"] = parked_at
-    if ttl_seconds is not None and parked_at:
-        parked = _parse_iso(parked_at)
-        if parked is not None:
-            age = (datetime.now(timezone.utc) - parked).total_seconds()
-            if age > ttl_seconds:
-                lapse(
-                    brr_dir, request_id,
-                    source="ttl", reason=f"unclaimed for {int(age)}s (ttl {int(ttl_seconds)}s)",
-                )
-                return None
+    for key in ("parked_at", "expires_at"):
+        value = str(data.get(key) or "").strip()
+        if value:
+            out[key] = value
     return out
+
+
+def expired(request: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """Has this tap outlived the window the server gave it?
+
+    #733: one horizon, and it is the server's. ``RunnerWakeRequest`` carries
+    an ``expires_at`` the row is minted with, the server's own lazy sweep
+    already honours it (``wake_requests.pending_for_account``), and the
+    dashboard chip reports pending against it. This daemon used to keep a
+    *second*, independent horizon — a hardcoded 900 s — so the surface that
+    answered "is my tap still live?" (up to 24 h, truthfully) was not the
+    surface that decided (15 minutes). 96x apart, and reloading the chip to
+    confirm the tap held was both the correct instinct and unable to work.
+
+    A mirror with no ``expires_at`` is never expired here: an older server
+    that doesn't send the field leaves staleness where it already lives — the
+    server simply stops returning the request, and ``store_pending`` removes
+    the mirror on the next publish tick. Inventing a local horizon to fill
+    that silence is the bug this function replaced.
+    """
+    raw = str(request.get("expires_at") or "").strip()
+    if not raw:
+        return False
+    expires = _parse_iso(raw)
+    if expires is None:
+        return False
+    return expires < (now or datetime.now(timezone.utc))
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -147,21 +189,24 @@ def _parse_iso(value: str) -> datetime | None:
 def claimable_for_event(
     request: dict[str, Any],
     event_created: str | None,
-    *,
-    window_seconds: float = DEFAULT_CLAIM_WINDOW_S,
 ) -> bool:
-    """#577: is ``request`` (from :func:`pending`) close enough in time to
-    ``event_created`` (an event's ISO-8601 ``created`` stamp) to be the tap
-    that event was meant to spend?
+    """Was ``request`` parked *before* the event that wants to spend it?
 
-    Either timestamp missing or unparseable ⇒ claimable — we have nothing
-    to judge the window against, so the pre-#577 behaviour (claim whatever
-    is pending) wins rather than a parsing hiccup silently swallowing a
-    tap. Otherwise claimable when ``parked_at`` falls up to
-    ``window_seconds`` *before* ``event_created`` (the tap predates the
-    message it rode in on, but the mirror file landed late), with a small
-    tolerance the other way for ordinary clock/publish-tick jitter when the
-    tap and the message are truly the same breath.
+    #577 asked this as "close enough in time", with a window in both
+    directions. #733 kept only the direction that was doing work: a tap minted
+    after an event was already created was not parked for that event — the
+    maintainer tapped while a wake was already queued, and meant the next one.
+    ``_CLAIM_SKEW_TOLERANCE_S`` allows the small overlap where a tap and the
+    message it rode in on are genuinely the same breath and the clocks
+    disagree.
+
+    The other direction — "too old for this event" — is deliberately gone. It
+    duplicated :func:`expired` with a number 720x smaller and, being the
+    smaller number, it was the one that decided. That is what ate the tap in
+    #733.
+
+    Either timestamp missing or unparseable ⇒ claimable: nothing to judge
+    against, so a parsing hiccup must not silently swallow a tap.
     """
     parked_at = str(request.get("parked_at") or "").strip()
     if not parked_at or not event_created:
@@ -170,16 +215,18 @@ def claimable_for_event(
     created = _parse_iso(str(event_created))
     if parked is None or created is None:
         return True
-    delta = (created - parked).total_seconds()
-    return -_CLAIM_SKEW_TOLERANCE_S <= delta <= window_seconds
+    return (created - parked).total_seconds() >= -_CLAIM_SKEW_TOLERANCE_S
 
 
 def store_pending(brr_dir: Path, request: dict[str, Any] | None) -> None:
     """Mirror the server's pending request (None ⇒ none pending ⇒ remove).
 
-    A request whose id is already in the consumed ledger is *not*
+    A request whose id is already in the consumed *or* lapsed ledger is not
     resurrected: the server simply hasn't processed our ack yet — one
-    publish tick of lag is expected, a double consume is not.
+    publish tick of lag is expected, a double consume is not. (#733 split the
+    two ledgers; both are "already decided locally, awaiting ack", so both
+    block a resurrection. Checking only one would let an expired tap reappear
+    on the very next tick.)
     """
     path = _pending_path(brr_dir)
     if not request:
@@ -187,7 +234,8 @@ def store_pending(brr_dir: Path, request: dict[str, Any] | None) -> None:
         return
     request_id = str(request.get("request_id") or "").strip()
     profile = str(request.get("profile") or "").strip()
-    if not request_id or not profile or request_id in consumed_ids(brr_dir):
+    decided = set(consumed_ids(brr_dir)) | set(lapsed_ids(brr_dir))
+    if not request_id or not profile or request_id in decided:
         path.unlink(missing_ok=True)
         return
     current = pending(brr_dir)
@@ -207,6 +255,13 @@ def store_pending(brr_dir: Path, request: dict[str, Any] | None) -> None:
     requested_at = str(request.get("requested_at") or "").strip()
     if requested_at:
         payload["parked_at"] = requested_at
+    # #733: and the expiry the server minted the row with, so local staleness
+    # has one authority instead of a second hardcoded horizon. Optional in the
+    # same way ``parked_at`` is: an older server sends neither, and the local
+    # side then simply has no opinion about staleness (see :func:`expired`).
+    expires_at = str(request.get("expires_at") or "").strip()
+    if expires_at:
+        payload["expires_at"] = expires_at
     _write_json(path, payload)
 
 
@@ -223,8 +278,26 @@ def consume(brr_dir: Path, request_id: str) -> None:
 
 
 def consumed_ids(brr_dir: Path) -> list[str]:
-    """Consumed ids not yet acked to the server."""
-    data = _read_json(_consumed_path(brr_dir))
+    """Consumed ids not yet acked to the server — genuinely *spent* taps."""
+    return _ledger_ids(_consumed_path(brr_dir))
+
+
+def lapsed_ids(brr_dir: Path) -> list[str]:
+    """Lapsed ids not yet acked — taps that existed and never applied.
+
+    #733: separate from :func:`consumed_ids` because the two are different
+    facts and the server has different words for them. They used to share one
+    list, so every lapse was reported to ``wake_requests.mark_consumed``,
+    whose own docstring says *"these requests were spent on a dispatched
+    wake."* It wasn't. ``RunnerWakeRequest.STATUS_EXPIRED`` already existed
+    for the server's own sweep; the daemon simply had no field to route a
+    lapse into. This is that field.
+    """
+    return _ledger_ids(_lapsed_path(brr_dir))
+
+
+def _ledger_ids(path: Path) -> list[str]:
+    data = _read_json(path)
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
@@ -303,23 +376,28 @@ def lapse(
 ) -> None:
     """#577: expire a pending tap that never got applied to a profile.
 
-    Mechanically identical to :func:`consume` (move the id to the consumed
-    ledger so it doesn't resurrect on the next mirror tick, drop the
-    pending file) — the wire protocol has no separate "expired, never
-    used" signal to give the server, and adding one is out of scope here
-    (server-side protocol changes are explicitly not this fix). The
-    receipt is where the distinction actually lives: ``profile=None`` and
-    ``outcome="lapsed"`` read unmistakably differently from a real spend,
-    so a human or the dashboard can tell "this was asked for and never
-    happened" apart from "this was asked for and did."
+    #733: this now says so *on the wire*, not only in a local file. It used to
+    move the id into the same ledger :func:`consume` writes, and defended that
+    on the grounds that "the receipt is where the distinction actually lives…
+    so a human or the dashboard can tell." Neither could: the receipt is
+    ``.brr/wake-request-receipt.json``, a file that never leaves the machine,
+    and the dashboard reads the server row — which the shared ledger had just
+    reported as ``consumed``. A comment claiming more than the code beneath it
+    can do, in the exact place a reader goes to check whether the loss was
+    deliberate.
+
+    So the id goes to the *lapsed* ledger (:func:`lapsed_ids`), rides its own
+    field on the next publish, and lands as ``STATUS_EXPIRED`` server-side. The
+    local receipt keeps its extra detail — which event, which source, why — but
+    it is no longer the only place the truth exists.
     """
     request_id = str(request_id or "").strip()
     if not request_id:
         return
-    ids = consumed_ids(brr_dir)
+    ids = lapsed_ids(brr_dir)
     if request_id not in ids:
         ids.append(request_id)
-        _write_json(_consumed_path(brr_dir), ids)
+        _write_json(_lapsed_path(brr_dir), ids)
     _pending_path(brr_dir).unlink(missing_ok=True)
     record_receipt(
         brr_dir, request_id, source=source, event_id=event_id, profile=None,
@@ -334,11 +412,20 @@ def last_receipt(brr_dir: Path) -> dict[str, Any] | None:
 
 
 def clear_consumed(brr_dir: Path, acked: list[str]) -> None:
-    """Drop ids the server has acknowledged (post-publish)."""
+    """Drop consumed ids the server has acknowledged (post-publish)."""
+    _clear_ledger(_consumed_path(brr_dir), acked)
+
+
+def clear_lapsed(brr_dir: Path, acked: list[str]) -> None:
+    """Drop lapsed ids the server has acknowledged (post-publish)."""
+    _clear_ledger(_lapsed_path(brr_dir), acked)
+
+
+def _clear_ledger(path: Path, acked: list[str]) -> None:
     if not acked:
         return
-    remaining = [rid for rid in consumed_ids(brr_dir) if rid not in set(acked)]
+    remaining = [rid for rid in _ledger_ids(path) if rid not in set(acked)]
     if remaining:
-        _write_json(_consumed_path(brr_dir), remaining)
+        _write_json(path, remaining)
     else:
-        _consumed_path(brr_dir).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)

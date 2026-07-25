@@ -131,12 +131,12 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
-# #577: a dashboard wake-tap's claim window and staleness backstop.
-# Overridable via ``.brr/config`` (``dispatch.wake_request_claim_window_seconds``
-# / ``dispatch.wake_request_ttl_seconds``). See ``wake_request.py`` for the
-# mechanism these gate.
-_WAKE_REQUEST_CLAIM_WINDOW_DEFAULT = wake_request_mod.DEFAULT_CLAIM_WINDOW_S
-_WAKE_REQUEST_TTL_DEFAULT = wake_request_mod.DEFAULT_TTL_S
+# #733 retired both wake-tap tuning knobs that used to live here
+# (``dispatch.wake_request_claim_window_seconds`` / ``…_ttl_seconds``). A tap's
+# staleness is one fact with one owner — the server's ``expires_at``, published
+# on the row and read by ``wake_request.expired()`` — and a local number that
+# can disagree with it is the bug, not the configuration. Nothing to tune:
+# there is no correct second answer to "is my tap still live?".
 _RUN_STATE_REAP_AFTER_SECONDS = 24 * 3600.0
 # How often a live daemon re-sweeps both run-truth stores for zombies. See
 # ``_sweep_zombie_runs``: boot-only made a data repair the user had to
@@ -1766,14 +1766,22 @@ def _apply_dashboard_wake_request(
         return target
     original_target = target
     brr_dir = gitops.shared_brr_dir(default_repo_root)
-    ttl_seconds = float(
-        (cfg or {}).get(
-            "dispatch.wake_request_ttl_seconds", _WAKE_REQUEST_TTL_DEFAULT
-        )
-    )
-    request = wake_request_mod.pending(brr_dir, ttl_seconds=ttl_seconds)
+    request = wake_request_mod.pending(brr_dir)
     if request is None:
         return target
+    # #733: staleness is the server's `expires_at`, asked here rather than
+    # hidden inside `pending()`. Dispatch has no report to write on (the run
+    # doesn't exist yet), so this arm only clears the tap; `_run_worker`'s read
+    # below is the one that composes the "you asked for X, got Y, because Z"
+    # line for a lapse it sees itself.
+    if wake_request_mod.expired(request):
+        wake_request_mod.lapse(
+            brr_dir, request["request_id"],
+            source=str(target.event.get("source") or ""),
+            event_id=str(target.event.get("id") or "") or None,
+            reason=f"the tap expired at {request.get('expires_at')}",
+        )
+        return original_target
 
     repo_label = str(request.get("repo_label") or "").strip()
     if repo_label:
@@ -1802,27 +1810,18 @@ def _apply_dashboard_wake_request(
         # request) still reclaims it if it's simply wrong.
         return original_target
 
-    claim_window = float(
-        (cfg or {}).get(
-            "dispatch.wake_request_claim_window_seconds",
-            _WAKE_REQUEST_CLAIM_WINDOW_DEFAULT,
-        )
-    )
     if not wake_request_mod.claimable_for_event(
         request, str(target.event.get("created") or ""),
-        window_seconds=claim_window,
     ):
-        # #577: this dispatch was otherwise eligible (no pin, not a
-        # schedule wake, a profile this daemon knows) but the tap's
-        # server-stamped park time is outside the claim window for *this*
-        # event — it belongs to a wake that already came and went. Lapse
-        # rather than leave it armed to ambush whatever fires next.
-        wake_request_mod.lapse(
-            brr_dir, request["request_id"],
-            source=str(target.event.get("source") or ""),
-            event_id=str(target.event.get("id") or "") or None,
-            reason="tap parked outside the claim window for this wake",
-        )
+        # #577/#733: this dispatch was otherwise eligible (no pin, not a
+        # schedule wake, a profile this daemon knows), but the tap was parked
+        # *after* this event already existed — so it was meant for the next
+        # wake, not this one. Leave it pending rather than lapse it: unlike an
+        # expiry, nothing here says the tap is dead, and the wake it was
+        # actually parked for hasn't happened yet. (Lapsing was #577's
+        # behaviour, correct only under the old reading where the same branch
+        # also caught taps that were merely *old*. Now that expiry owns
+        # staleness, lapsing here would destroy a live tap for arriving early.)
         return original_target
 
     updates: dict[str, object] = {
@@ -2221,10 +2220,7 @@ def _run_worker(
             "applied": True,
             "reason": None,
         }
-    wake_req_ttl = float(
-        cfg.get("dispatch.wake_request_ttl_seconds", _WAKE_REQUEST_TTL_DEFAULT)
-    )
-    wake_req = wake_request_mod.pending(brr_dir, ttl_seconds=wake_req_ttl)
+    wake_req = wake_request_mod.pending(brr_dir)
     wake_req_source = str(event.get("source") or "")
     wake_req_has_override = any(
         runner_overrides.get(key) for key in ("shell", "core", "runner")
@@ -2238,7 +2234,19 @@ def _run_worker(
         # rather than applied blind.
         requested_profile = wake_req["profile"]
         reason: str | None = None
-        if wake_req_has_override:
+        if wake_request_mod.expired(wake_req):
+            # #733: the miss the whole report surface was blind to. The
+            # staleness check used to live inside `pending()`, which returned
+            # `None` on a lapse — so `wake_request_report` stayed `None`,
+            # `body_provenance` stayed `None`, and the one outcome a user
+            # actually asks about ("where did my pick go?") produced the same
+            # silence as no tap at all. Now it is a reason like any other.
+            reason = f"the tap expired at {wake_req.get('expires_at')}"
+            wake_request_mod.lapse(
+                brr_dir, wake_req["request_id"],
+                source=wake_req_source, event_id=eid, reason=reason,
+            )
+        elif wake_req_has_override:
             reason = "an event-level runner pin outranks the dashboard tap"
         elif wake_req_source == "schedule":
             reason = "a schedule-source wake never spends a dashboard tap"
@@ -2251,22 +2259,13 @@ def _run_worker(
             reason = f"profile '{requested_profile}' is unknown to this daemon"
         elif not wake_request_mod.claimable_for_event(
             wake_req, str(event.get("created") or ""),
-            window_seconds=float(
-                cfg.get(
-                    "dispatch.wake_request_claim_window_seconds",
-                    _WAKE_REQUEST_CLAIM_WINDOW_DEFAULT,
-                )
-            ),
         ):
-            reason = "tap parked outside the claim window for this wake"
-            # #577: this wake *was* otherwise eligible (no pin, not a
-            # schedule firing, a known profile) and still didn't fit — the
-            # tap belongs to a wake that already came and went. Lapse it
-            # rather than leave it armed to ambush whatever fires next.
-            wake_request_mod.lapse(
-                brr_dir, wake_req["request_id"],
-                source=wake_req_source, event_id=eid, reason=reason,
-            )
+            # #577/#733: the tap was parked *after* this event already existed,
+            # so it was meant for the next wake. Left pending, not lapsed — see
+            # the same branch in `_apply_dashboard_wake_request`. It is still
+            # reported, because "your tap is still armed, this wake just wasn't
+            # the one" is an answer and silence is not.
+            reason = "the tap was parked after this wake was already queued"
         else:
             runner_overrides["runner"] = requested_profile
             runner_wake_note = "requested from the dashboard spool rack"
