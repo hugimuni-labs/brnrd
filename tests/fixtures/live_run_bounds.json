@@ -1,0 +1,44 @@
+{
+  "$comment": [
+    "The live-run wire bounds (#685 ask 2, pinned per #723).",
+    "",
+    "GENERATED from `src/brnrd/schemas.py::LiveRunIn` — do not hand-edit.",
+    "`tests/test_brnrd_dashboard.py::test_live_run_bounds_fixture_matches_the_model`",
+    "regenerates it and fails when the model and this table disagree; ",
+    "`tests/test_cloud_gate.py::test_live_run_bounds_copy_matches_the_fixture` fails",
+    "when the daemon-side copy in `src/brr/gates/cloud.py` disagrees with it.",
+    "",
+    "It exists because `src/brr` (the daemon) cannot import `src/brnrd` (the API)",
+    "— they ship separately — so the daemon's bound is a deliberate duplication.",
+    "A parity test between the two implementations would be the wrong pin: #722's",
+    "four implementations of one rule agreed with each other perfectly for the",
+    "bug's entire life. Both copies are pinned to this table instead, and the",
+    "table is generated from the one model that actually defines the wire.",
+    "",
+    "`string_bounds` is characters, and only for `str` fields — `mood_frames` is",
+    "`max_length=4` *sequences* and is deliberately absent.",
+    "`identity_fields` are join keys: a truncated one is wrong data, not short",
+    "data, so they reject instead of truncating. Everything else truncates."
+  ],
+  "truncation_mark": "…",
+  "identity_fields": [
+    "id",
+    "parent_run_id",
+    "run_id"
+  ],
+  "string_bounds": {
+    "id": 64,
+    "kind": 32,
+    "stream": 256,
+    "label": 256,
+    "name": 60,
+    "run_id": 64,
+    "repo_label": 256,
+    "parent_run_id": 64,
+    "phase": 32,
+    "card_text": 4096,
+    "mood": 64,
+    "mood_glyph": 16,
+    "mood_rest": 16
+  }
+}

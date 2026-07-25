@@ -1144,9 +1144,71 @@ def _subject_bearing_put_lanes() -> dict[str, list[str]]:
             and issubclass(item, BaseModel)
             and "repo_label" in item.model_fields
         ]
+        # A lane that isolates per row (#685) cannot type its list of rows —
+        # a typed item annotation means FastAPI rejects the whole batch before
+        # the handler runs, which is the outage that change exists to close.
+        # Those lanes declare their row model as `ROW_MODEL` instead, so the
+        # row shape stays readable *here* rather than only in a comment. Both
+        # spellings are walked; neither is a special case for one path.
+        row_model = getattr(model, "ROW_MODEL", None)
+        if (
+            isinstance(row_model, type)
+            and issubclass(row_model, BaseModel)
+            and "repo_label" in row_model.model_fields
+        ):
+            carriers.append(row_model.__name__)
         if carriers:
             found[route.path] = carriers
     return found
+
+
+def test_a_row_isolating_report_declares_its_row_model():
+    """The pin under the derivation above, and the reason it is not a special
+    case for `/v1/daemons/live-runs`.
+
+    Per-row isolation (#685) requires erasing the item type from the request
+    model — and that erasure is precisely what hid the row shape from #714's
+    per-row-consent derivation, which reads item types to answer "does this
+    lane's payload name its own repo". The lane stayed correct; the test that
+    proves it went blind. #722's shape exactly: a guard anchored one level off
+    reads like no guard at all.
+
+    So: a PUT report whose rows are untyped must say what they are. The next
+    lane to adopt isolation fails here instead of silently un-testing itself.
+    """
+    import typing
+
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+
+    from brnrd.routers import daemons as daemons_router
+
+    untyped = []
+    for route in daemons_router.router.routes:
+        if not (isinstance(route, APIRoute) and "PUT" in route.methods):
+            continue
+        hints = typing.get_type_hints(route.endpoint)
+        model = next(
+            (t for t in hints.values() if isinstance(t, type) and issubclass(t, BaseModel)),
+            None,
+        )
+        if model is None:
+            continue
+        for name, field in model.model_fields.items():
+            if typing.get_origin(field.annotation) is not list:
+                continue
+            (item,) = typing.get_args(field.annotation) or (None,)
+            if item is not typing.Any:
+                continue
+            row_model = getattr(model, "ROW_MODEL", None)
+            if not (isinstance(row_model, type) and issubclass(row_model, BaseModel)):
+                untyped.append(f"{model.__name__}.{name} ({route.path})")
+
+    assert not untyped, (
+        "these PUT payloads carry an untyped list of rows and declare no "
+        "`ROW_MODEL`, so every derivation that reads row shape off the request "
+        f"model is blind to them: {untyped}"
+    )
 
 
 def test_a_lane_whose_rows_name_a_repo_must_gate_per_row():

@@ -1853,6 +1853,60 @@ def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.
         return None
 
 
+# --- live-run wire bounds (#685 ask 2, guard B) ------------------------------
+#
+# A deliberate duplication of `src/brnrd/schemas.py::LiveRunIn`'s field caps.
+# `src/brr` (this daemon) cannot import `src/brnrd` (the API): they ship
+# separately. The collector should not rely on the server's mercy — the server
+# now truncates display fields, but a daemon publishing to an older API, or to
+# one whose truncation regressed, still wants its own bound.
+#
+# Pinned to `tests/fixtures/live_run_bounds.json`, which is *generated* from
+# `LiveRunIn` (#723). A parity test between the two implementations would be
+# the wrong pin: #722's four implementations of one rule agreed with each other
+# perfectly for the bug's whole life. The fixture makes "deliberately mirrored
+# by hand" a checkable claim, and a bound that changes in `LiveRunIn` reddens a
+# test here instead of 422ing a dashboard.
+#
+# Note the *shape*: the identity set is the closed class and truncation is the
+# default, so a display field added to `LiveRunIn` later is bounded here as
+# soon as the table is regenerated, without anyone remembering to list it.
+_LIVE_RUN_TRUNCATION_MARK = "…"
+_LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "parent_run_id", "run_id"})
+_LIVE_RUN_STRING_BOUNDS = {
+    "card_text": 4096,
+    "id": 64,
+    "kind": 32,
+    "label": 256,
+    "mood": 64,
+    "mood_glyph": 16,
+    "mood_rest": 16,
+    "name": 60,
+    "parent_run_id": 64,
+    "phase": 32,
+    "repo_label": 256,
+    "run_id": 64,
+    "stream": 256,
+}
+
+
+def _bounded_live_run(row: dict[str, Any]) -> dict[str, Any]:
+    """Truncate this row's over-long display strings, marked.
+
+    Identity keys are left exactly as read: a truncated join key is *wrong
+    data*, not shortened data — it would silently re-point this row at another
+    run. The server rejects those, and one rejected row now costs one row.
+    """
+    for field, cap in _LIVE_RUN_STRING_BOUNDS.items():
+        if field in _LIVE_RUN_IDENTITY_FIELDS:
+            continue
+        value = row.get(field)
+        if isinstance(value, str) and len(value) > cap:
+            keep = max(0, cap - len(_LIVE_RUN_TRUNCATION_MARK))
+            row[field] = value[:keep] + _LIVE_RUN_TRUNCATION_MARK[:cap]
+    return row
+
+
 def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's live/coexisting-runs snapshot (#258).
 
@@ -1886,7 +1940,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
         run_id = str(entry.get("run_id") or "")
         view = _live_run_progress(brr_dir, stream, run_id)
         out.append(
-            {
+            _bounded_live_run({
                 "id": str(entry.get("id") or ""),
                 "kind": str(entry.get("kind") or ""),
                 "stream": stream,
@@ -1935,7 +1989,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # unknown handle degrades to name-only — never a guessed
                 # face (the library's honesty bar).
                 **_mood_payload(entry),
-            }
+            })
         )
     return out
 
@@ -2075,6 +2129,34 @@ def _dispatch_run_stops(brr_dir: Path, inbox_dir: Path | None, requests: list) -
         print(f"[brnrd:cloud] stop {run_id} ({stage}) by account owner")
 
 
+def _report_live_runs_losses(body: Any) -> None:
+    """Print what the live-runs publish lost, if anything (#685 guard C).
+
+    Silent on a clean publish — this loop runs every
+    ``_DASHBOARD_PUBLISH_INTERVAL_S`` and a per-tick line would be noise that
+    trains a reader to stop reading. Tolerant of an older API that does not
+    send these fields yet: absent means nothing to say, not a crash.
+    """
+    if not isinstance(body, dict):
+        return
+    rejected = body.get("runs_rejected")
+    if isinstance(rejected, list) and rejected:
+        for row in rejected[:8]:
+            if not isinstance(row, dict):
+                continue
+            print(
+                "[brnrd:cloud] live-runs row dropped: "
+                f"id={row.get('id')!r} fields={row.get('fields')} "
+                f"— {row.get('detail')}"
+            )
+    truncated = body.get("fields_truncated")
+    if isinstance(truncated, list) and truncated:
+        print(
+            "[brnrd:cloud] live-runs fields truncated server-side: "
+            + ", ".join(str(item) for item in truncated[:16])
+        )
+
+
 @_publish_lane("live_runs")
 def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
@@ -2108,6 +2190,11 @@ def _publish_live_runs(brr_dir: Path, inbox_dir: Path | None, state: dict) -> No
     except Exception as e:
         print(f"[brnrd:cloud] live-runs publish failed: {e}")
         return
+    # #685 ask 2, guard C: a 200 that stored nothing is the same outage with a
+    # friendlier face, and an absent reading renders as "fine" (#632). The
+    # server now tells us what it refused and what it shortened; say it in the
+    # same neighbourhood as the failure line above, on the success path.
+    _report_live_runs_losses(body)
     run_stop_request.clear_consumed(brr_dir, acked)
     served = body.get("pending_run_stop_requests") if isinstance(body, dict) else None
     pending = run_stop_request.unhandled(

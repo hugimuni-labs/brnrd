@@ -953,3 +953,232 @@ def test_put_live_runs_stores_mood_fields():
     )
     assert report.daemon_mood.state == "idle"
     assert report.daemon_mood.frames == ["brnrd", "b-n-d", "brnrd"]
+
+
+# --- #685 ask 2: one bad row must cost one row -------------------------------
+#
+# The card (#722) was the instance; this is the class. `PUT /v1/daemons/live-runs`
+# publishes every live run on a daemon in one request, so while `LiveRunsReport.runs`
+# was a typed `list[LiveRunIn]`, FastAPI rejected the whole body before the handler
+# ran and the daemon re-attempted the doomed PUT every 3 seconds
+# (`src/brr/gates/cloud.py::_DASHBOARD_PUBLISH_INTERVAL_S`) — a continuous outage of
+# every run's live surface, caused by one over-long field on one row.
+
+
+def _daemon_client():
+    """A paired daemon's client + headers + repo id, for the live-runs lane."""
+    client = _client()
+    account_token = _login(client)
+    repo_id = _create_repo(client, account_token)
+    account_headers = {"Authorization": f"Bearer {account_token}"}
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=headers)
+    return client, headers, repo_id
+
+
+def _stored_live_runs(client, repo_id):
+    """The rows the server actually *stored* — the only honest assertion here.
+
+    A 200 that stored nothing is the same outage with a friendlier face, so
+    every test below reads the persisted snapshot rather than the status code.
+    """
+    import json
+
+    from brnrd.models import Daemon
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(Daemon).filter(Daemon.repo_id == repo_id).one()
+        return json.loads(daemon.live_runs_json or "[]")
+
+
+def test_one_unparseable_live_run_row_costs_one_row():
+    """The driven repro from #685 ask 2, as a test.
+
+    Two innocent rows and one whose *identity* is unusable: the two must be
+    stored. Before per-row isolation this PUT was a 422 and the stored snapshot
+    stayed at whatever the last good publish left — every live run dark.
+    """
+    client, headers, repo_id = _daemon_client()
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={
+            "runs": [
+                {"id": "run-a", "repo_label": "Gurio/brr"},
+                {"id": "run-b", "repo_label": "Gurio/brr"},
+                {"id": "z" * 65, "repo_label": "Gurio/brr"},
+            ]
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    stored = _stored_live_runs(client, repo_id)
+    assert [row["id"] for row in stored] == ["run-a", "run-b"]
+
+
+def test_an_over_long_identity_key_costs_its_own_row_and_no_other():
+    """Identity keys reject rather than truncate — a shortened join key is
+    *wrong data*, not short data, and would silently re-point the row at
+    another run. So the isolation has to be real, not cosmetic: the bad row is
+    gone and its neighbours on both sides survive intact."""
+    client, headers, repo_id = _daemon_client()
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={
+            "runs": [
+                {"id": "keep-1", "run_id": "run-1", "repo_label": "Gurio/brr"},
+                {"id": "drop-me", "run_id": "r" * 65, "repo_label": "Gurio/brr"},
+                {"id": "keep-2", "run_id": "run-2", "repo_label": "Gurio/brr"},
+            ]
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    stored = _stored_live_runs(client, repo_id)
+    assert [row["id"] for row in stored] == ["keep-1", "keep-2"]
+    assert [row["run_id"] for row in stored] == ["run-1", "run-2"]
+    # And the loss is *said*, not left for a reader to infer from a row that
+    # quietly stopped appearing (#632).
+    rejected = r.json()["runs_rejected"]
+    assert [(row["id"], row["fields"]) for row in rejected] == [("drop-me", ["run_id"])]
+
+
+def test_over_long_display_field_is_stored_truncated_and_marked():
+    """`name` is the `.card`-neighbour control file `.name` — resident-authored
+    prose whose cap is stated only as an instruction. One character over used to
+    darken the dashboard for every run on the daemon; now it costs the tail of
+    one string, and the mark is what tells a reader the value continues rather
+    than merely ends."""
+    from brnrd import schemas
+
+    client, headers, repo_id = _daemon_client()
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={"runs": [{"id": "run-a", "name": "x" * 61, "repo_label": "Gurio/brr"}]},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    stored = _stored_live_runs(client, repo_id)
+    assert len(stored) == 1
+    assert len(stored[0]["name"]) == 60
+    assert stored[0]["name"].endswith(schemas.LIVE_RUN_TRUNCATION_MARK)
+    assert stored[0]["name"].startswith("x" * 59)
+    assert r.json()["fields_truncated"] == ["run-a.name"]
+
+
+def test_a_display_field_at_the_cap_is_stored_byte_identical():
+    """The other direction, and the reason the test above is not enough on its
+    own: a field that is *always* truncated passes the long case perfectly. At
+    exactly the cap nothing may be cut and nothing may be marked."""
+    client, headers, repo_id = _daemon_client()
+    at_cap_name = "n" * 60
+    at_cap_card = "c" * 4096
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={
+            "runs": [{
+                "id": "run-a",
+                "name": at_cap_name,
+                "card_text": at_cap_card,
+                "repo_label": "Gurio/brr",
+            }]
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    stored = _stored_live_runs(client, repo_id)
+    assert stored[0]["name"] == at_cap_name
+    assert stored[0]["card_text"] == at_cap_card
+    assert r.json()["fields_truncated"] == []
+
+
+def test_live_run_bounds_fixture_matches_the_model():
+    """The fixture table is *generated* from `LiveRunIn` (#723).
+
+    `src/brr` cannot import `src/brnrd` — they ship separately — so the
+    daemon-side bound in `cloud.py` is a deliberate duplication. A parity test
+    between the two implementations would be the wrong pin: #722's four
+    implementations of one rule agreed with each other perfectly for the bug's
+    whole life. Both copies are pinned to this table instead, and this test is
+    what makes the table honest: change a `max_length` on `LiveRunIn` without
+    regenerating the fixture and it reddens here.
+
+    `mood_frames` is deliberately absent — its `max_length=4` counts
+    *sequences*, not characters, and a table that conflated the two would tell
+    the daemon to truncate a list of faces to four letters.
+    """
+    import json
+    from pathlib import Path
+
+    from brnrd import schemas
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "live_run_bounds.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fixture["string_bounds"] == schemas.LiveRunIn.string_bounds()
+    assert fixture["identity_fields"] == sorted(schemas.LIVE_RUN_IDENTITY_FIELDS)
+    assert fixture["truncation_mark"] == schemas.LIVE_RUN_TRUNCATION_MARK
+    assert "mood_frames" not in fixture["string_bounds"]
+
+
+def test_every_bounded_display_string_truncates_rather_than_rejects():
+    """The positive control for the split, driven over the model's own field
+    list rather than a hand-written sample.
+
+    A test naming three fields proves three fields. This walks
+    `string_bounds()`, so a bounded display field added to `LiveRunIn` later is
+    covered the moment it exists — the property this whole guard rests on.
+    """
+    from brnrd import schemas
+
+    bounds = schemas.LiveRunIn.string_bounds()
+    display = {f: c for f, c in bounds.items() if f not in schemas.LIVE_RUN_IDENTITY_FIELDS}
+    assert display, "no display fields — the split has lost its subject"
+    for field, cap in display.items():
+        model = schemas.LiveRunIn.model_validate({"id": "run-a", field: "y" * (cap + 1)})
+        value = getattr(model, field)
+        assert len(value) == cap, f"{field} not truncated to its bound"
+        assert value.endswith(schemas.LIVE_RUN_TRUNCATION_MARK), f"{field} truncated unmarked"
+    for field in sorted(schemas.LIVE_RUN_IDENTITY_FIELDS):
+        payload = {"id": "run-a", field: "y" * (bounds[field] + 1)}
+        with pytest.raises(Exception):
+            schemas.LiveRunIn.model_validate(payload)
+
+
+def test_a_row_that_is_not_even_an_object_costs_one_row():
+    """Found by breaking an existing test, not by predicting it.
+
+    The first cut typed `runs` as `list[dict[str, Any]]`, which reads like
+    isolation and is not: a `null` or a bare string in the list fails at the
+    *report* level, before the handler runs, and 422s the whole batch — the
+    exact class this change exists to close, reintroduced one type annotation
+    up. The row type has to be unconstrained for per-row validation to be the
+    only thing that can reject a row.
+    """
+    client, headers, repo_id = _daemon_client()
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={
+            "runs": [
+                {"id": "run-a", "repo_label": "Gurio/brr"},
+                None,
+                "not a row at all",
+                {"id": "run-b", "repo_label": "Gurio/brr"},
+            ]
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    assert [row["id"] for row in _stored_live_runs(client, repo_id)] == ["run-a", "run-b"]
+    assert [row["index"] for row in r.json()["runs_rejected"]] == [1, 2]
