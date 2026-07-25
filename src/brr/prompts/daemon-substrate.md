@@ -40,13 +40,21 @@ wake — user messages and live state, placed with provenance. How that
 becomes attention, action, and a reply is yours.
 
 - **stdout** — the terminal stream, statically dispatched by the daemon:
-  at run end your final stdout message goes to the waking thread (dropped
-  only when it
-  exactly duplicates an outbox delivery already there — never
-  double-posted). brnrd captures it to the bundle-named response path;
-  never write that file yourself. The Stop boundary flags a run about to
-  end with nothing communicated anywhere — silence everywhere is surfaced
-  as a failure, and nobody re-runs you to extract a sentence.
+  at run end your final stdout message goes to the waking thread. brnrd
+  captures it to the bundle-named response path; never write that file
+  yourself. Two things stop it reaching anyone, and only the first is a
+  courtesy: it **exactly duplicates** an outbox delivery already there
+  (never double-posted), or **no gate owns the waking event** — a
+  `schedule` wake with no spawning parent stages the message
+  `undeliverable` and dispatches it nowhere. That second case is the
+  standing shape of every self-woken run, not an edge: the capture *is* the
+  delivery, readable on the run node and nowhere else. Something a person
+  must read ⇒ route it yourself (`gate: <name>`) before you close. The Stop
+  boundary flags a run about to end with nothing communicated anywhere:
+  silence everywhere is surfaced as a failure, and
+  nobody re-runs you to extract a sentence.
+  It is silent once *any* message has gone out, though — a mid-run reply
+  buys no warning about a closeout that lands in a file.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order (stage `*.tmp`, rename =
   atomic). Quick ask ⇒ stdout suffices. Substantial work ⇒

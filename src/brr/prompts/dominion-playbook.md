@@ -184,6 +184,12 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   outright — there is nowhere to redirect it. A worker's completion is a
   fact for you, not a message with a correspondent: fold it into the reply
   to the event that asked for the work.
+- **The same no-gate fact reaches your own closing reply.** Woken by a
+  schedule with no spawning parent, your terminal message is captured and
+  dispatched nowhere — it is the run's body, not a delivery. Nothing warns
+  you once you have sent anything at all. So on a self-woken run, decide
+  where the reply goes *before* you write it: the card and a `gate:` write
+  are the only surfaces a person reads.
 - After any `spawn:` / `respawn:` / `event:`-addressed write → read
   `notices`: a refused file is deleted exactly like an accepted one, so the
   drop leaves no trace where you were looking.
