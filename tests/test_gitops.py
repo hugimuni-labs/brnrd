@@ -19,6 +19,7 @@ from brr.worktree import (
     classify_worktree_hygiene,
     create,
     format_worktree_hygiene_line,
+    list_brr_worktrees,
     list_worktrees,
     parse_worktree_hygiene_list,
     remove,
@@ -165,6 +166,106 @@ def test_list_worktrees_finds_brr_worktree(tmp_path):
 
     remove(repo, "task-42", branch="brr/task-42", delete_branch=True, force=True)
     assert list_worktrees(repo) == []
+
+
+def _repo_with_two_worktrees(tmp_path: Path) -> tuple[Path, Path]:
+    """A repo with one brr worktree and one worktree of it living elsewhere.
+
+    The second is the shape the ``host`` environment mandates —
+    ``git worktree add /tmp/brr-wt-<slug>`` — and the shape a path-prefix
+    filter made invisible (#721).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("init\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    create(repo, "task-42")
+    foreign = tmp_path / "elsewhere" / "brr-wt-mood"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "brr/mood", str(foreign)],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return repo, foreign
+
+
+def test_list_worktrees_counts_and_tags_a_worktree_outside_brr(tmp_path):
+    """#721: classify, don't filter.
+
+    The old shape dropped every path outside ``.brr/worktrees/`` with a bare
+    ``except ValueError: pass`` — no count, no trace — and the dropped set was
+    not incidental: it is where the ``host`` invariant *requires* a run's work
+    to live.
+    """
+    repo, foreign = _repo_with_two_worktrees(tmp_path)
+
+    by_name = {wt.path.name: wt for wt in list_worktrees(repo)}
+    assert set(by_name) == {"task-42", "brr-wt-mood"}
+
+    brr_wt = by_name["task-42"]
+    assert brr_wt.kind == "brr"
+    assert brr_wt.run_id == "task-42"
+    assert brr_wt.branch == "brr/task-42"
+
+    external = by_name["brr-wt-mood"]
+    assert external.kind == "external"
+    assert external.branch == "brr/mood"
+    assert external.path == foreign
+    # Its directory name is a slug, not a run id. Handing it out as one would
+    # send every consumer that joins it into a path at a manifest that does
+    # not exist, and be answered with a plausible False.
+    assert external.run_id is None
+
+
+def test_list_worktrees_excludes_the_main_checkout(tmp_path):
+    """Deliberate, not a filter leftover — the main checkout is the repo.
+
+    Pinned with a second worktree present so the assertion cannot pass merely
+    because the list came back empty.
+    """
+    repo, foreign = _repo_with_two_worktrees(tmp_path)
+
+    paths = {wt.path.resolve() for wt in list_worktrees(repo)}
+    assert repo.resolve() not in paths
+    assert paths == {(repo / ".brr/worktrees/task-42").resolve(), foreign.resolve()}
+
+
+def test_list_brr_worktrees_narrows_to_brr_managed(tmp_path):
+    """The narrow accessor callers ask for by name instead of re-filtering."""
+    repo, _foreign = _repo_with_two_worktrees(tmp_path)
+
+    narrowed = list_brr_worktrees(repo)
+    assert [wt.run_id for wt in narrowed] == ["task-42"]
+    assert {wt.kind for wt in narrowed} == {"brr"}
+
+
+def test_list_worktrees_tags_a_detached_worktree_outside_brr(tmp_path):
+    """A detached external worktree still parses: no branch line, no branch."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("init\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        stdout=subprocess.PIPE,
+    )
+    foreign = tmp_path / "elsewhere" / "detached"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(foreign)],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    wts = list_worktrees(repo)
+    assert len(wts) == 1
+    assert wts[0].kind == "external"
+    assert wts[0].branch == ""
+    assert wts[0].run_id is None
 
 
 def test_shared_brr_dir_uses_main_checkout_for_worktree(tmp_path):

@@ -35,13 +35,35 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
     )
 
 
+WorktreeKind = Literal["brr", "external"]
+
+
 @dataclass(frozen=True)
 class WorktreeInfo:
-    """A brr-managed worktree entry."""
+    """One worktree of this repo, other than the main checkout.
+
+    ``kind`` names which population the entry belongs to:
+
+    - ``"brr"`` — a run worktree brnrd minted under ``.brr/worktrees/``.
+    - ``"external"`` — a worktree of this same repo living anywhere else: a
+      resident's hand-made ``/tmp/brr-wt-<slug>`` tree (which the ``host``
+      environment's standing invariant *mandates*, precisely so a run stays
+      out of the maintainer's checkout), a Shell's own agent-isolation
+      directory, a maintainer's scratch checkout.
+
+    ``run_id`` is meaningful only for ``kind == "brr"``, where the layout
+    ``.brr/worktrees/<run-id>`` makes the directory name the run id. An
+    external worktree's directory name is *not* a run id — ``/tmp/brr-wt-mood``
+    would yield ``"brr-wt-mood"`` — and passing that off as one silently
+    mis-resolves every consumer that joins it into a path (a missing
+    ``.brr/runs/<run-id>/run.md`` reads as "no new commit" rather than as "no
+    such run"). So it carries ``None``, and consumers must handle it.
+    """
 
     path: Path
-    run_id: str
+    run_id: str | None
     branch: str
+    kind: WorktreeKind
 
 
 class BranchCheckedOutError(RuntimeError):
@@ -58,15 +80,62 @@ def run_branch_name(run_id: str) -> str:
     return f"brr/{run_id}"
 
 
-def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
-    """List brr-managed worktrees under ``.brr/worktrees/``.
+def _resolved(path: Path) -> Path:
+    """Best-effort canonical form, for *comparison* only.
 
-    Parses ``git worktree list --porcelain`` and filters to worktrees
-    whose path starts with the brr worktrees directory.
+    Both sides of every path test here come from different producers (git's
+    porcelain vs a config-derived ``Path``), so a symlinked checkout or a
+    ``..`` segment would otherwise make two names for one directory compare
+    unequal. The un-resolved path is what gets stored: it is the name git
+    itself prints, and the one an operator can paste back.
+    """
+    try:
+        return path.resolve()
+    except OSError:  # pragma: no cover - defensive; resolve() is non-strict
+        return path
+
+
+def _classify_worktree(path: Path, branch: str, worktrees_dir: Path) -> WorktreeInfo:
+    """Tag one parsed worktree ``brr`` or ``external``. Never drops it."""
+    try:
+        _resolved(path).relative_to(_resolved(worktrees_dir))
+    except ValueError:
+        return WorktreeInfo(path=path, run_id=None, branch=branch, kind="external")
+    return WorktreeInfo(
+        path=path, run_id=path.name, branch=branch, kind="brr",
+    )
+
+
+def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
+    """Every worktree of this repo except the main checkout, classified.
+
+    Parses ``git worktree list --porcelain`` and tags each entry ``brr``
+    (under ``.brr/worktrees/``) or ``external`` (anywhere else) — it does not
+    *drop* the latter. It used to: a filter by path prefix, silent, no count.
+    That made a whole population invisible to every consumer of this list,
+    and the invisible population was not incidental — the ``host``
+    environment's standing invariant is *pin* ``git worktree add
+    /tmp/brr-wt-<slug>``, so the rule that keeps a run out of the
+    maintainer's tree is the same rule that put its work where nothing could
+    see it, in a directory that does not survive a reboot (#721).
+
+    The **main checkout is excluded**, deliberately and not as a filter's
+    leftover: it is the repository rather than a worktree of it, it is the
+    one tree its owner is already looking at, and counting its working-tree
+    dirt would light the wake facet on every wake in which someone was
+    simply editing.
+
+    Callers whose subject is brnrd's own housekeeping want
+    :func:`list_brr_worktrees` — ask for the narrow set by name rather than
+    re-filtering this one, so which population a caller means stays legible
+    at the call site.
     """
     from . import gitops
 
-    worktrees_dir = gitops.shared_brr_dir(repo_root) / "worktrees"
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    worktrees_dir = brr_dir / "worktrees"
+    main_checkout = _resolved(brr_dir.parent)
+
     result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
     if result.returncode != 0:
         return []
@@ -75,6 +144,15 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
     current_path: Path | None = None
     current_branch: str = ""
 
+    def flush() -> None:
+        nonlocal current_path, current_branch
+        if current_path is not None and _resolved(current_path) != main_checkout:
+            entries.append(
+                _classify_worktree(current_path, current_branch, worktrees_dir)
+            )
+        current_path = None
+        current_branch = ""
+
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
             current_path = Path(line.split(" ", 1)[1])
@@ -82,34 +160,26 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
         elif line.startswith("branch "):
             ref = line.split(" ", 1)[1]
             current_branch = ref.removeprefix("refs/heads/")
-        elif line == "" and current_path is not None:
-            try:
-                current_path.relative_to(worktrees_dir)
-            except ValueError:
-                pass
-            else:
-                run_id = current_path.name
-                entries.append(WorktreeInfo(
-                    path=current_path,
-                    run_id=run_id,
-                    branch=current_branch,
-                ))
-            current_path = None
-            current_branch = ""
+        elif line == "":
+            # Records are blank-line separated; a detached worktree simply
+            # has no ``branch`` line, so its branch stays "".
+            flush()
 
-    if current_path is not None:
-        try:
-            current_path.relative_to(worktrees_dir)
-        except ValueError:
-            pass
-        else:
-            entries.append(WorktreeInfo(
-                path=current_path,
-                run_id=current_path.name,
-                branch=current_branch,
-            ))
-
+    flush()
     return entries
+
+
+def list_brr_worktrees(repo_root: Path) -> list[WorktreeInfo]:
+    """Only the run worktrees brnrd itself minted under ``.brr/worktrees/``.
+
+    The narrow half of :func:`list_worktrees`, for callers whose subject is
+    brnrd's own housekeeping rather than the repo's whole worktree
+    population. The distinction load-bears wherever a count drives a remedy:
+    "these accumulated, prune them" is sound advice about trees brnrd created
+    and abandoned, and wrong — destructive, even — about a Shell's live agent
+    isolation directory or a resident's ``/tmp`` tree holding unpushed work.
+    """
+    return [wt for wt in list_worktrees(repo_root) if wt.kind == "brr"]
 
 
 def path_for(repo_root: Path, run_id: str) -> Path:
