@@ -79,7 +79,7 @@ it). A turn over the cap keeps its head and states the elision inline —
 rather than a search. The cap exists because a fired `schedule` body
 becomes an immutable record: editing the live `schedule.md` entry forks it
 from every copy already in the store, and one such ghost was measured at
-12.9% of a whole wake (#736). Turns already under the cap render
+nearly 10% of a whole wake (#736). Turns already under the cap render
 untouched, so a normal wake is byte-identical to an uncapped one.
 
 The deeper records are written under the run directory as one JSONL file
