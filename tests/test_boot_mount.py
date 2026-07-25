@@ -92,6 +92,25 @@ def test_the_mount_loses_nothing(repo: Path):
     keys_b = {c.block_key for c in score_b.contracts if c.present}
     assert keys_a == keys_b
 
+    # 5. And the *total* says so too, not just the key list. Clause 4 asserted that
+    #    the ledger keeps *naming* every block, and for a while that was all any
+    #    assertion here reached: `prompt_bytes` counted the prose alone, so a
+    #    mounted wake reported itself 24% smaller than it was and `_cost_ledger`
+    #    printed a negative `unattributed` line with shares summing to 132%. The
+    #    mount moves bytes between channels; it is not a discount.
+    moved = sum(len(text.encode("utf-8")) for text in sink.values())
+    assert score_a.prompt_bytes == len(prose_only.encode("utf-8"))
+    #    The teeth: under the old arithmetic these two were equal. The mounted
+    #    total must exceed the prose it kept, by what left it.
+    assert score_b.prompt_bytes > len(mounted_prose.encode("utf-8"))
+    assert score_b.prompt_bytes == len(mounted_prose.encode("utf-8")) + moved
+    #    Both arms therefore bill the same wake, up to the one line the mount
+    #    itself adds (the kernel's `boot: mounted · <snapshot restored>` notice —
+    #    measured at 91 B, and the only text either arm has that the other
+    #    doesn't). Not exact equality: the mount is not free, it is just not a
+    #    saving. What this rules out is a *shortfall the size of a block*.
+    assert 0 <= score_b.prompt_bytes - score_a.prompt_bytes < 200
+
 
 def test_a_computed_block_is_never_subtracted(repo: Path):
     """Live state has no honest `Read`, so it must stay prose — in *both* paths.

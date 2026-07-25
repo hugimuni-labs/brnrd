@@ -411,11 +411,20 @@ class BootScore:
     hooks: list[BootHook] = field(default_factory=list)
 
     prompt_bytes: int | None = None
-    """Total UTF-8 size of the rendered wake, kernel included.
+    """Total UTF-8 size of the wake, kernel and mounted perceptions included.
 
     Set after the prompt is joined — the kernel is part of what the wake pays
     for, and a ledger that excludes the auditor is not a ledger.  ``None`` on
     an unrendered score (see :attr:`ContractEntry.bytes`).
+
+    "The wake", not "the prose".  Under ``boot.mount`` a file-backed block
+    leaves the prompt string and arrives as a seeded ``Read`` result instead
+    (``prompts.py``'s ``_take``, ``transcript.py``); the runner still reads
+    those bytes, so they are still part of the bill.  This used to count the
+    prose alone, which made every mounted wake under-report itself by the size
+    of everything that mounted — 24% on a measured Tier-2 boot, enough to
+    drive :func:`_cost_ledger` to a *negative* ``unattributed`` line.  The
+    field named the total; only the subtotal was in it.
     """
 
 

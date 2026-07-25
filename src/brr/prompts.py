@@ -2422,7 +2422,28 @@ def build_daemon_prompt_with_score(
         # nobody had is the failure this module's docstring already names.)
         mounted=bool(mountable),
     )
-    score.prompt_bytes = sizes.get("_prompt")
+    # A mounted block leaves the prose but never the wake: `_take` diverts it
+    # into `mount_sink` and `transcript.py` re-delivers it as a seeded `Read`
+    # result, so the runner pays for those bytes in a different grammatical
+    # position. Counting only the prose made this field a *subtotal* wearing
+    # the name "total". On a real Tier-2 wake five files mount (identity core,
+    # run preamble, weave, register, daemon-substrate) and the shortfall is not
+    # marginal: measured on run-260725-1136-pyck, prose 88,835 B against
+    # 117,459 B of censused blocks, so `_cost_ledger` printed
+    # `unattributed  -28,624 B` with per-authority shares summing to 132% —
+    # 24% of the wake invisible to the one number that claims to size it, and
+    # a negative "unattributed" line right under a comment saying a ledger
+    # whose columns don't add up is how you learn to stop trusting the ledger.
+    #
+    # `mount_sink`, not `mountable`: the latter is the set that *could* mount,
+    # and `introspection` sits in it while never passing through `_take` (it is
+    # joined via `_prepared_introspection_block` and stays prose). Correcting
+    # by `mountable` would double-count it. The sink is the only record of what
+    # actually left.
+    prose_bytes = sizes.get("_prompt")
+    score.prompt_bytes = None if prose_bytes is None else prose_bytes + sum(
+        len(text.encode("utf-8")) for text in (mount_sink or {}).values()
+    )
 
     return prompt, score
 
