@@ -306,10 +306,10 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
     # Server-side enforcement at the publish seam (#417 legal pack item 2).
     # Corpus is account-wide by construction (one home, shared across every
     # repo the account connects), so no single repo's consent can own it
-    # alone — `corpus_slices_permitted` intersects every connected repo's
-    # recorded consent and returns `None` (unenforced) unless every one of
-    # them has recorded one. A slice this account has not jointly consented
-    # to is dropped here, before it ever reaches storage.
+    # alone — `corpus_slices_permitted` intersects the recorded consent of
+    # every connected repo that has one, and returns `None` (unenforced) only
+    # when none of them do. A slice this account has not jointly consented to
+    # is dropped here, before it ever reaches storage.
     allowed_slices = publish_scope.corpus_slices_permitted(db, principal.account_id)
 
     seen: set[str] = set()
