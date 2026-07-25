@@ -25,7 +25,16 @@ def env():
     forwarder = CapturingForwarder()
     settings = Settings(
         database_url="sqlite:///:memory:",
-        inbox_long_poll_max_s=0.4,
+        # This cap must stay *above* the largest `wait=` any test here asks
+        # for, because the endpoint clamps to `min(wait, cap)` silently: at
+        # 0.4 the wake test below declared a 2s budget and got 0.4s, so on a
+        # loaded 2-core CI runner the enqueue landed after the poll had
+        # already returned empty (`assert [] == ['late']`, #726/#727 CI).
+        # The cap is a failure bound, not a schedule — every test still
+        # returns the moment its event arrives, so raising it costs nothing
+        # on the happy path. Tests wanting a short window pass their own
+        # `wait=` (see `test_long_poll_times_out_empty`, which asks 0.3).
+        inbox_long_poll_max_s=3.0,
         inbox_poll_interval_s=0.02,
     )
     app = create_app(settings, forwarder=forwarder)
