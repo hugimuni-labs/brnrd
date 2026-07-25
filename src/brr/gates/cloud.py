@@ -1868,11 +1868,17 @@ def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.
 # by hand" a checkable claim, and a bound that changes in `LiveRunIn` reddens a
 # test here instead of 422ing a dashboard.
 #
-# Note the *shape*: the identity set is the closed class and truncation is the
-# default, so a display field added to `LiveRunIn` later is bounded here as
+# Note the *shape*: the matched set is the closed class and truncation is the
+# default, so a *shown* field added to `LiveRunIn` later is bounded here as
 # soon as the table is regenerated, without anyone remembering to list it.
+#
+# The split is **matched vs shown**, not display vs identity. `repo_label`
+# reads like display and is matched: `publish_scope._subject_permits` resolves
+# a row's consent through it, and an unresolvable label falls back to the
+# *publisher's* consent — so truncating it here would publish an opted-out
+# repo's row under someone else's permission.
 _LIVE_RUN_TRUNCATION_MARK = "…"
-_LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "parent_run_id", "run_id"})
+_LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "parent_run_id", "repo_label", "run_id"})
 _LIVE_RUN_STRING_BOUNDS = {
     "card_text": 4096,
     "id": 64,
@@ -1893,9 +1899,11 @@ _LIVE_RUN_STRING_BOUNDS = {
 def _bounded_live_run(row: dict[str, Any]) -> dict[str, Any]:
     """Truncate this row's over-long display strings, marked.
 
-    Identity keys are left exactly as read: a truncated join key is *wrong
-    data*, not shortened data — it would silently re-point this row at another
-    run. The server rejects those, and one rejected row now costs one row.
+    Matched keys are left exactly as read: truncating a value some decision is
+    resolved against is *wrong data*, not shortened data. `id`/`run_id`/
+    `parent_run_id` would silently re-point this row at another run, and
+    `repo_label` decides whose consent the row publishes under. The server
+    rejects those, and one rejected row now costs one row.
     """
     for field, cap in _LIVE_RUN_STRING_BOUNDS.items():
         if field in _LIVE_RUN_IDENTITY_FIELDS:
