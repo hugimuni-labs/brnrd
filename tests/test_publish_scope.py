@@ -1250,28 +1250,146 @@ def test_a_lane_whose_rows_name_a_repo_must_gate_per_row():
     )
 
 
-def test_a_truncated_repo_label_cannot_borrow_another_repos_consent():
-    """`repo_label` is classified as a *display* field and truncates (#685), but
-    it is also the key `permitted_rows` resolves consent against — the one place
-    the truncate-vs-reject split touches something security-relevant.
+def _two_repos(client, *, victim_label: str, victim_layers: str, publisher_layers: str):
+    """A repo that opted OUT and a publisher that opted IN, same account."""
+    from brnrd.models import Repo
 
-    Truncation must therefore fail **closed**: a shortened label may drop its
-    row for want of consent, and must never resolve to a *different* repo that
-    happens to share a prefix. It does, by construction — the truncation mark is
-    appended, and no forge repo name can contain it — so a truncated label
-    matches nothing. Asserted rather than assumed, because "it can't get that
-    long in practice" is the reasoning this lane already lost money on.
+    client.post("/v1/repos/connect",
+                json={"repo_full_name": victim_label, "publish_layers": victim_layers})
+    client.post("/v1/repos/connect",
+                json={"repo_full_name": "Gurio/publisher", "publish_layers": publisher_layers})
+    with client.app.state.SessionLocal() as db:
+        victim = db.query(Repo).filter(Repo.repo_full_name == victim_label).one()
+        publisher = db.query(Repo).filter(Repo.repo_full_name == "Gurio/publisher").one()
+        return victim.account_id, victim.id, publisher.id
+
+
+def test_truncating_repo_label_would_publish_an_opted_out_repo_under_the_publishers_consent():
+    """The escalation `repo_label`'s classification used to open, pinned (#685).
+
+    The first cut of #685 classified `repo_label` as display and truncated it,
+    on the argument that a shortened label "fails closed" because the truncation
+    mark cannot appear in a forge repo name, so it matches nothing.
+
+    **Matching nothing is not failing closed.** `_subject_permits` resolves the
+    no-match case to the *publisher's* consent — the #714 fallback, which is
+    right for a spoofed label and catastrophic for one the server truncated
+    itself. Truncation is what flips the outcome, and this test drives both
+    sides of that flip against `permitted_rows` rather than asserting a string
+    property. The string-property version this replaces passed for the entire
+    life of the escalation, because it never called `permitted_rows`.
     """
     from brnrd import schemas
 
+    client = _client()
+    _login(client)
     cap = schemas.LiveRunIn.string_bounds()["repo_label"]
-    victim = "Gurio/" + "r" * cap  # truncates to a prefix of a real label
-    row = schemas.LiveRunIn.model_validate({"id": "x", "repo_label": victim})
+    victim_label = "Gurio/" + "r" * (cap + 50)
+    account_id, _victim_id, publisher_id = _two_repos(
+        client, victim_label=victim_label, victim_layers="none", publisher_layers="live_runs",
+    )
 
-    assert len(row.repo_label) == cap
-    assert row.repo_label.endswith(schemas.LIVE_RUN_TRUNCATION_MARK)
-    # The mark is what makes this fail closed: the stored label is not a prefix
-    # of any real repo label, so it can only ever match a repo literally named
-    # with it — and `…` is not a legal character in a forge repo name.
-    assert not victim.startswith(row.repo_label)
-    assert schemas.LIVE_RUN_TRUNCATION_MARK not in victim
+    class _Row:
+        def __init__(self, label):
+            self.repo_label = label
+
+    with client.app.state.SessionLocal() as db:
+        def kept_for(label):
+            return publish_scope.permitted_rows(
+                db, [_Row(label)], account_id=account_id,
+                publisher_repo_id=publisher_id, lane="live_runs",
+            )
+
+        # As the daemon sends it: resolves to the victim, whose `none` drops it.
+        assert kept_for(victim_label) == []
+
+        # The value truncation *would* have produced. It resolves to no repo, so
+        # `_subject_permits` falls back to the publisher's `live_runs` and the
+        # opted-out repo's row publishes under someone else's consent.
+        mark = schemas.LIVE_RUN_TRUNCATION_MARK
+        as_truncated = victim_label[: cap - len(mark)] + mark
+        assert len(kept_for(as_truncated)) == 1, (
+            "expected the truncated label to escalate — if this no longer holds, "
+            "the fallback in _subject_permits changed and this test's premise is stale"
+        )
+
+    # Which is why the server must never produce that value: `repo_label` is in
+    # the matched set, so an over-long one costs its row at validation instead.
+    with pytest.raises(Exception):
+        schemas.LiveRunIn.model_validate({"id": "run-v", "repo_label": victim_label})
+
+
+def test_an_over_long_repo_label_costs_its_row_instead_of_changing_whose_consent_applies():
+    """The shipped behaviour: reject, report, and leave the neighbours alone."""
+    from brnrd import schemas
+
+    cap = schemas.LiveRunIn.string_bounds()["repo_label"]
+    over = "Gurio/" + "r" * (cap + 50)
+
+    intake = schemas.isolate_live_runs([
+        {"id": "keep-1", "repo_label": "Gurio/publisher"},
+        {"id": "drop-me", "repo_label": over},
+        {"id": "keep-2", "repo_label": "Gurio/publisher"},
+    ])
+    assert [row.id for row in intake.runs] == ["keep-1", "keep-2"]
+    assert [(r.id, r.fields) for r in intake.rejected] == [("drop-me", ["repo_label"])]
+    # It is *not* silently shortened into an unresolvable label.
+    assert schemas.LIVE_RUN_TRUNCATION_MARK not in "".join(
+        row.repo_label for row in intake.runs
+    )
+
+
+def test_a_repo_label_at_the_cap_still_resolves_to_its_own_repos_consent():
+    """The other direction, and the one that proves the fix did not simply break
+    the lane: a label at exactly the bound is unchanged and still resolves to
+    the repo it names — whose recorded `none` is honoured over the publisher's
+    `live_runs`."""
+    from brnrd import schemas
+
+    client = _client()
+    _login(client)
+    cap = schemas.LiveRunIn.string_bounds()["repo_label"]
+    at_cap_label = "Gurio/" + "r" * (cap - len("Gurio/"))
+    assert len(at_cap_label) == cap
+    account_id, _victim_id, publisher_id = _two_repos(
+        client, victim_label=at_cap_label, victim_layers="none", publisher_layers="live_runs",
+    )
+
+    row = schemas.LiveRunIn.model_validate({"id": "run-v", "repo_label": at_cap_label})
+    assert row.repo_label == at_cap_label  # byte-identical, unmarked
+
+    with client.app.state.SessionLocal() as db:
+        kept = publish_scope.permitted_rows(
+            db, [row], account_id=account_id,
+            publisher_repo_id=publisher_id, lane="live_runs",
+        )
+    assert kept == [], "the victim's recorded `none` must still win over the publisher's consent"
+
+
+def test_every_matched_field_rejects_rather_than_truncates():
+    """The rule, stated as the predicate that actually decides: **is this value
+    ever matched, or only shown?**
+
+    "Display vs identity" is how this set was first drawn, and it is why
+    `repo_label` — which reads like display and is matched — was truncated into
+    a consent escalation. The polarity chosen in #685 makes truncation the
+    default so a new *shown* field is safe automatically; the cost is that a new
+    *matched* field defaults to the wrong side. This is the test that charges
+    that cost: any bounded `LiveRunIn` field a consent or join lookup reads must
+    be in `LIVE_RUN_IDENTITY_FIELDS`.
+    """
+    from brnrd import schemas
+
+    # Fields `src/brnrd` resolves a decision through, not merely renders.
+    # `repo_label`: publish_scope._subject_repos (consent). id/run_id/
+    # parent_run_id: row and parent/child joins. `stream` is deliberately absent
+    # — it looks like a key and nothing in src/brnrd matches on it.
+    matched = {"id", "run_id", "parent_run_id", "repo_label"}
+    assert matched <= schemas.LIVE_RUN_IDENTITY_FIELDS, (
+        "a value something is matched against is truncating: "
+        f"{sorted(matched - schemas.LIVE_RUN_IDENTITY_FIELDS)}"
+    )
+    bounds = schemas.LiveRunIn.string_bounds()
+    for field in sorted(schemas.LIVE_RUN_IDENTITY_FIELDS):
+        with pytest.raises(Exception):
+            schemas.LiveRunIn.model_validate({"id": "run-a", field: "y" * (bounds[field] + 1)})
