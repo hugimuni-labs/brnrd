@@ -268,6 +268,12 @@ def test_wake_request_rides_daemon_publish_and_consume_ack():
     assert pending is not None
     assert pending["request_id"] == wake["request_id"]
     assert pending["profile"] == "codex"
+    # #733: and the row's own staleness horizon rides along, so the daemon
+    # stops keeping a second one. Without this the daemon had no way to know
+    # when the tap it is holding actually dies, and invented 900 s while the
+    # chip reported pending against 24 h.
+    assert pending["expires_at"] is not None
+    assert pending["expires_at"] > pending["requested_at"]
 
     # The daemon acks consumption on its next publish; the row retires and
     # the chip disappears from the dashboard view.
@@ -283,3 +289,75 @@ def test_wake_request_rides_daemon_publish_and_consume_ack():
         f"/v1/dashboard/runners/wake-request/{wake['request_id']}",
     )
     assert canceled.json()["wake_request"]["status"] == "consumed"
+
+
+def test_a_lapsed_tap_lands_on_expired_not_on_consumed():
+    """#733: the daemon can finally say "this never ran".
+
+    Its only ack channel used to be `consumed_wake_request_ids`, routed to
+    `mark_consumed` — *"these requests were spent on a dispatched wake"* — so a
+    tap the daemon expired locally was published as having run. The chip flipped
+    to consumed for a runner the user never got. `STATUS_EXPIRED` already
+    existed for the server's own sweep; the daemon just had no field for it.
+    """
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    _login_cookie(client)
+    wake = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
+    ).json()["wake_request"]
+
+    payload = dict(_CATALOG_PAYLOAD)
+    payload["lapsed_wake_request_ids"] = [wake["request_id"]]
+    posted = client.put("/v1/daemons/runners", json=payload, headers=daemon_headers)
+    assert posted.status_code == 200
+    # Retired either way — the chip goes quiet rather than lying.
+    assert posted.json()["pending_wake_request"] is None
+    assert client.get("/v1/dashboard/runners").json()["wake_request"] is None
+
+    # But the row says what actually happened, which is the whole point.
+    row = client.delete(
+        f"/v1/dashboard/runners/wake-request/{wake['request_id']}",
+    ).json()["wake_request"]
+    assert row["status"] == "expired"
+
+
+def test_the_two_ack_lists_are_independent_on_one_tick():
+    """Both arrive on the same publish; neither may absorb the other.
+
+    A single shared list is what made every expiry read as a spend, so the
+    regression to guard is a "simplification" that merges them again.
+    """
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+    _login_cookie(client)
+    spent = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
+    ).json()["wake_request"]
+    # Minting a second tap supersedes the first (one pending per account), so
+    # cancel-free supersession is exactly how two decided rows coexist here.
+    expired = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "claude-haiku"},
+    ).json()["wake_request"]
+
+    payload = dict(_CATALOG_PAYLOAD)
+    payload["consumed_wake_request_ids"] = [spent["request_id"]]
+    payload["lapsed_wake_request_ids"] = [expired["request_id"]]
+    assert client.put(
+        "/v1/daemons/runners", json=payload, headers=daemon_headers,
+    ).status_code == 200
+
+    def _status(request_id):
+        return client.delete(
+            f"/v1/dashboard/runners/wake-request/{request_id}",
+        ).json()["wake_request"]["status"]
+
+    assert _status(spent["request_id"]) == "consumed"
+    assert _status(expired["request_id"]) == "expired"

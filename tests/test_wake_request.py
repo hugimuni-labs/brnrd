@@ -173,31 +173,48 @@ def test_claimable_for_event_within_window():
     assert wake_request.claimable_for_event(request, now.isoformat()) is True
 
 
-def test_claimable_for_event_outside_window():
+def test_a_tap_older_than_the_event_is_still_claimable(tmp_path):
+    """#733: the direction that ate a real tap.
+
+    #577 refused any tap parked more than 120 s before the event that wanted
+    it. A human taps the rack and then composes a message; the maintainer's
+    took 16 minutes, and the guard fired on exactly the behaviour the feature
+    exists to serve. "Too old" is now the expiry's question and only the
+    expiry's, so age alone never disqualifies a claim.
+    """
     now = datetime.now(timezone.utc)
-    parked = now - timedelta(minutes=10)
-    request = {"request_id": "w2", "profile": "codex", "parked_at": parked.isoformat()}
-    assert wake_request.claimable_for_event(
-        request, now.isoformat(), window_seconds=120,
-    ) is False
+    for age in (timedelta(minutes=10), timedelta(hours=6), timedelta(hours=23)):
+        request = {
+            "request_id": "w2", "profile": "codex",
+            "parked_at": (now - age).isoformat(),
+        }
+        assert wake_request.claimable_for_event(request, now.isoformat()) is True
 
 
-def test_claimable_for_event_respects_custom_window():
+def test_a_tap_parked_after_the_event_is_not_for_that_event():
+    """The half of #577 that survives, because no expiry can answer it.
+
+    A tap minted while a wake is already queued was parked for the *next* one.
+    The small tolerance is for a tap and its message being one breath with
+    disagreeing clocks.
+    """
     now = datetime.now(timezone.utc)
-    parked = now - timedelta(seconds=90)
-    request = {"request_id": "w3", "profile": "codex", "parked_at": parked.isoformat()}
-    assert wake_request.claimable_for_event(
-        request, now.isoformat(), window_seconds=120,
-    ) is True
-    assert wake_request.claimable_for_event(
-        request, now.isoformat(), window_seconds=60,
-    ) is False
+
+    def _claimable(offset):
+        return wake_request.claimable_for_event(
+            {"request_id": "w3", "profile": "codex",
+             "parked_at": (now + offset).isoformat()},
+            now.isoformat(),
+        )
+
+    assert _claimable(timedelta(seconds=2)) is True     # same breath, clock skew
+    assert _claimable(timedelta(seconds=60)) is False    # a later wake's tap
 
 
 def test_claimable_for_event_missing_timestamps_defaults_true():
     """No `parked_at` (legacy mirror) or no event `created` ⇒ nothing to
-    judge the window against ⇒ claim whatever is pending, same as before
-    #577 ever existed."""
+    judge against ⇒ claim whatever is pending, same as before #577 ever
+    existed. A parsing hiccup must never silently swallow a tap."""
     assert wake_request.claimable_for_event({"profile": "codex"}, None) is True
     assert wake_request.claimable_for_event(
         {"profile": "codex", "parked_at": datetime.now(timezone.utc).isoformat()},
@@ -205,57 +222,79 @@ def test_claimable_for_event_missing_timestamps_defaults_true():
     ) is True
 
 
-def test_pending_ttl_lapses_stale_request(tmp_path):
-    """#577: a tap nobody claimed in `ttl_seconds` has outlived any wake it
-    could have been meant for — lazily expired on read, with a receipt."""
+def test_expiry_is_the_servers_and_pending_no_longer_decides(tmp_path):
+    """#733: one staleness horizon, published, and `pending()` is only a read.
+
+    The old shape kept a local 900 s TTL *inside* `pending()`, so a lapse
+    returned `None` and every miss was invisible to the report surface built
+    for it. Now the mirror carries the row's own `expires_at`, `expired()` is
+    the only thing that judges it, and the tap is still in the caller's hand
+    when the verdict is composed.
+    """
     brr_dir = _brr(tmp_path)
-    stale = (datetime.now(timezone.utc) - timedelta(seconds=1000)).isoformat()
-    wake_request.store_pending(
-        brr_dir, {"request_id": "wake_stale", "profile": "codex", "requested_at": stale},
-    )
-    assert wake_request.pending(brr_dir, ttl_seconds=900) is None
-    assert wake_request.consumed_ids(brr_dir) == ["wake_stale"]
-    receipt = wake_request.last_receipt(brr_dir)
-    assert receipt["request_id"] == "wake_stale"
-    assert receipt["outcome"] == "lapsed"
-    assert receipt["profile"] is None
-    # A later mirror tick for the same still-server-pending id must not
-    # resurrect it — same guard as an ordinary consume.
-    wake_request.store_pending(
-        brr_dir, {"request_id": "wake_stale", "profile": "codex", "requested_at": stale},
-    )
-    assert wake_request.pending(brr_dir) is None
+    now = datetime.now(timezone.utc)
+    wake_request.store_pending(brr_dir, {
+        "request_id": "wake_live", "profile": "codex",
+        "requested_at": (now - timedelta(hours=3)).isoformat(),
+        "expires_at": (now + timedelta(hours=21)).isoformat(),
+    })
+    live = wake_request.pending(brr_dir)
+    # Three hours old — dead under the retired 900 s TTL, alive under the row.
+    assert live is not None
+    assert live["expires_at"]
+    assert wake_request.expired(live) is False
+
+    wake_request.store_pending(brr_dir, {
+        "request_id": "wake_gone", "profile": "codex",
+        "requested_at": (now - timedelta(days=2)).isoformat(),
+        "expires_at": (now - timedelta(hours=1)).isoformat(),
+    })
+    stale = wake_request.pending(brr_dir)
+    # Still *returned* — that is the point. The caller decides and can report.
+    assert stale is not None and stale["request_id"] == "wake_gone"
+    assert wake_request.expired(stale) is True
 
 
-def test_pending_ttl_keeps_fresh_request(tmp_path):
+def test_a_mirror_with_no_expiry_is_never_locally_expired(tmp_path):
+    """An older server sends no `expires_at`, so this daemon has no opinion.
+
+    Inventing a local horizon to fill that silence is precisely the bug #733
+    removed: the surface that answered was not the surface that decided. When
+    the server stops returning the request, `store_pending` drops the mirror —
+    staleness stays where it already lives.
+    """
     brr_dir = _brr(tmp_path)
-    fresh = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    ancient = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     wake_request.store_pending(
-        brr_dir, {"request_id": "wake_fresh", "profile": "codex", "requested_at": fresh},
+        brr_dir,
+        {"request_id": "wake_ancient", "profile": "codex", "requested_at": ancient},
     )
-    assert wake_request.pending(brr_dir, ttl_seconds=900) is not None
+    request = wake_request.pending(brr_dir)
+    assert request is not None
+    assert "expires_at" not in request
+    assert wake_request.expired(request) is False
 
 
-def test_pending_ttl_none_skips_check(tmp_path):
-    """`ttl_seconds=None` (the default) reproduces the pre-#577 behaviour
-    exactly — existing callers that never pass it are unaffected."""
-    brr_dir = _brr(tmp_path)
-    stale = (datetime.now(timezone.utc) - timedelta(seconds=100_000)).isoformat()
-    wake_request.store_pending(
-        brr_dir, {"request_id": "wake_ancient", "profile": "codex", "requested_at": stale},
-    )
-    assert wake_request.pending(brr_dir) is not None
+def test_a_lapse_is_acked_as_expired_not_as_a_spend(tmp_path):
+    """#733: the two ledgers, and why they cannot be one.
 
-
-def test_lapse_records_receipt_and_prevents_resurrection(tmp_path):
+    `lapse()` used to write the same list `consume()` writes, so every expiry
+    was published through `mark_consumed` — *"these requests were spent on a
+    dispatched wake"* — and the chip flipped to consumed for a tap that never
+    ran. Its docstring defended the loss because "the receipt is where the
+    distinction lives… a human or the dashboard can tell": the receipt is a
+    local file that never leaves the machine.
+    """
     brr_dir = _brr(tmp_path)
     wake_request.store_pending(brr_dir, {"request_id": "wake_lapse", "profile": "codex"})
     wake_request.lapse(
         brr_dir, "wake_lapse", source="telegram", event_id="evt-x",
-        reason="tap parked outside the claim window for this wake",
+        reason="the tap expired at 2026-07-25T10:55:00+00:00",
     )
     assert wake_request.pending(brr_dir) is None
-    assert wake_request.consumed_ids(brr_dir) == ["wake_lapse"]
+    # The distinction the wire now carries: expired, not spent.
+    assert wake_request.lapsed_ids(brr_dir) == ["wake_lapse"]
+    assert wake_request.consumed_ids(brr_dir) == []
     receipt = wake_request.last_receipt(brr_dir)
     assert {k: v for k, v in receipt.items() if k != "at"} == {
         "request_id": "wake_lapse",
@@ -263,11 +302,29 @@ def test_lapse_records_receipt_and_prevents_resurrection(tmp_path):
         "event_id": "evt-x",
         "profile": None,
         "outcome": "lapsed",
-        "reason": "tap parked outside the claim window for this wake",
+        "reason": "the tap expired at 2026-07-25T10:55:00+00:00",
     }
-    # Doesn't resurrect even if the server still reports it pending.
+    # Doesn't resurrect even if the server still reports it pending: the
+    # lapsed ledger blocks it exactly as the consumed one does.
     wake_request.store_pending(brr_dir, {"request_id": "wake_lapse", "profile": "codex"})
     assert wake_request.pending(brr_dir) is None
+
+
+def test_the_two_ledgers_clear_independently(tmp_path):
+    """Acking one must not silently drop the other's pending work."""
+    brr_dir = _brr(tmp_path)
+    wake_request.store_pending(brr_dir, {"request_id": "spent", "profile": "codex"})
+    wake_request.consume(brr_dir, "spent")
+    wake_request.store_pending(brr_dir, {"request_id": "gone", "profile": "codex"})
+    wake_request.lapse(brr_dir, "gone", source="ttl", reason="expired")
+    assert wake_request.consumed_ids(brr_dir) == ["spent"]
+    assert wake_request.lapsed_ids(brr_dir) == ["gone"]
+
+    wake_request.clear_consumed(brr_dir, ["spent"])
+    assert wake_request.consumed_ids(brr_dir) == []
+    assert wake_request.lapsed_ids(brr_dir) == ["gone"]
+    wake_request.clear_lapsed(brr_dir, ["gone"])
+    assert wake_request.lapsed_ids(brr_dir) == []
 
 
 def test_record_receipt_default_shape_unaffected_by_new_kwargs():
