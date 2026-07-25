@@ -390,18 +390,26 @@ class RunnersOut(BaseModel):
 # how a reader can tell the difference.
 LIVE_RUN_TRUNCATION_MARK = "…"
 
-# Join keys, where a truncated value is *wrong data* rather than shortened
-# data: it would silently re-point a row at another run. These keep hard
-# rejection; every other bounded string on `LiveRunIn` is a display field and
-# truncates instead.
+# Values something is **matched** against, where a truncated value is *wrong
+# data* rather than shortened data. These keep hard rejection; every other
+# bounded string on `LiveRunIn` is only ever *shown* and truncates instead.
+#
+# The split is **matched vs shown**, not display vs identity. `id`/`run_id`/
+# `parent_run_id` are row and parent-child joins. `repo_label` reads like
+# display and is matched: `publish_scope._subject_permits` resolves a row's
+# consent through it, and an unresolvable label falls back to the *publisher's*
+# consent — so truncating it here publishes an opted-out repo's row under
+# someone else's permission, which is #714 through a new door. `stream` is
+# deliberately absent: it looks like a key and nothing in `src/brnrd` matches
+# on it.
 #
 # Deliberately the *closed* class, so the open one is the default (#685). This
 # repo has paid four times (#417, #674, #709, #721) for a class defined by
-# listing its members: the member nobody listed shows up later. Here the
-# listed set is small, semantic and finite — a live-run row has exactly these
-# three join keys — while a display field added to `LiveRunIn` next month
-# inherits the safe behaviour with no edit here.
-LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "run_id", "parent_run_id"})
+# listing its members: the member nobody listed shows up later. The polarity
+# chosen here makes a new *shown* field safe with no edit; the cost is that a
+# new *matched* field defaults to the wrong side, and
+# `test_every_matched_field_rejects_rather_than_truncates` is what charges it.
+LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "run_id", "parent_run_id", "repo_label"})
 
 
 def _is_str_annotation(annotation: Any) -> bool:
