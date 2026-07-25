@@ -1,0 +1,93 @@
+{
+  "$comment": [
+    "The section-depth contract, sibling to card_now_projection.json (#722).",
+    "Kept separate because that file is properly projection-only: one string in,",
+    "one string out. This rule answers a different question — which heading depth",
+    "carries a body's sections — and each language consumes the answer on its own",
+    "surface.",
+    "",
+    "Read by tests/test_card.py (`section_names` -> names) and by",
+    "src/frontend/src/lib/runNode.test.ts (`hasSectionsBeyondNow` -> boolean).",
+    "Same bodies, same rule, two surfaces; a case only one side passes is a",
+    "divergence the gate catches.",
+    "",
+    "The rule: sections sit at `Now`'s depth, because they are its siblings by",
+    "construction. Only when there is no `Now` does anything need inferring —",
+    "shallowest depth with more than one heading (a lone shallow heading is a",
+    "title, two are sections), else shallowest."
+  ],
+  "cases": [
+    {
+      "name": "H1 title above H2 sections — the dominant card shape, 200 of 272 bodies",
+      "body": "# run-260719-0000-hg96 · the frontier arithmetic\n\n## Now\nliving\n\n## Arc\nhistory\n\n## Open\nquestions",
+      "expectedNames": ["Arc", "Open"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "H1 sections with no title — Now's depth is the section depth, no inference",
+      "body": "# Now\nliving\n\n# Arc\nhistory",
+      "expectedNames": ["Arc"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "'## Now — done' is excluded by name, not by literal string",
+      "body": "# a run title\n\n## Now — done\nliving\n\n## Evidence chain\ne\n\n## Next\nn",
+      "expectedNames": ["Evidence chain", "Next"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "no headings at all",
+      "body": "one note, no sections",
+      "expectedNames": [],
+      "expectedHasMore": false
+    },
+    {
+      "name": "H1 title above a lone H2 Now — the title is not content behind the expand",
+      "body": "# a run title\n\n## Now\nliving",
+      "expectedNames": [],
+      "expectedHasMore": false
+    },
+    {
+      "name": "real preamble before the sections is content the projection dropped",
+      "body": "# a run title\n\nprose the projection never showed\n\n## Now\nliving",
+      "expectedNames": [],
+      "expectedHasMore": true
+    },
+    {
+      "name": "no Now, one H1 title above H2 sections — shallowest depth that repeats",
+      "body": "# a run title\n\n## Arc\nhistory\n\n## Open\nquestions",
+      "expectedNames": ["Arc", "Open"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "no Now, two H1s are sections rather than titles",
+      "body": "# Arc\nhistory\n\n# Open\nquestions",
+      "expectedNames": ["Arc", "Open"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "no Now, a single heading is all there is — nothing repeats, take the shallowest",
+      "body": "# a run title\n\nprose",
+      "expectedNames": ["a run title"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "deeper headings sit inside their section, not beside it",
+      "body": "## Now\nliving\n\n## Arc\nhistory\n\n### Sub\ndetail",
+      "expectedNames": ["Arc"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "a body sectioned entirely in H3",
+      "body": "### Now\nliving\n\n### Arc\nhistory",
+      "expectedNames": ["Arc"],
+      "expectedHasMore": true
+    },
+    {
+      "name": "headings inside a fence are not headings",
+      "body": "## Now\n```sh\n# not a heading\n## also not\n```\ndone",
+      "expectedNames": [],
+      "expectedHasMore": false
+    }
+  ]
+}

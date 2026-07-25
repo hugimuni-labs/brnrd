@@ -139,14 +139,32 @@ def now_projection(body: str, *, limit: int | None = None) -> str:
 
 
 def section_names(body: str, *, exclude_now: bool = True) -> list[str]:
-    """The body's top-level section names, in order.
+    """The body's section names, in order — the wake's "also in that body: …".
 
-    "Top level" is the shallowest heading depth the body actually uses, not a
-    hardcoded ``##`` — an H1-sectioned card has a shape too, and reporting it
-    as shapeless is the same defect as projecting it whole.
+    **The section depth is ``Now``'s depth.** Sections are ``Now``'s siblings by
+    construction, so when the body has a ``Now`` heading the question is already
+    answered and nothing needs inferring.
+
+    The fallback, and only when there is no ``Now``: the shallowest depth
+    carrying **more than one** heading, else the shallowest. That distinguishes
+    the two things a lone shallow heading can be — one H1 is a run *title*, two
+    H1s are sections.
+
+    A title is not a section, and defining the top level as ``min(depth)``
+    conflates them. The dominant card shape is an H1 title above H2 sections, so
+    ``min`` reports the run's own title as its entire shape — a definite,
+    plausible, useless value, on the same wake surface #722 is about. Driven
+    over 272 captured bodies, ``min`` disagreed with the old ``## ``-only rule
+    on 200 of them and was worse on every one.
+
+    Against that old rule this is a strict improvement, not just a repair:
+    equal on 246 of 272, and each of the 26 differences drops a ``Now — done`` /
+    ``Now — CLOSING`` heading that was leaking into the list as though it were a
+    section, because the old exclusion tested for the literal string ``now``.
     """
 
     headings: list[tuple[int, str]] = []
+    now_depth: int | None = None
     fenced = False
     for line in body.replace("\r\n", "\n").split("\n"):
         stripped = line.strip()
@@ -156,12 +174,22 @@ def section_names(body: str, *, exclude_now: bool = True) -> list[str]:
         if fenced:
             continue
         found = _heading_depth(line)
-        if found is not None:
-            headings.append((found, stripped.lstrip("#").strip()))
+        if found is None:
+            continue
+        headings.append((found, stripped.lstrip("#").strip()))
+        if now_depth is None and _NOW_HEADING_RE.match(stripped):
+            now_depth = found
     if not headings:
         return []
-    top = min(depth for depth, _ in headings)
-    names = [name for depth, name in headings if depth == top and name]
+    if now_depth is not None:
+        depth = now_depth
+    else:
+        counts: dict[int, int] = {}
+        for found, _ in headings:
+            counts[found] = counts.get(found, 0) + 1
+        repeated = sorted(d for d, n in counts.items() if n > 1)
+        depth = repeated[0] if repeated else min(counts)
+    names = [name for found, name in headings if found == depth and name]
     if exclude_now:
         names = [n for n in names if not re.match(r"now\b", n, re.IGNORECASE)]
     return names

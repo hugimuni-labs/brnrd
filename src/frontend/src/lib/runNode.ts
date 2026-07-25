@@ -410,11 +410,15 @@ export function nowProjection(body: string, limit?: number): string {
  *
  * Depth-agnostic since #722, for the same reason the projection is: an
  * H1-sectioned card reported `hasMore: false` and hid real content behind an
- * affordance that never appeared. "Top level" is the shallowest depth the body
- * actually uses, so a body sectioned entirely in `###` still has a shape.
+ * affordance that never appeared.
+ *
+ * Section depth comes from `sectionDepth` — mirroring `brr.card.section_names`,
+ * which is where the rule is documented. The short version: sections are `Now`'s
+ * siblings, so `Now`'s depth *is* the section depth; `Math.min` would call an H1
+ * run title a section, and the dominant card shape is an H1 title above H2
+ * sections.
  */
-export function hasSectionsBeyondNow(body: string): boolean {
-	const lines = body.replace(/\r\n/g, '\n').split('\n');
+function bodyHeadings(lines: string[]): { index: number; depth: number; text: string }[] {
 	const headings: { index: number; depth: number; text: string }[] = [];
 	let fenced = false;
 	lines.forEach((line, index) => {
@@ -427,13 +431,51 @@ export function hasSectionsBeyondNow(body: string): boolean {
 		const depth = headingDepth(line);
 		if (depth !== null) headings.push({ index, depth, text: stripped.replace(/^#+/, '').trim() });
 	});
+	return headings;
+}
+
+/**
+ * Which heading depth carries this body's sections.
+ *
+ * `Now`'s depth when there is a `Now`, because sections are its siblings by
+ * construction. Otherwise the shallowest depth carrying more than one heading —
+ * one shallow heading is a title, two are sections — and the shallowest depth
+ * if nothing repeats. See `brr.card.section_names` for the driven reasoning.
+ */
+function sectionDepth(headings: { depth: number; text: string }[]): number {
+	const now = headings.find((h) => /^now\b/i.test(h.text));
+	if (now) return now.depth;
+	const counts = new Map<number, number>();
+	for (const h of headings) counts.set(h.depth, (counts.get(h.depth) ?? 0) + 1);
+	const repeated = [...counts.entries()]
+		.filter(([, n]) => n > 1)
+		.map(([d]) => d)
+		.sort((a, b) => a - b);
+	return repeated.length ? repeated[0] : Math.min(...counts.keys());
+}
+
+export function hasSectionsBeyondNow(body: string): boolean {
+	const lines = body.replace(/\r\n/g, '\n').split('\n');
+	const headings = bodyHeadings(lines);
 	if (headings.length === 0) return false;
-	const top = Math.min(...headings.map((h) => h.depth));
-	const topLevel = headings.filter((h) => h.depth === top);
-	if (topLevel.some((h) => !/^now\b/i.test(h.text))) return true;
-	// Only `Now` headings at the top level: anything before the first one is
-	// body the projection dropped.
-	return lines.slice(0, topLevel[0].index).join('\n').trim() !== '';
+	const depth = sectionDepth(headings);
+	const sections = headings.filter((h) => h.depth === depth);
+	if (sections.some((h) => !/^now\b/i.test(h.text))) return true;
+	// Only `Now` sections: anything before the first one is body the projection
+	// dropped — except a heading shallower than the sections, which is the run's
+	// title. A title is not content, and the node's frame already carries it, so
+	// offering an expand that reveals only the title is the same title/section
+	// confusion `sectionDepth` exists to end.
+	return (
+		lines
+			.slice(0, sections[0].index)
+			.filter((line) => {
+				const found = headingDepth(line);
+				return found === null || found >= depth;
+			})
+			.join('\n')
+			.trim() !== ''
+	);
 }
 
 /**
