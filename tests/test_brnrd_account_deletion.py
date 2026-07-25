@@ -22,7 +22,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from brnrd import account_deletion, create_app, ids, stripe_api  # noqa: E402
+from brnrd import account_deletion, billing, create_app, ids, stripe_api  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import (  # noqa: E402
     Account,
@@ -304,6 +304,81 @@ def test_delete_account_sweeps_every_store_but_retains_the_ledger(monkeypatch):
     # And the cookie-based dashboard seam agrees.
     denied_cookie = client.get("/v1/dashboard/repos")
     assert denied_cookie.status_code == 401
+
+
+def test_retention_receipt_survives_a_post_erasure_webhook_replay(monkeypatch):
+    """The receipt claims ``retained=[billing_ledger]`` is the *only* store
+    that outlives the erasure. #713 falsified it: post-erasure Stripe webhooks
+    wrote fresh Subscription/CreditBucket rows and appended to the retained
+    ledger itself. Replay every type the billing dispatcher knows — the
+    enumeration is read off its dispatch table, so a seventh type joins this
+    assertion with no edit here — and hold the claim to the letter.
+
+    The companion assertion to test_brnrd_billing.py's replay: that one pins
+    "no writes", this one pins the *receipt's* wording against the schema.
+    """
+    from sqlalchemy import func, select
+
+    from brnrd.models import Base
+
+    client = _client()
+    account_id, _ = _login(client)
+    _seed_everything(client, account_id)
+    monkeypatch.setattr(
+        "brnrd.account_deletion.stripe_api.cancel_subscription_now",
+        lambda settings, *, subscription_id: None,
+    )
+    assert client.post("/v1/accounts/delete", json={"confirm_login": "octocat"}).status_code == 200
+
+    settings = client.app.state.settings
+    with client.app.state.SessionLocal() as db:
+        for event_type in sorted(billing._EVENT_HANDLERS):
+            disposition = billing.handle_stripe_event(
+                db,
+                settings,
+                {
+                    "id": f"evt_{event_type}",
+                    "type": event_type,
+                    "data": {
+                        "object": {
+                            "id": "sub_live_1",
+                            "subscription": "sub_live_1",
+                            "customer": "cus_after_erasure",
+                            "payment_intent": "pi_after_erasure",
+                            "amount_refunded": 100,
+                            "amount_total": 500,
+                            "status": "active",
+                            "current_period_end": 2000000000,
+                            "metadata": {"brnrd_account_id": account_id},
+                            "items": {
+                                "data": [
+                                    {"price": {"id": "price_x", "recurring": {"interval": "month"}}}
+                                ]
+                            },
+                            "lines": {"data": [{"period": {"end": 2000000000}}]},
+                        }
+                    },
+                },
+            )
+            assert disposition == billing.DISPOSITION_ACCOUNT_DELETED, event_type
+        db.commit()
+
+    with client.app.state.SessionLocal() as db:
+        for mapper in Base.registry.mappers:
+            model = mapper.class_
+            if model is Account or not hasattr(model, "account_id"):
+                continue
+            rows = db.execute(
+                select(func.count()).select_from(model).where(model.account_id == account_id)
+            ).scalar_one()
+            if model is BillingLedgerEntry:
+                assert rows == 1, "the retained ledger must be exactly what erasure left"
+            else:
+                assert rows == 0, f"{model.__name__} gained rows about an erased account"
+        account = db.get(Account, account_id)
+        assert account.deleted_at is not None
+        assert account.stripe_customer_id is None
+        assert account.tier == Account.TIER_FREE
 
 
 def test_delete_account_rejects_a_wrong_confirmation_phrase():
