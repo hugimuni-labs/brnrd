@@ -61,6 +61,12 @@ _FLUSH_ACK_TIMEOUT_SECONDS = 5.0
 # premature stop was already blocked once (so the nudge fires once, not in
 # a loop). Daemon-independent; the hook owns this file.
 HOOK_STATE_NAME = ".hook-state.json"
+# The gate-less routing fact (#728) is true for the whole life of a gate-less
+# run and can never be cleared, so it is said once and then remembered here —
+# the one line in the closeout briefing that is a constant rather than an
+# obligation. Everything else there (scm, card staleness, pending events) goes
+# quiet when the resident acts, and so re-renders freely.
+GATELESS_ROUTING_KEY = "gateless_routing_noted"
 
 # Closeout artifact obligations the armed guard can escalate from the soft
 # `inject` mention (see `format_delta`, which already surfaces a stale card
@@ -251,6 +257,22 @@ def _record_fired(state: dict[str, Any], phase: str) -> None:
         fired = {}
     fired[phase] = _utc_now_iso()
     state[FIRED_KEY] = fired
+
+
+def _stop_is_gate_less(portal: dict[str, Any]) -> bool:
+    """True when the closeout delivery block will speak as a gate-less run.
+
+    The exact predicate ``format_delta``'s delivery block uses, kept here so
+    the once-per-run latch (#728) and the line it gates cannot drift apart:
+    a waking event must exist for the block to render at all, and
+    ``current_event_replyable`` must be explicitly ``False`` — an *absent*
+    key is an older or partial portal state, which falls back to the
+    addressed-run shape rather than inventing a gate-less run.
+    """
+    inbound = portal.get("inbound") if isinstance(portal.get("inbound"), dict) else {}
+    return bool(inbound.get("current_event")) and (
+        inbound.get("current_event_replyable") is False
+    )
 
 
 def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
@@ -1017,6 +1039,7 @@ def format_delta(
     mood: str | None = None,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
+    note_routing: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -1051,6 +1074,13 @@ def format_delta(
     computed by the caller (:func:`_orientation_progress`) — a mid-run bar
     segment only, never seed/stop prose: the kernel already names the walk
     at seed, and by stop the walk is either done, skipped, or moot.
+
+    ``note_routing`` is the gate-less routing fact's once-per-run latch
+    (#728), owned by the caller for the same reason ``orient`` and
+    ``surprise`` are: this renderer is a pure function of the portal
+    snapshot, and "has this already been said" is run state, not snapshot
+    state. See the delivery block below for why that fact is latched rather
+    than gated.
     """
     if not payload:
         return None
@@ -1293,6 +1323,48 @@ def format_delta(
                 "- delivery: the waking thread itself has no reply yet — "
                 "your final message will be dispatched there by the daemon; "
                 "end on the reply, not on scratch."
+            )
+        elif gate_less and note_routing:
+            # The fourth cell (#728). ``gate_less`` was computed above and
+            # then consumed only inside the silence arm, so the one fact that
+            # actually loses content went unsaid in the one case that loses
+            # it: a gate-less run that pinged a gate mid-run and then wrote
+            # its real closeout to stdout, where it stages
+            # ``status: undeliverable`` and nobody reads it.
+            #
+            # Two things had to be got right, and the first is a correction
+            # to the obvious fix.
+            #
+            # *Not* "warn unless a gate delivery exists." ``outbound_messages``
+            # already IS the gate-delivery count — daemon.py's ``stats``
+            # writes ``outbound`` in exactly one place (the ``gate:`` branch)
+            # and only when ``_deliver_out_of_bound`` returns True, so an
+            # unconfigured gate does not count. Discriminating on it would
+            # therefore go quiet on precisely the runs this exists for: the
+            # mid-run ping is what sets it, and the closeout is lost anyway.
+            # The loss does not depend on prior delivery, so neither may the
+            # statement.
+            #
+            # Which makes it unconditional under ``gate_less`` — and an
+            # unconditional line at a recurring boundary is the #562 trap
+            # wearing new clothes. The escape is not a cleverer clearing
+            # condition; there isn't one, because this is the run's topology
+            # and not a chore. It is that a constant carries its whole
+            # payload the first time it is read: latched to once per run by
+            # the caller, and phrased to say outright that it is a fact and
+            # not something owed. Note the token gate above would NOT have
+            # been enough — ``outbound`` is part of ``change_token``, so every
+            # gate delivery re-renders the briefing, and an unlatched line
+            # would nag hardest at the runs delivering most. That is #562's
+            # exact signature.
+            lines.append(
+                "- delivery: routing fact, stated once — no gate owns this "
+                "waking event, so nothing dispatches your final message "
+                "however much has already gone out: stdout is captured to "
+                "the response path as this run's body/message store only. "
+                "Content the reader must see rides a `gate: telegram` "
+                "delivery, and the closeout is not exempt. Not a chore — "
+                "this is the run's topology and cannot be cleared."
             )
     # SCM posture is a boundary signal (seed / stop only): the commit/push
     # reminder a wake about to end needs. Rendered only when there is
@@ -1781,10 +1853,25 @@ def compute_neutral(
         # bare ``{}`` result is the actual "nothing to add, stop cleanly"
         # signal.
         stop_token = portal.get("change_token")
+        # #728: latch, don't gate. ``format_delta`` is a pure function of the
+        # snapshot, so "already said once" has to be decided here — same
+        # division of labour as ``orient`` and ``surprise``.
+        gate_less_run = _stop_is_gate_less(portal)
+        note_routing = gate_less_run and not state.get(GATELESS_ROUTING_KEY)
         if stop_token != state.get("stop_last_token"):
             inject = format_delta(
-                portal, stop=True, run_body=_read_card_body(ctx), mood=mood
+                portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
+                note_routing=note_routing,
             )
+            # Latch on the render, not on the decision: a Stop whose token
+            # did not move injects nothing, and burning the one statement on
+            # a boundary the resident never saw is how a once-per-run signal
+            # becomes a never-per-run one. Both gate-less arms of the
+            # delivery block state the routing fact — the silence arm has
+            # always carried it — so a rendered gate-less closeout means it
+            # was said, whichever arm said it.
+            if gate_less_run:
+                state[GATELESS_ROUTING_KEY] = True
         state["stop_last_token"] = stop_token
         state["last_token"] = stop_token
     else:
