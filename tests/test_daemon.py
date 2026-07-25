@@ -260,290 +260,65 @@ def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkey
     assert "untrusted" in response.lower()
 
 
-def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatch):
-    """#328 tap-to-request: a mirrored wake request overrides the runner for
-    exactly one wake, is spent into the consumed ledger, and stamps the
-    prompt's Runner line so the resident knows the body was asked for."""
-    from brr import wake_request as wake_request_mod
-
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-wake")
-    _stub_env_isolated(monkeypatch, tmp_path)
-    brr_dir = tmp_path / ".brr"
-    wake_request_mod.store_pending(
-        brr_dir, {"request_id": "wake_9", "profile": "codex-mini"},
-    )
-
-    seen_overrides: list[dict | None] = []
-
+def _stub_wake_runner(monkeypatch, seen_overrides, resolved="codex"):
+    """Common runner/prompt/env stubs for the wake-tap worker tests."""
     def fake_resolve(_root, overrides=None):
         seen_overrides.append(overrides)
-        name = overrides["runner"] if overrides and overrides.get("runner") else "codex"
+        name = overrides["runner"] if overrides and overrides.get("runner") else resolved
         return daemon.runner.runner_profile(name, _root)
 
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
+    monkeypatch.setattr(
+        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+
+def test_run_worker_reads_the_dispatch_time_claim_verdict(tmp_path, monkeypatch):
+    """#733: the worker consumes the verdict `_apply_dashboard_wake_request`
+    stamped on the event — it no longer decides anything about a tap.
+
+    The runner override, the "you were asked for" line on the prompt, and
+    the run's `wake_request` facet all come off those flat event keys.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-wake")
+    event["runner"] = "codex-mini"
+    event["dashboard_wake_request_id"] = "wake_9"
+    event["dashboard_wake_request_profile"] = "codex-mini"
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+
+    seen_overrides: list[dict | None] = []
     prompt_kwargs: dict = {}
 
     def fake_prompt(task, eid, rp, root, **kw):
         prompt_kwargs.update(kw)
         return f"PROMPT {eid}"
 
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(
-        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
-    )
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    _stub_wake_runner(monkeypatch, seen_overrides)
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
-    )
 
     task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
 
     assert task.status == "done"
     assert seen_overrides and seen_overrides[0] == {"runner": "codex-mini"}
-    # Spent: pending mirror gone, id parked for the publish-tick ack.
-    assert wake_request_mod.pending(brr_dir) is None
-    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_9"]
     # The wake knows it was asked for.
     assert prompt_kwargs["runner_medium"] == (
-        "codex-mini (requested from the dashboard spool rack)"
+        "codex-mini (requested from the dashboard dispatch header)"
     )
-    # #564: consumption leaves a trace — who spent it, from what source.
-    receipt = wake_request_mod.last_receipt(brr_dir)
-    assert receipt["at"]
-    assert {k: v for k, v in receipt.items() if k != "at"} == {
-        "request_id": "wake_9",
-        "source": "telegram",
-        "event_id": "evt-wake",
-        "profile": "codex-mini",
-    }
-
-
-def test_run_worker_event_pin_outranks_wake_request(tmp_path, monkeypatch):
-    """An event-level shell/core pin (respawn, quality escalation) is a
-    deliberate per-run choice: the tap must neither override it nor be
-    silently swallowed — it stays pending for the next unpinned wake."""
-    from brr import wake_request as wake_request_mod
-
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-pinned")
-    event["core"] = "claude-opus-4-8"
-    _stub_env_isolated(monkeypatch, tmp_path)
-    brr_dir = tmp_path / ".brr"
-    wake_request_mod.store_pending(
-        brr_dir, {"request_id": "wake_10", "profile": "codex-mini"},
-    )
-
-    seen_overrides: list[dict | None] = []
-
-    def fake_resolve(_root, overrides=None):
-        seen_overrides.append(overrides)
-        return daemon.runner.runner_profile("claude-opus", _root)
-
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
-    )
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
-    )
-
-    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
-
-    assert seen_overrides and seen_overrides[0] == {"core": "claude-opus-4-8"}
-    assert wake_request_mod.pending(brr_dir) == {
-        "request_id": "wake_10",
-        "profile": "codex-mini",
-    }
-    assert wake_request_mod.consumed_ids(brr_dir) == []
-
-
-def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch):
-    """#564: a tap naming a profile this daemon doesn't know (stale rack,
-    another daemon's catalog) is dropped WITHOUT being spent — a drop never
-    delivered what was asked for, so consuming it too would burn the tap for
-    nothing. It stays pending for a daemon that knows the profile, or for
-    the server to cancel."""
-    from brr import wake_request as wake_request_mod
-
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-unknown")
-    _stub_env_isolated(monkeypatch, tmp_path)
-    brr_dir = tmp_path / ".brr"
-    wake_request_mod.store_pending(
-        brr_dir, {"request_id": "wake_11", "profile": "gemini-ultra-99"},
-    )
-
-    seen_overrides: list[dict | None] = []
-
-    def fake_resolve(_root, overrides=None):
-        seen_overrides.append(overrides)
-        return daemon.runner.runner_profile("codex", _root)
-
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(
-        daemon.runner, "profile_metadata", lambda name, root=None: None,
-    )
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
-    )
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
-    )
-
-    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
-
-    # No override applied, and the drop does NOT spend the tap.
-    assert seen_overrides and seen_overrides[0] is None
-    assert wake_request_mod.pending(brr_dir) == {
-        "request_id": "wake_11",
-        "profile": "gemini-ultra-99",
-    }
-    assert wake_request_mod.consumed_ids(brr_dir) == []
-    assert wake_request_mod.last_receipt(brr_dir) is None
-
-
-def test_run_worker_schedule_source_does_not_consume_wake_request(tmp_path, monkeypatch):
-    """#564: a `source: schedule` wake (director tick, `every:`/`at:`
-    firing — nobody watching) must not consume a dashboard tap parked for
-    the interactive wake the maintainer was about to cause. The request
-    stays pending, untouched, for that wake."""
-    from brr import wake_request as wake_request_mod
-
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-schedule", source="schedule")
-    _stub_env_isolated(monkeypatch, tmp_path)
-    brr_dir = tmp_path / ".brr"
-    wake_request_mod.store_pending(
-        brr_dir, {"request_id": "wake_12", "profile": "codex-mini"},
-    )
-
-    seen_overrides: list[dict | None] = []
-
-    def fake_resolve(_root, overrides=None):
-        seen_overrides.append(overrides)
-        return daemon.runner.runner_profile("codex", _root)
-
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(
-        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
-    )
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
-    )
-
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
-    )
-
-    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
-
-    # Untouched: no override, nothing consumed, no receipt.
-    assert seen_overrides and seen_overrides[0] is None
-    assert wake_request_mod.pending(brr_dir) == {
-        "request_id": "wake_12",
-        "profile": "codex-mini",
-    }
-    assert wake_request_mod.consumed_ids(brr_dir) == []
-    assert wake_request_mod.last_receipt(brr_dir) is None
-
-
-def test_run_worker_wake_request_claimed_when_parked_shortly_before_event(
-    tmp_path, monkeypatch,
-):
-    """#577: the mirror file can land *after* dispatch already read
-    ``pending()`` once — the worker-level second read still claims it when
-    the tap's server-stamped ``parked_at`` predates this event by only a
-    couple of seconds, well inside the default claim window."""
-    from datetime import datetime, timedelta, timezone
-
-    from brr import wake_request as wake_request_mod
-
-    write_repo_scaffold(tmp_path)
-    now = datetime.now(timezone.utc)
-    event = make_event(
-        tmp_path, eid="evt-wake-close",
-        created=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
-    _stub_env_isolated(monkeypatch, tmp_path)
-    brr_dir = tmp_path / ".brr"
-    parked = now - timedelta(seconds=2)
-    wake_request_mod.store_pending(
-        brr_dir,
-        {
-            "request_id": "wake_close", "profile": "codex-mini",
-            "requested_at": parked.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-    )
-
-    seen_overrides: list[dict | None] = []
-
-    def fake_resolve(_root, overrides=None):
-        seen_overrides.append(overrides)
-        name = overrides["runner"] if overrides and overrides.get("runner") else "codex"
-        return daemon.runner.runner_profile(name, _root)
-
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(
-        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
-    )
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
-    )
-
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
-    )
-
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
-
-    assert seen_overrides and seen_overrides[0] == {"runner": "codex-mini"}
-    assert wake_request_mod.pending(brr_dir) is None
-    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_close"]
     assert task.meta["wake_request"] == {
         "requested_profile": "codex-mini",
         "applied": True,
@@ -552,90 +327,76 @@ def test_run_worker_wake_request_claimed_when_parked_shortly_before_event(
     }
 
 
-def test_run_worker_reports_an_expired_tap_instead_of_going_silent(
-    tmp_path, monkeypatch,
-):
-    """#733 defect 4: the miss the report surface was structurally blind to.
-
-    The staleness check used to live *inside* `wake_request.pending()`, which
-    returned `None` on a lapse. So `wake_request_report` was never built,
-    `body_provenance` stayed `None`, and the single most common outcome — "your
-    tap expired, you got the default" — produced byte-identical silence to "no
-    tap was ever parked". #577's whole "you asked for X, got Y, because Z"
-    surface could not see its own most frequent case.
-
-    Expiry is now a reason like any other, so the tap is still in hand when the
-    verdict is written.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from brr import wake_request as wake_request_mod
-
+def test_run_worker_surfaces_a_refused_tap_on_the_run(tmp_path, monkeypatch):
+    """#733's other half: a tap that existed and did not apply must not look
+    like no tap. "You asked for X, you got Y, because Z" reaches the run via
+    `resources.runner.wake_request` (facets.py) — the surface a human reads
+    when asking where the dashboard pick went."""
     write_repo_scaffold(tmp_path)
-    now = datetime.now(timezone.utc)
-    event = make_event(
-        tmp_path, eid="evt-wake-stale",
-        created=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
+    event = make_event(tmp_path, eid="evt-wake-refused")
+    event["dashboard_wake_request_id"] = "wake_lapsed"
+    event["dashboard_wake_request_profile"] = "codex-mini"
+    event["dashboard_wake_request_reason"] = "the tap expired before a wake claimed it"
     _stub_env_isolated(monkeypatch, tmp_path)
     brr_dir = tmp_path / ".brr"
-    wake_request_mod.store_pending(
-        brr_dir,
-        {
-            "request_id": "wake_stale_evt", "profile": "codex-mini",
-            "requested_at": (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            # Dead by the server's own published horizon — the only horizon.
-            "expires_at": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-    )
 
     seen_overrides: list[dict | None] = []
-
-    def fake_resolve(_root, overrides=None):
-        seen_overrides.append(overrides)
-        return daemon.runner.runner_profile("codex", _root)
-
-    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", fake_resolve)
-    monkeypatch.setattr(
-        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
-    )
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    _stub_wake_runner(monkeypatch, seen_overrides)
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
     )
 
-    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
+    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
 
+    # Refused ⇒ no override; the wake ran on the default resolve.
+    assert seen_overrides and seen_overrides[0] is None
+    assert task.meta["wake_request"] == {
+        "requested_profile": "codex-mini",
+        "applied": False,
+        "reason": "the tap expired before a wake claimed it",
+        "resolved_profile": "codex",
+    }
+
+
+def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
+    """The duplicated guard ladder is gone (#733).
+
+    A mirrored tap with no verdict stamped on the event is *not this
+    worker's business*: a concurrent `spawn:` child and a crash re-dispatch
+    both reach `_run_worker` without passing dispatch, and neither is "the
+    next wake the account owner is about to cause". The worker must leave
+    the mirror alone and never reach the network — running the ladder here
+    a second time is what made #733's expiry invisible.
+    """
+    from brr import wake_request as wake_request_mod
+    from brr.gates import cloud
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-spawn-child")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+    wake_request_mod.store_pending(brr_dir, {"request_id": "wake_untouched"})
+
+    def _never(*args, **kwargs):
+        raise AssertionError("the worker must not claim a tap")
+
+    monkeypatch.setattr(cloud, "claim_wake_request", _never)
+    monkeypatch.setattr(cloud, "_request", _never)
+
+    seen_overrides: list[dict | None] = []
+    _stub_wake_runner(monkeypatch, seen_overrides)
     monkeypatch.setattr(
-        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
     )
 
     task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
 
-    # Not applied: the daemon dispatched on the default resolve, untouched.
     assert seen_overrides and seen_overrides[0] is None
-    # Lapsed, not left pending — the next unrelated wake can't inherit it.
-    assert wake_request_mod.pending(brr_dir) is None
-    # #733: acked as expired, not as a spend. `mark_consumed`'s docstring says
-    # "these requests were spent on a dispatched wake"; this one never ran.
-    assert wake_request_mod.lapsed_ids(brr_dir) == ["wake_stale_evt"]
-    assert wake_request_mod.consumed_ids(brr_dir) == []
-    receipt = wake_request_mod.last_receipt(brr_dir)
-    assert receipt["outcome"] == "lapsed"
-    assert receipt["profile"] is None
-    # The teeth: under the old shape `task.meta` had no "wake_request" key at
-    # all here, because the lapse happened inside the accessor.
-    report = task.meta["wake_request"]
-    assert report["requested_profile"] == "codex-mini"
-    assert report["resolved_profile"] == "codex"
-    assert report["applied"] is False
-    assert "expired" in report["reason"]
+    # Still armed for the wake it was actually parked for.
+    assert wake_request_mod.pending_id(brr_dir) == "wake_untouched"
+    assert wake_request_mod.last_receipt(brr_dir) is None
+    # No tap was in play *for this wake* — absent, not a miss.
+    assert "wake_request" not in task.meta
 
 
 def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
@@ -5984,44 +5745,78 @@ def test_account_starts_one_cloud_gate_on_default_repo_runtime(
     assert cloud_calls[0][2] == ctx.responses_dir
 
 
-def test_dashboard_dispatch_header_stamps_event_before_repo_routing(tmp_path):
-    from brr import wake_request as wake_request_mod
+# ── #733 the one claim point: `_apply_dashboard_wake_request` ────────────
+#
+# The server owns every rung; these pin what dispatch does with the answer.
 
+
+def _wake_ctx(tmp_path, *, source="telegram", extra_repo=None):
     repo_a = tmp_path / "repo-a"
-    repo_b = tmp_path / "repo-b"
     repo_a.mkdir()
-    repo_b.mkdir()
     write_repo_scaffold(repo_a)
-    write_repo_scaffold(repo_b)
     cfg = {
         "repo.label": "Gurio/a",
         "home.path": str(tmp_path / "account-home"),
-        "account.repo.Gurio/b": str(repo_b),
     }
+    if extra_repo is not None:
+        write_repo_scaffold(extra_repo)
+        cfg["account.repo.Gurio/b"] = str(extra_repo)
     ctx = daemon.account.resolve_context(repo_a, cfg)
-    event = protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
+    protocol.create_event(ctx.dispatch_inbox, source, "dispatch this")
     target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {
-            "request_id": "wake_dispatch",
-            "profile": "codex-mini",
-            "repo_label": "Gurio/b",
-            "environment": "solitary",
-        },
-    )
+    return repo_a, ctx, target
+
+
+def _stub_claim(monkeypatch, verdict, calls=None):
+    from brr.gates import cloud
+
+    def _fake(brr_dir, **kwargs):
+        if calls is not None:
+            calls.append(kwargs)
+        return verdict
+
+    monkeypatch.setattr(cloud, "claim_wake_request", _fake)
+
+
+def test_dashboard_dispatch_header_stamps_event_before_repo_routing(
+    tmp_path, monkeypatch,
+):
+    """An applied claim routes the wake to the repo the tap named — the one
+    thing only this site can do, and the reason it owns the claim rather
+    than `_run_worker` (whose repo root is already chosen)."""
+    from brr import wake_request as wake_request_mod
+
+    repo_b = tmp_path / "repo-b"
+    repo_b.mkdir()
+    repo_a, ctx, target = _wake_ctx(tmp_path, extra_repo=repo_b)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_dispatch"})
+    calls: list[dict] = []
+    _stub_claim(monkeypatch, {
+        "apply": True, "reason": None, "request_id": "wake_dispatch",
+        "status": "consumed", "profile": "codex-mini",
+        "repo_label": "Gurio/b", "environment": "solitary",
+    }, calls)
 
     applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
 
+    # The claim carried the whole question: which tap, which wake, what woke
+    # it, and when that wake's event came into being.
+    assert calls == [{
+        "request_id": "wake_dispatch",
+        "event_id": target.event["id"],
+        "source": "telegram",
+        "event_created": target.event["created"],
+    }]
     assert applied.repo_root == repo_b
     assert applied.repo_label == "Gurio/b"
     assert applied.event["runner"] == "codex-mini"
     assert applied.event["repo_label"] == "Gurio/b"
     assert applied.event["environment"] == "solitary"
     assert applied.event["dashboard_wake_request_id"] == "wake_dispatch"
-    assert wake_request_mod.pending(repo_a / ".brr") is None
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_dispatch"]
-    # #564: consumption leaves a trace — who spent it, from what source.
+    assert applied.event["dashboard_wake_request_profile"] == "codex-mini"
+    assert "dashboard_wake_request_reason" not in applied.event
+    # The server said the row is retired; don't keep offering it.
+    assert wake_request_mod.pending_id(repo_a / ".brr") is None
     receipt = wake_request_mod.last_receipt(repo_a / ".brr")
     assert receipt["at"]
     assert {k: v for k, v in receipt.items() if k != "at"} == {
@@ -6032,207 +5827,181 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(tmp_path):
     }
 
 
-def test_dashboard_wake_request_schedule_source_does_not_consume(tmp_path):
-    """#564: a `source: schedule` event at dispatch time (the director tick
-    itself, before any per-run worker fallback runs) must not bind or spend
-    a parked dashboard tap — that tap is a promise to the next *interactive*
-    wake, not to whichever schedule firing happens to dispatch first."""
-    from brr import wake_request as wake_request_mod
+def test_no_mirrored_tap_makes_no_http_call_at_all(tmp_path, monkeypatch):
+    """#733's cost control: the presence bit gates the network entirely.
 
-    repo_a = tmp_path / "repo-a"
-    repo_a.mkdir()
-    write_repo_scaffold(repo_a)
-    cfg = {
-        "repo.label": "Gurio/a",
-        "home.path": str(tmp_path / "account-home"),
-    }
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    protocol.create_event(ctx.dispatch_inbox, "schedule", "director tick")
-    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {"request_id": "wake_sched", "profile": "codex-mini"},
-    )
+    This is the overwhelmingly common dispatch and every local-only account,
+    so it must not merely return None — it must never touch the transport.
+    """
+    from brr.gates import cloud
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+
+    def _never(*args, **kwargs):
+        raise AssertionError("dispatch called out with no tap parked")
+
+    monkeypatch.setattr(cloud, "claim_wake_request", _never)
+    monkeypatch.setattr(cloud, "_request", _never)
+    monkeypatch.setattr(cloud, "_load_state", _never)
 
     applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
 
     assert applied is target
     assert "runner" not in applied.event
     assert "dashboard_wake_request_id" not in applied.event
-    assert wake_request_mod.pending(repo_a / ".brr") == {
-        "request_id": "wake_sched",
-        "profile": "codex-mini",
-    }
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
+
+
+def test_unreachable_server_leaves_dispatch_untouched(tmp_path, monkeypatch):
+    """Fail-open, and byte-identical to the empty-mirror path: the honest
+    cost of moving the decision to its owner is that dispatch now depends on
+    brnrd.dev being reachable — it costs the tap, never the wake.
+
+    No receipt either: nothing was decided, and claiming otherwise would be
+    the invisible-outcome bug in a new place.
+    """
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_offline"})
+    _stub_claim(monkeypatch, None)
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied is target
+    assert "runner" not in applied.event
+    assert "dashboard_wake_request_id" not in applied.event
+    # Still armed for a wake that can reach the server.
+    assert wake_request_mod.pending_id(repo_a / ".brr") == "wake_offline"
     assert wake_request_mod.last_receipt(repo_a / ".brr") is None
 
 
-def test_apply_dashboard_wake_request_claims_when_parked_shortly_before_event(
-    tmp_path,
-):
-    """#577: parked_at is the server's own tap timestamp, not this mirror
-    file's write time — a tap parked a couple of seconds before the event
-    it rode in on is claimable even though the mirror itself only appears
-    on disk later."""
-    from datetime import datetime, timedelta, timezone
-
+def test_a_refused_tap_is_not_recorded_as_consumed(tmp_path, monkeypatch):
+    """The refusal reaches the machine, in both places a human looks: the
+    receipt file and the event the run's facet is built from."""
     from brr import wake_request as wake_request_mod
 
-    repo_a = tmp_path / "repo-a"
-    repo_a.mkdir()
-    write_repo_scaffold(repo_a)
-    cfg = {
-        "repo.label": "Gurio/a",
-        "home.path": str(tmp_path / "account-home"),
-    }
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
-    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    parked = datetime.now(timezone.utc) - timedelta(seconds=2)
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {
-            "request_id": "wake_close_evt", "profile": "codex-mini",
-            "requested_at": parked.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-    )
-
-    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
-
-    assert applied.event["runner"] == "codex-mini"
-    assert applied.event["dashboard_wake_request_id"] == "wake_close_evt"
-    assert wake_request_mod.pending(repo_a / ".brr") is None
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_close_evt"]
-
-
-def test_the_sixteen_minute_tap_the_daemon_used_to_eat(tmp_path):
-    """#733, the incident itself, at the dispatch seam.
-
-    Timeline as it actually happened: tap minted 10:40:03Z, message sent
-    16m11s later, run started at 10:56:20Z. `DEFAULT_TTL_S = 900` killed it by
-    71 seconds, and even with a fresh TTL the 120 s claim window would have
-    killed it anyway — a tap parked more than two minutes before the message it
-    was parked *for* was refused. Both numbers were local; the server's row
-    lived 24 h and the dashboard chip the maintainer reloaded said so.
-
-    A human taps a rack and then writes. Sixteen minutes is not a stale tap, it
-    is a sentence being composed. This is the test whose absence let that ship.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from brr import wake_request as wake_request_mod
-
-    repo_a = tmp_path / "repo-a"
-    repo_a.mkdir()
-    write_repo_scaffold(repo_a)
-    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
-    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    now = datetime.now(timezone.utc)
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {
-            "request_id": "wake_composed_slowly", "profile": "codex-mini",
-            "requested_at": (now - timedelta(minutes=16, seconds=11)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
-            # The server minted it with a day to live, which is what the chip
-            # reported and what now decides.
-            "expires_at": (now + timedelta(hours=23, minutes=43)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
-        },
-    )
-
-    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
-
-    assert applied.event["runner"] == "codex-mini"
-    assert applied.event["dashboard_wake_request_id"] == "wake_composed_slowly"
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_composed_slowly"]
-    # And it was *spent*, not lapsed — the two now land in different ledgers.
-    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == []
-
-
-def test_a_tap_the_server_already_expired_lapses_rather_than_applying(tmp_path):
-    """The horizon that remains is the server's, and it is still enforced.
-
-    Removing the local TTL must not mean removing staleness — only relocating
-    its ownership. A row whose published `expires_at` has passed is dead, and
-    the daemon says so in the ledger the server reads as `expired`.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from brr import wake_request as wake_request_mod
-
-    repo_a = tmp_path / "repo-a"
-    repo_a.mkdir()
-    write_repo_scaffold(repo_a)
-    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
-    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    now = datetime.now(timezone.utc)
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {
-            "request_id": "wake_truly_dead", "profile": "codex-mini",
-            "requested_at": (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "expires_at": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-    )
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_lapsed"})
+    _stub_claim(monkeypatch, {
+        "apply": False, "reason": "the tap expired before a wake claimed it",
+        "request_id": "wake_lapsed", "status": "expired", "profile": "codex-mini",
+    })
 
     applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
 
     assert applied is target
     assert "runner" not in applied.event
-    assert wake_request_mod.pending(repo_a / ".brr") is None
-    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == ["wake_truly_dead"]
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
+    assert applied.event["dashboard_wake_request_id"] == "wake_lapsed"
+    assert applied.event["dashboard_wake_request_profile"] == "codex-mini"
+    assert applied.event["dashboard_wake_request_reason"] == (
+        "the tap expired before a wake claimed it"
+    )
     receipt = wake_request_mod.last_receipt(repo_a / ".brr")
-    assert receipt["outcome"] == "lapsed"
+    assert receipt["outcome"] == "refused"
     assert receipt["profile"] is None
+    assert receipt["reason"] == "the tap expired before a wake claimed it"
+    # Terminal server-side ⇒ stop offering it locally too.
+    assert wake_request_mod.pending_id(repo_a / ".brr") is None
 
 
-def test_a_tap_parked_after_this_event_waits_instead_of_being_destroyed(tmp_path):
-    """#733: arriving early is not dying.
-
-    A tap minted while a wake was already queued was meant for the next one.
-    #577 *lapsed* it here, which was defensible only while this same branch
-    also caught taps that were merely old. Now that expiry owns staleness,
-    lapsing would destroy a live tap for the crime of being punctual.
-    """
-    from datetime import datetime, timedelta, timezone
-
+def test_a_refusal_that_keeps_the_tap_pending_leaves_the_mirror_armed(
+    tmp_path, monkeypatch,
+):
+    """A `schedule`-source wake, an unpublished profile, a tap parked after
+    the event: all refusals the server answers with the row *still pending*.
+    The mirror must stay armed for the wake the tap was actually meant for."""
     from brr import wake_request as wake_request_mod
 
-    repo_a = tmp_path / "repo-a"
-    repo_a.mkdir()
-    write_repo_scaffold(repo_a)
-    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
-    ctx = daemon.account.resolve_context(repo_a, cfg)
-    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
-    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    now = datetime.now(timezone.utc)
-    wake_request_mod.store_pending(
-        repo_a / ".brr",
-        {
-            "request_id": "wake_for_the_next_one", "profile": "codex-mini",
-            "requested_at": (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "expires_at": (now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-    )
+    repo_a, ctx, target = _wake_ctx(tmp_path, source="schedule")
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_sched"})
+    _stub_claim(monkeypatch, {
+        "apply": False,
+        "reason": "a schedule-source wake never spends a dashboard tap",
+        "request_id": "wake_sched", "status": "pending", "profile": "codex-mini",
+    })
 
     applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
 
     assert applied is target
     assert "runner" not in applied.event
-    # Still armed. Neither spent nor expired: the wake it was parked for
-    # has not happened yet.
-    still = wake_request_mod.pending(repo_a / ".brr")
-    assert still is not None and still["request_id"] == "wake_for_the_next_one"
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
-    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == []
+    assert wake_request_mod.pending_id(repo_a / ".brr") == "wake_sched"
+
+
+def test_event_pin_outranks_the_tap_and_never_claims_it(tmp_path, monkeypatch):
+    """An event-level pin (respawn shell:/core:, quality: escalate) is a
+    deliberate per-run choice. It short-circuits *before* the claim, so the
+    tap stays pending for the next unpinned wake instead of being spent on
+    one that was never going to honour it — and costs no HTTP call."""
+    from brr import wake_request as wake_request_mod
+    from brr.gates import cloud
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    protocol.update_event_meta(target.event, core="claude-opus-4-8")
+    target.event["core"] = "claude-opus-4-8"
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_pinned"})
+
+    def _never(*args, **kwargs):
+        raise AssertionError("a pinned wake must not claim a tap")
+
+    monkeypatch.setattr(cloud, "claim_wake_request", _never)
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied is target
+    assert "runner" not in applied.event
+    assert wake_request_mod.pending_id(repo_a / ".brr") == "wake_pinned"
+    assert wake_request_mod.last_receipt(repo_a / ".brr") is None
+
+
+def test_applied_tap_naming_an_unregistered_repo_refuses_visibly(
+    tmp_path, monkeypatch,
+):
+    """The rack drifted from the daemon's registered repos. The row is
+    already spent server-side and the wake can't go where it was asked to —
+    running the requested profile against the *wrong* repo would answer a
+    question nobody asked, so refuse and let the receipt say why."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_lost"})
+    _stub_claim(monkeypatch, {
+        "apply": True, "reason": None, "request_id": "wake_lost",
+        "status": "consumed", "profile": "codex-mini", "repo_label": "Gurio/gone",
+    })
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied is target
+    assert applied.repo_root == target.repo_root
+    assert "runner" not in applied.event
+    receipt = wake_request_mod.last_receipt(repo_a / ".brr")
+    assert receipt["outcome"] == "refused"
+    assert "Gurio/gone" in receipt["reason"]
+
+
+def test_refusal_reason_cannot_break_the_event_frontmatter(tmp_path, monkeypatch):
+    """Event frontmatter is flat and line-oriented. The reason is
+    server-authored and short in practice; this is the guard that keeps "in
+    practice" from being the load-bearing part."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_evil"})
+    _stub_claim(monkeypatch, {
+        "apply": False, "reason": "nope\nrunner: claude-fable\nstatus: done",
+        "request_id": "wake_evil", "status": "pending", "profile": "codex-mini",
+    })
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied.event["dashboard_wake_request_reason"] == (
+        "nope runner: claude-fable status: done"
+    )
+    reread = daemon._dispatchable_targets(ctx, repo_a, {
+        "repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home"),
+    })[0].event
+    assert "runner" not in reread
+    assert reread["status"] != "done"
 
 
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):
