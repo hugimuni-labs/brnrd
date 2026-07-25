@@ -16,7 +16,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from brnrd import create_app, stripe_api  # noqa: E402
+from brnrd import account_deletion, billing, create_app, ids, stripe_api  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -374,6 +374,234 @@ def test_billing_api_still_401s_with_no_credentials():
     assert client.get("/v1/accounts/subscription").status_code == 401
     assert client.get("/v1/accounts/wallet").status_code == 401
     assert client.post("/v1/accounts/subscription/checkout", json={"cadence": "monthly"}).status_code == 401
+
+
+# --- Art 17 tombstone (#713) --------------------------------------------------
+#
+# The erasure (account_deletion.delete_account) sets Account.deleted_at and
+# nothing in the billing module read it: one webhook carrying
+# brnrd_account_id re-linked the customer, re-created the Subscription row and
+# appended to the *retained* ledger. The guard lives at handle_stripe_event —
+# ahead of the dispatch table — so these tests derive their coverage from
+# billing._EVENT_HANDLERS rather than hand-listing the types. Add a seventh
+# entry to that table and a seventh case appears here with no edit below.
+
+GHOST_SUBSCRIPTION_ID = "sub_ghost"
+GHOST_PAYMENT_INTENT = "pi_ghost"
+GHOST_CUSTOMER_ID = "cus_ghost"
+
+
+def _account_id_for(client: TestClient, github_id: str) -> str:
+    from sqlalchemy import select
+
+    from brnrd.models import Account
+
+    with client.app.state.SessionLocal() as db:
+        return db.execute(select(Account).where(Account.github_id == github_id)).scalar_one().id
+
+
+def _tombstoned_account(client: TestClient, *, github_id: str = "77", login: str = "ghost") -> str:
+    """Erase an account, then re-attach the billing rows that a resurrection —
+    or a delete/webhook interleave, where Stripe's delivery reads rows the
+    erasure commits away underneath it — leaves pointing at the tombstone.
+
+    Without them the row-walking handlers (subscription.deleted,
+    invoice.*, charge.refunded) would be inert for the wrong reason: their
+    rows were swept, so they resolve nothing and a missing guard looks
+    correct. Seeding the rows is what makes each dispatch type able to reach
+    the tombstone, which is what the guard has to stop.
+    """
+    from brnrd.models import Account, CreditBucket, Subscription
+
+    _account(client, github_id=github_id, login=login)
+    account_id = _account_id_for(client, github_id)
+    with client.app.state.SessionLocal() as db:
+        account_deletion.delete_account(db, client.app.state.settings, db.get(Account, account_id))
+        db.add(
+            Subscription(
+                id=ids.subscription_id(),
+                account_id=account_id,
+                stripe_subscription_id=GHOST_SUBSCRIPTION_ID,
+                status=Subscription.STATUS_ACTIVE,
+                stripe_price_id="price_sup_m",
+            )
+        )
+        db.add(
+            CreditBucket(
+                id=ids.credit_bucket_id(),
+                account_id=account_id,
+                source=CreditBucket.SOURCE_PURCHASED,
+                granted_credits=500,
+                remaining_credits=500,
+                stripe_ref=GHOST_PAYMENT_INTENT,
+            )
+        )
+        db.commit()
+    return account_id
+
+
+def _account_keyed_snapshot(client: TestClient, account_id: str) -> dict:
+    """Every row of every mapped class carrying an ``account_id``, plus the
+    account row itself — derived from the mapper registry, so a store added
+    later joins the snapshot with no edit here."""
+    from sqlalchemy import inspect, select
+
+    from brnrd.models import Account, Base
+
+    snapshot: dict[str, object] = {}
+    with client.app.state.SessionLocal() as db:
+        for mapper in Base.registry.mappers:
+            model = mapper.class_
+            if model is Account or not hasattr(model, "account_id"):
+                continue
+            rows = db.execute(select(model).where(model.account_id == account_id)).scalars().all()
+            snapshot[model.__name__] = sorted(
+                repr({c.key: getattr(row, c.key) for c in mapper.column_attrs}) for row in rows
+            )
+        account = db.get(Account, account_id)
+        snapshot["Account"] = repr(
+            {c.key: getattr(account, c.key) for c in inspect(Account).column_attrs}
+        )
+    return snapshot
+
+
+def _ghost_event(event_type: str, account_id: str, *, event_id: str | None = None) -> dict:
+    """One object carrying every id any handler resolves an account through —
+    metadata id, customer id, subscription id, payment intent — so a single
+    payload shape drives every dispatch type, including ones added later.
+
+    Deliberately *not* a wallet top-up: without ``brnrd_purpose`` the
+    checkout arm takes its customer-attach path, which is the write #713
+    reports (the erased ``stripe_customer_id`` coming back), and it leaves
+    ``payment_intent`` free to address the seeded bucket for charge.refunded.
+    """
+    return {
+        "id": event_id or f"evt_ghost_{event_type}",
+        "type": event_type,
+        "data": {
+            "object": {
+                "id": GHOST_SUBSCRIPTION_ID,
+                "customer": GHOST_CUSTOMER_ID,
+                "subscription": GHOST_SUBSCRIPTION_ID,
+                "payment_intent": GHOST_PAYMENT_INTENT,
+                "amount_refunded": 200,
+                "amount_total": 500,
+                "status": "active",
+                "cancel_at_period_end": False,
+                "current_period_end": 2000000000,
+                "billing_reason": "subscription_cycle",
+                "metadata": {"brnrd_account_id": account_id},
+                "items": {
+                    "data": [{"price": {"id": "price_sup_m", "recurring": {"interval": "month"}}}]
+                },
+                "lines": {"data": [{"period": {"end": 2000000000}}]},
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize("event_type", sorted(billing._EVENT_HANDLERS))
+def test_tombstoned_account_is_inert_for_every_dispatch_type(event_type):
+    """Replay one event of every type the dispatcher knows against an erased
+    account that still has billing rows pointing at it, and assert the event
+    changed nothing anywhere account-keyed."""
+    from brnrd.models import StripeEvent
+
+    client = _client()
+    account_id = _tombstoned_account(client)
+    before = _account_keyed_snapshot(client, account_id)
+
+    response = _post_event(client, _ghost_event(event_type, account_id))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["disposition"] == billing.DISPOSITION_ACCOUNT_DELETED
+    assert _account_keyed_snapshot(client, account_id) == before, (
+        f"{event_type} wrote to a tombstoned account"
+    )
+    # Handled, not rejected: recorded in StripeEvent and answered 2xx, so
+    # Stripe stops redelivering instead of looping against a deleted account.
+    with client.app.state.SessionLocal() as db:
+        assert db.get(StripeEvent, f"evt_ghost_{event_type}") is not None
+
+
+def test_a_seventh_dispatch_type_inherits_the_tombstone_guard(monkeypatch):
+    """#713's acceptance bar, driven: register a dispatch type that did not
+    exist when the guard was written, and prove both arms — it runs for a live
+    account, and is never reached for a tombstoned one — with no edit to the
+    guard, the resolver, or this test's enumeration."""
+    reached = []
+
+    def _seventh(db, settings, obj):
+        reached.append(obj.get("id"))
+        return "seventh-applied"
+
+    monkeypatch.setitem(billing._EVENT_HANDLERS, "customer.tax_id.created", _seventh)
+
+    client = _client()
+    _account(client, github_id="9", login="live")
+    live_id = _account_id_for(client, "9")
+
+    live = _post_event(client, _ghost_event("customer.tax_id.created", live_id, event_id="evt_7_live"))
+    assert live.json()["disposition"] == "seventh-applied"
+    assert reached == [GHOST_SUBSCRIPTION_ID], "positive control: the new type does dispatch"
+
+    dead_id = _tombstoned_account(client)
+    blocked = _post_event(client, _ghost_event("customer.tax_id.created", dead_id, event_id="evt_7_dead"))
+    assert blocked.json()["disposition"] == billing.DISPOSITION_ACCOUNT_DELETED
+    assert reached == [GHOST_SUBSCRIPTION_ID], "the seventh handler must never run on a tombstone"
+
+
+def test_one_webhook_cannot_resurrect_a_deleted_account(monkeypatch):
+    """#713's headline case end to end: subscribe, erase, then feed the single
+    ``customer.subscription.updated`` the issue drove against main."""
+    from sqlalchemy import select
+
+    from brnrd.models import Account, BillingLedgerEntry, Subscription
+
+    client = _client()
+    _account(client, github_id="42", login="erased")
+    account_id = _account_id_for(client, "42")
+    _post_event(client, _subscription_event(account_id))
+    _post_event(client, _invoice_paid_event(account_id))
+
+    monkeypatch.setattr(
+        "brnrd.account_deletion.stripe_api.cancel_subscription_now",
+        lambda settings, *, subscription_id: None,
+    )
+    with client.app.state.SessionLocal() as db:
+        account_deletion.delete_account(db, client.app.state.settings, db.get(Account, account_id))
+
+    with client.app.state.SessionLocal() as db:
+        ledger_before = sorted(
+            e.op
+            for e in db.execute(
+                select(BillingLedgerEntry).where(BillingLedgerEntry.account_id == account_id)
+            ).scalars()
+        )
+
+    resurrect = _subscription_event(
+        account_id, event_id="evt_resurrect", event_type="customer.subscription.updated"
+    )
+    assert _post_event(client, resurrect).json()["disposition"] == billing.DISPOSITION_ACCOUNT_DELETED
+
+    with client.app.state.SessionLocal() as db:
+        account = db.get(Account, account_id)
+        assert account.deleted_at is not None, "the tombstone must stay set"
+        assert account.stripe_customer_id is None, "the erased customer link must not come back"
+        assert account.tier == Account.TIER_FREE
+        assert (
+            db.execute(
+                select(Subscription).where(Subscription.account_id == account_id)
+            ).scalars().all()
+            == []
+        )
+        ledger_after = sorted(
+            e.op
+            for e in db.execute(
+                select(BillingLedgerEntry).where(BillingLedgerEntry.account_id == account_id)
+            ).scalars()
+        )
+    assert ledger_after == ledger_before, "the retained ledger must not gain post-erasure entries"
 
 
 def test_grant_bucket_insert_order_survives_fk_enforcement():

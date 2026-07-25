@@ -9,6 +9,10 @@ Implements the kb design-billing.md contract on the brnrd side:
   API handlers;
 - supporter→public cohort cutoff for new checkouts (existing subscribers
   keep their signup-time Price; grandfathering is Stripe-native).
+
+Every webhook path is gated on the Art 17 tombstone (``Account.deleted_at``)
+at ``handle_stripe_event``, ahead of dispatch — see the guard's own docstring
+for why the seam is there and not inside the handlers (#713).
 """
 
 from __future__ import annotations
@@ -300,27 +304,94 @@ def _refresh_tier(db: Session, account: Account) -> None:
     account.tier = Account.TIER_SUBSCRIBED if live else Account.TIER_FREE
 
 
+# An event touching an Art 17 tombstone is *handled* and applied to nothing,
+# never rejected: the webhook router turns any disposition into a 2xx and
+# records the event id in ``StripeEvent``, so this string ends Stripe's
+# redelivery. A non-2xx would leave Stripe retrying against a deleted account
+# forever — a worse outcome than a dropped write, and a louder one.
+DISPOSITION_ACCOUNT_DELETED = "account-deleted"
+
+
+def _accounts_touched(db: Session, obj: dict) -> list[Account]:
+    """Every account this event object could reach, by every linkage the
+    handlers below resolve through.
+
+    Deliberately *not* dispatched on the event type. It tries each id the
+    object carries against each table a handler walks — account by metadata id
+    or customer id, subscription row by Stripe subscription id, credit bucket
+    by Stripe ref — so there is no per-type arm here for a new dispatch type to
+    be added to. Ids belonging to another object kind (a ``cs_…`` checkout id
+    probed against ``subscriptions``) simply miss.
+
+    It returns *all* candidates rather than the first hit: the handlers
+    disagree about which linkage wins (``_account_for_event`` prefers the
+    metadata id, ``_on_subscription_deleted`` trusts the subscription row), and
+    resolving one account here while a handler writes to another is exactly the
+    hole a single-strategy guard would leave.
+    """
+    account_ids: list[str] = []
+
+    def _remember(account_id: str | None) -> None:
+        if account_id and account_id not in account_ids:
+            account_ids.append(account_id)
+
+    def _strs(*values) -> list[str]:
+        return [v for v in values if isinstance(v, str) and v]
+
+    _remember((obj.get("metadata") or {}).get("brnrd_account_id"))
+
+    customer_ids = _strs(obj.get("customer"))
+    if customer_ids:
+        for row in db.execute(
+            select(Account).where(Account.stripe_customer_id.in_(customer_ids))
+        ).scalars():
+            _remember(row.id)
+
+    subscription_refs = _strs(obj.get("id"), _invoice_subscription_id(obj))
+    if subscription_refs:
+        for row in db.execute(
+            select(Subscription).where(
+                Subscription.stripe_subscription_id.in_(subscription_refs)
+            )
+        ).scalars():
+            _remember(row.account_id)
+
+    bucket_refs = _strs(obj.get("payment_intent"), obj.get("id"))
+    if bucket_refs:
+        for row in db.execute(
+            select(CreditBucket).where(CreditBucket.stripe_ref.in_(bucket_refs))
+        ).scalars():
+            _remember(row.account_id)
+
+    return [row for row in (db.get(Account, aid) for aid in account_ids) if row is not None]
+
+
 def handle_stripe_event(db: Session, settings: Settings, event: dict) -> str:
     """Apply one verified Stripe event; returns a short disposition string.
 
     Caller owns idempotency (``StripeEvent``) and the commit.
-    """
-    event_type = event.get("type") or ""
-    obj = ((event.get("data") or {}).get("object")) or {}
 
-    if event_type == "checkout.session.completed":
-        return _on_checkout_completed(db, settings, obj)
-    if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-        return _on_subscription_upserted(db, settings, obj)
-    if event_type == "customer.subscription.deleted":
-        return _on_subscription_deleted(db, obj)
-    if event_type == "invoice.paid":
-        return _on_invoice_paid(db, settings, obj)
-    if event_type == "invoice.payment_failed":
-        return _on_invoice_payment_failed(db, obj)
-    if event_type == "charge.refunded":
-        return _on_charge_refunded(db, obj)
-    return "ignored"
+    The Art 17 tombstone guard lives here, between the dispatch lookup and the
+    handler call, and that placement is the point (#713). Erasure sets
+    ``Account.deleted_at`` and keeps the row (the retained billing ledger's FK
+    needs a parent); every webhook write afterwards is a write about an erased
+    subject. Guarding inside the handlers would mean six guards and a seventh
+    to remember — and guarding their shared ``_account_for_event`` instead
+    covers only three of the seven event types, because three handlers resolve
+    the account by walking a row and ``_on_invoice_paid`` reaches the helper
+    only on its fallback branch. Measured, not reasoned: that guard leaves 4/7
+    types still writing to a tombstone.
+    Guarding *the dispatch itself* means a handler added to
+    ``_EVENT_HANDLERS`` later inherits it with no edit anywhere: there is no
+    path from this function to any handler that does not pass this check.
+    """
+    handler = _EVENT_HANDLERS.get(event.get("type") or "")
+    if handler is None:
+        return "ignored"
+    obj = ((event.get("data") or {}).get("object")) or {}
+    if any(account.deleted_at is not None for account in _accounts_touched(db, obj)):
+        return DISPOSITION_ACCOUNT_DELETED
+    return handler(db, settings, obj)
 
 
 def _on_checkout_completed(db: Session, settings: Settings, obj: dict) -> str:
@@ -404,7 +475,7 @@ def _on_subscription_upserted(db: Session, settings: Settings, obj: dict) -> str
     return "subscription-created" if created else "subscription-updated"
 
 
-def _on_subscription_deleted(db: Session, obj: dict) -> str:
+def _on_subscription_deleted(db: Session, settings: Settings, obj: dict) -> str:
     stripe_subscription_id = obj.get("id") or ""
     row = db.execute(
         select(Subscription).where(
@@ -507,7 +578,7 @@ def _on_invoice_paid(db: Session, settings: Settings, obj: dict) -> str:
     return "grant-issued" if bucket else "grant-duplicate"
 
 
-def _on_invoice_payment_failed(db: Session, obj: dict) -> str:
+def _on_invoice_payment_failed(db: Session, settings: Settings, obj: dict) -> str:
     subscription_id = _invoice_subscription_id(obj)
     if not subscription_id:
         return "ignored"
@@ -531,7 +602,7 @@ def _on_invoice_payment_failed(db: Session, obj: dict) -> str:
     return "past-due"
 
 
-def _on_charge_refunded(db: Session, obj: dict) -> str:
+def _on_charge_refunded(db: Session, settings: Settings, obj: dict) -> str:
     payment_intent = obj.get("payment_intent")
     if not payment_intent:
         return "ignored"
@@ -553,3 +624,19 @@ def _on_charge_refunded(db: Session, obj: dict) -> str:
         metadata={"payment_intent": payment_intent, "amount_refunded_cents": refunded_cents},
     )
     return "refund-applied"
+
+
+# The dispatch table ``handle_stripe_event`` reads — the one structure that
+# says which Stripe event types this service acts on. Every handler takes the
+# same ``(db, settings, obj)`` protocol whether or not it needs ``settings``,
+# so a new type is one line here and nothing else: the tombstone guard, and
+# the tests that enumerate this dict, both pick it up unedited.
+_EVENT_HANDLERS = {
+    "checkout.session.completed": _on_checkout_completed,
+    "customer.subscription.created": _on_subscription_upserted,
+    "customer.subscription.updated": _on_subscription_upserted,
+    "customer.subscription.deleted": _on_subscription_deleted,
+    "invoice.paid": _on_invoice_paid,
+    "invoice.payment_failed": _on_invoice_payment_failed,
+    "charge.refunded": _on_charge_refunded,
+}
