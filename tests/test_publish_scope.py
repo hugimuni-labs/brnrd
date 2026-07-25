@@ -1248,3 +1248,30 @@ def test_a_lane_whose_rows_name_a_repo_must_gate_per_row():
         "these lanes gate per row but their payload rows name no repo, so there "
         f"is nothing to key on: {spurious}"
     )
+
+
+def test_a_truncated_repo_label_cannot_borrow_another_repos_consent():
+    """`repo_label` is classified as a *display* field and truncates (#685), but
+    it is also the key `permitted_rows` resolves consent against — the one place
+    the truncate-vs-reject split touches something security-relevant.
+
+    Truncation must therefore fail **closed**: a shortened label may drop its
+    row for want of consent, and must never resolve to a *different* repo that
+    happens to share a prefix. It does, by construction — the truncation mark is
+    appended, and no forge repo name can contain it — so a truncated label
+    matches nothing. Asserted rather than assumed, because "it can't get that
+    long in practice" is the reasoning this lane already lost money on.
+    """
+    from brnrd import schemas
+
+    cap = schemas.LiveRunIn.string_bounds()["repo_label"]
+    victim = "Gurio/" + "r" * cap  # truncates to a prefix of a real label
+    row = schemas.LiveRunIn.model_validate({"id": "x", "repo_label": victim})
+
+    assert len(row.repo_label) == cap
+    assert row.repo_label.endswith(schemas.LIVE_RUN_TRUNCATION_MARK)
+    # The mark is what makes this fail closed: the stored label is not a prefix
+    # of any real repo label, so it can only ever match a repo literally named
+    # with it — and `…` is not a legal character in a forge repo name.
+    assert not victim.startswith(row.repo_label)
+    assert schemas.LIVE_RUN_TRUNCATION_MARK not in victim

@@ -1126,9 +1126,20 @@ def test_live_run_bounds_fixture_matches_the_model():
             encoding="utf-8"
         )
     )
-    assert fixture["string_bounds"] == schemas.LiveRunIn.string_bounds()
-    assert fixture["identity_fields"] == sorted(schemas.LIVE_RUN_IDENTITY_FIELDS)
-    assert fixture["truncation_mark"] == schemas.LIVE_RUN_TRUNCATION_MARK
+    regenerate = (
+        "regenerate with:\n"
+        "  python -c \"import json,pathlib;from brnrd import schemas;"
+        "p=pathlib.Path('tests/fixtures/live_run_bounds.json');"
+        "d=json.loads(p.read_text());"
+        "d['string_bounds']=schemas.LiveRunIn.string_bounds();"
+        "d['identity_fields']=sorted(schemas.LIVE_RUN_IDENTITY_FIELDS);"
+        "d['truncation_mark']=schemas.LIVE_RUN_TRUNCATION_MARK;"
+        "p.write_text(json.dumps(d,indent=2,ensure_ascii=False)+chr(10))\"\n"
+        "then update `_LIVE_RUN_STRING_BOUNDS` in src/brr/gates/cloud.py to match."
+    )
+    assert fixture["string_bounds"] == schemas.LiveRunIn.string_bounds(), regenerate
+    assert fixture["identity_fields"] == sorted(schemas.LIVE_RUN_IDENTITY_FIELDS), regenerate
+    assert fixture["truncation_mark"] == schemas.LIVE_RUN_TRUNCATION_MARK, regenerate
     assert "mood_frames" not in fixture["string_bounds"]
 
 
