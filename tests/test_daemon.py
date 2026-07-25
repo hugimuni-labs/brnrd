@@ -2346,6 +2346,11 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
     monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    # Both push lanes, not just one. `write_repo_scaffold` deliberately does
+    # not `git init`, and since #746 `publish_default_branch` refuses to ship
+    # from a tree git will not confirm — recording that on this run's
+    # `stray_host_write`, which rewrites the very note this test reads.
+    monkeypatch.setattr(daemon, "publish_default_branch", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
     # Deliberately NOT monkeypatching _notify_spawn_parent — that is the

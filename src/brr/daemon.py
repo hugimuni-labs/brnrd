@@ -392,6 +392,109 @@ def _start_gates(
 # ── Git publish ──────────────────────────────────────────────────────
 
 
+# The kind recorded on ``task.meta["stray_host_write"]`` when the check
+# below refuses. Shares #703/#726's key on purpose — see
+# ``_publish_tree_mismatch``.
+_PUBLISH_TREE_MISMATCH = "publish-tree-mismatch"
+
+
+def _publish_tree_mismatch(repo_root: Path) -> dict | None:
+    """Is *repo_root* the tree git agrees it is? ``None`` when confirmed. (#746)
+
+    An assertion, not a report: a caller that gets a dict back must refuse
+    the operation, because the alternative is what #746 did — a push, a PR,
+    and a green CI run on another run's content, every command exiting 0.
+
+    **What it catches, and why nothing else does.** ``core.worktree`` lives
+    in the common git dir, which the main checkout and every linked worktree
+    share; a worktree isolates files and not config. Write it and *this*
+    checkout silently becomes another one. Nothing in git objects: status,
+    add, commit, push all succeed, against the wrong tree. The only reading
+    that disagrees is git's own ``rev-parse --show-toplevel``, and only if
+    somebody asks it.
+
+    **A new predicate, deliberately, at #726's surface.** ``_stray_host_write``
+    is the neighbouring check and cannot be extended into this one. It is
+    gated on ``has_new_commit`` being False, and #746's run *did* commit —
+    that commit is the damage; it runs at finalize, after the shipping has
+    happened; and it reports rather than refuses. Three properties, each
+    individually fatal to reusing it. What *is* reused is the reporting:
+    a refusal records ``task.meta["stray_host_write"]``, so it reaches the
+    run state doc, a spawning parent's completion note, and the produce
+    manifest through machinery that already exists and is already driven —
+    #726's own post-mortem was five correct guards nobody could prove were
+    wired, and a sixth reporting channel would repeat it exactly.
+
+    ``None`` from :func:`gitops.toplevel` is a mismatch, not a pass. It is
+    the same contamination one step later — ``core.worktree`` left pointing
+    at a torn-down worktree, which is how the incident was finally noticed —
+    and more generally, *I cannot tell which tree this is* is not a
+    confirmation that it is the right one.
+    """
+    seen = gitops.toplevel(repo_root)
+    if seen is None:
+        return {"kind": _PUBLISH_TREE_MISMATCH, "expected": str(repo_root), "seen": ""}
+    # Physical paths on both sides: git reports the resolved toplevel, and a
+    # repo_root reached through a symlink (/tmp on macOS) would otherwise
+    # read as contaminated on every run.
+    try:
+        same = seen.resolve() == Path(repo_root).resolve()
+    except OSError:
+        same = False
+    if same:
+        return None
+    return {
+        "kind": _PUBLISH_TREE_MISMATCH,
+        "expected": str(Path(repo_root)),
+        "seen": str(seen),
+    }
+
+
+def _refuse_publish(task: Run, repo_root: Path, lane: str) -> dict | None:
+    """Record and announce a publish refused for a repointed tree, or ``None``.
+
+    One detector, both push lanes: ``publish`` ships the run's own branch,
+    and ``publish_default_branch`` fast-forwards the shared checkout's
+    default branch with ``git merge --ff-only``, which *writes files into
+    the working tree* — under a repointed ``core.worktree`` that merge lands
+    in some other run's worktree.
+
+    **Where this can and cannot be read.** Response delivery is released
+    *before* publish on purpose (push is post-response housekeeping and must
+    not delay the operator seeing the result), so by the time this fires the
+    chat reply has already gone out saying the work is done. The refusal
+    therefore rides every surface that is still live afterwards — the
+    ``conflict`` packet on the card, ``publish_status``, and #726's
+    ``stray_host_write`` key into the run state doc and a spawning parent's
+    thread — and cannot amend the reply. That is a known limit of the seam,
+    not an oversight: a check placed early enough to amend the reply would
+    be running before the run had produced anything to publish.
+    """
+    mismatch = _publish_tree_mismatch(repo_root)
+    if mismatch is None:
+        return None
+    task.meta["publish_status"] = "conflict"
+    # A repointed tree makes ``_stray_host_write``'s dirty-path arm read the
+    # *other* worktree, so ``stranded-worktree`` is likely already sitting on
+    # this key when we get here. The refusal outranks it — it is the live,
+    # blocking fact and the one with a repair step — but the finding it
+    # displaces is carried in the detail rather than dropped.
+    superseded = str(task.meta.get("stray_host_write") or "").strip()
+    task.meta["stray_host_write"] = _PUBLISH_TREE_MISMATCH
+    detail = {**mismatch, "lane": lane}
+    if superseded and superseded != _PUBLISH_TREE_MISMATCH:
+        detail["superseded"] = superseded
+    task.meta["stray_host_write_detail"] = json.dumps(detail, sort_keys=True)
+    seen = mismatch["seen"] or "<git would not say>"
+    print(
+        f"[brnrd] run {task.id}: REFUSING {lane} — {repo_root} is not the tree "
+        f"git resolves for it (--show-toplevel says {seen}). Something wrote "
+        f"core.worktree into the shared git dir; nothing is pushed from here "
+        f"until it is unset (#746)."
+    )
+    return mismatch
+
+
 def publish(
     repo_root: Path,
     task: Run,
@@ -436,6 +539,24 @@ def publish(
     emit = _WorkerEmit(
         brr_dir, task.conversation_key or "", task.event_id or "",
     )
+
+    # #746: before anything is shipped, assert the tree we are shipping from
+    # is the one we think it is. Placed after the "is there anything to
+    # publish" guards so a run with no branch pays nothing, and before every
+    # git read below, all of which would answer confidently about the wrong
+    # repository. The refusal rides the ``conflict`` packet — the same
+    # terminal phase a failed push renders as, so the card a human is already
+    # watching shows this rather than a silent success.
+    if _refuse_publish(task, repo_root, "publish") is not None:
+        if task.conversation_key:
+            emit(
+                "conflict",
+                run_id=task.id,
+                branch=push_branch,
+                publish_branch=push_branch,
+                reason=_PUBLISH_TREE_MISMATCH,
+            )
+        return
 
     expected = task.meta.get("target_branch") or None
     expected_remote_oid = task.meta.get("expected_remote_oid") or None
@@ -575,6 +696,13 @@ def publish_default_branch(repo_root: Path, task: Run) -> None:
     """
     if task.meta.get("root_kind") == "home":
         # Home is committed and pushed by the account-home capture net.
+        return
+    # #746, same assertion as ``publish``'s and for a sharper reason: the
+    # fast-forward below runs ``git merge --ff-only`` when the default
+    # branch is checked out here, and a merge *writes files into the
+    # working tree*. Under a repointed ``core.worktree`` that write lands in
+    # whichever run's worktree the shared config now names.
+    if _refuse_publish(task, repo_root, "default-branch publish") is not None:
         return
     try:
         branch = gitops.default_branch(repo_root)
@@ -7275,6 +7403,22 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 "child's (clean) worktree, committed nothing, and left the "
                 "deliverable unstaged in the shared tree. Recover from there — "
                 "it is not lost, and it is not on any branch."
+            )
+        elif stray_kind == _PUBLISH_TREE_MISMATCH:
+            status_label = "publish-refused"
+            stray_block = (
+                "\n\nPUBLISH REFUSED — the shared host checkout at "
+                f"{detail.get('expected', '?')} is not the tree git resolves "
+                f"for it (--show-toplevel says "
+                f"{detail.get('seen') or '<git would not say>'}), so nothing "
+                f"was pushed from it ({detail.get('lane', 'publish')} lane).\n"
+                "Something wrote `core.worktree` into the *shared* git dir — "
+                "a worktree isolates files, not `.git/config`. Every git "
+                "command in that checkout is currently operating on another "
+                "tree and exiting 0. Unset it "
+                "(`git config --unset core.worktree`) before trusting "
+                "anything git says there; this child's work is still on its "
+                "own branch, unpublished (#746)."
             )
         else:  # host-head-moved — unattributed, the weakest arm
             stray_block = (

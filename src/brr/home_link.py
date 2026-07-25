@@ -192,12 +192,17 @@ def _ensure_has_commit(repo_path: Path, message: str) -> None:
         return
     if gitops.worktree_dirty(repo_path) and gitops.commit_all(repo_path, message):
         return
+    # Authored as brnrd, like the ``commit_all`` path above it (#746): this
+    # is the founding commit of a repo brnrd is creating for the user, so it
+    # is brnrd's commit and not theirs — and pinning the identity is also
+    # what makes it land on a machine with no git identity configured.
     subprocess.run(
         ["git", "commit", "--allow-empty", "-m", message],
         cwd=repo_path,
         capture_output=True,
         text=True,
         check=False,
+        env=gitops.bot_identity_env(),
     )
 
 
