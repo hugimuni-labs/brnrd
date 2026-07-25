@@ -366,6 +366,9 @@ def _render_forge_state(forge: Any) -> str:
     worktree_summary = forge_state.summarize_worktrees(worktrees)
     if worktree_summary["total"]:
         bits = [f"{worktree_summary['total']} total"]
+        external_note = forge_state.external_worktree_note(worktree_summary)
+        if external_note:
+            bits.append(external_note)
         if worktree_summary["unpushed_branches"]:
             branches = worktree_summary["unpushed_branches"]
             commits = worktree_summary["unpushed_commits"]
@@ -380,7 +383,7 @@ def _render_forge_state(forge: Any) -> str:
         lines.append(f"- Worktrees / branches: {'; '.join(bits)}")
         for wt in worktree_summary["attention"]:
             branch = str(wt.get("branch") or "").strip() or "(detached)"
-            tid = str(wt.get("run_id") or "").strip()
+            tid = forge_state.worktree_label(wt)
             bits: list[str] = []
             unpushed = wt.get("unpushed", 0)
             if isinstance(unpushed, int) and unpushed > 0:
