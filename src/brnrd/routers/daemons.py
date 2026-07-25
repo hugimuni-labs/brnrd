@@ -413,6 +413,12 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     wake_requests.mark_consumed(
         db, principal.account_id, payload.consumed_wake_request_ids,
     )
+    # #733: and the ones it decided *against* — a tap that existed and was
+    # never applied lands on `expired`, not `consumed`. Both lists arrive on
+    # the same tick; keeping them separate here is the whole point.
+    wake_requests.mark_expired(
+        db, principal.account_id, payload.lapsed_wake_request_ids,
+    )
     pending = wake_requests.pending_for_account(db, principal.account_id)
     return schemas.RunnersOut(
         profiles=profiles,

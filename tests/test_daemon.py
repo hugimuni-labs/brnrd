@@ -552,13 +552,21 @@ def test_run_worker_wake_request_claimed_when_parked_shortly_before_event(
     }
 
 
-def test_run_worker_wake_request_lapses_when_parked_outside_claim_window(
+def test_run_worker_reports_an_expired_tap_instead_of_going_silent(
     tmp_path, monkeypatch,
 ):
-    """#577: a tap parked well before this event's window is not this
-    event's tap — the wake dispatches on the default profile (visibly, via
-    task.meta["wake_request"]) and the tap lapses rather than staying armed
-    for whatever unrelated wake reads next."""
+    """#733 defect 4: the miss the report surface was structurally blind to.
+
+    The staleness check used to live *inside* `wake_request.pending()`, which
+    returned `None` on a lapse. So `wake_request_report` was never built,
+    `body_provenance` stayed `None`, and the single most common outcome — "your
+    tap expired, you got the default" — produced byte-identical silence to "no
+    tap was ever parked". #577's whole "you asked for X, got Y, because Z"
+    surface could not see its own most frequent case.
+
+    Expiry is now a reason like any other, so the tap is still in hand when the
+    verdict is written.
+    """
     from datetime import datetime, timedelta, timezone
 
     from brr import wake_request as wake_request_mod
@@ -571,12 +579,13 @@ def test_run_worker_wake_request_lapses_when_parked_outside_claim_window(
     )
     _stub_env_isolated(monkeypatch, tmp_path)
     brr_dir = tmp_path / ".brr"
-    parked = now - timedelta(minutes=10)
     wake_request_mod.store_pending(
         brr_dir,
         {
             "request_id": "wake_stale_evt", "profile": "codex-mini",
-            "requested_at": parked.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "requested_at": (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            # Dead by the server's own published horizon — the only horizon.
+            "expires_at": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         },
     )
 
@@ -613,16 +622,20 @@ def test_run_worker_wake_request_lapses_when_parked_outside_claim_window(
     assert seen_overrides and seen_overrides[0] is None
     # Lapsed, not left pending — the next unrelated wake can't inherit it.
     assert wake_request_mod.pending(brr_dir) is None
-    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_stale_evt"]
+    # #733: acked as expired, not as a spend. `mark_consumed`'s docstring says
+    # "these requests were spent on a dispatched wake"; this one never ran.
+    assert wake_request_mod.lapsed_ids(brr_dir) == ["wake_stale_evt"]
+    assert wake_request_mod.consumed_ids(brr_dir) == []
     receipt = wake_request_mod.last_receipt(brr_dir)
     assert receipt["outcome"] == "lapsed"
     assert receipt["profile"] is None
-    # #577: visible on the run — "you asked for X, you got Y, because Z".
+    # The teeth: under the old shape `task.meta` had no "wake_request" key at
+    # all here, because the lapse happened inside the accessor.
     report = task.meta["wake_request"]
     assert report["requested_profile"] == "codex-mini"
     assert report["resolved_profile"] == "codex"
     assert report["applied"] is False
-    assert "claim window" in report["reason"]
+    assert "expired" in report["reason"]
 
 
 def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
@@ -6092,10 +6105,19 @@ def test_apply_dashboard_wake_request_claims_when_parked_shortly_before_event(
     assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_close_evt"]
 
 
-def test_apply_dashboard_wake_request_lapses_stale_park_outside_window(tmp_path):
-    """#577: a tap parked well before this event's claim window belongs to
-    a wake that already came and went — dispatch leaves it unapplied and
-    the tap lapses instead of lingering to ambush the next unrelated wake."""
+def test_the_sixteen_minute_tap_the_daemon_used_to_eat(tmp_path):
+    """#733, the incident itself, at the dispatch seam.
+
+    Timeline as it actually happened: tap minted 10:40:03Z, message sent
+    16m11s later, run started at 10:56:20Z. `DEFAULT_TTL_S = 900` killed it by
+    71 seconds, and even with a fresh TTL the 120 s claim window would have
+    killed it anyway — a tap parked more than two minutes before the message it
+    was parked *for* was refused. Both numbers were local; the server's row
+    lived 24 h and the dashboard chip the maintainer reloaded said so.
+
+    A human taps a rack and then writes. Sixteen minutes is not a stale tap, it
+    is a sentence being composed. This is the test whose absence let that ship.
+    """
     from datetime import datetime, timedelta, timezone
 
     from brr import wake_request as wake_request_mod
@@ -6103,19 +6125,60 @@ def test_apply_dashboard_wake_request_lapses_stale_park_outside_window(tmp_path)
     repo_a = tmp_path / "repo-a"
     repo_a.mkdir()
     write_repo_scaffold(repo_a)
-    cfg = {
-        "repo.label": "Gurio/a",
-        "home.path": str(tmp_path / "account-home"),
-    }
+    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
     ctx = daemon.account.resolve_context(repo_a, cfg)
     protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
     target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
-    parked = datetime.now(timezone.utc) - timedelta(minutes=10)
+    now = datetime.now(timezone.utc)
     wake_request_mod.store_pending(
         repo_a / ".brr",
         {
-            "request_id": "wake_stale_dispatch", "profile": "codex-mini",
-            "requested_at": parked.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "request_id": "wake_composed_slowly", "profile": "codex-mini",
+            "requested_at": (now - timedelta(minutes=16, seconds=11)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            # The server minted it with a day to live, which is what the chip
+            # reported and what now decides.
+            "expires_at": (now + timedelta(hours=23, minutes=43)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        },
+    )
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied.event["runner"] == "codex-mini"
+    assert applied.event["dashboard_wake_request_id"] == "wake_composed_slowly"
+    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_composed_slowly"]
+    # And it was *spent*, not lapsed — the two now land in different ledgers.
+    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == []
+
+
+def test_a_tap_the_server_already_expired_lapses_rather_than_applying(tmp_path):
+    """The horizon that remains is the server's, and it is still enforced.
+
+    Removing the local TTL must not mean removing staleness — only relocating
+    its ownership. A row whose published `expires_at` has passed is dead, and
+    the daemon says so in the ledger the server reads as `expired`.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brr import wake_request as wake_request_mod
+
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    write_repo_scaffold(repo_a)
+    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
+    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
+    now = datetime.now(timezone.utc)
+    wake_request_mod.store_pending(
+        repo_a / ".brr",
+        {
+            "request_id": "wake_truly_dead", "profile": "codex-mini",
+            "requested_at": (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         },
     )
 
@@ -6123,12 +6186,53 @@ def test_apply_dashboard_wake_request_lapses_stale_park_outside_window(tmp_path)
 
     assert applied is target
     assert "runner" not in applied.event
-    assert "dashboard_wake_request_id" not in applied.event
     assert wake_request_mod.pending(repo_a / ".brr") is None
-    assert wake_request_mod.consumed_ids(repo_a / ".brr") == ["wake_stale_dispatch"]
+    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == ["wake_truly_dead"]
+    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
     receipt = wake_request_mod.last_receipt(repo_a / ".brr")
     assert receipt["outcome"] == "lapsed"
     assert receipt["profile"] is None
+
+
+def test_a_tap_parked_after_this_event_waits_instead_of_being_destroyed(tmp_path):
+    """#733: arriving early is not dying.
+
+    A tap minted while a wake was already queued was meant for the next one.
+    #577 *lapsed* it here, which was defensible only while this same branch
+    also caught taps that were merely old. Now that expiry owns staleness,
+    lapsing would destroy a live tap for the crime of being punctual.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brr import wake_request as wake_request_mod
+
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    write_repo_scaffold(repo_a)
+    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    protocol.create_event(ctx.dispatch_inbox, "telegram", "dispatch this")
+    target = daemon._dispatchable_targets(ctx, repo_a, cfg)[0]
+    now = datetime.now(timezone.utc)
+    wake_request_mod.store_pending(
+        repo_a / ".brr",
+        {
+            "request_id": "wake_for_the_next_one", "profile": "codex-mini",
+            "requested_at": (now + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": (now + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    )
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert applied is target
+    assert "runner" not in applied.event
+    # Still armed. Neither spent nor expired: the wake it was parked for
+    # has not happened yet.
+    still = wake_request_mod.pending(repo_a / ".brr")
+    assert still is not None and still["request_id"] == "wake_for_the_next_one"
+    assert wake_request_mod.consumed_ids(repo_a / ".brr") == []
+    assert wake_request_mod.lapsed_ids(repo_a / ".brr") == []
 
 
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):

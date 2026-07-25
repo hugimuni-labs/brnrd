@@ -1817,8 +1817,15 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None
     # #328 tap-to-request: ack wake requests a dispatched wake has spent,
     # and mirror back the account's still-pending one (if any). Same
     # publish tick, no extra request — see src/brr/wake_request.py.
+    # #733: two lists, because "spent on a wake" and "expired unspent" are two
+    # facts and the server has two statuses for them. They shared one list, so
+    # every lapse was acked through `mark_consumed` — whose docstring reads
+    # "these requests were spent on a dispatched wake" — and the chip flipped
+    # to consumed for a tap that never ran.
     acked = wake_request.consumed_ids(brr_dir)
+    lapsed = wake_request.lapsed_ids(brr_dir)
     payload["consumed_wake_request_ids"] = acked
+    payload["lapsed_wake_request_ids"] = lapsed
     try:
         body = _request(
             state["brnrd_url"],
@@ -1832,6 +1839,7 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None
         print(f"[brnrd:cloud] runners publish failed: {e}")
         return
     wake_request.clear_consumed(brr_dir, acked)
+    wake_request.clear_lapsed(brr_dir, lapsed)
     pending = body.get("pending_wake_request") if isinstance(body, dict) else None
     wake_request.store_pending(
         brr_dir, pending if isinstance(pending, dict) else None,

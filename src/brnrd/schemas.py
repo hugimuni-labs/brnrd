@@ -359,6 +359,11 @@ class RunnersReport(BaseModel):
     # (#328 tap-to-request): a dispatched wake ran on the requested profile,
     # so the server should retire the row (and with it the rack chip).
     consumed_wake_request_ids: list[str] = Field(default_factory=list)
+    # And the ones that expired unspent (#733). A separate list because it is a
+    # separate fact: the tap existed, no wake ever applied it, and the row
+    # belongs on `expired` rather than `consumed`. One list used to carry both,
+    # so a tap that was never honoured was published as having run.
+    lapsed_wake_request_ids: list[str] = Field(default_factory=list)
 
 
 class RunnerWakeRequestOut(BaseModel):
@@ -369,6 +374,12 @@ class RunnerWakeRequestOut(BaseModel):
     repo_label: str | None = None
     environment: str | None = None
     requested_at: datetime | None = None
+    # #733: the row's own staleness horizon, published so the daemon stops
+    # keeping a second one. The chip already reported "pending" against this
+    # value while the daemon destroyed the tap on a hardcoded 900 s of its own —
+    # the surface that answered was not the surface that decided. Optional for
+    # the same reason `requested_at` is: an older daemon ignores it.
+    expires_at: datetime | None = None
     status: str
 
 
