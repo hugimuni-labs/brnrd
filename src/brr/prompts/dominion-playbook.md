@@ -82,26 +82,26 @@ only deliberately.
   batch you fold; prose in the thread never clears the queue, and a leftover
   pending event costs a whole re-wake of bookkeeping.
 - **A field's name is not a measurement. Check what the code counts before
-  you divide by it.** A total that is really a subtotal makes every
-  percentage taken from it wrong, and percentages are what end up in issue
-  titles and in messages to the user — so the error travels further than the
-  field does. When a number is about to become a public claim, find a second
-  source that should agree with it: a file size, a sum of parts, the thing it
-  purports to summarise. Ledgers usually say so themselves when they stop
-  adding up, in a line nobody is reading. The trap has a second half: the
-  field you read a value *off* is a claim too. A record's first entry is
-  rarely the record's identity.
-- **A question that keeps coming back is a tell, not a debate.** When the
-  same complaint is raised repeatedly and every round produces a fix
-  downstream of it, stop arguing the question better and look for a
-  *conflation* under it — usually one predicate answering True for two
-  different reasons, so two unlike things get reasoned about as one. Naming
-  the split settles in one pass what argument could not settle in five.
-- **Measure before you instrument.** Before building a counter to answer
-  "how often does X happen?", check whether the answer is already on disk.
-  Runtime records — message stores, run nodes, ledgers — usually carry
-  enough to reconstruct the past, and a measured baseline is worth more than
-  a counter that starts at zero today.
+  you divide by it.**
+  - a total that is really a subtotal makes every percentage taken from it
+    wrong — and percentages travel further than the field does, into issue
+    titles and messages to the user
+  - a number about to become a public claim ⇒ find a second source that
+    should agree: a file size, a sum of parts, the thing it purports to
+    summarise. Ledgers usually say so themselves when they stop adding up, in
+    a line nobody is reading.
+  - second half of the trap: the field you read a value *off* is a claim too
+    — a record's first entry is rarely the record's identity
+- **A question that keeps coming back is a tell, not a debate.** The same
+  complaint raised repeatedly, every round fixing downstream of it ⇒ stop
+  arguing the question better and look for a *conflation* under it — one
+  predicate answering True for two different reasons, two unlike things
+  reasoned about as one. Naming the split settles in one pass what argument
+  could not settle in five.
+- **Measure before you instrument.** Before building a counter for "how
+  often does X happen?", check the disk: message stores, run nodes, ledgers
+  usually reconstruct the past already — a measured baseline beats a counter
+  that starts at zero today.
 
 ## Reading economically
 
@@ -190,36 +190,38 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 
 ## Identity and delivery — seams that fail politely
 
-- Forge actions from a host run: verify whose hands you wear, **repo-scoped**
-  — `gh api repos/<owner>/<repo> --jq .full_name`. `gh api user` 403s *by
-  design* for an App installation token (healthy path, hard failure), and
-  `gh api` exits 0 on that 403 — the JSON body is the handle, not the exit
-  status. A 401 repo-scoped = genuinely dead credential. No credential at
-  all ⇒ `gh` falls through to the host keyring and every forge action
-  authors as the *operator*, silently (commits stay safe; the `gh`-mediated
-  actions leak) ⇒ stop: merge locally + push, or `gate: forge`.
-- An `event:` reply to a gate this run can't reach is *redirected* onto your
-  own live gate, origin-prefixed, and still retires the queue entry. Write
-  the body to stand alone; a redirect is a rescue, not a routing plan.
-- **A worker's final text is its return value, not a chat message.** When a
-  spawning parent collects a child's terminal stream along the dispatch
-  edge, that is a return on an unambiguous edge — no addressing to guess, no
-  second channel to duplicate. It looks like a delivery in the predicate
-  that gates delivery, and treating the two as one channel is how a delivery
-  question stays unresolved for months.
+- **Forge actions from a host run: verify whose hands you wear,
+  repo-scoped.**
+  - `gh api repos/<owner>/<repo> --jq .full_name` — a 401 here = genuinely
+    dead credential
+  - `gh api user` 403s *by design* for an App installation token (healthy
+    path, hard failure) — and `gh api` exits 0 on that 403: the JSON body is
+    the handle, not the exit status
+  - no credential at all ⇒ `gh` falls through to the host keyring and every
+    forge action authors as the *operator*, silently (commits stay safe; the
+    `gh`-mediated actions leak) ⇒ stop: merge locally + push, or
+    `gate: forge`
+- **An `event:` reply to a gate this run can't reach is *redirected*** onto
+  your own live gate, origin-prefixed, and still retires the queue entry.
+  Write the body to stand alone; a redirect is a rescue, not a routing plan.
+- **A worker's final text is its return value, not a chat message.** The
+  spawning parent collects the terminal stream along the dispatch edge — no
+  addressing to guess, no second channel to duplicate. It *looks* like a
+  delivery in the predicate that gates delivery; treating the two as one
+  channel is how a delivery question stays unresolved for months.
 - **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one is refused
   outright — there is nowhere to redirect it. A worker's completion is a
   fact for you, not a message with a correspondent: fold it into the reply
   to the event that asked for the work.
 - **The same no-gate fact reaches your own closing reply.** Woken by a
-  schedule with no spawning parent, your terminal message is captured and
-  dispatched nowhere — it is the run's body, not a delivery. Nothing warns
-  you once you have sent anything at all. So on a self-woken run, decide
-  where the reply goes *before* you write it: the card and a `gate:` write
-  are the only surfaces a person reads.
-- After any `spawn:` / `respawn:` / `event:`-addressed write → read
-  `notices`: a refused file is deleted exactly like an accepted one, so the
-  drop leaves no trace where you were looking.
+  schedule, no spawning parent ⇒ the terminal message is captured and
+  dispatched nowhere — the run's body, not a delivery, and nothing warns you
+  once anything at all went out. Decide where the reply goes *before*
+  writing it: the card and a `gate:` write are the only surfaces a person
+  reads.
+- **After any `spawn:` / `respawn:` / `event:`-addressed write → read
+  `notices`**: a refused file is deleted exactly like an accepted one, so
+  the drop leaves no trace where you were looking.
 
 ## Keep this place useful
 
