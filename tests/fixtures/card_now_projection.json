@@ -1,0 +1,105 @@
+{
+  "$comment": [
+    "The shared contract for the run card's Now projection (#722).",
+    "Read by BOTH tests/test_card.py (Python) and",
+    "src/frontend/src/lib/runNode.test.ts (Vitest). The TS implementation is",
+    "hand-written by necessity — there is no shared runtime between the daemon",
+    "and the browser — so this table is the only thing that makes 'deliberately",
+    "mirrored by hand' a checkable claim rather than a comment.",
+    "",
+    "Adding a case here obliges BOTH implementations. That is the point: a case",
+    "that only one side can pass is a divergence caught at the gate instead of",
+    "in a 422 four hours later.",
+    "",
+    "`body` and `expected` are part lists. A string part is literal; a",
+    "[unit, count] part repeats `unit` `count` times, so an over-cap fixture",
+    "stays readable instead of shipping 5,000 literal characters.",
+    "`limit` is optional; absent means unbounded (the wake-injection callers)."
+  ],
+  "truncationMark": "\n…",
+  "cases": [
+    {
+      "name": "h2 Now — the shape the rule was written for",
+      "body": ["## Now\nliving\n\n## Arc\nhistory"],
+      "expected": ["living"]
+    },
+    {
+      "name": "h1 Now — #722 itself: 18 of 272 captured bodies, every one published whole",
+      "body": ["# Now\nliving\n\n# Arc\nhistory"],
+      "expected": ["living"]
+    },
+    {
+      "name": "h3 Now",
+      "body": ["### Now\nliving\n\n### Arc\nhistory"],
+      "expected": ["living"]
+    },
+    {
+      "name": "no Now section — the legacy one-note card stays valid",
+      "body": ["one note, no sections"],
+      "expected": ["one note, no sections"]
+    },
+    {
+      "name": "h1 Now terminated by h1 Arc — generalising the anchor without the terminator would run to EOF",
+      "body": ["# Now\na\n# Arc\nb"],
+      "expected": ["a"]
+    },
+    {
+      "name": "h2 Now keeps its h3 Sub — a deeper heading is inside the section, not after it",
+      "body": ["## Now\na\n\n### Sub\nb\n\n## Arc\nc"],
+      "expected": ["a\n\n### Sub\nb"]
+    },
+    {
+      "name": "h2 Now terminated by a shallower h1 — depth <=, not depth ==",
+      "body": ["## Now\na\n\n# Arc\nb"],
+      "expected": ["a"]
+    },
+    {
+      "name": "h3 Now is not terminated by h4",
+      "body": ["### Now\na\n\n#### Deep\nb\n\n### Arc\nc"],
+      "expected": ["a\n\n#### Deep\nb"]
+    },
+    {
+      "name": "trailing text after the name — '## Now — done', 10 of 272 captured bodies",
+      "body": ["## Now — done\na\n\n## Arc\nb"],
+      "expected": ["a"]
+    },
+    {
+      "name": "case-insensitive",
+      "body": ["## NOW\na"],
+      "expected": ["a"]
+    },
+    {
+      "name": "'## Nowhere' is a different section and must not anchor",
+      "body": ["## Nowhere\na"],
+      "expected": ["## Nowhere\na"]
+    },
+    {
+      "name": "a # comment inside a fence is not a heading — the truncation path that fixing the anchor would otherwise create",
+      "body": ["## Now\n```sh\n# not a heading\n```\ndone\n\n## Arc\nb"],
+      "expected": ["```sh\n# not a heading\n```\ndone"]
+    },
+    {
+      "name": "over-cap section-less body is bounded with a visible ellipsis, not published whole",
+      "body": [["x", 5000]],
+      "limit": 4096,
+      "expected": [["x", 4094], "\n…"]
+    },
+    {
+      "name": "an over-cap Now *section* 422s exactly like an over-cap body — 4 of 272 captured bodies",
+      "body": ["## Now\n", ["y", 5000]],
+      "limit": 4096,
+      "expected": [["y", 4094], "\n…"]
+    },
+    {
+      "name": "under the cap, the limit changes nothing",
+      "body": ["## Now\nshort"],
+      "limit": 4096,
+      "expected": ["short"]
+    },
+    {
+      "name": "empty body",
+      "body": [""],
+      "expected": [""]
+    }
+  ]
+}
