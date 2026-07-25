@@ -355,10 +355,12 @@ class RunnersReport(BaseModel):
     default: str | None = Field(default=None, max_length=64)
     environment_default: str | None = Field(default=None, max_length=32)
     environments: list[EnvironmentOptionIn] = Field(default_factory=list)
-    # Wake-request ids this daemon has consumed since its last publish
-    # (#328 tap-to-request): a dispatched wake ran on the requested profile,
-    # so the server should retire the row (and with it the rack chip).
-    consumed_wake_request_ids: list[str] = Field(default_factory=list)
+    # No `consumed_wake_request_ids` here any more (#733). Retiring a tap was
+    # a piggybacked *ack* — the daemon deciding locally that a row was spent
+    # and telling the server one publish tick later. The claim endpoint
+    # decides and retires in the same transaction, so there is nothing left
+    # to acknowledge. An older daemon still sending the field is ignored, and
+    # correctly so: its opinion was never the one that mattered.
 
 
 class RunnerWakeRequestOut(BaseModel):
@@ -370,6 +372,43 @@ class RunnerWakeRequestOut(BaseModel):
     environment: str | None = None
     requested_at: datetime | None = None
     status: str
+
+
+class WakeRequestClaim(BaseModel):
+    """A dispatching daemon asking the server to decide a tap's fate (#733).
+
+    Sent at most once per dispatched wake, and only when the daemon's
+    presence-bit mirror says a tap exists at all — so the common dispatch,
+    and every local-only account, sends this never. Everything the server
+    needs to run the whole guard ladder is here: which tap, which wake, what
+    woke it, and when that wake's event came into being.
+    """
+
+    request_id: str = Field(max_length=64)
+    event_id: str | None = Field(default=None, max_length=128)
+    source: str | None = Field(default=None, max_length=64)
+    event_created: datetime | None = None
+
+
+class WakeRequestClaimOut(BaseModel):
+    """The server's verdict on a claim, with the row already at its final
+    status (#733) — there is no second round trip and no ack.
+
+    ``apply`` is the only bit dispatch acts on. ``reason`` is what the
+    daemon writes into ``.brr/wake-request-receipt.json`` and onto the run's
+    ``resources.runner.wake_request`` facet, so "you asked for X, you got Y,
+    because Z" survives the machine that decided it. ``status`` is the row's
+    status *after* the transaction: anything but ``pending`` means the
+    daemon may drop its mirror now rather than wait a publish tick.
+    """
+
+    apply: bool
+    reason: str | None = None
+    request_id: str
+    status: str
+    profile: str | None = None
+    repo_label: str | None = None
+    environment: str | None = None
 
 
 class RunnersOut(BaseModel):
