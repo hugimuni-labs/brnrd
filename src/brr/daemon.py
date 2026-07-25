@@ -2133,10 +2133,13 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
 
     raw_baseline = task.meta.get("host_dirty_at_dispatch")
     if raw_baseline is not None:
+        baseline_paths: set[str] | None
         try:
             baseline_paths = set(json.loads(str(raw_baseline)))
         except (ValueError, TypeError):
-            baseline_paths = None  # type: ignore[assignment]
+            # An unparseable baseline is the over-cap case's twin: comparing
+            # against it would invent "new" paths. Skip the arm.
+            baseline_paths = None
         if baseline_paths is not None:
             gained = sorted(gitops.dirty_paths(repo_root) - baseline_paths)
             if gained:

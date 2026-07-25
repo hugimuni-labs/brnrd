@@ -18,13 +18,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from brr import cli, daemon, gitops
+from brr import cli, daemon, envs, gitops
 from brr.run import Run
+from brr.runner import RunnerResult
 
-from _helpers import init_git_repo
+from _helpers import init_git_repo, make_event, write_repo_scaffold
 
 
 # ── scaffolding ─────────────────────────────────────────────────────
@@ -171,6 +173,139 @@ def test_no_pin_for_a_resident_or_a_host_run(trees):
 def test_pin_absent_rather_than_half_built_when_git_dir_unreadable(tmp_path):
     task = _worker(tmp_path / "nope")
     assert daemon._child_git_pin(task, tmp_path / "not-a-repo") == {}
+
+
+# ── the wiring: the pin must reach the env the runner is actually given ──
+#
+# Every test above calls `_child_git_pin` directly, which measures the pin's
+# *logic* and says nothing about whether anything calls it. Deleting the
+# `env.update(_child_git_pin(...))` line in `_runner_runtime` would leave all
+# of them green — a guard can be perfect and unwired, and "counting call sites
+# overcounts coverage" is this repo's own lesson. These two drive `_run_worker`
+# end to end and read the env the runner is handed.
+
+
+def _drive_run_worker(tmp_path, monkeypatch, *, worker: bool, during=None,
+                      finalize=False):
+    """Run `_run_worker` against a real checkout + real worktree, and return
+    the environment the runner was actually invoked with.
+
+    ``during`` is called with ``(repo_root, run_root)`` while the stub runner
+    is "executing", so a test can simulate what a drifted worker does. With
+    ``finalize=True`` the whole ``_run_worker_and_finalize`` path runs, which
+    is what puts the stray-write check itself under test rather than just the
+    function it calls.
+    """
+    write_repo_scaffold(tmp_path)
+    init_git_repo(tmp_path)
+    (tmp_path / "seed.md").write_text("seed\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "seed")
+    run_root = tmp_path / ".brr" / "worktrees" / "wiring"
+    run_root.parent.mkdir(parents=True, exist_ok=True)
+    _git(tmp_path, "worktree", "add", "-b", "brr/wiring", str(run_root), "main")
+
+    extra = {"worker": True} if worker else {}
+    event = make_event(tmp_path, eid="evt-wiring", **extra)
+    seen: dict[str, str] = {}
+
+    class StubEnv:
+        name = "worktree"
+
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                    outbox_path=None):
+            return envs.RunContext(
+                name=self.name, cwd=run_root, repo_root=repo_root,
+                runtime_dir=tmp_path / ".brr",
+                response_path_host=response_path,
+                response_path_env=response_path,
+                outbox_host=outbox_path, outbox_env=outbox_path,
+                branch_name="brr/wiring",
+                env_state={"worktree_path": str(run_root)},
+            )
+
+        def invoke(self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+            seen.update(invocation.env)
+            if during is not None:
+                during(tmp_path, run_root)
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="ok\n", stderr="", returncode=0, trace_dir=None,
+                artifacts=[],
+            )
+
+        def finalize(self, ctx, task, runs_dir):
+            return task
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
+    )
+    driver = (
+        daemon._run_worker_and_finalize if finalize else daemon._run_worker
+    )
+    task = driver(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    return task, seen, run_root
+
+
+def test_the_pin_reaches_the_runners_environment(tmp_path, monkeypatch):
+    task, seen, run_root = _drive_run_worker(tmp_path, monkeypatch, worker=True)
+    assert task.meta.get("worker") is True
+    assert seen.get("GIT_WORK_TREE") == str(run_root)
+    assert seen.get("GIT_DIR") == str(gitops.absolute_git_dir(run_root))
+
+
+def test_no_pin_reaches_a_non_worker_runs_environment(tmp_path, monkeypatch):
+    _task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, worker=False)
+    assert "GIT_DIR" not in seen
+    assert "GIT_WORK_TREE" not in seen
+
+
+def test_the_host_baseline_is_recorded_by_the_dispatch_path(tmp_path, monkeypatch):
+    """Half 2's dispatch-time arm, wired rather than called directly."""
+    task, _seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, worker=True)
+    assert task.meta.get("host_head_at_dispatch")
+    assert "host_dirty_at_dispatch" in task.meta
+
+
+def test_finalize_reports_a_stranded_deliverable_end_to_end(tmp_path, monkeypatch):
+    """The whole containment, from dispatch to verdict, with no direct call.
+
+    A worker whose cwd drifted writes its deliverable into the execution root
+    and commits nothing. `_run_worker_and_finalize` must reach a verdict on
+    `task.meta` — otherwise the check is a function with no caller, which is
+    the shape a guard has when it was wired and then quietly unwired.
+    """
+    def drift(repo_root, _run_root):
+        (repo_root / "stranded-deliverable.md").write_text(
+            "262 insertions\n", encoding="utf-8",
+        )
+
+    task, _seen, _run_root = _drive_run_worker(
+        tmp_path, monkeypatch, worker=True, during=drift, finalize=True,
+    )
+    assert task.meta.get("stray_host_write") == "stranded-worktree"
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert "stranded-deliverable.md" in detail["stranded_paths"]
+
+
+def test_finalize_stays_silent_when_the_worker_behaved(tmp_path, monkeypatch):
+    """The positive control's counterpart: no verdict key at all when clean.
+
+    Absent stays absent — never a "clean" or a False that a reader has to
+    tell apart from "never checked".
+    """
+    def behave(_repo_root, run_root):
+        (run_root / "deliverable.md").write_text("real work\n", encoding="utf-8")
+        _git(run_root, "add", "-A")
+        _git(run_root, "commit", "-m", "feat: work, in the right tree")
+
+    task, _seen, _run_root = _drive_run_worker(
+        tmp_path, monkeypatch, worker=True, during=behave, finalize=True,
+    )
+    assert "stray_host_write" not in task.meta
 
 
 # ── the pin's cost, and brnrd's immunity to it ──────────────────────
@@ -412,6 +547,126 @@ def test_strongest_signal_wins_when_both_arms_fire(trees):
     verdict = daemon._stray_host_write(task, host)
     assert verdict["kind"] == "stray-commit"
     assert set(verdict["signals"]) == {"stray-commit", "stranded-worktree"}
+
+
+# ── the reporting surface: the finding has to reach a reader ─────────
+#
+# #703 exists because "nothing refused it and nothing reported it". A verdict
+# that only ever lands on `task.meta` reproduces the second clause, so the
+# block that writes it into the parent's own thread is pinned here. Measured:
+# without these, reverting the whole notify block reds nothing.
+
+
+def _spawn_child(*, stray=None, detail=None, status="done", body="spec\n"):
+    meta = {
+        "spawn_parent_run_id": "run-parent",
+        "spawn_parent_conversation_key": "telegram:42:",
+        "publish_branch": "brr/child",
+        "trace_dirs": "/tmp/trace",
+    }
+    if stray:
+        meta["stray_host_write"] = stray
+        meta["stray_host_write_detail"] = json.dumps(detail or {})
+    return Run(
+        id="run-child", event_id="evt-child", body=body,
+        source="telegram", status=status, meta=meta,
+    )
+
+
+def _note(tmp_path, task):
+    from brr import protocol
+
+    inbox = tmp_path / ".brr" / "inbox"
+    daemon._notify_spawn_parent(inbox, task)
+    return protocol.list_pending(inbox)[0]
+
+
+def test_notify_indicts_an_attributed_stray_commit(tmp_path):
+    note = _note(tmp_path, _spawn_child(
+        stray="stray-commit",
+        detail={"stray_commits": ["abc123def4567890", "0011223344556677"]},
+    ))
+    assert note["spawn_stray_host_write"] == "stray-commit"
+    assert "status=stray-host-commit" in note["body"]
+    assert "STRAY WRITE" in note["body"]
+    assert "abc123def456" in note["body"]
+
+
+def test_notify_reports_stranded_work(tmp_path):
+    note = _note(tmp_path, _spawn_child(
+        stray="stranded-worktree",
+        detail={"stranded_paths": ["docs/sub-processors.md"]},
+    ))
+    assert note["spawn_stray_host_write"] == "stranded-worktree"
+    assert "status=stray-host-worktree" in note["body"]
+    assert "STRANDED WORK" in note["body"]
+    assert "docs/sub-processors.md" in note["body"]
+
+
+def test_notify_keeps_an_unattributed_head_move_an_advisory(tmp_path):
+    """The maintainer's original conjunction, reported without accusing.
+
+    Status must stay `done`: a sibling run or a human commit reaches this arm,
+    and a guard that indicts for a non-reason is one readers learn to skip.
+    """
+    note = _note(tmp_path, _spawn_child(
+        stray="host-head-moved",
+        detail={"host_head_at_dispatch": "aaaaaaaaaaaa1111",
+                "host_head_now": "bbbbbbbbbbbb2222"},
+    ))
+    assert "status=done" in note["body"]
+    assert "advisory" in note["body"]
+    assert "aaaaaaaaaaaa" in note["body"] and "bbbbbbbbbbbb" in note["body"]
+    assert "STRAY WRITE" not in note["body"]
+
+
+def test_notify_says_nothing_when_there_is_nothing_stray(tmp_path):
+    note = _note(tmp_path, _spawn_child())
+    assert "spawn_stray_host_write" not in note
+    assert "STRAY WRITE" not in note["body"]
+    assert "STRANDED WORK" not in note["body"]
+
+
+def test_a_runner_that_never_ran_is_not_accused_of_a_stray_write(tmp_path):
+    """#633's rule, preserved: no worker, nothing to have written."""
+    task = _spawn_child(stray="stray-commit", detail={"stray_commits": ["a"]},
+                        status="error")
+    task.meta.pop("trace_dirs")  # no transcript ⇒ the Shell never gave a turn
+    note = _note(tmp_path, task)
+    assert "status=runner-failed" in note["body"]
+    assert "STRAY WRITE" not in note["body"]
+    assert "spawn_stray_host_write" not in note
+
+
+def test_a_malformed_detail_blob_does_not_break_the_note(tmp_path):
+    task = _spawn_child(stray="stranded-worktree")
+    task.meta["stray_host_write_detail"] = "{not json"
+    note = _note(tmp_path, task)
+    assert "STRANDED WORK" in note["body"]
+
+
+def test_the_verdict_reaches_the_run_state_doc(tmp_path):
+    """The only surface a *non-spawn* worktree run has.
+
+    A scheduled or user-addressed run has no parent thread to notify, so
+    without this line the check's sole reader would be the daemon's own
+    uncaptured stdout — which is how the original incident went unreported.
+    """
+    from brr import account
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = account.resolve_context(repo, {"home.path": str(tmp_path / "home")})
+    task = Run(
+        id="run-260725-0000-aaaa", event_id="evt-x", body="b", env="worktree",
+        meta={"stray_host_write": "stranded-worktree"},
+    )
+    doc = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished", cfg={},
+    )
+    assert doc is not None
+    assert "stray_host_write: stranded-worktree" in doc.read_text(encoding="utf-8")
 
 
 def test_a_rename_reports_its_destination(trees):
