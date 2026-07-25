@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import runner_failures
+
 
 _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
@@ -607,15 +609,90 @@ class RunnerResult:
             return False
         return True
 
+    @property
+    def timed_out(self) -> bool:
+        """Whether this attempt was killed by its wall-clock budget.
+
+        Derived, not attested: there is no timeout flag on this object.
+        ``invoke_runner`` represents a timeout by setting ``returncode`` to
+        124 and appending ``runner timed out after Ns`` to stderr; its own
+        ``timed_out`` local never reaches the result. This property is the
+        single place that derivation lives, so readers stop repeating the
+        ``124`` literal (the daemon's failure classifier was the second one).
+        """
+        return self.returncode == 124
+
+    @property
+    def transport_failure(self) -> bool:
+        """Whether this failure is a dropped connection rather than a verdict.
+
+        Only ever true for a *failed, non-timeout* attempt: a clean exit has
+        nothing to classify, and a timeout is a budget overrun even when the
+        captured text also mentions a connection that dropped earlier and was
+        survived.
+        """
+        if self.ok or self.timed_out:
+            return False
+        return runner_failures.looks_like_transport_failure(self._failure_text())
+
+    def _failure_text(self) -> str:
+        """Captured output for failure classification: both streams, minus echo.
+
+        **Both** streams, because which one carries a provider's error text
+        is a per-Shell accident — the 2026-07-25 incident's
+        ``API Error: Connection closed mid-response.`` was in *stdout*, while
+        ``error_detail`` prefers stderr and would have missed it entirely.
+        Prompt-echoed lines are dropped for the same reason ``error_detail``
+        drops them, which here is load-bearing rather than cosmetic: wake
+        prompts routinely *quote* error strings (an issue body, a pitfall
+        note), and a run must not be able to classify its own failure from
+        the text of its own instructions.
+        """
+        prompt_lines = {
+            line.strip() for line in self.invocation.prompt.splitlines()
+            if line.strip()
+        }
+        captured = "\n".join(part for part in (self.stdout, self.stderr) if part)
+        return "\n".join(
+            line for line in captured.splitlines()
+            if line.strip() and line.strip() not in prompt_lines
+        )
+
     def retry_reason(self) -> str | None:
         """Return a retryable reason, or None.
 
-        Only clean exits are retryable: when the runner subprocess exits 0
-        but didn't produce the artifacts we expected, the next attempt may
-        succeed (a stochastic "ran past the deliverable" case). Hard
-        failures — non-zero exit, timeout — are not retryable here; the
-        daemon's give-up path surfaces them with the captured error
-        instead of paying for a duplicate expensive attempt.
+        **Three** failure classes, each with its own arm. The predicate used
+        to be ``if not self.ok: return None`` — a class defined by
+        subtracting from clean-exit, which silently absorbed every failure
+        mode nobody had enumerated. The one it absorbed (#729):
+
+        1. **Clean exit, missing artifacts** — retryable. The subprocess
+           exited 0 but didn't produce the artifacts we asked for, and the
+           next attempt may (a stochastic "ran past the deliverable" case).
+        2. **Timeout** — *not* retryable. The work exceeded its budget and a
+           second attempt pays for the same overrun. That reasoning was
+           always right and is unchanged; what changed is that it is now
+           checked *by name* (``timed_out``) instead of being one of many
+           things ``not self.ok`` happened to cover. Checked before the
+           transport arm so an overrun that survived an earlier drop is
+           still classified as the overrun it is.
+        3. **Transport failure mid-response** — retryable, and the most
+           retryable failure brnrd has: the model connection dropped, the
+           turn never completed, so *no work was done that a retry would
+           duplicate*, and the failure is non-deterministic by construction.
+           Until 2026-07-25 it was classified with the least retryable one —
+           ``run-260725-0820-gc3n`` died 78s in on "Connection closed
+           mid-response", was never retried, and produced no branch and no
+           report.
+
+        Anything else — an unrecognised non-zero exit — is **not** retryable,
+        and now says so as the explicit default arm below rather than as the
+        shape of the predicate: a missing CLI, a dead credential, a bad flag
+        are deterministic, and the retry reproduces them exactly. The
+        daemon's give-up path surfaces them with the captured error instead
+        of paying for a duplicate expensive attempt. Recognising one more
+        transport signature is a one-line addition to
+        ``runner_failures._TRANSPORT_PATTERNS``, not a new arm here.
 
         Empty stdout alone is *not* a retry reason: re-running a whole wake
         to extract a terminal message pays a full runner invocation for a
@@ -624,11 +701,20 @@ class RunnerResult:
         silent addressed run takes the give-up path and gets the daemon's
         terminal failure note instead.
         """
-        if not self.ok:
+        if self.ok:
+            if self.missing_artifacts:
+                labels = ", ".join(
+                    artifact.label for artifact in self.missing_artifacts
+                )
+                return f"missing required output(s): {labels}"
             return None
-        if self.missing_artifacts:
-            labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
-            return f"missing required output(s): {labels}"
+        if self.timed_out:
+            return None
+        if self.transport_failure:
+            return (
+                "transport failure mid-response: the model connection "
+                "dropped before the turn completed"
+            )
         return None
 
     def error_detail(self, *, limit: int = 500) -> str | None:

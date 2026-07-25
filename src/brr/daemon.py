@@ -3060,7 +3060,16 @@ def _run_worker(
     )
 
     attempt = 0
-    clean_retries_used = 0
+    # One retry budget for every retryable class, not one per class. The
+    # counter was named ``clean_retries_used`` while a clean exit with
+    # missing artifacts was the only retryable failure; #729 added the
+    # transport-death class and the two now **share** this counter
+    # deliberately. ``response_retries`` (default 1) is the operator's
+    # ceiling on how many extra *expensive* attempts one event may buy, and
+    # that cost is the same whichever class asked for it; a per-class
+    # counter would let a run spend 2× a budget nobody raised, and #729
+    # forbids adding a config key to re-cap it.
+    retries_used = 0
     attempted_runners: list[str] = []
     prompt_mode = "normal"
     fallback_notice: str | None = None
@@ -3089,6 +3098,23 @@ def _run_worker(
             prompt_instruction = (
                 "Previous attempt exited cleanly but did not produce the "
                 "required output file(s). Produce them this time.\n\n"
+                f"Original run instruction: {task.body}"
+            )
+        elif prompt_mode == "transport_retry":
+            # A transport death is not a failed attempt at the work, it is a
+            # dropped call: the turn may have gotten arbitrarily far before
+            # the connection went, and whatever it committed or wrote is
+            # still on disk. Telling it "you produced nothing" (the
+            # artifact_retry wording) would be false and would invite it to
+            # redo work that is already there.
+            prompt_instruction = (
+                "The previous attempt's connection to the model dropped "
+                "mid-response, so that turn never finished. Any files, "
+                "commits, or outbox messages it had already produced are "
+                "still present. Continue from the current worktree state "
+                "and finish the original run instruction; do not restart "
+                "work that is already present in the files unless it is "
+                "wrong.\n\n"
                 f"Original run instruction: {task.body}"
             )
         elif prompt_mode == "fallback" and fallback_notice:
@@ -3530,7 +3556,7 @@ def _run_worker(
         except RuntimeError as e:
             print(f"[brnrd] worker {eid}: runner error: {e}")
             detail = result.error_detail() or str(e)
-            timed_out = result.returncode == 124
+            timed_out = result.timed_out
             last_failure = {
                 "exit_code": result.returncode,
                 "error": detail,
@@ -3543,6 +3569,11 @@ def _run_worker(
                     timed_out=timed_out,
                     exit_code=result.returncode,
                     detail=detail,
+                    # ``detail`` prefers stderr; the transport verdict was
+                    # taken over both streams, so hand it in rather than
+                    # letting a stdout-only signature read as a generic
+                    # runner error in the terminal note.
+                    transport=result.transport_failure,
                 ),
             }
         else:
@@ -3685,7 +3716,7 @@ def _run_worker(
             return task
 
         retry_reason = result.retry_reason()
-        will_retry = bool(retry_reason and clean_retries_used < max_retries)
+        will_retry = bool(retry_reason and retries_used < max_retries)
         fallback_runner_name: str | None = None
         fallback_choice: runner_select.RunnerProfile | None = None
         failure_kind = (
@@ -3751,8 +3782,11 @@ def _run_worker(
                 relay_plan = None
         emit("attempt_failed", **attempt_payload)
         if will_retry:
-            clean_retries_used += 1
-            prompt_mode = "artifact_retry"
+            retries_used += 1
+            prompt_mode = (
+                "transport_retry" if result.transport_failure
+                else "artifact_retry"
+            )
             print(f"[brnrd] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
@@ -3807,9 +3841,10 @@ def _run_worker(
             )
             last_failure = None
             continue
-        # Hard failure (timeout / non-zero exit) — no retry, give up now
-        # rather than burning another expensive attempt. The give-up
-        # branch below carries the captured error up to the gate.
+        # Nothing left to try: a timeout, an unrecognised non-zero exit, or a
+        # retryable class whose budget is spent. Give up now rather than
+        # burning another expensive attempt; the give-up branch below carries
+        # the captured error up to the gate.
         break
 
     if last_failure and last_failure.get("timed_out"):
