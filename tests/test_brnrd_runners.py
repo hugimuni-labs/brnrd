@@ -245,44 +245,68 @@ def test_wake_request_rejects_unknown_repo_and_environment():
     assert "environment" in bad_env.json()["detail"]
 
 
-def test_wake_request_rides_daemon_publish_and_consume_ack():
-    client = _client()
-    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+# ── #733 claim at dispatch ───────────────────────────────────────────────
+#
+# The server owns the tap's whole lifecycle. These pin the guard ladder that
+# used to run — twice, divergently — on the daemon.
+
+_CLAIM = "/v1/daemons/runners/wake-request/claim"
+
+
+def _park(client: TestClient, daemon_headers: dict[str, str], profile: str = "codex") -> dict:
+    """Register + publish the rack, then tap `profile` from the dashboard."""
     assert client.post(
         "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
     ).status_code == 200
-
-    # No tap: the publish response piggybacks nothing.
     posted = client.put("/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers)
     assert posted.status_code == 200
+    # No tap yet: the publish response piggybacks nothing.
     assert posted.json()["pending_wake_request"] is None
-
     _login_cookie(client)
     wake = client.post(
-        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
+        "/v1/dashboard/runners/wake-request", json={"profile": profile},
     ).json()["wake_request"]
+    # Next publish tick: the daemon learns a tap exists.
+    pending = client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).json()["pending_wake_request"]
+    assert pending is not None and pending["request_id"] == wake["request_id"]
+    return wake
 
-    # Next publish tick: the daemon learns of the tap.
-    posted = client.put("/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers)
-    pending = posted.json()["pending_wake_request"]
-    assert pending is not None
-    assert pending["request_id"] == wake["request_id"]
-    assert pending["profile"] == "codex"
-    # #733: and the row's own staleness horizon rides along, so the daemon
-    # stops keeping a second one. Without this the daemon had no way to know
-    # when the tap it is holding actually dies, and invented 900 s while the
-    # chip reported pending against 24 h.
-    assert pending["expires_at"] is not None
-    assert pending["expires_at"] > pending["requested_at"]
 
-    # The daemon acks consumption on its next publish; the row retires and
-    # the chip disappears from the dashboard view.
-    payload = dict(_CATALOG_PAYLOAD)
-    payload["consumed_wake_request_ids"] = [wake["request_id"]]
-    posted = client.put("/v1/daemons/runners", json=payload, headers=daemon_headers)
-    assert posted.status_code == 200
-    assert posted.json()["pending_wake_request"] is None
+def test_wake_request_claim_applies_and_retires_the_row_in_one_transaction():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+
+    claimed = client.post(
+        _CLAIM,
+        json={"request_id": wake["request_id"], "event_id": "evt-1", "source": "telegram"},
+        headers=daemon_headers,
+    )
+    assert claimed.status_code == 200, claimed.text
+    verdict = claimed.json()
+    assert verdict["apply"] is True
+    assert verdict["reason"] is None
+    assert verdict["profile"] == "codex"
+    # The row is already at its final status in the answer — no ack round trip.
+    assert verdict["status"] == "consumed"
+
+    # The chip is gone and the publish tick stops offering it.
     assert client.get("/v1/dashboard/runners").json()["wake_request"] is None
+    assert client.put(
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).json()["pending_wake_request"] is None
+
+    # A second claim of the same id — a daemon whose mirror is one publish
+    # tick stale — is refused rather than double-spent. This is the only
+    # staleness left in the system, and it is harmless.
+    again = client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "telegram"},
+        headers=daemon_headers,
+    ).json()
+    assert again["apply"] is False
+    assert again["reason"] == "the tap is already consumed"
 
     # Cancel-after-consume stays truthful: the wake fired.
     canceled = client.delete(
@@ -291,73 +315,233 @@ def test_wake_request_rides_daemon_publish_and_consume_ack():
     assert canceled.json()["wake_request"]["status"] == "consumed"
 
 
-def test_a_lapsed_tap_lands_on_expired_not_on_consumed():
-    """#733: the daemon can finally say "this never ran".
+def test_wake_request_claim_expires_a_lapsed_tap_never_consumes_it():
+    """#733's core failure: a lapsed tap that reported as spent.
 
-    Its only ack channel used to be `consumed_wake_request_ids`, routed to
-    `mark_consumed` — *"these requests were spent on a dispatched wake"* — so a
-    tap the daemon expired locally was published as having run. The chip flipped
-    to consumed for a runner the user never got. `STATUS_EXPIRED` already
-    existed for the server's own sweep; the daemon just had no field for it.
+    `expired` and `consumed` are different answers to "what happened to my
+    tap", and only one of them is true here.
     """
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import RunnerWakeRequest
+
     client = _client()
     _, daemon_headers, _repo_id = _repo_and_daemon(client)
-    assert client.post(
-        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
-    ).status_code == 200
+    wake = _park(client, daemon_headers)
 
-    _login_cookie(client)
-    wake = client.post(
-        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
-    ).json()["wake_request"]
+    with client.app.state.SessionLocal() as db:
+        row = db.get(RunnerWakeRequest, wake["request_id"])
+        row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
 
-    payload = dict(_CATALOG_PAYLOAD)
-    payload["lapsed_wake_request_ids"] = [wake["request_id"]]
-    posted = client.put("/v1/daemons/runners", json=payload, headers=daemon_headers)
-    assert posted.status_code == 200
-    # Retired either way — the chip goes quiet rather than lying.
-    assert posted.json()["pending_wake_request"] is None
-    assert client.get("/v1/dashboard/runners").json()["wake_request"] is None
+    verdict = client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "telegram"},
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is False
+    assert verdict["status"] == "expired"
+    assert "expired" in verdict["reason"]
 
-    # But the row says what actually happened, which is the whole point.
-    row = client.delete(
-        f"/v1/dashboard/runners/wake-request/{wake['request_id']}",
-    ).json()["wake_request"]
-    assert row["status"] == "expired"
+    with client.app.state.SessionLocal() as db:
+        assert db.get(RunnerWakeRequest, wake["request_id"]).status == "expired"
 
 
-def test_the_two_ack_lists_are_independent_on_one_tick():
-    """Both arrive on the same publish; neither may absorb the other.
-
-    A single shared list is what made every expiry read as a spend, so the
-    regression to guard is a "simplification" that merges them again.
-    """
+def test_wake_request_claim_refuses_a_schedule_wake_and_keeps_the_tap_armed():
+    """#564: a scheduled firing is never the interactive wake a tap was
+    parked for — and a refusal must not burn the row either."""
     client = _client()
     _, daemon_headers, _repo_id = _repo_and_daemon(client)
-    assert client.post(
-        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
-    ).status_code == 200
-    _login_cookie(client)
-    spent = client.post(
-        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
-    ).json()["wake_request"]
-    # Minting a second tap supersedes the first (one pending per account), so
-    # cancel-free supersession is exactly how two decided rows coexist here.
-    expired = client.post(
-        "/v1/dashboard/runners/wake-request", json={"profile": "claude-haiku"},
-    ).json()["wake_request"]
+    wake = _park(client, daemon_headers)
 
-    payload = dict(_CATALOG_PAYLOAD)
-    payload["consumed_wake_request_ids"] = [spent["request_id"]]
-    payload["lapsed_wake_request_ids"] = [expired["request_id"]]
+    verdict = client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "schedule"},
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is False
+    assert "schedule" in verdict["reason"]
+    assert verdict["status"] == "pending"
+
+    # Still offered on the next publish tick, and still claimable by a real
+    # interactive wake.
     assert client.put(
-        "/v1/daemons/runners", json=payload, headers=daemon_headers,
-    ).status_code == 200
+        "/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers,
+    ).json()["pending_wake_request"]["request_id"] == wake["request_id"]
+    assert client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "telegram"},
+        headers=daemon_headers,
+    ).json()["apply"] is True
 
-    def _status(request_id):
-        return client.delete(
-            f"/v1/dashboard/runners/wake-request/{request_id}",
-        ).json()["wake_request"]["status"]
 
-    assert _status(spent["request_id"]) == "consumed"
-    assert _status(expired["request_id"]) == "expired"
+def test_wake_request_claim_refuses_a_profile_missing_from_the_published_rack():
+    """A drop is not a spend: the row stays pending for a rack that has it."""
+    from brnrd.models import RunnerWakeRequest
+
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+
+    # The daemon republishes a rack that no longer carries `codex`.
+    shrunk = dict(_CATALOG_PAYLOAD)
+    shrunk["profiles"] = [
+        p for p in _CATALOG_PAYLOAD["profiles"] if p["name"] != "codex"
+    ]
+    client.put("/v1/daemons/runners", json=shrunk, headers=daemon_headers)
+
+    verdict = client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "telegram"},
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is False
+    assert "codex" in verdict["reason"]
+    assert verdict["status"] == "pending"
+    with client.app.state.SessionLocal() as db:
+        assert db.get(RunnerWakeRequest, wake["request_id"]).status == "pending"
+
+
+def test_wake_request_claim_judges_the_tap_against_when_the_event_existed():
+    """#577's one surviving rule. The mirror lags its source by up to a
+    publish tick, so a tap minted seconds ago may not be on the daemon's
+    disk yet — but a tap parked *after* the event existed was meant for the
+    next wake anyway. The lag and the rule are the same rule."""
+    from datetime import datetime, timedelta, timezone
+
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+    now = datetime.now(timezone.utc)
+
+    # Event created *before* the tap was parked ⇒ the tap is for a later wake.
+    verdict = client.post(
+        _CLAIM,
+        json={
+            "request_id": wake["request_id"],
+            "source": "telegram",
+            "event_created": (now - timedelta(minutes=5)).isoformat(),
+            "daemon_now": now.isoformat(),
+        },
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is False
+    assert "parked after" in verdict["reason"]
+    assert verdict["status"] == "pending"
+
+    # Event created *after* the tap was parked ⇒ this is the wake it meant,
+    # however long ago that was: the server's 24h TTL is the only horizon.
+    verdict = client.post(
+        _CLAIM,
+        json={
+            "request_id": wake["request_id"],
+            "source": "telegram",
+            "event_created": (now + timedelta(minutes=5)).isoformat(),
+            "daemon_now": now.isoformat(),
+        },
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is True
+
+
+def test_wake_request_claim_survives_a_daemon_clock_behind_the_server():
+    """The rung compares two *ages*, each measured inside one machine.
+
+    Comparing the absolute stamps instead — server ``created_at`` against a
+    daemon-stamped ``event_created`` — is skew-sensitive in the one direction
+    that costs taps. A daemon clock 90s behind makes a tap parked a minute
+    before the event look parked *after* it, and because a refusal leaves the
+    row pending, the same skew refuses again on the next wake and the one
+    after: not "deferred once" but never applied, which is exactly the
+    invisible expiry #733 exists to end.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import RunnerWakeRequest
+
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+    server_now = datetime.now(timezone.utc)
+    with client.app.state.SessionLocal() as db:
+        row = db.get(RunnerWakeRequest, wake["request_id"])
+        row.created_at = server_now - timedelta(seconds=60)
+        db.commit()
+
+    # This daemon's clock runs 90s behind the server's. On its own clock the
+    # event is 30s old — comfortably younger than the 60s-old tap.
+    daemon_now = server_now - timedelta(seconds=90)
+    verdict = client.post(
+        _CLAIM,
+        json={
+            "request_id": wake["request_id"],
+            "source": "telegram",
+            "event_created": (daemon_now - timedelta(seconds=30)).isoformat(),
+            "daemon_now": daemon_now.isoformat(),
+        },
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is True, verdict.get("reason")
+
+
+def test_wake_request_claim_skips_the_age_rung_without_a_daemon_clock():
+    """An older daemon sends no ``daemon_now``. Skip the rung rather than
+    guess at it — this module never silently drops a tap, and a guess here
+    would be a second opinion in the one place #733 removed them from."""
+    from datetime import datetime, timedelta, timezone
+
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+    verdict = client.post(
+        _CLAIM,
+        json={
+            "request_id": wake["request_id"],
+            "source": "telegram",
+            "event_created": (
+                datetime.now(timezone.utc) - timedelta(minutes=5)
+            ).isoformat(),
+        },
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is True
+
+
+def test_wake_request_claim_unknown_id_and_unregistered_daemon():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+
+    # No daemon registered for this token yet.
+    assert client.post(
+        _CLAIM, json={"request_id": "wake_nope"}, headers=daemon_headers,
+    ).status_code == 404
+
+    _park(client, daemon_headers)
+    verdict = client.post(
+        _CLAIM, json={"request_id": "wake_nope"}, headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is False
+    assert verdict["reason"] == "no such wake request"
+    assert verdict["status"] == "absent"
+
+    # Unauthenticated: the claim is daemon-principal only.
+    assert client.post(_CLAIM, json={"request_id": "wake_nope"}).status_code == 401
+
+
+def test_wake_request_claim_skips_availability_when_the_rack_is_blank():
+    """An empty published catalog (never published, or a publish-scope
+    denial) must not refuse every tap — that would turn a consent setting
+    into a silent wake-tap outage, exactly the invisible failure #733 is
+    about."""
+    from brnrd.models import Daemon
+
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    wake = _park(client, daemon_headers)
+
+    with client.app.state.SessionLocal() as db:
+        row = db.query(Daemon).one()
+        row.runners_json = "[]"
+        db.commit()
+
+    verdict = client.post(
+        _CLAIM, json={"request_id": wake["request_id"], "source": "telegram"},
+        headers=daemon_headers,
+    ).json()
+    assert verdict["apply"] is True
