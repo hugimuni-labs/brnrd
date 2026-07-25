@@ -2919,7 +2919,7 @@ SCHEDULE_TURN_DEDUP_TURN_STUB = (
 # Issue #736: `RECENT_CONVERSATION_MAX` caps the *count* of woven turns and
 # nothing caps their *size*, so one turn can eat the wake. Measured on
 # `run-260725-1056-u1y3`: a single 2026-07-21 `schedule` firing rendered at
-# 12,438 B — 12.9% of a 96,422 B prompt — for a `schedule.md` entry that had
+# 12,438 B — 9.9% of a 125,044 B wake — for a `schedule.md` entry that had
 # been rewritten two days later and deleted two days after that. A fired
 # schedule body is an immutable conversation record, so every edit to the
 # live entry forks it from its ghosts and the ghosts keep full weight
@@ -3785,9 +3785,18 @@ def _schedule_turn_dedup_stub(
 def _recent_turn_byte_cap(repo_root: Path) -> int:
     """Resolve the per-turn byte cap for the recent-turns weave (#736).
 
-    Returns 0 when the cap is disabled (configured <= 0 or unreadable
-    config), which the renderer treats as "render every turn in full" —
+    Returns 0 only when the cap is *deliberately* disabled — a configured
+    value <= 0 — which the renderer treats as "render every turn in full",
     the pre-#736 behaviour.
+
+    An unreadable or unparseable config **falls back to the default cap, not
+    to 0**: a config this function cannot read is not a config saying "no
+    limit", and reading silence as consent to an unbounded turn is how the
+    12 KB ghost got in. Fail closed. (Reviewed 2026-07-25: the first draft of
+    this docstring claimed the opposite of the code beneath it, which is the
+    exact class #736's own sibling tickets are filed under — a comment
+    claiming more, or other, than the code can do, in the place a reader goes
+    to check.)
     """
     try:
         cfg = conf.load_config(repo_root)
