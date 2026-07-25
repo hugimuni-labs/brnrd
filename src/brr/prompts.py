@@ -2966,6 +2966,41 @@ RECENT_TURN_MAX_BYTES_KEY = "conversation.recent_turn_max_bytes"
 # it. Never "…" alone, never "truncated".
 RECENT_TURN_ELISION_MARKER = "…{dropped:,} B elided · {pointer}"
 
+# Issue #755: measured on the wake audit, the recent-turns block was 15,836 B
+# of a 122,542 B wake and **71% of it was the resident's own previously-sent
+# messages**, replayed at full text every boot. That is not context, it is a
+# feedback loop: the voice is demonstrably learned from examples rather than
+# rules (#711 — `fluency: weave` declared once was out-argued by ~70 KB of the
+# resident's own prose, and the introspection reflex decayed 67-100% → 0-20%
+# with its instruction text unchanged), so re-feeding yesterday's outbound
+# verbatim re-teaches yesterday's voice on every wake.
+#
+# Inbound user turns are the half that must never be lost — they are the only
+# record of what someone actually asked. Own outbound is *recoverable*: the
+# per-run history JSONL holds the full text and `_turn_store_pointer` already
+# names the file. So it needs a receipt, not a replay.
+#
+# A third axis, deliberately independent of the two above it. The #576 dedup
+# asks *is this a repeat?*, the #736 cap asks *is this too big?*, and this asks
+# **whose text is this?** — a question neither of the others can answer, and
+# one that a 300 B outbound turn fails just as squarely as a 12 KB one. So it
+# is not gated on `turn_max_bytes`: a caller that opted out of the size cap did
+# not thereby ask to be fed its own voice back.
+OWN_OUTBOUND_RECEIPT_HEAD_CHARS = 200
+
+# The first line is the verdict line under the message-shape contract, so it is
+# the right summary handle; for older messages predating that contract it is
+# still the best available single line.
+OWN_OUTBOUND_RECEIPT_MARKER = "{head} · {size:,} B · {pointer}"
+
+# The newest own-outbound record keeps today's full-body rendering: the
+# resident has to know what it just replied in order to hold a live exchange,
+# and everything older is exactly what the receipt line is for. Flip this to
+# ``False`` for the all-receipts variant — that is the one knob between the two
+# shapes, kept explicit so the choice stays visible rather than buried in a
+# loop condition.
+OWN_OUTBOUND_KEEP_NEWEST_IN_FULL = True
+
 
 def _render_runner_catalog(
     catalog: list[dict[str, Any]] | None,
@@ -3713,12 +3748,24 @@ def _format_recent_conversation(
     forge gate can carry a whole PR description just as easily. Callers
     that pass no ``turn_max_bytes`` get the uncapped, pre-#736 rendering,
     which is what the bare-helper tests and any non-daemon caller want.
+
+    Issue #755: a third mechanism, on a third axis. Every `artifact` record
+    carrying a body is the resident's *own* prior outbound, and replaying it
+    verbatim feeds the voice back to itself; all but the newest collapse to a
+    one-line receipt — first line, byte count, pointer to the full turn (see
+    :func:`_own_outbound_receipt`). Where the other two ask *is this a
+    repeat?* and *is this too big?*, this asks *whose text is this?*, so
+    unlike the cap it applies regardless of ``turn_max_bytes``: opting out of
+    a size limit is not a request to be fed your own voice back. Inbound
+    `event` records and the `run` / `update` kinds are untouched.
     """
     if not records:
         return ""
     bullets: list[str] = []
     kept_schedule_turns: list[tuple[str, str]] = []
-    for record in records[-RECENT_CONVERSATION_MAX:]:
+    window = records[-RECENT_CONVERSATION_MAX:]
+    newest_own_outbound = _newest_own_outbound_index(window)
+    for index, record in enumerate(window):
         kind = record.get("kind")
         ts = record.get("ts", "")
         line: str | None = None
@@ -3765,9 +3812,16 @@ def _format_recent_conversation(
             label = record.get("label") or record.get("artifact_kind") or ""
             body = _conversation_body(record)
             if body:
-                body = _cap_turn_body(
-                    body, record, limit=turn_max_bytes, brr_dir=brr_dir
+                keeps_full_body = (
+                    OWN_OUTBOUND_KEEP_NEWEST_IN_FULL
+                    and index == newest_own_outbound
                 )
+                if keeps_full_body:
+                    body = _cap_turn_body(
+                        body, record, limit=turn_max_bytes, brr_dir=brr_dir
+                    )
+                else:
+                    body = _own_outbound_receipt(body, record, brr_dir=brr_dir)
                 line = _format_turn(f"{ts} agent ({label})", body)
             else:
                 path = record.get("path") or ""
@@ -3775,6 +3829,61 @@ def _format_recent_conversation(
         if line:
             bullets.append(line)
     return "\n".join(bullets)
+
+
+def _newest_own_outbound_index(window: list[dict[str, Any]]) -> int:
+    """Index of the last own-outbound record in *window*, or ``-1``.
+
+    "Own outbound" = an `artifact` record that carries a body: every producer
+    of one (`conversations.append_artifact`, called for responses, interim
+    replies, gate messages, spawn/respawn requests, policy proposals) is
+    writing text the resident itself authored. A bodiless artifact record is
+    a bare path line and has nothing to collapse.
+
+    Deliberately computed over the *rendered window* rather than all
+    ``records``: the exception exists so the resident can see what it just
+    replied, and a record trimmed off by ``RECENT_CONVERSATION_MAX`` is not
+    on screen to be the newest of anything.
+    """
+    for index in range(len(window) - 1, -1, -1):
+        record = window[index]
+        if record.get("kind") == "artifact" and _conversation_body(record):
+            return index
+    return -1
+
+
+def _own_outbound_receipt(
+    body: str,
+    record: dict[str, Any],
+    *,
+    brr_dir: Path | None,
+) -> str:
+    """Collapse one own-outbound turn to a receipt line (#755).
+
+    ``<first non-empty line, ~200 chars> · <NNN> B · full turn: <path>`` —
+    single-line by construction, so :func:`_format_turn` renders it inline
+    after the ``ts agent (label)`` prefix rather than as an indented block.
+
+    All three parts load-bear, the same way #736's elision marker does: the
+    head says which message this was, the byte count says how much text the
+    receipt stands in for, and the pointer says where to read it. The pointer
+    is :func:`_turn_store_pointer` — the same existence-checked derivation the
+    cap uses, so a receipt never names a path that does not resolve, and the
+    two mechanisms cannot drift apart on where a full turn lives.
+    """
+    head = ""
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if stripped:
+            head = stripped
+            break
+    if len(head) > OWN_OUTBOUND_RECEIPT_HEAD_CHARS:
+        head = head[: OWN_OUTBOUND_RECEIPT_HEAD_CHARS - 1].rstrip() + "…"
+    return OWN_OUTBOUND_RECEIPT_MARKER.format(
+        head=head,
+        size=len(body.encode("utf-8")),
+        pointer=_turn_store_pointer(record, brr_dir),
+    )
 
 
 def _schedule_turn_dedup_stub(
