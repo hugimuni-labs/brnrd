@@ -54,6 +54,7 @@ _ROW_FIELDS = (
     "source_system",
     "external_refs",
     "reply_archive",
+    "terminal_route",
     "name",
     "parent_run_id",
     "is_subspawn",
@@ -251,6 +252,11 @@ def build_closed_run_row(
         "source_system": _source_system(task),
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
         "reply_archive": _str_or_none(task.meta.get("reply_archive")),
+        # #743: which channel carried the run's terminal stream — the column
+        # that makes "how often does the static dispatch catch something a
+        # run would otherwise have lost?" a query instead of a directory
+        # walk. ``None`` when the run produced no terminal body at all.
+        "terminal_route": _str_or_none(task.meta.get("terminal_route")),
         "name": read_run_name_control(outbox_dir) or "",
         "parent_run_id": _str_or_none(task.meta.get("spawn_parent_run_id")),
         "is_subspawn": bool(task.meta.get("spawn_immediate")),

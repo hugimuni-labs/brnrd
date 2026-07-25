@@ -88,7 +88,20 @@ only deliberately.
   field does. When a number is about to become a public claim, find a second
   source that should agree with it: a file size, a sum of parts, the thing it
   purports to summarise. Ledgers usually say so themselves when they stop
-  adding up, in a line nobody is reading.
+  adding up, in a line nobody is reading. The trap has a second half: the
+  field you read a value *off* is a claim too. A record's first entry is
+  rarely the record's identity.
+- **A question that keeps coming back is a tell, not a debate.** When the
+  same complaint is raised repeatedly and every round produces a fix
+  downstream of it, stop arguing the question better and look for a
+  *conflation* under it — usually one predicate answering True for two
+  different reasons, so two unlike things get reasoned about as one. Naming
+  the split settles in one pass what argument could not settle in five.
+- **Measure before you instrument.** Before building a counter to answer
+  "how often does X happen?", check whether the answer is already on disk.
+  Runtime records — message stores, run nodes, ledgers — usually carry
+  enough to reconstruct the past, and a measured baseline is worth more than
+  a counter that starts at zero today.
 
 ## Reading economically
 
@@ -188,6 +201,12 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - An `event:` reply to a gate this run can't reach is *redirected* onto your
   own live gate, origin-prefixed, and still retires the queue entry. Write
   the body to stand alone; a redirect is a rescue, not a routing plan.
+- **A worker's final text is its return value, not a chat message.** When a
+  spawning parent collects a child's terminal stream along the dispatch
+  edge, that is a return on an unambiguous edge — no addressing to guess, no
+  second channel to duplicate. It looks like a delivery in the predicate
+  that gates delivery, and treating the two as one channel is how a delivery
+  question stays unresolved for months.
 - **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one is refused
   outright — there is nowhere to redirect it. A worker's completion is a
   fact for you, not a message with a correspondent: fold it into the reply

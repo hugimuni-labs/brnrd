@@ -55,6 +55,17 @@ becomes attention, action, and a reply is yours.
   nobody re-runs you to extract a sentence.
   It is silent once *any* message has gone out, though — a mid-run reply
   buys no warning about a closeout that lands in a file.
+  Two more facts about this channel, because it is a **net and the net now
+  says so** (#743). A worker's terminal stream is not a chat message at all:
+  the spawning parent collects it along the dispatch edge as the report, so
+  a worker's final text *is* its return value. And every run's node records
+  which channel carried its terminal stream — `terminal_route`, one of
+  `gate-sole` · `gate-extra` · `dispatch-edge` · `duplicate` ·
+  `undeliverable`. `gate-sole` means a gate delivered your closeout and it
+  was this run's **only** delivery: the static dispatch is the sole reason
+  your correspondent heard anything. That is the count deciding whether
+  this channel keeps existing, so route what a reader must see rather than
+  leaving it to the net.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order (stage `*.tmp`, rename =
   atomic). Quick ask ⇒ stdout suffices. Substantial work ⇒

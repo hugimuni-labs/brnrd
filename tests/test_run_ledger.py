@@ -23,6 +23,7 @@ _ROW_FIELDS = {
     "source_system",
     "external_refs",
     "reply_archive",
+    "terminal_route",
     "name",
     "parent_run_id",
     "is_subspawn",
@@ -71,6 +72,25 @@ def _task(run_id: str = "run-ledger") -> Run:
     )
 
 
+def test_closed_run_row_carries_the_terminal_route(tmp_path, monkeypatch):
+    # #743: the column exists to be counted. A run whose only delivery was
+    # the daemon's static terminal dispatch must be findable in the ledger
+    # without walking every run's message store and inferring it from
+    # ``platform_gate`` plus the presence of other delivered messages.
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+
+    task = _task()
+    task.meta["terminal_route"] = "gate-sole"
+    task.meta["started_at"] = "2026-07-25T10:00:00Z"
+    task.meta["ended_at"] = "2026-07-25T10:00:05Z"
+
+    path = run_ledger.append_closed_run(tmp_path, task, {})
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["terminal_route"] == "gate-sole"
+
+
 def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     snapshots = iter([
@@ -117,6 +137,10 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["context_window_used"] == 12.5
     assert row["external_refs"] == []
     assert row["reply_archive"] is None
+    # #743: absent when the run produced no terminal body at all — the
+    # column has to distinguish "no terminal stream" from "the net carried
+    # it", or counting the second one silently includes the first.
+    assert row["terminal_route"] is None
     assert row["name"] == ""
     assert row["estimate_vs_actual"] == "actual"
 
