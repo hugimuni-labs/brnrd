@@ -196,6 +196,16 @@ def _drive_run_worker(tmp_path, monkeypatch, *, worker: bool, during=None,
     is what puts the stray-write check itself under test rather than just the
     function it calls.
     """
+    # `_run_worker` resolves a Shell+Core profile before it builds any
+    # environment, and `resolve_runner_profile` raises when neither `claude`
+    # nor `codex` is on PATH. Unstubbed, that makes this helper pass on every
+    # dev machine (which has a Shell installed) and fail only on the gate,
+    # which has none — the tests it drives went green locally and red on CI.
+    # Same stub every other `_run_worker` test in this suite already uses.
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
     write_repo_scaffold(tmp_path)
     init_git_repo(tmp_path)
     (tmp_path / "seed.md").write_text("seed\n", encoding="utf-8")
