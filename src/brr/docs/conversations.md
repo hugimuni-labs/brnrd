@@ -71,6 +71,17 @@ Before the runner starts it builds a compact `CommunicationSnapshot`:
   Bundle;
 - pointers to grouped deep-history files.
 
+Each rendered turn is capped at 2,000 bytes
+(`conversation.recent_turn_max_bytes` in `.brr/config`; `<= 0` disables
+it). A turn over the cap keeps its head and states the elision inline —
+`…N B elided · full turn: <path>` — where the path is that turn's own
+`<event-id>.jsonl` in the store below, so "inspect on demand" is one read
+rather than a search. The cap exists because a fired `schedule` body
+becomes an immutable record: editing the live `schedule.md` entry forks it
+from every copy already in the store, and one such ghost was measured at
+12.9% of a whole wake (#736). Turns already under the cap render
+untouched, so a normal wake is byte-identical to an uncapped one.
+
 The deeper records are written under the run directory as one JSONL file
 per gate/forge thread plus a `manifest.json`. This gives the resident a
 cheap snapshot at wake and an exact file interface when it needs "all of
