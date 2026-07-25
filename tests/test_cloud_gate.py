@@ -2704,3 +2704,113 @@ def test_publish_scopes_resolution():
     # `none` mixed with real scopes wins: the off switch is not overridable.
     lanes, slices = cloud._resolve_publish_scopes({"publish.layers": "runs,none"})
     assert lanes == frozenset() and slices == frozenset()
+
+
+# --- #685 ask 2 guard B: bound what you send ---------------------------------
+
+
+def test_live_run_bounds_copy_matches_the_fixture():
+    """The daemon's copy of `LiveRunIn`'s caps is pinned to the generated table.
+
+    `src/brr` cannot import `src/brnrd` — they ship separately — so this is a
+    deliberate duplication (#723). The pin is an *external fixture generated
+    from the model*, not a parity test between the two implementations: #722's
+    four implementations of one rule agreed with each other perfectly for the
+    bug's entire life, so agreement between copies proves nothing. Change a
+    bound in `LiveRunIn`, regenerate the fixture, and this reddens until the
+    daemon copy follows.
+    """
+    import json
+    from pathlib import Path
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "live_run_bounds.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert cloud._LIVE_RUN_STRING_BOUNDS == fixture["string_bounds"]
+    assert sorted(cloud._LIVE_RUN_IDENTITY_FIELDS) == fixture["identity_fields"]
+    assert cloud._LIVE_RUN_TRUNCATION_MARK == fixture["truncation_mark"]
+
+
+def test_live_runs_snapshot_bounds_display_fields_before_publishing(tmp_path):
+    """The collector should not rely on the server's mercy (#685 guard B).
+
+    `.name` is a resident-authored control file whose cap is stated only as an
+    instruction, and `label`/`stream` are equally unbounded upstream. Every one
+    of them now leaves this process at or under the wire bound, marked, so a
+    daemon publishing to an API whose truncation regressed still cannot darken
+    its own live surface.
+    """
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    presence.register(
+        brr_dir, kind="daemon", stream="s" * 300, label="l" * 300,
+        name="n" * 61, run_id="run-long", repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    row = cloud._live_runs_snapshot(brr_dir)[0]
+    for field, cap in cloud._LIVE_RUN_STRING_BOUNDS.items():
+        assert len(row.get(field) or "") <= cap, f"{field} left this process over its bound"
+    assert len(row["name"]) == 60
+    assert row["name"].endswith(cloud._LIVE_RUN_TRUNCATION_MARK)
+    assert row["name"].startswith("n" * 59)
+    assert len(row["label"]) == 256
+    assert row["label"].endswith(cloud._LIVE_RUN_TRUNCATION_MARK)
+
+
+def test_live_runs_snapshot_leaves_a_field_at_its_cap_alone(tmp_path):
+    """The other direction: a value exactly at the bound is published
+    byte-identical and unmarked. A collector that always truncated would pass
+    the test above and quietly corrupt every value on the lane."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    at_cap = "n" * 60
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:1:", name=at_cap,
+        run_id="run-at-cap", repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    row = cloud._live_runs_snapshot(brr_dir)[0]
+    assert row["name"] == at_cap
+    assert cloud._LIVE_RUN_TRUNCATION_MARK not in row["name"]
+
+
+def test_live_runs_snapshot_never_truncates_an_identity_key(tmp_path):
+    """A shortened join key is *wrong data*, not short data — it would silently
+    re-point this row at another run. The daemon leaves them exactly as read and
+    lets the server reject the row, which now costs that row alone."""
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    long_run_id = "r" * 80
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:1:", run_id=long_run_id,
+        repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    row = cloud._live_runs_snapshot(brr_dir)[0]
+    assert row["run_id"] == long_run_id
+    assert row["id"] == row["id"].rstrip(cloud._LIVE_RUN_TRUNCATION_MARK)
+
+
+def test_publish_live_runs_says_what_the_server_dropped(capsys):
+    """#685 guard C. An absent reading renders as "fine" (#632): a row that
+    silently stops appearing on the dashboard and a daemon with nothing to
+    report look identical from the outside. Silent on a clean publish — this
+    loop runs every 3 seconds and a per-tick line trains a reader to stop
+    reading."""
+    cloud._report_live_runs_losses({
+        "runs_rejected": [
+            {"id": "run-c", "fields": ["run_id"], "detail": "run_id: too long"},
+        ],
+        "fields_truncated": ["run-a.card_text"],
+    })
+    out = capsys.readouterr().out
+    assert "run-c" in out and "run_id" in out
+    assert "run-a.card_text" in out
+
+    cloud._report_live_runs_losses({"runs_rejected": [], "fields_truncated": []})
+    assert capsys.readouterr().out == ""
+    # An older API that does not send these fields yet is not an error.
+    cloud._report_live_runs_losses({})
+    assert capsys.readouterr().out == ""

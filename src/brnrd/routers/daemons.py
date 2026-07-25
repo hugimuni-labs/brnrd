@@ -449,9 +449,16 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     # `repo_label` and the daemon collects them across every repo in the
     # account context, so gating on the publishing token's repo let a
     # sibling's token ship a repo that had recorded `none`.
+    # Per *row*, not per report (#685 ask 2). This lane publishes every live
+    # run on the daemon in one PUT, so a typed `list[LiveRunIn]` on the
+    # request body meant one over-long field on one row 422'd the batch and
+    # took the whole live surface dark — re-attempted every 3s. Rows are
+    # validated one at a time here: display fields truncate inside `LiveRunIn`,
+    # and a row whose *identity* is unusable costs that row alone.
+    intake = schemas.isolate_live_runs(payload.runs)
     runs = publish_scope.permitted_rows(
         db,
-        payload.runs,
+        intake.runs,
         account_id=principal.account_id,
         publisher_repo_id=principal.repo_id,
         lane="live_runs",
@@ -488,6 +495,11 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
             schemas.RunStopRequestOut(**run_stop_requests.view(row))
             for row in pending_stops
         ],
+        # Say what was dropped (#685 ask 2, guard C). A row that silently
+        # stops appearing and a daemon with nothing to report look identical
+        # from the outside — #632's shape exactly.
+        runs_rejected=intake.rejected,
+        fields_truncated=intake.truncated,
     )
 
 
