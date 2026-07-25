@@ -311,7 +311,27 @@ test('hasSectionsBeyondNow reads an H1-sectioned card as sectioned', () => {
 	assert.equal(hasSectionsBeyondNow('## Now\nx\n\n### Sub\ny'), false);
 	// Anything above the first heading is body the projection dropped.
 	assert.equal(hasSectionsBeyondNow('preamble\n\n## Now\nx'), true);
+	// ...except the run's own title, which the node's frame already carries.
+	// Offering an expand that reveals only the title is the title/section
+	// confusion `sectionDepth` exists to end.
+	assert.equal(hasSectionsBeyondNow('# a run title\n\n## Now\nx'), false);
 });
+
+// The section-depth contract, sibling to the projection table. Same bodies on
+// both sides; Python asserts the section *names*, this side asserts the boolean
+// the expand affordance actually consumes. See `tests/test_card.py`.
+const sectionTable = JSON.parse(
+	readFileSync(
+		new URL('../../../../tests/fixtures/card_section_names.json', import.meta.url),
+		'utf8'
+	)
+) as { cases: { name: string; body: string; expectedHasMore: boolean }[] };
+
+for (const sectionCase of sectionTable.cases) {
+	test(`shared section-depth table: ${sectionCase.name}`, () => {
+		assert.equal(hasSectionsBeyondNow(sectionCase.body), sectionCase.expectedHasMore);
+	});
+}
 
 test('nodeDigest offers the expand only when expanding reveals something', () => {
 	const node = (files: SurfaceResponse['files']) =>

@@ -17,6 +17,9 @@ from brr import card
 FIXTURE = Path(__file__).parent / "fixtures" / "card_now_projection.json"
 _TABLE = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
+SECTION_FIXTURE = Path(__file__).parent / "fixtures" / "card_section_names.json"
+_SECTIONS = json.loads(SECTION_FIXTURE.read_text(encoding="utf-8"))
+
 
 def _expand(parts: list) -> str:
     """A part list to a string: strings literal, ``[unit, count]`` repeated."""
@@ -39,19 +42,28 @@ def test_shared_projection_table(case: dict) -> None:
     assert card.now_projection(body, limit=case.get("limit")) == expected
 
 
-def test_the_fixture_table_is_the_one_the_typescript_test_reads() -> None:
-    """A pin on the path, not the content.
+@pytest.mark.parametrize(
+    "case", _SECTIONS["cases"], ids=[c["name"] for c in _SECTIONS["cases"]]
+)
+def test_shared_section_depth_table(case: dict) -> None:
+    assert card.section_names(case["body"]) == case["expectedNames"]
 
-    The table only makes the hand-written mirror checkable while both sides
-    actually read it. If this file moves, the Vitest import breaks loudly
-    rather than the frontend quietly testing nothing.
+
+def test_the_fixture_tables_are_the_ones_the_typescript_test_reads() -> None:
+    """A pin on the paths, not the content.
+
+    The tables only make the hand-written mirror checkable while both sides
+    actually read them. If either file moves, the frontend test breaks loudly
+    rather than quietly testing nothing.
     """
     assert FIXTURE.exists()
+    assert SECTION_FIXTURE.exists()
     ts = (
         Path(__file__).parents[1]
         / "src" / "frontend" / "src" / "lib" / "runNode.test.ts"
     ).read_text(encoding="utf-8")
     assert "card_now_projection.json" in ts
+    assert "card_section_names.json" in ts
 
 
 def test_the_cap_mirrors_the_schema_that_actually_rejects() -> None:
@@ -178,6 +190,41 @@ def test_section_names_report_an_h1_cards_shape() -> None:
     """
     assert card.section_names("# Now\na\n\n# Arc\nb\n\n# Open\nc") == ["Arc", "Open"]
     assert card.section_names("## Now\na\n\n## Arc\nb") == ["Arc"]
-    # The shallowest depth in use is the top level; deeper headings are inside.
+    # Deeper headings are inside their section, not beside it.
     assert card.section_names("## Now\na\n\n## Arc\nb\n\n### Sub\nc") == ["Arc"]
     assert card.section_names("no sections here") == []
+
+
+def test_a_run_title_is_not_a_section() -> None:
+    """The regression a first pass shipped, and the reason `min(depth)` fails.
+
+    An H1 run title above H2 sections is the *dominant* card shape — 200 of 272
+    captured bodies. Taking the shallowest depth in use makes the title the only
+    match, so the wake is told the body's entire shape is the run's own name,
+    which it already has from the frame. A definite, plausible, useless value,
+    on the same class of surface #722 is about.
+
+    The fix is not a better heuristic, it is not needing one: sections are
+    `Now`'s siblings, so `Now`'s depth is the section depth.
+    """
+    body = "# run-1 · a title\n\n## Now\nliving\n\n## Arc\nhistory\n\n## Open\nq"
+    assert card.section_names(body) == ["Arc", "Open"]
+
+    # Inference is the fallback, not the definition — it runs only with no Now.
+    # One shallow heading is a title; two are sections.
+    assert card.section_names("# a title\n\n## Arc\nb\n\n## Open\nc") == ["Arc", "Open"]
+    assert card.section_names("# Arc\nb\n\n# Open\nc") == ["Arc", "Open"]
+    # Nothing repeats: the shallowest heading is all the shape there is.
+    assert card.section_names("# a title\n\nprose") == ["a title"]
+
+
+def test_trailing_text_headings_stop_leaking_into_the_section_list() -> None:
+    """Strictly better than the rule this replaced, not merely equal to it.
+
+    The old exclusion tested the literal string ``now``, so every ``Now — done``
+    and ``Now — CLOSING`` card listed its own Now as though it were a section.
+    Over 272 captured bodies the new rule agrees with the old on 246 and differs
+    on 26 — all 26 being this leak.
+    """
+    body = "# a title\n\n## Now — CLOSING (blocked)\nliving\n\n## Arc\nhistory"
+    assert card.section_names(body) == ["Arc"]
