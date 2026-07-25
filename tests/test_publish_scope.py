@@ -381,6 +381,117 @@ def test_corpus_lane_ships_the_slices_every_repo_agreed_to():
     assert [f["path"] for f in files] == ["surface/plan.md"]
 
 
+# ── account-wide corpus: a legacy sibling narrows nothing, dissolves nothing ──
+
+
+def _account_id(client: TestClient) -> str:
+    with client.app.state.SessionLocal() as db:
+        return db.query(Repo).first().account_id
+
+
+def _mint_legacy_repo(client: TestClient, session_token: str, full_name: str) -> str:
+    """A repo with `publish_layers IS NULL` — the account-API-key surface this
+    change deliberately leaves un-migrated, i.e. a repo connected before the
+    consent step shipped."""
+    repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": full_name},
+        headers={"Authorization": f"Bearer {session_token}"},
+    ).json()["repo_id"]
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, repo_id).publish_layers is None
+    return repo_id
+
+
+def test_a_legacy_sibling_does_not_dissolve_a_recorded_none():
+    """#715 B2, driven at the seam that ships. An account with one repo that
+    recorded an explicit `none` and one legacy repo that recorded nothing must
+    still ship no corpus: a repo with no recorded value neither consents nor
+    vetoes, so it cannot dissolve the sibling's opt-out. Before the fix the
+    first `NULL` row returned `None` (unenforced) and the whole surface
+    shipped."""
+    client = _client()
+    token = _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/opted-out", "publish_layers": "none"},
+    )
+    _mint_legacy_repo(client, token, "Gurio/legacy")
+
+    with client.app.state.SessionLocal() as db:
+        recorded = db.query(Repo).filter(Repo.repo_full_name == "Gurio/opted-out").one()
+        repo_id, account_id = recorded.id, recorded.account_id
+
+    daemon_token = _pair_daemon(client, repo_id)
+    r = client.put(
+        "/v1/daemons/surface",
+        json={"files": [
+            {"path": "surface/plan.md", "markdown": "# plan", "layer": "authored", "truncated": False},
+            {"path": "knowledge/index.md", "markdown": "# kb", "layer": "knowledge", "truncated": False},
+        ]},
+        headers={"Authorization": f"Bearer {daemon_token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["files"] == []
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset()
+
+
+def test_legacy_only_account_is_still_entirely_unenforced():
+    """The `SECURITY.md` carve-out, pinned: an account where *no* repo recorded
+    a consent keeps today's exact behaviour — `None`, unenforced, every slice
+    ships. Nothing that publishes today goes dark for the fix above."""
+    client = _client()
+    token = _login(client)
+    _mint_legacy_repo(client, token, "Gurio/legacy-a")
+    repo_b = _mint_legacy_repo(client, token, "Gurio/legacy-b")
+
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.corpus_slices_permitted(db, _account_id(client)) is None
+
+    daemon_token = _pair_daemon(client, repo_b)
+    r = client.put(
+        "/v1/daemons/surface",
+        json={"files": [
+            {"path": "surface/plan.md", "markdown": "# plan", "layer": "authored", "truncated": False},
+            {"path": "knowledge/index.md", "markdown": "# kb", "layer": "knowledge", "truncated": False},
+        ]},
+        headers={"Authorization": f"Bearer {daemon_token}"},
+    )
+    assert r.status_code == 200
+    assert [f["path"] for f in r.json()["files"]] == ["surface/plan.md", "knowledge/index.md"]
+
+
+def test_recorded_consents_still_intersect_and_a_legacy_sibling_does_not_widen():
+    """The all-recorded path is unchanged (plain intersection), and adding a
+    legacy repo to that account neither widens nor dissolves the result."""
+    client = _client()
+    token = _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/a", "publish_layers": "authored,knowledge"},
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/b", "publish_layers": "knowledge,runs"},
+    )
+    account_id = _account_id(client)
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset({"knowledge"})
+
+    _mint_legacy_repo(client, token, "Gurio/legacy")
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset({"knowledge"})
+
+
+def test_account_with_no_repos_at_all_is_unenforced():
+    """Unchanged: nothing connected means nothing to enforce against."""
+    client = _client()
+    _login(client)
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.corpus_slices_permitted(db, "acc-nonexistent") is None
+
+
 def test_a_future_layer_ships_dark_for_an_existing_consent(monkeypatch):
     """Pin for the ticket's own requirement: "a layer added to the product
     later ships dark for existing consents until opted in." Simulate the
