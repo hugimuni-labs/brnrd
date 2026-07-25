@@ -105,6 +105,36 @@ class BranchUpdateResult:
     detail: str = ""
 
 
+# Git's two environment-level repository overrides. Both outrank *every*
+# cwd-based discovery mechanism — `cwd=`, `-C <path>`, even an absolute
+# pathspec — so a process that inherits them cannot address any repository
+# but the pinned one.
+#
+# #703 pins these into a worker run's environment on purpose (see
+# `daemon._child_git_pin`), which makes the inheritance a hazard for brnrd's
+# own code: every git call in this module names the repository it means, and
+# under an inherited pin each one would silently report the pinned worktree
+# while naming another path. Driven, git 2.43: `git -C <other-repo> rev-parse
+# --show-toplevel` under a pin returns the *pinned* tree, exit 0 — a
+# confident wrong answer, which is the "an absent reading renders as fine"
+# class this repo keeps paying for.
+#
+# So the rule is symmetric and belongs next to the wrapper it protects: the
+# pin governs a *bare* git run from a drifted shell; code that names its repo
+# drops the pin. Nothing is lost — brnrd never runs a bare git.
+DISCOVERY_OVERRIDE_VARS = ("GIT_DIR", "GIT_WORK_TREE")
+
+
+def explicit_repo_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """``base`` (default ``os.environ``) minus git's repository overrides.
+
+    For any git invocation that names its own repository via ``cwd=`` or
+    ``-C``. See :data:`DISCOVERY_OVERRIDE_VARS`.
+    """
+    source = os.environ if base is None else base
+    return {k: v for k, v in source.items() if k not in DISCOVERY_OVERRIDE_VARS}
+
+
 def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run a git command in *repo_root*."""
     return subprocess.run(
@@ -114,6 +144,7 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=explicit_repo_env(),
     )
 
 
@@ -141,6 +172,28 @@ def rev_parse(repo_root: Path, ref: str) -> str | None:
         return None
     value = result.stdout.strip()
     return value or None
+
+
+def absolute_git_dir(repo_root: Path) -> Path | None:
+    """The absolute ``.git`` directory serving *repo_root*, or None.
+
+    For a linked worktree this is the worktree's own administrative dir
+    (``<main>/.git/worktrees/<name>``), *not* the shared common dir — which
+    is exactly the distinction ``GIT_DIR`` needs: pointing it at the common
+    dir would put a worker on the main checkout's HEAD (#703).
+    """
+    try:
+        result = _git(repo_root, "rev-parse", "--absolute-git-dir", check=False)
+    except OSError:
+        # A run root that does not exist on disk: subprocess raises on `cwd`
+        # before git ever runs. The caller pins an environment from this, so
+        # None (no pin) is the only safe answer — a half-built pin is worse
+        # than none.
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return Path(value) if value else None
 
 
 def shared_brr_dir(repo_root: Path) -> Path:
@@ -849,3 +902,70 @@ def worktree_dirty(worktree_path: Path) -> bool:
     if result.returncode != 0:
         return False
     return bool(result.stdout.strip())
+
+
+def dirty_paths(worktree_path: Path) -> set[str]:
+    """The set of paths ``git status --porcelain`` reports in *worktree_path*.
+
+    The path-set sibling of :func:`worktree_dirty`, for callers that need to
+    compare two readings rather than ask a yes/no. Used by #703's stray-write
+    check: a worker whose deliverable landed in the *shared* checkout leaves
+    new entries here that were not present when the run was dispatched.
+
+    Paths only — the two-character status prefix is dropped, because the
+    question is *which files*, not how they differ, and a file's status can
+    legitimately change between readings (untracked, then staged). A rename
+    (``R  old -> new``) contributes the destination. Unreadable or non-repo
+    reports empty, matching :func:`worktree_dirty`'s best-effort posture.
+    """
+    result = _git(worktree_path, "status", "--porcelain", check=False)
+    if result.returncode != 0:
+        return set()
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        entry = line[3:].strip() if len(line) > 3 else ""
+        if not entry:
+            continue
+        # `R  old -> new` / `C  old -> new`: the destination is the path that
+        # now exists in the tree.
+        _, sep, dest = entry.partition(" -> ")
+        paths.add((dest if sep else entry).strip('"'))
+    return paths
+
+
+def commits_owned_by_run(
+    repo_root: Path, start_oid: str, run_id: str,
+) -> list[str]:
+    """Commit SHAs in ``start_oid..HEAD`` whose :data:`RUN_ID_TRAILER` is *run_id*.
+
+    Identity, not proximity: a commit with no trailer, or a sibling run's
+    trailer, is excluded rather than defaulting into this run's credit (#565).
+    The trailer arrives two ways and this reads both — :func:`commit_all`
+    stamps it for an automated commit, and :func:`ensure_run_id_hook`'s
+    ``commit-msg`` hook stamps a commit a resident types by hand.
+
+    That second path is what makes this an *attribution* primitive rather
+    than a time window, and #703 leans on it: the hook lives in the shared
+    ``.git/hooks`` (a linked worktree resolves to the same file), so a
+    worker whose cwd drifted into the host checkout stamped its stray
+    commits there with its own run id. Driven against a real checkout —
+    ``test_gitops.py::test_commits_owned_by_run_*``.
+
+    Empty on an unresolvable range, an unreadable repo, or no match.
+    """
+    result = _git(
+        repo_root, "log",
+        f"--format=%H%x00%(trailers:key={RUN_ID_TRAILER},valueonly,separator=%x2C)",
+        f"{start_oid}..HEAD",
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    owned: list[str] = []
+    for line in result.stdout.split("\n"):
+        if not line:
+            continue
+        sha, _, value = line.partition("\0")
+        if sha and value.strip() == run_id:
+            owned.append(sha)
+    return owned

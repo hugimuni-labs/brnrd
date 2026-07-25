@@ -1976,6 +1976,186 @@ def _presence_label_for_event(event: dict) -> str:
     return " ".join(str(event.get("summary") or "").split())[:120]
 
 
+def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
+    """``GIT_DIR``/``GIT_WORK_TREE`` pinning a worker to its own worktree (#703).
+
+    Empty dict when the pin does not apply, so the caller can ``update()``
+    unconditionally.
+
+    **Why these two variables.** They are the only overrides that outrank
+    cwd, and cwd is the thing that drifts. Driven against a real checkout +
+    linked worktree (git 2.43): with both set, `cd <host checkout> && git add
+    -A && git commit` leaves the host's HEAD *unmoved* and either commits the
+    worker's real work onto the worker's own branch (when its worktree has
+    changes) or exits 1 with "nothing to commit". `git push origin HEAD` from
+    the same drifted cwd pushes the worker's branch. That is the maintainer's
+    "lands in the worktree it was given, or fails loudly", both halves.
+
+    **Why both, rather than one.** The issue offered either alone. Both alone
+    are *worse*, not milder: `GIT_WORK_TREE` alone leaves git discovering the
+    object store from cwd, and `GIT_DIR` alone leaves it discovering the work
+    tree from cwd — each cross-wires one tree's working files to another
+    tree's index, which is a corruption mode the incident never had. Pinning
+    both is the only self-consistent setting.
+
+    **Why workers only.** A resident authors knowledge in ``.brnrd-kb/`` — a
+    *separate* git repository beside the checkout — and commits there itself.
+    Under a pin those commits would land in the run's worktree instead, so
+    the pin would break the resident's one durable write path. A worker has
+    no kb governance and no dominion write (``prompts/worker.md``), so it has
+    nothing to commit outside the worktree it was handed. Scope follows the
+    contract, not the calendar.
+
+    **The cost, and it is real.** The pin is global: it also outranks ``-C``
+    and an explicit ``cwd=``, so under it a worker cannot read *any* tree but
+    its own — ``git -C <other repo> rev-parse --show-toplevel`` answers with
+    the pinned worktree, exit 0, no warning. brnrd's own code is immune by
+    construction (``gitops.explicit_repo_env`` and
+    ``cli._drop_inherited_git_pin``); a worker driving scratch repositories
+    by hand is not, and ``prompts/worker.md`` tells it the escape
+    (``env -u GIT_DIR -u GIT_WORK_TREE git -C …``). Not a silent trade: the
+    stray-write check below is fact-based precisely because this readability
+    cost means a worker cannot always verify its own containment.
+    """
+    if not task.meta.get("worker"):
+        return {}
+    # `host` never gets a pin: its cwd *is* the checkout, and its commits
+    # legitimately land there. Belt and braces with the meta check — a worker
+    # is forced to `worktree` at dispatch (see `_queue_spawn_request`), so a
+    # `host` worker should not exist, and if one ever does the pin would be
+    # actively wrong rather than merely unnecessary.
+    if task.env == "host":
+        return {}
+    run_root = Path(run_root)
+    git_dir = gitops.absolute_git_dir(run_root)
+    if git_dir is None:
+        # No readable git dir (a non-repo run root, a docker env whose host
+        # path is not the container's). Absent stays absent: an unpinned
+        # worker behaves exactly as it did before #703, and the finalize-time
+        # check is the arm that notices. Never a half-pin — one variable
+        # alone is the cross-wiring mode described above.
+        return {}
+    return {"GIT_DIR": str(git_dir), "GIT_WORK_TREE": str(run_root)}
+
+
+# Above this many dirty paths in the host checkout, #703's arm 2 records no
+# baseline and is skipped for the run. A truncated baseline is *worse than
+# none*: every dropped path would read as "new" at finalize and the check
+# would accuse every run. The skip is recorded, never silent — an inventory
+# that bounds its coverage has to say so (#721).
+_HOST_BASELINE_PATH_CAP = 250
+
+
+def _record_host_baseline(task: Run, repo_root: Path) -> None:
+    """Pin the shared host checkout's state onto ``task.meta`` at dispatch (#703).
+
+    Two readings, both facts about the checkout the maintainer works in:
+    its ``HEAD`` commit, and the path-set ``git status --porcelain`` reports.
+    ``_stray_host_write`` compares each against the same reading at finalize.
+
+    Skipped for a ``host`` run, whose commits legitimately land in this very
+    checkout — there is no "stray" to define. Best-effort throughout: an
+    unreadable checkout records nothing, and a missing baseline disables the
+    check rather than failing the run.
+    """
+    if task.env == "host":
+        return
+    head = gitops.rev_parse(repo_root, "HEAD")
+    if head:
+        task.meta["host_head_at_dispatch"] = head
+    paths = gitops.dirty_paths(repo_root)
+    if len(paths) > _HOST_BASELINE_PATH_CAP:
+        task.meta["host_dirty_at_dispatch_skipped"] = f"over-cap:{len(paths)}"
+        return
+    task.meta["host_dirty_at_dispatch"] = json.dumps(sorted(paths))
+
+
+def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
+    """Did this run's work end up anywhere but its own branch? (#703)
+
+    ``None`` when there is nothing to report. Otherwise a dict with ``kind``
+    (the strongest signal), ``signals`` (all of them), and the evidence.
+
+    **The predicate, and why it is not the one the issue specced.** The agreed
+    check was *host HEAD moved during the run's life AND the run's branch did
+    not*. That is the right shape for the incident as it happened, and it
+    cannot fire once the pin lands, because the pin is exactly what stops the
+    host's HEAD from moving. A guard aimed at the branch its sibling fix
+    removes is the defect this repo paid for on #722 — *after the other half
+    lands, does this still execute?* So the question is generalised to the one
+    that survives the fix: **did this run's work end up anywhere but its own
+    branch?** Three arms, one shared conjunct.
+
+    The conjunct: ``has_new_commit`` is False — the run's own branch did not
+    move. Not moving is legal on its own (a review run commits nothing), which
+    is why it only ever gates the arms rather than firing by itself.
+
+    - ``stray-commit`` — commits in ``host_head_at_dispatch..HEAD`` carrying
+      *this run's* ``Brnrd-Run-Id`` trailer. Proof, not inference: the
+      ``commit-msg`` hook lives in the shared ``.git/hooks``, so a drifted
+      worker stamped its own id onto the stray commits it made in the host
+      checkout. Driven — see ``test_daemon_child_git.py``.
+    - ``stranded-worktree`` — the host checkout gained dirty paths during the
+      run's life. This is the mode the pin *creates*: ``git add -A`` sweeps
+      ``GIT_WORK_TREE``, finds it clean, and the commit exits 1 with "nothing
+      to commit", so the deliverable is left sitting unstaged in the
+      maintainer's tree while the run reports done with an empty branch —
+      #703's own complaint one layer over.
+    - ``host-head-moved`` — HEAD moved, no commit attributable to this run.
+      The maintainer's original conjunction, kept verbatim and deliberately
+      last: it is the arm that still fires when the pin stops holding *and*
+      attribution is unavailable (a hand-customized ``commit-msg`` hook makes
+      ``ensure_run_id_hook`` bow out, leaving commits unstamped). Reported as
+      unattributed, because a sibling run or the maintainer's own commit
+      reaches it too — labelling that honestly is what keeps the note
+      readable, and a guard that fires constantly for a non-reason stops being
+      read long before the tenth alarm, the real one.
+    """
+    if task.env == "host":
+        return None
+    if task.meta.get("has_new_commit"):
+        return None
+    baseline_head = str(task.meta.get("host_head_at_dispatch") or "").strip()
+    signals: list[str] = []
+    detail: dict = {}
+
+    if baseline_head:
+        now_head = gitops.rev_parse(repo_root, "HEAD")
+        if now_head and now_head != baseline_head:
+            owned = gitops.commits_owned_by_run(repo_root, baseline_head, task.id)
+            detail["host_head_at_dispatch"] = baseline_head
+            detail["host_head_now"] = now_head
+            if owned:
+                signals.append("stray-commit")
+                detail["stray_commits"] = owned
+            else:
+                signals.append("host-head-moved")
+
+    raw_baseline = task.meta.get("host_dirty_at_dispatch")
+    if raw_baseline is not None:
+        baseline_paths: set[str] | None
+        try:
+            baseline_paths = set(json.loads(str(raw_baseline)))
+        except (ValueError, TypeError):
+            # An unparseable baseline is the over-cap case's twin: comparing
+            # against it would invent "new" paths. Skip the arm.
+            baseline_paths = None
+        if baseline_paths is not None:
+            gained = sorted(gitops.dirty_paths(repo_root) - baseline_paths)
+            if gained:
+                signals.append("stranded-worktree")
+                detail["stranded_paths"] = gained
+
+    if not signals:
+        return None
+    # Strongest first: proof outranks the mode the fix creates, which outranks
+    # an unattributed ref move.
+    for kind in ("stray-commit", "stranded-worktree", "host-head-moved"):
+        if kind in signals:
+            return {"kind": kind, "signals": signals, **detail}
+    return None
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -2298,6 +2478,11 @@ def _run_worker(
     # placeholder branch without paying a git probe on every dashboard tick.
     task.meta["seed_ref"] = branch_plan.seed_ref
     task.meta["has_new_commit"] = False
+    # #703 arm-of-record: the shared host checkout's state as this run starts.
+    # Taken here — after `sync.refresh_before_run`'s fetch+fast-forward, before
+    # the runner exists — so a daemon-owned ff is never mistaken for a run's own
+    # write. Read back in `_run_worker_and_finalize` by `_stray_host_write`.
+    _record_host_baseline(task, repo_root)
     # The boot janitor runs in a future daemon process. Persist this daemon's
     # pid so that future boot can prove the process which owned the run is
     # gone instead of treating an absent pid as equivalent evidence.
@@ -2712,6 +2897,17 @@ def _run_worker(
         # no conversation — never export an empty value.
         if task.conversation_key:
             env["BRR_CONVERSATION_ID"] = task.conversation_key
+
+        # #703: pin this worker's git to the worktree it was given, so a shell
+        # whose cwd drifted to the execution root cannot commit into the
+        # *shared host checkout*. Live 2026-07-24: run-260724-2109-hqfz put 262
+        # insertions of its deliverable on the maintainer's own `main`, twice,
+        # while its own branch published empty — and an empty publish is
+        # indistinguishable from a worker that correctly had nothing to commit,
+        # so nothing refused it and nothing reported it. Worktree isolation is
+        # the filesystem lane; git's notion of "which working tree am I in" is
+        # just cwd, and cwd is not contained.
+        env.update(_child_git_pin(task, run_root))
         # The closeout guard (`hooks.next_move`, default off). Armed per-run via env
         # so the hook subprocess needs no config of its own. Default-off is the
         # control arm, not timidity: `next_move` failed 0/6 across *both* arms of the
@@ -6679,6 +6875,56 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 f"own status is unaffected.{report_note}"
             )
 
+    # #703: the containment's second source, reported where the parent already
+    # reads. Placed after the contract logic and allowed to outrank it: a
+    # contract mismatch says the child published the wrong *name*, a stray
+    # write says its work is not on its branch at all — and the incident that
+    # opened #703 published a branch whose name was perfectly correct and
+    # perfectly empty. Never overrides ``runner-failed``: that arm means no
+    # worker existed to have written anything (#633).
+    stray_block = ""
+    stray_kind = str(task.meta.get("stray_host_write") or "").strip()
+    if stray_kind and not runner_failed:
+        detail: dict = {}
+        try:
+            detail = json.loads(str(task.meta.get("stray_host_write_detail") or "{}"))
+        except (ValueError, TypeError):
+            detail = {}
+        if stray_kind == "stray-commit":
+            status_label = "stray-host-commit"
+            shas = detail.get("stray_commits") or []
+            stray_block = (
+                "\n\nSTRAY WRITE — this child's own branch never moved, and the "
+                "shared host checkout carries commit(s) stamped with this "
+                f"child's run id: {', '.join(str(s)[:12] for s in shas)}\n"
+                "Its work is on the shared checkout, not on its branch. This is "
+                "attributed by the Brnrd-Run-Id trailer, not inferred from "
+                "timing — see #703."
+            )
+        elif stray_kind == "stranded-worktree":
+            status_label = "stray-host-worktree"
+            paths = detail.get("stranded_paths") or []
+            shown = ", ".join(str(p) for p in paths[:8])
+            more = f" (+{len(paths) - 8} more)" if len(paths) > 8 else ""
+            stray_block = (
+                "\n\nSTRANDED WORK — this child's own branch never moved, and the "
+                "shared host checkout gained uncommitted path(s) during its "
+                f"life: {shown}{more}\n"
+                "The likely shape: a `git add -A` from a drifted cwd swept the "
+                "child's (clean) worktree, committed nothing, and left the "
+                "deliverable unstaged in the shared tree. Recover from there — "
+                "it is not lost, and it is not on any branch."
+            )
+        else:  # host-head-moved — unattributed, the weakest arm
+            stray_block = (
+                "\n\nadvisory — this child's branch never moved and the shared "
+                f"host checkout's HEAD did ({detail.get('host_head_at_dispatch', '?')[:12]}"
+                f" → {str(detail.get('host_head_now', '?'))[:12]}), but no commit "
+                "there carries this child's run id. A sibling run or a human "
+                "commit reaches this too, so the child's own status is "
+                "unaffected — worth one look, not an accusation."
+            )
+
     response_path = task.meta.get("response_path")
     text = ""
     if response_path:
@@ -6701,7 +6947,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     else:
         summary = (
             f"concurrent spawn {task.id} finished: status={status_label}"
-            f"{contract_block}"
+            f"{stray_block}{contract_block}"
         )
         if text:
             summary = f"{summary}\n\n{text}"
@@ -6724,6 +6970,11 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     pr_num = str(task.meta.get("pr_number") or "").strip()
     if pr_num:
         produce_kwargs["spawn_pr_number"] = pr_num
+    # #703: structured alongside the prose block, same "absent stays absent"
+    # rule — a run with nothing stray carries no key at all, never a "clean"
+    # or a False that a reader has to distinguish from "never checked".
+    if stray_kind and not runner_failed:
+        produce_kwargs["spawn_stray_host_write"] = stray_kind
     if contract is not None and contract.get("spec_report"):
         produce_kwargs["spawn_report_path"] = contract["spec_report"]
         if contract.get("report_found") is not None:
@@ -7399,6 +7650,12 @@ def _persist_run_state_doc(
         "reply_archive",
         "success_signal",
         "pid",
+        # #703. The finished-stage frame is the only surface a *non-spawn*
+        # worktree run has for this finding — a spawned child also reports it
+        # into its parent's thread, but a scheduled or user-addressed run has
+        # no parent to tell. Without this line the check would be one whose
+        # only reader is the daemon's own uncaptured stdout.
+        "stray_host_write",
     ):
         value = task.meta.get(key)
         if value not in (None, ""):
@@ -8621,6 +8878,30 @@ def _run_worker_and_finalize(
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
             print(f"[brnrd] run {task.id}: failed")
+
+        # #703, arm 2 of the containment: the earliest point in finalize, and
+        # deliberately so. Every later step can move the very refs this reads —
+        # `publish_default_branch` fast-forwards an auto-land target in this
+        # checkout, and `_capture_knowledge` commits in a neighbouring one — so
+        # a check placed after them would measure the daemon's own housekeeping
+        # and call it a stray write. `has_new_commit` and any salvage commit are
+        # already settled inside `_run_worker`, so nothing is read too early.
+        # Independent of the env-pin half by construction: it reads git, not the
+        # runner's environment, which is what makes it a *second source* rather
+        # than the guard verifying itself (#610, #611, the writerless mood
+        # channel — three times this repo has shipped the latter).
+        try:
+            stray = _stray_host_write(task, repo_root)
+        except Exception as exc:  # noqa: BLE001 - a check bug is never a run failure
+            print(f"[brnrd] run {task.id}: stray-host-write check failed: {exc}")
+            stray = None
+        if stray:
+            task.meta["stray_host_write"] = stray["kind"]
+            task.meta["stray_host_write_detail"] = json.dumps(stray, sort_keys=True)
+            print(
+                f"[brnrd] run {task.id}: {stray['kind']} — this run's branch never "
+                f"moved but the shared checkout at {repo_root} did: {stray}"
+            )
 
         outbox_path = (
             Path(str(task.meta["outbox_path"]))

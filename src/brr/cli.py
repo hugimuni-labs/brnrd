@@ -13,6 +13,7 @@ never discovered by a user reading the verb list. ``ALL_COMMANDS`` /
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 #: Every gate brnrd knows how to auth/bind/configure. Single source of truth
@@ -478,7 +479,35 @@ def _retired_command(name: str, replacement: str):
     return _fail
 
 
+def _drop_inherited_git_pin() -> None:
+    """Drop ``GIT_DIR`` / ``GIT_WORK_TREE`` from this process's environment.
+
+    #703 pins both into a worker run's environment so a bare ``git commit``
+    from a drifted cwd cannot reach the shared host checkout. Those two
+    variables outrank *every* cwd-based discovery mechanism — ``cwd=``,
+    ``-C <path>``, an absolute pathspec — so any tool that inherits them
+    addresses the pinned worktree no matter which repository it names.
+
+    ``brnrd`` is such a tool, and it is invoked from inside a pinned run on
+    two live paths: the runner hook endpoint (``brnrd hook <phase>``, see
+    ``hooks.hook_command``) and any ``brnrd`` command the resident itself
+    types. Every git call brnrd makes names the repository it means, so the
+    pin can only make brnrd report the wrong tree — confidently, exit 0.
+    Dropping it here is the single floor for the whole package: it covers
+    modules that call ``subprocess.run`` directly, and modules added later
+    that never hear about this. The per-wrapper scrub in
+    ``gitops.explicit_repo_env`` is the same invariant stated locally, for
+    library importers that never come through this entrypoint.
+
+    Not a behaviour change for a normal invocation: brnrd resolves its
+    repository from cwd and config, never from ``GIT_DIR``.
+    """
+    for var in ("GIT_DIR", "GIT_WORK_TREE"):
+        os.environ.pop(var, None)
+
+
 def main(argv: list[str] | None = None) -> None:
+    _drop_inherited_git_pin()
     args = build_parser().parse_args(argv)
     return args.func(args)
 
