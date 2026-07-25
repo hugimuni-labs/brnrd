@@ -2842,7 +2842,9 @@ def _run_worker(
     )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
-    output_stats = {"current": 0, "other": 0, "outbound": 0}
+    # ``delivered`` (#743) is the subset of the three above that actually put
+    # text in front of a reader — see the increment site in ``_drain_outbox``.
+    output_stats = {"current": 0, "other": 0, "outbound": 0, "delivered": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
     # Liveness budget: the heartbeat enforces this soft, agent-extensible
     # deadline; the runner's communicate() backstops at the hard cap. The
@@ -3607,6 +3609,15 @@ def _run_worker(
                     if unowned
                     else ""
                 )
+                route = _terminal_route(
+                    source,
+                    spawn_parent_run_id=str(
+                        task.meta.get("spawn_parent_run_id") or ""),
+                    duplicate=terminal_duplicate,
+                    undeliverable=unowned and not terminal_duplicate,
+                    delivered_elsewhere=bool(output_stats.get("delivered", 0)),
+                )
+                task.meta["terminal_route"] = route
                 _stage_terminal_response(
                     task,
                     account_context,
@@ -3622,13 +3633,21 @@ def _run_worker(
                     # again double-posts on the one surface the user watches;
                     # the content is already in the conversation log, so the
                     # durable message is stamped as already delivered.
-                    task.meta["terminal_stream_suppressed"] = True
                     print(
                         f"[brnrd] worker {eid}: terminal stream suppressed "
                         "(duplicate of a delivered reply)"
                     )
                 elif not unowned:
                     _record_response_artifact(emit, task, resp_path)
+                    if route == _TERMINAL_ROUTE_GATE_SOLE:
+                        # #743: the net caught this one. Printed only here —
+                        # ``gate-extra`` is the common shape and a line at
+                        # every closeout would stop being read.
+                        print(
+                            f"[brnrd] worker {eid}: terminal stream is this "
+                            "run's only delivery — the fallback net carried "
+                            "it, not a route the run chose"
+                        )
             # Keep an in-memory snapshot for closeout consumers; the response
             # carrier now stays on disk too, but synthetic/older gates can
             # still race the transition during deploy skew.
@@ -5837,6 +5856,7 @@ def _drain_outbox(
                 promoted += 1
                 if stats is not None:
                     stats["outbound"] = stats.get("outbound", 0) + 1
+                    stats["delivered"] = stats.get("delivered", 0) + 1
             _retire_outbox_staging(fpath)
             continue
         target = str(fm.get("event") or "").strip()
@@ -5977,6 +5997,14 @@ def _drain_outbox(
         if stats is not None:
             key = "other" if cross else "current"
             stats[key] = stats.get(key, 0) + 1
+            # #743. ``current`` is *not* "a message reached a correspondent":
+            # a parked ``runner_policy`` / ``config_change`` proposal
+            # increments it too. ``delivered`` counts only the writes that
+            # put text in front of a reader, so the terminal-route
+            # classification can ask that question directly instead of
+            # subtracting the proposal verbs — a subtraction the next verb
+            # added would silently rejoin.
+            stats["delivered"] = stats.get("delivered", 0) + 1
         if not cross:
             # Remember what was already delivered to the waking thread so the
             # terminal-stream dispatch can skip an exact duplicate — the
@@ -6106,6 +6134,68 @@ def _terminal_reply_lands(
     if not source:
         return True
     return bool(spawn_parent_run_id) or _gate_owns_source(source)
+
+
+_TERMINAL_ROUTE_DUPLICATE = "duplicate"
+_TERMINAL_ROUTE_UNDELIVERABLE = "undeliverable"
+_TERMINAL_ROUTE_DISPATCH_EDGE = "dispatch-edge"
+_TERMINAL_ROUTE_GATE_EXTRA = "gate-extra"
+_TERMINAL_ROUTE_GATE_SOLE = "gate-sole"
+_TERMINAL_ROUTE_UNKNOWN = "unknown"
+
+
+def _terminal_route(
+    source: str,
+    *,
+    spawn_parent_run_id: str = "",
+    duplicate: bool = False,
+    undeliverable: bool = False,
+    delivered_elsewhere: bool = False,
+) -> str:
+    """Name what carried this run's terminal stream, at the moment it was decided.
+
+    #743. The terminal stdout and the outbox are documented as peer delivery
+    channels, and once delivered they are indistinguishable on every
+    aggregate surface — so "how often does the daemon's static dispatch
+    actually catch something a run would otherwise have lost?" had no
+    answer, and the question of whether it should exist at all could not be
+    settled with evidence. This records the answer per run, one string:
+
+    - ``duplicate`` — an exact copy of a reply already delivered; no loss if
+      the static dispatch went away.
+    - ``undeliverable`` — nobody owns the source; already dispatched
+      nowhere (#562).
+    - ``dispatch-edge`` — a spawning parent collects it as the worker's
+      report (``_mark_report_collected``). Structurally *not* a chat
+      delivery: it is a return value on an unambiguous edge, with no
+      addressing guess and no second channel to duplicate. The predicate
+      that gates delivery (:func:`_terminal_reply_lands`) answers True for
+      this and for a gate the same way, which is exactly why the two kept
+      getting reasoned about as one thing.
+    - ``gate-extra`` — a gate delivered it, and the run had already spoken
+      through the outbox; the closeout is additional content, not the run's
+      only voice.
+    - ``gate-sole`` — a gate delivered it and it was the run's *only*
+      delivery. This is the net catching: without the static dispatch this
+      run reaches its correspondent with nothing at all.
+
+    ``unknown`` covers an absent source, which :func:`_terminal_reply_lands`
+    treats as landing rather than as impossible. Naming it beats an empty
+    string that reads as "no terminal stream".
+    """
+    if duplicate:
+        return _TERMINAL_ROUTE_DUPLICATE
+    if undeliverable:
+        return _TERMINAL_ROUTE_UNDELIVERABLE
+    if _gate_owns_source(source):
+        return (
+            _TERMINAL_ROUTE_GATE_EXTRA
+            if delivered_elsewhere
+            else _TERMINAL_ROUTE_GATE_SOLE
+        )
+    if spawn_parent_run_id:
+        return _TERMINAL_ROUTE_DISPATCH_EDGE
+    return _TERMINAL_ROUTE_UNKNOWN
 
 
 def _delivery_source_for_gate(gate: str) -> str:
@@ -7649,6 +7739,11 @@ def _persist_run_state_doc(
         "publish_status",
         "reply_archive",
         "success_signal",
+        # #743. What carried the terminal stream — see ``_terminal_route``.
+        # ``success_signal`` says a run delivered *something*; this says
+        # which channel did it, which is the fact the static-dispatch
+        # question needs and the one no surface carried.
+        "terminal_route",
         "pid",
         # #703. The finished-stage frame is the only surface a *non-spawn*
         # worktree run has for this finding — a spawned child also reports it

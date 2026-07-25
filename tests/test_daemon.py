@@ -6148,7 +6148,11 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
         body="please make the state visible",
         source="telegram",
         status="running",
-        meta={"runner_name": "codex", "reply_archive": "archived"},
+        meta={
+            "runner_name": "codex",
+            "reply_archive": "archived",
+            "terminal_route": "gate-sole",
+        },
     )
 
     path = daemon._persist_run_state_doc(
@@ -6164,6 +6168,10 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     assert "repo_label: Gurio/brr" in text
     assert "runner_name: codex" in text
     assert "reply_archive: archived" in text
+    # #743: which channel carried the terminal stream reaches the run node,
+    # so "the fallback net was this run's only voice" is a readable fact
+    # rather than something reconstructed from message-store frontmatter.
+    assert "terminal_route: gate-sole" in text
     # The body no longer restates frontmatter facts as bullets — the
     # non-repetitive-node cut, 2026-07-19.
     assert "- runner:" not in text
