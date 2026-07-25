@@ -591,8 +591,17 @@ def test_stop_silent_when_gate_less_event_delivered_elsewhere(tmp_path):
     # ``current_event``-only gate passed and the reply nag fired — but the
     # router refuses ``event:`` replies to a source no gate owns, so
     # ``replies_current`` can never leave 0. The nag was un-clearable, and it
-    # hit hardest the runs that had already reported on telegram. Once
-    # anything was delivered anywhere, silence is the success state.
+    # hit hardest the runs that had already reported on telegram.
+    #
+    # What this fences is the *nag*, and only the nag. It said "once anything
+    # was delivered anywhere, silence is the success state" until #728, which
+    # is no longer true of the cell as a whole: a gate-less run that delivered
+    # now gets the routing fact, once, from the arm below. The distinction is
+    # the point — an obligation with no available remedy must stay gone, while
+    # a constant about the run's topology is said once and latched. So this
+    # asserts the two *nag* strings stay absent, not that the briefing is
+    # silent; see ``test_stop_gate_less_and_delivered_states_the_routing_fact``
+    # for what may legitimately appear here.
     _portal(
         tmp_path, token="t1", pending=0, current_event_replyable=False,
         outbound={"replies_current": 0, "replies_other": 0,
