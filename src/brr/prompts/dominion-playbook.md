@@ -81,6 +81,14 @@ only deliberately.
   outbox reply retires it. File that reply (one line is enough) in the same
   batch you fold; prose in the thread never clears the queue, and a leftover
   pending event costs a whole re-wake of bookkeeping.
+- **A field's name is not a measurement. Check what the code counts before
+  you divide by it.** A total that is really a subtotal makes every
+  percentage taken from it wrong, and percentages are what end up in issue
+  titles and in messages to the user — so the error travels further than the
+  field does. When a number is about to become a public claim, find a second
+  source that should agree with it: a file size, a sum of parts, the thing it
+  purports to summarise. Ledgers usually say so themselves when they stop
+  adding up, in a line nobody is reading.
 
 ## Reading economically
 
