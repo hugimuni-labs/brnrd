@@ -324,12 +324,20 @@ class RunnerWakeRequest(Base):
     account owner approving their own ask, and a second confirm would be
     ceremony (thread decision, 2026-07-11).
 
-    Delivery rides the existing catalog publish tick: the daemon's
+    *Notice* rides the existing catalog publish tick: the daemon's
     ``PUT /v1/daemons/runners`` response carries the account's pending
-    request, and the daemon acks consumption in its next PUT payload — no
-    new polling loop, the same piggyback economics as the config-approval
-    flow riding the inbox long-poll. Cancelable (chip tap) until a wake
-    actually consumes it; cancellation propagates within one tick.
+    request, so a tap reaches the daemon within a tick with no new polling
+    loop — the same piggyback economics as the config-approval flow riding
+    the inbox long-poll.
+
+    *Deciding* does not (#733). The daemon mirrors only the fact that a tap
+    exists and calls ``POST /v1/daemons/runners/wake-request/claim`` at
+    dispatch; ``wake_requests.claim`` runs the whole guard ladder and moves
+    this row to its final status in that one transaction. There is no ack,
+    because the daemon never forms an opinion to acknowledge — it used to,
+    and its 900s mirror horizon quietly outranked the 24h ``expires_at``
+    below that the dashboard chip was truthfully reporting. Cancelable (chip
+    tap) until a wake claims it; cancellation propagates within one tick.
     """
 
     __tablename__ = "runner_wake_requests"
