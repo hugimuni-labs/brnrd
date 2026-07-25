@@ -250,6 +250,19 @@ wake/stop control channel on the bidirectional `runners` and `live_runs`
 lanes (see above) is unaffected, since that traffic is inbound to your
 daemon, not repo content leaving it.
 
+The consent that is checked is the one belonging to the repo the data is
+**about**, not the repo whose daemon token happened to send it. Three lanes —
+**live_runs**, **pr_review_queue** and **run_ledger** — carry rows that each
+name their own repo, and a daemon collects them across every repo in its
+account context, so one PUT routinely carries rows about several repos at
+once. Each row is checked against its own repo's consent and dropped
+individually; the rest of the payload still publishes. The remaining lanes
+(**activity**, **quota**, **runners**) carry daemon-scoped data with no
+per-row subject, so there the publishing token's own repo is the consent that
+applies. A row naming a repo this account has not connected is checked
+against the publishing repo's consent, so an unrecognised label never reaches
+further than the token that carried it.
+
 One lane, **corpus**, cannot be scoped to a single repo: the knowledge mirror
 is account-wide by construction, so the server only ships a corpus slice once
 **every** repo the account has connected *that has recorded a consent* has
