@@ -95,12 +95,13 @@ _RETRY_STATUSES = frozenset({502, 503, 504})
 _RETRY_SLEEPS_S = (2.0, 5.0)
 
 
-def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S) -> dict:
+def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S, retry: bool = True) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    for attempt, sleep_s in enumerate((*_RETRY_SLEEPS_S, None)):
+    sleeps = _RETRY_SLEEPS_S if retry else ()
+    for attempt, sleep_s in enumerate((*sleeps, None)):
         resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
         if resp.status_code in _RETRY_STATUSES and sleep_s is not None:
-            print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(_RETRY_SLEEPS_S)} in {sleep_s:.0f}s")
+            print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(sleeps)} in {sleep_s:.0f}s")
             time.sleep(sleep_s)
             continue
         break
@@ -1814,11 +1815,6 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None
     if not (state.get("token") and state.get("brnrd_url")):
         return
     payload = _runners_snapshot(brr_dir)
-    # #328 tap-to-request: ack wake requests a dispatched wake has spent,
-    # and mirror back the account's still-pending one (if any). Same
-    # publish tick, no extra request — see src/brr/wake_request.py.
-    acked = wake_request.consumed_ids(brr_dir)
-    payload["consumed_wake_request_ids"] = acked
     try:
         body = _request(
             state["brnrd_url"],
@@ -1831,11 +1827,82 @@ def _publish_runners(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None
     except Exception as e:
         print(f"[brnrd:cloud] runners publish failed: {e}")
         return
-    wake_request.clear_consumed(brr_dir, acked)
+    # #328 tap-to-request: mirror the account's pending tap (if any) so
+    # dispatch knows within a publish tick that one exists at all. One-way
+    # since #733 — the daemon has nothing to ack back, because it no longer
+    # decides anything about a tap. See src/brr/wake_request.py.
     pending = body.get("pending_wake_request") if isinstance(body, dict) else None
     wake_request.store_pending(
         brr_dir, pending if isinstance(pending, dict) else None,
     )
+
+
+# #733: the one bound on dispatch's one server call. Dispatch already spends
+# ~4s before a runner starts, so ~2s is noise against it — but it has to be a
+# *bound*, not a hope, because this is the only place a wake blocks on
+# brnrd.dev being reachable. Deliberately below the gateway-retry path too:
+# riding `_RETRY_SLEEPS_S` would turn a deploy-window 502 into ~9s of held
+# dispatch, and a tap is worth 2s of waiting, not 9.
+_WAKE_CLAIM_TIMEOUT_S = 2.0
+
+
+def claim_wake_request(
+    brr_dir: Path,
+    *,
+    request_id: str,
+    event_id: str | None = None,
+    source: str | None = None,
+    event_created: str | None = None,
+    timeout: float = _WAKE_CLAIM_TIMEOUT_S,
+) -> dict | None:
+    """Ask the server whether this wake spends the parked tap (#733).
+
+    The single claim point. Returns the server's verdict dict (``apply``,
+    ``reason``, ``status``, ``profile``, ``repo_label``, ``environment``), or
+    **None** when no answer was obtained — not connected, timed out,
+    unreachable, refused, malformed.
+
+    None is fail-open by construction: dispatch treats it exactly as it
+    treats an empty mirror, so an unreachable brnrd.dev costs the tap and
+    nothing else. That is the one honest cost of moving the decision to its
+    owner — dispatch now has a network dependency it never had — and it is
+    bounded to :data:`_WAKE_CLAIM_TIMEOUT_S` and to the rare wake that has a
+    tap parked for it at all.
+    """
+    request_id = str(request_id or "").strip()
+    if not request_id:
+        return None
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return None
+    body = {"request_id": request_id}
+    if event_id:
+        body["event_id"] = str(event_id)
+    if source:
+        body["source"] = str(source)
+    if event_created:
+        body["event_created"] = str(event_created)
+        # Our clock, read now, so the server can judge the tap's age against
+        # the event's age instead of comparing two absolute stamps taken on
+        # two machines. Only sent alongside ``event_created``, which is the
+        # only thing it is a reference point for.
+        body["daemon_now"] = (
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
+    try:
+        result = _request(
+            state["brnrd_url"],
+            "POST",
+            "/v1/daemons/runners/wake-request/claim",
+            token=state["token"],
+            json=body,
+            timeout=timeout,
+            retry=False,
+        )
+    except Exception as e:
+        print(f"[brnrd:cloud] wake-request claim failed: {e}")
+        return None
+    return result if isinstance(result, dict) else None
 
 
 def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.RunProgressView | None:

@@ -407,12 +407,10 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    # #328 tap-to-request piggyback: retire wake requests this daemon just
-    # spent on a dispatched wake, then hand back the account's still-pending
-    # one (if any) so the daemon learns of a tap within one publish tick.
-    wake_requests.mark_consumed(
-        db, principal.account_id, payload.consumed_wake_request_ids,
-    )
+    # #328 tap-to-request piggyback, now one-way (#733): hand back the
+    # account's still-pending tap (if any) so the daemon learns one exists
+    # within a publish tick. Retiring it is no longer the daemon's to report
+    # — `claim_wake_request` below decides and retires in one transaction.
     pending = wake_requests.pending_for_account(db, principal.account_id)
     return schemas.RunnersOut(
         profiles=profiles,
@@ -426,6 +424,63 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
             else None
         ),
     )
+
+
+def _published_profile_names(daemon: Daemon) -> set[str] | None:
+    """Profile names in this daemon's last published rack, or None.
+
+    None means "no usable catalog" — an unregistered or unparseable one, or
+    a publish-scope denial that blanked the lane — and the claim ladder skips
+    the availability rung rather than refusing every tap. Refusing on an
+    absent catalog would turn a consent setting into a silent wake-tap
+    outage, which is precisely the invisible failure #733 is about.
+    """
+    try:
+        rows = json.loads(daemon.runners_json or "[]")
+    except ValueError:
+        return None
+    if not isinstance(rows, list):
+        return None
+    names = {
+        str(row.get("name") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    }
+    return names or None
+
+
+@router.post("/runners/wake-request/claim", response_model=schemas.WakeRequestClaimOut)
+def claim_wake_request(payload: schemas.WakeRequestClaim, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Decide a spool-rack tap's fate for one dispatching wake (#733).
+
+    The one claim point. A daemon calls this at dispatch, once, and only
+    when its presence-bit mirror says a tap exists at all; the answer comes
+    back with the row already at its final status, so there is no window in
+    which the two sides disagree about whether the tap was spent.
+
+    Same daemon-principal auth as `put_runners` above, and for the same
+    reason: the rack this claim is judged against is the one *this* daemon
+    published. The availability rung asks whether the tapped profile is
+    still in that rack — the rack the dashboard offered the tapper — rather
+    than whatever a particular execution root can probe today.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    daemon.online = True
+    daemon.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
+    result = wake_requests.claim(
+        db,
+        principal.account_id,
+        request_id=payload.request_id,
+        event_id=payload.event_id,
+        source=payload.source,
+        event_created=payload.event_created,
+        daemon_now=payload.daemon_now,
+        known_profiles=_published_profile_names(daemon),
+    )
+    return schemas.WakeRequestClaimOut(**result)
 
 
 @router.put("/live-runs", response_model=schemas.LiveRunsOut)
