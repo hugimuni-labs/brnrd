@@ -252,8 +252,11 @@ daemon, not repo content leaving it.
 
 One lane, **corpus**, cannot be scoped to a single repo: the knowledge mirror
 is account-wide by construction, so the server only ships a corpus slice once
-**every** repo the account has connected has consented to it — a single
-narrower repo silences that slice for the whole account.
+**every** repo the account has connected *that has recorded a consent* has
+consented to it — a single narrower repo silences that slice for the whole
+account. A repo with no recorded value (below) neither consents nor vetoes:
+it does not gate the slice, and it does not dissolve a narrower sibling's
+recorded choice either.
 
 **Repos connected before this consent existed carry no recorded value at
 all** (distinct from an explicit `none`) and are, by design, unaffected: the
