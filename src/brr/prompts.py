@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import account, config as conf, dev_reload, forge_state
+from . import account, card, config as conf, dev_reload, forge_state
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -3836,43 +3836,34 @@ def _build_prior_run_block(repo_root: Path) -> str:
 
 
 def _body_section_shape(body: str) -> list[str]:
-    """The body's ``##`` section names, minus the ``Now`` already rendered.
+    """The body's top-level section names, minus the ``Now`` already rendered.
 
     The compiled half of the wake's memory (maintainer, 2026-07-19: "maybe
     header + sections' headers, maybe just top"). A heading list is a
     remarkably high ratio of orientation to tokens: "also in that body: Arc ·
     Decisions · Open" tells a wake what kind of run that was and what it would
     find, at a cost that does not scale with how much the run actually wrote.
+
+    Depth-agnostic since #722: an H1-sectioned card has a shape, and reporting
+    it as shapeless was the same defect as projecting it whole — the wake was
+    told "also in that body: " and nothing, about a body full of sections.
     """
-    names: list[str] = []
-    for line in body.splitlines():
-        if not line.startswith("## "):
-            continue
-        name = line[3:].strip()
-        if name and name.casefold() != "now":
-            names.append(name)
-    return names
+    return card.section_names(body)
 
 
 def _now_projection(body: str) -> str:
-    """The body's ``## Now`` section, or the whole body when it has none.
+    """The body's ``Now`` section, or the whole body when it has none.
 
-    Third implementation of one rule (``daemon._card_now_projection``,
-    ``runNode.ts:nowProjection``). Kept local rather than imported from the
-    daemon: prompts must not pull the daemon module into every wake's import
-    graph for eighteen lines of string handling.
+    One rule, shared with ``daemon._card_now_projection`` and the hooks
+    boundary meter since #722; the earlier local copy was the second of three
+    that drifted. Its stated reason for staying local — that prompts must not
+    pull ``daemon`` into every wake's import graph — measured true (that
+    direction costs ~46 ms), which is why the rule moved *outward* to the leaf
+    module :mod:`brr.card` rather than into either caller. See that module for
+    the numbers and for what they did not justify.
+
+    No *limit* here. This projection is read by the next wake, not published
+    to a transport, so bounding it would cost the resident its own memory to
+    solve a problem this path does not have.
     """
-    lines = body.splitlines()
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if line.strip().casefold() == "## now":
-            start = index + 1
-            break
-    if start is None:
-        return body.strip()
-    projected: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
-            break
-        projected.append(line)
-    return "\n".join(projected).strip()
+    return card.now_projection(body)
