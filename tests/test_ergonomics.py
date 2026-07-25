@@ -294,7 +294,7 @@ def test_probe_stale_image_newer_is_clean(tmp_path, monkeypatch):
 
 def test_probe_worktree_buildup(tmp_path, monkeypatch):
     fake = [SimpleNamespace(path=tmp_path / f"wt{i}") for i in range(6)]
-    monkeypatch.setattr("brr.worktree.list_worktrees", lambda _root: fake)
+    monkeypatch.setattr("brr.worktree.list_brr_worktrees", lambda _root: fake)
     p = _pctx(tmp_path, tmp_path, cfg={"ergonomics.worktree_warn": 5})
     findings = probes.probe_worktree_buildup(p)
     assert findings and findings[0].detail["count"] == 6
@@ -302,8 +302,40 @@ def test_probe_worktree_buildup(tmp_path, monkeypatch):
 
 def test_probe_worktree_under_threshold(tmp_path, monkeypatch):
     fake = [SimpleNamespace(path=tmp_path / "wt0")]
-    monkeypatch.setattr("brr.worktree.list_worktrees", lambda _root: fake)
+    monkeypatch.setattr("brr.worktree.list_brr_worktrees", lambda _root: fake)
     p = _pctx(tmp_path, tmp_path)
+    assert probes.probe_worktree_buildup(p) == []
+
+
+def test_probe_worktree_buildup_counts_only_brr_worktrees(tmp_path, monkeypatch):
+    """#721 widened the producer; this count drives a *deletion* hint.
+
+    The probe's mechanism ("finalize keeps worktrees on failure/dirty exit")
+    is brnrd's own, and "remove stale ones to reclaim space" is only sound
+    advice about trees brnrd created and abandoned. Aimed at a Shell's live
+    agent-isolation directory, or at a resident's ``/tmp`` worktree holding
+    unpushed work, the same sentence proposes data loss. So the wider set
+    must not reach it: 4 brr worktrees stay under a threshold of 5 even with
+    six more worktrees of this repo living elsewhere.
+    """
+    from brr.worktree import WorktreeInfo
+
+    wide = [
+        WorktreeInfo(
+            path=tmp_path / f"wt{i}", run_id=f"run-{i}",
+            branch=f"brr/run-{i}", kind="brr",
+        )
+        for i in range(4)
+    ] + [
+        WorktreeInfo(
+            path=Path(f"/tmp/brr-wt-{i}"), run_id=None,
+            branch=f"brr/slug-{i}", kind="external",
+        )
+        for i in range(6)
+    ]
+    monkeypatch.setattr("brr.worktree.list_worktrees", lambda _root: wide)
+    p = _pctx(tmp_path, tmp_path, cfg={"ergonomics.worktree_warn": 5})
+
     assert probes.probe_worktree_buildup(p) == []
 
 

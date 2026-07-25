@@ -148,11 +148,21 @@ def probe_worktree_buildup(p: ProbeContext) -> list[Finding]:
 
     A growing pile burns disk and makes ``git worktree list`` noisy.
     Warn past a threshold so the operator prunes.
+
+    Counts **brr-managed** worktrees only, and says so in its hint. The
+    mechanism named above is brnrd's own finalize, and the remedy is a
+    deletion: pointed at the wider population :func:`worktree.list_worktrees`
+    now returns since #721, the same sentence would be aiming "remove stale
+    ones" at a Shell's live agent-isolation directory and at a resident's
+    ``/tmp`` worktree holding unpushed work. Widening the producer must not
+    silently widen a destructive remedy — noticing those trees is the wake
+    facet's job (:func:`brr.forge_state.summarize_worktrees`), which reports
+    them instead of proposing to delete them.
     """
     from .. import worktree
 
     try:
-        worktrees = worktree.list_worktrees(p.repo_root)
+        worktrees = worktree.list_brr_worktrees(p.repo_root)
     except Exception:
         return []
     threshold = _int_cfg(p.cfg, "ergonomics.worktree_warn", 5)
@@ -167,9 +177,11 @@ def probe_worktree_buildup(p: ProbeContext) -> list[Finding]:
                 "threshold": threshold,
                 "paths": [str(w.path) for w in worktrees[:20]],
                 "hint": (
-                    "leftover run worktrees are piling up (kept on "
-                    "failure/dirty exit). Inspect and remove stale ones to "
-                    "reclaim space and cut noise."
+                    "leftover brr run worktrees under .brr/worktrees/ are "
+                    "piling up (kept on failure/dirty exit). Inspect and "
+                    "remove stale ones to reclaim space and cut noise. "
+                    "Worktrees of this repo elsewhere are not counted here "
+                    "and are not safe to prune on this count."
                 ),
             },
         )
