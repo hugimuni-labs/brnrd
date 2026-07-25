@@ -2916,6 +2916,35 @@ SCHEDULE_TURN_DEDUP_TURN_STUB = (
     "[schedule entry, identical to the {ts} firing above — not repeated]"
 )
 
+# Issue #736: `RECENT_CONVERSATION_MAX` caps the *count* of woven turns and
+# nothing caps their *size*, so one turn can eat the wake. Measured on
+# `run-260725-1056-u1y3`: a single 2026-07-21 `schedule` firing rendered at
+# 12,438 B — 12.9% of a 96,422 B prompt — for a `schedule.md` entry that had
+# been rewritten two days later and deleted two days after that. A fired
+# schedule body is an immutable conversation record, so every edit to the
+# live entry forks it from its ghosts and the ghosts keep full weight
+# forever.
+#
+# Deliberately *additive* to the #576 dedup above, not a replacement: that
+# collapse fires only when a schedule turn resembles another schedule turn
+# or the current event body. The 07-21 ghost resembled neither (its
+# successor had been rewritten), so it sailed through a mechanism that was
+# working exactly as designed. Size is a separate axis from similarity.
+#
+# 2,000 B is the sizing from the issue: all six live turns on the measured
+# wake were already under it, so a normal wake renders byte-identically to
+# before the cap existed and only the pathological turn is ever touched.
+# Set `conversation.recent_turn_max_bytes` in `.brr/config` to retune it;
+# <= 0 disables the cap entirely.
+RECENT_TURN_MAX_BYTES = 2_000
+RECENT_TURN_MAX_BYTES_KEY = "conversation.recent_turn_max_bytes"
+
+# The elision has to be *visible* or the trim reads as if nothing was
+# dropped (#660's complaint, #688's failure). Both halves are load-bearing:
+# the byte count says how much is missing, the pointer says where to read
+# it. Never "…" alone, never "truncated".
+RECENT_TURN_ELISION_MARKER = "…{dropped:,} B elided · {pointer}"
+
 
 def _render_runner_catalog(
     catalog: list[dict[str, Any]] | None,
@@ -3211,8 +3240,30 @@ def _build_run_context_bundle(
         sections.append("")
         sections.append(presence_block)
 
+    # #736: the per-turn byte cap and the store root it points at are
+    # resolved once here — the two renderers below are pure formatters and
+    # neither should be reaching for config or the filesystem on its own.
+    # `runtime_dir` is the daemon's own value for the *shared* `.brr`; the
+    # `gitops` fallback keeps hand-built callers (tests, `brnrd agent
+    # inject`) pointing at the same store rather than at a worktree copy
+    # that gets torn down at finalize.
+    from . import gitops
+
+    turn_max_bytes = _recent_turn_byte_cap(repo_root)
+    try:
+        turn_store_root = (
+            Path(runtime_dir) if runtime_dir else gitops.shared_brr_dir(repo_root)
+        )
+    except Exception:
+        # A pointer we cannot resolve degrades the marker; it never fails
+        # the wake. Assembling the bundle is not the place to die.
+        turn_store_root = None
+
     snapshot_block = _format_communication_snapshot(
-        communication_snapshot, event_body=event_body
+        communication_snapshot,
+        event_body=event_body,
+        turn_max_bytes=turn_max_bytes,
+        brr_dir=turn_store_root,
     )
     if snapshot_block:
         sections.append("")
@@ -3221,7 +3272,10 @@ def _build_run_context_bundle(
         sections.append(snapshot_block)
     else:
         recent_block = _format_recent_conversation(
-            recent_conversation, event_body=event_body
+            recent_conversation,
+            event_body=event_body,
+            turn_max_bytes=turn_max_bytes,
+            brr_dir=turn_store_root,
         )
         if recent_block:
             sections.append("")
@@ -3307,6 +3361,8 @@ def _format_communication_snapshot(
     snapshot: dict[str, Any] | None,
     *,
     event_body: str | None = None,
+    turn_max_bytes: int = 0,
+    brr_dir: Path | None = None,
 ) -> str:
     """Render the curated cross-channel wake snapshot.
 
@@ -3410,7 +3466,10 @@ def _format_communication_snapshot(
         lines.append(forge_block)
 
     turns = _format_recent_conversation(
-        snapshot.get("recent_turns"), event_body=event_body
+        snapshot.get("recent_turns"),
+        event_body=event_body,
+        turn_max_bytes=turn_max_bytes,
+        brr_dir=brr_dir,
     )
     if turns:
         if lines:
@@ -3607,6 +3666,8 @@ def _format_recent_conversation(
     records: list[dict[str, Any]] | None,
     *,
     event_body: str | None = None,
+    turn_max_bytes: int = 0,
+    brr_dir: Path | None = None,
 ) -> str:
     """Render the last few conversation records as human-readable bullets.
 
@@ -3621,6 +3682,16 @@ def _format_recent_conversation(
     one-line stub instead of repeating the whole body. A user repeating
     themselves is signal and is left alone; only `schedule`-sourced turns
     are ever collapsed.
+
+    Issue #736: independently of that, any turn body over
+    ``turn_max_bytes`` keeps its head and states what it dropped —
+    ``…N B elided · full turn: <path>`` (see :func:`_cap_turn_body`). The
+    two mechanisms answer different questions (*is this a repeat?* vs *is
+    this too big?*) and a turn can pass one and fail the other. The cap
+    applies to every kind that renders a body, not only `schedule`: a
+    forge gate can carry a whole PR description just as easily. Callers
+    that pass no ``turn_max_bytes`` get the uncapped, pre-#736 rendering,
+    which is what the bare-helper tests and any non-daemon caller want.
     """
     if not records:
         return ""
@@ -3642,6 +3713,9 @@ def _format_recent_conversation(
                     summary = stub
                 else:
                     kept_schedule_turns.append((ts, summary))
+            summary = _cap_turn_body(
+                summary, record, limit=turn_max_bytes, brr_dir=brr_dir
+            )
             line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "run":
             tid = record.get("run_id", "")
@@ -3670,6 +3744,9 @@ def _format_recent_conversation(
             label = record.get("label") or record.get("artifact_kind") or ""
             body = _conversation_body(record)
             if body:
+                body = _cap_turn_body(
+                    body, record, limit=turn_max_bytes, brr_dir=brr_dir
+                )
                 line = _format_turn(f"{ts} agent ({label})", body)
             else:
                 path = record.get("path") or ""
@@ -3703,6 +3780,100 @@ def _schedule_turn_dedup_stub(
         if ratio >= SCHEDULE_TURN_DEDUP_RATIO:
             return SCHEDULE_TURN_DEDUP_TURN_STUB.format(ts=kept_ts)
     return None
+
+
+def _recent_turn_byte_cap(repo_root: Path) -> int:
+    """Resolve the per-turn byte cap for the recent-turns weave (#736).
+
+    Returns 0 when the cap is disabled (configured <= 0 or unreadable
+    config), which the renderer treats as "render every turn in full" —
+    the pre-#736 behaviour.
+    """
+    try:
+        cfg = conf.load_config(repo_root)
+        raw = cfg.get(RECENT_TURN_MAX_BYTES_KEY, RECENT_TURN_MAX_BYTES)
+        limit = int(raw)
+    except Exception:
+        return RECENT_TURN_MAX_BYTES
+    return limit if limit > 0 else 0
+
+
+def _turn_store_pointer(record: dict[str, Any], brr_dir: Path | None) -> str:
+    """Where the *full* text of one elided turn is readable, or what's known.
+
+    Every conversation record lands in exactly one `<event-id>.jsonl` under
+    its own thread's store directory (`conversations.event_log_path`), and
+    woven records carry `conversation_key` (tagged by
+    `conversations._tag_record`) plus `event_id` — so the pointer is the
+    turn's own file, not the thread's tail copy under
+    `.brr/runs/<run>/history/`, which is bounded and can itself have
+    dropped the record.
+
+    **Existence-checked on purpose.** A marker naming a path that does not
+    resolve is worse than no marker, so every rung here either stats a real
+    location or degrades to saying what it can offer. The degradations are
+    reachable for a record with no `conversation_key` (never produced by
+    the daemon's append path, but tests and hand-built snapshots do it) and
+    for any record whose store file has since been pruned.
+    """
+    if brr_dir is None:
+        return "full turn: conversation store not resolvable on this wake"
+    from . import conversations
+
+    key = str(record.get("conversation_key") or "").strip()
+    if not key:
+        return "full turn: this turn carries no thread key to resolve"
+    event_id = str(record.get("event_id") or "").strip()
+    try:
+        path = conversations.event_log_path(brr_dir, key, event_id)
+        if path.is_file():
+            return f"full turn: `{path}`"
+        store = conversations.conversation_path(brr_dir, key)
+        if store.is_dir():
+            return f"full turn: not in one file — thread store: `{store}`"
+    except OSError:
+        pass
+    return f"full turn: no stored record found for thread `{key}`"
+
+
+def _cap_turn_body(
+    body: str,
+    record: dict[str, Any],
+    *,
+    limit: int,
+    brr_dir: Path | None,
+) -> str:
+    """Return *body* truncated to *limit* bytes with the elision stated.
+
+    **Keeps the head, drops the tail** (#736). A turn's first lines carry
+    who said what and why they woke someone; the tail is accreted
+    rationale. Note for the next reader: this repo's two other trimmers
+    each chose a *different* direction for their own reasons —
+    `dominion._collapse_markdown_to_budget` drops bottom-up and
+    `prompts._tail_trim_entries` keeps the tail (the log's newest entries
+    live at the bottom). Neither governs here; this is a third call made on
+    this block's own content, not a convention to generalise.
+
+    Truncation prefers the last line boundary inside the budget so the
+    kept head stays valid markdown rather than ending mid-sentence; a
+    single over-long first line still gets a hard byte cut (decoded with
+    `errors="ignore"` so a multi-byte character is never split in half).
+    """
+    if limit <= 0:
+        return body
+    raw = body.encode("utf-8")
+    if len(raw) <= limit:
+        return body
+    kept = raw[:limit].decode("utf-8", errors="ignore")
+    boundary = kept.rfind("\n")
+    if boundary > 0:
+        kept = kept[:boundary]
+    kept = kept.rstrip()
+    dropped = len(raw) - len(kept.encode("utf-8"))
+    marker = RECENT_TURN_ELISION_MARKER.format(
+        dropped=dropped, pointer=_turn_store_pointer(record, brr_dir)
+    )
+    return f"{kept}\n{marker}" if kept else marker
 
 
 def _conversation_body(record: dict[str, Any]) -> str:

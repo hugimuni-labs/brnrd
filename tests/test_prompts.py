@@ -1,9 +1,13 @@
 """Tests for the prompt-assembly module."""
 
 import difflib
+import json
+import re
+from pathlib import Path
 
-from brr import dominion
+from brr import conversations, dominion
 from brr.prompts import (
+    RECENT_TURN_MAX_BYTES,
     SCHEDULE_TURN_DEDUP_RATIO,
     TrimResult,
     _build_context_block,
@@ -1966,6 +1970,221 @@ class TestScheduleTurnDedup:
         # timestamp) plus the current firing rendered once, in full, as
         # the event body.
         assert full_prompt.count(self._ENTRY_BODY) == 1
+
+
+class TestRecentTurnByteCap:
+    """Issue #736: `RECENT_CONVERSATION_MAX` caps how *many* turns the weave
+    renders and nothing capped how *big* one turn may be, so a single
+    `schedule` firing from 2026-07-21 rendered at 12,438 B — 12.9% of a
+    96,422 B wake — long after the `schedule.md` entry behind it had been
+    rewritten and deleted. A turn over the cap now keeps its head and says
+    what it dropped, with a pointer that resolves to the full record.
+
+    Separate axis from #576's dedup above: that collapse fires on
+    *similarity*, this one on *size*, and the 07-21 ghost passed the first
+    while failing the second.
+    """
+
+    _THREAD = "cloud:telegram:155783668:"
+    _HEAD = "director tick — 5h cadence, dispatch authority granted."
+    _TAIL_SENTINEL = "GHOST-TAIL-THAT-MUST-NOT-SURVIVE"
+
+    def _ghost_body(self) -> str:
+        """A ~12 KB multi-line body in the shape of the real 07-21 firing."""
+        filler = "\n".join(
+            f"- accreted rationale line {i}: rebuild the plan from "
+            f"../../../plans/Gurio__brr/active.md and rank the open work."
+            for i in range(100)
+        )
+        return f"{self._HEAD}\n{filler}\n{self._TAIL_SENTINEL}"
+
+    def _seed_store(self, tmp_path, *, event_id: str, body: str) -> Path:
+        """Append a real conversation record so the pointer has a real target.
+
+        Deliberately the daemon's own append path rather than a hand-written
+        file: the marker's whole claim is that the store layout it names is
+        the one `conversations` actually writes.
+        """
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        conversations.append_event(
+            brr_dir,
+            self._THREAD,
+            {"id": event_id, "source": "schedule", "body": body},
+        )
+        return brr_dir
+
+    def _record(self, *, event_id: str, body: str, ts: str = "2026-07-21T04:44:00Z"):
+        return {
+            "ts": ts,
+            "kind": "event",
+            "source": "schedule",
+            "schedule_id": "director-tick",
+            "conversation_key": self._THREAD,
+            "event_id": event_id,
+            "body": body,
+        }
+
+    def test_over_cap_turn_states_dropped_bytes_and_keeps_the_head(self, tmp_path):
+        body = self._ghost_body()
+        brr_dir = self._seed_store(tmp_path, event_id="evt-ghost", body=body)
+        block = _format_recent_conversation(
+            [self._record(event_id="evt-ghost", body=body)],
+            turn_max_bytes=RECENT_TURN_MAX_BYTES,
+            brr_dir=brr_dir,
+        )
+
+        assert self._HEAD in block, "the head is what carries who/what"
+        assert self._TAIL_SENTINEL not in block, "the tail is what gets dropped"
+
+        match = re.search(r"…([\d,]+) B elided", block)
+        assert match, f"no elision marker in:\n{block[-400:]}"
+        # The stated number must be the real one, not a rounded gesture:
+        # dropped + kept has to reconstruct the original body exactly, and
+        # the kept half has to respect the budget.
+        dropped = int(match.group(1).replace(",", ""))
+        kept = len(body.encode("utf-8")) - dropped
+        assert 0 < kept <= RECENT_TURN_MAX_BYTES
+        assert dropped > 9_000
+
+    def test_marker_pointer_resolves_to_the_full_turn(self, tmp_path):
+        """Drive the pointer, don't trust it. A marker naming a path that
+
+        does not exist is worse than no marker, so this takes the path back
+        out of the *rendered text* and opens it.
+        """
+        body = self._ghost_body()
+        brr_dir = self._seed_store(tmp_path, event_id="evt-ghost", body=body)
+        block = _format_recent_conversation(
+            [self._record(event_id="evt-ghost", body=body)],
+            turn_max_bytes=RECENT_TURN_MAX_BYTES,
+            brr_dir=brr_dir,
+        )
+
+        match = re.search(r"full turn: `([^`]+)`", block)
+        assert match, f"no pointer in the marker:\n{block[-400:]}"
+        path = Path(match.group(1))
+        assert path.is_file(), f"marker names a path that does not exist: {path}"
+
+        stored = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert any(rec.get("body") == body for rec in stored), (
+            "the pointer resolves but the full turn is not readable there"
+        )
+
+    def test_short_turns_render_byte_identically_to_no_cap(self, tmp_path):
+        """The property that makes the cap free: every turn on a normal wake
+
+        is already under it, so enabling it must not move a single byte.
+        """
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True)
+        records = [
+            self._record(
+                event_id=f"evt-{i}",
+                body=f"line one of turn {i}\nline two of turn {i}",
+                ts=f"2026-07-2{i}T04:44:00Z",
+            )
+            for i in range(6)
+        ]
+        uncapped = _format_recent_conversation(records, brr_dir=brr_dir)
+        capped = _format_recent_conversation(
+            records, turn_max_bytes=RECENT_TURN_MAX_BYTES, brr_dir=brr_dir
+        )
+
+        assert capped == uncapped
+        assert "elided" not in capped
+
+    def test_pointer_degrades_instead_of_inventing_a_path(self, tmp_path):
+        """A record the daemon never produces (no thread key) still gets a
+
+        marker — it just says what it can offer rather than naming a file.
+        """
+        body = self._ghost_body()
+        record = self._record(event_id="", body=body)
+        record.pop("conversation_key")
+        block = _format_recent_conversation(
+            [record],
+            turn_max_bytes=RECENT_TURN_MAX_BYTES,
+            brr_dir=tmp_path / ".brr",
+        )
+
+        assert "B elided" in block
+        assert "no thread key to resolve" in block
+        assert "`" not in block.split("B elided")[1], "a path was invented"
+
+    def test_config_key_retunes_the_cap(self, tmp_path):
+        brr = tmp_path / ".brr"
+        (brr / "prompts").mkdir(parents=True)
+        (brr / "prompts" / "run.md").write_text("You are an agent.")
+        (brr / "config").write_text(
+            "conversation.recent_turn_max_bytes=400\n", encoding="utf-8"
+        )
+        body = self._ghost_body()
+        self._seed_store(tmp_path, event_id="evt-ghost", body=body)
+
+        prompt = build_daemon_prompt(
+            "tick", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-1",
+            recent_conversation=[self._record(event_id="evt-ghost", body=body)],
+            event_body="tick",
+        )
+        match = re.search(r"…([\d,]+) B elided", prompt)
+        assert match
+        kept = len(body.encode("utf-8")) - int(match.group(1).replace(",", ""))
+        assert kept <= 400
+
+    def test_wake_prompt_shrinks_by_the_elided_bytes(self, tmp_path):
+        """Drive the real thing: the block the wake actually reads.
+
+        A unit test on the helper does not prove the assembled prompt
+        changed — this repo has shipped a guard that was perfect and
+        unwired. The baseline is the same prompt with the cap disabled via
+        config, so the comparison is against this code path and not a
+        hand-rolled imitation of it.
+        """
+        brr = tmp_path / ".brr"
+        (brr / "prompts").mkdir(parents=True)
+        (brr / "prompts" / "run.md").write_text("You are an agent.")
+        body = self._ghost_body()
+        self._seed_store(tmp_path, event_id="evt-ghost", body=body)
+        recent = [self._record(event_id="evt-ghost", body=body)]
+
+        def render() -> str:
+            return build_daemon_prompt(
+                "tick", "evt-1", "/tmp/resp.md", tmp_path,
+                run_id="task-1",
+                recent_conversation=recent,
+                event_body="tick",
+            )
+
+        (brr / "config").write_text(
+            "conversation.recent_turn_max_bytes=0\n", encoding="utf-8"
+        )
+        before = render()
+        (brr / "config").write_text("", encoding="utf-8")
+        after = render()
+
+        assert self._TAIL_SENTINEL in before
+        assert self._TAIL_SENTINEL not in after
+        assert len(after.encode("utf-8")) < len(before.encode("utf-8"))
+        # The whole saving is the turn's tail: the assembled prompt has to
+        # fall by what the marker says was elided. Not exactly equal — the
+        # marker counts *body* bytes, while `_format_turn` also drops two
+        # bytes of indentation per dropped line and adds the marker line
+        # itself back — so the tolerance is for that bookkeeping only, not
+        # slack in the claim.
+        match = re.search(r"…([\d,]+) B elided", after)
+        assert match
+        dropped = int(match.group(1).replace(",", ""))
+        saved = len(before.encode("utf-8")) - len(after.encode("utf-8"))
+        assert abs(dropped - saved) < 400, (
+            f"prompt fell {saved} B for {dropped} B elided — the cap is not "
+            "reaching the assembled bundle"
+        )
 
 
 class TestRevisitSignalGuardrails:
