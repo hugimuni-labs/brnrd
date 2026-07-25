@@ -7,12 +7,14 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from brr import runner as runner_mod
 from brr.runner import (
     DEFAULT_RUNNER_TIMEOUT,
+    RunnerArtifactRecord,
     RunnerArtifactSpec,
     RunnerInvocation,
     RunnerResult,
@@ -1694,6 +1696,38 @@ class TestFailureDetailRedaction:
             exit_code=1, detail="session limit reached",
         ) == runner_failures.QUOTA_EXHAUSTED
 
+    def test_transport_failure_kind_is_named_and_5xx_stays_a_provider_error(self):
+        """#729's one deliberate deviation from its own spec, pinned here.
+
+        A dropped connection classifies as ``transport_error`` — and the
+        provider 5xx family the issue proposed as transport signatures
+        stays ``provider_error`` on purpose: PROVIDER_ERROR's recovery is
+        *better* than a retry (``automatic_fallback_runner`` moves the work
+        to a different provider), and since the daemon only consults
+        ``failure_kind`` when there is no retry reason, calling a 5xx
+        retryable would switch that fallback off in exchange for redialling
+        the provider that just failed.
+        """
+        from brr import runner_failures
+
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="API Error: Connection closed mid-response.",
+        ) == runner_failures.TRANSPORT_ERROR
+        # Signature on stdout, so ``detail`` (stderr-first) misses it and the
+        # caller hands the verdict in instead.
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="thinking…", transport=True,
+        ) == runner_failures.TRANSPORT_ERROR
+        assert runner_failures.reason_prefix(runner_failures.TRANSPORT_ERROR) == (
+            "runner connection dropped mid-response"
+        )
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="upstream returned 503",
+        ) == runner_failures.PROVIDER_ERROR
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="the model is overloaded",
+        ) == runner_failures.PROVIDER_ERROR
+
 
 class TestExtraRunnerArgs:
     """``RunnerInvocation.extra_runner_args`` injects argv before the prompt
@@ -1823,11 +1857,29 @@ class TestTimeoutConfig:
 
 
 class TestRetryReason:
-    def _result(self, *, returncode: int, stdout: str, response_path: str) -> RunnerResult:
+    """Three failure classes, one arm each (#729).
+
+    The predicate used to be ``if not self.ok: return None`` — a class
+    defined by subtracting from clean-exit, so it absorbed every failure
+    nobody enumerated. The one it absorbed was a transport death: the model
+    connection dropped mid-response, no work was done that a retry would
+    duplicate, and it was filed with the timeouts.
+    """
+
+    def _result(
+        self,
+        *,
+        returncode: int,
+        stdout: str,
+        response_path: str,
+        stderr: str = "some failure tail",
+        prompt: str = "p",
+        artifacts: list | None = None,
+    ) -> RunnerResult:
         invocation = RunnerInvocation(
             kind="daemon-run",
             label="x",
-            prompt="p",
+            prompt=prompt,
             cwd=None,
             repo_root=None,  # type: ignore[arg-type]
             response_path=response_path,
@@ -1837,11 +1889,117 @@ class TestRetryReason:
             runner_name="mock",
             command=["mock"],
             stdout=stdout,
-            stderr="some failure tail",
+            stderr=stderr,
             returncode=returncode,
             trace_dir=None,
-            artifacts=[],
+            artifacts=artifacts or [],
         )
+
+    def test_module_under_test_is_this_worktree(self):
+        """A green run only means something if it ran *this* checkout's code.
+
+        The editable install resolves ``brr`` to whichever tree pip was
+        pointed at, which on a brnrd host is the shared checkout, not the
+        run's worktree.
+        """
+        repo_root = Path(__file__).resolve().parents[1]
+        assert Path(runner_mod.__file__).resolve().is_relative_to(repo_root)
+
+    def test_transport_death_on_stdout_is_retryable(self, tmp_path):
+        """The measured incident: ``run-260725-0820-gc3n``, dead 78s in with
+        ``API Error: Connection closed mid-response`` on *stdout*,
+        returncode 1, never retried, no branch, no report."""
+        result = self._result(
+            returncode=1,
+            stdout=(
+                "API Error: Connection closed mid-response. The response "
+                "above may be incomplete."
+            ),
+            stderr="",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.transport_failure is True
+        assert "transport failure mid-response" in (result.retry_reason() or "")
+
+    def test_transport_signature_is_matched_case_insensitively(self, tmp_path):
+        result = self._result(
+            returncode=1,
+            stdout="fatal: STREAM CLOSED before the turn completed",
+            stderr="",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.retry_reason() is not None
+
+    def test_transport_signature_on_stderr_also_counts(self, tmp_path):
+        """Which stream carries a provider's error text is a per-Shell
+        accident, so both are searched."""
+        result = self._result(
+            returncode=1,
+            stdout="",
+            stderr="thinking…\nhttpx.RemoteProtocolError: Server disconnected",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.retry_reason() is not None
+
+    def test_timeout_is_not_retryable_even_carrying_transport_text(self, tmp_path):
+        """Ordering: the timeout arm is checked before the transport one. A
+        run that survived a dropped connection and *then* overran its budget
+        is a budget overrun, and a second attempt pays for the same one."""
+        result = self._result(
+            returncode=124,
+            stdout="API Error: Connection closed mid-response.",
+            stderr="runner timed out after 3600s",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.timed_out is True
+        assert result.transport_failure is False
+        assert result.retry_reason() is None
+
+    def test_unrecognised_nonzero_exit_is_not_retryable(self, tmp_path):
+        """The explicit default arm: a missing CLI / dead credential / bad
+        flag is deterministic, and the retry reproduces it exactly."""
+        result = self._result(
+            returncode=127,
+            stdout="",
+            stderr="executable 'claude' not found on PATH",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.transport_failure is False
+        assert result.retry_reason() is None
+
+    def test_clean_exit_with_missing_artifacts_stays_retryable(self, tmp_path):
+        """Unchanged behaviour, pinned: the pre-#729 retryable class."""
+        result = self._result(
+            returncode=0,
+            stdout="",
+            stderr="",
+            response_path=str(tmp_path / "r.md"),
+            artifacts=[RunnerArtifactRecord(
+                path=tmp_path / "out.md", label="out.md", exists=False,
+            )],
+        )
+        assert result.retry_reason() == "missing required output(s): out.md"
+
+    def test_transport_signature_quoted_by_the_prompt_is_not_a_signal(self, tmp_path):
+        """A wake whose own instructions quote an error string must not be
+        able to classify its runner's failure from them. Wake prompts quote
+        error text constantly — issue bodies, pitfall notes, this very
+        test's spec — and a Shell that echoes its prompt would otherwise
+        turn every deterministic failure in such a run into a paid retry."""
+        prompt = (
+            "Fix #729: a dispatch died with\n"
+            "API Error: Connection closed mid-response.\n"
+            "and was never retried.\n"
+        )
+        result = self._result(
+            returncode=2,
+            stdout=prompt,
+            stderr="",
+            response_path=str(tmp_path / "r.md"),
+            prompt=prompt,
+        )
+        assert result.transport_failure is False
+        assert result.retry_reason() is None
 
     def test_retry_reason_none_on_hard_failure(self, tmp_path):
         """Non-zero exit (timeout, crash) is not retryable: the daemon
