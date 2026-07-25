@@ -444,8 +444,23 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     # Content only (`card_text` is the sharpest fact in this whole lane) —
     # the run-stop piggyback below is the dashboard's inbound control
     # channel, same unresolved-bidirectionality note as `put_runners`.
+    #
+    # Per *row*, not per token (#714): this lane's rows each name their own
+    # `repo_label` and the daemon collects them across every repo in the
+    # account context, so gating on the publishing token's repo let a
+    # sibling's token ship a repo that had recorded `none`.
+    runs = publish_scope.permitted_rows(
+        db,
+        payload.runs,
+        account_id=principal.account_id,
+        publisher_repo_id=principal.repo_id,
+        lane="live_runs",
+    )
+    # `daemon_mood` is the *daemon's* face, not any one repo's content — it
+    # has no `repo_label` to resolve, so the publishing token's consent is
+    # the only consent that could speak for it. Left token-keyed on purpose
+    # (#714): per-row keying here would have nothing to key on.
     permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="live_runs")
-    runs = payload.runs if permitted else []
     daemon.live_runs_json = json.dumps([run.model_dump() for run in runs], separators=(",", ":"))
     daemon.live_runs_updated_at = now
     daemon.spawn_max_concurrent = payload.spawn_max_concurrent
@@ -488,9 +503,18 @@ def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Princip
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    # Server-side enforcement at the publish seam (#417 legal pack item 2).
-    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="pr_review_queue")
-    prs = payload.prs if permitted else []
+    # Server-side enforcement at the publish seam (#417 legal pack item 2),
+    # keyed per row on the repo each PR is *about* (#714) — the queue is
+    # account-scoped by construction (`cloud.py::_pr_review_repo_labels`
+    # iterates the whole account context), so the publishing token's repo
+    # was never the right subject.
+    prs = publish_scope.permitted_rows(
+        db,
+        payload.prs,
+        account_id=principal.account_id,
+        publisher_repo_id=principal.repo_id,
+        lane="pr_review_queue",
+    )
     daemon.pr_review_queue_json = json.dumps([pr.model_dump() for pr in prs], separators=(",", ":"))
     daemon.pr_review_queue_updated_at = now
     daemon.online = True
@@ -506,9 +530,16 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
     if daemon is None:
         raise HTTPException(status_code=404, detail="no daemon registered for this token")
     now = datetime.now(timezone.utc)
-    # Server-side enforcement at the publish seam (#417 legal pack item 2).
-    permitted = publish_scope.lane_permitted(db, repo_id=principal.repo_id, lane="run_ledger")
-    rows = payload.rows if permitted else []
+    # Server-side enforcement at the publish seam (#417 legal pack item 2),
+    # keyed per row on the repo each receipt is *about* (#714) — a closed-run
+    # row carries its own `repo_label` and the ledger spans the account.
+    rows = publish_scope.permitted_rows(
+        db,
+        payload.rows,
+        account_id=principal.account_id,
+        publisher_repo_id=principal.repo_id,
+        lane="run_ledger",
+    )
     daemon.run_ledger_json = json.dumps([row.model_dump() for row in rows], separators=(",", ":"))
     daemon.run_ledger_updated_at = now
     daemon.online = True

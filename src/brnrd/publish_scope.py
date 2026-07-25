@@ -110,6 +110,82 @@ def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:
     return lane in lanes
 
 
+def _subject_repo_id(
+    db: Session, *, account_id: str, repo_label: str | None, publisher_repo_id: str | None
+) -> str | None:
+    """The repo a payload row is *about*, not the one that published it.
+
+    The daemon collects these lanes across every repo in its account context
+    (`brr.gates.cloud::_live_runs_snapshot` — "across every repo it touches"),
+    so a row's ``repo_label`` and the publishing token's repo are routinely
+    different repos. The token identifies the publisher; it was never the
+    data subject.
+
+    ``repo_label`` arrives from the client, so the lookup is scoped to the
+    token's own account: a daemon must not be able to name another account's
+    repo and borrow its consent. ``Repo`` carries
+    ``UniqueConstraint("account_id", "repo_full_name")`` (`models.py:46`), so
+    within one account the label resolves to at most one row — the join key
+    is exact, not a heuristic.
+
+    A row naming no repo — or naming one this account does not have — falls
+    back to the **publisher's** repo, which is precisely the question asked
+    before this function existed. That keeps the unresolvable cases byte-for-
+    byte at today's behaviour, and it denies a spoofed label a wider audience
+    than the token that carried it.
+    """
+    label = (repo_label or "").strip()
+    if not label:
+        return publisher_repo_id
+    repo = db.execute(
+        select(Repo).where(Repo.account_id == account_id, Repo.repo_full_name == label)
+    ).scalar_one_or_none()
+    if repo is None:
+        return publisher_repo_id
+    return repo.id
+
+
+def permitted_rows(
+    db: Session,
+    rows: list,
+    *,
+    account_id: str,
+    publisher_repo_id: str | None,
+    lane: str,
+) -> list:
+    """Filter ``rows`` to the ones their *own* repo consents to publishing.
+
+    Only for lanes whose payload rows name a repo (``live_runs``,
+    ``pr_review_queue``, ``run_ledger``). The daemon-scoped lanes —
+    ``activity``, ``quota``, ``runners`` — carry no per-row subject, so
+    ``lane_permitted`` on the token's repo is the *correct* question there
+    and they keep asking it. Reusing one predicate for uniformity is what
+    put the subject and the publisher on the same key to begin with.
+
+    Filters, never rejects: a mixed payload keeps its permitted rows and
+    drops the rest, the same shape as the ``rows if permitted else []`` it
+    replaces. Each distinct label is resolved once per request.
+    """
+    decided: dict[str, bool] = {}
+    kept = []
+    for row in rows:
+        label = (getattr(row, "repo_label", None) or "").strip()
+        if label not in decided:
+            decided[label] = lane_permitted(
+                db,
+                repo_id=_subject_repo_id(
+                    db,
+                    account_id=account_id,
+                    repo_label=label,
+                    publisher_repo_id=publisher_repo_id,
+                ),
+                lane=lane,
+            )
+        if decided[label]:
+            kept.append(row)
+    return kept
+
+
 def corpus_slices_permitted(db: Session, account_id: str) -> frozenset[str] | None:
     """Corpus slices the account's connected repos jointly consent to.
 
