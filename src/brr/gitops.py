@@ -135,8 +135,58 @@ def explicit_repo_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return {k: v for k, v in source.items() if k not in DISCOVERY_OVERRIDE_VARS}
 
 
-def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a git command in *repo_root*."""
+# The identity brnrd stamps on commits **it** authors: the dominion capture
+# net, kb pages, a worktree salvage commit, a founding deed. Not the user's
+# — #475 split those two, and #746 re-opened the split by a different route:
+# identity resolution fell through to the shared checkout's config and a
+# daemon-made commit was authored *and* committed as the human maintainer,
+# in their own repository, with a message they never wrote. Values are the
+# ones ``repo_deed`` had been carrying as its no-identity fallback; they are
+# stated once, here, next to the other environment invariant every git call
+# in this module already obeys.
+BOT_NAME = "brnrd"
+BOT_EMAIL = "brnrd@users.noreply.github.com"
+
+
+def bot_identity_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """:func:`explicit_repo_env` plus brnrd's own commit identity, pinned.
+
+    For any git invocation that *creates a commit on brnrd's behalf*.
+
+    **Environment, not ``-c user.name=``.** Git resolves identity from
+    ``GIT_AUTHOR_*``/``GIT_COMMITTER_*`` *before* it consults config at any
+    level, so ``-c`` is the weaker lever: it beats a contaminated
+    ``.git/config`` but loses to an inherited ``GIT_AUTHOR_NAME``. Setting
+    the four variables is the only form that does not depend on ambient
+    state at all — which is the whole property being bought.
+
+    Deliberately narrower than the whole environment: this pins *who
+    committed*, and inherits everything else (``GIT_CONFIG_GLOBAL``, PATH,
+    proxy settings) so a caller's hermetic or sandboxed environment still
+    reaches git.
+    """
+    env = explicit_repo_env(base)
+    env.update({
+        "GIT_AUTHOR_NAME": BOT_NAME,
+        "GIT_AUTHOR_EMAIL": BOT_EMAIL,
+        "GIT_COMMITTER_NAME": BOT_NAME,
+        "GIT_COMMITTER_EMAIL": BOT_EMAIL,
+    })
+    return env
+
+
+def _git(
+    repo_root: Path, *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a git command in *repo_root*.
+
+    *env* defaults to :func:`explicit_repo_env` — the discovery-override
+    scrub every call in this module needs because it names its repository.
+    Commit-creating calls pass :func:`bot_identity_env`, which is that same
+    scrub plus brnrd's identity; nothing else should override it.
+    """
     return subprocess.run(
         ["git", *args],
         cwd=repo_root,
@@ -144,7 +194,7 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=explicit_repo_env(),
+        env=explicit_repo_env() if env is None else env,
     )
 
 
@@ -301,10 +351,32 @@ def main_worktree_root(repo_root: Path) -> Path | None:
         return head
     if _is_linked_worktree(repo_root):
         return None
-    top = _git(repo_root, "rev-parse", "--show-toplevel", check=False)
-    if top.returncode != 0:
+    return toplevel(repo_root)
+
+
+def toplevel(repo_root: Path) -> Path | None:
+    """The working tree git resolves for *repo_root* — or ``None`` if it won't say.
+
+    A repository's own answer to *which tree am I*, and normally
+    *repo_root* itself. Not so when ``core.worktree`` in the **common git
+    dir** repoints it: a git worktree isolates files, it does not isolate
+    ``.git/config``, which the main checkout and every linked worktree
+    share. #746 is that mode — one run wrote ``core.worktree = <its own
+    worktree>`` into the shared config and for fifteen minutes every git
+    command in the maintainer's checkout operated on another run's tree,
+    exit 0 throughout, noticed only when the tree was torn down.
+
+    So this is deliberately *not* ``repo_root``-with-extra-steps: the whole
+    value is that the two can disagree, and that a caller about to ship
+    something can ask rather than assume. ``None`` means git declined to
+    answer (not a repository; a ``core.worktree`` pointing somewhere
+    deleted) — for an assertion that is a failure too, since "I cannot tell
+    which tree this is" is not a confirmation.
+    """
+    result = _git(repo_root, "rev-parse", "--show-toplevel", check=False)
+    if result.returncode != 0:
         return None
-    value = top.stdout.strip()
+    value = result.stdout.strip()
     return Path(value) if value else None
 
 
@@ -559,10 +631,17 @@ def create_orphan_branch(
     if branch_exists(repo_root, branch):
         return branch_head(repo_root, branch)
 
+    # These two are the module's only hand-rolled ``subprocess.run`` git
+    # calls, and both were missing the environment every ``_git`` call gets:
+    # unscrubbed they address an inherited ``GIT_DIR`` pin instead of
+    # *repo_root* (#703), and unpinned the root commit is authored by
+    # whatever identity config resolution finds (#746).
+    env = bot_identity_env()
     tree = subprocess.run(
         ["git", "mktree"],
         cwd=repo_root, input="", text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env,
     )
     if tree.returncode != 0:
         return None
@@ -572,6 +651,7 @@ def create_orphan_branch(
         ["git", "commit-tree", tree_oid, "-m", message],
         cwd=repo_root, input="", text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env,
     )
     if commit.returncode != 0:
         return None
@@ -667,6 +747,14 @@ def commit_all(
     stamped as a ``Brnrd-Conversation-Id`` git trailer; ``run_id`` (the
     task's own id) as a ``Brnrd-Run-Id`` trailer. Either empty/None means no
     trailer — never stamp an empty value.
+
+    Authored and committed as brnrd (:func:`bot_identity_env`). This is the
+    funnel for nine of brnrd's eleven commit sites — the dominion capture
+    net, kb capture, worktree salvage, policy and config proposals — and
+    every one of them writes into a repository whose git config belongs to
+    somebody else. Pinning here rather than at each caller is what stops the
+    tenth caller, written later, from inheriting the maintainer's name
+    (#746, re-opening #475 by a different route).
     """
     add = _git(worktree_path, "add", "-A", check=False)
     if add.returncode != 0:
@@ -678,7 +766,7 @@ def commit_all(
     run = (run_id or "").strip()
     if run:
         args += ["--trailer", f"{RUN_ID_TRAILER}: {run}"]
-    commit = _git(worktree_path, *args, check=False)
+    commit = _git(worktree_path, *args, check=False, env=bot_identity_env())
     return commit.returncode == 0
 
 

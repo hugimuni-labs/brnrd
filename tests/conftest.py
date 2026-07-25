@@ -7,20 +7,48 @@ account-scoped store out of the developer's real home.
 
 import pytest
 
+from brr import gitops
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_git_env(tmp_path_factory, monkeypatch):
-    """Pin git's ambient environment so the suite is machine-independent.
+    """Pin git's ambient environment — machine-independence *and* containment.
 
-    CI runners have no git identity at all (``git commit`` fails, which
-    surfaces downstream as a misleading "src refspec HEAD does not match
-    any" push error in code that commits, e.g. ``home_link``), while a
-    developer's global config can carry commit signing, ``core.hooksPath``,
-    or a non-``main`` ``init.defaultBranch`` — any of which changes test
-    behavior invisibly. Point ``GIT_CONFIG_GLOBAL`` at a known minimal
-    config and drop the system config entirely. Repo-local config written
-    by ``_helpers.init_git_repo`` still wins where tests set it.
+    Two jobs, and reading this fixture as only the first is what let #746
+    happen.
+
+    **Machine-independence.** CI runners have no git identity at all (``git
+    commit`` fails, which surfaces downstream as a misleading "src refspec
+    HEAD does not match any" push error in code that commits, e.g.
+    ``home_link``), while a developer's global config can carry commit
+    signing, ``core.hooksPath``, or a non-``main`` ``init.defaultBranch`` —
+    any of which changes test behavior invisibly. Point
+    ``GIT_CONFIG_GLOBAL`` at a known minimal config and drop the system
+    config entirely. Repo-local config written by ``_helpers.init_git_repo``
+    still wins where tests set it.
+
+    **Containment.** ``GIT_DIR``/``GIT_WORK_TREE`` outrank *every* cwd-based
+    discovery mechanism — ``cwd=``, ``-C <path>``, an absolute pathspec — so
+    a process that inherits them addresses the pinned tree no matter which
+    repository it names. #703 pins both into a worker run's environment on
+    purpose (``daemon._child_git_pin``), and a worker that runs this suite
+    inherits them: the ~319 ``["git", …]`` call sites under ``tests/`` then
+    ``git init`` and ``git config`` into the *shared* host checkout rather
+    than into their own tmpdir. That is #746 — a test's
+    ``[user] Test/test@example.com`` and a stray ``init`` commit landed in
+    the maintainer's live repository, and separately a ``core.worktree``
+    write repointed it for fifteen minutes while every command exited 0.
+
+    So this fixture is a boundary, not a convenience: the suite's git may
+    only ever touch trees the suite itself built. Dropped here rather than
+    at each call site because the fixture is the one place it can be said
+    once. Names come from :data:`gitops.DISCOVERY_OVERRIDE_VARS` — the same
+    tuple ``gitops.explicit_repo_env`` and ``cli._drop_inherited_git_pin``
+    read, so there is one list of these two variables in the project and not
+    a third copy typed out here.
     """
+    for var in gitops.DISCOVERY_OVERRIDE_VARS:
+        monkeypatch.delenv(var, raising=False)
     cfg = tmp_path_factory.getbasetemp() / "gitconfig-hermetic"
     if not cfg.exists():
         cfg.write_text(

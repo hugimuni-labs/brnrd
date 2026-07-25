@@ -686,3 +686,430 @@ def test_a_rename_reports_its_destination(trees):
     verdict = daemon._stray_host_write(task, host)
     assert verdict["kind"] == "stranded-worktree"
     assert "READENGINE.md" in verdict["stranded_paths"]
+
+
+# ── half 3: the suite itself inherits the pin (#746) ─────────────────
+#
+# #703 pinned `GIT_DIR`/`GIT_WORK_TREE` into a worker's environment on
+# purpose. Every subprocess that worker starts inherits them — including
+# `pytest`, and *this* suite does `git init` and `git config` at ~319 call
+# sites. Under the inherited pin those writes leave the tmpdir they name and
+# land in the shared host checkout's common git dir: a `[user]` section and
+# an `init` commit in the maintainer's live repository, and separately a
+# `core.worktree` write that repointed it for fifteen minutes while every
+# command exited 0.
+#
+# A git worktree isolates files. It does not isolate `.git/config`, which
+# the main checkout and every linked worktree share. That is the whole bug.
+
+
+def _inner_pytest(tmp_path, decoy: Path, body: str) -> subprocess.CompletedProcess:
+    """Run *body* as a pytest under `tests/conftest.py`, pinned at *decoy*.
+
+    A subprocess and not `monkeypatch`, because the property under test is
+    about a pin that exists *before the fixture runs*. Setting the variables
+    inside a test body proves nothing: the autouse fixture already ran and
+    already dropped them. The only faithful shape is a fresh interpreter
+    whose environment carries the pin at startup, exactly as a worker's
+    pytest does.
+
+    The real `tests/conftest.py` is copied rather than imported so the inner
+    run exercises the shipped fixture and would notice it being deleted.
+    """
+    import shutil
+    import sys
+
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    shutil.copy(Path(__file__).parent / "conftest.py", inner / "conftest.py")
+    (inner / "test_inner.py").write_text(body, encoding="utf-8")
+    env = {
+        **os.environ,
+        "GIT_DIR": str(decoy / ".git"),
+        "GIT_WORK_TREE": str(decoy),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(inner)],
+        cwd=inner, env=env, capture_output=True, text=True, check=False,
+    )
+
+
+_INNER_WRITES_GIT = '''
+import subprocess
+
+
+def test_inner_git_writes_land_where_the_test_names_them(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=sandbox, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "inner-suite@brr.invalid"],
+        cwd=sandbox, check=True,
+    )
+    written = (sandbox / ".git" / "config").read_text(encoding="utf-8")
+    assert "inner-suite@brr.invalid" in written
+'''
+
+
+def test_the_suite_cannot_write_into_a_repo_the_inherited_pin_names(tmp_path):
+    """The load-bearing one. Adversarial, behavioural, and mutant-measured.
+
+    A decoy repository stands in for the maintainer's checkout — built here,
+    never pointed at a real one, because a test that can damage a live tree
+    when it regresses is not a guard, it is the bug with a green tick.
+
+    Two assertions, and both matter. The decoy's config is untouched: the
+    #746 damage was `[user] Test/test@example.com` appearing in the shared
+    config, and nothing but reading that file afterwards can prove it did
+    not. And the inner run *passed*: under the pin the test's own tmpdir
+    assertion fails too, so a suite that merely errored out would look
+    identical to one that was correctly contained.
+
+    Reverting the `delenv` in `tests/conftest.py` turns both red.
+    """
+    decoy = tmp_path / "decoy"
+    init_git_repo(decoy)
+    decoy_config = decoy / ".git" / "config"
+    before = decoy_config.read_text(encoding="utf-8")
+
+    result = _inner_pytest(tmp_path, decoy, _INNER_WRITES_GIT)
+
+    after = decoy_config.read_text(encoding="utf-8")
+    assert "inner-suite@brr.invalid" not in after, (
+        "the inner suite's `git config` reached the decoy repository — "
+        "the pin was inherited past the fixture"
+    )
+    assert after == before, f"decoy config mutated:\n{before!r}\n->\n{after!r}"
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+_INNER_READS_ENV = '''
+import os
+
+from brr import gitops
+
+
+def test_inner_sees_no_discovery_override(tmp_path):
+    for var in gitops.DISCOVERY_OVERRIDE_VARS:
+        assert var not in os.environ, f"{var} survived the fixture"
+'''
+
+
+def test_the_fixture_drops_the_pin_by_the_time_a_test_body_runs(tmp_path):
+    """The direct reading, under a real inherited pin.
+
+    Cheap canary for the behavioural test above: when that one fails, this
+    says whether the cause is the fixture or the git plumbing.
+    """
+    decoy = tmp_path / "decoy"
+    init_git_repo(decoy)
+    result = _inner_pytest(tmp_path, decoy, _INNER_READS_ENV)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_this_very_suite_runs_without_a_discovery_override():
+    """Same fact, asserted in-process — free, and it fails first."""
+    for var in gitops.DISCOVERY_OVERRIDE_VARS:
+        assert var not in os.environ
+
+
+def test_the_fixture_sources_the_names_from_gitops():
+    """One list of these two variables in the project, not a fourth copy.
+
+    `gitops.DISCOVERY_OVERRIDE_VARS`, `gitops.explicit_repo_env` and
+    `cli._drop_inherited_git_pin` already state this pair; #723 is the class
+    where the copies drift apart and one of them keeps being right.
+    """
+    source = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+    assert "gitops.DISCOVERY_OVERRIDE_VARS" in source
+    assert '"GIT_DIR"' not in source and "'GIT_DIR'" not in source
+
+
+# ── half 4: publish refuses to ship from a repointed tree (#746) ─────
+#
+# `core.worktree` in the *common* git dir repoints the checkout for every
+# command. In the incident the parent's `add`/`commit`/`push`/`gh pr create`
+# all exited 0 on the child's content, and CI certified it. Nothing objects;
+# the only reading that disagrees is `rev-parse --show-toplevel`, and only if
+# something asks.
+
+
+@pytest.fixture
+def publishable(tmp_path):
+    """A host checkout with a commit on `brr/child` and a bare origin."""
+    host = tmp_path / "host"
+    init_git_repo(host)
+    (host / "README.md").write_text("host\n", encoding="utf-8")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-m", "host: base")
+    remote = tmp_path / "origin.git"
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    _git(host, "remote", "add", "origin", str(remote))
+    _git(host, "push", "-q", "-u", "origin", "main")
+    _git(host, "switch", "-q", "-c", "brr/child")
+    (host / "work.md").write_text("child work\n", encoding="utf-8")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-m", "feat: the child's work")
+    return host, remote
+
+
+def _publish_run(**meta):
+    return Run(
+        id="run-746-child", event_id="evt-746", body="spec", env="worktree",
+        status="done", meta={"publish_branch": "brr/child", **meta},
+    )
+
+
+def _remote_branches(remote: Path) -> set[str]:
+    out = _git(remote, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
+    return set(out.split())
+
+
+def _repoint(host: Path, elsewhere: Path) -> None:
+    """Write `core.worktree` into the shared config — the #746 mutation."""
+    elsewhere.mkdir(parents=True, exist_ok=True)
+    _git(host, "config", "core.worktree", str(elsewhere))
+
+
+def test_publish_ships_when_the_tree_is_the_one_it_thinks_it_is(publishable):
+    """Positive control. Without it the refusal could be unconditional."""
+    host, remote = publishable
+    task = _publish_run()
+    daemon.publish(host, task)
+    assert "brr/child" in _remote_branches(remote)
+    assert task.meta.get("stray_host_write") is None
+    assert task.meta.get("publish_status") != "conflict"
+
+
+def test_publish_refuses_when_core_worktree_repoints_the_checkout(
+    publishable, tmp_path, capsys,
+):
+    """The incident, at the seam that would have made it loud."""
+    host, remote = publishable
+    _repoint(host, tmp_path / "someone-elses-worktree")
+
+    task = _publish_run()
+    daemon.publish(host, task)
+
+    assert "brr/child" not in _remote_branches(remote), (
+        "published from a checkout git no longer agrees is this one"
+    )
+    assert task.meta["stray_host_write"] == "publish-tree-mismatch"
+    assert task.meta["publish_status"] == "conflict"
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["seen"].endswith("someone-elses-worktree")
+    assert detail["lane"] == "publish"
+    assert "REFUSING publish" in capsys.readouterr().out
+
+
+def test_the_refusal_reaches_the_run_state_doc(publishable, tmp_path):
+    """The surface, not the return value — a non-spawn run's only reader.
+
+    #726's post-mortem was five correct guards nobody could prove were
+    wired. `publish` returns `None` on every path, so asserting the meta key
+    alone would prove nothing a reader ever sees.
+    """
+    from brr import account
+
+    host, _remote = publishable
+    _repoint(host, tmp_path / "elsewhere")
+    task = _publish_run()
+    daemon.publish(host, task)
+
+    ctx = account.resolve_context(host, {"home.path": str(tmp_path / "home")})
+    doc = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished", cfg={},
+    )
+    assert doc is not None
+    assert "stray_host_write: publish-tree-mismatch" in doc.read_text(encoding="utf-8")
+
+
+def test_the_refusal_reaches_a_spawning_parents_thread(publishable, tmp_path):
+    """The other reader: a worker's parent, in its own conversation."""
+    host, _remote = publishable
+    _repoint(host, tmp_path / "elsewhere")
+    task = _publish_run(
+        spawn_parent_run_id="run-parent",
+        spawn_parent_conversation_key="telegram:42:",
+    )
+    task.source = "telegram"
+    daemon.publish(host, task)
+
+    note = _note(tmp_path, task)
+    assert note["spawn_stray_host_write"] == "publish-tree-mismatch"
+    assert "PUBLISH REFUSED" in note["body"]
+    assert "core.worktree" in note["body"]
+    assert "status=publish-refused" in note["body"]
+
+
+def test_the_conflict_packet_puts_the_refusal_on_the_card(publishable, tmp_path):
+    """The live surface a human is already watching.
+
+    Not the `print` — that goes to the daemon's own stdout, which is where
+    the original incident was reported to nobody for fifteen minutes.
+    """
+    from brr import run_progress
+
+    host, _remote = publishable
+    _repoint(host, tmp_path / "elsewhere")
+    brr_dir = gitops.shared_brr_dir(host)
+    task = _publish_run()
+    task.conversation_key = "telegram:42:"
+    daemon.publish(host, task)
+
+    view = run_progress.project_conversation_latest(brr_dir, "telegram:42:")
+    assert view is not None
+    assert view.state == "failed"
+    assert "conflict" in run_progress.render_text(view)
+
+
+def test_default_branch_publish_refuses_from_a_repointed_tree(
+    publishable, tmp_path, capsys,
+):
+    """The sibling lane, and the sharper one.
+
+    `publish_default_branch` fast-forwards with `git merge --ff-only` when
+    the default branch is checked out here — a merge *writes files into the
+    working tree*, so under a repointed `core.worktree` it lands in another
+    run's worktree rather than merely pushing the wrong ref.
+    """
+    host, _remote = publishable
+    _git(host, "switch", "-q", "main")
+    _repoint(host, tmp_path / "elsewhere")
+
+    task = _publish_run()
+    daemon.publish_default_branch(host, task)
+
+    assert task.meta["stray_host_write"] == "publish-tree-mismatch"
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["lane"] == "default-branch publish"
+    assert "REFUSING default-branch publish" in capsys.readouterr().out
+
+
+def test_the_refusal_carries_the_finding_it_displaces(publishable, tmp_path):
+    """A repointed tree makes the finalize check read the *other* worktree,
+    so `stranded-worktree` is usually already on this key. The refusal
+    outranks it — live and repairable — but does not erase it."""
+    host, _remote = publishable
+    _repoint(host, tmp_path / "elsewhere")
+    task = _publish_run(stray_host_write="stranded-worktree")
+    daemon.publish(host, task)
+    detail = json.loads(task.meta["stray_host_write_detail"])
+    assert detail["superseded"] == "stranded-worktree"
+
+
+def test_a_tree_git_will_not_speak_for_is_not_a_confirmation(tmp_path):
+    """`core.worktree` left pointing at a torn-down worktree — how the
+    incident was finally noticed. Absent is not clean."""
+    not_a_repo = tmp_path / "nothing"
+    not_a_repo.mkdir()
+    verdict = daemon._publish_tree_mismatch(not_a_repo)
+    assert verdict is not None
+    assert verdict["seen"] == ""
+
+
+def test_an_honest_checkout_is_confirmed(publishable):
+    host, _remote = publishable
+    assert daemon._publish_tree_mismatch(host) is None
+
+
+def test_a_linked_worktree_is_its_own_toplevel(trees):
+    """Not a mismatch: the run's own worktree is legitimately its own tree,
+    and a check that flagged it would fire on every worktree run."""
+    _host, run_root = trees
+    assert daemon._publish_tree_mismatch(run_root) is None
+
+
+# ── half 5: brnrd's commits are brnrd's (#746, re-opening #475) ──────
+
+
+def _idents(repo: Path, ref: str = "HEAD") -> dict[str, str]:
+    out = _git(repo, "log", "-1", "--format=%an%n%ae%n%cn%n%ce", ref).stdout.split("\n")
+    return {
+        "author_name": out[0], "author_email": out[1],
+        "committer_name": out[2], "committer_email": out[3],
+    }
+
+
+@pytest.fixture
+def hostile_identity(monkeypatch):
+    """A repo config *and* an environment both naming a human.
+
+    Both halves are needed: `-c user.name=` beats the config and loses to
+    the environment, so a test that only contaminated the config would pass
+    against the weaker fix.
+    """
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Arseni Lapunov")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "human@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Arseni Lapunov")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "human@example.com")
+
+
+def test_a_brnrd_commit_never_inherits_an_ambient_identity(
+    tmp_path, hostile_identity,
+):
+    """The secondary damage in #746: the worker's commit was authored *and*
+    committed as the human maintainer, because identity resolution went
+    through the contaminated shared config."""
+    repo = tmp_path / "dominion"
+    init_git_repo(repo)  # writes [user] Test User <test@example.com>
+    (repo / "note.md").write_text("thought\n", encoding="utf-8")
+
+    assert gitops.commit_all(repo, "brnrd: capture")
+
+    idents = _idents(repo)
+    assert set(idents.values()) == {gitops.BOT_NAME, gitops.BOT_EMAIL}
+    assert "Arseni" not in "".join(idents.values())
+    assert "Test User" not in "".join(idents.values())
+
+
+def test_the_deed_founding_commit_is_brnrds(tmp_path, hostile_identity):
+    """The commit that founds a *user's* repo — the one line of history
+    every later reader sees first."""
+    from brr import repo_deed
+
+    repo = tmp_path / "home"
+    init_git_repo(repo)
+    assert repo_deed.ensure_deed(repo, "dominion")
+
+    idents = _idents(repo)
+    assert idents["author_name"] == gitops.BOT_NAME
+    assert idents["committer_email"] == gitops.BOT_EMAIL
+
+
+def test_an_orphan_branchs_root_commit_is_brnrds(tmp_path, hostile_identity):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "seed.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "base")
+
+    oid = gitops.create_orphan_branch(repo, "brr/dominion", message="brnrd: seed")
+    assert oid
+
+    idents = _idents(repo, "brr/dominion")
+    assert set(idents.values()) == {gitops.BOT_NAME, gitops.BOT_EMAIL}
+
+
+def test_the_identity_is_stated_once(tmp_path):
+    """`repo_deed` used to carry its own copy of these two strings as a
+    no-identity fallback. #723 is the class where such copies drift."""
+    from brr import repo_deed
+
+    assert not hasattr(repo_deed, "_FALLBACK_IDENT")
+    source = Path(repo_deed.__file__).read_text(encoding="utf-8")
+    assert gitops.BOT_EMAIL not in source
+
+
+def test_bot_identity_env_still_scrubs_the_discovery_overrides():
+    """It is `explicit_repo_env` plus identity, not instead of it — a commit
+    helper that dropped the scrub would commit into the pinned worktree
+    while naming another repo (#703)."""
+    env = gitops.bot_identity_env({
+        "GIT_DIR": "/somewhere/.git",
+        "GIT_WORK_TREE": "/somewhere",
+        "PATH": "/usr/bin",
+    })
+    assert "GIT_DIR" not in env and "GIT_WORK_TREE" not in env
+    assert env["PATH"] == "/usr/bin"
+    assert env["GIT_COMMITTER_NAME"] == gitops.BOT_NAME

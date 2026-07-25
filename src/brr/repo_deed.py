@@ -36,14 +36,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-DEED_FILENAME = "README.md"
+from . import gitops
 
-# Fallback commit identity, used only when the plain commit fails (no git
-# user configured on the machine) — the deed must still land at birth.
-_FALLBACK_IDENT = [
-    "-c", "user.name=brnrd",
-    "-c", "user.email=brnrd@users.noreply.github.com",
-]
+DEED_FILENAME = "README.md"
 
 _SLOT_TITLES = {
     "dominion": "Your brnrd resident's memory",
@@ -147,23 +142,35 @@ def write_deed(repo_path: Path, slot: str) -> bool:
 
 
 def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
+    # ``bot_identity_env`` for every call, not just the commit: it carries
+    # the ``GIT_DIR``/``GIT_WORK_TREE`` scrub too, and without it a deed
+    # written from inside a pinned worker run would ``git add`` into that
+    # worker's worktree while naming the home repo (#703, #746).
     return subprocess.run(
         ["git", *args],
         cwd=repo_path,
         capture_output=True,
         text=True,
         check=False,
+        env=gitops.bot_identity_env(),
     )
 
 
 def _commit_deed(repo_path: Path, message: str) -> bool:
-    """Best-effort commit of the just-written deed. Returns success."""
+    """Best-effort commit of the just-written deed. Returns success.
+
+    Authored as brnrd. This used to try a bare commit first and fall back
+    to an explicit ``-c user.name=brnrd`` only when that failed for want of
+    a configured identity — which meant the deed founding a *user's* repo
+    was authored by whoever the machine's git config named, and the brnrd
+    identity appeared only on machines with no identity at all. The
+    fallback's values are now the standing ones in
+    :data:`gitops.BOT_NAME`/:data:`gitops.BOT_EMAIL`, applied on the only
+    attempt, so there is no path where this commit inherits a human's name.
+    """
     if _git(repo_path, "add", DEED_FILENAME).returncode != 0:
         return False
-    if _git(repo_path, "commit", "-m", message).returncode == 0:
-        return True
-    # No committer identity configured — the deed still has to land.
-    return _git(repo_path, *_FALLBACK_IDENT, "commit", "-m", message).returncode == 0
+    return _git(repo_path, "commit", "-m", message).returncode == 0
 
 
 def ensure_deed(repo_path: Path, slot: str, *, commit: bool = True) -> bool:
