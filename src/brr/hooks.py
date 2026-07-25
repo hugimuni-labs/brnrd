@@ -1309,11 +1309,17 @@ def format_delta(
                 "gate (`gate: telegram`) if this run has something to say. A "
                 "run that ends silent everywhere is surfaced as a failure."
                 if gate_less else
+                # #743. This used to end "end on the reply itself (no outbox
+                # re-delivery needed)" — orientation that actively taught
+                # reliance on the static dispatch, which is the thing being
+                # measured. The fallback still works and the line still says
+                # so; what it no longer does is recommend it.
                 "- delivery: nothing communicated on any thread yet — the "
-                "daemon dispatches your final message to the waking thread "
-                "when this run ends, so end on the reply itself (no outbox "
-                "re-delivery needed). A run that ends silent everywhere is "
-                "surfaced as a failure."
+                "daemon's fallback net dispatches your final message to the "
+                "waking thread when this run ends, and records the run as "
+                "`terminal_route: gate-sole` for having been carried by it. "
+                "That still reaches the reader; a run that ends silent "
+                "everywhere does not, and is surfaced as a failure."
             )
         elif not replied_current and not gate_less:
             # Gate-less runs can never clear this: the router refuses

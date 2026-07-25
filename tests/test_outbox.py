@@ -27,6 +27,8 @@ from brr import (
 from brr.envs import RunContext
 from brr.run import Run
 
+from _helpers import write_repo_scaffold
+
 
 def _emit(brr_dir, key, ptype, **payload):
     updates.emit(brr_dir, updates.UpdatePacket(
@@ -1090,6 +1092,45 @@ def test_terminal_reply_lands_predicate():
     assert daemon._terminal_reply_lands("") is True
 
 
+def test_terminal_route_names_what_carried_the_stream():
+    # #743. ``_terminal_reply_lands`` answers True for a gate delivery and
+    # for a dispatch-edge collection alike, which is exactly why "should the
+    # terminal stdout be a delivery channel?" kept being reasoned about as
+    # one question. This splits them, per run, at the moment it is decided.
+    route = daemon._terminal_route
+
+    # A gate delivered it and nothing else went out: the static dispatch is
+    # the only reason this run's correspondent heard anything at all.
+    assert route("telegram") == "gate-sole"
+    # The run already spoke through the outbox — the closeout is additional
+    # content, not the run's only voice.
+    assert route("telegram", delivered_elsewhere=True) == "gate-extra"
+
+    # A worker's report on the dispatch edge. Not a chat delivery: an
+    # unambiguous return value to one parent, with nothing to duplicate and
+    # no addressing to guess.
+    assert route(
+        "spawn", spawn_parent_run_id="run-parent") == "dispatch-edge"
+
+    # The two shapes that already cost nothing if the static dispatch went
+    # away, distinguished so they never inflate the count of what it saves.
+    assert route("telegram", duplicate=True) == "duplicate"
+    assert route("schedule", undeliverable=True) == "undeliverable"
+    # Precedence: a duplicate is a duplicate even where a gate would have
+    # taken it, and an undeliverable run that also spoke elsewhere is not a
+    # gate delivery.
+    assert route(
+        "telegram", duplicate=True, delivered_elsewhere=True) == "duplicate"
+    assert route(
+        "spawn", undeliverable=True, delivered_elsewhere=True
+    ) == "undeliverable"
+
+    # An absent source lands by assumption (see the predicate above), so it
+    # is neither a gate delivery nor a dispatch edge. Say so rather than
+    # returning an empty string that reads as "no terminal stream".
+    assert route("") == "unknown"
+
+
 def test_portal_state_marks_schedule_event_not_replyable(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -1481,3 +1522,49 @@ class TestLiveRunBodyMirror:
         task = types.SimpleNamespace(id="task-1")
 
         assert daemon._drain_agent_card(emit, task, "evt-1", card, {}) is True
+
+
+def test_parked_proposal_counts_as_promoted_but_not_as_delivered(
+    tmp_path, monkeypatch,
+):
+    # #743. ``stats["current"]`` is not "a message reached a correspondent":
+    # a parked ``runner_policy`` proposal increments it too. The terminal
+    # route asks whether the run already put text in front of a reader, so
+    # it reads ``delivered`` — which this pins as the *narrower* count.
+    # Getting this wrong biases in the dangerous direction: a run whose only
+    # actual delivery was the fallback net would be filed ``gate-extra``,
+    # under-reporting what removing the net costs.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    brr_dir = tmp_path / ".brr"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-1"
+    outbox.mkdir(parents=True)
+    (outbox / "001.md").write_text(
+        "---\nrunner_policy: propose\n---\ncore: opus\n", encoding="utf-8")
+    (outbox / "002.md").write_text("a real reply\n", encoding="utf-8")
+    monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+    emit = daemon._WorkerEmit(
+        brr_dir=brr_dir, conversation_key="", event_id="evt-1")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        emit, task, responses, "evt-1", outbox,
+        account_context=ctx, stats=stats,
+    )
+
+    assert promoted == 2
+    # Both files were promoted and both bumped ``current``...
+    assert stats["current"] == 2
+    assert stats["runner_policy"] == 1
+    # ...but only the reply reached a reader.
+    assert stats["delivered"] == 1
