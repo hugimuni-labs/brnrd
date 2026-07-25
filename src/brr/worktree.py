@@ -24,7 +24,12 @@ from . import gitops
 
 
 def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a git command in *repo_root*."""
+    """Run a git command in *repo_root*.
+
+    ``env`` drops git's environment-level repository overrides — see
+    ``gitops.explicit_repo_env``. Every call here names its worktree, and a
+    ``GIT_DIR`` inherited from a pinned worker run (#703) would outrank that.
+    """
     return subprocess.run(
         ["git", *args],
         cwd=repo_root,
@@ -32,6 +37,7 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=gitops.explicit_repo_env(),
     )
 
 
