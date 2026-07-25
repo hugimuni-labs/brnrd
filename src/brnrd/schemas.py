@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from types import UnionType
+from typing import Any, ClassVar, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 
 class RepoCreate(BaseModel):
@@ -382,6 +383,72 @@ class RunnersOut(BaseModel):
     pending_wake_request: RunnerWakeRequestOut | None = None
 
 
+# The visible mark a truncated display value ends with (#685 ask 2). Mirrors
+# the *idea* of `src/brr/card.py::_TRUNCATION_MARK` without importing across
+# the package boundary — `src/brr` (daemon) and `src/brnrd` (API) ship
+# separately. A value that merely stops reads as a value that ended; this is
+# how a reader can tell the difference.
+LIVE_RUN_TRUNCATION_MARK = "…"
+
+# Join keys, where a truncated value is *wrong data* rather than shortened
+# data: it would silently re-point a row at another run. These keep hard
+# rejection; every other bounded string on `LiveRunIn` is a display field and
+# truncates instead.
+#
+# Deliberately the *closed* class, so the open one is the default (#685). This
+# repo has paid four times (#417, #674, #709, #721) for a class defined by
+# listing its members: the member nobody listed shows up later. Here the
+# listed set is small, semantic and finite — a live-run row has exactly these
+# three join keys — while a display field added to `LiveRunIn` next month
+# inherits the safe behaviour with no edit here.
+LIVE_RUN_IDENTITY_FIELDS = frozenset({"id", "run_id", "parent_run_id"})
+
+
+def _is_str_annotation(annotation: Any) -> bool:
+    """True for ``str`` and ``str | None``, false for ``list``/``dict`` fields.
+
+    `max_length` means *characters* on a `str` and *items* on a `list`, and
+    `LiveRunIn` carries both (`mood_frames` is `max_length=4` sequences). A
+    bound table that failed to tell them apart would tell the daemon to
+    truncate `mood_frames` to four characters.
+    """
+    if annotation is str:
+        return True
+    if get_origin(annotation) in (Union, UnionType):
+        return any(arg is str for arg in get_args(annotation))
+    return False
+
+
+def string_bounds(model: type[BaseModel]) -> dict[str, int]:
+    """``{field: max_length}`` for every ``str``-typed field of ``model``.
+
+    Read off the model itself rather than hand-listed, so a field that gains
+    a bound later joins with no edit here. This is the generator behind
+    `tests/fixtures/live_run_bounds.json`, which pins the daemon-side copy in
+    `src/brr/gates/cloud.py` (#723: pin duplications to an external fixture
+    table; parity tests are the wrong pin, since copies that agree can be
+    wrong together).
+    """
+    bounds: dict[str, int] = {}
+    for name, field in model.model_fields.items():
+        if not _is_str_annotation(field.annotation):
+            continue
+        for meta in field.metadata:
+            cap = getattr(meta, "max_length", None)
+            if cap is not None:
+                bounds[name] = cap
+                break
+    return bounds
+
+
+def truncate_marked(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters with the truncation mark visible."""
+    if len(text) <= limit:
+        return text
+    keep = max(0, limit - len(LIVE_RUN_TRUNCATION_MARK))
+    return text[:keep] + LIVE_RUN_TRUNCATION_MARK[: limit]
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
@@ -444,6 +511,41 @@ class LiveRunIn(BaseModel):
     mood_rest: str | None = Field(default=None, max_length=16)
     mood_pitch: float | None = Field(default=None, ge=0.0, le=1.0)
 
+    @classmethod
+    def string_bounds(cls) -> dict[str, int]:
+        """This model's ``{field: max_length}`` for its ``str`` fields."""
+        return string_bounds(cls)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _truncate_display_fields(cls, data: Any) -> Any:
+        """Cut over-long *display* strings to their bound instead of 422ing.
+
+        #685 ask 2, the truncate half. A truncated `name` on the dashboard is
+        strictly better than a dark dashboard, and until this existed one
+        over-long field on one row rejected the daemon's entire live-runs
+        publish — every run on that daemon went dark, re-attempted every 3s
+        (`src/brr/gates/cloud.py::_DASHBOARD_PUBLISH_INTERVAL_S`).
+
+        It lives here, not on the caller, because a caller can forget. It runs
+        off `string_bounds(cls)` rather than a list of fields, because a list
+        of fields can go stale: add a bounded display field to this model and
+        it is covered the moment it exists. `LIVE_RUN_IDENTITY_FIELDS` is the
+        only exception and stays hard-rejecting — see its comment.
+        """
+        if not isinstance(data, dict):
+            return data
+        out: dict[str, Any] | None = None
+        for field, cap in cls.string_bounds().items():
+            if field in LIVE_RUN_IDENTITY_FIELDS:
+                continue
+            value = data.get(field)
+            if isinstance(value, str) and len(value) > cap:
+                if out is None:
+                    out = dict(data)
+                out[field] = truncate_marked(value, cap)
+        return data if out is None else out
+
     @field_validator("mood_frames")
     @classmethod
     def _bound_mood_frames(
@@ -491,7 +593,38 @@ class LiveRunsReport(BaseModel):
     collector this feeds from.
     """
 
-    runs: list[LiveRunIn] = Field(default_factory=list)
+    # Deliberately *not* `list[LiveRunIn]` (#685 ask 2). FastAPI validates the
+    # whole request body before the handler runs, so a typed list here means
+    # one unparseable row 422s the entire batch and every live run on that
+    # daemon goes dark. Rows are validated one at a time by
+    # `isolate_live_runs` below, which the handler calls.
+    #
+    # `Any` and not `dict[str, Any]`, which was the first cut here: a `null` or
+    # a bare string in the list fails `dict` at the *report* level and 422s the
+    # whole batch again — the very class this change exists to close. The row
+    # type has to be unconstrained for the isolation below to be the only thing
+    # that can reject a row.
+    #
+    # The cost is that OpenAPI describes this as a list of anything rather than
+    # of `LiveRunIn`; the response model still documents the row shape in full,
+    # and this is a daemon-token-authenticated machine lane, not a browsable
+    # one.
+    runs: list[Any] = Field(default_factory=list)
+    # The row model `runs` is validated against, declared rather than inferred.
+    #
+    # `runs` had to lose its item type for per-row isolation to be possible at
+    # all (see above), and that erased the row shape from the one place a
+    # *different* guard was reading it: #714's per-row-consent test derives
+    # "does this lane's payload name its own repo" by walking the request
+    # model's item types for a `repo_label` field. Typing this list as `Any`
+    # blinded that derivation — the lane still gated correctly, and the test
+    # that proves it stopped being able to see the lane. Exactly #722's shape:
+    # a guard anchored one level off reads like no guard at all.
+    #
+    # So the row type stays machine-readable here. A lane that adopts per-row
+    # isolation later must declare this too, and
+    # `test_a_row_isolating_report_declares_its_row_model` fails it if not.
+    ROW_MODEL: ClassVar[type[BaseModel]] = LiveRunIn
     # Stop-request ids this daemon has dispatched into the kill path since
     # its last publish (#476 wyrd §3) — same ack economics as
     # `RunnersReport.consumed_wake_request_ids`.
@@ -551,10 +684,85 @@ class RunStopRequestOut(BaseModel):
     status: str
 
 
+class LiveRunRejection(BaseModel):
+    """One live-run row the server refused, and why (#685 ask 2, guard C).
+
+    An absent reading renders as "fine" (#632): a silently dropped row is how
+    this comes back. The daemon prints these on its own success path
+    (`src/brr/gates/cloud.py::_publish_live_runs`).
+    """
+
+    index: int
+    # Best-effort — the row's own `id` is often the thing that failed.
+    id: str | None = None
+    fields: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
+class LiveRunsIntake(BaseModel):
+    """What per-row validation kept, cut, and threw away."""
+
+    runs: list[LiveRunIn] = Field(default_factory=list)
+    rejected: list[LiveRunRejection] = Field(default_factory=list)
+    # `"<row id>.<field>"` for every display value the server shortened.
+    truncated: list[str] = Field(default_factory=list)
+
+
+def isolate_live_runs(rows: list[Any]) -> LiveRunsIntake:
+    """Validate live-run rows one at a time, so one bad row costs one row.
+
+    #685 ask 2, the isolation half — the load-bearing one. Display fields are
+    already truncated by `LiveRunIn._truncate_display_fields`, so the only
+    rows that fail here are ones whose *identity* is unusable, and a row
+    without a usable join key is a row nothing can render anyway.
+
+    Truncation is detected by diffing the raw row against the validated model
+    over `LiveRunIn.string_bounds()`, not by a second copy of the cap list.
+    """
+    kept: list[LiveRunIn] = []
+    rejected: list[LiveRunRejection] = []
+    truncated: list[str] = []
+    bounds = LiveRunIn.string_bounds()
+    for index, row in enumerate(rows):
+        try:
+            model = LiveRunIn.model_validate(row)
+        except ValidationError as exc:
+            raw_id = row.get("id") if isinstance(row, dict) else None
+            rejected.append(
+                LiveRunRejection(
+                    index=index,
+                    id=str(raw_id)[:64] if isinstance(raw_id, str) else None,
+                    fields=sorted({
+                        str(error["loc"][0])
+                        for error in exc.errors()
+                        if error.get("loc")
+                    }),
+                    detail="; ".join(
+                        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                        for error in exc.errors()[:4]
+                    )[:500],
+                )
+            )
+            continue
+        kept.append(model)
+        if isinstance(row, dict):
+            for field in bounds:
+                before = row.get(field)
+                if isinstance(before, str) and before != getattr(model, field, before):
+                    truncated.append(f"{model.id}.{field}")
+    return LiveRunsIntake(runs=kept, rejected=rejected, truncated=truncated)
+
+
 class LiveRunsOut(BaseModel):
     runs: list[LiveRunIn]
     live_runs_updated_at: datetime | None = None
     spawn_max_concurrent: int | None = None
+    # #685 ask 2, guard C — additive, so a dashboard deployed before this
+    # existed is unaffected. Rows the server refused and display values it
+    # shortened, said out loud on the success path rather than left for a
+    # reader to infer from a row that quietly stopped appearing.
+    runs_rejected: list[LiveRunRejection] = Field(default_factory=list)
+    fields_truncated: list[str] = Field(default_factory=list)
     # Piggyback channel: the account's pending run stops ride back on the
     # daemon's own live-runs publish tick, so a tap reaches the kill path
     # within one tick without a new polling loop.
