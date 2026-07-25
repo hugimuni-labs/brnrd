@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 
-from brr import hooks
+from brr import card, hooks
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
@@ -1902,6 +1902,45 @@ def test_notices_chip_position_is_after_produce_before_card():
     assert "!1" in bar
     # Order: ⚒ before !1 before mood before card
     assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
+
+
+def test_card_chip_meters_the_projection_not_the_file():
+    """The chip that said `card ok` all the way through #685.
+
+    Positive control first: a card far over the *file* cap whose ``Now``
+    section is small is safe, and must still read `ok` — the chip is not a size
+    warning about `.card`. Then the case it exists for: a card comfortably
+    under any file cap whose projection oversteps the 4096-char transport.
+
+    The two are ordered this way deliberately. `card ok` on a 30 KB file is the
+    assertion that would still pass if the chip were reverted to checking
+    non-emptiness; `card cut` on a 4.1 KB one is the assertion that would not.
+    """
+    cap = card.CARD_TEXT_MAX_CHARS
+
+    big_file_small_now = "## Now\nfine\n\n## Arc\n" + "history. " * 5000
+    assert len(big_file_small_now) > 30_000
+    chip = hooks._card_chip(
+        {"active": True, "text": big_file_small_now}, card_stale=False
+    )
+    assert chip == "card ok"
+
+    small_file_big_now = "## Now\n" + "y" * (cap + 20)
+    assert len(small_file_big_now) < 2 * cap
+    chip = hooks._card_chip(
+        {"active": True, "text": small_file_big_now}, card_stale=False
+    )
+    assert chip == f"card cut {cap + 20}>{cap}"
+
+    # The H1 card that started it: identical content, one heading level apart.
+    h1 = "# Now\nfine\n\n# Arc\n" + "history. " * 5000
+    assert hooks._card_chip({"active": True, "text": h1}, card_stale=False) == "card ok"
+
+    # Unchanged verdicts.
+    assert hooks._card_chip({"active": False}, card_stale=False) == "card blank"
+    assert hooks._card_chip({"active": True}, card_stale=True) == "card stale"
+    # A capsule with no body to measure is not a failure verdict.
+    assert hooks._card_chip({"active": True}, card_stale=False) == "card ok"
 
 
 def test_closeout_excludes_spawn_completed_from_obligation_count():
