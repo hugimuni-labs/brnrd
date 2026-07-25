@@ -595,6 +595,13 @@ def test_publish_plain_push_to_existing_upstream(tmp_path, monkeypatch):
 
     def _fake_run(args, **_kw):
         calls.append(args)
+        if "--show-toplevel" in args:
+            # #746: publish now asks the repository which tree it is before
+            # shipping from it. A fake git that answers this with silence is
+            # claiming a repointed `core.worktree` — answer as a healthy
+            # checkout does. (`daemon` and `gitops` share one `subprocess`
+            # module object, so this stub intercepts gitops' calls too.)
+            return _Result(returncode=0, stdout=f"{tmp_path}\n")
         if "log" in args:
             return _Result(returncode=0, stdout="abc Fix bug\n")
         return _Result(returncode=0)
@@ -626,6 +633,13 @@ def test_publish_new_branch_pushes_with_upstream_flag(tmp_path, monkeypatch):
 
     def _fake_run(args, **_kw):
         calls.append(args)
+        if "--show-toplevel" in args:
+            # #746: publish now asks the repository which tree it is before
+            # shipping from it. A fake git that answers this with silence is
+            # claiming a repointed `core.worktree` — answer as a healthy
+            # checkout does. (`daemon` and `gitops` share one `subprocess`
+            # module object, so this stub intercepts gitops' calls too.)
+            return _Result(returncode=0, stdout=f"{tmp_path}\n")
         if "merge-base" in args:
             return _Result(returncode=0, stdout="baseoid\n")
         if "log" in args:
@@ -665,6 +679,13 @@ def test_publish_refspec_when_agent_kept_run_branch(tmp_path, monkeypatch):
 
     def _fake_run(args, **_kw):
         calls.append(args)
+        if "--show-toplevel" in args:
+            # #746: publish now asks the repository which tree it is before
+            # shipping from it. A fake git that answers this with silence is
+            # claiming a repointed `core.worktree` — answer as a healthy
+            # checkout does. (`daemon` and `gitops` share one `subprocess`
+            # module object, so this stub intercepts gitops' calls too.)
+            return _Result(returncode=0, stdout=f"{tmp_path}\n")
         if "log" in args:
             return _Result(returncode=0, stdout="abc rebased\n")
         return _Result(returncode=0)
@@ -702,6 +723,13 @@ def test_publish_force_with_lease_for_rewritten_target(tmp_path, monkeypatch):
 
     def _fake_run(args, **_kw):
         calls.append(args)
+        if "--show-toplevel" in args:
+            # #746: publish now asks the repository which tree it is before
+            # shipping from it. A fake git that answers this with silence is
+            # claiming a repointed `core.worktree` — answer as a healthy
+            # checkout does. (`daemon` and `gitops` share one `subprocess`
+            # module object, so this stub intercepts gitops' calls too.)
+            return _Result(returncode=0, stdout=f"{tmp_path}\n")
         if "log" in args:
             return _Result(returncode=0, stdout="abc rebased\n")
         return _Result(returncode=0)
@@ -744,6 +772,13 @@ def test_publish_flips_publish_status_to_conflict_on_push_failure(
     monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
 
     def _fake_run(args, **_kw):
+        if "--show-toplevel" in args:
+            # #746: publish now asks the repository which tree it is before
+            # shipping from it. A fake git that answers this with silence is
+            # claiming a repointed `core.worktree` — answer as a healthy
+            # checkout does. (`daemon` and `gitops` share one `subprocess`
+            # module object, so this stub intercepts gitops' calls too.)
+            return _Result(returncode=0, stdout=f"{tmp_path}\n")
         if "log" in args:
             return _Result(returncode=0, stdout="abc Fix bug\n")
         if "push" in args:
