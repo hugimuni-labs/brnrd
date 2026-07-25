@@ -13,6 +13,7 @@ import types
 
 from brr import (
     account,
+    card,
     conversations,
     daemon,
     hooks,
@@ -787,14 +788,21 @@ class TestDrainAgentCard:
         assert "last" not in state
 
     def test_oversized_card_is_truncated(self, tmp_path, monkeypatch):
+        """Two caps, two questions — this pins the one that reaches the wire.
+
+        ``_CARD_CONTROL_MAX_BYTES`` bounds how much of ``.card`` the daemon is
+        willing to *read*; ``card_text``'s ``max_length`` bounds what the live
+        -runs PUT will *accept*. This test used to assert the read cap on the
+        emitted packet, which is how a 64 KB payload could ride a 4 KB field
+        with a green suite (#722): the read cap was never the publish bound and
+        the projection, which was, silently declined to narrow.
+        """
         big = "x" * (daemon._CARD_CONTROL_MAX_BYTES + 500)
         ok, emitted, _, _ = self._drain(tmp_path, monkeypatch, big)
         assert ok is True
         text = emitted[0].payload["text"]
-        # Daemon side caps the read at _CARD_CONTROL_MAX_BYTES; the
-        # renderer caps the displayed text again. We assert the daemon
-        # half here.
-        assert len(text) == daemon._CARD_CONTROL_MAX_BYTES
+        assert len(text) == card.CARD_TEXT_MAX_CHARS
+        assert text.endswith("…")
 
     def test_drain_outbox_leaves_card_control_file_alone(
         self, tmp_path, monkeypatch,
