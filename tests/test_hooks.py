@@ -13,7 +13,8 @@ from brr import card, hooks
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
-            name=None, current_event="evt-1", current_event_replyable=True):
+            name=None, current_event="evt-1", current_event_replyable=True,
+            notices=None):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -51,6 +52,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["resources"] = resources
     if card is not None:
         payload["card"] = card
+    if notices is not None:
+        payload["notices"] = notices
     if name is not None:
         payload["name"] = name
     path = tmp_path / "portal-state.json"
@@ -2241,3 +2244,87 @@ def test_spawn_completed_for_different_run_still_counts_as_obligation():
     assert "Address each" in rendered
     # Not classified as a finished spawn.
     assert "finished spawn" not in rendered
+
+
+# ── notices: the seed/stop briefing spells the text, not just the count ──────
+#
+# The count already had a home (the ``!N`` bar segment, #616). What did not:
+# ``notices`` was read on the seed/stop path and then never rendered, so the
+# two verbose boundaries — including Stop, the last one at which a dropped
+# reply can still be re-routed — said nothing about a refusal at all. A
+# refused outbox file is deleted exactly like an accepted one, so the notice
+# is the only trace there is.
+
+
+def _notice(text):
+    return {"at": "2026-07-25T20:47:00Z", "text": text}
+
+
+def test_stop_spells_out_notice_text(tmp_path):
+    """Drive red: delete the notices block in ``format_context`` — the count
+    still renders on the bar and this test still fails, which is the point."""
+    _portal(
+        tmp_path, token="t1", pending=0,
+        notices=[_notice(
+            "reply NOT delivered: no gate owns dispatch_message events "
+            "(target evt-y8lx) — address the originating user event instead"
+        )],
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 1 directive(s) brnrd refused or dropped" in ctx
+    assert "no gate owns dispatch_message events" in ctx
+    # Stop is the last re-route boundary and says so; seed does not.
+    assert "last boundary that can re-route one" in ctx
+
+
+def test_seed_spells_out_notice_text_without_the_stop_clause(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            notices=[_notice("spawn dropped: no inbox to queue into")])
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "spawn dropped: no inbox to queue into" in ctx
+    assert "last boundary that can re-route one" not in ctx
+
+
+def test_no_notices_stays_silent(tmp_path):
+    """Absent at zero, exactly like the chip and the scm line — or the block
+    becomes the permanent line that teaches the reader to skip the channel."""
+    _portal(tmp_path, token="t1", pending=0, notices=[])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert "notices:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_still_uses_the_chip_not_the_prose(tmp_path):
+    """The mid-run boundary keeps the cheap count; spelling four notices out
+    at every tool call is the churn the bar exists to avoid."""
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+            notices=[_notice("reply NOT delivered: no gate owns schedule events")])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "refused or dropped" not in ctx
+    assert "!1" in ctx
+
+
+def test_notice_overflow_is_counted_not_silently_dropped(tmp_path):
+    """A cap that reads as "that was all of them" is the failure this guards:
+    the same silent-truncation class the notices themselves are about."""
+    _portal(tmp_path, token="t1", pending=0,
+            notices=[_notice(f"dropped directive {i}") for i in range(7)])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 7 directive(s)" in ctx
+    # newest kept, oldest summarised
+    assert "dropped directive 6" in ctx
+    assert "dropped directive 0" not in ctx
+    assert "(+3 older" in ctx
+
+
+def test_long_notice_text_is_truncated_with_an_ellipsis(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            notices=[_notice("x" * 400)])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "…" in ctx
+    assert "x" * 400 not in ctx

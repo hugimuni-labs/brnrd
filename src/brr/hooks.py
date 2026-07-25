@@ -92,6 +92,15 @@ _STOP_BODY_MAX_CHARS = 6000
 # not be able to flood the one boundary the resident reads most carefully.
 _STOP_MANIFEST_MAX_RECORDS = 40
 
+#: How many notice texts the seed/stop briefing spells out, newest last, and
+#: how much of each. Bounded because a notices list is unbounded and a
+#: boundary line the reader scrolls past is a line the reader stops reading;
+#: the overflow is counted, so the cap can never read as "that was all of
+#: them". The daemon already truncates the stored list, so this is a second
+#: bound on a bounded thing rather than the only one.
+_NOTICE_LINES = 4
+_NOTICE_TEXT_CAP = 220
+
 _CLOSEOUT_ARTIFACT_ORDER = ("card",)
 _CLOSEOUT_ARTIFACTS = {
     "card": (
@@ -1371,6 +1380,54 @@ def format_delta(
                 "Content the reader must see rides a `gate: telegram` "
                 "delivery, and the closeout is not exempt. Not a chore — "
                 "this is the run's topology and cannot be cleared."
+            )
+    # Notices are the directives brnrd *refused or dropped*. Until now their
+    # only surface was the post-tool bar's ``!N`` count — and that path
+    # returns at the ``not seed and not stop`` branch above, so on the two
+    # verbose boundaries ``notices`` was read into a local and then never
+    # rendered at all. Including Stop: the last boundary at which a dropped
+    # reply can still be re-routed said nothing about the drop.
+    #
+    # A count is the wrong shape even where it does render. A refused outbox
+    # file is deleted exactly like an accepted one, so the count is the only
+    # trace that survives, and turning it into a fact costs a
+    # ``portal-state.json`` open the resident has to remember to make — a
+    # polling tax on the one class of event that cannot be recovered
+    # afterwards. Measured on this account 2026-07-25: 178 undeliverable
+    # outbound messages / 287,638 B, 115 of them mid-run interims, each in a
+    # run that closed reporting zero undelivered outbox files. The largest
+    # single loss was a 10,229 B analysis, staged and gone two minutes before
+    # its run's closeout claimed nothing was outstanding.
+    #
+    # Text, not classification. Sorting loss-notices from config-warnings by
+    # matching their prose would be the renderer guessing at something only
+    # the writer knows; that split wants a ``kind:`` field on the record
+    # (#716) and a daemon change, which is a restart away. Rendering the text
+    # is the half that is live in the very next hook subprocess — and it is
+    # also what makes a *standing* notice legible. This account carries one
+    # permanently (a repo-side ``runners.md`` that is ignored by design), so
+    # ``!N`` is never zero here and has stopped carrying information. Four
+    # words of the text tell a reader "that one again" from "that one is
+    # new"; the count cannot, which is precisely why it habituated.
+    if (seed or stop) and notices:
+        shown = notices[-_NOTICE_LINES:]
+        head = f"- notices: {len(notices)} directive(s) brnrd refused or dropped"
+        if stop:
+            head += (
+                " — a refused outbox file is deleted exactly like an accepted"
+                " one, so this is the last boundary that can re-route one"
+            )
+        lines.append(head + ":")
+        for record in shown:
+            text = " ".join(str(record.get("text") or "").split())
+            if len(text) > _NOTICE_TEXT_CAP:
+                text = text[: _NOTICE_TEXT_CAP - 1].rstrip() + "…"
+            if text:
+                lines.append(f"  · {text}")
+        if len(notices) > len(shown):
+            lines.append(
+                f"  · (+{len(notices) - len(shown)} older — "
+                "`portal-state.json` → `notices` for the full list)"
             )
     # SCM posture is a boundary signal (seed / stop only): the commit/push
     # reminder a wake about to end needs. Rendered only when there is
