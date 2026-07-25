@@ -321,44 +321,119 @@ export function messageInstant(metadata: Record<string, string>): string {
 // so the band stays put and the frame fills; the `/runs/...` page remains the
 // addressable deep link for sharing.
 
-/**
- * The `## Now` section of a run body, or the whole body when it has none.
- *
- * Mirrors `daemon._card_now_projection`, deliberately and by hand: both sides
- * read the same resident-authored Markdown, and the compact projection is a
- * presentation rule, not data the writer should have to duplicate. One-section
- * legacy cards stay valid — an absent `## Now` means the whole body *is* the
- * now.
- */
-export function nowProjection(body: string): string {
-	const lines = body.replace(/\r\n/g, '\n').split('\n');
-	const start = lines.findIndex((line) => line.trim().toLowerCase() === '## now');
-	if (start === -1) return body.trim();
-	const projected: string[] = [];
-	for (const line of lines.slice(start + 1)) {
-		if (line.startsWith('## ')) break;
-		projected.push(line);
-	}
-	return projected.join('\n').trim();
+/** Mirror of `brr.card.CARD_TEXT_MAX_CHARS` / `LiveRunIn.card_text`'s max_length. */
+export const CARD_TEXT_MAX_CHARS = 4096;
+
+/** Appended when a projection is truncated, so truncation is visible. */
+const TRUNCATION_MARK = '\n…';
+
+/** The section anchor: any depth, any case, trailing text allowed after the name. */
+const NOW_HEADING_RE = /^(#{1,6})\s*now\b/i;
+
+/** Any ATX heading, depth captured. `#foo` is not a heading in CommonMark. */
+const HEADING_RE = /^(#{1,6})(\s|$)/;
+
+const FENCE_RE = /^(?:```|~~~)/;
+
+function headingDepth(line: string): number | null {
+	const match = HEADING_RE.exec(line.trim());
+	return match ? match[1].length : null;
+}
+
+function bound(text: string, limit?: number): string {
+	if (limit === undefined || text.length <= limit) return text;
+	return text.slice(0, Math.max(0, limit - TRUNCATION_MARK.length)) + TRUNCATION_MARK;
 }
 
 /**
- * Does this body carry anything outside its `## Now` section?
+ * The `Now` section of a run body, or the whole body when it has none.
+ *
+ * Mirrors `brr.card.now_projection`, deliberately and by hand: there is no
+ * shared runtime between the daemon and the browser, and the compact
+ * projection is a presentation rule, not data the writer should have to
+ * duplicate. Since #722 the mirror is no longer only a claim in a comment —
+ * `tests/fixtures/card_now_projection.json` is read by the Python test and by
+ * `runNode.test.ts`, so a case one side fails is caught at the gate.
+ *
+ * The section is anchored by *name* at any heading depth and ends at the first
+ * heading at a depth **less than or equal to** the anchor's. `# Now` used to
+ * miss the anchor entirely and publish the whole card; a `### Sub` inside the
+ * section must still not end it. Fenced blocks are not scanned, or a `#`
+ * comment in a shell fence would end the section early — a truncation path
+ * created by fixing the anchor, not present before it.
+ *
+ * One-section legacy cards stay valid: an absent `Now` means the whole body
+ * *is* the now.
+ */
+export function nowProjection(body: string, limit?: number): string {
+	const lines = body.replace(/\r\n/g, '\n').split('\n');
+	let start: number | null = null;
+	let depth = 0;
+	let fenced = false;
+	for (let i = 0; i < lines.length; i += 1) {
+		const stripped = lines[i].trim();
+		if (FENCE_RE.test(stripped)) {
+			fenced = !fenced;
+			continue;
+		}
+		if (fenced) continue;
+		const match = NOW_HEADING_RE.exec(stripped);
+		if (match) {
+			start = i + 1;
+			depth = match[1].length;
+			break;
+		}
+	}
+	if (start === null) return bound(body.trim(), limit);
+	const projected: string[] = [];
+	fenced = false;
+	for (const line of lines.slice(start)) {
+		const stripped = line.trim();
+		if (FENCE_RE.test(stripped)) {
+			fenced = !fenced;
+		} else if (!fenced) {
+			const found = headingDepth(line);
+			if (found !== null && found <= depth) break;
+		}
+		projected.push(line);
+	}
+	return bound(projected.join('\n').trim(), limit);
+}
+
+/**
+ * Does this body carry anything outside its `Now` section?
  *
  * The question the expand affordance actually asks. A body with no sections
- * at all is entirely the now, and a body whose only section is `## Now` has
+ * at all is entirely the now, and a body whose only section is `Now` has
  * nothing further to give — in both cases the projection already showed the
  * reader everything.
+ *
+ * Depth-agnostic since #722, for the same reason the projection is: an
+ * H1-sectioned card reported `hasMore: false` and hid real content behind an
+ * affordance that never appeared. "Top level" is the shallowest depth the body
+ * actually uses, so a body sectioned entirely in `###` still has a shape.
  */
 export function hasSectionsBeyondNow(body: string): boolean {
 	const lines = body.replace(/\r\n/g, '\n').split('\n');
-	const headings = lines.filter((line) => line.startsWith('## '));
+	const headings: { index: number; depth: number; text: string }[] = [];
+	let fenced = false;
+	lines.forEach((line, index) => {
+		const stripped = line.trim();
+		if (FENCE_RE.test(stripped)) {
+			fenced = !fenced;
+			return;
+		}
+		if (fenced) return;
+		const depth = headingDepth(line);
+		if (depth !== null) headings.push({ index, depth, text: stripped.replace(/^#+/, '').trim() });
+	});
 	if (headings.length === 0) return false;
-	if (headings.some((line) => line.trim().toLowerCase() !== '## now')) return true;
-	// Only `## Now` headings: anything before the first one is body the
-	// projection dropped.
-	const first = lines.findIndex((line) => line.startsWith('## '));
-	return lines.slice(0, first).join('\n').trim() !== '';
+	const top = Math.min(...headings.map((h) => h.depth));
+	const topLevel = headings.filter((h) => h.depth === top);
+	if (topLevel.some((h) => !/^now\b/i.test(h.text))) return true;
+	// Only `Now` headings at the top level: anything before the first one is
+	// body the projection dropped.
+	return lines.slice(0, topLevel[0].index).join('\n').trim() !== '';
 }
 
 /**
@@ -369,6 +444,15 @@ export function hasSectionsBeyondNow(body: string): boolean {
  * links, and the alternative was a third hand-mirrored copy of the relic
  * vocabulary (`relics._ICONS` → `runLedger.RELIC_ICONS` was already two).
  * Headings and links are the interchange format; this is the only reader.
+ *
+ * Deliberately *not* generalised to any heading depth alongside `nowProjection`
+ * (#722). That change was needed because `.card` is resident-authored prose
+ * where the heading level is a writer's choice the writer cannot see the
+ * consequences of. `state.md` is generated by the daemon at a fixed depth
+ * (`daemon.py`, the produce-manifest section walk), so here the depth is a
+ * contract between two pieces of our own code, not a guess about a human.
+ * Loosening it would widen what counts as a section boundary in a document
+ * where the boundary is already known exactly.
  */
 export function bodySection(body: string, heading: string): string {
 	const lines = body.replace(/\r\n/g, '\n').split('\n');
