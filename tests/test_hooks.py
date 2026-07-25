@@ -655,6 +655,175 @@ def test_stop_missing_replyable_key_keeps_addressed_behavior(tmp_path):
     assert "no gate owns this waking event" not in ctx
 
 
+# ── The gate-less routing fact, all four cells (#728) ────────────────────
+#
+# ``gate_less`` used to be computed and then read only inside the silence
+# arm, so the third delivery line below existed in one cell of a
+# two-by-two table. These four pin the whole table on the axis the older
+# tests above cannot speak to — they predate the line — while those older
+# tests keep pinning the first two arms unchanged.
+#
+#                      | silent                    | delivered
+#   -------------------|---------------------------|-------------------------
+#   gate-less          | routing fact via the      | routing fact, its own
+#                      | silence arm               | line  ← was the gap
+#   gate-owned         | dispatch promise          | waking-thread nag
+#
+_ROUTING = "routing fact, stated once"
+_DELIVERED = {"replies_current": 0, "replies_other": 0, "outbound_messages": 1}
+
+
+def _stop(tmp_path, **kw):
+    _portal(tmp_path, pending=0, **kw)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    return out["hookSpecificOutput"]["additionalContext"]
+
+
+def _hook_state(tmp_path):
+    return json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+
+
+def test_stop_gate_less_and_delivered_states_the_routing_fact(tmp_path):
+    # The cell #728 is about, and the one that actually loses content: a
+    # schedule wake that pinged a gate mid-run and then wrote its real
+    # closeout to stdout, where it stages ``status: undeliverable``. The old
+    # code said nothing here — ``any_delivery`` was satisfied by the ping.
+    ctx = _stop(
+        tmp_path, token="t1", current_event_replyable=False,
+        outbound=_DELIVERED,
+    )
+    assert _ROUTING in ctx
+    assert "no gate owns this waking event" in ctx
+    assert "the closeout is not exempt" in ctx
+    # Prior delivery is named as irrelevant rather than treated as a clear:
+    # that is the whole correction. A discriminator on "did a gate delivery
+    # happen" would have gone quiet on exactly this run.
+    assert "however much has already gone out" in ctx
+    # And it must not resurrect either arm the older tests fence off here.
+    assert "nothing communicated on any thread" not in ctx
+    assert "waking thread itself has no reply yet" not in ctx
+
+
+def test_stop_gate_less_and_silent_keeps_the_fact_in_the_silence_arm(tmp_path):
+    # Same fact, already carried by the silence arm since #562. Restating it
+    # on its own line in this cell would be the duplication the latch exists
+    # to prevent, so the dedicated line stays out of the way.
+    ctx = _stop(tmp_path, token="t1", current_event_replyable=False)
+    assert "no gate owns this waking event" in ctx
+    assert "body/message store only" in ctx
+    assert _ROUTING not in ctx
+
+
+def test_stop_gate_owned_and_delivered_states_no_routing_fact(tmp_path):
+    # A gate owns this event: the terminal stream lands, so the fact is
+    # false here and asserting it would be the guard lying.
+    ctx = _stop(
+        tmp_path, token="t1", current_event_replyable=True,
+        outbound=_DELIVERED,
+    )
+    assert _ROUTING not in ctx
+    assert "waking thread itself has no reply yet" in ctx
+
+
+def test_stop_gate_owned_and_silent_states_no_routing_fact(tmp_path):
+    ctx = _stop(tmp_path, token="t1", current_event_replyable=True)
+    assert _ROUTING not in ctx
+    assert "dispatches your final message to the waking thread" in ctx
+
+
+def test_gate_less_routing_fact_is_stated_once_per_run(tmp_path):
+    # The reason this is latched and not merely token-gated: ``outbound`` is
+    # part of ``change_token``, so every gate delivery moves the token and
+    # re-renders the closeout briefing. Unlatched, a fact that can never be
+    # cleared would nag hardest at the runs delivering most — #562's exact
+    # signature, which is what made that nag un-clearable and taught the
+    # reader to skip the channel.
+    first = _stop(
+        tmp_path, token="t1", current_event_replyable=False,
+        outbound=_DELIVERED,
+    )
+    assert _ROUTING in first
+    second = _stop(
+        tmp_path, token="t2", current_event_replyable=False,
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 2},
+    )
+    # The briefing still renders — only the constant is spent.
+    assert "delivery so far" in second
+    assert _ROUTING not in second
+
+
+def test_gate_less_silence_arm_primes_the_routing_latch(tmp_path):
+    # A run that was silent at one closeout already read the fact off the
+    # silence arm; delivering and stopping again must not tell it twice in
+    # different words. One fact, one statement, whichever arm carried it.
+    first = _stop(tmp_path, token="t1", current_event_replyable=False)
+    assert "no gate owns this waking event" in first
+    second = _stop(
+        tmp_path, token="t2", current_event_replyable=False,
+        outbound=_DELIVERED,
+    )
+    assert _ROUTING not in second
+
+
+def test_gate_less_silence_warning_survives_the_routing_latch(tmp_path):
+    # The latch spends the *constant*, never the clearable warning beside
+    # it. Silence is a real obligation — deliver something and it goes away
+    # on its own — so it must keep re-rendering at every closeout.
+    _stop(tmp_path, token="t1", current_event_replyable=False)
+    second = _stop(tmp_path, token="t2", current_event_replyable=False)
+    assert "nothing communicated on any thread yet" in second
+
+
+def test_routing_latch_is_not_burned_by_an_unrendered_stop(tmp_path):
+    # Latched on the render, not the decision. A Stop whose token has not
+    # moved injects nothing (#282), and spending the one statement on a
+    # boundary the resident never saw turns once-per-run into never.
+    (tmp_path / hooks.HOOK_STATE_NAME).write_text(
+        json.dumps({"stop_last_token": "t1"}), encoding="utf-8",
+    )
+    _portal(
+        tmp_path, token="t1", pending=0, current_event_replyable=False,
+        outbound=_DELIVERED,
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    # A bare result is the "nothing to add, stop cleanly" signal (#282) —
+    # there is no additionalContext, so nothing was said and nothing spent.
+    assert "hookSpecificOutput" not in out
+    assert not _hook_state(tmp_path).get(hooks.GATELESS_ROUTING_KEY)
+    later = _stop(
+        tmp_path, token="t2", current_event_replyable=False,
+        outbound=_DELIVERED,
+    )
+    assert _ROUTING in later
+
+
+def test_routing_fact_absent_when_replyable_key_is_missing(tmp_path):
+    # Absent is not False, here as in the arms above: a partial portal state
+    # must not manufacture a gate-less run, and must not spend the latch.
+    path = _portal(tmp_path, token="t1", pending=0, outbound=_DELIVERED)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["inbound"]["current_event_replyable"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert _ROUTING not in ctx
+    assert not _hook_state(tmp_path).get(hooks.GATELESS_ROUTING_KEY)
+
+
+def test_routing_fact_absent_on_an_unaddressed_run(tmp_path):
+    # No waking event at all: the delivery block does not render, so there
+    # is no routing fact to state and nothing to latch.
+    ctx = _stop(
+        tmp_path, token="t1", current_event=None,
+        current_event_replyable=False, outbound=_DELIVERED,
+    )
+    assert _ROUTING not in ctx
+    assert not _hook_state(tmp_path).get(hooks.GATELESS_ROUTING_KEY)
+
+
 def test_long_running_surfaced_when_over_soft_budget(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
