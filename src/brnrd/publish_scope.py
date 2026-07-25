@@ -116,20 +116,29 @@ def corpus_slices_permitted(db: Session, account_id: str) -> frozenset[str] | No
     The corpus/knowledge mirror is account-wide by construction (one home,
     shared across every repo the account connects) — no single repo's
     consent can own it alone. So this enforces the *intersection* across
-    every connected repo's recorded consent: never ship a slice unless every
-    connected repo agreed to it. If any connected repo has not recorded a
-    consent yet (legacy), or the account has no repos, this returns ``None``
-    — unenforced, current behaviour untouched, exactly as it was before any
-    repo in this account had a consent to check.
+    every connected repo that has **recorded** a consent: never ship a slice
+    unless every one of them agreed to it.
+
+    A repo with no recorded value (legacy — connected before this gate
+    shipped) is skipped rather than returning early: it neither consents nor
+    vetoes. Returning ``None`` on the first such row made an unconsented repo
+    *dissolve* the intersection instead of narrowing it, so one legacy
+    sibling silently discarded an explicit ``none`` recorded next to it and
+    the whole account's corpus shipped (#715). Enforcement must not weaken
+    when a repo is added.
+
+    ``None`` — unenforced, current behaviour untouched — is returned only
+    when there is genuinely nothing to enforce against: the account has no
+    repos, or not one of them has recorded a consent. A purely legacy account
+    therefore behaves exactly as it did before this module existed, which is
+    the carve-out ``SECURITY.md`` states.
     """
     repos = list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
-    if not repos:
+    resolved = [
+        scopes[1]
+        for scopes in (_repo_scopes(repo.publish_layers) for repo in repos)
+        if scopes is not None
+    ]
+    if not resolved:
         return None
-    resolved = []
-    for repo in repos:
-        scopes = _repo_scopes(repo.publish_layers)
-        if scopes is None:
-            return None
-        resolved.append(scopes[1])
-    slices = frozenset.intersection(*resolved) if resolved else frozenset()
-    return slices
+    return frozenset.intersection(*resolved)
