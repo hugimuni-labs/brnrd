@@ -821,6 +821,120 @@ def test_a_label_from_another_account_does_not_borrow_that_accounts_consent(
     )
 
 
+@pytest.mark.parametrize(
+    "lane,put_path,payload_of,stored_key,dash_path,dash_key",
+    _SUBJECT_LANES,
+    ids=[row[0] for row in _SUBJECT_LANES],
+)
+def test_a_case_mismatched_label_still_resolves_to_its_repo(
+    lane, put_path, payload_of, stored_key, dash_path, dash_key
+):
+    """One character of case must not reopen #714.
+
+    The two sides of this comparison have different provenance. The `Repo` row
+    records what the connect payload said; the daemon derives `repo_label` by
+    parsing the **git remote URL** (`cloud.py::_github_repo_label` ->
+    `parse_origin_url`). GitHub serves repos case-insensitively, so a clone of
+    `.../gurio/secret` produces a label that parses to `gurio/secret` while the
+    connect record says `Gurio/secret`. Exact matching fails to resolve there,
+    and an unresolved subject falls back to the publisher — which is #714's own
+    defect wearing a different coat.
+
+    Not theoretical, and the codebase had already decided this twice: this
+    lane's own producer dedups its labels by `repo_label.casefold()`
+    (`cloud.py::_pr_review_repo_labels`), and `webhooks.py::_find_repo` matches
+    the same way. The producer folded and the consumer did not.
+    """
+    client = _client()
+    headers = _two_repos_one_token(client)
+
+    r = client.put(put_path, json=payload_of("gurio/secret", "Gurio/public"), headers=headers)
+    assert r.status_code == 200, r.text
+    assert [row["repo_label"] for row in r.json()[stored_key]] == ["Gurio/public"], (
+        f"{lane}: 'gurio/secret' did not resolve to the connected 'Gurio/secret', so "
+        "the opted-out repo's rows fell through to the publisher's consent"
+    )
+
+    served = [row.get("repo_label") for row in client.get(dash_path).json()[dash_key]]
+    assert not any((s or "").casefold() == "gurio/secret" for s in served), (
+        f"{lane}: the opted-out repo reached the dashboard under a case variant — {served}"
+    )
+    assert "Gurio/public" in served, f"{lane}: positive control lost — {served}"
+
+
+@pytest.mark.parametrize(
+    "lane,put_path,payload_of,stored_key,dash_path,dash_key",
+    _SUBJECT_LANES,
+    ids=[row[0] for row in _SUBJECT_LANES],
+)
+def test_case_variant_siblings_must_all_consent(
+    lane, put_path, payload_of, stored_key, dash_path, dash_key
+):
+    """Folding the match creates an ambiguity, and it resolves the strict way.
+
+    `Repo` is unique on `(account_id, repo_full_name)` (`models.py:46`) but that
+    constraint is case-*sensitive*, and so is the dedup in
+    `accounts.py::create_repo` — so one account can genuinely hold `Gurio/x` and
+    `gurio/x` as two rows with two different recorded consents. A folded lookup
+    therefore has to answer for a *set*, not a row.
+
+    The rule is #715's, pointed at a new axis — **enforcement must not weaken
+    when a repo is added**: the row publishes only if every case variant
+    permits the lane. Resolving the ambiguity by giving up instead
+    (`_find_repo`'s `len(matches) == 1` shape) would fall through to the
+    publisher, and connecting a second repo would then *widen* what the first
+    had shut.
+
+    This also pins that the lookup cannot raise: an unfolded
+    `scalar_one_or_none()` over a folded predicate would throw
+    `MultipleResultsFound` on a live request, turning a consent check into a
+    500.
+    """
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/dup", "publish_layers": "none"},
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={
+            "repo_full_name": "gurio/dup",
+            "publish_layers": "live_runs,pr_review_queue,run_ledger",
+        },
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={
+            "repo_full_name": "Gurio/public",
+            "publish_layers": "live_runs,pr_review_queue,run_ledger",
+        },
+    )
+    with client.app.state.SessionLocal() as db:
+        variants = db.query(Repo).filter(Repo.repo_full_name.in_(["Gurio/dup", "gurio/dup"])).all()
+        assert len(variants) == 2, (
+            "this account no longer holds two case variants — the premise of this "
+            "test moved; check accounts.py::create_repo's dedup"
+        )
+        public_id = db.query(Repo).filter(Repo.repo_full_name == "Gurio/public").one().id
+    headers = {"Authorization": f"Bearer {_pair_daemon(client, public_id)}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=headers)
+
+    # Either spelling names a set containing the `none` sibling ⇒ neither ships.
+    for spelling in ("Gurio/dup", "gurio/dup"):
+        r = client.put(put_path, json=payload_of(spelling, "Gurio/public"), headers=headers)
+        assert r.status_code == 200, r.text
+        assert [row["repo_label"] for row in r.json()[stored_key]] == ["Gurio/public"], (
+            f"{lane}: {spelling!r} published although a case variant of it recorded 'none'"
+        )
+
+    served = [row.get("repo_label") for row in client.get(dash_path).json()[dash_key]]
+    assert not any((s or "").casefold() == "gurio/dup" for s in served), (
+        f"{lane}: a case-variant pair reached the dashboard — {served}"
+    )
+    assert "Gurio/public" in served, f"{lane}: positive control lost — {served}"
+
+
 def test_mixed_payload_is_filtered_not_rejected():
     """Shape pin: the request still succeeds and keeps its permitted rows.
 
