@@ -5,8 +5,9 @@ import json
 import re
 from pathlib import Path
 
-from brr import conversations, dominion
+from brr import conversations, dominion, prompts
 from brr.prompts import (
+    OWN_OUTBOUND_RECEIPT_HEAD_CHARS,
     RECENT_TURN_MAX_BYTES,
     SCHEDULE_TURN_DEDUP_RATIO,
     TrimResult,
@@ -2184,6 +2185,365 @@ class TestRecentTurnByteCap:
         assert abs(dropped - saved) < 400, (
             f"prompt fell {saved} B for {dropped} B elided — the cap is not "
             "reaching the assembled bundle"
+        )
+
+
+class TestOwnOutboundReceipts:
+    """Issue #755: the recent-turns block was 71% the resident's own prior
+    outbound, replayed at full text every boot — ~16 KB/wake spent teaching
+    the resident yesterday's voice back to itself. Own outbound collapses to
+    a receipt line (first line · byte count · pointer); inbound user turns,
+    which are the only record of what someone actually asked, are untouched.
+
+    A third axis, not a variant of the two classes above: #576 collapses on
+    *similarity*, #736 on *size*, this one on *authorship*. A 300 B own
+    reply passes both of those and still fails this one.
+    """
+
+    _THREAD = "cloud:telegram:155783668:"
+
+    def _seed(self, tmp_path, *, event_id: str, body: str) -> Path:
+        """Append a real artifact record so the receipt's pointer has a target.
+
+        The daemon's own append path on purpose — the receipt claims the
+        store layout it names is the one `conversations` actually writes.
+        """
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        conversations.append_artifact(
+            brr_dir,
+            self._THREAD,
+            kind="response",
+            path=f"/tmp/{event_id}.md",
+            event_id=event_id,
+            label=f"response:{event_id}",
+            body=body,
+        )
+        return brr_dir
+
+    def _outbound(self, *, event_id: str, body: str, ts: str) -> dict:
+        return {
+            "ts": ts,
+            "kind": "artifact",
+            "artifact_kind": "response",
+            "conversation_key": self._THREAD,
+            "event_id": event_id,
+            "label": f"response:{event_id}",
+            "path": f"/tmp/{event_id}.md",
+            "body": body,
+        }
+
+    def _reply_body(self, n: int) -> str:
+        """A multi-line reply in the shape of a real one: verdict line first.
+
+        Sized to stay *under* `RECENT_TURN_MAX_BYTES` (asserted below), so
+        every test here proves the receipt collapse acting on its own rather
+        than riding #736's size cap.
+        """
+        tail = "\n".join(
+            f"- supporting detail {i} for reply {n}: the kind of accreted "
+            f"rationale that has no business re-entering the next wake."
+            for i in range(12)
+        )
+        return f"**Verdict {n}: the thing shipped.**\n\n{tail}"
+
+    def test_fixture_stays_under_the_size_cap(self):
+        """Guards every other test in this class from a confound."""
+        assert len(self._reply_body(0).encode("utf-8")) < RECENT_TURN_MAX_BYTES
+
+    def test_older_own_outbound_collapses_to_one_receipt_line_each(self, tmp_path):
+        bodies = {f"evt-{n}": self._reply_body(n) for n in range(3)}
+        brr_dir = tmp_path / ".brr"
+        for event_id, body in bodies.items():
+            brr_dir = self._seed(tmp_path, event_id=event_id, body=body)
+        records = [
+            self._outbound(event_id=eid, body=body, ts=f"2026-07-2{i}T04:44:00Z")
+            for i, (eid, body) in enumerate(bodies.items())
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        # The two older replies: one line each, verdict line kept, body gone.
+        for n in (0, 1):
+            assert f"**Verdict {n}: the thing shipped.**" in block
+            assert f"supporting detail 3 for reply {n}" not in block
+            size = len(bodies[f"evt-{n}"].encode("utf-8"))
+            assert f"· {size:,} B ·" in block, (
+                f"receipt for reply {n} does not state the bytes it stands in "
+                f"for:\n{block}"
+            )
+        # Newest keeps its body — see the exception test below.
+        assert "supporting detail 3 for reply 2" in block
+
+        receipts = [
+            ln for ln in block.splitlines() if "B · full turn:" in ln
+        ]
+        assert len(receipts) == 2, f"expected 2 receipt lines, got:\n{block}"
+        for line in receipts:
+            assert line.startswith("- 2026-07-2"), "receipt lost its timestamp"
+            assert "agent (response:evt-" in line, "receipt lost its label"
+
+    def test_newest_own_outbound_keeps_its_body(self, tmp_path):
+        """Pins the exception. Fails if the newest reply also collapsed.
+
+        The rationale is live-exchange coherence: a resident that cannot see
+        what it just replied cannot hold the next turn of the conversation.
+        Everything older is what the receipt line is for.
+        """
+        older, newest = self._reply_body(1), self._reply_body(2)
+        self._seed(tmp_path, event_id="evt-old", body=older)
+        brr_dir = self._seed(tmp_path, event_id="evt-new", body=newest)
+        records = [
+            self._outbound(event_id="evt-old", body=older, ts="2026-07-20T04:44:00Z"),
+            self._outbound(event_id="evt-new", body=newest, ts="2026-07-21T04:44:00Z"),
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        # Every line of the newest reply survives, indented by `_format_turn`.
+        for line in newest.splitlines():
+            if line.strip():
+                assert line in block, (
+                    "the newest own outbound lost a line — the live-exchange "
+                    f"exception is not holding:\n{line}"
+                )
+        # And the older one did not.
+        assert "supporting detail 7 for reply 1" not in block
+
+    def test_all_receipts_variant_is_one_constant_away(self, tmp_path, monkeypatch):
+        """The exception is a flag, not a shape baked into the loop."""
+        older, newest = self._reply_body(1), self._reply_body(2)
+        self._seed(tmp_path, event_id="evt-old", body=older)
+        brr_dir = self._seed(tmp_path, event_id="evt-new", body=newest)
+        records = [
+            self._outbound(event_id="evt-old", body=older, ts="2026-07-20T04:44:00Z"),
+            self._outbound(event_id="evt-new", body=newest, ts="2026-07-21T04:44:00Z"),
+        ]
+
+        monkeypatch.setattr(prompts, "OWN_OUTBOUND_KEEP_NEWEST_IN_FULL", False)
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        assert "supporting detail 3 for reply 2" not in block
+        assert block.count("B · full turn:") == 2
+
+    def test_inbound_events_are_untouched(self, tmp_path):
+        """The half that must never be lost: what someone actually asked."""
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True)
+        ask = "please rebuild the plan\nand rank the open work by blast radius"
+        records = [
+            {
+                "ts": "2026-07-20T04:44:00Z",
+                "kind": "event",
+                "source": "telegram",
+                "conversation_key": self._THREAD,
+                "body": ask,
+            },
+            self._outbound(
+                event_id="evt-a", body=self._reply_body(1), ts="2026-07-20T04:45:00Z"
+            ),
+            {
+                "ts": "2026-07-20T04:46:00Z",
+                "kind": "event",
+                "source": "telegram",
+                "conversation_key": self._THREAD,
+                "body": "second ask, also in full",
+            },
+            self._outbound(
+                event_id="evt-b", body=self._reply_body(2), ts="2026-07-20T04:47:00Z"
+            ),
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        for line in ask.splitlines():
+            assert line in block
+        assert "second ask, also in full" in block
+        assert block.count("B · full turn:") == 1, (
+            "an inbound turn was collapsed, or the newest outbound was"
+        )
+
+    def test_run_and_update_records_are_untouched(self, tmp_path):
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True)
+        records = [
+            {
+                "ts": "2026-07-20T04:44:00Z",
+                "kind": "run",
+                "run_id": "run-1",
+                "status": "done",
+                "branch_name": "brr/x",
+            },
+            {
+                "ts": "2026-07-20T04:45:00Z",
+                "kind": "update",
+                "type": "progress",
+                "run_id": "run-1",
+                "stage": "worker",
+            },
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        assert "run run-1 status=done branch=brr/x" in block
+        assert "update progress run=run-1 stage=worker" in block
+        assert "full turn:" not in block
+
+    def test_empty_body_artifact_still_renders_the_path_line(self, tmp_path):
+        """A bodiless artifact has nothing to collapse — old path line stands."""
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True)
+        records = [
+            {
+                "ts": "2026-07-20T04:44:00Z",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "label": "response:evt-bare",
+                "path": "/tmp/evt-bare.md",
+            },
+            {
+                "ts": "2026-07-20T04:45:00Z",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "label": "response:evt-blank",
+                "path": "/tmp/evt-blank.md",
+                "body": "   \n  \n",
+            },
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        assert "- 2026-07-20T04:44:00Z artifact response:evt-bare /tmp/evt-bare.md" in block
+        assert "- 2026-07-20T04:45:00Z artifact response:evt-blank /tmp/evt-blank.md" in block
+        assert "full turn:" not in block
+
+    def test_receipt_pointer_resolves_to_the_full_turn(self, tmp_path):
+        """Drive the pointer, don't trust it — the receipt's whole promise is
+
+        that the collapsed text is still readable somewhere.
+        """
+        older, newest = self._reply_body(1), self._reply_body(2)
+        self._seed(tmp_path, event_id="evt-old", body=older)
+        brr_dir = self._seed(tmp_path, event_id="evt-new", body=newest)
+        records = [
+            self._outbound(event_id="evt-old", body=older, ts="2026-07-20T04:44:00Z"),
+            self._outbound(event_id="evt-new", body=newest, ts="2026-07-21T04:44:00Z"),
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        match = re.search(r"B · full turn: `([^`]+)`", block)
+        assert match, f"no resolvable pointer on the receipt:\n{block}"
+        path = Path(match.group(1))
+        assert path.is_file(), f"receipt names a path that does not exist: {path}"
+        stored = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert any(rec.get("body") == older for rec in stored), (
+            "the pointer resolves but the collapsed reply is not readable there"
+        )
+
+    def test_collapse_applies_with_no_byte_cap(self, tmp_path):
+        """The deliberate call: authorship is not size.
+
+        A caller that passes no `turn_max_bytes` opted out of #736's size
+        cap. That is not a request to be fed its own voice back, so the
+        receipt collapse still fires — the two answer different questions.
+        """
+        older, newest = self._reply_body(1), self._reply_body(2)
+        self._seed(tmp_path, event_id="evt-old", body=older)
+        brr_dir = self._seed(tmp_path, event_id="evt-new", body=newest)
+        records = [
+            self._outbound(event_id="evt-old", body=older, ts="2026-07-20T04:44:00Z"),
+            self._outbound(event_id="evt-new", body=newest, ts="2026-07-21T04:44:00Z"),
+        ]
+
+        uncapped = _format_recent_conversation(records, brr_dir=brr_dir)
+        capped = _format_recent_conversation(
+            records, turn_max_bytes=RECENT_TURN_MAX_BYTES, brr_dir=brr_dir
+        )
+
+        assert "supporting detail 3 for reply 1" not in uncapped
+        assert uncapped.count("B · full turn:") == 1
+        # Both bodies are under the #736 cap, so the two renderings agree:
+        # the collapse is doing this on its own, not riding the cap.
+        assert len(newest.encode("utf-8")) < RECENT_TURN_MAX_BYTES
+        assert capped == uncapped
+
+    def test_long_first_line_is_truncated_at_the_receipt_width(self, tmp_path):
+        brr_dir = tmp_path / ".brr"
+        brr_dir.mkdir(parents=True)
+        long_head = "x" * 500
+        records = [
+            self._outbound(
+                event_id="evt-old", body=long_head, ts="2026-07-20T04:44:00Z"
+            ),
+            self._outbound(
+                event_id="evt-new",
+                body=self._reply_body(2),
+                ts="2026-07-21T04:44:00Z",
+            ),
+        ]
+
+        block = _format_recent_conversation(records, brr_dir=brr_dir)
+
+        receipt = next(ln for ln in block.splitlines() if "B · full turn:" in ln)
+        head = receipt.split("): ", 1)[1].split(" · ")[0]
+        assert len(head) <= OWN_OUTBOUND_RECEIPT_HEAD_CHARS
+        assert head.endswith("…"), "a truncated head must say it was truncated"
+        # The byte count is still the *whole* reply's, not the kept head's.
+        assert f"· {len(long_head.encode('utf-8')):,} B ·" in receipt
+
+    def test_wake_prompt_shrinks_by_the_collapsed_outbound(self, tmp_path, monkeypatch):
+        """Drive the assembled bundle, not just the helper.
+
+        This repo has shipped a guard that was perfect and unwired; the
+        baseline is the same prompt with the receipt neutered to return the
+        body it was handed, so the comparison runs through this code path
+        rather than a hand-rolled imitation of it.
+        """
+        brr = tmp_path / ".brr"
+        (brr / "prompts").mkdir(parents=True)
+        (brr / "prompts" / "run.md").write_text("You are an agent.")
+        bodies = {f"evt-{n}": self._reply_body(n) for n in range(4)}
+        for event_id, body in bodies.items():
+            self._seed(tmp_path, event_id=event_id, body=body)
+        recent = [
+            self._outbound(event_id=eid, body=body, ts=f"2026-07-2{i}T04:44:00Z")
+            for i, (eid, body) in enumerate(bodies.items())
+        ]
+
+        def render() -> str:
+            return build_daemon_prompt(
+                "next thing", "evt-now", "/tmp/resp.md", tmp_path,
+                run_id="task-1",
+                recent_conversation=recent,
+                event_body="next thing",
+            )
+
+        after = render()
+        # "Every outbound renders in full" = the pre-#755 rendering.
+        monkeypatch.setattr(
+            prompts,
+            "_own_outbound_receipt",
+            lambda body, record, *, brr_dir: body,
+        )
+        before = render()
+        assert "supporting detail 7 for reply 0" in before, (
+            "baseline is not the pre-#755 rendering"
+        )
+
+        assert "supporting detail 7 for reply 0" not in after
+        assert "supporting detail 7 for reply 3" in after, "newest lost its body"
+        saved = len(before.encode("utf-8")) - len(after.encode("utf-8"))
+        collapsed = sum(
+            len(bodies[f"evt-{n}"].encode("utf-8")) for n in range(3)
+        )
+        assert saved > collapsed * 0.8, (
+            f"prompt fell only {saved} B for {collapsed} B of collapsed "
+            "outbound — the receipt is not reaching the assembled bundle"
         )
 
 
