@@ -1094,30 +1094,16 @@ def committed_pages_in_window(
 def _commit_shas_owned_by_run(
     git_root: Path, start_oid: str, run_id: str,
 ) -> list[str]:
-    """Commit SHAs in ``start_oid..HEAD`` whose ``Brnrd-Run-Id`` trailer is
-    exactly ``run_id`` — the identity gate #565 adds in place of the time
-    window alone. A commit with no trailer, or a sibling's trailer, is
-    excluded rather than defaulting into this run's credit."""
+    """Commit SHAs in ``start_oid..HEAD`` owned by ``run_id`` — see
+    :func:`gitops.commits_owned_by_run`, which owns this read.
 
-    result = subprocess.run(
-        [
-            "git", "log",
-            f"--format=%H%x00%(trailers:key={gitops.RUN_ID_TRAILER},"
-            "valueonly,separator=%x2C)",
-            f"{start_oid}..HEAD",
-        ],
-        cwd=git_root, capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        return []
-    owned: list[str] = []
-    for line in result.stdout.split("\n"):
-        if not line:
-            continue
-        sha, _, value = line.partition("\0")
-        if sha and value.strip() == run_id:
-            owned.append(sha)
-    return owned
+    Kept as a thin alias because this module's callers name it; the
+    implementation moved to ``gitops`` in #703, where a second consumer
+    (the stray-host-write check) needed the same range+trailer read. Two
+    copies of a trailer grammar would have agreed right up until one of
+    them was wrong — the failure mode #723 files.
+    """
+    return gitops.commits_owned_by_run(git_root, start_oid, run_id)
 
 
 def _committed_markdown_paths(
