@@ -110,39 +110,78 @@ def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:
     return lane in lanes
 
 
-def _subject_repo_id(
-    db: Session, *, account_id: str, repo_label: str | None, publisher_repo_id: str | None
-) -> str | None:
-    """The repo a payload row is *about*, not the one that published it.
+def _subject_repos(repos: list[Repo], repo_label: str) -> list[Repo]:
+    """Every repo in the account a row's ``repo_label`` could be naming.
 
-    The daemon collects these lanes across every repo in its account context
-    (`brr.gates.cloud::_live_runs_snapshot` — "across every repo it touches"),
-    so a row's ``repo_label`` and the publishing token's repo are routinely
-    different repos. The token identifies the publisher; it was never the
-    data subject.
+    Matched **case-insensitively**, because the two sides of this comparison
+    have different provenance and only one of them is authoritative about
+    case:
 
-    ``repo_label`` arrives from the client, so the lookup is scoped to the
-    token's own account: a daemon must not be able to name another account's
-    repo and borrow its consent. ``Repo`` carries
-    ``UniqueConstraint("account_id", "repo_full_name")`` (`models.py:46`), so
-    within one account the label resolves to at most one row — the join key
-    is exact, not a heuristic.
+    - the ``Repo`` row records what the connect payload / GitHub API said
+      (`routers/accounts.py`);
+    - the daemon derives ``repo_label`` by parsing the git remote URL
+      (`brr.gates.cloud::_github_repo_label` -> ``parse_origin_url``, with a
+      further fallback to the checkout's directory name).
 
-    A row naming no repo — or naming one this account does not have — falls
-    back to the **publisher's** repo, which is precisely the question asked
-    before this function existed. That keeps the unresolvable cases byte-for-
-    byte at today's behaviour, and it denies a spoofed label a wider audience
-    than the token that carried it.
+    GitHub serves repositories case-insensitively, so a clone of
+    ``.../gurio/brnrd`` yields a remote that parses to ``gurio/brnrd`` while
+    the connect record says ``Gurio/brnrd``. An exact comparison silently
+    fails to resolve there — and a subject that fails to resolve falls back
+    to the publisher, which is #714's own defect wearing one character of
+    case.
+
+    The codebase had already reached this conclusion twice and this module
+    was the odd one out: `routers/webhooks.py::_find_repo` matches on
+    ``casefold()``, and this lane's *own producer* dedups its labels by
+    ``repo_label.casefold()`` (`cloud.py::_pr_review_repo_labels`). The
+    producer folded and the consumer did not.
+
+    Returns a **list**, not a single row, and that is deliberate — see
+    ``_subject_permits``. ``Repo`` is unique on
+    ``(account_id, repo_full_name)`` (`models.py:46`), but that constraint is
+    case-*sensitive* and so is the dedup in
+    `routers/accounts.py::create_repo`, so one account can legitimately hold
+    ``Gurio/x`` and ``gurio/x`` as two rows carrying two different consents.
+    """
+    wanted = repo_label.casefold()
+    return [repo for repo in repos if repo.repo_full_name.casefold() == wanted]
+
+
+def _subject_permits(
+    db: Session,
+    repos: list[Repo],
+    *,
+    repo_label: str | None,
+    publisher_repo_id: str | None,
+    lane: str,
+) -> bool:
+    """May this one row publish, judged on the repo it is *about*?
+
+    Three cases, and the middle one is the reason this is not a lookup:
+
+    - **No match** — the row names no repo, or names one this account has not
+      connected. Falls back to the **publisher's** consent, which is exactly
+      the question asked before #714 existed: the unresolvable case stays
+      byte-for-byte at its old behaviour, and a spoofed label cannot buy a
+      wider audience than the token that carried it.
+    - **Several matches** — case variants of one name, each with its own
+      recorded consent. The row publishes only if **every** one of them
+      permits the lane. This is #715's rule (`corpus_slices_permitted`)
+      pointed at a new axis: *enforcement must not weaken when a repo is
+      added*. Resolving the ambiguity by giving up — `_find_repo`'s
+      ``len(matches) == 1`` shape — would fall through to the publisher and
+      make a second connect *widen* what the first one had shut.
+    - **One match** — that repo's consent, the ordinary case.
+
+    A legacy repo among the matches returns ``True`` from ``lane_permitted``
+    and so neither consents nor vetoes, which is the carve-out behaving as
+    ``SECURITY.md`` states.
     """
     label = (repo_label or "").strip()
-    if not label:
-        return publisher_repo_id
-    repo = db.execute(
-        select(Repo).where(Repo.account_id == account_id, Repo.repo_full_name == label)
-    ).scalar_one_or_none()
-    if repo is None:
-        return publisher_repo_id
-    return repo.id
+    matches = _subject_repos(repos, label) if label else []
+    if not matches:
+        return lane_permitted(db, repo_id=publisher_repo_id, lane=lane)
+    return all(lane_permitted(db, repo_id=repo.id, lane=lane) for repo in matches)
 
 
 def permitted_rows(
@@ -164,21 +203,31 @@ def permitted_rows(
 
     Filters, never rejects: a mixed payload keeps its permitted rows and
     drops the rest, the same shape as the ``rows if permitted else []`` it
-    replaces. Each distinct label is resolved once per request.
+    replaces.
+
+    The candidate set is read once per request and matched in Python rather
+    than per row in SQL: the match is ``casefold()`` (see ``_subject_repos``),
+    which is a Python string operation the database's own collation cannot be
+    trusted to reproduce, and an account's repo list is small — the same
+    shape `corpus_slices_permitted` and `routers/webhooks.py::_find_repo`
+    already use. Each distinct label is then decided once.
     """
+    if not rows:
+        return []
+    # Scoped to the token's account: `repo_label` is client-supplied, and a
+    # daemon must not be able to name another account's repo and borrow its
+    # consent.
+    repos = list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
     decided: dict[str, bool] = {}
     kept = []
     for row in rows:
         label = (getattr(row, "repo_label", None) or "").strip()
         if label not in decided:
-            decided[label] = lane_permitted(
+            decided[label] = _subject_permits(
                 db,
-                repo_id=_subject_repo_id(
-                    db,
-                    account_id=account_id,
-                    repo_label=label,
-                    publisher_repo_id=publisher_repo_id,
-                ),
+                repos,
+                repo_label=label,
+                publisher_repo_id=publisher_repo_id,
                 lane=lane,
             )
         if decided[label]:

@@ -259,9 +259,20 @@ once. Each row is checked against its own repo's consent and dropped
 individually; the rest of the payload still publishes. The remaining lanes
 (**activity**, **quota**, **runners**) carry daemon-scoped data with no
 per-row subject, so there the publishing token's own repo is the consent that
-applies. A row naming a repo this account has not connected is checked
-against the publishing repo's consent, so an unrecognised label never reaches
-further than the token that carried it.
+applies. Repo names are matched case-insensitively, because the daemon reads
+the label off your git remote while the connect record keeps the spelling
+GitHub reported; where an account holds two spellings of one name as separate
+repos, a row publishes only if **both** have consented.
+
+**The limit of this control, stated plainly:** a row can name a repo that is
+not connected to this brnrd account at all — a checkout the daemon can see
+locally but that was never connected here. There is no consent on file for
+such a repo, so **its own consent is not consulted**, and the row is checked
+against the *publishing* repo's consent instead. If the repo whose daemon
+token sent it has consented to that lane, the row publishes. The control
+bounds what your **connected** repos disclose; it cannot speak for a repo you
+never told brnrd about. Connect a repo — with whatever scope you want,
+including `none` — if you want its consent enforced.
 
 One lane, **corpus**, cannot be scoped to a single repo: the knowledge mirror
 is account-wide by construction, so the server only ships a corpus slice once
