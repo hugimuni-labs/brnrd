@@ -34,12 +34,19 @@ def _aware(value: datetime | None) -> datetime | None:
 
 def view(row: RunnerWakeRequest) -> dict:
     created = _aware(row.created_at)
+    expires = _aware(row.expires_at)
     return {
         "request_id": row.id,
         "profile": row.profile,
         "repo_label": row.repo_label,
         "environment": row.environment,
         "requested_at": created.isoformat() if created else None,
+        # #733: the daemon needs this. It used to keep its own, much shorter
+        # staleness horizon because the row's expiry was never published — so
+        # the chip rendered from this view said "pending" for up to a day while
+        # the daemon destroyed the tap after 15 minutes. Same fact, two owners,
+        # and the one nobody could see was the one that decided.
+        "expires_at": expires.isoformat() if expires else None,
         "status": row.status,
     }
 
@@ -130,7 +137,33 @@ def cancel(db: Session, account_id: str, request_id: str) -> RunnerWakeRequest |
 
 
 def mark_consumed(db: Session, account_id: str, request_ids: list[str]) -> None:
-    """Daemon ack: these requests were spent on a dispatched wake."""
+    """Daemon ack: these requests were spent on a dispatched wake.
+
+    Only genuine spends reach here. #733: the daemon used to report expiries
+    through this call too — its lapse path shared one local ledger with its
+    consume path — so a tap that was never honoured was recorded as having run.
+    Expiries now arrive via :func:`mark_expired`.
+    """
+    _decide(db, account_id, request_ids, RunnerWakeRequest.STATUS_CONSUMED)
+
+
+def mark_expired(db: Session, account_id: str, request_ids: list[str]) -> None:
+    """Daemon ack: these requests existed and were never applied.
+
+    #733. ``STATUS_EXPIRED`` is not a new concept — :func:`pending_for_account`
+    already sets it on the server's own lazy TTL sweep. What was missing was a
+    way for the *daemon* to say it: the only ack channel was
+    :func:`mark_consumed`, so every locally-lapsed tap was published as spent.
+    The distinction is the difference between "you got the runner you asked
+    for" and "you didn't", which is exactly the question a user re-reads the
+    chip to answer.
+    """
+    _decide(db, account_id, request_ids, RunnerWakeRequest.STATUS_EXPIRED)
+
+
+def _decide(
+    db: Session, account_id: str, request_ids: list[str], status: str
+) -> None:
     if not request_ids:
         return
     now = datetime.now(timezone.utc)
@@ -140,12 +173,14 @@ def mark_consumed(db: Session, account_id: str, request_ids: list[str]) -> None:
         if row is None or row.account_id != account_id:
             continue
         # A cancel that lost the race to a real dispatch stays truthful:
-        # the wake did fire on the requested profile.
+        # the wake did fire on the requested profile. Same reasoning for a
+        # cancel racing a lapse — the daemon's account of what happened to the
+        # tap is the more specific one either way.
         if row.status in (
             RunnerWakeRequest.STATUS_PENDING,
             RunnerWakeRequest.STATUS_CANCELED,
         ):
-            row.status = RunnerWakeRequest.STATUS_CONSUMED
+            row.status = status
             row.decided_at = now
             dirty = True
     if dirty:
