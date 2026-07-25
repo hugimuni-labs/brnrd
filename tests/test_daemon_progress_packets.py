@@ -163,6 +163,120 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     assert failed.get("will_retry") is True
 
 
+_TRANSPORT_DEATH = (
+    "API Error: Connection closed mid-response. The response above may be "
+    "incomplete."
+)
+
+
+def _transport_death_result(runner_name, invocation):
+    """The 2026-07-25 incident's shape: exit 1, the drop text on *stdout*,
+    nothing on stderr, no artifacts, no response file written."""
+    return RunnerResult(
+        invocation=invocation, runner_name=runner_name, command=["mock"],
+        stdout=_TRANSPORT_DEATH, stderr="", returncode=1,
+        trace_dir=None, artifacts=[],
+    )
+
+
+def test_transport_death_is_retried_and_the_next_attempt_lands(
+    tmp_path, monkeypatch,
+):
+    """#729, driven through the daemon rather than asserted on the predicate.
+
+    A connection that drops mid-response did no work a retry would
+    duplicate, so the daemon must pay for a second attempt. Before the fix
+    ``retry_reason()`` was ``if not self.ok: return None`` and this run died
+    at attempt 1 with no branch and no report (``run-260725-0820-gc3n``,
+    dead 78s in, recovered only because a human re-dispatched by hand).
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-transport", body="ship it",
+        telegram_chat_id=42,
+    )
+    _patch_runner(monkeypatch)
+
+    prompts_seen: list[str] = []
+
+    def _drop_then_succeed(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        prompts_seen.append(invocation.prompt)
+        if invocation.label.endswith("attempt-1"):
+            return _transport_death_result(runner_name, invocation)
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_drop_then_succeed),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    assert task.status == "done"
+    types = _packet_types(tmp_path / ".brr", task.conversation_key)
+    assert types.count("attempt_started") == 2
+    assert "retrying" in types
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    failed = next(r for r in records if r.get("type") == "attempt_failed")
+    assert failed.get("will_retry") is True
+    assert "transport failure mid-response" in failed.get("reason", "")
+    # The retry prompt must not tell the resident it "exited cleanly but did
+    # not produce the required output file(s)" — that is the artifact-retry
+    # story and it is false here. A dropped call may have committed real
+    # work before the connection went.
+    assert len(prompts_seen) == 2
+    assert "connection to the model dropped mid-response" in prompts_seen[1]
+    assert "did not produce the required output" not in prompts_seen[1]
+
+
+def test_transport_retries_are_bounded_by_max_retries(tmp_path, monkeypatch):
+    """Retryable does not mean unbounded: the transport class shares the one
+    ``response_retries`` budget (default 1) with the missing-artifact class,
+    so a provider dropping every call costs exactly one extra attempt."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-transport-bounded", body="ship it",
+        telegram_chat_id=43,
+    )
+    _patch_runner(monkeypatch)
+
+    attempts: list[str] = []
+
+    def _always_drop(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        attempts.append(invocation.label)
+        return _transport_death_result(runner_name, invocation)
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_always_drop),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    assert task.status == "error"
+    assert attempts == [
+        "evt-transport-bounded-attempt-1",
+        "evt-transport-bounded-attempt-2",
+    ]
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    failed = next(r for r in records if r.get("type") == "failed")
+    assert failed.get("attempts") == 2
+    # The operator's terminal note names the class instead of collapsing it
+    # into a generic runner error — the drop text was on stdout, which
+    # ``error_detail()`` (stderr-first) never sees.
+    assert failed.get("failure_kind") == "transport_error"
+
+
 def test_clean_silent_run_fails_once_without_retry(tmp_path, monkeypatch):
     """Ceremony cut 2026-07-16: a clean exit that communicated nothing —
     no stdout, no outbox reply, no commit — is NOT re-run to extract a
