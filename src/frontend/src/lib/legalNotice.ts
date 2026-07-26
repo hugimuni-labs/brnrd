@@ -106,7 +106,8 @@ const PUBLISHER: readonly LegalField[] = [
 		whereToFind:
 			'not on the K-bis — the mémento fiscal / impots.gouv.fr professional account (it is FR + a 2-digit key + the SIREN, but the key must be read, not computed by hand)',
 		value: 'FR 73 104 156 260',
-		source: 'mémento fiscal, supplied 2026-07-24; key 73 cross-checked against (12 + 3·(SIREN mod 97)) mod 97 — read from the document, the check only confirms it'
+		source:
+			'mémento fiscal, supplied 2026-07-24; key 73 cross-checked against (12 + 3·(SIREN mod 97)) mod 97 — read from the document, the check only confirms it'
 	},
 	{
 		key: 'publisher.publicationDirector',
