@@ -181,6 +181,13 @@ class RunProgressView:
     # no capsule, facet unknown); ``{}`` when the facet is known and the
     # run simply has no produce yet. Renderers treat both as "no line".
     relics_counts: dict[str, int] | None = None
+    # Issue produce, split by action (#686). Read from the same capsule as
+    # ``relics_counts``, but kept apart from it because the split is not a
+    # count-by-kind: ``None`` is *unrecorded* (no capsule, or an older
+    # daemon's facet), never "zero created, zero completed" — an issue close
+    # is invisible to every collector brnrd has, so an empty bucket can only
+    # ever mean nobody reported one.
+    issue_actions: relics_mod.IssueActions | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -248,6 +255,9 @@ def _enrich_with_live_relics(
     """
     if view is not None and view.event_id:
         view.relics_counts = relics_mod.live_portal_counts(
+            brr_dir, view.event_id,
+        )
+        view.issue_actions = relics_mod.live_portal_issue_actions(
             brr_dir, view.event_id,
         )
     return view
@@ -859,6 +869,17 @@ def _render_compact(
     relics_tail = relics_mod.counts_phrase(view.relics_counts)
     if relics_tail:
         lines.append(f"relics: {relics_tail}")
+
+    # #686: the issue produce, split by action, beside the PR stats the
+    # relics tail already carries. Its own line rather than another chip in
+    # that tail because the two answer different questions — "N issues" is
+    # how many the run touched, "N created · M completed" is what it did to
+    # them — and because an unrecorded half has to be sayable, which a
+    # count-chip vocabulary has no room for. Silent unless an action was
+    # actually recorded, so an idle card gains no noise.
+    issues_tail = relics_mod.issues_phrase(view.issue_actions)
+    if issues_tail:
+        lines.append(f"issues: {issues_tail}")
 
     return "\n".join(lines).rstrip() + "\n"
 
