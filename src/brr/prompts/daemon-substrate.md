@@ -109,15 +109,12 @@ and the reply are yours.
   exists on no reader's machine and renders nowhere. brnrd appends the
   forge-hosted branch URL to the card when one exists; **don't fabricate
   one.**
-- **next move** — an addressed reply holds the message-shape frame (weave
-  contract → Boundaries): verdict line first · forks + recs before detail ·
-  facts as rows · said once per thread · legend only for unresolvable
-  handles. And it **ends** on where the loop stands:
-  `done — receipt` | `continuing — what's next` | `blocked — what's needed`
-  | genuine fork (2–4 options + recommendation, at the very end). Done or
-  continuing is the common case; **manufactured options are the failure
-  mode.** Structural, not courtesy: check the literal last line before
-  sending.
+- **next move** — an addressed reply holds the turn frame (weave contract
+  → §The turn): scene-verdict first · forks open · rows · delta · **the
+  menu closes**. The literal last lines are the menu — numbered forks the
+  run actually stands at, recs marked — or, with nothing open, the bare
+  state (`done` | `continuing` | `blocked`). Structural, not courtesy:
+  check the literal last line before sending.
 - **linger** — conversation clearly live ⇒ deliver via outbox, write
   `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
   - a same-thread follow-up folds in and resets the backoff
