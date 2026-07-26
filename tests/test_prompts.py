@@ -1310,6 +1310,22 @@ class TestPromptBuilding:
         )
         assert "your working register" in prompt
 
+    def test_prompts_carry_the_turn_grammar(self, tmp_path):
+        """The reply-as-turn contract (weave.md → "The turn") rides both
+        runner paths: menu closes the turn, empty menu legal, free text
+        overrides. Issue #777 — a content pin so a refactor or trim that
+        drops the section is caught here, not by a reader."""
+        for prompt in (
+            build_run_prompt("ship it", tmp_path),
+            build_daemon_prompt(
+                "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
+            ),
+        ):
+            assert "The menu closes the turn" in prompt
+            assert "An empty menu is legal" in prompt
+            assert "Free text always overrides" in prompt
+            assert "Scene-verdict line" in prompt
+
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
@@ -1920,7 +1936,7 @@ class TestPromptBuilding:
             "blocked — what's needed",
         ):
             assert state in prompt
-        assert "manufactured options are the failure" in prompt
+        assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
