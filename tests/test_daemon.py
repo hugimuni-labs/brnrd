@@ -1727,6 +1727,7 @@ def test_notify_spawn_parent_contract_match_is_ordinary_event(tmp_path):
 
     note = protocol.list_pending(inbox)[0]
     assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "done"
     assert "status=done" in note["body"]
     assert "contract-mismatch" not in note["body"]
 
@@ -1970,6 +1971,7 @@ def test_notify_spawn_parent_no_evidence_is_runner_failed_not_mismatch(tmp_path)
 
     note = protocol.list_pending(inbox)[0]
     assert "spawn_contract_mismatch" not in note
+    assert note.get("spawn_status") == "runner-failed"
     assert "status=runner-failed" in note["body"]
     assert "contract mismatch" not in note["body"]
     assert "spec branch" not in note["body"]
@@ -1980,6 +1982,17 @@ def test_notify_spawn_parent_no_evidence_is_runner_failed_not_mismatch(tmp_path)
     assert note["body"].index("usage limit") < note["body"].index(
         "status=runner-failed",
     )
+
+
+def test_notify_spawn_parent_omits_status_before_terminal_state(tmp_path):
+    """An undetermined lifecycle state stays absent, never ``pending``."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(body="", status="pending")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_status" not in note
 
 
 def test_notify_spawn_parent_worker_ran_declared_mismatch_still_indicts(tmp_path):

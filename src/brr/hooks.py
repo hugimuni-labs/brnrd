@@ -903,7 +903,7 @@ def _render_bar(
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
     notices: list[Any] | None = None,
-    finished_spawn_count: int = 0,
+    finished_spawns: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -916,9 +916,9 @@ def _render_bar(
     or produce chatter must not manufacture an injection by itself.
 
     *notices* drives the ``!N`` segment: non-zero refusal count only.
-    *finished_spawn_count* is the number of ``spawn_completed`` events the
-    parent already observed; they are facts, not obligations, and are
-    reported separately rather than counted against *pending*.
+    *finished_spawns* are the ``spawn_completed`` events the parent already
+    observed; they are facts, not obligations, and are reported separately
+    rather than counted against *pending*.
     """
     segments: list[str] = []
     id_chip = _run_id_chip(run)
@@ -985,15 +985,12 @@ def _render_bar(
                 f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
                 f"{summary[:200]}"
             )
-    if finished_spawn_count:
+    if finished_spawns:
         # Finished spawns are facts, not obligations — the parent already
         # observed them; they will self-retire at run end. Reported as a
         # distinct line so the run body can name them without any "address each"
         # pressure.
-        details.append(
-            f"- ▷ {finished_spawn_count} finished spawn(s) observed — "
-            "no address needed; will retire at run end."
-        )
+        details.append(_finished_spawns_line(finished_spawns))
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -1032,11 +1029,70 @@ def _render_bar(
     if (
         pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
-        and not notices_chip and not finished_spawn_count
+        and not notices_chip and not finished_spawns
     ):
         return None
     bar = " │ ".join(segments)
     return bar + ("\n" + "\n".join(details) if details else "")
+
+
+def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
+    """Render the shared finished-spawn fact without inferring absent status."""
+    count = len(finished_spawns)
+    statuses = [
+        str(event["spawn_status"]).strip()
+        for event in finished_spawns
+        if str(event.get("spawn_status") or "").strip()
+    ]
+    error_count = sum(status != "done" for status in statuses)
+    ok_count = statuses.count("done")
+    # An event that carries no status is not a healthy one — it is one whose
+    # outcome was never determined, and that is the case this whole line
+    # exists for. Folding it into the all-clear branch would restate #730's
+    # defect in the one place nobody drives: "no address needed" is itself a
+    # claim about outcome. It is reachable, too — every completion event
+    # minted before this shipped has no ``spawn_status``, and daemon.py is
+    # the restart-only liveness class, so that window is real.
+    unknown_count = count - len(statuses)
+    missing_reports = [
+        event for event in finished_spawns
+        if event.get("spawn_report_found") is False
+    ]
+
+    if not error_count and not missing_reports and not unknown_count:
+        return (
+            f"- ▷ {count} finished spawn(s) observed — "
+            "no address needed; will retire at run end."
+        )
+
+    # The parts sum to the whole, always. A ledger whose columns do not add
+    # up is how a reader learns to stop trusting the ledger (#683, one file
+    # over), so every spawn is accounted for under exactly one term.
+    counts: list[str] = []
+    if ok_count:
+        counts.append(f"{ok_count} ok")
+    if error_count:
+        counts.append(f"{error_count} error")
+    if unknown_count:
+        counts.append(f"{unknown_count} status unknown")
+
+    noteworthy = [
+        event for event in finished_spawns
+        if not str(event.get("spawn_status") or "").strip()
+        or event.get("spawn_status") != "done"
+        or event.get("spawn_report_found") is False
+    ]
+    notes: list[str] = []
+    for event in noteworthy:
+        child_id = str(event.get("spawned_by_run") or event.get("id") or "-")
+        note = child_id
+        if event.get("spawn_report_found") is False:
+            note += "; no report written"
+        notes.append(note)
+
+    summary = ", ".join(counts) if counts else "report missing"
+    detail = f" ({'; '.join(notes)})" if notes else ""
+    return f"- ▷ {count} finished spawn(s) — {summary}{detail}."
 
 
 def format_delta(
@@ -1144,7 +1200,7 @@ def format_delta(
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
             mood=mood, surprise=surprise, orient=orient,
-            notices=notices, finished_spawn_count=len(finished_spawns),
+            notices=notices, finished_spawns=finished_spawns,
         )
 
     lines: list[str] = []
@@ -1179,10 +1235,7 @@ def format_delta(
         )
     if finished_spawns:
         # Distinct fact line: not obligations, but visible to the parent.
-        lines.append(
-            f"- ▷ {len(finished_spawns)} finished spawn(s) observed — "
-            "no address needed; will retire at run end."
-        )
+        lines.append(_finished_spawns_line(finished_spawns))
         for ev in finished_spawns:
             summary = str(ev.get("summary") or "").strip()
             lines.append(
