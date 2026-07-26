@@ -148,11 +148,38 @@ old shape costs more than it saves.
 
 ## Build and run
 
-Editable install with dev deps, then run tests:
+**To run the tests, run `pytest`. Nothing else.** `pyproject.toml` sets
+`pythonpath = ["src"]` relative to pytest's rootdir, so the suite already
+imports the tree it is running in — the checkout, or a worktree, whichever
+holds the tests you invoked.
+
+The editable install is a **one-time setup step for the operator's own
+checkout**, not something a task re-runs:
 
 ```bash
-pip install -e ".[dev]" && pytest
+pip install -e ".[dev]"   # once, in the main checkout only
 ```
+
+**Never run `pip install -e` from a worktree, a linked checkout, or any
+task that did not create its own virtualenv.** A worktree gets its own
+files; it shares the operator's venv. An editable install from there writes
+a `.pth` into that shared venv pointing at a path that will not exist in ten
+minutes, and until it is torn down every *fresh* Python process on this
+machine — including the CLI and the hooks subprocess the daemon spawns at
+every tool boundary — imports the worktree instead of the checkout. When the
+worktree goes, `site.addpackage` skips the dead path without a word and
+resolution falls back, so the damage is invisible while it is happening and
+gone before anyone looks for it (issue #762).
+
+Two related traps in the same neighbourhood:
+
+- A bare `python -c "import brr"` run *inside* a worktree imports the
+  **host's** installed copy, not the worktree's. Under pytest you get the
+  worktree; outside it you do not. When it matters which tree you are
+  testing, assert `module.__file__` rather than trusting the working
+  directory.
+- Needing a real install inside a task means needing a real virtualenv:
+  create one under the task's own tree and use its interpreter explicitly.
 
 See [`README.md`](README.md) → Development for variants (uv, fork
 install, dev-reload daemon). Build system is setuptools; the source
