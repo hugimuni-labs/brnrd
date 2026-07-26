@@ -2432,3 +2432,106 @@ def test_long_notice_text_is_truncated_with_an_ellipsis(tmp_path):
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "…" in ctx
     assert "x" * 400 not in ctx
+
+
+# ── The wake census (#739, the reading half of #683) ─────────────────────
+#
+# Same fixture discipline as the orientation ledger above (#611): every
+# assertion of absence sits beside a positive twin on the same input shape,
+# so "no census rendered" can never be green against an input that could not
+# have produced one.
+
+
+def _census_score(tmp_path, *, contracts, prompt_bytes=None):
+    """A `boot-score.json` carrying only what the census reads.
+
+    Deliberately not a full score: the census must work off whatever the
+    daemon wrote, including an older daemon's partial one.
+    """
+    payload = {"contracts": contracts}
+    if prompt_bytes is not None:
+        payload["prompt_bytes"] = prompt_bytes
+    path = tmp_path / "boot-score.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+_CENSUS_BLOCKS = [
+    {"block_key": "work-surface", "label": "Discovered work surface",
+     "bytes": 24716, "present": True, "oldest_item": "2026-07-25 21:18"},
+    {"block_key": "dominion", "label": "Dominion digest",
+     "bytes": 21521, "present": True, "oldest_item": None},
+    {"block_key": "weave", "label": "Working register",
+     "bytes": 5524, "present": True, "oldest_item": "2026-07-26 09:00"},
+    # Present in scope, silent in this wake: must not win `top` on a stale
+    # byte count from a block that never rendered.
+    {"block_key": "diffense", "label": "Diffense pack",
+     "bytes": 99999, "present": False, "oldest_item": None},
+]
+
+
+def test_census_renders_total_biggest_block_and_oldest_item(tmp_path):
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, code = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert code == 0
+    bar = _inject_text(out).splitlines()[0]
+    assert "wake 113.0 KB" in bar
+    assert "top work-surface 24.1 KB" in bar
+    # The oldest item across every measured block, not the top block's own.
+    assert "oldest 2026-07-25" in bar
+
+
+def test_census_is_silent_when_the_score_carries_no_contracts(tmp_path):
+    """An older daemon's score, or none at all, renders nothing — not a zero.
+
+    Positive twin: the same portal input with a contracts-bearing score
+    renders the segment (asserted above), so this absence is the score's,
+    not the boundary's.
+    """
+    _boot_score(tmp_path, _orient_files(tmp_path))  # orientation_set only
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "wake " not in _inject_text(out)
+
+
+def test_census_fields_degrade_one_at_a_time(tmp_path):
+    """A partial score still renders what it measured.
+
+    One absent field silencing the line would hide the census exactly when
+    the score is partial — which is when it is most worth reading.
+    """
+    blocks = [
+        {"block_key": "run-context-bundle", "bytes": 19789, "present": True},
+    ]
+    _census_score(tmp_path, contracts=blocks)  # no prompt_bytes, no oldest
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    bar = _inject_text(out).splitlines()[0]
+    assert "top run-context-bundle 19.3 KB" in bar
+    assert "wake " not in bar
+    assert "oldest" not in bar
+
+
+def test_census_never_opens_the_bar_on_its_own(tmp_path):
+    """A value constant for a whole run must not manufacture a boundary.
+
+    Same rule the orientation meter keeps: the census rides bars the portal
+    would have rendered anyway. Positive twin: the identical score with one
+    pending event renders it (asserted above).
+    """
+    _census_score(tmp_path, contracts=_CENSUS_BLOCKS, prompt_bytes=115714)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
+    )
+    assert "wake " not in _inject_text(out)

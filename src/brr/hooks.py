@@ -445,6 +445,81 @@ def _orientation_progress(
     return count, len(set_paths)
 
 
+# ── The wake census (#739, the reading half of #683) ─────────────────────
+#
+# `boot-score.json` has carried an owner-attributed per-block census since
+# #683, and the one surface that never saw it was the wake it describes.
+# Three fields, straight off the artifact the daemon already wrote before
+# the runner started — projection, not measurement, so it cannot disagree
+# with the score an operator reads later.
+#
+# Why these three (the maintainer's ask, 2026-07-25): a block that doubles
+# shows up in `top` the boot it lands, and a block still carrying material
+# from days ago shows up in `oldest` — which is exactly how #736's 12 KB
+# dead turn would have announced itself four days before anyone asked.
+
+
+def _fmt_kb(size: int) -> str:
+    """Bytes as `24.7 KB`. One decimal: enough to see a block move, short
+    enough to ride a bar segment."""
+    return f"{size / 1024:.1f} KB"
+
+
+def _wake_census(ctx: HookContext) -> str | None:
+    """`wake 115.7 KB · top work-surface 24.7 KB · oldest 2026-07-25`.
+
+    ``None`` on any absence — no score armed, unreadable file, a score with
+    no `contracts` (an older daemon), or nothing measured. Same three-state
+    discipline the score itself keeps: a missing measurement renders nothing
+    rather than a zero, because "0 B" is a claim and absence is not.
+
+    Each field degrades on its own. A score whose `prompt_bytes` is missing
+    still renders `top` and `oldest`; a wake where no block carries an
+    `oldest_item` renders the first two. The alternative — one absent field
+    silencing the line — would hide the census exactly when the score is
+    partial, which is when it is most worth reading.
+    """
+    score = _read_json(ctx.boot_score_path)
+    contracts = score.get("contracts")
+    if not isinstance(contracts, list):
+        return None
+    measured = [
+        entry for entry in contracts
+        if isinstance(entry, dict)
+        and entry.get("present")
+        and isinstance(entry.get("bytes"), int)
+        and entry["bytes"] > 0
+    ]
+    if not measured:
+        return None
+
+    parts: list[str] = []
+    total = score.get("prompt_bytes")
+    if isinstance(total, int) and total > 0:
+        # `prompt_bytes` is the whole wake (prose + mounted blocks) since
+        # #741; before that it was the prose subtotal wearing the name, and
+        # this line would have under-reported by ~24%.
+        parts.append(f"wake {_fmt_kb(total)}")
+
+    top = max(measured, key=lambda entry: entry["bytes"])
+    label = str(top.get("block_key") or top.get("label") or "?").strip() or "?"
+    parts.append(f"top {label} {_fmt_kb(top['bytes'])}")
+
+    # ISO-shaped strings, so lexical order is chronological order.
+    oldest = min(
+        (
+            str(entry["oldest_item"]).strip()
+            for entry in measured
+            if isinstance(entry.get("oldest_item"), str)
+            and str(entry["oldest_item"]).strip()
+        ),
+        default="",
+    )
+    if oldest:
+        parts.append(f"oldest {oldest[:10]}")
+    return " · ".join(parts)
+
+
 # ── Injection rendering (portal-state → compact delta) ───────────────────
 #
 # Slice 8 (#513): the mid-run (``post-tool``) boundary renders as ONE compact
@@ -506,6 +581,17 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "completion or skip, and never opens the "
         "bar on its own: a meter is not an obligation, and a meter that "
         "never leaves trains skimming.",
+    ),
+    _BarSegment(
+        "census", "wake",
+        "the wake census (#739, #683): total wake bytes, the biggest single "
+        "block, and the oldest item any block still carries "
+        "(`wake 115.7 KB · top work-surface 24.7 KB · oldest 2026-07-25`). "
+        "Projection off the `boot-score.json` the daemon wrote before this "
+        "runner started, so it never re-measures and never disagrees with "
+        "the score. Static for a run by construction — it is the shape of "
+        "the boot, not a meter that moves — and each field degrades "
+        "independently when the score is partial.",
     ),
     _BarSegment(
         "siblings", "▷",
@@ -902,6 +988,7 @@ def _render_bar(
     mood: str | None,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
+    census: str | None = None,
     notices: list[Any] | None = None,
     finished_spawns: list[dict[str, Any]] | None = None,
 ) -> str | None:
@@ -937,6 +1024,12 @@ def _render_bar(
         # first-class outcome), and a segment that could keep the bar alive
         # at every boundary would train the exact skimming it measures.
         segments.append(f"orient {orient[0]}/{orient[1]}")
+    if census:
+        # Sits beside `orient` because both describe the *wake*, not the run:
+        # what the boot cost, and how much of it has been walked. Never in the
+        # gate below, for `orient`'s reason and one of its own — a value that
+        # is constant for a whole run must never be what keeps the bar alive.
+        segments.append(census)
     siblings_chip = _siblings_chip(resources)
     if siblings_chip:
         segments.append(siblings_chip)
@@ -1104,6 +1197,7 @@ def format_delta(
     mood: str | None = None,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
+    census: str | None = None,
     note_routing: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
@@ -1139,6 +1233,11 @@ def format_delta(
     computed by the caller (:func:`_orientation_progress`) — a mid-run bar
     segment only, never seed/stop prose: the kernel already names the walk
     at seed, and by stop the walk is either done, skipped, or moot.
+
+    ``census`` is the wake census (#739), computed by the caller
+    (:func:`_wake_census`) off `boot-score.json` — a mid-run bar segment
+    only, for `orient`'s reason: seed already names the boot's shape, and by
+    stop the number is a week-old fact about a prompt nobody will re-read.
 
     ``note_routing`` is the gate-less routing fact's once-per-run latch
     (#728), owned by the caller for the same reason ``orient`` and
@@ -1199,7 +1298,7 @@ def format_delta(
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood, surprise=surprise, orient=orient,
+            mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
         )
 
@@ -2007,6 +2106,11 @@ def compute_neutral(
         # a bar happens to render this boundary. The returned value is the
         # segment's, and only when the walk is still open.
         orient = _orientation_progress(ctx, payload, state)
+        # The wake census (#739): a pure read of the score the daemon wrote
+        # before this runner started. Computed here rather than inside the
+        # renderer for the same reason `orient` is — `format_delta` stays a
+        # function of the portal snapshot, and the score is not in it.
+        census = _wake_census(ctx)
         token = portal.get("change_token")
         # An edge opens the gate on its own. Gating it on the portal token
         # would be a contract the signal can't keep: a failing tool call
@@ -2014,7 +2118,9 @@ def compute_neutral(
         # boundary the ask exists for is exactly the one that would render
         # nothing.
         if token is not None and (token != state.get("last_token") or edge):
-            inject = format_delta(portal, mood=mood, surprise=edge, orient=orient)
+            inject = format_delta(
+                portal, mood=mood, surprise=edge, orient=orient, census=census,
+            )
             state["last_token"] = token
 
     if phase == PHASE_STOP:
