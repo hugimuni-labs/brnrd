@@ -248,10 +248,10 @@ their GDPR rights over Customer Content, through:
 
 - **Self-service.** Disconnecting a repository immediately deletes that
   repository's queued messages, activity rows, chat pairings, and tokens.
-  <!-- src/brnrd/routers/_session.py:339-362 `_disconnect_repo_core`, the delete loop at :347-348 -->
+  <!-- src/brnrd/routers/_session.py:378-401 `_disconnect_repo_core`, the delete loop at :386-387 -->
   When Customer's last connected repository is disconnected, the
   dashboard mirror for that account is emptied as well.
-  <!-- src/brnrd/routers/_session.py:353-360 -->
+  <!-- src/brnrd/routers/_session.py:392-399 -->
 - **Account deletion.** Deleting the account itself (dashboard settings,
   "danger zone") sweeps every Customer Content store the repo-disconnect
   path above does, for every connected repository at once, plus the
@@ -304,10 +304,10 @@ HugiMuni deletes the Customer Content it holds as processor:
 
 - Disconnecting a repository deletes that repository's queued messages,
   activity rows, chat pairings, and tokens immediately.
-  <!-- src/brnrd/routers/_session.py:347-348 -->
+  <!-- src/brnrd/routers/_session.py:386-387 (`_disconnect_repo_core`'s delete loop) -->
 - Disconnecting the last repository on an account empties the dashboard
   mirror for that account.
-  <!-- src/brnrd/routers/_session.py:353-360 -->
+  <!-- src/brnrd/routers/_session.py:392-399 -->
 
 Deletion of relayed message content is also **independent of any Customer
 action**: a message body is nulled the moment the reply is delivered, and
@@ -450,7 +450,7 @@ avoid.
 | Session token | Expires 30 days after issuance | `routers/accounts.py:22` (`SESSION_TTL`) |
 | Review pack | Held in memory 3,600 seconds by default, then dropped; never persisted | `pack_relay.py:39`, `config.py:62` |
 | Pending/running task row | Replaced on every publish tick; dropped after 10 minutes of no report | `activity_records.py:11` (`ACTIVITY_STALE_TTL`) |
-| Dashboard corpus mirror | No fixed TTL — replaced wholesale roughly every 3 seconds on publish; deleted in full when the account's last repository disconnects | `routers/_session.py:353-360`; publish cadence per `SECURITY.md` §"What dashboard publishing mirrors" |
+| Dashboard corpus mirror | No fixed TTL — replaced wholesale roughly every 3 seconds on publish; deleted in full when the account's last repository disconnects | `routers/_session.py:392-399`; publish cadence per `SECURITY.md` §"What dashboard publishing mirrors" |
 | Run pages within the mirror | Customer's own daemon stops mirroring run pages older than 14 days by default (Customer-configurable, `publish.runs_window_days`) | `brr/gates/cloud.py:1194` (`_RUNS_WINDOW_DAYS_DEFAULT`) |
 
 The retention numbers published on HugiMuni's public `/privacy` notice

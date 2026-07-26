@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
+
+	const legalNoticeReady = legalNoticeIsComplete();
 
 	import TermsGate from '$lib/TermsGate.svelte';
 	import { DOC_TOS, fetchTermsStatus, safeNext, type TermsStatus } from '$lib/terms';
@@ -115,16 +118,26 @@
 				     end 2026. Confirm the wording is adequate under French law. -->
 				<p class="mt-2">
 					The service is operated by <strong class="text-amber-100">HugiMuni SAS</strong>, a société
-					par actions simplifiée incorporated in France, and its legal successors. Its full company
-					and publication details — registered office, share capital, SIREN/RCS registration, VAT
-					number, publication director, and hosting provider — belong in a separate legal notice
-					(mentions légales) which is not yet published.
+					par actions simplifiée incorporated in France, and its legal successors.
+					{#if legalNoticeReady}
+						Its full company and publication details — registered office, share capital, SIREN/RCS
+						registration, VAT number, publication director, and hosting provider — are in the
+						<a class="text-sky-400 underline" href={resolve('/legal-notice')}>legal notice</a> (mentions
+						légales).
+					{:else}
+						Its full company and publication details — registered office, share capital, SIREN/RCS
+						registration, VAT number, publication director, and hosting provider — belong in a
+						separate legal notice (mentions légales) which is not yet published.
+					{/if}
 				</p>
-				<!-- OPEN: mentions légales is #569 document 4, mandatory under LCEN
-				     Art 6-III for a French-operated site, and does not exist in this
-				     repository. Not drafted here because every value on it must come
-				     from the Kbis, not from a guess. It is a launch blocker for a
-				     French site and should ship before or with these terms. -->
+				<!-- mentions légales is #569 document 4, mandatory under LCEN Art
+				     6-III for a French-operated site:
+				     src/frontend/src/routes/legal-notice/+page.svelte. Gated on
+				     $lib/legalNotice's isComplete() — the same registry that page
+				     renders from — so this paragraph only claims the notice exists
+				     once every statutory field on it actually does; if a K-bis value
+				     is ever blanked out, this text falls back on its own rather than
+				     quietly lying alongside it. -->
 			</section>
 
 			<section>
@@ -332,18 +345,18 @@
 					bodies, mirrored pages, repository-derived text, which may contain other people's personal
 					data — you decide, and we process it on your behalf and on your instructions.
 				</p>
-				<!-- OPEN, and stated rather than papered over: /privacy (#569
-				     document 3) is still in preparation; a DPA now exists
-				     (docs/legal/dpa.md, #706) but has no public route yet — a
-				     Customer can request it directly. Not linked here because
-				     linking a page that 404s is worse than naming the gap.
-				     Art 17 erasure *is* self-service as of 2026-07-25: dashboard
-				     settings, "danger zone" button, POST /v1/accounts/delete
-				     (src/brnrd/account_deletion.py). -->
+				<!-- /privacy (#569 document 3) published 2026-07-24
+				     (src/frontend/src/routes/privacy/+page.svelte); linked below rather
+				     than named as pending. A DPA also exists (docs/legal/dpa.md, #706),
+				     available to any Customer on request. Art 17 erasure *is* self-service
+				     as of 2026-07-25: dashboard settings, "danger zone" button,
+				     POST /v1/accounts/delete (src/brnrd/account_deletion.py). -->
 				<p class="mt-2">
-					A privacy notice is in preparation and not yet published; a data-processing agreement
-					exists and is available to any Customer on request. Until the privacy notice is published,
-					the measured description of what the service holds and for how long is on the
+					The
+					<a class="text-sky-400 underline" href={resolve('/privacy')}>privacy notice</a>
+					states what personal data the service holds, why, and for how long; a data-processing agreement
+					exists and is available to any Customer on request. Operational detail beyond the notice's scope
+					is on the
 					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>hosted-execution page</a
 					>
