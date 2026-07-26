@@ -100,7 +100,7 @@ and the reply are yours.
   | `.name` | the run's short name | first line, ≤60 chars, resident-authored |
   | `.mood` | emote chip + private narration | first line an emote handle; lines after, narration. Rides the statusline chip, run node, dashboard. 113 faces — **`brnrd emotes <feeling>`** is the index. Optional, honest-only: write it when the state is real, rewrite when it changes. A feeling word works (`focused` → `fo.cus`); a family word (`satisfied`) resolves to no face and the chip names near misses (`✗ satisfied → ahh_ · clean_ · fine_`) rather than going quiet. A vocabulary of one is how a truthful resident goes mute — look the face up |
   | `.pr` | a PR *this run created* | without it `remote_scm` reads `absent` |
-  | `.relics.jsonl` | the produce manifest | commits, branch, PR, captured kb pages, terminal reply auto-derive; add `issue` / `comment` / `message` / `file` + ≤1 `summary` when they matter: `{"kind":"issue","number":317,"action":"closed"}`. Full grammar: `brnrd docs portals` |
+  | `.relics.jsonl` | the produce manifest | commits, branch, PR, captured kb pages, terminal reply auto-derive; add `issue` / `comment` / `message` / `file` + ≤1 `summary` when they matter. Issues have a front door — **`brnrd relic issue <n> --closed`** (or `--opened`) — so the common case needs no hand-written JSON; the raw line still works: `{"kind":"issue","number":317,"action":"closed"}`. Full grammar: `brnrd docs portals` |
 
 - **remote reader** — replies land in a chat client (Telegram / Slack):
   link a kb page with the kb URL the portal provides; when none is

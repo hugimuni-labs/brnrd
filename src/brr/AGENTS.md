@@ -401,6 +401,21 @@ it. So: edit in `.brnrd-kb/`, commit if you have something to say in the
 message, and **never hand-run a push chain** — if a page seems to need one to
 reach the forge, that's a bug to report, not a ritual to learn.
 
+**Which of the two you write into depends on how you were started, and the
+prompt tells you.** These are two audiences, not two opinions:
+
+- **A brnrd-hosted wake.** The wake prompt's Knowledge Sources block names the
+  authoring directory explicitly, and it is the **account path** — the same one
+  `active_kb_dir` resolves and every reader (injection, preflight, graph, plan)
+  reads. Write there. `.brnrd-kb/` is a clone that can lag; a page authored
+  into a stale mirror looks filed and is invisible to the next wake.
+- **An ad-hoc session with no wake prompt** (editor, bare coding-agent CLI).
+  Nothing named a path for you, so `.brnrd-kb/` beside the repo is the
+  discoverable surface and the paragraph above is your instruction.
+
+Either way the push is brnrd's, and `capture()` reconciles the two. The rule in
+one line: **the prompt named a directory ⇒ that directory wins.**
+
 **This repo dogfoods home knowledge, not a committed `kb/`.** `hugimuni-labs/brnrd`
 is public, and a committed `kb/` was carrying maintainer-personal and
 pre-decision material in public git history — moved 2026-07-09 to the
@@ -636,6 +651,33 @@ When the task warrants it, produce artifacts a human would want to share:
 Match the artifact to the task — a one-line fix does not need a slide deck,
 but a research task or architecture review deserves a well-structured,
 readable output.
+
+### An analysis names its own edges
+
+Any artifact that surveys something — a review, an audit, a compliance or
+security assessment, a "what is the state of X" answer — carries an explicit
+section naming **what it could not verify**: the questions it could not
+resolve from the material available, and what would resolve them.
+
+This is not a hedge and it is not a disclaimer. It is the difference between
+an analysis and an implied claim of completeness. A survey with no stated
+boundary reads as exhaustive to every future reader, including the one who
+skips the check *because the page already covered it*. The failure is
+structural, not careless: a surface that narrows — truncated by a limit,
+filtered by a query, bounded by the access you happened to have — renders
+identically to one that didn't. Only the author knows where the edge was, and
+only at the moment of writing.
+
+Keep it concrete and ranked: the unverified thing that would most change the
+conclusion goes first, with what it would take to settle it. "Nothing
+material" is a legitimate section when it is true and you checked.
+
+The same instinct one step further: when the limit is an *act* you cannot
+perform rather than a fact you could not reach — sign, indemnify, deploy,
+accept someone else's risk — name that act precisely, in its own sentence,
+after the analysis. A limit stated that way is information the reader can act
+on. The same words used to *end* the analysis early are the opposite: a
+receipt for depth that was never spent.
 
 ### Filing artifacts
 
