@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from brr import conversations, run_progress, updates
+from brr import conversations, relics, run_progress, updates
 
 
 def _emit(brr_dir: Path, key: str, ptype: str, **payload):
@@ -1168,14 +1168,18 @@ def test_failed_packet_is_in_card_packets():
 # ── relics-so-far on the card (#342) ────────────────────────────────
 
 
-def _write_produce_capsule(brr_dir: Path, event_id: str, counts) -> None:
+def _write_produce_capsule(
+    brr_dir: Path, event_id: str, counts, issue_actions=None,
+) -> None:
     import json
 
     outbox = brr_dir / "outbox" / event_id
     outbox.mkdir(parents=True)
+    produce = {"known": True, "counts": counts}
+    if issue_actions is not None:
+        produce["issue_actions"] = issue_actions
     (outbox / "portal-state.json").write_text(
-        json.dumps({"produce": {"known": True, "counts": counts}}),
-        encoding="utf-8",
+        json.dumps({"produce": produce}), encoding="utf-8",
     )
 
 
@@ -1234,3 +1238,68 @@ def test_compact_card_zero_relics_renders_no_line(tmp_path):
     assert view is not None
     assert view.relics_counts == {}
     assert "relics:" not in run_progress.render_text(view, compact=True)
+
+
+# ── the issue block, beside the PR stats (#686) ──────────────────────────────
+
+
+def test_compact_card_splits_issues_by_action(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:13:"
+    _start_run(brr_dir, key, "run-13", "evt-13")
+    _write_produce_capsule(
+        brr_dir, "evt-13", {"pr": 1, "issue": 3},
+        {"created": 2, "completed": 1, "unattributed": 0},
+    )
+
+    view = run_progress.project_run(brr_dir, key, "run-13")
+    lines = run_progress.render_text(view, compact=True).rstrip().splitlines()
+    # Beside the PR stats the relics tail already carries, not folded into it.
+    assert lines[-2] == "relics: 1 PR · 3 issues"
+    assert lines[-1] == "issues: 2 created · 1 completed"
+
+
+def test_compact_card_never_claims_an_unrecorded_zero(tmp_path):
+    """The defect #686 names: three filed and no closes recorded must not
+    render as a run that closed none. brnrd cannot observe an issue close, so
+    the empty half says so."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:14:"
+    _start_run(brr_dir, key, "run-14", "evt-14")
+    _write_produce_capsule(
+        brr_dir, "evt-14", {"issue": 3},
+        {"created": 3, "completed": 0, "unattributed": 0},
+    )
+
+    view = run_progress.project_run(brr_dir, key, "run-14")
+    text = run_progress.render_text(view, compact=True)
+    assert "issues: 3 created · completed unrecorded" in text
+    assert "0 completed" not in text
+
+
+def test_compact_card_issue_block_silent_without_an_action(tmp_path):
+    """An older daemon's capsule (no split) and a run whose only issue relics
+    are actionless both render no issues line — there is no action to report,
+    and the relics tail already says the issues were touched."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:15:"
+    _start_run(brr_dir, key, "run-15", "evt-15")
+    _write_produce_capsule(brr_dir, "evt-15", {"issue": 2})
+
+    view = run_progress.project_run(brr_dir, key, "run-15")
+    assert view is not None
+    assert view.issue_actions is None
+    text = run_progress.render_text(view, compact=True)
+    assert "relics: 2 issues" in text
+    assert "issues:" not in text
+
+    key2 = "telegram:16:"
+    _start_run(brr_dir, key2, "run-16", "evt-16")
+    _write_produce_capsule(
+        brr_dir, "evt-16", {"issue": 2},
+        {"created": 0, "completed": 0, "unattributed": 2},
+    )
+    view2 = run_progress.project_run(brr_dir, key2, "run-16")
+    assert view2 is not None
+    assert view2.issue_actions == relics.IssueActions(unattributed=2)
+    assert "issues:" not in run_progress.render_text(view2, compact=True)

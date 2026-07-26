@@ -67,6 +67,176 @@ def test_docs_unknown_topic_errors(capsys):
     assert main(["docs", "does-not-exist"]) == 1
 
 
+# ── brnrd relic issue (#686) ─────────────────────────────────────────────────
+#
+# The front door onto `.relics.jsonl`. Issue produce is the one relic kind
+# the daemon cannot derive — `gh issue close` happens in the resident's
+# shell — so the record exists only if the resident writes it, and until now
+# that meant remembering a JSON shape.
+
+
+def _relic_env(monkeypatch, outbox):
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+
+def _relic_lines(outbox):
+    return [
+        json.loads(line)
+        for line in (outbox / ".relics.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_relic_issue_writes_the_grammar_record(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "issue", "686", "--closed"]) == 0
+    assert _relic_lines(outbox) == [
+        {"action": "closed", "kind": "issue", "number": 686},
+    ]
+    assert "#686 closed" in capsys.readouterr().out
+
+
+def test_relic_issue_accepts_a_hash_prefix_and_a_foreign_repo(tmp_path, monkeypatch):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(
+        ["relic", "issue", "#317", "--opened", "--repo", "hugimuni-labs/brnrd"],
+    ) == 0
+    assert _relic_lines(outbox) == [
+        {
+            "action": "opened", "kind": "issue", "number": 317,
+            "repo": "hugimuni-labs/brnrd",
+        },
+    ]
+
+
+def test_relic_issue_appends_and_never_rewrites(tmp_path, monkeypatch):
+    """The control file is a JSONL the resident may already have written into
+    by hand — a second record must land beside the first, not replace it."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".relics.jsonl").write_text(
+        '{"kind": "summary", "text": "hand-written"}\n', encoding="utf-8",
+    )
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "issue", "686", "--opened"]) == 0
+    assert main(["relic", "issue", "687", "--closed"]) == 0
+    kinds = [(r["kind"], r.get("number")) for r in _relic_lines(outbox)]
+    assert kinds == [("summary", None), ("issue", 686), ("issue", 687)]
+
+
+def test_relic_issue_refuses_a_non_number_with_the_shape_it_wanted(
+    tmp_path, monkeypatch, capsys,
+):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    for bad in ["abc", "0", "-4", "12.5", ""]:
+        assert main(["relic", "issue", bad, "--closed"]) == 1
+    err = capsys.readouterr().err
+    assert "positive integer" in err
+    assert "nothing was written" in err.lower()
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_issue_requires_an_action_flag(tmp_path, monkeypatch, capsys):
+    """The judgement call (#686): no default. Defaulting the bare form to
+    `opened` would manufacture the very asymmetry the issue is about, and
+    defaulting to no action would write a record that counts in neither
+    bucket — a front door onto the room the resident already stood in."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "issue", "686"]) == 1
+    err = capsys.readouterr().err
+    assert "--opened" in err and "--closed" in err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_issue_refuses_both_action_flags_at_once(tmp_path, monkeypatch):
+    """One action per invocation."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["relic", "issue", "686", "--opened", "--closed"])
+    assert exc.value.code == 2
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_issue_refuses_a_malformed_repo(tmp_path, monkeypatch, capsys):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    assert main(["relic", "issue", "686", "--closed", "--repo", "brnrd"]) == 1
+    assert "owner/name" in capsys.readouterr().err
+    assert not (outbox / ".relics.jsonl").exists()
+
+
+def test_relic_issue_outside_a_run_says_why(monkeypatch, capsys):
+    """No outbox in the environment ⇒ a reason, not a traceback."""
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+
+    assert main(["relic", "issue", "686", "--closed"]) == 1
+    err = capsys.readouterr().err
+    assert "no run outbox" in err
+    assert "BRR_OUTBOX_DIR" in err
+
+
+def test_relic_issue_resolves_the_outbox_from_the_portal_path(tmp_path, monkeypatch):
+    """One resolution path, shared with every other control-file consumer:
+    `hooks.HookContext` falls back to the portal file's parent directory."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.setenv("BRR_PORTAL_STATE", str(outbox / "portal-state.json"))
+
+    assert main(["relic", "issue", "686", "--closed"]) == 0
+    assert _relic_lines(outbox) == [
+        {"action": "closed", "kind": "issue", "number": 686},
+    ]
+
+
+def test_relic_issue_reports_a_failed_append(tmp_path, monkeypatch, capsys):
+    """`relics.append` is best-effort by design — right at closeout, wrong at
+    a prompt, where a silent drop is a resident who believes the close is
+    recorded."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    from brr import relics as relics_mod
+
+    monkeypatch.setattr(relics_mod, "append", lambda *a, **k: None)
+    assert main(["relic", "issue", "686", "--closed"]) == 1
+    assert "could not append" in capsys.readouterr().err
+
+
+def test_relic_issue_feeds_the_produce_split(tmp_path, monkeypatch):
+    """End to end: what the command writes is what the display block counts."""
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _relic_env(monkeypatch, outbox)
+
+    from brr import relics as relics_mod
+
+    assert main(["relic", "issue", "686", "--opened"]) == 0
+    assert main(["relic", "issue", "317", "--closed"]) == 0
+    actions = relics_mod.issue_actions(relics_mod.read_reported(outbox))
+    assert relics_mod.issues_phrase(actions) == "1 created · 1 completed"
+
+
 def test_portal_state_prints_text_view(tmp_path, capsys):
     state = tmp_path / "portal-state.json"
     state.write_text(
