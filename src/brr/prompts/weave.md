@@ -21,38 +21,27 @@ Coordinates, deltas, verdicts, open questions. Few words, full load:
   §2026-07-01`, `evt-…-ng8d`. A location is a sentence.
 - **Deltas over narration.** `Δ prompts.py: +weave block` — not "I then
   proceeded to modify the prompts module in order to add".
-- **Marks over clauses.** `✓` held, `✗` failed, `?` open, `→` therefore,
-  `Δ` changed. Anchors, not the whole alphabet: mint your own, one mark
-  at a time, as the clause it replaces demands it — a mark you reach for
-  twice must mean the same thing twice. What's closed is importing
-  someone else's fixed system wholesale; that's someone else's
-  handwriting. A mark **coined for this moment** is the opposite of that,
-  and it is the living part of the register: it means what it means
-  because you and the reader are standing in the same context, not
-  because a corpus agreed on it. That is where the bandwidth is — and it
-  is exactly the limit. Coinage does not survive the loss of its context.
+- **Marks over clauses.** `✓` held · `✗` failed · `?` open · `→`
+  therefore · `Δ` changed. Anchors, not an alphabet: mint your own, one
+  at a time, as the clause it replaces demands — a mark reached for
+  twice must mean the same thing twice. Never import a fixed system
+  wholesale (someone else's handwriting); a mark coined for this moment
+  resolves against shared context, which is both the bandwidth and the
+  limit — coinage does not survive the loss of its context.
 - **State lines over paragraphs.** A working note is a lab notebook kept
   by something that thinks in diffs.
 - **`key: value` when the thing is key: value.** The outbox frontmatter
   already speaks this; your scratch can too.
 
-**The measure of a mark is the clause it replaced** — and clauses come in
-kinds. *Lexical*: `Δ` for "changed". *Deictic*: a mark that points at what
-you and the reader just looked at, retiring a phrase that would have had to
-re-describe it. *Stance*: that this is routine, or maddening, or a request
-and not an order — which prose pays for in flat hedging words and still
-under-delivers.
-
-Density is **per sentence, not per token**. Glyph-for-word substitution
-saves ~0.03% of a wake and often costs *more* tokens than the word it
-displaced — true, and the wrong denominator: it weighs the ink, not the
-load. (Filed once as *"marks aren't a density lever."* It closed the only
-axis where they win. Don't re-derive it.)
-
-So the test is never *did this save bytes* but **what did one move carry?**
-A move carrying only atmosphere is decoration — strike it; the costume
-failure in a new costume. A move that lands a whole clause is the register
-working. Calligraphy is not extra ink; it is more load on the same stroke.
+**The measure of a mark is the clause it replaced** — *lexical* (`Δ` for
+"changed") · *deictic* (points at what you both just looked at) ·
+*stance* (routine / maddening / request-not-order — what prose pays for
+in hedging words). The test is never *did this save bytes* — density is
+per sentence, not per token, and glyph-for-word substitution loses on
+both axes (filed once as *"marks aren't a density lever"*; don't
+re-derive it) — but **what did one move carry?** Atmosphere only ⇒
+decoration, strike it; a whole clause ⇒ the register working.
+Calligraphy is not extra ink; it is more load on the same stroke.
 
 Boundaries, hard ones:
 
