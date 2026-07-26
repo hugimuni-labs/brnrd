@@ -1,9 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
-
-	const legalNoticeReady = legalNoticeIsComplete();
 
 	import TermsGate from '$lib/TermsGate.svelte';
 	import { DOC_TOS, fetchTermsStatus, safeNext, type TermsStatus } from '$lib/terms';
@@ -22,8 +19,9 @@
 	// neither checkbox can stand in for the other.
 	//
 	// The document itself is delimited by the LEGAL-TEXT markers below and
-	// pinned to `src/brnrd/legal/tos-2026-07-24.txt`; the sha256 of that file
-	// is what the acceptance row stores, so the record can reproduce what was
+	// pinned to the file `brnrd.terms._CURRENT` names (currently
+	// `src/brnrd/legal/tos-2026-07-24-r2.txt`); the sha256 of that file is
+	// what the acceptance row stores, so the record can reproduce what was
 	// accepted rather than merely naming a version.
 	const TERMS_VERSION = '2026-07-24';
 
@@ -54,7 +52,7 @@
 		>
 	</div>
 	<!-- LEGAL-TEXT:BEGIN tos — everything between these two markers is the
-	     document a user accepts. `src/brnrd/legal/tos-<version>.txt` is the
+	     document a user accepts. The file `brnrd.terms._CURRENT` names is the
 	     plain-text pin of exactly this region, and the sha256 of that file is
 	     what a `terms_acceptances` row stores. `tests/test_brnrd_legal_pinning.py`
 	     re-extracts this region and fails if it and the pin disagree by one
@@ -118,26 +116,26 @@
 				     end 2026. Confirm the wording is adequate under French law. -->
 				<p class="mt-2">
 					The service is operated by <strong class="text-amber-100">HugiMuni SAS</strong>, a société
-					par actions simplifiée incorporated in France, and its legal successors.
-					{#if legalNoticeReady}
-						Its full company and publication details — registered office, share capital, SIREN/RCS
-						registration, VAT number, publication director, and hosting provider — are in the
-						<a class="text-sky-400 underline" href={resolve('/legal-notice')}>legal notice</a> (mentions
-						légales).
-					{:else}
-						Its full company and publication details — registered office, share capital, SIREN/RCS
-						registration, VAT number, publication director, and hosting provider — belong in a
-						separate legal notice (mentions légales) which is not yet published.
-					{/if}
+					par actions simplifiée incorporated in France, and its legal successors. Its full company
+					and publication details — registered office, share capital, SIREN/RCS registration, VAT
+					number, publication director, and hosting provider — are in the
+					<a class="text-sky-400 underline" href={resolve('/legal-notice')}>legal notice</a> (mentions
+					légales).
 				</p>
 				<!-- mentions légales is #569 document 4, mandatory under LCEN Art
 				     6-III for a French-operated site:
-				     src/frontend/src/routes/legal-notice/+page.svelte. Gated on
-				     $lib/legalNotice's isComplete() — the same registry that page
-				     renders from — so this paragraph only claims the notice exists
-				     once every statutory field on it actually does; if a K-bis value
-				     is ever blanked out, this text falls back on its own rather than
-				     quietly lying alongside it. -->
+				     src/frontend/src/routes/legal-notice/+page.svelte. Stated
+				     unconditionally, NOT gated on $lib/legalNotice's isComplete()
+				     at runtime: this region is pinned and hashed (brnrd.terms),
+				     and a sentence that can change under the reader at runtime is
+				     a sentence the acceptance record cannot reproduce — the
+				     pinning extractor refuses `{#if}` for exactly that reason.
+				     The truthfulness guard lives in tests instead:
+				     legalNotice.test.ts's gate keeps every statutory field filled,
+				     and termsPrivacyLink.test.ts fails the moment this claim and
+				     isComplete() disagree — so blanking a K-bis value forces a
+				     deliberate edit-and-repin here rather than a silent runtime
+				     fallback that would desync the page from its pin. -->
 			</section>
 
 			<section>

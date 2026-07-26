@@ -46,8 +46,17 @@ _LEGAL_DIR = Path(__file__).parent / "legal"
 # non-bump note in the page source, and #664 for why a bump prompts nobody
 # today). Its pin is therefore the text as of 2026-07-26, and acceptances
 # recorded before that date carry no hash at all — see ``migrations``.
+#
+# ``tos``'s label survives the ``-r2`` repin deliberately. #773 published
+# /legal-notice and /privacy right after #735 pinned the page, and corrected
+# the two sentences that had called both "not yet published". A corrected
+# cross-reference changes no right or obligation, section 15 re-prompts (and
+# owes thirty days' dashboard notice) only for material changes, and #735
+# gates login on this version — so a bump here would re-prompt every user
+# over two links. The old pin stays beside the new one, and ``sha256`` on the
+# acceptance row says which of the two texts a user actually read.
 _CURRENT: dict[str, tuple[str, str]] = {
-    DOC_TOS: ("2026-07-24", "tos-2026-07-24.txt"),
+    DOC_TOS: ("2026-07-24", "tos-2026-07-24-r2.txt"),
     DOC_HOSTED: ("2026-07-08", "hosted-execution-2026-07-08.txt"),
 }
 

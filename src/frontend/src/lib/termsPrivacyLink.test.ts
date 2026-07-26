@@ -15,6 +15,12 @@ const generated = join(here, '.termsRoute.generated.mjs');
 // than string-match the source, so a claim that becomes false only in the
 // rendered HTML (a link that silently disappears, a class typo swallowing an
 // href) still fails this test.
+//
+// The route imports more of $lib than the legal-notice page does (#735 put
+// the acceptance widget on it), so beyond the $app/paths swap: $lib modules
+// are rewritten to their real files beside this test, and TermsGate — a
+// component whose behaviour these tests do not assert — is stubbed with a
+// no-op server component so the legal text renders without it.
 async function renderRoute(): Promise<string> {
 	const source = readFileSync(routePath, 'utf8');
 	const compiled = compile(source, {
@@ -24,6 +30,11 @@ async function renderRoute(): Promise<string> {
 	});
 	const runnable = compiled.js.code
 		.replace(/'\$lib\/legalNotice'/g, "'./legalNotice.ts'")
+		.replace(/'\$lib\/terms'/g, "'./terms.ts'")
+		.replace(
+			/import\s+TermsGate\s+from\s*'\$lib\/TermsGate\.svelte';/,
+			'const TermsGate = () => {};'
+		)
 		.replace(/import\s*\{[^}]*\}\s*from\s*'\$app\/paths';/, 'const resolve = (path) => path;');
 	writeFileSync(generated, runnable);
 	try {
