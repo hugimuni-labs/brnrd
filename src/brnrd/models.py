@@ -19,8 +19,12 @@ class Account(Base):
     github_login: Mapped[str] = mapped_column(String(255), index=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    hosted_terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    hosted_terms_version: Mapped[str] = mapped_column(String(32), default="")
+    # Terms acceptance is NOT a column pair here any more (#735). It was
+    # ``hosted_terms_accepted_at`` / ``hosted_terms_version``, one slot for one
+    # document, which could hold neither the general Terms of Service nor a
+    # second acceptance after a version bump. See ``TermsAcceptance``; the
+    # legacy columns are migrated into it and left unread on existing
+    # deployments pending a drop.
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
     # The discovered user/resident-authored work surface. The JSON is a read
     # replica of home/surface, not a second authoring store.
@@ -39,6 +43,49 @@ class Account(Base):
     # FK to stay valid. ``deleted_at`` is the tombstone marker; every other
     # PII-bearing column is cleared alongside it.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class TermsAcceptance(Base):
+    """#735 — one row per (account, document, version) a user actually accepted.
+
+    The general Terms of Service had no acceptance record anywhere while the
+    site was already selling, and the record the hosted-execution addendum
+    *did* have could not reproduce what was accepted: ``hosted_terms_version``
+    named a Svelte component git could change underneath it. Both defects are
+    the same defect — evidence stored as a label instead of as the document.
+
+    So a row is append-only and carries the document itself by hash. It is
+    never updated in place: re-consent after a version bump writes a *second*
+    row, because the earlier acceptance is what governed the earlier conduct
+    and overwriting it destroys the only evidence of the contract that was
+    actually in force then. That is the whole reason this is a table and not
+    two more columns on ``Account``.
+
+    ``sha256`` resolves back to the exact text through ``brnrd.terms``. It is
+    empty on exactly one class of row: acceptances migrated out of the legacy
+    ``accounts.hosted_terms_*`` columns, which predate pinning and whose text
+    genuinely cannot be reconstructed. Empty means "not recoverable", and
+    saying so is the honest report — it is not a placeholder to be filled in.
+
+    Deliberately absent: IP address and user-agent. They are the conventional
+    contents of a consent record and they are not needed to prove that this
+    account accepted this text at this time, so under Art 5(1)(c) they are not
+    collected.
+    """
+
+    __tablename__ = "terms_acceptances"
+    __table_args__ = (
+        UniqueConstraint("account_id", "document", "version", name="uq_terms_acceptance"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    # ``brnrd.terms.DOC_TOS`` / ``DOC_HOSTED``.
+    document: Mapped[str] = mapped_column(String(32), index=True)
+    # The operator's label for the text — what re-consent is decided on.
+    version: Mapped[str] = mapped_column(String(32), default="")
+    # The evidence: sha256 of the pinned plain text as of acceptance.
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    accepted_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class Repo(Base):
