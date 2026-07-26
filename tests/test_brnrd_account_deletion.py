@@ -4,7 +4,7 @@
 Walks every account-keyed store named in ``docs/legal/art-30-record.md`` /
 ``docs/legal/dpa.md`` plus the operational rows those documents don't
 individually enumerate (ConfigChangeRequest, TgPairCode, PairRequest,
-RunnerWakeRequest, RunStopRequest), asserting each is empty for the
+RunnerWakeRequest, RunStopRequest, TermsAcceptance), asserting each is empty for the
 deleted account afterward — except ``BillingLedgerEntry``, asserted to
 survive, and the ``Account`` row itself, asserted anonymized rather than
 gone.
@@ -40,6 +40,7 @@ from brnrd.models import (  # noqa: E402
     RunStopRequest,
     RunnerWakeRequest,
     Subscription,
+    TermsAcceptance,
     TgPairCode,
     Token,
 )
@@ -215,6 +216,15 @@ def _seed_everything(client: TestClient, account_id: str) -> str:
                 bucket_id=bucket.id,
             )
         )
+        db.add(
+            TermsAcceptance(
+                id=ids.terms_acceptance_id(),
+                account_id=account_id,
+                document="tos",
+                version="2026-07-24",
+                sha256="f" * 64,
+            )
+        )
         db.commit()
         return repo.id
 
@@ -238,6 +248,7 @@ def _counts(db, account_id: str, repo_id: str) -> dict[str, int]:
             select(GitHubInstalledRepo).where(GitHubInstalledRepo.repo_full_name == "octocat/one")
         ).scalars().all().__len__(),
         "Subscription": db.query(Subscription).filter(Subscription.account_id == account_id).count(),
+        "TermsAcceptance": db.query(TermsAcceptance).filter(TermsAcceptance.account_id == account_id).count(),
         "CreditBucket": db.query(CreditBucket).filter(CreditBucket.account_id == account_id).count(),
         "Repo": db.query(Repo).filter(Repo.account_id == account_id).count(),
         "BillingLedgerEntry": db.query(BillingLedgerEntry).filter(BillingLedgerEntry.account_id == account_id).count(),
