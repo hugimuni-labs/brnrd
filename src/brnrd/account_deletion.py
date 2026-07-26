@@ -56,6 +56,7 @@ from .models import (
     RunStopRequest,
     RunnerWakeRequest,
     Subscription,
+    TermsAcceptance,
     TgPairCode,
     Token,
     BillingLedgerEntry,
@@ -217,6 +218,16 @@ def delete_account(db: Session, settings: Settings, account: Account) -> Deletio
 
     db.execute(delete(Subscription).where(Subscription.account_id == account_id))
 
+    # Terms acceptances (#735) are erased, not retained. They replace the
+    # ``hosted_terms_*`` columns this function already cleared, so this keeps
+    # erasure exactly as wide as it was rather than quietly narrowing it when
+    # the fact moved to its own table. Note that this is a *choice*: an
+    # acceptance record is arguably retainable under Art 17(3)(e) as evidence
+    # for a legal claim, the way ``billing_ledger`` is. It is not retained
+    # here because nothing has decided that it should be, and inventing a
+    # retention basis inside a deletion path is the wrong place to decide it.
+    db.execute(delete(TermsAcceptance).where(TermsAcceptance.account_id == account_id))
+
     db.execute(delete(Repo).where(Repo.account_id == account_id))
 
     now = _utcnow()
@@ -226,8 +237,6 @@ def delete_account(db: Session, settings: Settings, account: Account) -> Deletio
     account.email = None
     account.surface_json = "[]"
     account.surface_updated_at = now.replace(tzinfo=None)
-    account.hosted_terms_accepted_at = None
-    account.hosted_terms_version = ""
     account.tier = Account.TIER_FREE
     account.stripe_customer_id = None
     account.deleted_at = now.replace(tzinfo=None)

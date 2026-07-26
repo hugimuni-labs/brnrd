@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from brnrd import ids, limits, oauth, publish_scope
+from brnrd import ids, limits, oauth, publish_scope, terms
 from brnrd.auth import get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
@@ -27,6 +27,7 @@ from brnrd.models import (
     GitHubInstalledRepo,
     PairRequest,
     Repo,
+    TermsAcceptance,
     TgPairCode,
     Token,
 )
@@ -37,17 +38,23 @@ from brnrd.security import hash_token
 
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
-_HOSTED_TERMS_VERSION = "2026-07-08"
+# `_HOSTED_TERMS_VERSION` used to live here as a literal. It is gone (#735):
+# a version now belongs to its document in `brnrd.terms`, next to the pinned
+# text it labels, so the two cannot drift. Read `terms.current(kind).version`.
 
 # Re-export for callers that previously imported from brnrd_web.routes
 __all__ = [
     "_account_id",
+    "_accepted_terms",
     "_age_label",
     "_clear_oauth_cookies",
     "_connect_repo_core",
     "_cookie_secure",
     "_disconnect_repo_core",
+    "_document_accept_url",
+    "_document_status",
     "_dt",
+    "_general_terms_accept_url",
     "_github_auto_sync_if_needed",
     "_github_oauth_ready",
     "_github_sync_configured",
@@ -55,7 +62,7 @@ __all__ = [
     "_installed_repos",
     "_json_account",
     "_json_body",
-    "_needs_hosted_terms",
+    "_needs_terms",
     "_notice_text",
     "_oauth_redirect_uri",
     "_pair_repo_telegram_core",
@@ -72,7 +79,6 @@ __all__ = [
     "_time_label",
     "_DAEMON_ONLINE_AFTER",
     "_GITHUB_AUTO_SYNC_AFTER",
-    "_HOSTED_TERMS_VERSION",
 ]
 
 
@@ -402,47 +408,116 @@ def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
 
 
 def _safe_next(value: str) -> str:
-    if not value or not value.startswith("/") or value.startswith("//"):
+    """A destination that stays on this site.
+
+    ``//host`` is the protocol-relative form everyone guards; ``/\\host`` is
+    the one that gets missed. Browsers normalise a backslash to a forward
+    slash in the authority position, so ``new URL('/\\evil.example', origin)``
+    resolves to ``https://evil.example/`` — off-site, from a value that passes
+    a naive ``startswith("/")`` check. The backend's own ``RedirectResponse``
+    happens to survive it (Starlette percent-encodes the Location header),
+    but this value is also handed to the frontend as a ``next=`` parameter and
+    fed to ``window.location.assign``, which does not. Guard it here, at the
+    single producer, rather than at each sink (#735).
+    """
+    if not value or not value.startswith("/"):
+        return "/"
+    if value[1:2] in ("/", "\\"):
         return "/"
     return value
 
 
-def _terms_accept_url(next_url: str) -> str:
-    """Where a caller sends someone to *accept* the hosted-execution terms.
+def _document_accept_url(kind: str, next_url: str) -> str:
+    """Where a caller sends someone to read and accept one document.
 
-    ``/beta-hosted-execution``, not ``/terms``. ``/terms`` is now the
-    service-wide Terms of Service — a document with no acceptance widget on
-    it, because the widget writes ``hosted_terms_accepted_at`` and that
-    record belongs to the hosted-execution addendum alone (#569: do not
-    silently repurpose it as acceptance of the general ToS). The addendum
-    and the checkbox that records it live on the same page.
+    Each document's acceptance widget lives on the page carrying that
+    document's text, and nowhere else — ``/terms`` for the general Terms of
+    Service, ``/beta-hosted-execution`` for the addendum. #569 is the rule
+    this encodes: a checkbox may only record acceptance of the words next to
+    it. That is why one URL producer takes the document as an argument rather
+    than a caller picking a path.
     """
     from urllib.parse import quote
 
-    return f"/beta-hosted-execution?next={quote(_safe_next(next_url), safe='/')}"
+    return f"{terms.current(kind).accept_path}?next={quote(_safe_next(next_url), safe='/')}"
 
 
-def _needs_hosted_terms(account: Account) -> bool:
-    """Whether ``account`` still owes acceptance of the hosted-execution beta terms.
+def _terms_accept_url(next_url: str) -> str:
+    """Accept-URL for the hosted-execution addendum. See ``_document_accept_url``."""
+    return _document_accept_url(terms.DOC_HOSTED, next_url)
 
-    A *point-of-use* predicate, not an authentication gate (#664). It says
-    nothing about whether the account uses, has requested, or could reach
-    hosted compute, so it is only meaningful once something actually offers
-    hosted execution. Read it there — through ``_terms_status``'s
-    ``needs_accept`` — and not on the login path.
+
+def _general_terms_accept_url(next_url: str) -> str:
+    """Accept-URL for the general Terms of Service. See ``_document_accept_url``."""
+    return _document_accept_url(terms.DOC_TOS, next_url)
+
+
+def _accepted_terms(db: Session, account_id: str, kind: str) -> TermsAcceptance | None:
+    """This account's acceptance of the *current* version of ``kind``, if any.
+
+    Scoped to the current version on purpose: superseded rows stay in the
+    table as the evidence of what was in force then, and must not answer
+    "has this user accepted what is on the page today".
     """
-    return account.hosted_terms_accepted_at is None or account.hosted_terms_version != _HOSTED_TERMS_VERSION
+    return db.execute(
+        select(TermsAcceptance)
+        .where(
+            TermsAcceptance.account_id == account_id,
+            TermsAcceptance.document == kind,
+            TermsAcceptance.version == terms.current(kind).version,
+        )
+        .order_by(TermsAcceptance.accepted_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
 
-def _terms_status(account: Account | None) -> dict:
-    accepted_at = account.hosted_terms_accepted_at if account is not None else None
+def _needs_terms(db: Session, account: Account, kind: str) -> bool:
+    """Whether ``account`` still owes acceptance of the current ``kind``.
+
+    Version-triggered, not hash-triggered. The ToS itself promises that the
+    version at the top of the page identifies the current text (§15), so a
+    typo fix must not re-prompt every account; the hash records what was
+    actually shown, and the pinning test makes a text change a deliberate
+    act. See ``brnrd.terms``.
+
+    For ``DOC_HOSTED`` this stays the *point-of-use* predicate #664 made it:
+    it says nothing about whether the account can reach hosted compute, so
+    only a surface offering that feature should read it. ``DOC_TOS`` is the
+    opposite and that difference is the whole distinction #664 drew — the
+    general terms govern using brnrd.dev at all, which is a condition login
+    can evaluate.
+    """
+    return _accepted_terms(db, account.id, kind) is None
+
+
+def _document_status(db: Session, account: Account | None, kind: str) -> dict:
+    doc = terms.current(kind)
+    row = _accepted_terms(db, account.id, kind) if account is not None else None
+    accepted_at = row.accepted_at if row is not None else None
     if accepted_at is not None and accepted_at.tzinfo is None:
         accepted_at = accepted_at.replace(tzinfo=timezone.utc)
     return {
-        "authenticated": account is not None,
-        "needs_accept": _needs_hosted_terms(account) if account is not None else False,
-        "terms_version": _HOSTED_TERMS_VERSION,
+        "version": doc.version,
+        # Published so a user can check for themselves that the page in front
+        # of them is the text their record points at.
+        "sha256": doc.sha256,
+        "accept_url": doc.accept_path,
+        "needs_accept": account is not None and row is None,
         "accepted_at": accepted_at.isoformat() if accepted_at is not None else None,
+        "accepted_sha256": row.sha256 if row is not None else None,
+    }
+
+
+def _terms_status(db: Session, account: Account | None) -> dict:
+    """Per-document acceptance state for the session's account.
+
+    A map rather than the old flat ``needs_accept``/``terms_version`` pair:
+    there are two documents now and a privacy notice plus a mentions légales
+    are already named as owed, so "the terms" has stopped being one thing.
+    """
+    return {
+        "authenticated": account is not None,
+        "documents": {kind: _document_status(db, account, kind) for kind in terms.kinds()},
     }
 
 
