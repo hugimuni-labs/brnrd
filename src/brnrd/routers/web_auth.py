@@ -21,20 +21,24 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from brnrd import oauth
+from brnrd import ids, oauth, terms
 from brnrd.auth import get_db
-from brnrd.models import Account, ConfigChangeRequest, Repo
+from brnrd.models import Account, ConfigChangeRequest, Repo, TermsAcceptance
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.pairing import approve_core, telegram_pair_core
 
 from ._session import (
     _account_id,
+    _accepted_terms,
     _clear_oauth_cookies,
     _cookie_secure,
+    _general_terms_accept_url,
     _github_oauth_ready,
+    _needs_terms,
     _oauth_redirect_uri,
     _repos,
     _safe_next,
@@ -157,7 +161,13 @@ def logout(request: Request):
 def terms_status_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     account_id = _account_id(request, db)
     account = db.get(Account, account_id) if account_id is not None else None
-    return JSONResponse(_terms_status(account))
+    return JSONResponse(_terms_status(db, account))
+
+
+_ACCEPT_NOTICE = {
+    terms.DOC_TOS: "You need to accept the Terms of Service before continuing.",
+    terms.DOC_HOSTED: "You need to accept the beta hosted-execution terms before continuing.",
+}
 
 
 @router.post("/v1/terms/accept")
@@ -166,23 +176,67 @@ def terms_accept_api(
     payload: dict[str, object] | None = Body(None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
+    """Record that this account accepted one named document (#735).
+
+    The row carries the sha256 of the text as pinned right now, not a version
+    string alone — the acceptance has to be able to reproduce what was
+    accepted, and ``hosted_terms_version`` could not. ``document`` defaults to
+    the hosted addendum so the existing widget's payload keeps working; a
+    caller that omits it is, by construction, the page that predates the ToS
+    gate.
+
+    Re-accepting the same version is idempotent rather than an error: the
+    first row is the evidence and a second click must not disturb its
+    timestamp.
+    """
     account_id = _account_id(request, db)
     if account_id is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     account = db.get(Account, account_id)
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
-    if (payload or {}).get("accept_terms") != "yes":
-        return JSONResponse(
-            {"ok": False, "notice": "You need to accept the beta hosted-execution terms before continuing."},
-            status_code=400,
-        )
-    account.hosted_terms_accepted_at = datetime.now(timezone.utc)
-    from brnrd.routers._session import _HOSTED_TERMS_VERSION
+    body = payload or {}
+    # Omitted means the addendum — that payload is the pre-#735 widget, which
+    # predates the field. *Present but malformed* is not the same thing and
+    # must not silently become a consent record for a document the caller
+    # never named (#569).
+    #
+    # The discriminator is key presence, not the value: `.get()` cannot tell
+    # `{}` from `{"document": null}`, and `or` would additionally fold "", 0
+    # and false into the default. Anything present falls through to the
+    # whitelist below and is refused there.
+    kind = terms.DOC_HOSTED if "document" not in body else str(body["document"])
+    if kind not in terms.kinds():
+        return JSONResponse({"ok": False, "notice": f"Unknown document: {kind}."}, status_code=400)
+    if body.get("accept_terms") != "yes":
+        return JSONResponse({"ok": False, "notice": _ACCEPT_NOTICE[kind]}, status_code=400)
 
-    account.hosted_terms_version = _HOSTED_TERMS_VERSION
-    db.commit()
-    return JSONResponse({"ok": True})
+    doc = terms.current(kind)
+    existing = _accepted_terms(db, account_id, kind)
+    if existing is None:
+        db.add(
+            TermsAcceptance(
+                id=ids.terms_acceptance_id(),
+                account_id=account_id,
+                document=kind,
+                version=doc.version,
+                sha256=doc.sha256,
+                accepted_at=datetime.now(timezone.utc),
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            # Read-then-insert is not atomic, and `uq_terms_acceptance` is the
+            # thing that actually enforces one row per (account, document,
+            # version). Two tabs racing means the constraint fires on the
+            # loser — but the acceptance it was trying to record is on disk,
+            # written by the winner. Reporting 500 for a click that succeeded
+            # would be a lie about the record's state, so the loser reports
+            # what is true: accepted. This is what makes the endpoint
+            # idempotent under concurrency and not just under sequence.
+            db.rollback()
+    return JSONResponse({"ok": True, "document": kind, "version": doc.version, "sha256": doc.sha256})
 
 
 @router.get("/terms/accept")
@@ -254,8 +308,19 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
     # Those terms apply "when HugiMuni SAS operates brnrd-hosted compute for
     # your account" — a condition login cannot evaluate and, for a
     # local-execution account, never satisfies. Acceptance belongs at the
-    # surface that offers hosted execution; `_terms_status().needs_accept` is
-    # what that surface reads when it exists.
+    # surface that offers hosted execution; the `hosted-execution` entry of
+    # `_terms_status()` is what that surface reads when it exists.
+    #
+    # The *general* Terms of Service are the opposite case, and #735 is where
+    # the distinction earns its keep: they govern using brnrd.dev at all, so
+    # login is precisely the moment the condition is satisfiable, and until
+    # now nothing asked. A user who owes acceptance is routed to /terms with
+    # their original destination carried in `next=`, so accepting resumes the
+    # journey rather than ending it. The session cookie is still set — the
+    # accept endpoint needs it, and a gate that logged you out to ask you a
+    # question could never be answered.
+    if _needs_terms(db, account, terms.DOC_TOS):
+        next_url = _general_terms_accept_url(next_url)
     resp = RedirectResponse(url=next_url, status_code=303)
     resp.set_cookie(s.session_cookie, raw, httponly=True, samesite="lax", secure=_cookie_secure(request), max_age=int(SESSION_TTL.total_seconds()))
     _clear_oauth_cookies(resp, request)

@@ -1,5 +1,9 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
+
+	import TermsGate from '$lib/TermsGate.svelte';
+	import { DOC_TOS, fetchTermsStatus, safeNext, type TermsStatus } from '$lib/terms';
 
 	// Draft for legal review — not yet counsel-approved. Every factual claim
 	// below carries an HTML comment with the file:line it was driven from.
@@ -7,21 +11,32 @@
 	// comment reaches the browser: Svelte strips template comments from the
 	// production build, so they live in source for the reviewer only.
 	//
-	// This page is a *document*. It deliberately carries no acceptance
-	// widget: the checkbox that used to live here writes
-	// `hosted_terms_accepted_at` (src/brnrd/routers/web_auth.py:180-183),
-	// which is the hosted-execution addendum's record, not acceptance of
-	// these terms. #569: "Do not silently repurpose hosted_terms_accepted_at
-	// / hosted_terms_version as acceptance of the general ToS." The widget
-	// now lives on /beta-hosted-execution, where the document it records
-	// acceptance of also lives.
+	// This page now carries its own acceptance widget, and only its own:
+	// `TermsGate` posts `document: 'tos'`, which writes a `terms_acceptances`
+	// row for THIS text (#735). #569's rule is unchanged and is what the
+	// per-document key enforces — the hosted-execution addendum's checkbox
+	// still lives on /beta-hosted-execution beside the words it accepts, and
+	// neither checkbox can stand in for the other.
 	//
-	// OPEN (#569 acceptance criterion, not this diff): there is no ToS
-	// acceptance record in the schema at all. `Account`
-	// (src/brnrd/models.py:15-35) carries only the hosted_terms_* pair. A
-	// separate `terms_accepted_at` / `terms_version` pair and the surface
-	// that writes it are still owed.
+	// The document itself is delimited by the LEGAL-TEXT markers below and
+	// pinned to `src/brnrd/legal/tos-2026-07-24.txt`; the sha256 of that file
+	// is what the acceptance row stores, so the record can reproduce what was
+	// accepted rather than merely naming a version.
 	const TERMS_VERSION = '2026-07-24';
+
+	let status = $state<TermsStatus | null>(null);
+	let statusError = $state<string | null>(null);
+	let nextUrl = $state('/');
+
+	onMount(async () => {
+		nextUrl = safeNext(new URLSearchParams(window.location.search).get('next'));
+		try {
+			status = await fetchTermsStatus();
+			statusError = null;
+		} catch (e) {
+			statusError = e instanceof Error ? e.message : 'terms-status fetch failed';
+		}
+	});
 </script>
 
 <svelte:head><title>brnrd.dev — Terms of Service</title></svelte:head>
@@ -35,6 +50,15 @@
 			>dashboard</a
 		>
 	</div>
+	<!-- LEGAL-TEXT:BEGIN tos — everything between these two markers is the
+	     document a user accepts. `src/brnrd/legal/tos-<version>.txt` is the
+	     plain-text pin of exactly this region, and the sha256 of that file is
+	     what a `terms_acceptances` row stores. `tests/test_brnrd_legal_pinning.py`
+	     re-extracts this region and fails if it and the pin disagree by one
+	     word — so changing a word here is a two-part edit: change the text,
+	     then re-pin it (and bump TERMS_VERSION if the change is material).
+	     Do NOT edit an already-pinned .txt in place; old rows must stay
+	     resolvable. -->
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
 		Terms of Service for brnrd.dev
 	</h1>
@@ -396,10 +420,16 @@
 					11. Hosted execution
 				</h2>
 				<!-- #664 (closed, merged a83043a7): hosted-execution consent is
-				     feature-scoped, not login-scoped. The gate at web_auth.py:251 was
-				     removed; `_terms_status().needs_accept`
-				     (_session.py:377-386, 389-397) is the seam a hosted-execution
-				     surface reads. Do not re-litigate. -->
+				     feature-scoped, not login-scoped. Its gate on the OAuth callback
+				     was removed; the `hosted-execution` entry of `_terms_status()`
+				     (_session.py) is the seam a hosted-execution surface reads. Do
+				     not re-litigate. #735 put a gate for THESE terms back on that
+				     same callback, which is the distinction #664 drew and not a
+				     reversal of it: the general terms govern using brnrd.dev at all,
+				     a condition login can evaluate; the addendum's condition is
+				     "when HugiMuni SAS operates hosted compute for your account",
+				     which it cannot. The paragraph below promises the split in
+				     words, and the two gates now keep that promise. -->
 				<p class="mt-2">
 					Running an agent on compute that HugiMuni SAS operates, rather than on your own machine,
 					is a separate feature with its own additional terms:
@@ -558,10 +588,13 @@
 				     consent for a consumer under French law for anything beyond a
 				     trivial change; (b) whether this drafting is adequate to carry a
 				     change of governing law and forum on a future entity move to
-				     Spain — that is the change it was written for. Note also that
-				     `_HOSTED_TERMS_VERSION` (src/brnrd/routers/_session.py:40) has no
-				     enforcement behind it since #664, so a version bump currently
-				     re-prompts nobody; a re-acceptance mechanism is still owed. -->
+				     Spain — that is the change it was written for. Note also that the
+				     hosted addendum's version (`brnrd.terms`) has no enforcement
+				     behind it since #664, so a bump of *that* document re-prompts
+				     nobody. These terms are different: #735 gates login on their
+				     version, so bumping the version at the top of this page is what
+				     makes the notice-and-re-acceptance promised below actually
+				     happen. -->
 				<!-- OPERATOR / OPEN — deliberately NOT drafted as "we will notify you
 				     by email". The backend has no email-sending path at all: there is
 				     no SMTP client and no transactional-email provider anywhere in
@@ -616,6 +649,28 @@
 				</p>
 			</section>
 		</div>
+		<!-- LEGAL-TEXT:END tos -->
+
+		{#snippet tosAttestation()}
+			I have read and accept the
+			<a class="text-sky-400 underline" href={resolve('/terms')}
+				>brnrd.dev Terms of Service, version {TERMS_VERSION}</a
+			>, including the description in section 5 of where the agent runs and with whose authority,
+			and the warranty and liability sections 12 and 13.
+		{/snippet}
+
+		{#if statusError}
+			<p class="mt-6 text-sm text-red-400">{statusError}</p>
+		{:else}
+			<TermsGate
+				documentKind={DOC_TOS}
+				status={status?.documents?.[DOC_TOS] ?? null}
+				authenticated={status?.authenticated ?? false}
+				next={nextUrl}
+				name="Terms of Service"
+				attestation={tosAttestation}
+			/>
+		{/if}
 
 		<p class="mt-6 text-xs text-ink-quiet">
 			See also: <a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}

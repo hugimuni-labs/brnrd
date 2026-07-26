@@ -35,6 +35,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_events(conn)
         if _table_exists(conn, "repos"):
             _migrate_repos(conn)
+        if _table_exists(conn, "terms_acceptances") and _table_exists(conn, "accounts"):
+            _migrate_terms_acceptances(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -74,8 +76,13 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_id VARCHAR(32)"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_login VARCHAR(255)"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email VARCHAR(320)"))
-    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_terms_accepted_at TIMESTAMP"))
-    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_terms_version VARCHAR(32) DEFAULT ''"))
+    # ``hosted_terms_accepted_at`` / ``hosted_terms_version`` are deliberately
+    # NOT created here any more (#735): acceptance moved to the
+    # ``terms_acceptances`` table. A database that already has them keeps them
+    # — ``_migrate_terms_acceptances`` copies their contents across and then
+    # nothing reads them again. Dropping them is a follow-up, once the copy is
+    # confirmed in production; a DROP COLUMN in the same release as the copy
+    # would leave no way back if the copy were wrong.
     conn.execute(
         text(
             "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "
@@ -213,6 +220,55 @@ def _migrate_repos(conn: Connection) -> None:
     # connected before this column existed carries no consent to enforce,
     # so it keeps its current (daemon-config-only) behaviour untouched.
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS publish_layers VARCHAR(255)"))
+
+
+def _migrate_terms_acceptances(conn: Connection) -> None:
+    """#735 — carry the legacy hosted-terms acceptances into the new table.
+
+    Two things this deliberately does **not** do.
+
+    It does not manufacture a general-ToS row for anybody. No account has ever
+    accepted the general Terms of Service — there was nowhere to record it —
+    so every existing account is asked on next login. A backfilled row would
+    be a forged consent record, and forging the evidence is the exact defect
+    this change exists to remove.
+
+    It does not invent a ``sha256`` for the rows it does carry across. The
+    text those users accepted was never pinned and cannot be reconstructed
+    (the hosted-execution page was redrafted under an unchanged version
+    label), so the hash stays empty and ``terms.text_for_sha256`` reports
+    "not recoverable". An acceptance that cannot reproduce its document is
+    weak evidence; an acceptance carrying a hash of a document the user never
+    saw is false evidence.
+
+    Idempotent: the ``NOT EXISTS`` guard plus ``uq_terms_acceptance`` mean a
+    second startup copies nothing, and a user who has since re-accepted
+    through the real endpoint keeps their newer, hash-carrying row.
+    """
+    if not _column_exists(conn, "accounts", "hosted_terms_accepted_at"):
+        return
+    conn.execute(
+        text(
+            """
+            INSERT INTO terms_acceptances (id, account_id, document, version, sha256, accepted_at)
+            SELECT
+                'ta_legacy_' || substr(md5(a.id), 1, 24),
+                a.id,
+                'hosted-execution',
+                COALESCE(a.hosted_terms_version, ''),
+                '',
+                a.hosted_terms_accepted_at
+            FROM accounts a
+            WHERE a.hosted_terms_accepted_at IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM terms_acceptances t
+                  WHERE t.account_id = a.id
+                    AND t.document = 'hosted-execution'
+                    AND t.version = COALESCE(a.hosted_terms_version, '')
+              )
+            """
+        )
+    )
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

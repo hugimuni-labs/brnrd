@@ -2,109 +2,62 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 
+	import TermsGate from '$lib/TermsGate.svelte';
+	import { DOC_HOSTED, fetchTermsStatus, safeNext, type TermsStatus } from '$lib/terms';
+
 	// Draft for legal review — not yet counsel-approved. Factual claims carry
 	// the file:line they were driven from; legal judgement calls carry a
 	// `LAWYER:` comment. Svelte strips template comments from the production
 	// build, so both kinds are for the reviewer reading source, not the user.
 	//
 	// This page is where the hosted-execution acceptance widget lives, moved
-	// here from /terms. The widget POSTs /v1/terms/accept, which writes
-	// `hosted_terms_accepted_at` / `hosted_terms_version`
-	// (src/brnrd/routers/web_auth.py:180-183) — the record for THIS document
-	// and nothing else. #569: do not repurpose it as acceptance of the general
-	// Terms of Service. #664 (closed, merged a83043a7) settled that this
-	// consent is feature-scoped, not login-scoped: the OAuth callback no
-	// longer gates on it, and `_terms_status().needs_accept`
-	// (src/brnrd/routers/_session.py:389-397) is the seam a hosted-execution
-	// surface reads when one exists.
+	// here from /terms. The widget POSTs /v1/terms/accept with
+	// `document: 'hosted-execution'`, which writes a `terms_acceptances` row
+	// for THIS document and nothing else (#735; it was a column pair on
+	// `Account` until then). #569: do not repurpose it as acceptance of the
+	// general Terms of Service — that document now has its own checkbox on
+	// /terms, beside its own words. #664 (closed, merged a83043a7) settled
+	// that this consent is feature-scoped, not login-scoped: the OAuth
+	// callback does not gate on it, and the `hosted-execution` entry of
+	// `_terms_status()` (src/brnrd/routers/_session.py) is the seam a
+	// hosted-execution surface reads when one exists. The general ToS gate
+	// added by #735 *is* on the login path, and that difference is the
+	// distinction #664 drew, not a reversal of it.
 	//
-	// OPEN: since #664 removed the gate, `_HOSTED_TERMS_VERSION`
-	// (src/brnrd/routers/_session.py:40) has no enforcement behind it —
-	// bumping it flips `needs_accept` to true for every account and nothing
-	// prompts anyone. Whoever builds the first hosted-execution surface must
-	// not assume a bump re-prompts.
+	// STILL OPEN: since #664 removed the gate, this document's version has no
+	// enforcement behind it — bumping it flips `needs_accept` to true for
+	// every account and nothing prompts anyone. Whoever builds the first
+	// hosted-execution surface must not assume a bump re-prompts.
 	//
 	// DELIBERATE NON-BUMP, for the maintainer to overrule if he disagrees:
-	// #569 says to bump `_HOSTED_TERMS_VERSION` to the release date when the
-	// expanded hosted terms ship, because the change is material. This diff
-	// does NOT bump it, for two reasons. (1) This text is a draft awaiting
+	// #569 says to bump the hosted-terms version to the release date when the
+	// expanded hosted terms ship, because the change is material. This has
+	// NOT been bumped, for two reasons. (1) This text is a draft awaiting
 	// counsel; it will change again after review, and a version bump spent
 	// now is a re-acceptance prompt spent on a text nobody should be asked to
 	// accept yet. (2) Post-#664 a bump prompts nobody anyway, so it would
 	// record a version change with no consent behind it — worse than not
 	// bumping. Bump it when counsel signs off AND a surface exists that reads
 	// `needs_accept`. Both, not either.
-
-	interface TermsStatus {
-		authenticated: boolean;
-		needs_accept: boolean;
-		terms_version: string;
-		accepted_at: string | null;
-	}
+	//
+	// The consequence #735 records rather than papers over: version
+	// `2026-07-08` has already named two materially different drafts of this
+	// page. That is precisely why an acceptance row stores a sha256 of the
+	// pinned text (`src/brnrd/legal/hosted-execution-2026-07-08.txt`) and not
+	// a version string alone.
 
 	let status = $state<TermsStatus | null>(null);
 	let statusError = $state<string | null>(null);
-	let checked = $state(false);
-	let posting = $state(false);
-	let result = $state<{ level: 'success' | 'error'; message: string } | null>(null);
 	let nextUrl = $state('/');
 
-	function safeNext(value: string | null): string {
-		if (!value || !value.startsWith('/') || value.startsWith('//')) return '/';
-		return value;
-	}
-
-	async function refreshStatus() {
+	onMount(async () => {
+		nextUrl = safeNext(new URLSearchParams(window.location.search).get('next'));
 		try {
-			const res = await fetch('/v1/dashboard/terms-status', { credentials: 'include' });
-			if (!res.ok) throw new Error(`terms-status fetch failed: ${res.status}`);
-			status = (await res.json()) as TermsStatus;
+			status = await fetchTermsStatus();
 			statusError = null;
 		} catch (e) {
 			statusError = e instanceof Error ? e.message : 'terms-status fetch failed';
 		}
-	}
-
-	async function acceptTerms() {
-		if (!checked) {
-			result = {
-				level: 'error',
-				message: 'You need to accept the beta hosted-execution terms before continuing.'
-			};
-			return;
-		}
-		posting = true;
-		result = null;
-		try {
-			const res = await fetch('/v1/terms/accept', {
-				method: 'POST',
-				credentials: 'include',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ accept_terms: 'yes' })
-			});
-			const body = await res.json().catch(() => ({}));
-			if (res.status === 401) {
-				result = { level: 'error', message: 'Sign in before accepting the beta terms.' };
-				return;
-			}
-			if (!res.ok || body.ok !== true) {
-				result = {
-					level: 'error',
-					message:
-						typeof body.notice === 'string' ? body.notice : `terms acceptance failed: ${res.status}`
-				};
-				return;
-			}
-			result = { level: 'success', message: 'Accepted.' };
-			window.location.assign(nextUrl);
-		} finally {
-			posting = false;
-		}
-	}
-
-	onMount(() => {
-		nextUrl = safeNext(new URLSearchParams(window.location.search).get('next'));
-		refreshStatus();
 	});
 </script>
 
@@ -119,13 +72,17 @@
 			>dashboard</a
 		>
 	</div>
+	<!-- LEGAL-TEXT:BEGIN hosted-execution — see the identical marker on
+	     /terms. This region is pinned to
+	     `src/brnrd/legal/hosted-execution-<version>.txt` and guarded by
+	     `tests/test_brnrd_legal_pinning.py`. -->
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
 		Hosted-execution beta terms
 	</h1>
 
 	<section class="panel mt-6 p-5">
 		<p class="text-sm text-stone-400">
-			Version {status?.terms_version ?? '2026-07-08'}. These terms supplement the
+			Version {status?.documents?.[DOC_HOSTED]?.version ?? '2026-07-08'}. These terms supplement the
 			<a class="text-sky-400 underline" href={resolve('/terms')}>Terms of Service</a> — they do not replace
 			them. They apply to what happens when you drive a brnrd thought through brnrd.dev, and to hosted
 			compute if and when HugiMuni SAS operates any for your account. You are asked to accept them at
@@ -544,60 +501,27 @@
 				</p>
 			</section>
 		</div>
+		<!-- LEGAL-TEXT:END hosted-execution -->
+
+		{#snippet hostedAttestation()}
+			I have read and accept the
+			<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
+				>brnrd beta hosted-execution terms</a
+			>, including the unattended-execution risk and the no-sandbox disclaimer, and I have read the
+			<a class="text-sky-400 underline" href={resolve('/terms')}>Terms of Service</a> they supplement.
+		{/snippet}
 
 		{#if statusError}
 			<p class="mt-6 text-sm text-red-400">{statusError}</p>
-		{:else if status === null}
-			<p class="mt-6 text-sm text-ink-quiet">Loading…</p>
-		{:else if status.needs_accept}
-			<div class="subpanel mt-6 p-4">
-				<label class="flex items-start gap-3 text-sm text-stone-300">
-					<input
-						bind:checked
-						type="checkbox"
-						class="mt-1 h-4 w-4 accent-amber-500"
-						aria-describedby="accept-copy"
-					/>
-					<span id="accept-copy">
-						I have read and accept the
-						<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
-							>brnrd beta hosted-execution terms</a
-						>, including the unattended-execution risk and the no-sandbox disclaimer, and I have
-						read the <a class="text-sky-400 underline" href={resolve('/terms')}>Terms of Service</a> they
-						supplement.
-					</span>
-				</label>
-				<div class="mt-4 flex flex-wrap items-center gap-3">
-					<button
-						type="button"
-						class="cursor-pointer border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-not-allowed disabled:border-stone-800 disabled:text-ink-mute"
-						disabled={posting}
-						onclick={acceptTerms}>{posting ? 'accepting…' : 'accept and continue'}</button
-					>
-					<span class="font-mono text-[11px] text-ink-mute">next {nextUrl}</span>
-				</div>
-				{#if result}
-					<p class={`mt-3 text-sm ${result.level === 'error' ? 'text-red-400' : 'text-amber-200'}`}>
-						{result.message}
-					</p>
-				{/if}
-			</div>
-		{:else if status.authenticated}
-			<p class="mt-6 text-sm text-ink-quiet">
-				{#if status.accepted_at}
-					Accepted {new Date(status.accepted_at).toLocaleString()}.
-				{:else}
-					Your account does not need a hosted-execution terms update.
-				{/if}
-			</p>
 		{:else}
-			<p class="mt-6 text-sm text-stone-400">
-				This page is readable signed out. To record acceptance, <a
-					class="text-sky-400 underline"
-					href="/login?next=/beta-hosted-execution"
-					rel="external">log in</a
-				>.
-			</p>
+			<TermsGate
+				documentKind={DOC_HOSTED}
+				status={status?.documents?.[DOC_HOSTED] ?? null}
+				authenticated={status?.authenticated ?? false}
+				next={nextUrl}
+				name="beta hosted-execution terms"
+				attestation={hostedAttestation}
+			/>
 		{/if}
 
 		<p class="mt-6 text-xs text-ink-quiet">
