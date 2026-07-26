@@ -84,7 +84,9 @@ def parse_pitfalls(dominion_dir: Path) -> list[Pitfall]:
             continue  # preamble before the first pitfall heading
         m = _TRIGGER_RE.match(line)
         if m:
-            triggers = [t.strip() for t in m.group(1).split(",") if t.strip()]
+            triggers.extend(
+                t.strip() for t in m.group(1).split(",") if t.strip()
+            )
             continue
         body_lines.append(line)
     _flush()
@@ -103,16 +105,17 @@ def format_block(matched: list[Pitfall]) -> str:
     if not matched:
         return ""
     parts = [
-        "## Pitfalls that match this task",
+        "# Pitfalls that match this task",
         "",
         "Failure-memory you recorded earlier, surfaced because a trigger in "
         "this task just hit it. Read it before you step on it again — and if "
-        "you've since guarded the failure with a lint, test, or baked tool, "
-        "slash the pitfall (the forcing function is the better memory).",
+        "you've since guarded the failure with a playbook invariant, lint, test, "
+        "or baked tool, slash the pitfall (the forcing function is the better "
+        "memory).",
     ]
     for p in matched:
         parts.append("")
-        parts.append(f"### {p.title}")
+        parts.append(f"## {p.title}")
         if p.body:
             parts.append(p.body)
     return "\n".join(parts)
