@@ -324,9 +324,17 @@ def home_profiles_unreachable(repo_root: Path) -> bool:
     exactly that shape (a plain repo, and a plain repo's own linked
     worktree) before shipping, alongside the #663 shape itself.
 
-    This is a symptom guard for #663's root, not a fix for it — retire the
-    call site (``daemon.py``) the day #663 closes, rather than letting it
-    accrete as permanent scar tissue.
+    This is a symptom guard, not a fix — but its retirement condition is
+    **not** "when #663 closes". #663 is already closed, and it corrected
+    ``main_worktree_root``'s docstrings rather than the strand itself: under
+    ``--separate-git-dir`` git records the main working tree's path nowhere,
+    so from a linked worktree the answer does not exist *in git*. There is no
+    ticket whose closure removes that. Retire this the day a stranded linked
+    worktree can resolve its account home again — i.e. the day condition (3)
+    stops being satisfiable, because brnrd records the main checkout itself
+    or resolves the account by another route. Until then the guard is live,
+    and reading "#663 is closed" as licence to delete it would remove a
+    working notice.
     """
     from . import account, gitops
 

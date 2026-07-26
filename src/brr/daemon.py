@@ -2737,8 +2737,11 @@ def _run_worker(
     # configured one". Same channel as the notices above, deliberately
     # (#693's reasoning: an operator learning a security-defining input
     # was dropped shouldn't have to learn a second place to look). This is
-    # a symptom guard for #663's root, not a fix for it — retire this call
-    # site the day #663 closes.
+    # a symptom guard, not a fix — and #663 is already *closed*, so "retire
+    # when #663 closes" would read as licence to delete a live notice. The
+    # real condition is behavioural, and lives on
+    # `config.home_profiles_unreachable`'s docstring: retire this the day a
+    # stranded linked worktree can resolve its account home again.
     if conf.home_profiles_unreachable(repo_root):
         print(
             f"[brnrd] WARNING: run {task.id} (event {eid}): the profile "
