@@ -52,8 +52,15 @@ PUBLIC_COMMANDS = (
 # docstring, and is named explicitly in onboarding docs; if a future
 # maintainer wants it front-and-center, retiring or folding another verb
 # to make room is the tradeoff to make deliberately, not by accident here.
+#
+# ``relic`` is hidden for the same reason as ``emotes``: it is the
+# resident's, not the operator's — it only does anything inside a live wake,
+# and ``daemon-substrate.md`` / ``brnrd docs portals`` point a resident at
+# the spelling directly. It also could not be public without evicting
+# something from the 18-verb ceiling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
+    "relic",
 )
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
@@ -317,6 +324,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="every face, not the top matches")
     p.add_argument("--telemetry", action="store_true", help="the daemon's derived set too")
     p.set_defaults(func=cmd_emotes)
+
+    # Hidden per HIDDEN_COMMANDS — the resident's front door onto the
+    # `.relics.jsonl` produce manifest, the same "control file with a command
+    # in front of it" shape as `.card` / `.keepalive`.
+    relic_p = sub.add_parser("relic")
+    relic_sub = relic_p.add_subparsers(dest="relic_command", required=True)
+
+    p = relic_sub.add_parser(
+        "issue", help="record an issue this run opened or closed")
+    p.add_argument("number", help="issue number (686 or #686)")
+    action_flags = p.add_mutually_exclusive_group()
+    action_flags.add_argument(
+        "--opened", dest="action", action="store_const", const="opened",
+        help="this run filed the issue")
+    action_flags.add_argument(
+        "--closed", dest="action", action="store_const", const="closed",
+        help="this run closed the issue")
+    p.add_argument(
+        "--repo", default=None, metavar="owner/name",
+        help="the issue's project, when it is not this checkout's origin")
+    p.set_defaults(func=cmd_relic_issue, action=None)
 
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
@@ -883,6 +911,119 @@ def cmd_emotes(args):
         print(f"           {e.trigger}")
     if not args.all and len(rows) >= 12:
         print("[brnrd emotes] top matches only — narrow the query, or --all")
+    return 0
+
+
+def _wake_outbox_dir() -> Path | None:
+    """This run's outbox directory, or ``None`` outside a wake.
+
+    Deliberately not a second resolution path: ``hooks.HookContext`` is the
+    one place that reads ``BRR_OUTBOX_DIR`` and falls back to the portal
+    file's parent, and it is what every other control-file consumer already
+    trusts. Constructing it is pure environment parsing — no I/O.
+    """
+    from . import hooks
+
+    return hooks.HookContext(dict(os.environ)).outbox_dir
+
+
+def cmd_relic_issue(args):
+    """Append an ``issue`` relic to this run's produce manifest (#686).
+
+    The grammar always accepted ``{"kind": "issue", "number": N, "action":
+    "closed"}`` — end to end, rendered and linked and counted. What it never
+    had was a front door: the record only existed if the resident remembered
+    the JSON shape *and* remembered that closing an issue is produce at all.
+    Filing feels like output; closing feels like tidying up, so the misses
+    skewed one way and a produce block reading "3 issues" was as likely to be
+    a run whose closes went unrecorded as a run that filed three.
+
+    The action flag is **required**, and that is the judgement call this
+    command makes. Defaulting the bare form to ``opened`` would manufacture
+    exactly the asymmetry #686 exists to remove — a resident recording a
+    close in a hurry would silently file the opposite fact — and defaulting
+    to *no* action would write a record that :func:`relics.issue_actions`
+    counts in neither bucket, i.e. a front door onto the room the resident
+    was already standing in. One retype teaches the vocabulary once; a wrong
+    fact in the manifest outlives the run.
+
+    Nothing here talks to the forge. Whether issue #686 is really closed is
+    the forge's knowledge; what this run *did* is the resident's, and the
+    manifest records the second.
+    """
+    import sys
+
+    from . import relics
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    raw = str(getattr(args, "number", "") or "").strip()
+    number_text = raw[1:] if raw.startswith("#") else raw
+    if not number_text.isdigit() or int(number_text) <= 0:
+        print(
+            f"[brnrd relic] not an issue number: {raw!r} — want a positive "
+            "integer, e.g. `brnrd relic issue 686 --closed` (a leading # is "
+            "fine). Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+    number = int(number_text)
+
+    action = getattr(args, "action", None)
+    if action is None:
+        print(
+            "[brnrd relic] say which: --opened or --closed. An issue relic "
+            "with no action counts as neither created nor completed, so the "
+            "flag is the record, not decoration on it. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    repo = str(getattr(args, "repo", None) or "").strip().strip("/")
+    if repo and repo.count("/") != 1:
+        print(
+            f"[brnrd relic] not a repo: {repo!r} — want owner/name, e.g. "
+            "`--repo hugimuni-labs/brnrd`. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # ``relics.append`` is the same writer the daemon's own auto-derivation
+    # uses: append-only, one JSON line, and it drops the record rather than
+    # corrupting a file the resident may have hand-written into. That
+    # best-effort posture is right on the closeout path and wrong at a
+    # prompt — a silent drop there is a resident who believes the close is
+    # recorded, which is the exact failure #686 is about — so confirm the
+    # file actually grew rather than reporting the intent.
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "issue", number=number, action=action,
+                  repo=repo or None)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    where = f" in {repo}" if repo else ""
+    print(f"[brnrd relic] issue #{number} {action}{where}")
     return 0
 
 
