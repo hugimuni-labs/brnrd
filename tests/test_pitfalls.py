@@ -20,6 +20,18 @@ def test_parse_missing_file_is_empty(tmp_path: Path) -> None:
     assert pitfalls.parse_pitfalls(tmp_path / "dominion") == []
 
 
+def test_parse_empty_file_is_empty(tmp_path: Path) -> None:
+    assert pitfalls.parse_pitfalls(_write(tmp_path / "dom", "")) == []
+
+
+def test_parse_preamble_only_is_empty(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "# Pitfalls\n# explanatory comment\ntrigger: not-a-real-trigger\n",
+    )
+    assert pitfalls.parse_pitfalls(dom) == []
+
+
 def test_parse_ignores_preamble_before_first_heading(tmp_path: Path) -> None:
     dom = _write(
         tmp_path / "dom",
@@ -45,6 +57,19 @@ def test_parse_splits_triggers_and_keeps_body(tmp_path: Path) -> None:
     assert p.body == "Line one.\nLine two."
 
 
+def test_parse_accumulates_multiple_trigger_lines(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## Two trigger lines\n"
+        "trigger: quota, rate limit\n"
+        "Some prose between them.\n"
+        "trigger: branch, rebase\n",
+    )
+    (p,) = pitfalls.parse_pitfalls(dom)
+    assert p.triggers == ["quota", "rate limit", "branch", "rebase"]
+    assert p.body == "Some prose between them."
+
+
 def test_parse_pitfall_without_trigger_is_inert(tmp_path: Path) -> None:
     dom = _write(tmp_path / "dom", "## No trigger\njust prose\n")
     (p,) = pitfalls.parse_pitfalls(dom)
@@ -59,6 +84,19 @@ def test_parse_multiple_pitfalls(tmp_path: Path) -> None:
     )
     parsed = pitfalls.parse_pitfalls(dom)
     assert [p.title for p in parsed] == ["First", "Second"]
+
+
+def test_parse_existing_heading_shape_is_backwards_compatible(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "# Pitfalls\n\n"
+        "## First\ntrigger: alpha, beta\nbody a\n\n"
+        "## Second\ntrigger: gamma\nbody b\n",
+    )
+    assert pitfalls.parse_pitfalls(dom) == [
+        pitfalls.Pitfall(title="First", triggers=["alpha", "beta"], body="body a"),
+        pitfalls.Pitfall(title="Second", triggers=["gamma"], body="body b"),
+    ]
 
 
 # ── match ──────────────────────────────────────────────────────────────
@@ -105,7 +143,32 @@ def test_format_renders_titles_and_bodies(tmp_path: Path) -> None:
         "## Blind retry\ntrigger: retry\nGate retries behind idempotency.\n",
     )
     block = pitfalls.format_block(pitfalls.parse_pitfalls(dom))
-    assert "## Pitfalls that match this task" in block
-    assert "### Blind retry" in block
+    lines = block.splitlines()
+    assert lines[0] == "# Pitfalls that match this task"
+    assert "## Blind retry" in lines
     assert "Gate retries behind idempotency." in block
     assert "trigger:" not in block  # triggers are matching metadata, not shown
+
+
+def test_format_entry_heading_round_trips_as_distinct_pitfall(tmp_path: Path) -> None:
+    rendered = pitfalls.format_block(
+        [
+            pitfalls.Pitfall(
+                title="Quota flicker",
+                triggers=["quota"],
+                body="Check the provider status before changing configuration.",
+            )
+        ]
+    )
+    dom = _write(
+        tmp_path / "dom",
+        "## Existing host\ntrigger: existing\nHost body.\n\n" + rendered,
+    )
+
+    parsed = pitfalls.parse_pitfalls(dom)
+
+    assert [p.title for p in parsed] == ["Existing host", "Quota flicker"]
+    assert parsed[0].triggers == ["existing"]
+    assert parsed[1].body == (
+        "Check the provider status before changing configuration."
+    )

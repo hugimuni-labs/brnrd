@@ -897,9 +897,9 @@ _PITFALLS_SEED = """\
 #
 # Format: a `## ` heading (the lesson's name), a `trigger:` line
 # (comma-separated keywords or loci that tend to appear when the failure
-# is about to recur), then the lesson. Slash a pitfall once a lint, test,
-# or baked tool guards the failure — the forcing function is the better
-# memory, and a stale pitfall is just orientation tax.
+# is about to recur), then the lesson. Slash a pitfall once a playbook
+# invariant, lint, test, or baked tool guards the failure — the forcing
+# function is the better memory, and a stale pitfall is just orientation tax.
 #
 # Example (delete once you have real ones):
 #
