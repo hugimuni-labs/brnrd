@@ -15,7 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from brnrd import ids, limits, oauth, publish_scope, terms
-from brnrd.auth import get_db  # noqa: F401  re-exported so callers can import from here
+from brnrd.auth import account_id_from_session_cookie, get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
     ActivityRecord,
@@ -251,17 +251,12 @@ def _notice_text(value: str | None) -> str | None:
 
 
 def _account_id(request: Request, db: Session) -> str | None:
-    cookie = request.cookies.get(request.app.state.settings.session_cookie)
-    if not cookie:
-        return None
-    token = db.execute(select(Token).where(Token.token_hash == hash_token(cookie), Token.kind == Token.KIND_SESSION)).scalar_one_or_none()
-    if token is None or token.revoked:
-        return None
-    if token.expires_at is not None:
-        expires = token.expires_at if token.expires_at.tzinfo else token.expires_at.replace(tzinfo=timezone.utc)
-        if expires < datetime.now(timezone.utc):
-            return None
-    return token.account_id
+    """Thin alias for the shared cookie resolver in ``brnrd.auth``.
+
+    Kept as a name because this module's callers (and tests) reach for
+    ``_session._account_id``; the predicate itself lives in one place now.
+    """
+    return account_id_from_session_cookie(request, db)
 
 
 def _json_account(request: Request, db: Session) -> Account:
