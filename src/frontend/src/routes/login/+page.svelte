@@ -103,13 +103,19 @@
 					</svg>
 					<span>sign in with GitHub</span>
 				</a>
+				<!-- This line used to point at the Terms of Service as the document
+				     that "covers the rest" while nothing anywhere recorded that
+				     anyone had accepted it (#735) — a sentence about a contract the
+				     system held no evidence of. It now describes what actually
+				     happens: signing in leads to the terms, and acceptance is
+				     recorded there against the exact text shown. -->
 				<p class="mt-3 text-xs text-ink-quiet">
-					Execution stays on your machine. The
+					Execution stays on your machine. Signing in asks you to accept the
+					<a class="text-sky-400 underline" href={resolve('/terms')}>terms of service</a>
+					if you have not accepted the current version. The
 					<a class="text-sky-400 underline" href={resolve('/beta-hosted-execution')}
 						>brnrd beta hosted-execution terms</a
-					>
-					apply only if HugiMuni SAS ever operates hosted compute for your account; the
-					<a class="text-sky-400 underline" href={resolve('/terms')}>terms of service</a> cover the rest.
+					> are separate and are asked for only at the point you use that feature.
 				</p>
 			{:else}
 				<button

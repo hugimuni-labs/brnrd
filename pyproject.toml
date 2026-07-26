@@ -52,7 +52,10 @@ include = ["brr*", "brnrd*"]
 
 [tool.setuptools.package-data]
 brr = ["AGENTS.md", "LICENSE", "Dockerfile", "prompts/*.md", "templates/*.md", "docs/*.md", "gates/README.md", "diffense/template.html", "data/*.json"]
-brnrd = ["LICENSE", "static/*.css"]
+# `legal/*.txt` is not documentation: it is the byte-exact text a
+# `terms_acceptances.sha256` resolves back to (#735). Ship it or an installed
+# backend cannot reproduce what a user accepted.
+brnrd = ["LICENSE", "static/*.css", "legal/*.txt"]
 
 [project.optional-dependencies]
 backend = [

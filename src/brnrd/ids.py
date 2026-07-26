@@ -51,6 +51,10 @@ def run_stop_request_id() -> str:
     return _rid("stopreq")
 
 
+def terms_acceptance_id() -> str:
+    return _rid("ta")
+
+
 def channel_route_id() -> str:
     return _rid("chan")
 

@@ -1,0 +1,211 @@
+Hosted-execution beta terms
+
+Version 2026-07-08. These terms supplement the Terms of Service — they do not replace
+them. They apply to what happens when you drive a brnrd thought through brnrd.dev, and
+to hosted compute if and when HugiMuni SAS operates any for your account. You are asked
+to accept them at the point you use the feature, not when you sign in.
+
+1. Two different things get called "hosted"
+
+What happens today. You send a task from brnrd.dev, or from a chat or forge gate
+connected through it. brnrd.dev queues it and hands it to a daemon you run, on your own
+machine. Your machine runs the agent, calls the model provider under your own
+subscription, and sends the reply back through brnrd.dev to wherever you asked. That is
+what this page mostly describes, because it is what exists.
+
+What does not exist yet. HugiMuni SAS running the agent on its own compute. Section 8
+covers that case, so that the terms are in place before the feature is — but as of this
+version, brnrd.dev is a control plane, not a compute farm, and there is no
+hosted-compute surface to use.
+
+2. What actually happens when you drive a thought through brnrd.dev
+
+A message arrives at brnrd.dev from the gate you connected. Its text is stored so it can
+be delivered. Your daemon polls, takes the task, and runs the agent locally — file reads
+and writes, shell commands, dependency installation, network and API calls, Git
+operations, tests and builds, whatever the work needs. The reply comes back to brnrd.dev
+and is delivered to the thread you wrote from.
+
+The agent does not ask you to approve each step. It is launched with its approval
+prompts deliberately bypassed, because unattended work is what the product is for. It
+acts with your user's authority, using your credentials and your network. Anyone you
+authorise to trigger a run can, in effect, instruct your agent — so treat that
+permission the way you would treat handing out shell access.
+
+3. What leaves your machine
+
+Two things leave, and they are different. The relay carries your task text and your
+agent's reply, because that is the job you connected it for. Dashboard publishing, which
+only exists if you ran brnrd account connect, additionally mirrors seven lanes of
+repo-derived content to brnrd.dev every few seconds so the dashboard can render them.
+
+No brnrd publisher reads your working tree, so we do not ship your checkout or a diff of
+it. That is narrower than it sounds, and we will not let it be read as "your code never
+leaves". The largest mirrored lane carries whole Markdown pages your agent wrote — your
+work surface, every knowledge-base page, and per-run bodies and message transcripts —
+verbatim. Those pages routinely quote the code the agent was working on. Measured
+against a real account, mirrored pages contained fenced code blocks including
+unified-diff fragments of repository files. If your agent wrote about your code, your
+code is in the mirror.
+
+The seven lanes also carry, in free text:
+
+run receipts — commit SHAs and subjects, branch names, file paths on your machine, and
+the summary the agent wrote about the run;
+
+the live progress card the agent is writing right now, for every active run, whichever
+gate it came from;
+
+your quota and billing figures for your agent CLIs, reset labels carrying your timezone,
+and the raw error string from the last failed gate poll;
+
+open pull-request titles across the repositories in your account;
+
+your locally-discovered runner catalog — which agent CLIs are installed and
+authenticated, and whether Docker is present. A fingerprint of your machine's tooling.
+
+The full lane-by-lane table, produced by driving each publisher and capturing the actual
+payload, is in SECURITY.md. It is the document to read before deciding what to publish —
+it is more specific than this page can be.
+
+4. What brnrd.dev stores, and for how long
+
+These are measurements of what the code does, not intentions. Where a figure is
+configurable, the default is given.
+
+Message bodies. The text of a message you send through a gate is nulled out of the
+database as soon as the reply is delivered. A message that never gets answered has its
+body nulled after 14 days, and the row itself is deleted after 90. The queue is a relay,
+not an archive.
+
+But read that with the next line. If dashboard publishing is on, the same message text
+is also part of the mirrored run page, and stays there for the run-mirror window — 14
+days by default, configurable, and 0 drops run pages from the mirror entirely. On a
+connected daemon, that window, not the null-after-reply, is the real retention for
+message text.
+
+The mirror. Each publish replaces the previous snapshot wholesale — it is a render
+cache, and your repository, knowledge base, and dominion remain the durable copies.
+Disconnecting your last repository empties it on our side. The two non-run mirror
+layers, your work surface and your knowledge base, have no age bound: every page ships
+however old, up to a 256 KB per-file cap.
+
+Tokens. Session and daemon tokens are stored as SHA-256 hashes only. There is no column
+holding the token itself.
+
+Review packs. A diffense review pack relayed through brnrd.dev lives in process memory
+only, behind an unguessable token, for at most one hour, and is dropped on expiry or
+restart. It is never written to the database or to disk. A pack carries file paths, line
+numbers, and the agent's prose about your code — not a patch.
+
+Your account. Your GitHub id and login, your email address if GitHub gave us one, your
+Stripe customer id if you have one, and the record of which version of these terms you
+accepted and when. This has no automatic expiry; ask us and we will delete it.
+
+5. What brnrd.dev does not do
+
+It calls no model provider. There is no model-provider client in the backend. Every
+model call your agent makes is made by your machine, under your own subscription, under
+that provider's terms with you.
+
+It runs no analytics. No analytics script, tag manager, or third-party tracker is loaded
+by this site. The session cookie is strictly necessary, which is why you are not being
+asked to dismiss a cookie banner.
+
+It sends no email. There is no mail-sending path in the service at all.
+
+It does not sell your data, and it does not use your content to train or fine-tune
+models.
+
+It does not read your working tree — with the caveat in section 3, which matters more
+than this line does.
+
+The providers that do receive something are our host, Stripe for payments, GitHub for
+sign-in and forge access, and the chat gate you chose to connect.
+
+6. What you control
+
+publish.layers in your.brr/config names what may be mirrored at all. Unset mirrors
+everything. none stops all seven lanes — and stops collection, not just transmission: no
+snapshot is built. Naming individual lanes turns everything you did not name off.
+
+publish.runs_window_days (default 14) bounds how far back run pages are mirrored; 0
+drops them.
+
+Disconnecting your last repository deletes the mirror from our servers.
+
+Disconnecting the account entirely leaves nothing running: without brnrd account
+connect, none of these lanes exist.
+
+One honest caveat about that switch:.brr/config lives in your checkout and is writable
+by anything with local write access — including the agent itself. It bounds what brnrd
+publishes. It is not a control an untrusted run cannot reach.
+
+Turning publishing off does not disconnect you. A connected daemon still talks to
+brnrd.dev for the relay job you connected it for — inbox polling, reply delivery,
+progress cards, review-pack relay, pairing. If you want no traffic at all, disconnect.
+
+7. Review before you rely on it
+
+An agent can produce output that is wrong, insecure, or subtly incorrect while reading
+as correct. Review its work before you merge it, deploy it, publish it, run it in
+production, or otherwise rely on it. Where a run touched credentials, dependencies, or
+infrastructure, review that too. This is your responsibility and it does not move to us
+because the change was made by an agent rather than by hand.
+
+8. If HugiMuni SAS ever operates the compute
+
+If and when we offer hosted compute for your account, the following applies to it, in
+addition to everything above.
+
+Your authorisation. You authorise us to run your selected agent on compute we operate,
+for the account, repositories, branches, and tasks you give it, and to perform the
+actions that work needs: file reads and writes, shell commands, dependency and package
+installation, network, API and browser calls, Git operations, tests and builds, and
+other tool use. Some runs use unattended or auto-approval modes; you are not asked to
+confirm each command.
+
+Secrets and credentials. You decide which repositories, credentials, tokens, environment
+variables, branches, data, prompts, and dependencies are safe to give a hosted run. A
+run can read and use anything you make available to it, and anything it can reach with
+what you gave it. Do not give a run a credential you would not give a person.
+
+Costs incurred by a run. A run can consume quota and incur charges with third parties —
+your model provider, your cloud accounts, any metered API it calls. Those charges are
+between you and that provider, and they are yours.
+
+No sandbox guarantee. We apply the execution defaults and controls stated in the product
+documentation, and they reduce risk. They are not a complete sandbox and not a
+containment boundary. We do not promise that hosted execution resists prompt injection,
+malicious code, supply-chain compromise, data loss, or misbehaviour by a tool the run
+can reach. Our published trust and execution model names, for each environment, exactly
+what it does and does not isolate, and which gaps are still open. That document is the
+description of what you are getting.
+
+9. Beta status, availability, and changes
+
+This is a beta feature and you use it at your own risk. We may change, pause, reject,
+throttle, or stop hosted execution at any time to protect the service, our
+infrastructure, other users, or connected third-party services. brnrd.dev is currently
+free to use; if paid plans apply to this feature later, the rules for them will be given
+at checkout and in the billing terms, and the Terms of Service govern the rest.
+
+When we materially change this document we bump its version. The version shown at the
+top of this page is the one your acceptance is recorded against.
+
+10. Warranty and liability
+
+Hosted execution is provided as is and as available, with no warranty that it will be
+uninterrupted, error-free, secure, or fit for your purpose, and no warranty that agent
+output is correct.
+
+The warranty disclaimer and the limitation of liability in sections 12 and 13 of the
+Terms of Service apply to this feature, including their carve-outs. Nothing here limits
+rights or remedies that cannot be waived under French law or European Union consumer
+protection law; if you are a consumer, your mandatory rights apply in full.
+
+11. Company and contact
+
+brnrd is operated by HugiMuni SAS, France, and its legal successors. These terms
+supplement the Terms of Service and any billing terms, data-processing agreement, or
+separately agreed contract; they replace none of them. Contact: security@hugimuni.fr.

@@ -13,9 +13,9 @@ pytest.importorskip("multipart")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
-from brnrd import create_app  # noqa: E402
+from brnrd import create_app, terms  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, PairRequest, Repo, TgPairCode  # noqa: E402
+from brnrd.models import Account, PairRequest, Repo, TermsAcceptance, TgPairCode  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -91,6 +91,41 @@ def _login_web(
         f"/auth/github/callback?code=ok&state={state}", follow_redirects=False
     )
     return start, callback, seen
+
+
+def _acceptances(client, kind):
+    """Every acceptance row for ``kind``, oldest first.
+
+    Read straight out of the table rather than through the status endpoint:
+    a test that only ever asks the API "am I accepted?" cannot see a second
+    row being written, and append-only-ness is the property that makes this
+    a table instead of two columns.
+    """
+    with client.app.state.SessionLocal() as db:
+        return list(
+            db.execute(
+                select(TermsAcceptance)
+                .where(TermsAcceptance.document == kind)
+                .order_by(TermsAcceptance.accepted_at)
+            ).scalars()
+        )
+
+
+def _accept_general_terms(client, monkeypatch, *, next="/"):
+    """Get a session past the #735 login gate, through the real caller.
+
+    Not a fixture shortcut that writes a row directly: a test whose setup
+    forges the acceptance would still pass if the endpoint that is supposed
+    to write it stopped working.
+    """
+    _login_web(client, monkeypatch, next=next)
+    accepted = client.post(
+        "/v1/terms/accept",
+        json={"document": "tos", "accept_terms": "yes"},
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 200, accepted.text
+    return accepted
 
 
 def test_login_context_carries_backend_validated_next(client):
@@ -204,34 +239,64 @@ def test_github_login_redirect_uses_state_and_pkce(client):
 def test_terms_status_is_public_for_anonymous_users(client):
     r = client.get("/v1/dashboard/terms-status")
     assert r.status_code == 200
-    assert r.json() == {
-        "authenticated": False,
-        "needs_accept": False,
-        "terms_version": "2026-07-08",
-        "accepted_at": None,
-    }
+    body = r.json()
+    assert body["authenticated"] is False
+    assert sorted(body["documents"]) == ["hosted-execution", "tos"]
+    for kind, doc in body["documents"].items():
+        # Nothing is owed by nobody: an anonymous reader is not withholding
+        # consent, and rendering "you must accept" at them would be a lie.
+        assert doc["needs_accept"] is False
+        assert doc["accepted_at"] is None
+        assert doc["version"] == terms.current(kind).version
+        assert doc["sha256"] == terms.current(kind).sha256
 
 
 def test_terms_status_reports_authenticated_acceptance_state(client, monkeypatch):
-    _login_web(client, monkeypatch, next="/connect/BR-123")
-    r = client.get("/v1/dashboard/terms-status")
-    assert r.status_code == 200
-    assert r.json() == {
-        "authenticated": True,
-        "needs_accept": True,
-        "terms_version": "2026-07-08",
-        "accepted_at": None,
-    }
+    _accept_general_terms(client, monkeypatch, next="/connect/BR-123")
+    body = client.get("/v1/dashboard/terms-status").json()
+    assert body["authenticated"] is True
+    # The general terms were just accepted through the real endpoint; the
+    # hosted addendum is a different document and stays outstanding. One
+    # acceptance must never satisfy the other (#569).
+    assert body["documents"]["tos"]["needs_accept"] is False
+    assert body["documents"]["tos"]["accepted_sha256"] == terms.current(terms.DOC_TOS).sha256
+    assert body["documents"]["hosted-execution"]["needs_accept"] is True
+    assert body["documents"]["hosted-execution"]["accepted_at"] is None
+
+
+def test_github_callback_gates_login_on_the_general_terms(client, monkeypatch):
+    """#735: signing in asks for the general Terms of Service.
+
+    The site has been selling since 2026-07-21 with no acceptance record for
+    the document that governs the sale. Login is where the condition those
+    terms describe — using brnrd.dev at all — becomes true, so login is where
+    they are asked for, with the original destination preserved so accepting
+    resumes the journey.
+    """
+    _, callback, _ = _login_web(client, monkeypatch, next="/connect/BR-123")
+    assert callback.status_code == 303
+    assert callback.headers["location"] == "/terms?next=/connect/BR-123"
+    # The session is issued anyway: the accept endpoint needs it, and a gate
+    # that logged you out to ask a question could never be answered.
+    assert client.get("/v1/dashboard/login-context").json()["authenticated"] is True
+    assert client.get("/v1/dashboard/terms-status").json()["documents"]["tos"]["needs_accept"] is True
 
 
 def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch):
     """#664: the hosted-execution beta terms are not an authentication gate.
 
     Driven through the real OAuth callback — the caller the defect lived in —
-    not through ``_needs_hosted_terms``. An account that has never accepted
-    (and, per the assertions below, still has not) reaches the destination it
-    asked for.
+    not through the predicate. An account that has never accepted the hosted
+    addendum (and, per the assertions below, still has not) reaches the
+    destination it asked for.
+
+    #735 added a general-ToS gate to this same callback, which is why this
+    test now satisfies that gate first, through the real accept endpoint: the
+    point being defended is that *hosted* terms hold nobody up, and it would
+    be untestable if the general gate were left standing in the way.
     """
+    _accept_general_terms(client, monkeypatch, next="/connect/BR-123")
+
     _, callback, seen = _login_web(client, monkeypatch, next="/connect/BR-123")
     assert callback.status_code == 303
     assert callback.headers["location"] == "/connect/BR-123"
@@ -246,8 +311,7 @@ def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch
         ).scalar_one()
         assert account.github_login == _LOGIN
         assert account.email == _EMAIL
-        assert account.hosted_terms_accepted_at is None
-        assert account.hosted_terms_version == ""
+        assert _acceptances(client, terms.DOC_HOSTED) == []
         repos = db.execute(
             select(Repo).where(Repo.account_id == account.id)
         ).scalars().all()
@@ -260,34 +324,39 @@ def test_github_callback_does_not_gate_login_on_hosted_terms(client, monkeypatch
     assert context.json()["authenticated"] is True
     # …and the server still knows acceptance is outstanding, for whatever
     # surface eventually offers hosted execution.
-    assert client.get("/v1/dashboard/terms-status").json()["needs_accept"] is True
+    status = client.get("/v1/dashboard/terms-status").json()
+    assert status["documents"]["hosted-execution"]["needs_accept"] is True
 
 
 def test_hosted_terms_acceptance_still_records_after_ungated_login(client, monkeypatch):
     """#664 removes a gate; it must not remove the acceptance path.
 
     Same lifecycle a point-of-use surface would drive: authenticate through
-    the real OAuth callback without accepting, then accept, and confirm the
-    record lands and ``needs_accept`` flips.
+    the real OAuth callback without accepting the addendum, then accept it,
+    and confirm the record lands and ``needs_accept`` flips.
     """
+    _accept_general_terms(client, monkeypatch, next="/repos")
     _, callback, _ = _login_web(client, monkeypatch, next="/repos")
     assert callback.headers["location"] == "/repos"
-    assert client.get("/v1/dashboard/terms-status").json()["needs_accept"] is True
+    status = client.get("/v1/dashboard/terms-status").json()
+    assert status["documents"]["hosted-execution"]["needs_accept"] is True
 
     accept = client.post(
-        "/v1/terms/accept", json={"accept_terms": "yes"}, follow_redirects=False
+        "/v1/terms/accept",
+        json={"document": "hosted-execution", "accept_terms": "yes"},
+        follow_redirects=False,
     )
     assert accept.status_code == 200
-    assert accept.json() == {"ok": True}
+    assert accept.json()["ok"] is True
 
-    with client.app.state.SessionLocal() as db:
-        account = db.execute(
-            select(Account).where(Account.github_id == _GITHUB_ID)
-        ).scalar_one()
-        assert account.hosted_terms_accepted_at is not None
-        assert account.hosted_terms_version == "2026-07-08"
+    rows = _acceptances(client, terms.DOC_HOSTED)
+    assert len(rows) == 1
+    assert rows[0].version == terms.current(terms.DOC_HOSTED).version
+    # The record reproduces the document, not just its label — the defect
+    # `hosted_terms_version` had (#735).
+    assert terms.text_for_sha256(rows[0].sha256) == terms.current(terms.DOC_HOSTED).text
 
-    status = client.get("/v1/dashboard/terms-status").json()
+    status = client.get("/v1/dashboard/terms-status").json()["documents"]["hosted-execution"]
     assert status["needs_accept"] is False
     assert status["accepted_at"] is not None
 
@@ -310,11 +379,7 @@ def test_terms_acceptance_requires_checkbox(client, monkeypatch):
         "ok": False,
         "notice": "You need to accept the beta hosted-execution terms before continuing.",
     }
-    with client.app.state.SessionLocal() as db:
-        account = db.execute(
-            select(Account).where(Account.github_id == _GITHUB_ID)
-        ).scalar_one()
-        assert account.hosted_terms_accepted_at is None
+    assert _acceptances(client, terms.DOC_HOSTED) == []
 
 
 def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
@@ -325,28 +390,33 @@ def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 200
-    assert r.json() == {"ok": True}
-    with client.app.state.SessionLocal() as db:
-        account = db.execute(
-            select(Account).where(Account.github_id == _GITHUB_ID)
-        ).scalar_one()
-        assert account.hosted_terms_accepted_at is not None
-        assert account.hosted_terms_version == "2026-07-08"
+    body = r.json()
+    assert body["ok"] is True
+    # An omitted ``document`` still means the hosted addendum: that is the
+    # payload the pre-#735 widget sends, and defaulting it to the general ToS
+    # would be the silent repurpose #569 forbids.
+    assert body["document"] == "hosted-execution"
+    assert _acceptances(client, terms.DOC_TOS) == []
+    rows = _acceptances(client, terms.DOC_HOSTED)
+    assert len(rows) == 1
+    assert rows[0].version == "2026-07-08"
     status = client.get("/v1/dashboard/terms-status")
     assert status.status_code == 200
     assert status.json()["authenticated"] is True
-    assert status.json()["needs_accept"] is False
-    assert status.json()["accepted_at"] is not None
+    hosted = status.json()["documents"]["hosted-execution"]
+    assert hosted["needs_accept"] is False
+    assert hosted["accepted_at"] is not None
 
 
 def test_terms_acceptance_shim_redirects_to_the_hosted_execution_page(client):
     """The shim lands on /beta-hosted-execution, not /terms.
 
-    /terms is the service-wide Terms of Service and carries no acceptance
-    widget: the widget writes ``hosted_terms_accepted_at``, which is the
-    hosted-execution addendum's record and must not stand in for acceptance
-    of the general ToS (#569). The document and the checkbox that records it
-    live on one page, and every accept-URL producer points there.
+    /terms now has an acceptance widget of its own (#735) — which makes this
+    guard *more* load-bearing, not less. Before, sending a hosted-terms
+    accept link to /terms landed on a page with no checkbox and the mistake
+    was visible. Now it would land on a live checkbox that records acceptance
+    of a different document, and the user would never know. Each document's
+    accept URL points at the page carrying that document's own words (#569).
     """
     r = client.get("/terms/accept?next=/connect/BR-123", follow_redirects=False)
     assert r.status_code == 308
