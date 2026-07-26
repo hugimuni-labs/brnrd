@@ -2726,6 +2726,37 @@ def _run_worker(
             "there.",
         )
 
+    # #700: the *unreachable* half of the same domain. #693 (above) covers
+    # a repo-side runners.md being ignored; this covers the account's own
+    # runners.md being unreachable in the first place. home_profiles_path
+    # derives from security_config_path, whose resolution isn't total
+    # (#663): from a linked worktree of a --separate-git-dir repo, the
+    # account home can't be found and resolution falls through to a
+    # per-repo project home. That home has no runners.md, which looks
+    # identical — from here and from every other surface — to "never
+    # configured one". Same channel as the notices above, deliberately
+    # (#693's reasoning: an operator learning a security-defining input
+    # was dropped shouldn't have to learn a second place to look). This is
+    # a symptom guard for #663's root, not a fix for it — retire this call
+    # site the day #663 closes.
+    if conf.home_profiles_unreachable(repo_root):
+        print(
+            f"[brnrd] WARNING: run {task.id} (event {eid}): the profile "
+            "catalog's home is unreachable from this worktree (likely a "
+            "linked worktree under --separate-git-dir, #663) — custom "
+            "runner profiles are not being read here; the bundled catalog "
+            "ran instead"
+        )
+        _record_outbox_notice(
+            outbox_dir,
+            "custom runner profiles are not being read in this worktree — "
+            "the profile catalog's home is unreachable from here (likely a "
+            "linked worktree under --separate-git-dir, #663), so brnrd ran "
+            "the bundled catalog instead of your account's runners.md. Run "
+            "brnrd from the main checkout (or resolve #663) to restore your "
+            "custom profiles.",
+        )
+
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
