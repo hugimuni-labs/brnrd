@@ -2145,6 +2145,13 @@ def test_closeout_excludes_spawn_completed_from_obligation_count():
                     "id": "evt-spawn-done",
                     "source": "spawn_completed",
                     "spawn_parent_run_id": run_id,
+                    # Structured, not only in the prose: since #730 a spawn
+                    # that reached a terminal state always carries this, so a
+                    # fixture asserting the healthy wording has to look like
+                    # what production now emits. Without it this is an
+                    # outcome-never-determined event, which is exactly the
+                    # case that must not read as "no address needed".
+                    "spawn_status": "done",
                     "summary": "concurrent spawn run-child done: status=done",
                 },
             ],
@@ -2223,7 +2230,7 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
                 "spawn_parent_run_id": run_id, "spawned_by_run": "run-error",
                 "spawn_status": "error",
             }],
-            "- ▷ 1 finished spawn(s) — 0 ok, 1 error (run-error).",
+            "- ▷ 1 finished spawn(s) — 1 error (run-error).",
         ),
         (
             [
@@ -2250,14 +2257,36 @@ def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
             "- ▷ 1 finished spawn(s) — 1 ok "
             "(run-no-report; no report written).",
         ),
+        # An event with no ``spawn_status`` is the case this line exists for:
+        # an outcome that was never determined. It must NOT take the all-clear
+        # branch — "no address needed" is itself a claim about outcome, and
+        # restating it here would reproduce #730 in the one place nobody
+        # drives. Reachable in practice: every completion event minted before
+        # this shipped carries no status, and daemon.py is restart-only.
         (
             [{
                 "id": "evt-legacy", "source": "spawn_completed",
                 "spawn_parent_run_id": run_id,
                 "spawned_by_run": "run-legacy",
             }],
-            "- ▷ 1 finished spawn(s) observed — no address needed; "
-            "will retire at run end.",
+            "- ▷ 1 finished spawn(s) — 1 status unknown (run-legacy).",
+        ),
+        # Parts sum to the whole: a known-good spawn beside an undetermined
+        # one accounts for both, rather than suppressing the "ok" term.
+        (
+            [
+                {
+                    "id": "evt-ok", "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id, "spawned_by_run": "run-ok",
+                    "spawn_status": "done",
+                },
+                {
+                    "id": "evt-unknown", "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id,
+                    "spawned_by_run": "run-unknown",
+                },
+            ],
+            "- ▷ 2 finished spawn(s) — 1 ok, 1 status unknown (run-unknown).",
         ),
     ]
 
