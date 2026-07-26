@@ -114,6 +114,25 @@ through their first descriptive field, but use a built-in kind when it fits.
 {"kind": "summary", "text": "…"}
 ```
 
+**Issues have a command, and it is the one relic worth the habit.**
+
+```
+brnrd relic issue 686 --closed [--repo owner/name]
+brnrd relic issue 764 --opened
+```
+
+Same appended line, none of the JSON. It exists because issue produce is the
+only kind the daemon cannot see: commits, merges, the branch, the PR, kb
+pages and your reply are all derived, but `gh issue create` and `gh issue
+close` happen inside your shell and leave the daemon nothing to observe. So
+an issue relic exists **only** if you write one — and the misses skew, because
+filing feels like output while closing feels like tidying up.
+
+The action flag is required, not defaulted. An issue relic with no `action`
+is neither created nor completed — that is how every hand-written record
+predating this command still reads, and it stays true rather than being
+retro-fitted into a bucket nobody chose.
+
 **Links are derived, not reported.** The daemon knows the run's forge and
 `owner/repo`, so an `issue` / `pr` / `commit` / `branch` relic gets its forge
 URL filled in at collection time from its `number` / `sha` / `name` alone —
