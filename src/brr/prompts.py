@@ -216,6 +216,57 @@ def _entry_key(entry: str) -> _EntryKey | None:
     return _EntryKey(order_date=instant[0], order_time=instant[1], shown_date=date)
 
 
+def _split_h2_entries(content: str) -> list[str]:
+    """Every ``## `` entry in *content*, in document order; ``[]`` if none.
+
+    The page's leading preamble (anything above the first ``## ``) is not an
+    entry and is not returned here.
+    """
+    match = _H2_RE.search(content)
+    if not match:
+        return []
+    return [e for e in _H2_SPLIT_RE.split(content[match.start() :]) if e.strip()]
+
+
+def _page_is_chronological(content: str) -> bool:
+    """Is this page an *accreting log*, or a *hand-authored document*?
+
+    The two kinds want opposite treatment and the difference is **computable
+    from the page itself** — no filename table, no config knob, no per-page
+    declaration (#688). The predicate is the one
+    :func:`_entries_attestation` already applies: every ``## `` heading
+    carries a parseable date.
+
+    - **Every heading dated ⇒ chronological.** ``ledger/decisions.md``,
+      ``kb/log.md``: entries accrete at the bottom forever, so the *tail* is
+      what a wake needs and the per-page cap is a real defence against a
+      458 KB page eating the surface budget.
+    - **Any heading undated ⇒ structural.** ``surface/workflow.md``,
+      ``plans/<repo>/active.md``: the ``## `` sections are a document's
+      parts, not a timeline. Their order is editorial, the *head* is what
+      leads, and the page is bounded because a human maintains it by hand.
+
+    Undated is deliberately the *structural* side rather than the unknown
+    side: a dated page is a claim the page itself makes and can be checked
+    against, and a page that makes no such claim is the one a human wrote.
+
+    A page with **no ``## `` headings at all** answers ``True`` — not
+    because it is a log, but because it is unclassifiable, and the accreting
+    cap is the backstop for that case (it takes the flat byte-cut path in
+    :func:`_tail_trim_entries`, which has no entry structure to reason
+    about).
+    """
+    entries = _split_h2_entries(content)
+    if not entries:
+        return True
+    return all(_entry_key(e) is not None for e in entries)
+
+
+def _heading_title(entry: str) -> str:
+    """The ``## `` heading's own text, markers stripped — for naming a cut."""
+    return entry.split("\n", 1)[0].lstrip("#").strip()
+
+
 def _entries_attestation(
     all_entries: list[str], picked_entries: list[str]
 ) -> tuple[str | None, str | None, str | None, bool, bool]:
@@ -421,18 +472,125 @@ def _trim_marker(
     )
 
 
-def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimResult:
-    """Trim an append-only, chronological-ascending page to fit *max_bytes*.
+_MAX_NAMED_CUT_SECTIONS = 6
 
-    Accreting surface pages only ever grow — the resident's convention is "add an
-    entry", never "prune the last one" (see ``_MAX_ACCRETING_BLOCK_BYTES``).
-    Mirrors ``_read_recent_log``'s newest-first, entry-boundary-aware
-    accumulation, generalized past ``kb/log.md``'s bracketed ``## [date]``
-    heading to a plain ``## `` heading: keep the file's leading preamble,
-    then walk ``## `` entries from the bottom (newest, since these pages
-    append at the end rather than prepend) backward, keeping everything
-    that fits and always keeping at least the newest entry even if it alone
-    exceeds budget — the most recent decision never silently disappears.
+
+def _head_cut_at_line_boundary(text: str, limit: int) -> str:
+    """*text* truncated to at most *limit* UTF-8 bytes, preferring a line break.
+
+    Shared by every head-keeping cut in this module (:func:`_cap_turn_body`,
+    the preamble charge in :func:`_tail_trim_entries`) so the boundary rule
+    is written once: prefer the last newline inside the budget so the kept
+    head stays valid markdown rather than ending mid-sentence; a single
+    over-long first line still gets a hard byte cut, decoded with
+    ``errors="ignore"`` so a multi-byte character is never split in half.
+    Returns ``""`` when *limit* leaves no room — the caller decides what to
+    say about that.
+    """
+    if limit <= 0:
+        return ""
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    kept = raw[:limit].decode("utf-8", errors="ignore")
+    boundary = kept.rfind("\n")
+    if boundary > 0:
+        kept = kept[:boundary]
+    return kept.rstrip()
+
+
+def _structural_trim_marker(dropped: list[str], source_hint: str) -> str:
+    """The truncation notice for a **structural** page, naming what it cut.
+
+    A structural page's sections are titled parts of a document, so the
+    honest report is *which parts are missing*, by name (#688). The
+    driving incident: ``surface/workflow.md`` — the account's one
+    two-party contract — lost ``## Autonomy``, ``## Gating and merges`` and
+    ``## Delivery and ceremony`` to a tail trim, and the marker called them
+    "3 earlier entries". A scheduled dispatcher tick whose own instructions
+    read *"Merging follows workflow.md exactly"* was handed the
+    ``## Signatures`` attestations for three sections whose text it never
+    got, and nothing in its context said which three.
+
+    ``entries`` is the dated path's noun and stays there; **sections** is
+    this one's. There is no date range and no staleness verdict here on
+    purpose: a structural page's order is editorial, so "newest" is not a
+    fact about it — see :func:`_page_is_chronological`.
+
+    Long cuts name the first :data:`_MAX_NAMED_CUT_SECTIONS` titles and
+    count the rest. A page that flips to this path with 198 sections cut
+    must not answer by pasting 198 titles into the wake it is trying to
+    fit.
+    """
+    noun = "section" if len(dropped) == 1 else "sections"
+    named = dropped[:_MAX_NAMED_CUT_SECTIONS]
+    listed = " · ".join(named)
+    if len(dropped) > len(named):
+        listed += f" · … and {len(dropped) - len(named)} more"
+    return (
+        f"_({len(dropped)} {noun} cut to fit the wake budget: {listed} · "
+        f"full page: {source_hint})_"
+    )
+
+
+def _preamble_cut_marker(cut_bytes: int, source_hint: str) -> str:
+    """The notice for a preamble that did not fit its page's own allowance.
+
+    The defect this pairs with is that the preamble used to be appended
+    *outside* the budget walk with ``used`` starting at 0, so a
+    preamble-heavy page rendered past its allowance (#688 measured
+    ``plans/<repo>/active.md`` at 193%, and ``ledger/decisions.md`` at 111%
+    live). Charging it is the fix; **truncating it silently would only move
+    the defect**, so a charged-and-cut preamble always says so, in bytes.
+    """
+    return (
+        f"_({cut_bytes:,} B of this page's opening cut to fit the wake budget "
+        f"· full page: {source_hint})_"
+    )
+
+
+def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimResult:
+    """Trim a ``## ``-sectioned page to fit *max_bytes*, keeping the right half.
+
+    **Which half is right is derived, never declared** (#688). The page's
+    own headings say which kind of page it is — see
+    :func:`_page_is_chronological`, which both this function and
+    ``_build_work_surface_block_scored`` consult, so the shape is decided in
+    one place:
+
+    - **Chronological** (every ``## `` heading dated) ⇒ keep the **tail**.
+      Accreting pages only ever grow — the resident's convention is "add an
+      entry", never "prune the last one" (see
+      ``_MAX_ACCRETING_BLOCK_BYTES``) — so the newest entries live at the
+      bottom and are what a wake needs. Mirrors ``_read_recent_log``'s
+      newest-first accumulation, generalized past ``kb/log.md``'s bracketed
+      ``## [date]`` heading to a plain ``## `` heading.
+    - **Structural** (any heading undated) ⇒ keep from the **head**, in
+      document order. A hand-authored page's sections are parts of a
+      document, not a timeline; its first sections are what lead.
+
+    This function shipped tail-only, and the docstring's "newest is at the
+    bottom" was true for ``ledger/decisions.md`` and false for
+    ``surface/workflow.md``. The cost was not hypothetical: a scheduled
+    dispatcher tick instructed to *"follow workflow.md exactly"* ran with
+    ``## Gating and merges`` cut out of its context and ``## Signatures``
+    — the tail — still present, so it held attestations for three sections
+    whose text it never received.
+
+    Either way **at least one entry always survives**, even if it alone
+    exceeds the budget: the newest decision, or the leading section, never
+    silently disappears. That floor is also the *only* way the rendered
+    text can exceed *max_bytes* — everything else here is charged, and the
+    overshoot in that one case is bounded by the notices, never by the
+    page.
+
+    The preamble is **charged against the allowance**, not appended outside
+    it. It used to be appended with ``used`` starting at 0, which is how a
+    preamble-heavy page rendered past its own allowance. When the preamble
+    cannot fit alongside the one mandatory entry it is cut at a line
+    boundary and :func:`_preamble_cut_marker` says how many bytes went —
+    an uncharged preamble is the defect, and a silently truncated one would
+    only move it.
 
     Returns *content* unchanged when it already fits — no trim, so the
     returned :class:`TrimResult` carries no attestation (all four extra
@@ -445,50 +603,118 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimRe
     ``oldest_item`` / ``source_newest`` are the facts this function already
     computes while deciding what to keep (see ``_entries_attestation``) —
     P1's whole point is that these used to be thrown away here, in the one
-    place that had them.
+    place that had them. A structural trim reports ``dropped`` and nothing
+    else: it is not-attestable by construction (undated headings), and
+    "newest" is not a fact about a page whose order is editorial.
     """
     encoded = content.encode("utf-8")
     if len(encoded) <= max_bytes:
         return TrimResult(text=content)
     match = _H2_RE.search(content)
-    if not match:
+    entries = _split_h2_entries(content)
+    if match is None or not entries:
         tail = encoded[-max_bytes:].decode("utf-8", errors="ignore")
         return TrimResult(text=(
             f"_(older content cut to fit the wake budget — full page: "
             f"{source_hint})_\n\n{tail}"
         ))
     preamble = content[: match.start()].strip()
-    entries = [e for e in _H2_SPLIT_RE.split(content[match.start() :]) if e.strip()]
-    picked: list[str] = []
-    used = 0
-    for entry in reversed(entries):
-        entry_bytes = len(entry.encode("utf-8"))
-        if picked and used + entry_bytes > max_bytes:
-            break
-        picked.append(entry)
-        used += entry_bytes
-    picked.reverse()
-    omitted = len(entries) - len(picked)
+    chronological = _page_is_chronological(content)
 
+    # `keep` counts entries taken from the keep side — the bottom when
+    # chronological, the top when structural. `_picked` turns that count
+    # back into document order, which is what everything downstream wants.
+    def _picked(keep: int) -> list[str]:
+        return entries[len(entries) - keep:] if chronological else entries[:keep]
+
+    def _cut(keep: int) -> list[str]:
+        return entries[: len(entries) - keep] if chronological else entries[keep:]
+
+    def render(keep: int) -> tuple[str, str]:
+        """``(marker, body)`` for a candidate pick of *keep* entries."""
+        picked = _picked(keep)
+        cut = _cut(keep)
+        body = "".join(picked).strip()
+        if not cut:
+            return "", body
+        if chronological:
+            newest, oldest, src_newest, is_stale, is_precise = _entries_attestation(
+                entries, picked
+            )
+            return _trim_marker(
+                len(cut), oldest, newest, src_newest, source_hint,
+                stale=is_stale, precise=is_precise,
+            ), body
+        return _structural_trim_marker(
+            [_heading_title(e) for e in cut], source_hint
+        ), body
+
+    def assemble(pre: str, pre_marker: str, marker: str, body: str) -> str:
+        # A chronological cut happens at the *top* (older entries above the
+        # kept tail) and a structural one at the *bottom* (later sections
+        # below the kept head): the marker sits where the content went.
+        pieces = [pre, pre_marker]
+        pieces += [marker, body] if chronological else [body, marker]
+        return "\n\n".join(p for p in pieces if p)
+
+    # Charge the preamble — but never let it crowd out the one entry that
+    # must survive, or the marker that explains the cut. Both are reserved
+    # before the preamble gets its room; the marker reserve uses the
+    # worst-case (maximal) cut, so the walk below can only overshoot by the
+    # difference between two marker strings, which the fit loop settles.
+    mandatory_bytes = len(_picked(1)[0].encode("utf-8"))
+    worst_marker = render(1)[0]
+    pre_marker = ""
+    if preamble:
+        room = max_bytes - mandatory_bytes - len(worst_marker.encode("utf-8")) - 4
+        preamble_bytes = len(preamble.encode("utf-8"))
+        if preamble_bytes > room:
+            # Only now does the preamble's own notice exist, so only now does
+            # it cost anything. Its byte count can never exceed the preamble's
+            # own size, so formatting the probe with that count bounds its
+            # width.
+            probe = _preamble_cut_marker(preamble_bytes, source_hint)
+            room -= len(probe.encode("utf-8")) + 2
+            kept_preamble = _head_cut_at_line_boundary(preamble, max(0, room))
+            cut_bytes = preamble_bytes - len(kept_preamble.encode("utf-8"))
+            pre_marker = _preamble_cut_marker(cut_bytes, source_hint)
+            preamble = kept_preamble
+
+    fixed = len(preamble.encode("utf-8")) + len(pre_marker.encode("utf-8"))
+    fixed += len(worst_marker.encode("utf-8")) + 8  # inter-piece separators
+    # Walk outward from the keep side: bottom-up when chronological (newest
+    # first), top-down when structural (leading section first).
+    from_keep_side = list(reversed(entries)) if chronological else entries
+    keep = 0
+    used = 0
+    for entry in from_keep_side:
+        entry_bytes = len(entry.encode("utf-8"))
+        if keep and fixed + used + entry_bytes > max_bytes:
+            break
+        keep += 1
+        used += entry_bytes
+
+    # The walk reserved the worst-case marker; the real one is usually
+    # shorter, but a structural cut names *different* titles depending on
+    # where the boundary fell, so settle the fit against the text actually
+    # rendered. Terminates: the mandatory entry is never dropped.
+    while True:
+        marker, body = render(keep)
+        text = assemble(preamble, pre_marker, marker, body)
+        if len(text.encode("utf-8")) <= max_bytes or keep <= 1:
+            break
+        keep -= 1
+
+    omitted = len(entries) - keep
     newest_item = oldest_item = source_newest = None
     stale = precise = False
     dropped: int | None = None
     if omitted:
         dropped = omitted
-        newest_item, oldest_item, source_newest, stale, precise = _entries_attestation(
-            entries, picked
-        )
-
-    pieces: list[str] = []
-    if preamble:
-        pieces.append(preamble)
-    if omitted:
-        pieces.append(_trim_marker(
-            omitted, oldest_item, newest_item, source_newest, source_hint,
-            stale=stale, precise=precise,
-        ))
-    pieces.append("".join(picked).strip())
-    text = "\n\n".join(p for p in pieces if p)
+        if chronological:
+            newest_item, oldest_item, source_newest, stale, precise = (
+                _entries_attestation(entries, _picked(keep))
+            )
     return TrimResult(
         text=text,
         newest_item=newest_item,
@@ -922,25 +1148,70 @@ def _build_work_surface_block_scored(
     trims: list[TrimResult] = []
     whole_paths: set[Path] = set()
     remaining = max(0, budget)
+    unannounced_skips = 0
     for path in acc.work_surface_files(ctx):
         relative = path.relative_to(surface).as_posix()
         content = path.read_text(encoding="utf-8").strip()
-        if not content or remaining <= 0:
+        if not content:
             continue
-        allowance = min(remaining, _MAX_ACCRETING_BLOCK_BYTES)
+        page_bytes = len(content.encode("utf-8"))
+        if remaining <= 0:
+            unannounced_skips += 1
+            continue
+        # The per-page cap is a defence against *accreting* pages — see
+        # `_MAX_ACCRETING_BLOCK_BYTES`, and `ledger/decisions.md`, 458 KB
+        # today and larger next week. A hand-authored page is not that: it
+        # is bounded because a human maintains it, so capping it deletes
+        # content while the shared budget sits idle: #688 measured
+        # `workflow.md` losing 5 KB of a signed two-party contract with
+        # roughly half of the 48,000 B budget still unspent. `remaining`
+        # still bounds it, so a runaway authored page cannot exceed it —
+        # it can only crowd pages after it, and `work_surface_files` order
+        # is stable, so that is deterministic and, via the skip placeholder
+        # below, visible.
+        if _page_is_chronological(content):
+            allowance = min(remaining, _MAX_ACCRETING_BLOCK_BYTES)
+        else:
+            allowance = remaining
         trimmed = _tail_trim_entries(content, allowance, f"`surface/{relative}`")
         block = f"### {relative}\n\n{trimmed.text}"
         size = len(block.encode("utf-8"))
         if size > remaining:
             # Heading overhead can push a budget-trimmed page just past the
             # remainder. Skip *this* page, not every page after it — the next
-            # (smaller) file may still fit.
+            # (smaller) file may still fit. **Say so**: a page dropped from a
+            # wake with nothing naming it is the same class of silent loss
+            # this whole change exists to end, and a reader who cannot see
+            # that `workflow.md` is absent cannot know to go read it.
+            placeholder = (
+                f"### {relative}\n\n_(page omitted — {page_bytes:,} B would not "
+                f"fit the {remaining:,} B left of the surface budget · full "
+                f"page: `surface/{relative}`)_"
+            )
+            placeholder_size = len(placeholder.encode("utf-8"))
+            if placeholder_size <= remaining:
+                blocks.append(placeholder)
+                remaining -= placeholder_size
+            else:
+                unannounced_skips += 1
             continue
         blocks.append(block)
         trims.append(trimmed)
         remaining -= size
         if trimmed.text == content:
             whole_paths.add(path.resolve())
+
+    if unannounced_skips:
+        # The budget ran out before even a placeholder fit. One line, not
+        # one per page, and it is not charged — the alternative is silence
+        # about pages the wake never saw. Emitted even when it is the *only*
+        # block: "no authored surface yet" would be a lie about a surface
+        # whose pages were all skipped.
+        noun = "page" if unannounced_skips == 1 else "pages"
+        blocks.append(
+            f"_({unannounced_skips} further surface {noun} omitted — the "
+            f"surface budget was exhausted · read them under `{surface}`)_"
+        )
 
     if not blocks:
         text = (
@@ -3988,10 +4259,12 @@ def _cap_turn_body(
     who said what and why they woke someone; the tail is accreted
     rationale. Note for the next reader: this repo's two other trimmers
     each chose a *different* direction for their own reasons —
-    `dominion._collapse_markdown_to_budget` drops bottom-up and
-    `prompts._tail_trim_entries` keeps the tail (the log's newest entries
-    live at the bottom). Neither governs here; this is a third call made on
-    this block's own content, not a convention to generalise.
+    `dominion._collapse_markdown_to_budget` drops bottom-up, and
+    `prompts._tail_trim_entries` picks its direction per page from the
+    page's own headings (`_page_is_chronological`: dated ⇒ keep the tail,
+    undated ⇒ keep the head). Neither governs here; a conversation turn has
+    no `## ` structure to classify, so this is a third call made on this
+    block's own content, not a convention to generalise.
 
     Truncation prefers the last line boundary inside the budget so the
     kept head stays valid markdown rather than ending mid-sentence; a
@@ -4003,11 +4276,7 @@ def _cap_turn_body(
     raw = body.encode("utf-8")
     if len(raw) <= limit:
         return body
-    kept = raw[:limit].decode("utf-8", errors="ignore")
-    boundary = kept.rfind("\n")
-    if boundary > 0:
-        kept = kept[:boundary]
-    kept = kept.rstrip()
+    kept = _head_cut_at_line_boundary(body, limit)
     dropped = len(raw) - len(kept.encode("utf-8"))
     marker = RECENT_TURN_ELISION_MARKER.format(
         dropped=dropped, pointer=_turn_store_pointer(record, brr_dir)
