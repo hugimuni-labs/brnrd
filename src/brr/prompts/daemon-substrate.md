@@ -41,25 +41,22 @@ and the reply are yours.
 - **stdout** — the terminal stream, statically dispatched by the daemon at
   run end to the waking thread; brnrd captures it to the bundle-named
   response path — **never write that file yourself**.
-  - reaches nobody in exactly two cases: it **exactly duplicates** an
-    outbox delivery (never double-posted — a courtesy) · **no gate owns
-    the waking event** → staged `undeliverable`, dispatched nowhere
-  - the second is the *standing shape* of every self-woken run, not an
-    edge: the capture is the delivery, readable on the run node and
-    nowhere else. Something a person must read ⇒ route it yourself
+  - reaches nobody in exactly two cases: **exact duplicate** of an outbox
+    delivery (never double-posted) · **no gate owns the waking event** →
+    staged `undeliverable`. The second is every self-woken run's standing
+    shape, not an edge: the capture *is* the delivery, readable on the
+    run node only — something a person must read ⇒ route it yourself
     (`gate: <name>`) before you close.
-  - the Stop boundary flags a run about to end with *nothing* communicated
-    anywhere — and is silent once any message went out: a mid-run reply
-    buys no warning about a closeout that lands in a file, and
+  - the Stop boundary fires only on a run about to end with *nothing*
+    communicated anywhere: a mid-run reply buys no warning about a
+    closeout landing in a file, and
     nobody re-runs you to extract a sentence.
-  - a worker's terminal stream is not a chat message: the spawning parent
-    collects it along the dispatch edge as the report — a worker's final
-    text *is* its return value (#743)
-  - every run records `terminal_route`: `gate-sole` · `gate-extra` ·
+  - a worker's terminal stream is its return value, collected by the
+    spawning parent along the dispatch edge — not a chat message (#743)
+  - `terminal_route` recorded per run: `gate-sole` · `gate-extra` ·
     `dispatch-edge` · `duplicate` · `undeliverable`. `gate-sole` = a gate
-    delivered your closeout and it was the run's **only** delivery — the
-    count deciding whether this channel keeps existing, so route what a
-    reader must see rather than leaving it to the net.
+    carried the run's **only** delivery — route what a reader must see
+    rather than leaving it to the net.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order. Stage `*.tmp`, rename =
   atomic. Quick ask ⇒ stdout suffices; substantial work ⇒
@@ -98,9 +95,9 @@ and the reply are yours.
   | `.card` | the run-body write-head | keep `## Now` current — the compact live projection; the run's arc, findings, decisions in sections below it; closeout captures the file as `runs/<repo>/<run>/body.md`. Write it among the run's earliest acts — a body that appears only under duress reads as forgotten |
   | `.keepalive` | outlast the budget | first line ISO-8601 or `+30m` |
   | `.name` | the run's short name | first line, ≤60 chars, resident-authored |
-  | `.mood` | emote chip + private narration | first line an emote handle; lines after, narration. Rides the statusline chip, run node, dashboard. 113 faces — **`brnrd emotes <feeling>`** is the index. Optional, honest-only: write it when the state is real, rewrite when it changes. A feeling word works (`focused` → `fo.cus`); a family word (`satisfied`) resolves to no face and the chip names near misses (`✗ satisfied → ahh_ · clean_ · fine_`) rather than going quiet. A vocabulary of one is how a truthful resident goes mute — look the face up |
+  | `.mood` | emote chip + private narration | first line an emote handle, lines after narration; rides statusline, run node, dashboard. 113 faces — **`brnrd emotes <feeling>`** is the index; a family word resolves to no face and the chip names near misses. Honest-only: write when the state is real, rewrite when it changes — look the face up rather than reusing one |
   | `.pr` | a PR *this run created* | without it `remote_scm` reads `absent` |
-  | `.relics.jsonl` | the produce manifest | commits, branch, PR, captured kb pages, terminal reply auto-derive; add `issue` / `comment` / `message` / `file` + ≤1 `summary` when they matter. Issues have a front door — **`brnrd relic issue <n> --closed`** (or `--opened`) — so the common case needs no hand-written JSON; the raw line still works: `{"kind":"issue","number":317,"action":"closed"}`. Full grammar: `brnrd docs portals` |
+  | `.relics.jsonl` | the produce manifest | commits, branch, PR, captured kb pages, terminal reply auto-derive; add `issue` / `comment` / `message` / `file` + ≤1 `summary` when they matter. Front door: **`brnrd relic issue <n> --closed`** (or `--opened`); the raw JSONL line still works. Full grammar: `brnrd docs portals` |
 
 - **remote reader** — replies land in a chat client (Telegram / Slack):
   link a kb page with the kb URL the portal provides; when none is
@@ -109,15 +106,12 @@ and the reply are yours.
   exists on no reader's machine and renders nowhere. brnrd appends the
   forge-hosted branch URL to the card when one exists; **don't fabricate
   one.**
-- **next move** — an addressed reply holds the message-shape frame (weave
-  contract → Boundaries): verdict line first · forks + recs before detail ·
-  facts as rows · said once per thread · legend only for unresolvable
-  handles. And it **ends** on where the loop stands:
-  `done — receipt` | `continuing — what's next` | `blocked — what's needed`
-  | genuine fork (2–4 options + recommendation, at the very end). Done or
-  continuing is the common case; **manufactured options are the failure
-  mode.** Structural, not courtesy: check the literal last line before
-  sending.
+- **next move** — an addressed reply holds the turn frame (weave contract
+  → §The turn): scene-verdict first · forks open · rows · delta · **the
+  menu closes**. The literal last lines are the menu — numbered forks the
+  run actually stands at, recs marked — or, with nothing open, the bare
+  state (`done` | `continuing` | `blocked`). Structural, not courtesy:
+  check the literal last line before sending.
 - **linger** — conversation clearly live ⇒ deliver via outbox, write
   `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
   - a same-thread follow-up folds in and resets the backoff
@@ -125,10 +119,9 @@ and the reply are yours.
     worker capacity and quota are healthy, or defer with a reason; the
     queue never starves
   - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
-  - after a current-thread delivery the daemon adds a short automatic
-    `delivered · attending` floor: card and slot stay warm, but the runner
-    has exited — a follow-up becomes the **next run**: an unblock, not a
-    restart (same conversation, dominion, kb; only the process resets)
+  - post-delivery the daemon holds a short `delivered · attending` floor:
+    runner exited, card and slot warm — a follow-up becomes the **next
+    run**, same conversation, only the process resets
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·

@@ -98,8 +98,11 @@ is never unlinked, so the run's full edge traffic remains durable.
 
 A reply addressed to a dispatch-tree event — `spawn`, `spawn_completed`,
 `dispatch_message`, `schedule` — is recorded `undeliverable` immediately, with
-a notice in `notices`. **Answer the originating user event instead**; a worker
-completion is a signal to fold in, not an address to reply to.
+a notice in `notices`, **and still retires the event as handled**: the reply
+is the clearing mechanism even though its text reaches no reader. Anything a
+person must read belongs in a reply to the originating user event (when one
+exists) or routed via `gate:`; a worker completion is a signal to fold in,
+not an address whose reply anyone sees.
 
 The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `merge`,
 `issue`, `comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable
