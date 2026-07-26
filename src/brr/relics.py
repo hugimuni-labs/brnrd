@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -719,6 +720,32 @@ _SAFE_KIND = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _PORTAL_STATE_NAME = "portal-state.json"
 
 
+def _read_produce_facet(
+    brr_dir: Path, event_id: str | None,
+) -> dict[str, Any] | None:
+    """The live ``produce`` facet for *event_id*, or ``None`` when unknown.
+
+    One parse shared by every live-produce reader (:func:`live_portal_counts`,
+    :func:`live_portal_issue_actions`) so two display surfaces cannot disagree
+    about whether a capsule is readable. ``None`` covers all four ways the
+    fact is unavailable: no event, no capsule on disk, a torn/half-written
+    JSON read, or the facet itself reporting ``known: false``.
+    """
+    if not event_id:
+        return None
+    try:
+        payload = json.loads(
+            (brr_dir / "outbox" / event_id / _PORTAL_STATE_NAME)
+            .read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    produce = payload.get("produce") if isinstance(payload, dict) else None
+    if not isinstance(produce, dict) or not produce.get("known"):
+        return None
+    return produce
+
+
 def live_portal_counts(brr_dir: Path, event_id: str | None) -> dict[str, int] | None:
     """Relics-so-far counts for a *live* run, read from its portal capsule.
 
@@ -735,17 +762,8 @@ def live_portal_counts(brr_dir: Path, event_id: str | None) -> dict[str, int] | 
     facet is known and the run has produced nothing yet. Never raises; a
     torn or half-written JSON read degrades to ``None``.
     """
-    if not event_id:
-        return None
-    try:
-        payload = json.loads(
-            (brr_dir / "outbox" / event_id / _PORTAL_STATE_NAME)
-            .read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return None
-    produce = payload.get("produce") if isinstance(payload, dict) else None
-    if not isinstance(produce, dict) or not produce.get("known"):
+    produce = _read_produce_facet(brr_dir, event_id)
+    if produce is None:
         return None
     counts = produce.get("counts")
     if not isinstance(counts, dict):
@@ -824,6 +842,125 @@ def counts_by_kind(relics: list[dict[str, Any]]) -> dict[str, int]:
     return out
 
 
+# The ``action`` vocabulary an ``issue`` relic may carry, folded to the two
+# buckets the produce block reports. ``opened``/``closed`` is what the
+# grammar documents and what ``brnrd relic issue`` writes; the synonyms are
+# read-tolerance for a hand-written line, not a second spelling to teach.
+_ISSUE_CREATED_ACTIONS = frozenset({"opened", "created", "filed"})
+_ISSUE_COMPLETED_ACTIONS = frozenset({"closed", "completed", "resolved"})
+
+
+@dataclass(frozen=True)
+class IssueActions:
+    """The created/completed split of one run's ``issue`` relics.
+
+    **Two independent facts, never a ratio** (#686): a run can close issues
+    it never filed and file issues nobody closes for weeks, so there is no
+    shared denominator and nothing here is ever rendered as a fraction or a
+    progress bar.
+
+    ``unattributed`` counts ``issue`` relics carrying no recognised
+    ``action`` — every hand-written record predating ``brnrd relic issue``.
+    Such a record is **neither** created nor completed; folding it into
+    either bucket would turn an old, honest "this run touched #317" into a
+    new, wrong claim about what it did to it. It keeps its row in the
+    ``## Produce`` manifest and its place in :func:`counts_by_kind`'s
+    ``issue`` total — only the action split declines to guess.
+    """
+
+    created: int = 0
+    completed: int = 0
+    unattributed: int = 0
+
+    @property
+    def attributed(self) -> bool:
+        """Whether any issue action was actually recorded this run."""
+        return bool(self.created or self.completed)
+
+
+def issue_actions(relics: list[dict[str, Any]]) -> IssueActions:
+    """Split ``issue`` relics by their ``action`` field.
+
+    Kept out of :func:`counts_by_kind` deliberately: that function flattens
+    by ``kind`` and its output is a wire shape (the portal capsule's
+    ``counts``, the publish payload, ``counts_phrase``'s vocabulary). Adding
+    synthetic ``issue_created``/``issue_completed`` kinds there would push a
+    rendering concern into every counts consumer and move pins that mean
+    something. The action split is a second, narrower question asked of the
+    same records.
+    """
+    created = completed = unattributed = 0
+    for record in relics:
+        if not isinstance(record, dict) or record.get("kind") != "issue":
+            continue
+        action = str(record.get("action") or "").strip().lower()
+        if action in _ISSUE_CREATED_ACTIONS:
+            created += 1
+        elif action in _ISSUE_COMPLETED_ACTIONS:
+            completed += 1
+        else:
+            unattributed += 1
+    return IssueActions(
+        created=created, completed=completed, unattributed=unattributed,
+    )
+
+
+def issues_phrase(actions: IssueActions | None) -> str:
+    """``"3 created · 2 completed"`` — the issue block beside the PR stats.
+
+    Renders **only when at least one action was recorded**. Nothing here can
+    observe an issue close: opens and closes happen through ``gh`` inside the
+    resident's shell, invisible to the daemon (``derive_auto`` covers exactly
+    what git and the control files attest, and #652 settled that scanning
+    prose for issue numbers is not a substitute). So an empty bucket is never
+    an attested zero — it is *unrecorded*, and the two must not render alike
+    (#686; the same ``absent``-is-a-value discipline as
+    :class:`knowledge.MirrorState`).
+
+    Hence: a bucket with records prints its count; the other half of a
+    half-reported run prints ``created unrecorded`` / ``completed
+    unrecorded`` rather than a ``0`` that would claim a fact nobody
+    collected. A run with no recorded action at all — including one whose
+    only ``issue`` relics are actionless — prints nothing, keeping
+    :func:`counts_phrase`'s "no produce ⇒ no line" contract: the flag fires
+    next to a real count, where the missing half is the finding, and stays
+    quiet on an idle card.
+    """
+    if actions is None or not actions.attributed:
+        return ""
+    left = f"{actions.created} created" if actions.created else "created unrecorded"
+    right = (
+        f"{actions.completed} completed" if actions.completed
+        else "completed unrecorded"
+    )
+    return f"{left} · {right}"
+
+
+def live_portal_issue_actions(
+    brr_dir: Path, event_id: str | None,
+) -> IssueActions | None:
+    """The live run's issue split, read from the same capsule as the counts.
+
+    ``None`` when the produce facet is unavailable or predates the split
+    (an older daemon's capsule) — *unknown*, not "zero of each", so a
+    renderer cannot turn a missing collector into an affirmative claim.
+    """
+    produce = _read_produce_facet(brr_dir, event_id)
+    if produce is None:
+        return None
+    raw = produce.get("issue_actions")
+    if not isinstance(raw, dict):
+        return None
+    values: dict[str, int] = {}
+    for field in ("created", "completed", "unattributed"):
+        try:
+            value = int(raw.get(field, 0))
+        except (TypeError, ValueError):
+            return None
+        values[field] = max(0, value)
+    return IssueActions(**values)
+
+
 def live_summary(
     repo_root: Path,
     *,
@@ -887,9 +1024,21 @@ def live_summary(
             for kind, count in counts_by_kind(records).items()
             if kind in _LIVE_KINDS
         }
+        actions = issue_actions(records)
         return {
             "known": True,
             "counts": counts,
+            # The action split rides alongside ``counts`` rather than inside
+            # it: ``counts`` is keyed by relic *kind* and gated by
+            # ``_LIVE_KINDS`` / ``_SAFE_KIND`` on the way out, so a synthetic
+            # ``issue_created`` key would be filtered away by one gate and
+            # mis-rendered by ``counts_phrase``'s unknown-kind fallback if it
+            # survived. Its own sub-facet keeps both shapes honest (#686).
+            "issue_actions": {
+                "created": actions.created,
+                "completed": actions.completed,
+                "unattributed": actions.unattributed,
+            },
             "latest_commit": latest_commit,
             "branch": branch,
             "pr": pr_number,

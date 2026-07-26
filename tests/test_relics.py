@@ -201,6 +201,11 @@ def test_live_summary_compiles_auto_and_reported_produce(tmp_path: Path):
         "counts": {
             "commit": 2, "branch": 1, "pr": 1, "issue": 1, "kb": 1,
         },
+        # #686: the issue split rides beside ``counts``, never inside it —
+        # ``counts`` is keyed by relic kind and gated by ``_LIVE_KINDS`` on
+        # the way out, so a synthetic ``issue_closed`` key would be dropped
+        # by one gate and mis-rendered by ``counts_phrase`` if it survived.
+        "issue_actions": {"created": 0, "completed": 1, "unattributed": 0},
         "latest_commit": latest,
         "branch": "brr/work",
         "pr": 451,
@@ -768,6 +773,117 @@ def test_counts_phrase_empty_and_none_are_empty():
     assert relics.counts_phrase(None) == ""
     assert relics.counts_phrase({}) == ""
     assert relics.counts_phrase({"branch": 1}) == ""
+
+
+# ── the issue split: created vs completed (#686) ─────────────────────
+#
+# The grammar always carried `action`; `counts_by_kind` flattened it away
+# before any renderer saw it, so a run that filed three issues and a run
+# that closed three rendered identically as "3 issues". These pin the split
+# and — the actual defect — that an *unrecorded* half never renders as an
+# affirmative zero.
+
+
+def test_issue_actions_splits_created_and_completed():
+    actions = relics.issue_actions([
+        {"kind": "issue", "number": 1, "action": "opened"},
+        {"kind": "issue", "number": 2, "action": "opened"},
+        {"kind": "issue", "number": 3, "action": "closed"},
+        {"kind": "commit", "sha": "abc1234"},
+        {"kind": "pr", "number": 9},
+    ])
+    assert actions == relics.IssueActions(created=2, completed=1)
+
+
+def test_issue_actions_tolerates_synonyms_and_casing():
+    actions = relics.issue_actions([
+        {"kind": "issue", "number": 1, "action": "Created"},
+        {"kind": "issue", "number": 2, "action": " FILED "},
+        {"kind": "issue", "number": 3, "action": "resolved"},
+        {"kind": "issue", "number": 4, "action": "completed"},
+    ])
+    assert actions == relics.IssueActions(created=2, completed=2)
+
+
+def test_issue_actions_actionless_record_lands_in_neither_bucket():
+    """Every hand-written issue relic predating `brnrd relic issue` carries no
+    `action`. It must not become a wrong fact in either direction — it stays
+    counted as an issue the run touched (counts_by_kind) and unattributed
+    here."""
+    records = [
+        {"kind": "issue", "number": 317},
+        {"kind": "issue", "number": 566, "action": ""},
+        {"kind": "issue", "number": 686, "action": "commented"},
+    ]
+    assert relics.issue_actions(records) == relics.IssueActions(
+        created=0, completed=0, unattributed=3,
+    )
+    # The relic itself is not lost — only the action claim is declined.
+    assert relics.counts_by_kind(records) == {"issue": 3}
+
+
+def test_issues_phrase_renders_both_facts_never_a_ratio():
+    phrase = relics.issues_phrase(relics.IssueActions(created=3, completed=2))
+    assert phrase == "3 created · 2 completed"
+    assert "/" not in phrase and "%" not in phrase
+
+
+def test_issues_phrase_distinguishes_unrecorded_from_zero():
+    """The #686 defect, pinned: brnrd cannot observe an issue close, so an
+    empty bucket is *unrecorded*, never an attested zero. A run that filed
+    three and recorded no closes must not read as one that closed none."""
+    assert relics.issues_phrase(
+        relics.IssueActions(created=3),
+    ) == "3 created · completed unrecorded"
+    assert relics.issues_phrase(
+        relics.IssueActions(completed=2),
+    ) == "created unrecorded · 2 completed"
+    assert "0 completed" not in relics.issues_phrase(
+        relics.IssueActions(created=3),
+    )
+
+
+def test_issues_phrase_is_silent_without_a_recorded_action():
+    """counts_phrase's contract — nothing to say ⇒ no line — holds here, so
+    an idle card gains no noise and the unrecorded flag only ever fires
+    beside a real count, where the missing half is the finding."""
+    assert relics.issues_phrase(None) == ""
+    assert relics.issues_phrase(relics.IssueActions()) == ""
+    # Actionless legacy records alone are not an action to report.
+    assert relics.issues_phrase(relics.IssueActions(unattributed=2)) == ""
+
+
+def test_live_portal_issue_actions_reads_the_same_capsule(tmp_path: Path):
+    brr_dir = tmp_path / ".brr"
+    _write_portal_state(
+        brr_dir, "evt-i",
+        {
+            "known": True, "counts": {"issue": 3},
+            "issue_actions": {"created": 2, "completed": 1, "unattributed": 0},
+        },
+    )
+    assert relics.live_portal_issue_actions(brr_dir, "evt-i") == (
+        relics.IssueActions(created=2, completed=1)
+    )
+
+
+def test_live_portal_issue_actions_absent_paths_degrade_to_none(tmp_path: Path):
+    """`None` is *unknown*, never IssueActions() — an older daemon's capsule
+    carries no split, and a renderer must not read that as "zero of each"."""
+    brr_dir = tmp_path / ".brr"
+    assert relics.live_portal_issue_actions(brr_dir, None) is None
+    assert relics.live_portal_issue_actions(brr_dir, "evt-missing") is None
+    _write_portal_state(brr_dir, "evt-unknown", {"known": False})
+    assert relics.live_portal_issue_actions(brr_dir, "evt-unknown") is None
+    # A capsule from before the split existed.
+    _write_portal_state(brr_dir, "evt-old", {"known": True, "counts": {"issue": 2}})
+    assert relics.live_portal_issue_actions(brr_dir, "evt-old") is None
+    # Hostile / non-integer values are refused rather than coerced.
+    _write_portal_state(
+        brr_dir, "evt-bad",
+        {"known": True, "issue_actions": {"created": "lots", "completed": 1}},
+    )
+    assert relics.live_portal_issue_actions(brr_dir, "evt-bad") is None
 
 
 # ── forge link derivation for reported relics ────────────────────────
