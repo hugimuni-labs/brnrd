@@ -1310,6 +1310,22 @@ class TestPromptBuilding:
         )
         assert "your working register" in prompt
 
+    def test_prompts_carry_the_turn_grammar(self, tmp_path):
+        """The reply-as-turn contract (weave.md → "The turn") rides both
+        runner paths: menu closes the turn, empty menu legal, free text
+        overrides. Issue #777 — a content pin so a refactor or trim that
+        drops the section is caught here, not by a reader."""
+        for prompt in (
+            build_run_prompt("ship it", tmp_path),
+            build_daemon_prompt(
+                "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
+            ),
+        ):
+            assert "The menu closes the turn" in prompt
+            assert "An empty menu is legal" in prompt
+            assert "Free text always overrides" in prompt
+            assert "Scene-verdict line" in prompt
+
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
@@ -1920,7 +1936,7 @@ class TestPromptBuilding:
             "blocked — what's needed",
         ):
             assert state in prompt
-        assert "manufactured options are the failure" in prompt
+        assert "Manufactured options are the failure mode" in prompt
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
@@ -2777,14 +2793,14 @@ class TestRevisitSignalGuardrails:
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
         assert "judgement on the substance" in prompt
-        assert "trust the intent rather than scanning for trigger words" in prompt
+        assert "trust the intent, not trigger words" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
         # The default on a clear, reversible reconsider is to resolve it
         # in-thread, not to park it for a second "go do that" event.
         assert "this same thought" in prompt
-        assert "round-trip" in prompt
+        assert "a clear call parked costs two wakes" in prompt
         assert "Stewardship" in prompt
 
     def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
@@ -2864,7 +2880,7 @@ class TestIntrospectionMode:
         self._enable(tmp_path)
         prompt = build_run_prompt("do something", tmp_path)
         assert "Look at it" in prompt
-        assert "The shape of the context itself" in prompt
+        assert "the place, not the errand" in prompt
         # It rides alongside the task; it must not displace the task text,
         # and it sits before the task as the last framing.
         assert "do something" in prompt
