@@ -269,6 +269,32 @@ def test_build_context_carries_no_vendored_dependency_trees(assembled_context):
     )
 
 
+def test_build_context_excludes_python_bytecode_but_not_similar_names(tmp_path):
+    """Bytecode is never a build input, unlike similarly named source paths."""
+    repo = tmp_path / "repo"
+    package = repo / "src" / "brr"
+    (package / "__pycache__").mkdir(parents=True)
+    (package / "prompts" / "__pycache__").mkdir(parents=True)
+    (package / "__pycache__" / "mod.cpython-312.pyc").write_bytes(b"cache")
+    (package / "prompts" / "__pycache__" / "x.pyc").write_bytes(b"cache")
+    (package / "y.pyo").write_bytes(b"cache")
+    (package / "notpycache.py").write_text("source", encoding="utf-8")
+    (package / "pycache_notes").mkdir()
+    (package / "pycache_notes" / "note.txt").write_text("keep", encoding="utf-8")
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM alpine\nCOPY src /opt/brr/src\n", encoding="utf-8")
+    ctx = tmp_path / "ctx"
+    ctx.mkdir()
+
+    adopt._assemble_build_context(dockerfile, repo, ctx)
+
+    assert not list(ctx.rglob("__pycache__"))
+    assert not list(ctx.rglob("*.pyc"))
+    assert not list(ctx.rglob("*.pyo"))
+    assert (ctx / "src" / "brr" / "notpycache.py").is_file()
+    assert (ctx / "src" / "brr" / "pycache_notes").is_dir()
+
+
 def test_build_context_has_everything_pip_install_needs(assembled_context):
     """``pip install /opt/brr`` must still be satisfiable from the context.
 
