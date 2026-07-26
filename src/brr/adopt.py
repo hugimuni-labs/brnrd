@@ -515,7 +515,12 @@ def _assemble_build_context(dockerfile: Path, repo_root: Path, ctx_path: Path) -
         source = repo_root / rel
         dest = ctx_path / rel
         if source.is_dir():
-            shutil.copytree(source, dest)
+            # #680's top-level package policy does not cover bytecode nested
+            # inside a legitimate package: Python cache files are never build
+            # inputs, so exclude them unconditionally from the Docker context.
+            shutil.copytree(
+                source, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
+            )
         elif source.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(source, dest)
