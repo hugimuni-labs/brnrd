@@ -1046,29 +1046,40 @@ def _finished_spawns_line(finished_spawns: list[dict[str, Any]]) -> str:
     ]
     error_count = sum(status != "done" for status in statuses)
     ok_count = statuses.count("done")
+    # An event that carries no status is not a healthy one — it is one whose
+    # outcome was never determined, and that is the case this whole line
+    # exists for. Folding it into the all-clear branch would restate #730's
+    # defect in the one place nobody drives: "no address needed" is itself a
+    # claim about outcome. It is reachable, too — every completion event
+    # minted before this shipped has no ``spawn_status``, and daemon.py is
+    # the restart-only liveness class, so that window is real.
+    unknown_count = count - len(statuses)
     missing_reports = [
         event for event in finished_spawns
         if event.get("spawn_report_found") is False
     ]
 
-    if not error_count and not missing_reports:
+    if not error_count and not missing_reports and not unknown_count:
         return (
             f"- ▷ {count} finished spawn(s) observed — "
             "no address needed; will retire at run end."
         )
 
+    # The parts sum to the whole, always. A ledger whose columns do not add
+    # up is how a reader learns to stop trusting the ledger (#683, one file
+    # over), so every spawn is accounted for under exactly one term.
     counts: list[str] = []
-    if len(statuses) == count:
+    if ok_count:
         counts.append(f"{ok_count} ok")
     if error_count:
         counts.append(f"{error_count} error")
+    if unknown_count:
+        counts.append(f"{unknown_count} status unknown")
 
     noteworthy = [
         event for event in finished_spawns
-        if (
-            str(event.get("spawn_status") or "").strip()
-            and event.get("spawn_status") != "done"
-        )
+        if not str(event.get("spawn_status") or "").strip()
+        or event.get("spawn_status") != "done"
         or event.get("spawn_report_found") is False
     ]
     notes: list[str] = []
