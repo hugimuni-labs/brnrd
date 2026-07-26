@@ -20,6 +20,8 @@ from brr.prompts import (
     _entry_key,
     _format_recent_conversation,
     _read_recent_log,
+    _MAX_ACCRETING_BLOCK_BYTES,
+    _page_is_chronological,
     _tail_trim_entries,
     _worst_trim,
     build_daemon_prompt,
@@ -195,6 +197,15 @@ def _ledger_entry(date: str, run_id: str, bulk: int) -> str:
     return f"## Decision ({date}, {run_id})\n\n" + ("x" * bulk)
 
 
+# The trim marker is rendered *inside* the trimmed page, so it is charged
+# against the allowance like everything else (#688). Budgets below that mean
+# "admit exactly these N entries" must therefore leave room for it; before
+# #688 they did not, and the block rendered past the allowance it was given —
+# `test_in_order_is_not_stale` at its old `+10` slack rendered 648 B against a
+# 506 B budget, 128%, with no preamble involved at all.
+_MARKER_HEADROOM = 240
+
+
 class TestBlockAttestation:
     def test_fits_whole_is_untouched_no_attestation(self):
         """A block that fits whole is untouched — byte-identical, no claim.
@@ -251,7 +262,9 @@ class TestBlockAttestation:
         e2 = _ledger_entry("2026-07-22", "run-260722-1000-bbbb", 200)
         e3 = _ledger_entry("2026-07-23", "run-260723-1100-cccc", 200)
         content = "\n\n".join([e1, e2, e3]) + "\n"
-        budget = len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + 10
+        budget = (
+            len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + _MARKER_HEADROOM
+        )
 
         result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
 
@@ -367,7 +380,11 @@ class TestBlockAttestation:
         early = _ledger_entry("2026-07-24", "run-260724-0059-pe1x", 200)
         latest = _ledger_entry("2026-07-24", "run-260724-1220-vzco", 200)
         content = "\n\n".join([crossed, early, latest]) + "\n"
-        budget = len(early.encode("utf-8")) + len(latest.encode("utf-8")) + 10
+        budget = (
+            len(early.encode("utf-8"))
+            + len(latest.encode("utf-8"))
+            + _MARKER_HEADROOM
+        )
 
         result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
 
@@ -477,6 +494,200 @@ class TestBlockAttestation:
         assert result.dropped == 1
         assert "showing" not in result.text
         assert "cut to fit the wake budget" in result.text
+
+    # ── #688 — which half, charged how, and named as what ────────────────
+    #
+    # This function shipped tail-only, with a docstring asserting "newest is
+    # at the bottom". True for `ledger/decisions.md` and `kb/log.md`; false
+    # for `surface/workflow.md` and `plans/<repo>/active.md`, whose `## `
+    # sections are a document's parts and not a timeline.
+    #
+    # The live instance: `workflow.md`, the account's one signed two-party
+    # contract, 13,392 B against an 8,192 B allowance. The trim kept
+    # `## Progress cadence` + `## Signatures` (the tail) and cut
+    # `## Autonomy`, `## Gating and merges`, `## Delivery and ceremony`. A
+    # scheduled dispatcher tick whose own instructions read "Merging follows
+    # workflow.md exactly" therefore ran with the *attestations* for three
+    # sections whose text it never received — and the marker called them
+    # "3 earlier entries".
+    #
+    # Three properties are pinned below, and they are separable:
+    #   1. the direction is derived from the page (`_page_is_chronological`),
+    #   2. everything rendered is charged against the allowance (preamble and
+    #      marker both — neither used to be),
+    #   3. the notice names what it cut, in the noun that fits the page.
+
+    def test_structural_page_keeps_the_head_and_names_what_it_cut(self):
+        """**The regression that matters** — `workflow.md`'s real shape.
+
+        Five undated structural sections over the allowance. The head must
+        survive (a contract leads with what it governs, not with its
+        signature block), and the marker must name the dropped sections by
+        title so a reader who needs `## Gating and merges` can tell it is
+        missing rather than inferring its absence from silence.
+        """
+        sections = [
+            ("Autonomy", 477),
+            ("Gating and merges", 3608),
+            ("Delivery and ceremony", 3776),
+            ("Progress cadence", 328),
+            ("Signatures", 4753),
+        ]
+        content = "# Workflow\n\n" + "\n\n".join(
+            f"## {title}\n\n" + ("w" * bulk) for title, bulk in sections
+        )
+        result = _tail_trim_entries(content, max_bytes=8192, source_hint="`surface/workflow.md`")
+
+        assert "## Autonomy" in result.text, "the head is what leads"
+        assert "## Gating and merges" in result.text, (
+            "the section the dispatcher tick was told to follow exactly"
+        )
+        assert "## Signatures" not in result.text, (
+            "the tail is what a bounded document can afford to lose"
+        )
+        # The noun belongs to the shape: "entries" is the dated path's word.
+        assert "sections cut" in result.text
+        assert "earlier entries" not in result.text
+        assert "Delivery and ceremony" in result.text, "cut sections are named"
+        assert "Signatures" in result.text, "...all of them"
+        # Not attestable, and it must not pretend otherwise: an undated page
+        # has no "newest", so no date claim may be rendered for it.
+        assert result.dropped == 2
+        assert result.newest_item is None
+        assert result.source_newest is None
+        assert result.stale is False
+        assert "showing" not in result.text
+
+    def test_a_dated_page_still_keeps_its_tail_and_its_attested_range(self):
+        """The chronological path must not move — same half, same claim.
+
+        `_page_is_chronological` sends a fully-dated page down exactly the
+        pre-#688 branch: keep the newest entries, attest the range.
+        """
+        e1 = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 400)
+        e2 = _ledger_entry("2026-07-22", "run-260722-1000-bbbb", 400)
+        e3 = _ledger_entry("2026-07-23", "run-260723-1100-cccc", 400)
+        content = "\n\n".join([e1, e2, e3]) + "\n"
+        budget = (
+            len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + _MARKER_HEADROOM
+        )
+
+        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+
+        assert "2026-07-21" not in result.text, "the oldest entry is what goes"
+        assert "run-260723-1100-cccc" in result.text, "the newest is what stays"
+        assert result.newest_item == "2026-07-23 11:00"
+        assert result.oldest_item == "2026-07-22 10:00"
+        assert result.source_newest == "2026-07-23 11:00"
+        assert result.dropped == 1
+        assert result.precise is True
+        assert "the newest entry in the source" in result.text
+        # And the dated path keeps its own noun.
+        assert "entry cut to fit the wake budget" in result.text
+        assert "sections cut" not in result.text
+
+    def test_one_undated_heading_makes_the_whole_page_structural(self):
+        """The classifier is the *same* predicate `_entries_attestation` uses.
+
+        A single unparseable heading already made a trim not-attestable; it
+        now also decides the direction. That is deliberate — one predicate,
+        computed from the page, rather than a filename table or a per-page
+        declaration — and it is the sharp edge worth knowing about: a dated
+        page that loses one heading's date flips which half survives. It
+        cannot do so *silently*, because the noun in the marker changes with
+        it, which is what this pins.
+        """
+        dated = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 400)
+        undated = "## Housekeeping\n\n" + ("y" * 400)
+        newest = _ledger_entry("2026-07-23", "run-260723-1100-cccc", 400)
+
+        assert _page_is_chronological("\n\n".join([dated, newest])) is True
+        assert _page_is_chronological("\n\n".join([dated, undated, newest])) is False
+
+        content = "\n\n".join([dated, undated, newest]) + "\n"
+        result = _tail_trim_entries(content, max_bytes=600, source_hint="`x`")
+
+        assert "run-260721-0900-aaaa" in result.text, "structural ⇒ head kept"
+        assert "sections cut" in result.text, "and the noun says so"
+
+    def test_a_page_with_no_headings_is_not_reclassified(self):
+        """Unclassifiable ⇒ treated as accreting, so the cap stays a backstop.
+
+        There is no `## ` structure to reason about, so the flat byte-cut
+        path is unchanged and the per-page cap still applies to it.
+        """
+        assert _page_is_chronological("just prose, no headings at all") is True
+
+    # ── #688 — the allowance is charged, not assumed ─────────────────────
+
+    def test_a_preamble_heavy_page_never_renders_past_its_allowance(self):
+        """`pieces.append(preamble)` used to happen *outside* the budget walk.
+
+        `used` started at 0, so the preamble was free and the rendered block
+        overran its allowance by the preamble's whole size — measured at
+        193% on `plans/<repo>/active.md` when #688 was filed, and 111% on
+        `ledger/decisions.md` live on the day it was fixed.
+        """
+        preamble = "# Plan\n\n" + "\n".join(f"> warning line {i}" for i in range(120))
+        entries = "\n\n".join(
+            _ledger_entry(f"2026-07-{i:02d}", f"run-2607{i:02d}-1000-aaaa", 300)
+            for i in range(11, 21)
+        )
+        content = f"{preamble}\n\n{entries}\n"
+        for allowance in (1200, 2400, 4096, 8192, 16384):
+            result = _tail_trim_entries(content, allowance, "`surface/plan.md`")
+            assert len(result.text.encode("utf-8")) <= allowance, (
+                f"rendered past the {allowance} B allowance it was given"
+            )
+
+    def test_the_one_entry_floor_is_the_only_way_past_the_allowance(self):
+        """The single documented exception, kept explicit rather than implicit.
+
+        "Always keep at least the newest entry even if it alone exceeds
+        budget" predates #688 and is the reason the guarantee above is
+        "never exceeds" and not "cannot exceed": an allowance too small to
+        hold one entry plus the notices explaining the cut will be
+        overshot, and the overshoot is bounded by those notices. Silence
+        would be the alternative, and silence is the defect.
+        """
+        preamble = "# Plan\n\n" + "\n".join(f"> warning line {i}" for i in range(120))
+        entries = "\n\n".join(
+            _ledger_entry(f"2026-07-{i:02d}", f"run-2607{i:02d}-1000-aaaa", 300)
+            for i in range(11, 21)
+        )
+        result = _tail_trim_entries(f"{preamble}\n\n{entries}\n", 600, "`surface/plan.md`")
+
+        rendered = len(result.text.encode("utf-8"))
+        assert rendered > 600, "this is the floor case, by construction"
+        assert "run-260720-1000-aaaa" in result.text, "the newest entry survived"
+        # Everything that *could* be given up was: the preamble is gone
+        # entirely, and both notices say what went.
+        assert "warning line" not in result.text
+        assert "of this page's opening cut" in result.text
+        assert "earlier entries cut" in result.text
+        assert rendered - 600 < 300, "overshoot bounded by the notices, not the page"
+
+    def test_a_preamble_that_alone_exceeds_the_allowance_is_cut_and_says_so(self):
+        """Charging it is the fix; truncating it silently would move the defect.
+
+        The cut lands on a line boundary so the kept head stays valid
+        markdown, and the marker states the byte count that went.
+        """
+        preamble = "# Plan\n\n" + "\n".join(f"> warning line {i}" for i in range(400))
+        entry = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 200)
+        content = f"{preamble}\n\n{entry}\n"
+
+        result = _tail_trim_entries(content, 2000, "`surface/plan.md`")
+
+        assert len(result.text.encode("utf-8")) <= 2000
+        assert "of this page's opening cut" in result.text
+        assert "warning line 0" in result.text, "the opening's head survives"
+        assert "warning line 399" not in result.text
+        # The one mandatory entry is never crowded out by the preamble.
+        assert "run-260721-0900-aaaa" in result.text
+        # Line boundary, not a mid-line byte cut.
+        kept = result.text.split("_(")[0]
+        assert not kept.rstrip().endswith("warning line"), "cut mid-line"
 
     def test_no_headings_flat_cut_has_no_entry_attestation(self):
         """The flat byte-cut fallback (no ``## `` at all) carries no entry facts.
@@ -2780,6 +2991,99 @@ class TestWorkSurfaceInjection:
         assert result.stale is True
         assert result.newest_item == "2026-07-22"
         assert result.source_newest == "2026-07-23 13:42"
+
+    def test_an_authored_page_over_the_cap_rides_whole_on_the_real_budget(self, tmp_path):
+        """#688 amendment — the per-page cap is for *accreting* pages only.
+
+        Look at the constant's name: ``_MAX_ACCRETING_BLOCK_BYTES``. It
+        exists because `ledger/decisions.md` is 458 KB today and larger next
+        week. A hand-authored page is bounded because a human maintains it,
+        so capping it at 8,192 B deletes content while the shared budget
+        sits idle — measured on the live surface the day this shipped:
+        `workflow.md` lost 5 KB of a signed two-party contract with
+        15,473 B of the 48,000 B surface budget unspent. Fixing the
+        *direction* would only have changed which 5 KB was lost.
+
+        This is `workflow.md`'s real shape: five undated sections, 13,392 B,
+        over the cap and under the budget. It must ride whole.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "index.md").write_text("# Start here", encoding="utf-8")
+        sections = [
+            ("Autonomy", 477),
+            ("Gating and merges", 3608),
+            ("Delivery and ceremony", 3776),
+            ("Progress cadence", 328),
+            ("Signatures", 4753),
+        ]
+        authored = "> preamble, 450 B or so\n\n" + "\n\n".join(
+            f"## {title}\n\n" + ("w" * bulk) for title, bulk in sections
+        )
+        assert len(authored.encode("utf-8")) > _MAX_ACCRETING_BLOCK_BYTES
+        (surface / "workflow.md").write_text(authored, encoding="utf-8")
+
+        result, whole = _build_work_surface_block_scored(tmp_path)
+
+        for title, _bulk in sections:
+            assert f"## {title}" in result.text, f"{title} must reach the wake"
+        assert "cut to fit the wake budget" not in result.text
+        assert result.dropped is None, "nothing was trimmed at all"
+        assert (surface / "workflow.md").resolve() in whole, (
+            "a page handed over whole must be billed as whole (#628)"
+        )
+
+    def test_an_accreting_page_is_still_capped(self, tmp_path):
+        """The other half of the same call — the cap keeps its real job.
+
+        A dated page accretes without bound, so it is capped at
+        ``_MAX_ACCRETING_BLOCK_BYTES`` regardless of how much surface budget
+        is free. Without this, one ledger would eat the whole surface.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        ledger_dir = surface / "ledger"
+        ledger_dir.mkdir(parents=True)
+        ledger = "\n\n".join(
+            _ledger_entry(f"2026-07-{i:02d}", f"run-2607{i:02d}-1000-aaaa", 3000)
+            for i in range(11, 21)
+        )
+        (ledger_dir / "decisions.md").write_text(ledger, encoding="utf-8")
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        page = result.text.split("### ledger/decisions.md\n\n", 1)[1]
+        assert len(page.encode("utf-8")) <= _MAX_ACCRETING_BLOCK_BYTES
+        assert result.dropped, "it was trimmed, and says so"
+
+    def test_a_page_skipped_for_budget_leaves_a_placeholder_naming_it(self, tmp_path):
+        """#688 fix 4 — `if size > remaining: continue` dropped a page in silence.
+
+        A whole surface page vanishing from a wake with nothing naming it is
+        the same class of loss as the trim that started this: a reader who
+        cannot see that a page is absent cannot know to go read it. The
+        amendment makes this live rather than theoretical — an authored page
+        now takes the budget it needs, so it can crowd the pages after it.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            "dominion.surface_inject_budget_bytes=900\n",
+            encoding="utf-8",
+        )
+        (surface / "index.md").write_text("# Start here\n\n" + ("i" * 700), encoding="utf-8")
+        (surface / "workflow.md").write_text(
+            "# Workflow\n\n" + ("w" * 4000), encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### workflow.md" in result.text, "the skipped page is named"
+        assert "page omitted" in result.text
+        assert "wwww" not in result.text, "and its content really was skipped"
 
     def test_stale_page_flows_through_to_the_contract_entry(self, tmp_path):
         """End-to-end: a stale surface page's attestation reaches the
