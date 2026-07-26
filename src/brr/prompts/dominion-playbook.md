@@ -209,9 +209,11 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   addressing to guess, no second channel to duplicate. It *looks* like a
   delivery in the predicate that gates delivery; treating the two as one
   channel is how a delivery question stays unresolved for months.
-- **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one is refused
-  outright — there is nowhere to redirect it. A worker's completion is a
-  fact for you, not a message with a correspondent: fold it into the reply
+- **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one stages
+  undeliverable — nowhere to route the text — **yet still retires the
+  event `done`**: the reply is the clearing move, and the "NOT delivered"
+  notice is its success shape. A worker's completion is a fact for you,
+  not a correspondent: anything a person must read folds into the reply
   to the event that asked for the work.
 - **The same no-gate fact reaches your own closing reply.** Woken by a
   schedule, no spawning parent ⇒ the terminal message is captured and

@@ -2793,14 +2793,14 @@ class TestRevisitSignalGuardrails:
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
         assert "judgement on the substance" in prompt
-        assert "trust the intent rather than scanning for trigger words" in prompt
+        assert "trust the intent, not trigger words" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
         # The default on a clear, reversible reconsider is to resolve it
         # in-thread, not to park it for a second "go do that" event.
         assert "this same thought" in prompt
-        assert "round-trip" in prompt
+        assert "a clear call parked costs two wakes" in prompt
         assert "Stewardship" in prompt
 
     def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
@@ -2880,7 +2880,7 @@ class TestIntrospectionMode:
         self._enable(tmp_path)
         prompt = build_run_prompt("do something", tmp_path)
         assert "Look at it" in prompt
-        assert "The shape of the context itself" in prompt
+        assert "the place, not the errand" in prompt
         # It rides alongside the task; it must not displace the task text,
         # and it sits before the task as the last framing.
         assert "do something" in prompt
