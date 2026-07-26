@@ -7498,6 +7498,11 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # the child deliver?" and are in a distinct namespace from
     # spawn_contract_* (which answers "did it meet its declared spec?").
     produce_kwargs: dict = {}
+    # A completion status is useful only after the Run reached a terminal
+    # state. Keep pending/running absent rather than turning "not determined"
+    # into a misleading completion fact.
+    if task.status in {"done", "error", "conflict", "stopped"}:
+        produce_kwargs["spawn_status"] = status_label
     published_branch = str(task.meta.get("publish_branch") or "").strip()
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch

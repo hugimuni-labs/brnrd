@@ -2204,6 +2204,81 @@ def test_closeout_still_shows_action_events_alongside_finished_spawns():
     assert "evt-done" in rendered
 
 
+def test_finished_spawn_outcomes_render_identically_at_both_boundaries():
+    """The bar and seed/closeout prose share one outcome-aware fact line."""
+    run_id = "run-parent"
+    cases = [
+        (
+            [{
+                "id": "evt-ok", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id, "spawned_by_run": "run-ok",
+                "spawn_status": "done",
+            }],
+            "- ▷ 1 finished spawn(s) observed — no address needed; "
+            "will retire at run end.",
+        ),
+        (
+            [{
+                "id": "evt-error", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id, "spawned_by_run": "run-error",
+                "spawn_status": "error",
+            }],
+            "- ▷ 1 finished spawn(s) — 0 ok, 1 error (run-error).",
+        ),
+        (
+            [
+                {
+                    "id": "evt-ok", "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id, "spawned_by_run": "run-ok",
+                    "spawn_status": "done",
+                },
+                {
+                    "id": "evt-error", "source": "spawn_completed",
+                    "spawn_parent_run_id": run_id,
+                    "spawned_by_run": "run-error", "spawn_status": "error",
+                },
+            ],
+            "- ▷ 2 finished spawn(s) — 1 ok, 1 error (run-error).",
+        ),
+        (
+            [{
+                "id": "evt-no-report", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id,
+                "spawned_by_run": "run-no-report", "spawn_status": "done",
+                "spawn_report_found": False,
+            }],
+            "- ▷ 1 finished spawn(s) — 1 ok "
+            "(run-no-report; no report written).",
+        ),
+        (
+            [{
+                "id": "evt-legacy", "source": "spawn_completed",
+                "spawn_parent_run_id": run_id,
+                "spawned_by_run": "run-legacy",
+            }],
+            "- ▷ 1 finished spawn(s) observed — no address needed; "
+            "will retire at run end.",
+        ),
+    ]
+
+    for events, expected in cases:
+        payload = _bar_payload(
+            run={"id": run_id},
+            attention={
+                "pending_event_count": len(events),
+                "pending_outbox_file_count": 0,
+            },
+            inbound={"events": events},
+        )
+        for stop in (False, True):
+            rendered = hooks.format_delta(payload, stop=stop)
+            fact_lines = [
+                line for line in rendered.splitlines()
+                if line.startswith("- ▷ ")
+            ]
+            assert fact_lines == [expected], f"stop={stop}, events={events}"
+
+
 def test_spawn_completed_for_different_run_still_counts_as_obligation():
     """A spawn_completed whose spawn_parent_run_id doesn't match the current
     run is NOT a fact-for-this-run — it counts as a normal obligation.
