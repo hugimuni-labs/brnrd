@@ -277,6 +277,76 @@ def ignored_repo_profile_files(repo_root: Path) -> list[str]:
     return [rel for rel in _REPO_PROFILE_RELPATHS if (brr_dir / rel).exists()]
 
 
+def home_profiles_unreachable(repo_root: Path) -> bool:
+    """True when the account's own profile catalog is unreachable (#700).
+
+    ``home_profiles_path`` deliberately derives from ``security_config_path``
+    so the two can never point at different homes — but that resolution is
+    not total (#663): under ``--separate-git-dir``, git records the main
+    checkout's path nowhere, so from a *linked worktree* of such a repo
+    ``account.resolve_context`` cannot find the registry entry and falls
+    through to a per-repo **project** home instead of the connected
+    account's. From every surface that is byte-identical to "you never
+    configured a custom profile" — ``ignored_repo_profile_files`` can't
+    catch it either, because there is no repo-side file to flag, just an
+    account-side one nothing here can reach.
+
+    The predicate is narrow on purpose, and narrower than "project home,
+    file missing" alone: **most** project homes are not #663 casualties —
+    ``account.py``'s own module docstring names project homes the ordinary
+    outcome for any repo that simply never connected an account, and that
+    is the overwhelmingly common case a repo-side test scaffold or a
+    standalone checkout hits with no account anywhere in the picture. Firing
+    on ``kind == "project"`` alone would notice *every one of those* —
+    exactly the "guard nobody reads" failure this predicate exists to avoid,
+    just on the project side instead of the account side. So three things
+    must hold together:
+
+    1. ``account.resolve_context`` resolved a **project** home, not the
+       connected account's (``ctx.kind``, never a path substring — the class
+       of bug ``security_config_path``'s own docstring records for the
+       deleted ``_canonical_repo_root``).
+    2. *repo_root* is unambiguously a git working tree in its own right
+       (``gitops.toplevel`` answers) — excludes the "not a git checkout at
+       all" degenerate case, which also drives ``main_worktree_root`` to
+       ``None`` but for an unrelated reason and must not be confused with
+       the worktree-specific one below.
+    3. ``gitops.main_worktree_root`` cannot name *repo_root*'s main working
+       tree (returns ``None``) — the specific, narrow signal #663 documents:
+       true only for a linked worktree of a ``--separate-git-dir`` checkout,
+       never for an ordinary standalone repo or an ordinary linked worktree
+       (both resolve their main tree fine, account or no account).
+    4. The resolved ``home_profiles_path`` does not exist.
+
+    (2) + (3) together are what keep this from firing for the ordinary
+    "project home, no account, no custom profile" case — driven empirically
+    against ``account.resolve_context`` + ``gitops.main_worktree_root`` for
+    exactly that shape (a plain repo, and a plain repo's own linked
+    worktree) before shipping, alongside the #663 shape itself.
+
+    This is a symptom guard for #663's root, not a fix for it — retire the
+    call site (``daemon.py``) the day #663 closes, rather than letting it
+    accrete as permanent scar tissue.
+    """
+    from . import account, gitops
+
+    repo_cfg = _read_flat(repo_config_path(repo_root))
+    try:
+        ctx = account.resolve_context(repo_root, repo_cfg, create=False)
+    except Exception:  # noqa: BLE001 - unresolvable home ⇒ nothing to flag
+        return False
+    if ctx.kind != "project":
+        return False
+
+    if gitops.toplevel(repo_root) is None:
+        return False  # not a git checkout at all — unrelated to #663
+    if gitops.main_worktree_root(repo_root) is not None:
+        return False  # git can name the main tree — resolution is total here
+
+    profiles_path = home_profiles_path(repo_root)
+    return profiles_path is not None and not profiles_path.exists()
+
+
 def load_config_report(repo_root: Path) -> tuple[dict[str, Any], list[str]]:
     """Load the merged config view, and report ignored repo-side security keys.
 

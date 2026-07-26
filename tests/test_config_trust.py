@@ -1121,6 +1121,164 @@ def test_no_profile_notice_when_the_repo_has_no_runners_file(tmp_path, monkeypat
     assert not any("runners.md" in n["text"] for n in notices), notices
 
 
+# ── #700: an unreachable profile catalog is not an empty one ────────────
+#
+# home_profiles_path derives from security_config_path, whose resolution
+# isn't total (#663): a linked worktree of a --separate-git-dir repo can't
+# recover its main checkout, so account.resolve_context falls through to a
+# per-repo *project* home instead of the connected account's. That project
+# home never has a runners.md, which — from every surface — reads exactly
+# like "no custom profile configured". home_profiles_unreachable is the
+# predicate that tells the two apart; these pin its three required cases
+# (through the caller, not by string-matching source) plus the two
+# ordinary-project-home shapes that must stay silent alongside them.
+
+
+def test_home_profiles_unreachable_fires_for_a_stranded_linked_worktree(
+    tmp_path, monkeypatch,
+):
+    """The bug case: --separate-git-dir + a linked worktree strands the home.
+
+    Same fixture shape as
+    ``test_security_config_from_a_worktree_of_a_separate_git_dir_repo`` —
+    the issue's own repro, and the faithful shape the report asked for.
+    """
+    import subprocess
+
+    repo, home = _account_repo(tmp_path, monkeypatch, separate_git_dir=True)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    # The strand this predicate exists to detect, pinned at its own source.
+    assert gitops.main_worktree_root(linked) is None
+    assert not (home / conf.PROFILES_FILENAME).exists()
+
+    assert conf.home_profiles_unreachable(linked) is True
+
+    # The main checkout is unaffected — only the linked worktree is stranded.
+    conf._SECURITY_PATH_CACHE.clear()
+    assert conf.home_profiles_unreachable(repo) is False
+
+
+def test_home_profiles_unreachable_is_silent_when_the_account_profile_is_just_absent(
+    tmp_path, monkeypatch,
+):
+    """Must NEVER fire for the ordinary "connected account, no custom
+    profile yet" case — the one the spec calls out by name. An account
+    home resolves cleanly here (no --separate-git-dir, no linked worktree)
+    and simply has no runners.md."""
+    repo, home = _account_repo(tmp_path, monkeypatch)
+    conf._SECURITY_PATH_CACHE.clear()
+
+    assert conf.security_config_path(repo, {}).parent == home
+    assert not (home / conf.PROFILES_FILENAME).exists()
+
+    assert conf.home_profiles_unreachable(repo) is False
+
+
+def test_home_profiles_unreachable_is_silent_when_the_account_profile_exists(
+    tmp_path, monkeypatch,
+):
+    """And silent when the account's runners.md is right there and used."""
+    repo, home = _account_repo(tmp_path, monkeypatch)
+    (home / conf.PROFILES_FILENAME).write_text(
+        "---\nhome-runner:\n  cmd: 'home-runner --go'\n---\n", encoding="utf-8"
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    assert conf.home_profiles_unreachable(repo) is False
+
+
+def test_home_profiles_unreachable_is_silent_for_an_ordinary_unconnected_repo(
+    tmp_path, monkeypatch,
+):
+    """The false-positive this predicate must dodge: an ordinary repo that
+    never connected any account also resolves a *project* home (see
+    ``account.py``'s module docstring — that is the designed outcome for
+    an unconnected repo, not a #663 casualty). Firing here would notice
+    every standalone checkout with no custom profile, which is most of
+    them — the same "guard nobody reads" failure the spec warns about, on
+    the project side instead of the account side.
+    """
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("BRNRD_HOME", raising=False)
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "seed"],
+        check=True, capture_output=True,
+    )
+    conf._SECURITY_PATH_CACHE.clear()
+
+    sec_path = conf.security_config_path(repo, {})
+    assert sec_path is not None  # a project home still resolves, just not #700's
+    assert gitops.main_worktree_root(repo) == repo  # nothing stranded here
+
+    assert conf.home_profiles_unreachable(repo) is False
+
+
+def test_home_profiles_unreachable_is_silent_with_no_git_repo_at_all(tmp_path):
+    """The other way ``main_worktree_root`` returns ``None``: no ``.git`` at
+    all (e.g. a bare test scaffold). Unrelated to #663 and must not be
+    confused with the stranded-worktree shape — ``gitops.toplevel`` is the
+    gate that tells them apart."""
+    bare = tmp_path / "bare"
+    bare.mkdir()
+
+    assert gitops.toplevel(bare) is None
+    assert gitops.main_worktree_root(bare) is None
+
+    assert conf.home_profiles_unreachable(bare) is False
+
+
+def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
+    tmp_path, monkeypatch, capsys,
+):
+    """The daemon call site (#700), same channel as #693 above: a stranded
+    linked worktree gets a WARNING + outbox notice naming the remedy, not
+    just the refusal."""
+    import subprocess
+
+    repo, home = _account_repo(tmp_path, monkeypatch, separate_git_dir=True)
+    linked = tmp_path / "linked"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "wt", str(linked)],
+        check=True, capture_output=True,
+    )
+    write_repo_scaffold(linked)
+    conf._SECURITY_PATH_CACHE.clear()
+
+    event = make_event(linked, eid="evt-700-notice")
+    _stub_worktree_env(monkeypatch, linked)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    daemon._run_worker(event, linked, linked / ".brr" / "responses", {}, 0)
+
+    notices = daemon._read_outbox_notices(
+        linked / ".brr" / "outbox" / "evt-700-notice"
+    )
+    assert any("not being read" in n["text"] for n in notices), notices
+    assert any("#663" in n["text"] for n in notices), notices
+
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "unreachable" in captured.out
+
+
 # ── ``brnrd config promote`` picks the profile file up ──────────────────
 
 
