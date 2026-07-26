@@ -349,4 +349,20 @@ backend relays, it does not run your agent.
 ## Found a gap?
 
 If you spot a hole in any of the above, raise it privately rather than in a public
-issue. Report it to **security@hugimuni.fr**.
+issue. Two routes, both fine:
+
+- **[Report a vulnerability](https://github.com/hugimuni-labs/brnrd/security/advisories/new)**
+  — GitHub's private reporting is enabled on this repository. The thread is
+  private, it stays attached to the repo, and it gives you a credited advisory
+  if the report leads to one. Preferred, because nothing gets lost in a mailbox.
+- **security@hugimuni.fr** — for anything you'd rather not file through GitHub,
+  or if you have no GitHub account.
+
+We are a small team and this is alpha software: expect a human acknowledgement
+within a few days rather than an hour, and no bounty programme. What you will
+get is a straight answer about whether it is a real gap, and credit in the
+advisory if you want it.
+
+Please don't open a public issue for something exploitable, and please give us
+a chance to ship a fix before publishing. There is no fixed embargo — tell us
+your intended disclosure date and we'll work to it.
