@@ -8,12 +8,13 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import RunNode from '$lib/RunNode.svelte';
-	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { runLedgerRowsForNode } from '$lib/runNode';
+	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 
 	// The widest window the ledger API honours (7 days); a run node is usually
@@ -23,6 +24,7 @@
 	let data = $state<SurfaceResponse | null>(null);
 	let error = $state<string | null>(null);
 	let unauthenticated = $state(false);
+	let connectedRepos = $state<ConnectedRepo[] | null>(null);
 	let ledgerRows = $state<RunLedgerRow[] | null>(null);
 	let ledgerWithheld = $state<WithheldLane | null>(null);
 	let ledgerStale = $state(false);
@@ -32,6 +34,11 @@
 	let runId = $derived(page.params.run ?? '');
 
 	onMount(async () => {
+		try {
+			connectedRepos = (await fetchRepos()).connected_repos;
+		} catch (e) {
+			if (e instanceof ReposAuthError) unauthenticated = true;
+		}
 		try {
 			data = await fetchSurface();
 		} catch (e) {
@@ -72,13 +79,19 @@
 	</div>
 {:else if data === null}
 	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">reading run node…</div>
-{:else if data.files.length === 0 && data.withheld}
-	<div class="mx-auto max-w-xl p-6">
-		<div class="panel p-4"><WithheldNotice withheld={data.withheld} /></div>
-	</div>
 {:else}
-	{#if ledgerRows?.length === 0 && ledgerWithheld}
-		<div class="mx-auto max-w-xl px-6 pt-6"><WithheldNotice withheld={ledgerWithheld} /></div>
+	<div class="mx-auto max-w-xl px-6 pt-2">
+		<PublishConsentNotice repos={connectedRepos} />
+	</div>
+	{#if data.files.length === 0 && data.withheld}
+		<div class="mx-auto max-w-xl px-6 pt-6">
+			<div class="panel p-4 text-sm text-amber-200">paused — no publish scope</div>
+		</div>
 	{/if}
-	<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
+	{#if ledgerRows?.length === 0 && ledgerWithheld}
+		<div class="mx-auto max-w-xl px-6 pt-6 text-sm text-amber-200">paused — no publish scope</div>
+	{/if}
+	{#if data.files.length > 0}
+		<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
+	{/if}
 {/if}
