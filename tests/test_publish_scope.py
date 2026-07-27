@@ -299,23 +299,20 @@ def test_quota_lane_gated_by_the_connecting_repos_own_consent():
     assert r.json()["shells"] == []
 
 
-def test_legacy_repo_with_no_recorded_consent_is_unenforced():
-    """A repo connected before this column existed (`publish_layers is
-    None`) keeps its current behaviour untouched — the whole point of the
-    "existing accounts" half of the ticket."""
+def test_legacy_repo_with_no_recorded_consent_publishes_nothing():
+    """A repo that never recorded a consent (`publish_layers IS NULL`) goes
+    dark.
+
+    Inverted deliberately: this used to pin the opposite — an unrecorded
+    consent was unenforced, so a legacy repo kept publishing everything.
+    Unrecorded is not permission, and it was the most permissive state in the
+    system. The row is not backfilled; it simply publishes nothing until its
+    owner records a scope, and the repos surface says so.
+    """
     client = _client()
     token = _login(client)
 
-    # Created through the account-API-key surface, which this change
-    # deliberately leaves un-migrated (see publish_scope / accounts.py).
-    api_headers = {"Authorization": f"Bearer {token}"}
-    repo_id = client.post(
-        "/v1/accounts/repos",
-        json={"repo_full_name": "Gurio/legacy"},
-        headers=api_headers,
-    ).json()["repo_id"]
-    with client.app.state.SessionLocal() as db:
-        assert db.get(Repo, repo_id).publish_layers is None
+    repo_id = _mint_legacy_repo(client, token, "Gurio/legacy")
 
     daemon_token = _pair_daemon(client, repo_id)
     headers = {"Authorization": f"Bearer {daemon_token}"}
@@ -326,7 +323,55 @@ def test_legacy_repo_with_no_recorded_consent_is_unenforced():
         headers=headers,
     )
     assert r.status_code == 200
-    assert len(r.json()["shells"]) == 1
+    assert r.json()["shells"] == []
+
+
+def test_api_key_connect_without_publish_layers_records_the_opt_out_not_null():
+    """The API-key surface can no longer mint an unrecorded consent.
+
+    It used to leave the column NULL, which the gate then read as "publish
+    everything" — an API-key client bypassed the consent gate entirely just by
+    not mentioning it. Omitting the field now records the explicit opt-out.
+    """
+    client = _client()
+    token = _login(client)
+    repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/api-minted"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["repo_id"]
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, repo_id).publish_layers == publish_scope.OFF
+
+
+def test_api_key_connect_records_an_explicit_consent_when_given_one():
+    """…and a client that does name its scopes gets exactly those, through the
+    same validator as the browser connect."""
+    client = _client()
+    token = _login(client)
+    created = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/api-consented", "publish_layers": "quota,activity"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert created.status_code == 201, created.text
+    # Canonical order, and echoed back on the wire so the caller can see what
+    # it consented to rather than having to infer it.
+    assert created.json()["publish_layers"] == "activity,quota"
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, created.json()["repo_id"]).publish_layers == "activity,quota"
+
+
+def test_api_key_connect_rejects_an_unknown_scope_token():
+    """A typo is not a choice — same loud 422 the browser connect gives."""
+    client = _client()
+    token = _login(client)
+    r = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/api-typo", "publish_layers": "totalnonsense"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_corpus_lane_requires_every_connected_repo_to_consent():
@@ -390,15 +435,27 @@ def _account_id(client: TestClient) -> str:
 
 
 def _mint_legacy_repo(client: TestClient, session_token: str, full_name: str) -> str:
-    """A repo with `publish_layers IS NULL` — the account-API-key surface this
-    change deliberately leaves un-migrated, i.e. a repo connected before the
-    consent step shipped."""
+    """A repo with `publish_layers IS NULL` — a row that predates the consent
+    gate.
+
+    Written to the column directly, because **no live endpoint can produce
+    one any more**: the browser connect always recorded a value, and the
+    account-API-key surface now records `publish_scope.DEFAULT_NEW_CONNECT`
+    when the caller omits `publish_layers` instead of leaving the column
+    unset. NULL is therefore purely a historical state — rows already in the
+    database when the gate shipped, deliberately not backfilled, since writing
+    a consent nobody gave would fabricate the evidence the gate exists to
+    hold. This helper reproduces that state so the tests below can pin what
+    such a row does now: nothing publishes.
+    """
     repo_id = client.post(
         "/v1/accounts/repos",
         json={"repo_full_name": full_name},
         headers={"Authorization": f"Bearer {session_token}"},
     ).json()["repo_id"]
     with client.app.state.SessionLocal() as db:
+        db.get(Repo, repo_id).publish_layers = None
+        db.commit()
         assert db.get(Repo, repo_id).publish_layers is None
     return repo_id
 
@@ -406,10 +463,9 @@ def _mint_legacy_repo(client: TestClient, session_token: str, full_name: str) ->
 def test_a_legacy_sibling_does_not_dissolve_a_recorded_none():
     """#715 B2, driven at the seam that ships. An account with one repo that
     recorded an explicit `none` and one legacy repo that recorded nothing must
-    still ship no corpus: a repo with no recorded value neither consents nor
-    vetoes, so it cannot dissolve the sibling's opt-out. Before the fix the
-    first `NULL` row returned `None` (unenforced) and the whole surface
-    shipped."""
+    still ship no corpus. Unchanged by the fail-closed change, and now true for
+    a stronger reason: the unrecorded sibling *vetoes* rather than abstaining,
+    so the result is `frozenset()` whether or not the explicit `none` is there."""
     client = _client()
     token = _login(client)
     client.post(
@@ -437,17 +493,22 @@ def test_a_legacy_sibling_does_not_dissolve_a_recorded_none():
         assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset()
 
 
-def test_legacy_only_account_is_still_entirely_unenforced():
-    """The `SECURITY.md` carve-out, pinned: an account where *no* repo recorded
-    a consent keeps today's exact behaviour — `None`, unenforced, every slice
-    ships. Nothing that publishes today goes dark for the fix above."""
+def test_legacy_only_account_publishes_no_corpus_at_all():
+    """The former `SECURITY.md` carve-out, inverted: an account where *no* repo
+    recorded a consent now ships **nothing**, where it used to ship everything.
+
+    This is the change's blast radius stated plainly — a purely legacy account
+    goes dark until its owner records a scope. That is the intended outcome,
+    not collateral: those repos never answered the consent question, and the
+    old behaviour answered it for them in the most permissive direction.
+    """
     client = _client()
     token = _login(client)
     _mint_legacy_repo(client, token, "Gurio/legacy-a")
     repo_b = _mint_legacy_repo(client, token, "Gurio/legacy-b")
 
     with client.app.state.SessionLocal() as db:
-        assert publish_scope.corpus_slices_permitted(db, _account_id(client)) is None
+        assert publish_scope.corpus_slices_permitted(db, _account_id(client)) == frozenset()
 
     daemon_token = _pair_daemon(client, repo_b)
     r = client.put(
@@ -459,12 +520,17 @@ def test_legacy_only_account_is_still_entirely_unenforced():
         headers={"Authorization": f"Bearer {daemon_token}"},
     )
     assert r.status_code == 200
-    assert [f["path"] for f in r.json()["files"]] == ["surface/plan.md", "knowledge/index.md"]
+    assert r.json()["files"] == []
 
 
-def test_recorded_consents_still_intersect_and_a_legacy_sibling_does_not_widen():
-    """The all-recorded path is unchanged (plain intersection), and adding a
-    legacy repo to that account neither widens nor dissolves the result."""
+def test_recorded_consents_intersect_and_a_legacy_sibling_narrows_to_nothing():
+    """The all-recorded path is unchanged (plain intersection). Adding a repo
+    with no recorded consent now narrows the result to nothing rather than
+    leaving it alone — the unrecorded row participates as `OFF`.
+
+    This is #715's rule (*enforcement must not weaken when a repo is added*)
+    reaching the one row that used to be exempt from it.
+    """
     client = _client()
     token = _login(client)
     client.post(
@@ -481,7 +547,7 @@ def test_recorded_consents_still_intersect_and_a_legacy_sibling_does_not_widen()
 
     _mint_legacy_repo(client, token, "Gurio/legacy")
     with client.app.state.SessionLocal() as db:
-        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset({"knowledge"})
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset()
 
 
 def test_account_with_no_repos_at_all_is_unenforced():
@@ -661,17 +727,19 @@ def test_a_sibling_token_cannot_publish_a_repo_that_recorded_none(
     _SUBJECT_LANES,
     ids=[row[0] for row in _SUBJECT_LANES],
 )
-def test_a_row_naming_a_repo_with_no_recorded_consent_still_publishes(
+def test_a_row_naming_a_repo_with_no_recorded_consent_goes_dark(
     lane, put_path, payload_of, stored_key, dash_path, dash_key
 ):
-    """Carve-out pin, not a fix-shaped assertion.
+    """The former carve-out pin, inverted.
 
-    `lane_permitted` fails **open** for a repo that never recorded a consent —
-    a repo connected before this gate shipped. That is the disclosed behaviour
-    in `SECURITY.md` and was re-litigated in #715 (`64925c11`); narrowing it
-    here would be a regression, not a bonus. Delete the #714 fix entirely and
-    this must stay green — that is what makes it a pin on the carve-out rather
-    than a restatement of the change.
+    `lane_permitted` used to fail **open** for a repo that never recorded a
+    consent, and this test pinned that as disclosed behaviour (`SECURITY.md`,
+    re-litigated in #715 / `64925c11`). The product decision changed: an
+    unrecorded consent is not permission, so a row *about* such a repo is
+    dropped while the consenting publisher's own rows still ship.
+
+    The publisher's rows staying visible is the part that still matters — the
+    change must narrow to the unconsented subject, not blank the whole payload.
     """
     client = _client()
     token = _login(client)
@@ -691,12 +759,16 @@ def test_a_row_naming_a_repo_with_no_recorded_consent_still_publishes(
     r = client.put(put_path, json=payload_of("Gurio/legacy", "Gurio/public"), headers=headers)
     assert r.status_code == 200, r.text
     assert [row["repo_label"] for row in r.json()[stored_key]] == [
-        "Gurio/legacy",
         "Gurio/public",
-    ], f"{lane}: a legacy repo with no recorded consent went dark — carve-out broken"
+    ], f"{lane}: expected only the consenting repo's rows to ship"
 
     served = [row.get("repo_label") for row in client.get(dash_path).json()[dash_key]]
-    assert "Gurio/legacy" in served, f"{lane}: legacy row missing from the dashboard — {served}"
+    assert "Gurio/legacy" not in served, (
+        f"{lane}: a repo with no recorded consent reached the dashboard — {served}"
+    )
+    assert "Gurio/public" in served, (
+        f"{lane}: the consenting repo's rows went dark too — {served}"
+    )
 
 
 @pytest.mark.parametrize(

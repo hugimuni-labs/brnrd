@@ -20,7 +20,7 @@ from brr import protocol  # noqa: E402
 from brr import schedule  # noqa: E402
 from brr import usage_samples  # noqa: E402
 from brr.gates import cloud  # noqa: E402
-from _helpers import brnrd_account_headers, init_git_repo  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers, init_git_repo  # noqa: E402
 
 
 class _StopLoop(BaseException):
@@ -124,7 +124,9 @@ def _account_and_project(client):
         client.app, github_id="123", login="octocat", email="a@b.com"
     )
     pid = client.post(
-        "/v1/accounts/repos", json={"repo_full_name": "Gurio/demo"}, headers=headers
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/demo", "publish_layers": PUBLISH_EVERYTHING},
+        headers=headers,
     ).json()["repo_id"]
     return headers, pid
 

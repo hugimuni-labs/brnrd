@@ -642,3 +642,231 @@ def test_sync_installation_prunes_rows_dropped_from_listing(env, monkeypatch):
             for row in db.execute(select(GitHubInstalledRepo)).scalars()
         }
         assert "other/kept-elsewhere" in all_names
+
+
+# ── the GitHub App router's own webhook and session surface ─────────
+
+
+def _app_env(monkeypatch, *, github_webhook_secret: str = _SECRET):
+    """A client whose GitHub App webhook secret is configurable per test.
+
+    Built directly rather than through `_build_env`, which pins the secret to
+    `_SECRET` — the unset-secret case is exactly what these tests need to reach.
+    """
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        github_webhook_secret=github_webhook_secret,
+        github_bot_login="brr-bot",
+        github_bot_token="ghs_test",
+    )
+    app = create_app(settings)
+    return app, TestClient(app), []
+
+
+def _app_webhook_body(installation_id: str = "42") -> bytes:
+    return json.dumps({"installation": {"id": installation_id}}).encode()
+
+
+def _app_signature(secret: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def test_app_webhook_refuses_an_unsigned_request_when_no_secret_is_configured(monkeypatch):
+    """The fail-open this closes: with `BRNRD_GITHUB_WEBHOOK_SECRET` unset the
+    guard's leading `settings.github_webhook_secret and …` conjunct skipped
+    verification entirely, so anyone on the internet could POST an
+    `installation` event and drive `sync_installation`.
+
+    Refused before the body is parsed or synced, and 403 — the shape all three
+    siblings already use (`routers/webhooks.py::github_webhook`,
+    `::telegram_webhook`, `::stripe_webhook`).
+    """
+    called = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: called.append(a),
+    )
+    _app, client, _ = _app_env(monkeypatch, github_webhook_secret="")
+
+    r = client.post(
+        "/api/github/webhook",
+        content=_app_webhook_body(),
+        headers={"X-GitHub-Event": "installation", "Content-Type": "application/json"},
+    )
+
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "bad secret"
+    assert called == [], "sync ran despite an unverifiable request"
+
+
+def test_app_webhook_refuses_a_signed_request_when_no_secret_is_configured(monkeypatch):
+    """Even a *correctly* signed body cannot be accepted while the server holds
+    no secret — there is nothing to verify against, so any signature the sender
+    chose would do."""
+    called = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: called.append(a),
+    )
+    _app, client, _ = _app_env(monkeypatch, github_webhook_secret="")
+    body = _app_webhook_body()
+
+    r = client.post(
+        "/api/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _app_signature("attacker-picked", body),
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert r.status_code == 403, r.text
+    assert called == []
+
+
+def test_app_webhook_refuses_a_bad_signature_when_a_secret_is_configured(monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: called.append(a),
+    )
+    _app, client, _ = _app_env(monkeypatch)
+    body = _app_webhook_body()
+
+    r = client.post(
+        "/api/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _app_signature("wrong-secret", body),
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert r.status_code == 403, r.text
+    assert called == []
+
+
+def test_app_webhook_accepts_a_correctly_signed_request(monkeypatch):
+    """The guard closes on the unconfigured case without shutting the door on
+    the configured one."""
+    called = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: called.append(a),
+    )
+    _app, client, _ = _app_env(monkeypatch)
+    body = _app_webhook_body()
+
+    r = client.post(
+        "/api/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "installation",
+            "X-Hub-Signature-256": _app_signature(_SECRET, body),
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    assert len(called) == 1, "a correctly signed installation event did not sync"
+
+
+# ── expired session cookies, at both routers that accept one ────────
+
+
+def _expire_sessions(app, account_id: str) -> None:
+    """Age every session token for this account past its expiry.
+
+    Session tokens really do get one — `routers/accounts.py::issue_session_token`
+    writes `expires_at = now + SESSION_TTL` — so this is the state a browser
+    reaches by simply holding a cookie long enough, not a synthetic one.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Token
+
+    with app.state.SessionLocal() as db:
+        for token in db.execute(
+            select(Token).where(Token.account_id == account_id, Token.kind == Token.KIND_SESSION)
+        ).scalars():
+            token.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+
+
+def _session_cookie_client(monkeypatch):
+    """A client holding a real session **cookie** — the credential these two
+    routers actually resolve, as a browser would present it."""
+    from brnrd.models import Account
+
+    app, client, _ = _app_env(monkeypatch)
+    acc = _account(client)
+    client.cookies.set(app.state.settings.session_cookie, acc["Authorization"].split()[1])
+    with app.state.SessionLocal() as db:
+        account_id = db.execute(select(Account)).scalars().one().id
+    return app, client, acc, account_id
+
+
+def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
+    """The drift this closes: `github_app.py` carried a third copy of "resolve a
+    caller from a credential" that checked `revoked` but **not** `expires_at`,
+    so an expired cookie still authenticated against `/api/github/sync` and
+    could drive `github_installation_sync` over the account's repos — while
+    every other surface in the app rejected it.
+
+    All three resolvers now share one predicate
+    (`brnrd.auth.account_id_from_session_cookie`), so there is no fourth copy
+    to drift.
+    """
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installations_for_account",
+        lambda *a, **k: synced.append(a) or 1,
+    )
+    app, client, _acc, account_id = _session_cookie_client(monkeypatch)
+
+    # Sanity: the cookie works while it is live, so the assertion below is
+    # about expiry and not about the cookie never having been accepted.
+    r = client.post("/api/github/sync", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/?notice=github-synced"
+    assert len(synced) == 1
+
+    _expire_sessions(app, account_id)
+
+    r = client.post("/api/github/sync", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/", "expired cookie still authenticated"
+    assert len(synced) == 1, "sync ran for an expired session"
+
+
+def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
+    """The same resolver on the App's other cookie surface: an expired cookie
+    must not attach a discovered installation to that account."""
+    seen = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda db, settings, installation_id, account_id=None: seen.append(account_id),
+    )
+    app, client, _acc, account_id = _session_cookie_client(monkeypatch)
+    _expire_sessions(app, account_id)
+
+    r = client.get(
+        "/api/github/setup", params={"installation_id": "42"}, follow_redirects=False
+    )
+
+    assert r.status_code == 303
+    assert seen == [None], "an expired cookie attributed the installation to its account"
+
+
+def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):
+    """The `_session` resolver's own path, pinned alongside the GitHub App one
+    so the two cannot drift apart again."""
+    app, client, _acc, account_id = _session_cookie_client(monkeypatch)
+
+    assert client.get("/v1/dashboard/repos").status_code == 200
+
+    _expire_sessions(app, account_id)
+
+    assert client.get("/v1/dashboard/repos").status_code == 401

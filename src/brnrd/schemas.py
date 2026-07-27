@@ -14,6 +14,12 @@ class RepoCreate(BaseModel):
     forge: str = Field(default="github", min_length=1, max_length=32)
     forge_repo_id: str | None = Field(default=None, max_length=64)
     default_branch: str | None = Field(default=None, max_length=255)
+    # Explicit publish-scope consent, same vocabulary as the browser connect
+    # flow (`publish_scope.normalize_publish_layers`, which 422s on a typo).
+    # Omitting it is not a way to get the permissive state: absent records the
+    # explicit opt-out sentinel `publish_scope.OFF`, never NULL. An API-key
+    # client that wants mirroring has to say which lanes, in as many words.
+    publish_layers: str | None = Field(default=None, max_length=255)
 
 
 class RepoOut(BaseModel):
@@ -25,6 +31,9 @@ class RepoOut(BaseModel):
     forge_repo_id: str | None = None
     default_branch: str | None = None
     created_at: datetime
+    # Surfaced so an API-key client can see what it consented to — and see a
+    # `null` (legacy row, publishing paused) instead of having to infer it.
+    publish_layers: str | None = None
 
 
 class RepoList(BaseModel):

@@ -16,7 +16,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
 
 
 def _client() -> TestClient:
@@ -37,7 +37,7 @@ def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]
     )
     repo = client.post(
         "/v1/accounts/repos",
-        json={"repo_full_name": "Gurio/brr", "default_branch": "main"},
+        json={"repo_full_name": "Gurio/brr", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
         headers=account_headers,
     ).json()
     pair = client.post("/v1/accounts/pair").json()

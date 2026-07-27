@@ -47,9 +47,13 @@ test('presetForValue recognizes the off and everything presets', () => {
 	assert.equal(presetForValue('activity,quota'), 'custom');
 });
 
-test('publishScopeSummary distinguishes legacy-unset from an explicit off', () => {
-	assert.match(publishScopeSummary(null), /not set/);
-	assert.match(publishScopeSummary(undefined), /not set/);
+test('publishScopeSummary distinguishes no-consent-recorded from an explicit off', () => {
+	// Both publish nothing, but for different reasons, and the owner needs to
+	// be able to tell them apart: `none` is a choice they made, `null` is a
+	// question they were never asked and can still answer.
+	assert.match(publishScopeSummary(null), /no consent recorded/);
+	assert.match(publishScopeSummary(null), /paused/);
+	assert.match(publishScopeSummary(undefined), /no consent recorded/);
 	assert.match(publishScopeSummary(PUBLISH_SCOPE_OFF), /nothing/);
 	assert.match(publishScopeSummary(PUBLISH_SCOPE_EVERYTHING), /everything/);
 	assert.match(publishScopeSummary('quota'), /1 of \d+ lanes: quota/);

@@ -316,8 +316,13 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
     files: list[dict[str, object]] = []
     accepted: list = []
     for item in payload.files:
-        if allowed_slices is not None and item.layer not in allowed_slices:
-            continue
+        # Shape first, consent second. The consent filter used to sit above
+        # these guards, so a file the account had not consented to skipped
+        # them: a traversal path in a filtered layer got a 200 instead of the
+        # 422 it earns. Latent while most repos were unenforced, and universal
+        # for a repo with no recorded consent once that stopped meaning
+        # "publish everything" — a malformed payload must be rejected on its
+        # own terms whether or not any of it would have shipped.
         path = PurePosixPath(item.path)
         if path.is_absolute() or ".." in path.parts or any(part.startswith(".") for part in path.parts):
             raise HTTPException(status_code=422, detail=f"invalid surface path: {item.path}")
@@ -325,6 +330,8 @@ def put_surface(payload: schemas.SurfaceReport, principal: Principal = Depends(r
         if normalized in seen:
             raise HTTPException(status_code=422, detail=f"duplicate surface path: {normalized}")
         seen.add(normalized)
+        if allowed_slices is not None and item.layer not in allowed_slices:
+            continue
         files.append({"path": normalized, "markdown": item.markdown, "layer": item.layer, "truncated": item.truncated})
         accepted.append(item)
 

@@ -14,7 +14,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
-from _helpers import brnrd_account_headers  # noqa: E402
+from _helpers import PUBLISH_EVERYTHING, brnrd_account_headers  # noqa: E402
 
 
 def _client() -> TestClient:
@@ -24,7 +24,7 @@ def _client() -> TestClient:
 
 def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]]:
     account_headers = brnrd_account_headers(client.app, github_id="123", login="octocat", email="a@b.com")
-    repo = client.post("/v1/accounts/repos", json={"repo_full_name": "Gurio/brr", "default_branch": "main"}, headers=account_headers).json()
+    repo = client.post("/v1/accounts/repos", json={"repo_full_name": "Gurio/brr", "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING}, headers=account_headers).json()
     pair = client.post("/v1/accounts/pair").json()
     client.post(f"/v1/accounts/pair/{pair['pair_code']}/approve", json={"repo_id": repo["repo_id"]}, headers=account_headers)
     paired = client.get(f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]}).json()
@@ -61,7 +61,15 @@ def test_daemon_surface_carries_corpus_layer_and_truncation():
     posted = client.put("/v1/daemons/surface", json={"files": [
         {"path": "surface/index.md", "markdown": "# Work surface", "layer": "authored"},
         {"path": "knowledge/repos/Gurio__brr/log.md", "markdown": "capped", "layer": "knowledge", "truncated": True},
-        {"path": "knowledge/replies/Gurio__brr/run-x.md", "markdown": "reply", "layer": "replies"},
+        # `runs`, not the invented `replies`: the corpus has exactly three
+        # layers (`brr.account.CORPUS_LAYERS`), and the daemon's surface
+        # publisher cannot emit a fourth. A `replies` layer only round-tripped
+        # here because the consent gate was unenforced for this fixture's repo
+        # — no consent string could ever have permitted it, since it is not in
+        # the slice vocabulary. With the gate closed the fiction is visible, so
+        # the fixture now names a layer production actually produces, and the
+        # case covers all three real layers instead of two plus a ghost.
+        {"path": "runs/Gurio__brr/run-x.md", "markdown": "reply", "layer": "runs"},
     ]}, headers=daemon_headers)
     assert posted.status_code == 200, posted.text
     _login_cookie(client)
@@ -69,7 +77,7 @@ def test_daemon_surface_carries_corpus_layer_and_truncation():
     by_path = {item["path"]: item for item in files}
     assert by_path["knowledge/repos/Gurio__brr/log.md"]["layer"] == "knowledge"
     assert by_path["knowledge/repos/Gurio__brr/log.md"]["truncated"] is True
-    assert by_path["knowledge/replies/Gurio__brr/run-x.md"]["layer"] == "replies"
+    assert by_path["runs/Gurio__brr/run-x.md"]["layer"] == "runs"
     assert by_path["surface/index.md"]["truncated"] is False
 
 
@@ -101,3 +109,37 @@ def test_dashboard_surface_returns_the_same_generic_file_set():
 
 def test_dashboard_surface_requires_session():
     assert _client().get("/v1/dashboard/surface").status_code == 401
+
+
+def test_surface_rejects_a_traversal_path_even_in_an_unconsented_layer():
+    """Shape is validated before consent is consulted.
+
+    The filter used to run first, so a file whose layer the account had not
+    consented to was `continue`d past the traversal guard and the request
+    returned 200. A malformed payload must be refused on its own terms
+    regardless of whether any of it would have shipped — otherwise closing the
+    consent gate silently *widens* what a caller can send unchecked.
+    """
+    from brnrd.models import Repo
+
+    client = _client()
+    _account_headers, daemon_headers = _repo_and_daemon(client)
+    # Narrow the consent so `knowledge` is definitely not permitted — asserted,
+    # not hoped for, since a consent that failed to narrow would let the guard
+    # fire for the ordinary reason and the test would prove nothing.
+    with client.app.state.SessionLocal() as db:
+        repo = db.query(Repo).filter(Repo.repo_full_name == "Gurio/brr").one()
+        repo.publish_layers = "authored"
+        db.commit()
+    from brnrd import publish_scope
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.query(Repo).filter(Repo.repo_full_name == "Gurio/brr").one()
+        assert "knowledge" not in publish_scope.corpus_slices_permitted(db, repo.account_id)
+
+    posted = client.put("/v1/daemons/surface", json={"files": [
+        {"path": "../secret.md", "markdown": "x", "layer": "knowledge"},
+    ]}, headers=daemon_headers)
+
+    assert posted.status_code == 422, posted.text
+    assert "invalid surface path" in posted.json()["detail"]

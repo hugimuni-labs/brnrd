@@ -33,10 +33,11 @@ from .models import Repo
 
 # New connects consent explicitly and the product default is off — never the
 # daemon-side "absent means everything" rule, which is a legacy-config
-# convenience, not a consent. See the ticket's "open product question": the
-# default flips for new connects only; existing accounts are untouched
-# (their repos simply carry no stored consent at all, so nothing here
-# applies to them below).
+# convenience, not a consent. This module now applies the same reading to a
+# *missing* stored value: an unrecorded consent resolves to OFF everywhere
+# below, so a repo carrying no consent publishes nothing until its owner
+# records a scope. Existing NULL rows are not backfilled — they go dark, and
+# the repos surface tells their owner why.
 DEFAULT_NEW_CONNECT = OFF
 
 _KNOWN_TOKENS = frozenset(LANES) | frozenset(CORPUS_SLICES) | {OFF}
@@ -75,38 +76,55 @@ def normalize_publish_layers(raw: str | None) -> str:
     return ",".join(ordered)
 
 
-def _repo_scopes(publish_layers: str | None) -> tuple[frozenset[str], frozenset[str]] | None:
-    """(lanes, corpus slices) a stored consent value permits, or ``None``.
+def _repo_scopes(publish_layers: str | None) -> tuple[frozenset[str], frozenset[str]]:
+    """(lanes, corpus slices) a stored consent value permits.
 
-    ``None`` on the *value* means "no consent recorded" — a repo connected
-    before this gate shipped. That is not the same as the string ``"none"``,
-    which is a recorded, explicit opt-out. Only a recorded value is ever
-    enforced; an unrecorded one leaves this repo's current behaviour
-    untouched, exactly as the ticket asks.
+    **Total by construction, and that is the point.** This used to return
+    ``None`` for ``publish_layers is None`` ("no consent recorded" — a repo
+    connected before this gate shipped, or one minted through the account
+    API-key surface, which recorded nothing at all). Every caller then had to
+    remember what to do with that ``None``, and two of the three chose
+    "publish everything": an unrecorded consent was silently the most
+    permissive state in the system.
+
+    Unrecorded is not permission. A missing value now resolves to ``OFF`` —
+    the same scopes as a recorded, explicit opt-out — so the *type* no longer
+    carries a way to say "unenforced", and no caller can reintroduce the
+    fail-open by forgetting a branch. The repo goes dark until its owner
+    records a scope; the surface says so (``publishScopeSummary`` in
+    ``src/frontend/src/lib/publishScope.ts``).
+
+    Existing ``NULL`` rows are deliberately **not** backfilled: writing a
+    consent nobody gave would fabricate exactly the evidence this gate
+    exists to hold.
     """
     if publish_layers is None:
-        return None
+        return _resolve_publish_scopes({"publish.layers": OFF})
     return _resolve_publish_scopes({"publish.layers": publish_layers})
 
 
 def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:
     """May this repo's daemon publish ``lane`` right now?
 
-    Fails open (``True``) whenever there is nothing to enforce against — no
-    repo_id on the token, an unknown repo, or a repo that never recorded a
-    consent (legacy). Only a repo with a *recorded* consent is gated, and a
-    recorded ``none``/subset gates every one of the six non-corpus lanes,
-    mirroring the daemon-side ``@_publish_lane`` shape one hop server-side.
+    A repo that never recorded a consent now publishes **nothing** — the
+    unrecorded case resolves to ``OFF`` inside ``_repo_scopes`` rather than
+    being special-cased to ``True`` here. A recorded ``none``/subset gates
+    every one of the six non-corpus lanes, mirroring the daemon-side
+    ``@_publish_lane`` shape one hop server-side.
+
+    Two ``True`` returns remain, and neither is a consent question: a token
+    carrying no ``repo_id`` at all, and a ``repo_id`` naming no row. Those
+    are "this payload has no repo to ask about" — the daemon-scoped lanes
+    (``activity``, ``quota``, ``runners``) reach here that way legitimately.
+    They are a genuinely separate gap from the one this docstring used to
+    describe, and are left as-is rather than widened into silently.
     """
     if not repo_id:
         return True
     repo = db.get(Repo, repo_id)
     if repo is None:
         return True
-    scopes = _repo_scopes(repo.publish_layers)
-    if scopes is None:
-        return True
-    lanes, _slices = scopes
+    lanes, _slices = _repo_scopes(repo.publish_layers)
     return lane in lanes
 
 
@@ -173,9 +191,11 @@ def _subject_permits(
       make a second connect *widen* what the first one had shut.
     - **One match** — that repo's consent, the ordinary case.
 
-    A legacy repo among the matches returns ``True`` from ``lane_permitted``
-    and so neither consents nor vetoes, which is the carve-out behaving as
-    ``SECURITY.md`` states.
+    A repo with no recorded consent among the matches now *vetoes*, because
+    ``lane_permitted`` reads an unrecorded value as ``OFF``. It used to
+    return ``True`` there — neither consent nor veto — which meant one
+    unconsented case-variant could not stop a publish, and adding it to the
+    account changed nothing.
     """
     label = (repo_label or "").strip()
     matches = _subject_repos(repos, label) if label else []
@@ -244,26 +264,22 @@ def corpus_slices_permitted(db: Session, account_id: str) -> frozenset[str] | No
     every connected repo that has **recorded** a consent: never ship a slice
     unless every one of them agreed to it.
 
-    A repo with no recorded value (legacy — connected before this gate
-    shipped) is skipped rather than returning early: it neither consents nor
-    vetoes. Returning ``None`` on the first such row made an unconsented repo
-    *dissolve* the intersection instead of narrowing it, so one legacy
-    sibling silently discarded an explicit ``none`` recorded next to it and
-    the whole account's corpus shipped (#715). Enforcement must not weaken
-    when a repo is added.
+    A repo with no recorded value no longer abstains: it contributes ``OFF``
+    like any other unrecorded consent, so a single unconsented repo narrows
+    the account's corpus to nothing rather than being skipped. That is the
+    intended direction of #715's rule — *enforcement must not weaken when a
+    repo is added* — now applied to the unrecorded case too, which used to
+    be the one row that could be added without ever narrowing anything.
 
-    ``None`` — unenforced, current behaviour untouched — is returned only
-    when there is genuinely nothing to enforce against: the account has no
-    repos, or not one of them has recorded a consent. A purely legacy account
-    therefore behaves exactly as it did before this module existed, which is
-    the carve-out ``SECURITY.md`` states.
+    ``None`` still means "nothing to enforce against", but that is now
+    reachable only when the account has **no connected repos at all**: with
+    no repo there is no consent question to ask. Note that this remains a
+    fail-open for an account whose corpus mirrors with zero repos connected
+    — a separate gap from the one this function just closed, called out
+    rather than quietly widened.
     """
     repos = list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
-    resolved = [
-        scopes[1]
-        for scopes in (_repo_scopes(repo.publish_layers) for repo in repos)
-        if scopes is not None
-    ]
+    resolved = [_repo_scopes(repo.publish_layers)[1] for repo in repos]
     if not resolved:
         return None
     return frozenset.intersection(*resolved)

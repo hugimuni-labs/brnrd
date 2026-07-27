@@ -8,16 +8,15 @@ from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .. import ids
-from ..auth import get_db
-from ..models import GitHubInstallation, GitHubInstalledRepo, Token
+from ..auth import account_id_from_session_cookie, get_db
+from ..models import GitHubInstallation, GitHubInstalledRepo
 from ..platforms import github_app as gh_app
-from ..security import hash_token
 
 router = APIRouter(prefix="/api/github", tags=["github-app"])
 
@@ -27,16 +26,6 @@ def _signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
         return False
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(f"sha256={digest}", signature)
-
-
-def _account_id_from_cookie(request: Request, db: Session) -> str | None:
-    cookie = request.cookies.get(request.app.state.settings.session_cookie)
-    if not cookie:
-        return None
-    token = db.execute(select(Token).where(Token.token_hash == hash_token(cookie), Token.kind == Token.KIND_SESSION)).scalar_one_or_none()
-    if token is None or token.revoked:
-        return None
-    return token.account_id
 
 
 def _github_dt(value: object) -> datetime | None:
@@ -124,7 +113,7 @@ def github_app_callback(code: str | None = None, state: str | None = None, error
 
 @router.get("/setup")
 def github_app_setup(request: Request, installation_id: str | None = None, setup_action: str | None = None, db: Session = Depends(get_db)) -> RedirectResponse:
-    account_id = _account_id_from_cookie(request, db)
+    account_id = account_id_from_session_cookie(request, db)
     notice = "github-installed"
     if installation_id:
         try:
@@ -139,7 +128,7 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
 
 @router.post("/sync")
 def github_installation_sync(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
-    account_id = _account_id_from_cookie(request, db)
+    account_id = account_id_from_session_cookie(request, db)
     if account_id is None:
         return RedirectResponse(url="/login?next=/", status_code=303)
     try:
@@ -155,8 +144,15 @@ def github_installation_sync(request: Request, db: Session = Depends(get_db)) ->
 async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[str | None, Header()] = None, x_github_event: Annotated[str | None, Header()] = None, db: Session = Depends(get_db)) -> dict[str, str | None]:
     body = await request.body()
     settings = request.app.state.settings
-    if settings.github_webhook_secret and not _signature_ok(settings.github_webhook_secret, body, x_hub_signature_256):
-        raise HTTPException(status_code=401, detail="Invalid GitHub signature")
+    # No leading `settings.github_webhook_secret and` conjunct: with the
+    # secret unset that made an unsigned request *skip* verification, so
+    # anyone could POST an `installation` event and drive `sync_installation`.
+    # `_signature_ok` already returns False on an empty secret, so the
+    # unconfigured case refuses here — before the body is parsed or synced —
+    # exactly like the three siblings (`routers/webhooks.py::github_webhook`,
+    # `::telegram_webhook`, `::stripe_webhook`), which all fail closed with 403.
+    if not _signature_ok(settings.github_webhook_secret, body, x_hub_signature_256):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
     if x_github_event in {"installation", "installation_repositories"}:
         try:
             payload = await request.json()

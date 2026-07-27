@@ -180,12 +180,14 @@ instructions. Those instructions are given through:
    `publish.layers`, which gates are configured, whether
    `brnrd account connect` has been run at all), which determines what
    Customer Content reaches the Service in the first place;
-3. For repositories connected on the Service since the connect-time
-   publish-scope consent step shipped, Customer's own explicit,
-   per-repository choice recorded at connect (or later revised from the
-   repository's settings), which the Service re-checks on each publish so
-   the recorded choice bounds what is stored even if the daemon
-   configuration in (2) would otherwise send more; and
+3. Customer's own explicit, per-repository publish-scope choice recorded at
+   connect (or later revised from the repository's settings), which the
+   Service re-checks on each publish so the recorded choice bounds what is
+   stored even if the daemon configuration in (2) would otherwise send more.
+   A repository for which no such choice was ever recorded — one connected
+   before this step shipped — is treated as having consented to nothing and
+   publishes no lane until Customer records a scope; the Service does not
+   write a consent on Customer's behalf; and
 4. The specific messages Customer's own daemon transmits to the Service's
    API endpoints.
 

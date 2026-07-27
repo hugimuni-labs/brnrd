@@ -45,16 +45,51 @@ def _bearer(authorization: str | None) -> str:
     return authorization[7:].strip()
 
 
+def token_expired(token: Token) -> bool:
+    """Has this token passed its ``expires_at``?
+
+    One implementation, because there were three copies of "resolve a caller
+    from a credential" and only two of them checked expiry: the bearer path
+    here and the cookie path in ``routers/_session.py`` did,
+    ``routers/github_app.py`` did not, so an expired session cookie still
+    authenticated against the GitHub App sync surface indefinitely. The
+    predicate now lives at the layer both callers already import (#764
+    follow-up) rather than being re-derived per router.
+
+    ``expires_at`` is naive-UTC on SQLite and aware on Postgres, so it is
+    normalized before comparison; a ``None`` expiry means non-expiring.
+    """
+    expires_at = token.expires_at
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
+def account_id_from_session_cookie(request: Request, db: Session) -> str | None:
+    """Account behind this request's session cookie, or ``None``.
+
+    The cookie twin of ``_resolve``: same three questions (does the token
+    exist, is it revoked, has it expired), answered once. Returns ``None``
+    rather than raising because both callers turn an absent session into a
+    redirect to ``/login``, not a JSON 401.
+    """
+    cookie = request.cookies.get(request.app.state.settings.session_cookie)
+    if not cookie:
+        return None
+    token = db.execute(select(Token).where(Token.token_hash == hash_token(cookie), Token.kind == Token.KIND_SESSION)).scalar_one_or_none()
+    if token is None or token.revoked or token_expired(token):
+        return None
+    return token.account_id
+
+
 def _resolve(db: Session, raw: str) -> Token:
     token = db.execute(select(Token).where(Token.token_hash == hash_token(raw))).scalar_one_or_none()
     if token is None or token.revoked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
-    expires_at = token.expires_at
-    if expires_at is not None:
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < datetime.now(timezone.utc):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="expired token")
+    if token_expired(token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="expired token")
     return token
 
 

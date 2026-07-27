@@ -237,7 +237,9 @@ or `none`), stored on the account's `Repo` row and re-checked at every
 connect UI. **The product default for a brand-new connect is `none`** — the
 opposite of `publish.layers`'s own unset-means-everything default — so
 connecting a repo mirrors nothing until you explicitly widen it, either at
-connect or later from the repo's settings row.
+connect or later from the repo's settings row. Repos connected through the
+account API key record the same default when the call omits a scope; that
+surface takes an explicit `publish_layers` if you want one.
 
 This is deliberately a *second* gate, not a replacement for the one above:
 `.brr/config`'s `publish.layers` is still the daemon's own, locally-writable
@@ -278,14 +280,23 @@ One lane, **corpus**, cannot be scoped to a single repo: the knowledge mirror
 is account-wide by construction, so the server only ships a corpus slice once
 **every** repo the account has connected *that has recorded a consent* has
 consented to it — a single narrower repo silences that slice for the whole
-account. A repo with no recorded value (below) neither consents nor vetoes:
-it does not gate the slice, and it does not dissolve a narrower sibling's
-recorded choice either.
+account. A repo with no recorded value (below) counts as having consented to
+nothing, so it silences the slice for the account exactly as an explicit
+`none` would.
 
-**Repos connected before this consent existed carry no recorded value at
-all** (distinct from an explicit `none`) and are, by design, unaffected: the
-server enforces nothing extra for them, and `publish.layers` remains their
-only control, exactly as it was before this section existed.
+**Repos with no recorded consent publish nothing.** A repo connected before
+this consent step existed carries no recorded value at all (distinct from an
+explicit `none`), and the server now reads that as consent to nothing rather
+than as permission: every lane is refused for such a repo until its owner
+records a scope, from the repo's row on the `/repos` page. The stored value
+is never backfilled on your behalf — a consent you did not give is not
+written for you — so the repo stays paused, and its row on that page says so,
+until you make the choice yourself.
+
+This reverses the earlier carve-out, which left such repos unenforced by this
+second control. The reasoning: an unrecorded consent was the most permissive
+state in the system, and "we never asked you" is not an answer that should
+grant more than any answer you could have given.
 
 ### What this switch does not turn off
 

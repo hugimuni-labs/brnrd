@@ -10,6 +10,7 @@ pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from _helpers import PUBLISH_EVERYTHING  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
@@ -44,7 +45,7 @@ def _login(client: TestClient, *, github_id: str = "12345", login: str = "Gurio"
 def _create_repo(client: TestClient, token: str, repo: str = "Gurio/brr") -> str:
     r = client.post(
         "/v1/accounts/repos",
-        json={"repo_full_name": repo, "default_branch": "main"},
+        json={"repo_full_name": repo, "default_branch": "main", "publish_layers": PUBLISH_EVERYTHING},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 201, r.text

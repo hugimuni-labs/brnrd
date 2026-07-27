@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import account_deletion, ids, limits, schemas, stripe_api
+from .. import account_deletion, ids, limits, publish_scope, schemas, stripe_api
 from ..activity_records import dedupe_activity_records, fresh_activity_records
 from ..auth import Principal, get_db, require_account, require_account_or_session
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
@@ -39,6 +39,7 @@ def repo_out(repo: Repo) -> schemas.RepoOut:
         forge_repo_id=repo.forge_repo_id,
         default_branch=repo.default_branch,
         created_at=repo.created_at,
+        publish_layers=repo.publish_layers,
     )
 
 
@@ -118,15 +119,13 @@ def create_repo(payload: schemas.RepoCreate, request: Request, principal: Princi
             db, request.app.state.settings, db.get(Account, principal.account_id)
         )
     )
-    # NOTE: unlike `_connect_repo_core` (the browser `/repos` connect flow,
-    # legal pack item 2), a repo minted through this account-API-key surface
-    # is left with no recorded consent (`publish_layers` stays `NULL`) —
-    # this endpoint has no attached consent UI (no `src/frontend/` surface
-    # asked for one) and is exercised throughout the existing daemon/cloud
-    # test fixtures on the assumption that a freshly connected repo publishes
-    # normally. Reported, not silently left: this is a real gap in the new
-    # consent gate (an API-key client bypasses it entirely) that a follow-up
-    # should close once this surface has its own explicit-consent story.
+    # Publish-scope consent is recorded here exactly as `_connect_repo_core`
+    # records it for the browser flow — same validator, same vocabulary, same
+    # loud 4xx on a typo. An omitted `publish_layers` records the explicit
+    # opt-out (`publish_scope.DEFAULT_NEW_CONNECT`), never `NULL`: this
+    # surface used to leave the column unset, which the gate then read as
+    # "publish everything", so an API-key client bypassed the consent gate
+    # entirely just by not mentioning it.
     repo = Repo(
         id=ids.repo_id(),
         account_id=principal.account_id,
@@ -136,6 +135,9 @@ def create_repo(payload: schemas.RepoCreate, request: Request, principal: Princi
         repo_name=name,
         forge_repo_id=payload.forge_repo_id,
         default_branch=payload.default_branch,
+        publish_layers=publish_scope.normalize_publish_layers(
+            payload.publish_layers if payload.publish_layers is not None else publish_scope.DEFAULT_NEW_CONNECT
+        ),
     )
     db.add(repo)
     db.commit()
