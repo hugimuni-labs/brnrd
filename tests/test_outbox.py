@@ -644,11 +644,65 @@ class TestCrossGateReplyRouting:
         assert protocol.list_partials(responses, "evt-A") == []
         assert [e["id"] for e in protocol.list_done(inbox, "schedule")] == [bid]
         notices = daemon._read_outbox_notices(outbox)
-        assert any("NOT delivered" in n["text"] for n in notices)
+        [notice] = notices
+        notice_text = " ".join(notice["text"].split())
+        assert f"event {bid} retired done" in notice_text
+        assert "reply text staged undeliverable" in notice_text
+        assert "no gate owns schedule events" in notice_text
+        assert "gate:<name>" in notice_text
+        assert "not delivered" not in notice_text.lower()
+        assert "originating user event" not in notice_text.lower()
         messages_dir = message_store.run_messages_dir(ctx, "Gurio/brr", "task-A")
         [row] = message_store.list_messages(messages_dir)
         assert row["status"] == message_store.UNDELIVERABLE
         assert row["status"]
+
+    def test_own_event_notice_may_not_claim_a_retire_that_never_happens(
+        self, tmp_path, monkeypatch,
+    ):
+        """The retire clause is only true on the branch that retires.
+
+        ``target_source`` falls back to the *run's own* source when there is no
+        cross target, so a plain outbox message from a gate-less run (schedule —
+        every self-woken run) lands in the same ``not deliverable`` branch. The
+        retire, however, is guarded by ``cross and target_event is not None``,
+        which is False there. A notice that asserts the retire unconditionally
+        therefore tells a resident its waking event is handled while it is still
+        pending — an optimistic lie, which is the worse direction: the text it
+        replaced claimed nothing about retirement at all.
+
+        The assertion is the honest one: whatever the notice *claims* about the
+        retire has to match what the inbox actually did.
+        """
+        ctx = self._account_ctx(tmp_path)
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        protocol.create_event(inbox, source="schedule", body="tick")
+        eid = protocol.list_pending(inbox)[0]["id"]
+        outbox = brr_dir / "outbox" / eid
+        outbox.mkdir(parents=True)
+        # No frontmatter: an ordinary mid-thought message to the waking thread.
+        (outbox / "note.md").write_text("noted\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id=eid)
+        task = types.SimpleNamespace(id="task-A", source="schedule", meta={})
+
+        daemon._drain_outbox(
+            emit, task, responses, eid, outbox, inbox, account_context=ctx,
+        )
+
+        retired = [e["id"] for e in protocol.list_done(inbox, "schedule")]
+        notices = [
+            " ".join(n["text"].split())
+            for n in daemon._read_outbox_notices(outbox)
+        ]
+        claims_retire = any("retired done" in text for text in notices)
+        assert claims_retire == (eid in retired), (
+            f"notice claims retire={claims_retire} but inbox retired={eid in retired}; "
+            f"notices={notices}"
+        )
 
     def test_no_accepted_path_leaves_an_absent_delivery_status(
         self, tmp_path, monkeypatch,
