@@ -17,12 +17,30 @@ import httpx
 _API = "https://api.telegram.org/bot{token}/{method}"
 _FILE_API = "https://api.telegram.org/file/bot{token}/{file_path}"
 _START_RE = re.compile(r"^/start(?:@\w+)?\s+(\S+)")
+# Telegram bot credentials have a numeric bot id, a colon, and a long
+# URL-safe secret. Match the URL structure rather than one configured value:
+# failures can carry a rotated credential, another account's credential, or
+# a structurally valid test fixture.
+_BOT_TOKEN_IN_URL_RE = re.compile(r"(?<=/bot)\d+:[A-Za-z0-9_-]{30,}")
 
 # Telegram rejects messages over 4096 chars with HTTP 400; stay under
 # it with margin and split long bodies across several messages rather
 # than letting the send fail (the daemon would otherwise retry forever).
 _MAX_LEN = 4000
 _MAX_CHUNKS = 12
+
+
+def redact_secrets(text: str) -> str:
+    """Remove Telegram bot credentials from text while keeping its diagnosis."""
+    return _BOT_TOKEN_IN_URL_RE.sub("<redacted>", text)
+
+
+def _redact_http_error(exc: httpx.HTTPError) -> None:
+    """Sanitize an HTTPX error in place so its concrete error class survives."""
+    exc.args = (redact_secrets(str(exc)),)
+    request = getattr(exc, "_request", None)
+    if request is not None:
+        request.url = httpx.URL(redact_secrets(str(request.url)))
 
 
 @dataclass
@@ -172,11 +190,15 @@ def resolve_file(token: str, file_id: str, *, timeout: float = 30.0) -> dict:
     API error) so the proxy endpoint can answer with an honest upstream
     error instead of fabricating bytes.
     """
-    resp = httpx.post(
-        _API.format(token=token, method="getFile"),
-        json={"file_id": file_id},
-        timeout=timeout,
-    )
+    try:
+        resp = httpx.post(
+            _API.format(token=token, method="getFile"),
+            json={"file_id": file_id},
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
     payload = {}
     try:
         payload = resp.json() if resp.content else {}
@@ -184,7 +206,9 @@ def resolve_file(token: str, file_id: str, *, timeout: float = 30.0) -> dict:
         pass
     result = payload.get("result") if isinstance(payload, dict) else None
     if resp.status_code != 200 or not isinstance(result, dict) or not result.get("file_path"):
-        detail = str((payload or {}).get("description") or f"HTTP {resp.status_code}")
+        detail = redact_secrets(
+            str((payload or {}).get("description") or f"HTTP {resp.status_code}")
+        )
         raise RuntimeError(f"telegram getFile failed: {detail}")
     return result
 
@@ -216,7 +240,10 @@ def fetch_file_bytes(
                     raise FileTooLarge(f"file exceeds {max_bytes} bytes")
                 chunks.append(chunk)
     except httpx.HTTPError as exc:
-        raise RuntimeError(f"telegram file fetch failed: {exc}") from exc
+        _redact_http_error(exc)
+        raise RuntimeError(
+            f"telegram file fetch failed: {exc}"
+        ) from exc
     return b"".join(chunks)
 
 
@@ -287,19 +314,23 @@ def send_message(
     timeout: float = 30.0,
 ) -> None:
     # Reply threading only on the first part; the rest follow it.
-    for i, part in enumerate(split_message(text)):
-        params: dict = {"chat_id": chat_id, "text": part or " "}
-        if topic_id:
-            params["message_thread_id"] = topic_id
-        if i == 0 and reply_to_message_id:
-            params["reply_to_message_id"] = reply_to_message_id
-            params["allow_sending_without_reply"] = True
-        resp = httpx.post(
-            _API.format(token=token, method="sendMessage"),
-            json=params,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
+    try:
+        for i, part in enumerate(split_message(text)):
+            params: dict = {"chat_id": chat_id, "text": part or " "}
+            if topic_id:
+                params["message_thread_id"] = topic_id
+            if i == 0 and reply_to_message_id:
+                params["reply_to_message_id"] = reply_to_message_id
+                params["allow_sending_without_reply"] = True
+            resp = httpx.post(
+                _API.format(token=token, method="sendMessage"),
+                json=params,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
 
 
 def set_webhook(
@@ -310,12 +341,16 @@ def set_webhook(
     timeout: float = 30.0,
 ) -> None:
     """Register the hosted Telegram webhook for this bot token."""
-    resp = httpx.post(
-        _API.format(token=token, method="setWebhook"),
-        json={"url": url, "secret_token": secret_token},
-        timeout=timeout,
-    )
-    resp.raise_for_status()
+    try:
+        resp = httpx.post(
+            _API.format(token=token, method="setWebhook"),
+            json={"url": url, "secret_token": secret_token},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
 
 
 class CardGone(RuntimeError):
@@ -349,10 +384,14 @@ def send_card(
     if reply_to_message_id:
         params["reply_to_message_id"] = reply_to_message_id
         params["allow_sending_without_reply"] = True
-    resp = httpx.post(
-        _API.format(token=token, method="sendMessage"), json=params, timeout=timeout
-    )
-    resp.raise_for_status()
+    try:
+        resp = httpx.post(
+            _API.format(token=token, method="sendMessage"), json=params, timeout=timeout
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
     return ((resp.json() or {}).get("result") or {}).get("message_id")
 
 
@@ -376,15 +415,26 @@ def edit_card(
         "text": text or " ",
         "parse_mode": "HTML",
     }
-    resp = httpx.post(
-        _API.format(token=token, method="editMessageText"), json=params, timeout=timeout
-    )
+    try:
+        resp = httpx.post(
+            _API.format(token=token, method="editMessageText"),
+            json=params,
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
     if resp.status_code == 400:
         try:
             desc = str((resp.json() or {}).get("description", ""))
         except ValueError:
             desc = resp.text
+        desc = redact_secrets(desc)
         if "not modified" in desc.lower():
             return
         raise CardGone(desc or "card not editable")
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        _redact_http_error(exc)
+        raise
