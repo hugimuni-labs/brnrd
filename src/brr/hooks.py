@@ -62,6 +62,19 @@ _FLUSH_ACK_TIMEOUT_SECONDS = 5.0
 # premature stop was already blocked once (so the nudge fires once, not in
 # a loop). Daemon-independent; the hook owns this file.
 HOOK_STATE_NAME = ".hook-state.json"
+# The boundary transcript: one JSON line per hook fire, appended beside the
+# wake's own `prompt.md` in the run directory. The wake is captured and the
+# boundaries were not — but they are the *same channel*: a run's context is
+# the boot prompt plus every injection the hooks made after it, and reading
+# only the first half gives a false picture of what the runner actually saw.
+# Written from the run directory the daemon already names (`BRR_BOOT_SCORE`'s
+# parent), so no new env var and no daemon restart are needed to arm it.
+BOUNDARIES_NAME = "boundaries.jsonl"
+# A bound, not a budget: the transcript is diagnostic, and a runaway run must
+# not be able to fill a disk with its own boundaries. Past the cap the file
+# stops growing and says so on its last line, because a transcript that
+# silently stops is indistinguishable from a run that went quiet.
+_BOUNDARIES_MAX_BYTES = 4_000_000
 # The gate-less routing fact (#728) is true for the whole life of a gate-less
 # run and can never be cleared, so it is said once and then remembered here —
 # the one line in the closeout briefing that is a constant rather than an
@@ -198,6 +211,21 @@ class HookContext:
     @property
     def state_path(self) -> Path | None:
         return self.outbox_dir / HOOK_STATE_NAME if self.outbox_dir else None
+
+    @property
+    def run_dir(self) -> Path | None:
+        """The daemon's per-run directory — where `prompt.md` already lives.
+
+        Derived from ``BRR_BOOT_SCORE`` rather than taking an env var of its
+        own: the daemon writes ``<brr>/runs/<run-id>/boot-score.json`` and
+        arms that path already, so the wake capture and the boundary
+        transcript land in one directory without a daemon change. Absent
+        (an older daemon, an ad-hoc hook run) ⇒ nothing is recorded, the same
+        "unassertable stays silent" doctrine the other optional handles keep.
+        """
+        if self.boot_score_path is None:
+            return None
+        return self.boot_score_path.parent
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -2535,7 +2563,77 @@ def run_hook(
         return {}, 0
     ctx = HookContext(env)
     neutral = compute_neutral(phase, ctx, _safe_json(stdin_text))
+    # Record the *neutral* result, not the rendered native JSON: the neutral
+    # shape is the one thing every Shell flavour shares, so a transcript
+    # written from here reads the same whether the run was claude or codex.
+    record_boundary(ctx, phase, neutral)
     return render_native(ctx.flavour, phase, neutral)
+
+
+def record_boundary(
+    ctx: HookContext, phase: str, neutral: dict[str, Any]
+) -> Path | None:
+    """Append this boundary to the run's transcript. Best-effort, never raises.
+
+    What a run *is*, as context, is the wake plus every hook injection after
+    it. The daemon has always captured the first half (`prompt.md`) and never
+    the second, so the only readable record of a run's environment stopped at
+    t=0 — and the boundaries are where the environment actually talks: the
+    portal delta, the pending-event nag, a Stop block and its reason. Anyone
+    reasoning about what a runner saw needed both halves and could only get
+    one.
+
+    Deliberately unconditional rather than dev-flagged. The wake capture is
+    unconditional; making its other half opt-in would mean the runs worth
+    inspecting are exactly the ones nobody armed it for. It is bounded
+    instead (:data:`_BOUNDARIES_MAX_BYTES`) — and the bound announces itself,
+    because a transcript that just stops reads as a run that went quiet.
+    """
+    directory = ctx.run_dir
+    if directory is None or not directory.is_dir():
+        return None
+    path = directory / BOUNDARIES_NAME
+    try:
+        if path.exists() and path.stat().st_size >= _BOUNDARIES_MAX_BYTES:
+            return None
+    except OSError:
+        return None
+    record = {
+        "at": _utc_now_iso(),
+        "phase": phase,
+        "inject": neutral.get("inject"),
+        "block": bool(neutral.get("block")),
+        "block_reason": neutral.get("block_reason"),
+    }
+    try:
+        line = json.dumps(record, sort_keys=True)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            if handle.tell() >= _BOUNDARIES_MAX_BYTES:
+                handle.write(
+                    json.dumps(
+                        {
+                            "at": _utc_now_iso(),
+                            "phase": phase,
+                            "truncated": True,
+                            "inject": (
+                                f"boundary transcript capped at "
+                                f"{_BOUNDARIES_MAX_BYTES} bytes — later "
+                                f"boundaries in this run were not recorded"
+                            ),
+                            "block": False,
+                            "block_reason": None,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+    except OSError:
+        return None
+    return path
 
 
 def _safe_json(text: str) -> dict[str, Any]:
