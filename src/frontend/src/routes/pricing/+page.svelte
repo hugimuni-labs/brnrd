@@ -3,6 +3,9 @@
 	import { resolve } from '$app/paths';
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { GITHUB_REPO, fetchPublicStats, type PublicStats } from '$lib/publicStats';
+	// Ex-tax figures on this page; a French buyer pays $6.00 for the $5 tier.
+	// Why the line exists and what is still open: $lib/pricing.ts.
+	import { TAX_NOTE } from '$lib/pricing';
 
 	// Pricing (#509): one click off the landing, never on it. Numbers are
 	// the accepted pricing decision (decision-pricing-shape, 2026-07):
@@ -101,12 +104,14 @@
 						· {seatsLeft} left
 					{/if}
 				</p>
+				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 			{:else}
 				<p class="eyebrow">subscriber</p>
 				<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
 					$7<span class="text-sm text-ink-quiet">/mo</span>
 				</p>
 				<p class="font-mono text-[11px] text-ink-quiet">or $70/yr</p>
+				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 			{/if}
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">
 				<li>everything in hosted free</li>
