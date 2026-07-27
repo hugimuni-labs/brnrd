@@ -103,6 +103,21 @@ only deliberately.
   usually reconstruct the past already — a measured baseline beats a counter
   that starts at zero today.
 
+**Fixing the classifier is not fixing the renderer.** When you teach
+something to distinguish cases, find who *renders* its output before you call
+it done — a repair whose result is consumed as a string by something that
+also has an opinion stops one layer below the lie. Ask: does the reader take
+the class, or re-derive it from the sentence? A reader that re-derives is a
+second copy of the classifier, which is usually the bug you just fixed.
+The twin is sharper: a **default** label is worse than a missing one. Absent
+information, say unknown — asserting a specific, actionable, wrong thing is
+how a guard sends people looking for a problem that is not there.
+
+**A prose guard that pins line wrapping fires on reflow.** Contract text
+gets rewrapped; a test asserting a literal newline reads that as a deleted
+rule. Compare whitespace-insensitively for sentences, exactly for anything a
+parser reads.
+
 ## Reading economically
 
 The weave disciplines output; this is its input mirror. Size the question
@@ -224,6 +239,23 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - **After any `spawn:` / `respawn:` / `event:`-addressed write → read
   `notices`**: a refused file is deleted exactly like an accepted one, so
   the drop leaves no trace where you were looking.
+- **A credential in the environment answers for every repo on the machine.**
+  A host-wide git credential helper reads the same env var the run's scoped
+  token lives in, so a token minted for *this* project silently answers for
+  unrelated repos — and a forge masks a repo the token may not see as
+  **404, not 403**, which reads as *deleted*. Two wakes can conclude a live
+  repo was destroyed. Handle, per repo: reset the inherited helper list and
+  pin one that cannot be re-narrowed. Never route around it with the
+  operator's own credential; that is the identity leak above, in a coat.
+- **Two identical refusals can have opposite fixes.** *"X is disabled for
+  this repository"* is a setting nobody enabled; *"resource not accessible"*
+  is a grant you do not hold. Same status code, different owner. And an
+  **empty collection is not a closed door** — a feature can be on with
+  nothing in it, and reading the emptiness as a refusal keeps an item on
+  someone's list for weeks.
+- **A permission granted is not a permission held.** A scoped token carries
+  the grants it was *minted* with; widening the grant changes nothing until
+  the next mint. Re-probe after the refresh, not after the click.
 
 ## Keep this place useful
 
