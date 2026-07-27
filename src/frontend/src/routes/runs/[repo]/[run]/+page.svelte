@@ -91,7 +91,12 @@
 	{#if ledgerRows?.length === 0 && ledgerWithheld}
 		<div class="mx-auto max-w-xl px-6 pt-6 text-sm text-amber-200">paused — no publish scope</div>
 	{/if}
-	{#if data.files.length > 0}
+	<!-- Render the node unless the consent marker has *replaced* it. Guarding on
+	     `files.length > 0` instead loses the case this page exists for: a live
+	     run whose corpus has not been mirrored yet has zero files and no
+	     `withheld`, and RunNode already knows to show the card for it ("a live
+	     node is not an empty one"). That combination rendered a blank page. -->
+	{#if !(data.files.length === 0 && data.withheld)}
 		<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
 	{/if}
 {/if}
