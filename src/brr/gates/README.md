@@ -47,6 +47,29 @@ resident's `Read` tool opens an inbound image the same way regardless of
 which channel it arrived on. `protocol.cleanup` removes the directory
 alongside the event and response files.
 
+Interactive menus converge on a second structured event shape. The daemon
+validates the resident's outbox `menu.json`; a gate renders that stored
+generation and turns a control tap into:
+
+```
+---
+id: evt-<timestamp>-<rand>
+source: telegram
+status: pending
+kind: menu_answer
+conversation_key: telegram:<chat>:<topic>
+menu_id: <generation>
+option: <stable-handle>
+menu_status: <live|stale|expired|unknown>
+created: <ISO timestamp>
+---
+{"menu_id": "...", "option": "...", "status": "..."}
+```
+
+Use `menus.create_answer_event` rather than reconstructing this at a gate.
+Stale, expired, and unknown generations deliberately still create events:
+the resident answers the tap honestly instead of the transport dropping it.
+
 ### Output: `.brr/responses/`
 
 The daemon captures the runner's final stdout and writes a response file:

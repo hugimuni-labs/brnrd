@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import forge_state, protocol
+from . import forge_state, menus, protocol
 from .envs import RunContext
 from .run import Run, run_manifest_path
 
@@ -319,6 +319,15 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
     forge = _render_forge_state(snapshot.get("forge"))
     if forge:
         lines.extend(["", forge])
+    live_menu = snapshot.get("live_menu")
+    if isinstance(live_menu, dict):
+        rendered = menus.render_numbered(live_menu)
+        lines.extend([
+            "",
+            "Live menu — same validated generation as the gate; free text "
+            "always overrides it:",
+            rendered or "(no standing options)",
+        ])
     recent = snapshot.get("recent_turns")
     if isinstance(recent, list) and recent:
         rendered = _render_recent_conversation(recent)

@@ -70,6 +70,7 @@ from . import gitops
 from . import hooks as hooks_mod
 from . import knowledge
 from . import message_store
+from . import menus
 from . import portals
 from . import presence
 from . import prompts
@@ -183,6 +184,7 @@ _QUOTA_STRETCH_FACTOR_DEFAULT = 3.0
 # is spelled, now that ``init`` plays driver for its own single wake (#507).
 _LIVE_INBOX_NAME = portals.LIVE_INBOX_NAME
 _LIVE_PORTAL_STATE_NAME = portals.LIVE_PORTAL_STATE_NAME
+_LIVE_MENU_NAME = portals.LIVE_MENU_NAME
 # Agent-owned run body: the resident writes this control dotfile
 # in its outbox; the daemon drains it on each heartbeat into a
 # ``card_composed`` packet and the gate re-renders the live card. See
@@ -2939,6 +2941,12 @@ def _run_worker(
         fluency = str(cfg.get("fluency") or "").strip()
         if fluency:
             communication_snapshot["fluency"] = fluency
+        # The next boundary reads the same validated generation gates render.
+        # Expired menus are filtered here; ingestion remains authoritative for
+        # taps on controls a transport may still display from an older message.
+        live_menu = menus.load_live_menu(brr_dir, conv_key)
+        if live_menu is not None:
+            communication_snapshot["live_menu"] = live_menu
     recent_conversation = (
         communication_snapshot.get("recent_turns", [])
         if communication_snapshot else []
@@ -3006,6 +3014,7 @@ def _run_worker(
     hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
     keepalive_path = outbox_dir / ".keepalive"
     card_path = outbox_dir / _CARD_CONTROL_NAME
+    menu_path = outbox_dir / _LIVE_MENU_NAME
     # Runner boundary back-channel flush signal: a stream driver or native
     # hook touches this dotfile to ask the daemon to drain now. Same host dir
     # the runner writes BRR_OUTBOX_DIR into (bind-mounted for container envs),
@@ -3014,6 +3023,7 @@ def _run_worker(
     # design doc).
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, object] = {}
+    menu_state: dict[str, object] = {}
     codex_events_path = outbox_dir / ".codex-events.jsonl"
     run_started_monotonic = time.monotonic()
 
@@ -3488,6 +3498,9 @@ def _run_worker(
                 account_context=account_context,
                 repo_label=task.meta.get("repo_label"),
             )
+            _drain_live_menu(
+                emit, task, menu_path, menu_state, outbox_dir=outbox_dir,
+            )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             # Advance the node's frame out of "created" the first time we can
             # prove the agent is alive. Once, not per heartbeat: the frame is a
@@ -3572,6 +3585,9 @@ def _run_worker(
                 emit, task, eid, card_path, card_state,
                 account_context=account_context,
                 repo_label=task.meta.get("repo_label"),
+            )
+            _drain_live_menu(
+                emit, task, menu_path, menu_state, outbox_dir=outbox_dir,
             )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
@@ -3667,6 +3683,9 @@ def _run_worker(
             emit, task, eid, card_path, card_state,
             account_context=account_context,
             repo_label=task.meta.get("repo_label"),
+        )
+        _drain_live_menu(
+            emit, task, menu_path, menu_state, outbox_dir=outbox_dir,
         )
         _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
         _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
@@ -4425,7 +4444,7 @@ def _iso_utc(epoch: float | None) -> str | None:
 def _outbox_message_files(outbox_dir: Path | None) -> list[str]:
     if not outbox_dir or not outbox_dir.exists():
         return []
-    control_names = {_LIVE_INBOX_NAME, _LIVE_PORTAL_STATE_NAME}
+    control_names = portals.CONTROL_NAMES
     try:
         entries = sorted(
             (p for p in outbox_dir.iterdir() if p.is_file()),
@@ -5877,7 +5896,7 @@ def _drain_outbox(
         if (
             portals.is_staging_name(fpath.name)
             or fpath.name.startswith(".")
-            or fpath.name in {_LIVE_INBOX_NAME, _LIVE_PORTAL_STATE_NAME}
+            or fpath.name in portals.CONTROL_NAMES
         ):
             continue
         try:
@@ -6566,6 +6585,82 @@ def _drain_agent_card(
             )
         except Exception:  # noqa: BLE001 - a card-control bug must not break a run
             pass
+    return True
+
+
+def _drain_live_menu(
+    emit: _WorkerEmit,
+    task: Run,
+    menu_path: Path | None,
+    state: dict[str, object],
+    *,
+    outbox_dir: Path,
+) -> bool:
+    """Validate and promote the resident's one composed ``menu.json``.
+
+    Like ``.card``, the menu is observed at heartbeat and synchronous runner
+    boundaries. Content digests make an unchanged file a no-op and make one
+    malformed generation produce one notice rather than a notice per tick.
+    The single-flight owner is the only v1 writer: worker-stack children
+    report prose to their parent and do not get a second menu transport.
+    """
+    if menu_path is None or not menu_path.is_file():
+        return False
+    try:
+        raw = menu_path.read_bytes()
+    except OSError:
+        return False
+    digest = hashlib.sha256(raw).hexdigest()
+    if state.get("digest") == digest:
+        return False
+    state["digest"] = digest
+
+    if task.meta.get("worker"):
+        _record_outbox_notice(
+            outbox_dir,
+            f"{_LIVE_MENU_NAME} ignored: worker-stack children may propose "
+            "items in their report, but the single-flight owner composes the "
+            "live menu in v1",
+        )
+        return False
+
+    thread = str(task.conversation_key or emit.conversation_key or "").strip()
+    if not thread:
+        _record_outbox_notice(
+            outbox_dir,
+            f"{_LIVE_MENU_NAME} ignored: this run has no conversation thread",
+        )
+        return False
+    try:
+        menu, _read_digest = menus.read_outbox_menu(
+            outbox_dir,
+            expected_thread=thread,
+        )
+        stored, superseded = menus.promote_menu(
+            emit.brr_dir,
+            menu,
+            run_id=task.id,
+        )
+    except menus.MenuValidationError as exc:
+        _record_outbox_notice(
+            outbox_dir,
+            f"malformed {_LIVE_MENU_NAME} ignored: {exc}",
+        )
+        return False
+    except OSError as exc:
+        _record_outbox_notice(
+            outbox_dir,
+            f"{_LIVE_MENU_NAME} could not be promoted: {exc}",
+        )
+        return False
+
+    emit(
+        "menu_composed",
+        run_id=task.id,
+        event_id=task.event_id or emit.event_id,
+        menu=stored,
+        superseded_menu_id=superseded,
+    )
     return True
 
 
