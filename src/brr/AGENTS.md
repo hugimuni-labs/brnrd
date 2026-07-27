@@ -762,14 +762,10 @@ Before marking a task complete:
 ## Constraints
 
 - `.brr/` is a runtime directory (gitignored) — do not commit its contents.
-- `src/brr/AGENTS.md` is brnrd's playbook *and* the template adopters receive
-  via `brnrd init`. Universal sections (How to read this playbook, Stewardship,
-  Workflow, Knowledge base, Artifacts, Operating rules, Self-review,
-  Guardrails) apply to every brnrd-managed project; project-specific sections
-  (Project, Build and run, Code guidelines, Constraints) are rewritten per
-  repo by the setup agent. The Workflow → *When the brnrd daemon runs you*
-  subsection is universal too — adopters keep it because their playbook may
-  be read by a brnrd daemon, even if they themselves run brnrd only by hand.
+- `src/brr/AGENTS.md` is brnrd's own playbook and nothing else — adopters
+  receive `src/brr/templates/constitution.md` via `brnrd init` (the top of
+  this file records the split). An edit here reaches every AI tool working
+  *this* repo; an edit meant for adopters belongs in the template.
 - `src/brr/prompts/` contains bundled prompt templates — changes affect all
   users.
 - Gate implementations (`src/brr/gates/`) follow the file protocol spec in
