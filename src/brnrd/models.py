@@ -12,6 +12,17 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _publish_store(lane: str, purge: str) -> dict[str, str]:
+    """Mark a persisted mirror field with its canonical publish lane.
+
+    ``publish_scope`` discovers these markers from SQLAlchemy's model
+    metadata.  Keeping the purge coordinate on the storage field makes a new
+    lane incomplete until its stored copy also says how withdrawal removes
+    it.
+    """
+    return {"publish_lane": lane, "publish_purge": purge}
+
+
 class Account(Base):
     __tablename__ = "accounts"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -28,7 +39,11 @@ class Account(Base):
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
     # The discovered user/resident-authored work surface. The JSON is a read
     # replica of home/surface, not a second authoring store.
-    surface_json: Mapped[str] = mapped_column(Text, default="[]")
+    surface_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("corpus", "slice"),
+    )
     surface_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Billing (#53, kb design-billing.md). ``tier`` flips only from Stripe
     # webhook state transitions; the Stripe subscription is source of truth.
@@ -146,16 +161,28 @@ class Daemon(Base):
     # Runner-quota snapshot (5h/weekly windows per local Shell), mirrored from
     # this daemon's own `.brr/` cache via `PUT /v1/daemons/quota` — the
     # dashboard-side half of #237; see kb/design-dashboard-live-surface.md.
-    quota_json: Mapped[str] = mapped_column(Text, default="[]")
+    quota_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("quota", "repo"),
+    )
     quota_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Per-ingestion-path liveness (#360), piggybacked on the quota publish.
     # Each row carries the source poll timestamp so a quiet gate remains
     # distinguishable from a dead one.
-    gate_health_json: Mapped[str] = mapped_column(Text, default="[]")
+    gate_health_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("quota", "repo"),
+    )
     # Live/coexisting-runs snapshot (#258), mirrored from the local presence
     # registry via `PUT /v1/daemons/live-runs` — see
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".
-    live_runs_json: Mapped[str] = mapped_column(Text, default="[]")
+    live_runs_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("live_runs", "repo_label"),
+    )
     live_runs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked on
     # the same live-runs publish tick — the loom-envelope Phase 1 "limits"
@@ -167,28 +194,62 @@ class Daemon(Base):
     # pitch as JSON), piggybacked on the same live-runs publish tick. What
     # the board wears when no run is live; per-run resident moods ride
     # inside live_runs_json entries instead.
-    daemon_mood_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    daemon_mood_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        info=_publish_store("live_runs", "repo"),
+    )
     # PR-review queue snapshot (#259), mirrored from `gh pr list` via
     # `PUT /v1/daemons/pr-review-queue`. Calendar age, not runner quota, is
     # the meaningful clock for this lane.
-    pr_review_queue_json: Mapped[str] = mapped_column(Text, default="[]")
+    pr_review_queue_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("pr_review_queue", "repo_label"),
+    )
     pr_review_queue_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Closed-run cost ledger snapshot (#271), mirrored from local
     # `.brr/run-ledger.jsonl` rows via `PUT /v1/daemons/run-ledger`.
-    run_ledger_json: Mapped[str] = mapped_column(Text, default="[]")
+    run_ledger_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("run_ledger", "repo_label"),
+    )
     run_ledger_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Runner-catalog snapshot (#328 spool rack): the locally-discovered
     # Shell+Core profiles this daemon can dispatch, plus its current default
     # pin, mirrored via `PUT /v1/daemons/runners`. Discovery is daemon-owned
     # and network-free (`src/brr/runner.py::available_runner_catalog`).
-    runners_json: Mapped[str] = mapped_column(Text, default="[]")
-    runners_default: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runners_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("runners", "repo"),
+    )
+    runners_default: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        info=_publish_store("runners", "repo"),
+    )
     runners_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    environment_default: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    environments_json: Mapped[str] = mapped_column(Text, default="[]")
+    environment_default: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        info=_publish_store("runners", "repo"),
+    )
+    environments_json: Mapped[str] = mapped_column(
+        Text,
+        default="[]",
+        info=_publish_store("runners", "repo"),
+    )
 
 
 class ActivityRecord(Base):
+    # Unlike the JSON snapshots above, activity is a row store.  The same
+    # model-level marker lets publish_scope derive its purge coverage from the
+    # canonical lane vocabulary without keeping a second table list.
+    __publish_lane__ = "activity"
+    __publish_purge__ = "repo"
+
     __tablename__ = "activity_records"
     __table_args__ = (
         UniqueConstraint(

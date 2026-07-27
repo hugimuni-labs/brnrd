@@ -10,6 +10,8 @@ captured at connect on brnrd.dev (`brnrd.publish_scope`, wired into
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -21,7 +23,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from brnrd import create_app, publish_scope  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Repo  # noqa: E402
+from brnrd.models import Account, ActivityRecord, Daemon, Repo, Token  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 from brr.gates import cloud  # noqa: E402
@@ -220,6 +222,174 @@ def test_publish_layers_settings_endpoint_is_account_scoped():
     _login(client, github_id="2", login="intruder")
     r = client.post(f"/v1/repos/{repo_id}/publish-layers", json={"publish_layers": "corpus"})
     assert r.status_code == 404
+
+
+def test_narrowing_purges_only_removed_scope_and_keeps_the_other_repo():
+    """#734: withdrawal is an eraser, and its key is the data's subject.
+
+    Both repos are connected through the real consent caller.  The stored
+    mirrors deliberately mix their rows inside each account-wide daemon
+    snapshot: deleting a whole daemon snapshot would make the victim vanish
+    but would also destroy the positive control this test protects.
+    """
+    client = _client()
+    _login(client)
+    everything = ",".join(cloud._PUBLISH_TICK_ORDER)
+    for name in ("Gurio/victim", "Gurio/survivor"):
+        result = client.post(
+            "/v1/repos/connect",
+            json={"repo_full_name": name, "publish_layers": everything},
+        )
+        assert result.status_code == 200, result.text
+
+    with client.app.state.SessionLocal() as db:
+        victim = db.query(Repo).filter(Repo.repo_full_name == "Gurio/victim").one()
+        survivor = db.query(Repo).filter(Repo.repo_full_name == "Gurio/survivor").one()
+        account = db.get(Account, victim.account_id)
+        session_token = db.query(Token).filter(Token.kind == Token.KIND_SESSION).one()
+
+        db.add_all(
+            [
+                ActivityRecord(
+                    id="act-victim",
+                    repo_id=victim.id,
+                    token_id=session_token.id,
+                    record_id="run:victim",
+                ),
+                ActivityRecord(
+                    id="act-survivor",
+                    repo_id=survivor.id,
+                    token_id=session_token.id,
+                    record_id="run:survivor",
+                ),
+            ]
+        )
+        victim_token = Token(
+            id="tok-victim-daemon",
+            account_id=victim.account_id,
+            repo_id=victim.id,
+            kind=Token.KIND_DAEMON,
+            token_hash="hash-victim-daemon",
+        )
+        survivor_token = Token(
+            id="tok-survivor-daemon",
+            account_id=victim.account_id,
+            repo_id=survivor.id,
+            kind=Token.KIND_DAEMON,
+            token_hash="hash-survivor-daemon",
+        )
+        db.add_all([victim_token, survivor_token])
+
+        mixed = [
+            {"id": "victim-row", "repo_label": "gurio/VICTIM"},
+            {"id": "survivor-row", "repo_label": "Gurio/survivor"},
+            # The stored format cannot attribute this row.  Withdrawal keeps
+            # it rather than guessing and erasing a sibling's content.
+            {"id": "unattributed-row"},
+        ]
+        victim_daemon = Daemon(
+            id="daemon-victim",
+            account_id=victim.account_id,
+            repo_id=victim.id,
+            token_id=victim_token.id,
+            daemon_name="victim",
+            quota_json='[{"shell":"victim"}]',
+            gate_health_json='[{"gate":"victim"}]',
+            live_runs_json=json.dumps(mixed),
+            daemon_mood_json='{"name":"victim"}',
+            pr_review_queue_json=json.dumps(mixed),
+            run_ledger_json=json.dumps(mixed),
+            runners_json='[{"name":"victim"}]',
+            runners_default="victim",
+            environment_default="worktree",
+            environments_json='[{"name":"worktree"}]',
+        )
+        survivor_daemon = Daemon(
+            id="daemon-survivor",
+            account_id=victim.account_id,
+            repo_id=survivor.id,
+            token_id=survivor_token.id,
+            daemon_name="survivor",
+            quota_json='[{"shell":"survivor"}]',
+            gate_health_json='[{"gate":"survivor"}]',
+            live_runs_json=json.dumps(mixed),
+            daemon_mood_json='{"name":"survivor"}',
+            pr_review_queue_json=json.dumps(mixed),
+            run_ledger_json=json.dumps(mixed),
+            runners_json='[{"name":"survivor"}]',
+            runners_default="survivor",
+            environment_default="host",
+            environments_json='[{"name":"host"}]',
+        )
+        db.add_all([victim_daemon, survivor_daemon])
+        account.surface_json = json.dumps(
+            [
+                {"path": "surface/plan.md", "layer": "authored"},
+                {"path": "knowledge/index.md", "layer": "knowledge"},
+                {"path": "runs/run-1/body.md", "layer": "runs"},
+            ]
+        )
+        account_id = victim.account_id
+        victim_id = victim.id
+        survivor_id = survivor.id
+        db.commit()
+
+    # Keep quota and one corpus slice; withdraw every other lane/slice.
+    response = client.post(
+        f"/v1/repos/{victim_id}/publish-layers",
+        json={"publish_layers": "quota,knowledge"},
+    )
+    assert response.status_code == 200, response.text
+
+    with client.app.state.SessionLocal() as db:
+        assert db.get(Repo, victim_id).publish_layers == "quota,knowledge"
+        assert {
+            row.repo_id for row in db.query(ActivityRecord).order_by(ActivityRecord.id)
+        } == {survivor_id}
+
+        files = json.loads(db.get(Account, account_id).surface_json)
+        assert [(item["path"], item["layer"]) for item in files] == [
+            ("knowledge/index.md", "knowledge")
+        ]
+
+        victim_daemon = db.get(Daemon, "daemon-victim")
+        survivor_daemon = db.get(Daemon, "daemon-survivor")
+        # Quota was retained, so widening/unchanged scope is a no-op.
+        assert json.loads(victim_daemon.quota_json) == [{"shell": "victim"}]
+        assert json.loads(victim_daemon.gate_health_json) == [{"gate": "victim"}]
+        # Repo-keyed content removed with the victim's lane.
+        assert json.loads(victim_daemon.runners_json) == []
+        assert victim_daemon.runners_default is None
+        assert victim_daemon.environment_default is None
+        assert json.loads(victim_daemon.environments_json) == []
+        assert victim_daemon.daemon_mood_json is None
+        # The untouched repo's repo-keyed snapshots survive.
+        assert json.loads(survivor_daemon.runners_json) == [{"name": "survivor"}]
+        assert survivor_daemon.runners_default == "survivor"
+        assert survivor_daemon.daemon_mood_json == '{"name":"survivor"}'
+
+        for daemon in (victim_daemon, survivor_daemon):
+            for field in (
+                "live_runs_json",
+                "pr_review_queue_json",
+                "run_ledger_json",
+            ):
+                assert [row["id"] for row in json.loads(getattr(daemon, field))] == [
+                    "survivor-row",
+                    "unattributed-row",
+                ]
+
+
+def test_publish_purge_coverage_is_derived_from_the_lane_vocabulary(monkeypatch):
+    assert publish_scope.purge_storage_lanes() == frozenset(cloud._PUBLISH_TICK_ORDER)
+
+    monkeypatch.setattr(
+        publish_scope,
+        "LANES",
+        (*publish_scope.LANES, "future_lane"),
+    )
+    with pytest.raises(RuntimeError, match="future_lane"):
+        publish_scope.purge_storage_lanes()
 
 
 # ── server-side enforcement at the publish seam ─────────────────────
