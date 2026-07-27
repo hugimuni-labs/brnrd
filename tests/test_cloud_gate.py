@@ -597,6 +597,66 @@ def test_corpus_publish_is_change_gated(tmp_path, monkeypatch):
     assert puts.count("/v1/daemons/surface") == 2
 
 
+def test_corpus_publish_names_the_all_dropped_consent_shape(tmp_path, monkeypatch, capsys):
+    """A 200 whose accepted list is empty is a withheld mirror, not a mirrored one.
+
+    Found live 2026-07-27: the daemon PUT 2,814 files, the server's consent
+    intersection dropped every one (`corpus_slices_permitted`, unrecorded =
+    OFF), answered 200 — and the lane marked its fingerprint clean while the
+    dashboard read "No corpus mirrored yet". The lane must say so, and must
+    still mark clean (re-PUTting an all-dropped payload every 3 s tick would
+    hammer the same refusal).
+    """
+    import json
+
+    from brr import account
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    headers = brnrd_account_headers(client.app, github_id="124", login="octodrop", email="d@b.com")
+    # Recorded consent with every lane but no corpus slice: the intersection
+    # is empty, so the server drops the whole corpus payload and 200s.
+    pid = client.post(
+        "/v1/accounts/repos",
+        json={
+            "repo_full_name": "Gurio/dropped",
+            "publish_layers": "runners,live_runs,activity,quota,pr_review_queue,run_ledger",
+        },
+        headers=headers,
+    ).json()["repo_id"]
+    token = _handshake(client, headers, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers).status_code == 200
+    cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0})
+    cloud._corpus_publish_hash.pop(str(brr_dir), None)
+
+    puts: list[str] = []
+    routed = _route_to(client)
+
+    def _counting(url, method, path, **kw):
+        if path == "/v1/daemons/surface":
+            puts.append(path)
+        return routed(url, method, path, **kw)
+
+    monkeypatch.setattr(cloud, "_request", _counting)
+
+    ctx = account.resolve_context(brr_dir.parent, create=True)
+    index = account.work_surface_path(ctx) / "index.md"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("# Work surface", encoding="utf-8")
+
+    cloud._publish_corpus(brr_dir, inbox_dir, cloud._load_state(brr_dir))
+    assert puts.count("/v1/daemons/surface") == 1
+    out = capsys.readouterr().out
+    assert "accepted 0 of" in out
+    assert "consent" in out
+
+    # Still change-gated: the refusal is not re-PUT on an unchanged corpus.
+    cloud._publish_corpus(brr_dir, inbox_dir, cloud._load_state(brr_dir))
+    assert puts.count("/v1/daemons/surface") == 1
+
+
 def test_corpus_fingerprint_tolerates_missing_knowledge_root(tmp_path):
     """Best-effort posture: a home with no linked knowledge repo still hashes."""
     digest = cloud._corpus_fingerprint([], tmp_path / "missing-knowledge")
