@@ -6189,11 +6189,24 @@ def _drain_outbox(
                 undeliverable_reason
             ),
         )
+        # The retire below is guarded by ``cross and target_event is not None``;
+        # ``not deliverable`` is *wider* than that, because ``target_source``
+        # falls back to the run's own source when there is no cross target — so
+        # a plain outbox message from any gate-less run (schedule: every
+        # self-woken run) lands here with nothing to retire. One predicate, both
+        # readers, so the notice cannot claim a retire the inbox never made.
+        # Asserting one optimistically is the worse failure: it tells a resident
+        # its waking event is handled while it is still pending.
+        retires_target = not deliverable and cross and target_event is not None
         if not deliverable:
             _record_outbox_notice(
                 outbox_dir,
-                f"event {target} retired done; reply text staged undeliverable — "
-                f"{undeliverable_reason}",
+                (
+                    f"event {target} retired done; reply text staged "
+                    f"undeliverable — {undeliverable_reason}"
+                    if retires_target else
+                    f"reply text staged undeliverable — {undeliverable_reason}"
+                ),
             )
         ppath = (
             protocol.write_partial(
@@ -6202,7 +6215,7 @@ def _drain_outbox(
             if body and deliverable else None
         )
         _retire_outbox_staging(fpath)
-        if cross and target_event is not None and not deliverable:
+        if retires_target:
             # Nothing will deliver this, but the resident *did* answer it:
             # retire the event so the unowned-source inbox stops growing
             # (#454), with the text preserved as an undeliverable record.
