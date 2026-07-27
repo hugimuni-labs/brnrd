@@ -16,6 +16,7 @@
 		splitIntoSections,
 		type SurfaceResponse
 	} from './surface';
+	import WithheldNotice from './WithheldNotice.svelte';
 
 	interface Props {
 		data: SurfaceResponse;
@@ -142,7 +143,11 @@
 			>{/if}
 	</div>
 	{#if data.files.length === 0}
-		<p class="text-sm text-ink-quiet">No corpus mirrored yet.</p>
+		{#if data.withheld}
+			<WithheldNotice withheld={data.withheld} />
+		{:else}
+			<p class="text-sm text-ink-quiet">No corpus mirrored yet.</p>
+		{/if}
 	{:else}
 		<div class="grid gap-3 md:grid-cols-[minmax(11rem,0.28fr)_minmax(0,1fr)]">
 			<!-- Nav tree: height-capped so 260-file lists don't stretch the page.

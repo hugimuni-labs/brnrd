@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import run_stop_requests, wake_requests
+from brnrd import publish_scope, run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
@@ -46,6 +46,20 @@ _FAILED_STATUSES = {"failed", "error", "errored", "cancelled", "canceled"}
 _COMPLETED_STATUSES = {"complete", "completed", "done", "responded", "success", "succeeded"}
 _PARKED_STATUSES = {"parked", "respawn", "respawned"}
 _DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
+
+
+def _withheld_lane(db: Session, account_id: str, lane: str) -> dict[str, Any]:
+    """Optional dashboard payload block for a provably consent-empty lane."""
+    if lane not in publish_scope.lanes_withheld(db, account_id):
+        return {}
+    absent = publish_scope.repos_without_publish_consent(db, account_id)
+    return {
+        "withheld": {
+            "lane": lane,
+            "unrecorded": list(absent.unrecorded),
+            "opted_out": list(absent.opted_out),
+        }
+    }
 
 
 def _duration_label(start: datetime | None, end: datetime | None = None) -> str:
@@ -773,6 +787,7 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
+            **_withheld_lane(db, account.id, "quota"),
         }
     )
 
@@ -794,6 +809,7 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
             "generated_at": datetime.now(timezone.utc).isoformat(),
             **views,
             "wake_request": wake_requests.view(pending) if pending else None,
+            **_withheld_lane(db, account.id, "runners"),
         }
     )
 
@@ -884,6 +900,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "reported_at": view["generated_at"],
             "spawn_max_concurrent": view["spawn_max_concurrent"],
             "daemon_mood": view["daemon_mood"],
+            **_withheld_lane(db, account.id, "live_runs"),
         }
     )
 
@@ -942,6 +959,7 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
             "prs": view["prs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            **_withheld_lane(db, account.id, "pr_review_queue"),
         }
     )
 
@@ -970,6 +988,7 @@ def dashboard_run_ledger_api(
             "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            **_withheld_lane(db, account.id, "run_ledger"),
         }
     )
 
@@ -1013,6 +1032,7 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JS
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "files": files,
             "reported_at": account.surface_updated_at.isoformat() if account.surface_updated_at else None,
+            **_withheld_lane(db, account.id, "corpus"),
         }
     )
 
@@ -1084,6 +1104,7 @@ def dashboard_activity_api(
             "kinds": kinds,
             "statuses": statuses,
             "repos": [{"id": repo.id, "label": repo.repo_full_name} for repo in repos],
+            **_withheld_lane(db, account.id, "activity"),
         }
     )
 
