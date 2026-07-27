@@ -497,7 +497,7 @@ def _document_status(db: Session, account: Account | None, kind: str) -> dict:
         # of them is the text their record points at.
         "sha256": doc.sha256,
         "accept_url": doc.accept_path,
-        "needs_accept": account is not None and row is None,
+        "needs_accept": row is None if account is not None else None,
         "accepted_at": accepted_at.isoformat() if accepted_at is not None else None,
         "accepted_sha256": row.sha256 if row is not None else None,
     }
@@ -509,6 +509,12 @@ def _terms_status(db: Session, account: Account | None) -> dict:
     A map rather than the old flat ``needs_accept``/``terms_version`` pair:
     there are two documents now and a privacy notice plus a mentions légales
     are already named as owed, so "the terms" has stopped being one thing.
+
+    Each document's ``needs_accept`` is meaningful only when
+    ``authenticated`` is true. ``null`` means no account was present on this
+    request, so the question does not apply. The correct consumer predicate
+    is ``authenticated && needs_accept === false`` allows; anything else does
+    not.
     """
     return {
         "authenticated": account is not None,
