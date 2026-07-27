@@ -133,7 +133,14 @@ def _purge_targets() -> list[tuple[str, str, type, str | None]]:
 
 
 def purge_storage_lanes() -> frozenset[str]:
-    """Canonical publish lanes for which persisted purge targets exist."""
+    """Canonical publish lanes for which persisted purge targets exist.
+
+    Raises when discovery and the canonical vocabulary disagree, so a new
+    publisher cannot ship without a withdrawal target. **This is a
+    development-time assertion and it is deliberately not called on the
+    withdrawal path** — see ``purge_removed_scope``. A user must never be
+    unable to withdraw consent because *we* forgot to mark a store.
+    """
     targets = _purge_targets()
     covered = frozenset(lane for lane, _purge, _model, _field in targets)
     canonical = frozenset(LANES)
@@ -157,19 +164,27 @@ def _transition_scopes(value: str | None) -> tuple[frozenset[str], frozenset[str
     return _repo_scopes(value)
 
 
-def _json_list(raw: Any) -> list[Any]:
+_UNPARSEABLE = object()
+
+
+def _json_list(raw: Any) -> list[Any] | object:
+    """Stored mirror content as a list, or ``_UNPARSEABLE``.
+
+    **Never raises.** An earlier shape answered malformed stored JSON with a
+    409 *"publish scope was not changed"* — which makes our own corrupt render
+    cache a reason the user cannot withdraw their consent, and that is the one
+    direction this whole module exists to forbid (GDPR Art 7(3): withdrawal at
+    least as easy as consent). The caller treats this sentinel as *erase the
+    whole field*: on a withdrawal the safe error is always to delete more.
+    Over-erasing a replaceable cache costs one republish; under-erasing is the
+    violation.
+    """
     try:
         value = json.loads(raw or "[]")
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="stored publish mirror is malformed; publish scope was not changed",
-        ) from exc
+    except (TypeError, ValueError):
+        return _UNPARSEABLE
     if not isinstance(value, list):
-        raise HTTPException(
-            status_code=409,
-            detail="stored publish mirror is malformed; publish scope was not changed",
-        )
+        return _UNPARSEABLE
     return value
 
 
@@ -205,7 +220,11 @@ def purge_removed_scope(
     if not removed_lanes and not removed_slices:
         return frozenset(), frozenset()
 
-    purge_storage_lanes()
+    # Deliberately NOT `purge_storage_lanes()` here. That assertion is a
+    # development-time guarantee (see its docstring and the coverage test); at
+    # runtime it would mean a lane someone forgot to mark makes the *user*
+    # unable to withdraw. Purge every target we can discover and let the
+    # consent write land regardless.
     affected_lanes = set(removed_lanes)
     if removed_slices:
         affected_lanes.add("corpus")
@@ -238,6 +257,12 @@ def purge_removed_scope(
             ).scalars()
             for row in rows:
                 stored = _json_list(getattr(row, field))
+                if stored is _UNPARSEABLE:
+                    # Cannot tell whose rows these are ⇒ erase the field. See
+                    # `_json_list`: on a withdrawal the safe error is to delete
+                    # more, never to refuse.
+                    setattr(row, field, _column_reset_value(column))
+                    continue
                 kept = [
                     item
                     for item in stored
@@ -258,6 +283,10 @@ def purge_removed_scope(
             if account is None:
                 continue
             stored = _json_list(getattr(account, field))
+            if stored is _UNPARSEABLE:
+                setattr(account, field, _column_reset_value(column))
+                surface_changed = True
+                continue
             kept = [
                 item
                 for item in stored
