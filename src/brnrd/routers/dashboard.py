@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import run_stop_requests, wake_requests
+from brnrd import publish_scope, run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
@@ -46,6 +46,28 @@ _FAILED_STATUSES = {"failed", "error", "errored", "cancelled", "canceled"}
 _COMPLETED_STATUSES = {"complete", "completed", "done", "responded", "success", "succeeded"}
 _PARKED_STATUSES = {"parked", "respawn", "respawned"}
 _DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
+
+
+def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
+    """Optional dashboard payload block for a provably consent-empty lane.
+
+    Emitted only when the claim is provable — absent, never ``null``-as-maybe,
+    so a reader cannot mistake "we did not check" for "consent is fine".
+
+    Takes the repo list the caller already loaded. Every one of the seven
+    callers is on the 2 s dashboard poll, so a signature that re-queried would
+    have spent a round trip per lane per tick to answer "not withheld".
+    """
+    if lane not in publish_scope.lanes_withheld(repos):
+        return {}
+    absent = publish_scope.repos_without_publish_consent(repos)
+    return {
+        "withheld": {
+            "lane": lane,
+            "unrecorded": list(absent.unrecorded),
+            "opted_out": list(absent.opted_out),
+        }
+    }
 
 
 def _duration_label(start: datetime | None, end: datetime | None = None) -> str:
@@ -773,6 +795,7 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
+            **_withheld_lane(repos, "quota"),
         }
     )
 
@@ -794,6 +817,7 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
             "generated_at": datetime.now(timezone.utc).isoformat(),
             **views,
             "wake_request": wake_requests.view(pending) if pending else None,
+            **_withheld_lane(repos, "runners"),
         }
     )
 
@@ -884,6 +908,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "reported_at": view["generated_at"],
             "spawn_max_concurrent": view["spawn_max_concurrent"],
             "daemon_mood": view["daemon_mood"],
+            **_withheld_lane(repos, "live_runs"),
         }
     )
 
@@ -942,6 +967,7 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
             "prs": view["prs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            **_withheld_lane(repos, "pr_review_queue"),
         }
     )
 
@@ -970,6 +996,7 @@ def dashboard_run_ledger_api(
             "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            **_withheld_lane(repos, "run_ledger"),
         }
     )
 
@@ -1008,11 +1035,15 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JS
         files = []
     if not isinstance(files, list):
         files = []
+    # The one lane endpoint that had no repo list of its own; the corpus is
+    # account-wide, so it never needed one until the consent question arrived.
+    repos = _repos(db, account.id)
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "files": files,
             "reported_at": account.surface_updated_at.isoformat() if account.surface_updated_at else None,
+            **_withheld_lane(repos, "corpus"),
         }
     )
 
@@ -1084,6 +1115,7 @@ def dashboard_activity_api(
             "kinds": kinds,
             "statuses": statuses,
             "repos": [{"id": repo.id, "label": repo.repo_full_name} for repo in repos],
+            **_withheld_lane(repos, "activity"),
         }
     )
 

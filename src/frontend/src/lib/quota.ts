@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // Slice 2: window-track live-quota view (kb/design-dashboard-live-surface.md
 // "A shape for the live-flow surface"). Types mirror the JSON
 // `GET /v1/dashboard/quota` returns (`src/brnrd/routers/dashboard.py::
@@ -102,6 +104,7 @@ export interface QuotaShell {
 export interface QuotaResponse {
 	generated_at: string;
 	runner_quotas: QuotaShell[];
+	withheld?: WithheldLane;
 }
 
 export class QuotaAuthError extends Error {}

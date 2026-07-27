@@ -829,6 +829,131 @@ def test_account_with_no_repos_at_all_is_unenforced():
         assert publish_scope.corpus_slices_permitted(db, "acc-nonexistent") is None
 
 
+# ── dashboard read-side consent explanation ────────────────────────
+
+
+def _connected_repos(db, account_id: str) -> list[Repo]:
+    """The list the dashboard endpoints already hold when they ask.
+
+    `lanes_withheld` and `repos_without_publish_consent` take the repo list
+    rather than a Session on purpose: they are asked once per lane per 2 s
+    poll, and a signature that re-queried would spend a round trip per lane
+    per tick to answer "not withheld".
+    """
+    return list(db.query(Repo).filter(Repo.account_id == account_id))
+
+
+
+def test_no_repos_proves_no_lane_is_withheld():
+    client = _client()
+    _login(client)
+    with client.app.state.SessionLocal() as db:
+        account_id = db.query(Account.id).one()[0]
+        assert publish_scope.lanes_withheld(_connected_repos(db, account_id)) == frozenset()
+
+
+def test_one_unrecorded_repo_withholds_every_lane():
+    client = _client()
+    token = _login(client)
+    _mint_legacy_repo(client, token, "Gurio/legacy")
+    with client.app.state.SessionLocal() as db:
+        assert publish_scope.lanes_withheld(_connected_repos(db, _account_id(client))) == frozenset(
+            publish_scope.LANES
+        )
+
+
+def test_one_repo_permitting_activity_leaves_only_activity_ambiguous():
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/active", "publish_layers": "activity"},
+    )
+    with client.app.state.SessionLocal() as db:
+        withheld = publish_scope.lanes_withheld(_connected_repos(db, _account_id(client)))
+    assert "activity" not in withheld
+    assert withheld == frozenset(publish_scope.LANES) - {"activity"}
+
+
+def test_any_permitting_repo_keeps_a_lane_out_of_withheld():
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/active", "publish_layers": "activity"},
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
+    )
+    with client.app.state.SessionLocal() as db:
+        withheld = publish_scope.lanes_withheld(_connected_repos(db, _account_id(client)))
+    assert "activity" not in withheld
+
+
+def test_consent_absence_distinguishes_unrecorded_from_explicit_none():
+    client = _client()
+    token = _login(client)
+    _mint_legacy_repo(client, token, "Gurio/legacy")
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
+    )
+    with client.app.state.SessionLocal() as db:
+        absence = publish_scope.repos_without_publish_consent(_connected_repos(db, _account_id(client)))
+    assert absence.unrecorded == ("Gurio/legacy",)
+    assert absence.opted_out == ("Gurio/off",)
+
+
+_WITHHELD_DASHBOARD_LANES = [
+    ("activity", "/v1/dashboard/activity"),
+    ("live_runs", "/v1/dashboard/live-runs"),
+    ("run_ledger", "/v1/dashboard/run-ledger"),
+    ("corpus", "/v1/dashboard/surface"),
+    ("quota", "/v1/dashboard/quota"),
+    ("runners", "/v1/dashboard/runners"),
+    ("pr_review_queue", "/v1/dashboard/pr-review-queue"),
+]
+
+
+@pytest.mark.parametrize(
+    "lane,path",
+    _WITHHELD_DASHBOARD_LANES,
+    ids=[lane for lane, _path in _WITHHELD_DASHBOARD_LANES],
+)
+def test_dashboard_empty_lane_names_why_consent_withheld_it(lane, path):
+    client = _client()
+    token = _login(client)
+    _mint_legacy_repo(client, token, "Gurio/legacy")
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
+    )
+
+    body = client.get(path).json()
+
+    assert body["withheld"] == {
+        "lane": lane,
+        "unrecorded": ["Gurio/legacy"],
+        "opted_out": ["Gurio/off"],
+    }
+
+
+def test_dashboard_omits_withheld_when_any_repo_permits_the_lane():
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/active", "publish_layers": "activity"},
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
+    )
+
+    assert "withheld" not in client.get("/v1/dashboard/activity").json()
+
+
 def test_a_recorded_consent_is_an_enumeration_and_never_widens():
     """Replaces `test_a_future_layer_ships_dark_for_an_existing_consent`, which
     was vacuous — and not for the reason first filed.
