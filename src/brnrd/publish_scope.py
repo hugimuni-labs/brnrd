@@ -316,13 +316,32 @@ def purge_removed_scope(
     return frozenset(removed_lanes), frozenset(removed_slices)
 
 
+#: Lanes whose payload is sliced, and therefore gated by the account-wide
+#: *intersection* in ``corpus_slices_permitted`` rather than by the per-repo
+#: lane check in ``lane_permitted``. Named here so ``lanes_withheld`` and the
+#: write-side gate cannot answer the same question with different reductions;
+#: ``test_sliced_lanes_matches_slice_enforcement`` pins the membership, so a
+#: second sliced lane fails a test instead of silently inheriting the union.
+SLICED_LANES = frozenset({"corpus"})
+
+
 def lanes_withheld(repos: list[Repo]) -> frozenset[str]:
     """Lanes where an empty payload is certainly consent, not absence.
 
-    A lane is withheld only when no connected repo in the account permits it.
-    One permitting repo keeps an empty payload ambiguous: that repo may simply
-    be idle. With zero connected repos there is no consent question and thus
-    no provable claim, so this returns an empty set.
+    A repo-scoped lane is withheld only when no connected repo in the account
+    permits it. One permitting repo keeps an empty payload ambiguous: that repo
+    may simply be idle. With zero connected repos there is no consent question
+    and thus no provable claim, so this returns an empty set.
+
+    **A sliced lane is not that question.** The corpus is account-wide by
+    construction — one shared home — so it is enforced by the *intersection*
+    of every connected repo's slices (``corpus_slices_permitted``), not by any
+    single repo's yes. Answering it with the same union as the six repo-scoped
+    lanes made this function disagree with the gate it describes: an account
+    with one fully-consented repo and one unrecorded repo had every file
+    dropped at the write seam while this said "not withheld", so the dashboard
+    rendered a bare "No corpus mirrored yet." — the one sentence that is false
+    in exactly the case the marker exists for. Ask the reduction that runs.
 
     Takes the already-loaded repo list rather than a ``Session``: this is asked
     once per dashboard lane per poll, the dashboard polls at 2 s, and six of the
@@ -332,8 +351,12 @@ def lanes_withheld(repos: list[Repo]) -> frozenset[str]:
     """
     if not repos:
         return frozenset()
-    permitted = frozenset().union(*(_repo_scopes(repo.publish_layers)[0] for repo in repos))
-    return frozenset(LANES) - permitted
+    scopes = [_repo_scopes(repo.publish_layers) for repo in repos]
+    permitted = frozenset().union(*(lanes for lanes, _slices in scopes))
+    withheld = set(LANES) - permitted
+    if not frozenset.intersection(*(slices for _lanes, slices in scopes)):
+        withheld |= SLICED_LANES
+    return frozenset(withheld)
 
 
 def repos_without_publish_consent(repos: list[Repo]) -> ReposWithoutPublishConsent:
