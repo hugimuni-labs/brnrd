@@ -5622,12 +5622,20 @@ def _queue_stop_request(
             "(already finished, never dispatched here, or the id is wrong)",
         )
         return False
-    if str(control.get("parent_run_id")) != task.id:
-        _record_outbox_notice(
-            outbox_dir,
-            f"stop refused: {target!r} was not dispatched by this run — "
-            "a run may stop only its own dispatchees (kb/design-wyrd.md §3)",
-        )
+    parent_run_id = control.get("parent_run_id")
+    if str(parent_run_id) != task.id:
+        if parent_run_id is None:
+            notice = (
+                f"stop refused: {target!r} is a resident run; no run dispatched "
+                "it. Only the account owner may stop it through the "
+                "account-scoped dashboard run controls"
+            )
+        else:
+            notice = (
+                f"stop refused: {target!r} was dispatched by {parent_run_id!r}, "
+                "not by this run; only its dispatcher may stop it"
+            )
+        _record_outbox_notice(outbox_dir, notice)
         return False
     reason = str(fm.get("reason") or "").strip() or body.strip()
     spawn_event_id = str(control["event_id"])
@@ -6151,6 +6159,10 @@ def _drain_outbox(
         # only about a source we can actually see: an absent one is unknown,
         # not impossible.
         deliverable = not target_source or _gate_owns_source(target_source)
+        undeliverable_reason = (
+            f"no gate owns {target_source or 'unknown'} events; route via "
+            "gate:<name> if a person must read it"
+        )
         message_path = _stage_outbound(
             task,
             account_context,
@@ -6174,16 +6186,14 @@ def _drain_outbox(
             ),
             reason=(
                 "" if deliverable else
-                f"no gate owns {target_source or 'unknown'} events — answer the "
-                "originating user event instead"
+                undeliverable_reason
             ),
         )
         if not deliverable:
             _record_outbox_notice(
                 outbox_dir,
-                f"reply NOT delivered: no gate owns {target_source or 'unknown'} "
-                f"events (target {target}) — address the originating user event "
-                f"instead; the text is kept in the run's message store",
+                f"event {target} retired done; reply text staged undeliverable — "
+                f"{undeliverable_reason}",
             )
         ppath = (
             protocol.write_partial(

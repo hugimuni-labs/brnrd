@@ -644,7 +644,14 @@ class TestCrossGateReplyRouting:
         assert protocol.list_partials(responses, "evt-A") == []
         assert [e["id"] for e in protocol.list_done(inbox, "schedule")] == [bid]
         notices = daemon._read_outbox_notices(outbox)
-        assert any("NOT delivered" in n["text"] for n in notices)
+        [notice] = notices
+        notice_text = " ".join(notice["text"].split())
+        assert f"event {bid} retired done" in notice_text
+        assert "reply text staged undeliverable" in notice_text
+        assert "no gate owns schedule events" in notice_text
+        assert "gate:<name>" in notice_text
+        assert "not delivered" not in notice_text.lower()
+        assert "originating user event" not in notice_text.lower()
         messages_dir = message_store.run_messages_dir(ctx, "Gurio/brr", "task-A")
         [row] = message_store.list_messages(messages_dir)
         assert row["status"] == message_store.UNDELIVERABLE

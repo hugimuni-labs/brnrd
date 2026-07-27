@@ -2370,8 +2370,9 @@ def test_stop_spells_out_notice_text(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
         notices=[_notice(
-            "reply NOT delivered: no gate owns dispatch_message events "
-            "(target evt-y8lx) — address the originating user event instead"
+            "event evt-y8lx retired done; reply text staged undeliverable — "
+            "no gate owns dispatch_message events; route via gate:<name> if "
+            "a person must read it"
         )],
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
@@ -2404,7 +2405,10 @@ def test_post_tool_still_uses_the_chip_not_the_prose(tmp_path):
     at every tool call is the churn the bar exists to avoid."""
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
-            notices=[_notice("reply NOT delivered: no gate owns schedule events")])
+            notices=[_notice(
+                "event evt-tick retired done; reply text staged undeliverable — "
+                "no gate owns schedule events"
+            )])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "refused or dropped" not in ctx
