@@ -30,8 +30,9 @@ choreography). One contract, one owner.
 
 The host-agnostic floor, any driver:
 
-- end on the reply, clean: no preamble, no meta. Speak mid-run when it
-  helps; progress, debug, tool chatter → stderr.
+- end on the reply, clean: no preamble, no meta. An addressed reply is a
+  turn (`weave.md` §The turn — `register.md` shows one played). Speak
+  mid-run when it helps; progress, debug, tool chatter → stderr.
 - the reply is the deliverable ⇒ it carries the kb findings itself. Link the
   kb URL when the portal provides one, otherwise name the file by basename
   only. A host path where an answer was asked is not an answer.
