@@ -2109,6 +2109,67 @@ def test_notify_spawn_parent_unknown_reply_stays_absent(tmp_path):
     assert "reply unknown" in note["body"]
 
 
+def test_notify_spawn_parent_measured_zero_commits_is_not_unknown(tmp_path):
+    """``publish_status == "nothing"`` is the env layer's *measured* zero.
+
+    ``publish()`` returns before stamping a count when there is no branch to
+    push, so an absent ``publish_commits`` covers two different states — and
+    only one of them is unknown. ``nothing`` means ``has_commits_beyond(seed)``
+    was checked and came back empty; rendering that as ``commits unknown``
+    would report a fact we hold as one we don't.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    response = tmp_path / "response.md"
+    response.write_text("done — nothing to act on.", encoding="utf-8")
+    task = _spawn_child_run(body="")
+    task.meta["publish_status"] = "nothing"
+    task.meta["response_path"] = str(response)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_commits") == 0
+    # 27, not 25: the em dash is three bytes. The handle counts bytes, and a
+    # test that counted characters would have passed against a `len()` bug.
+    assert "produce: 0 commits · no branch · reply 27 B" in note["body"]
+    assert "commits unknown" not in note["body"]
+
+
+def test_notify_spawn_parent_detached_commits_stay_unknown(tmp_path):
+    """The other no-branch arm. ``detached`` never counted anything, so the
+    count must stay absent rather than borrowing the measured-zero shape."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(body="")
+    task.meta["publish_status"] = "detached"
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_commits" not in note
+    assert "commits unknown" in note["body"]
+
+
+def test_notify_spawn_parent_undecodable_reply_still_has_a_size(tmp_path):
+    """A response that is not UTF-8 is unreadable, not unmeasurable.
+
+    The prose stays empty — undecodable bytes are not a reply anyone can
+    read — but the byte count is on disk and reporting it as unknown would be
+    the same defect this handle exists to close.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    response = tmp_path / "response.md"
+    response.write_bytes(b"\xff\xfe\x00garbage")
+    task = _spawn_child_run(body="")
+    task.meta["response_path"] = str(response)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_reply_bytes") == 10  # 3 BOM-ish bytes + "garbage"
+    assert "reply 10 B" in note["body"]
+    assert "reply unknown" not in note["body"]
+
+
 def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
     """A clean spawn reap emits branch, PR number, and report path/found as
     structured frontmatter keys on the spawn_completed event.

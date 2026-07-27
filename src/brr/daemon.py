@@ -7625,17 +7625,38 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     text = ""
     reply_bytes: int | None = None
     if response_path:
+        reply_file = Path(str(response_path))
         try:
-            untruncated = Path(str(response_path)).read_text(encoding="utf-8")
+            untruncated = reply_file.read_text(encoding="utf-8")
             reply_bytes = len(untruncated.encode("utf-8"))
             text = untruncated.strip()
-        except (OSError, UnicodeError):
+        except UnicodeError:
+            # The file is there and its *size* is not in doubt — only its
+            # decoding is. Dropping to "unknown" here would render a fact we
+            # hold as one we don't, which is the defect this whole handle
+            # exists to close. The prose stays empty: undecodable bytes are
+            # not a reply anyone can read.
+            text = ""
+            try:
+                reply_bytes = reply_file.stat().st_size
+            except OSError:
+                reply_bytes = None
+        except OSError:
             text = ""
         if text and len(text) > _SPAWN_NOTIFY_RESPONSE_MAX_CHARS:
             text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
 
     published_branch = str(task.meta.get("publish_branch") or "").strip()
     published_commits = task.meta.get("publish_commits")
+    if published_commits is None and task.meta.get("publish_status") == "nothing":
+        # ``publish()`` returns before stamping a count when there is no branch
+        # to push, so the count is absent for *two* different reasons and only
+        # one of them is unknown. ``publish_status == "nothing"`` is the env
+        # layer saying it checked ``has_commits_beyond(seed)`` and found none
+        # (``envs/__init__.py`` → ``_resolve_outcome``) — a measured zero, not
+        # a missing reading. ``detached`` is the genuinely-unknown arm and is
+        # deliberately left absent.
+        published_commits = 0
     thin_block = ""
     terminal = task.status in {"done", "error", "conflict", "stopped"}
     if (
@@ -7686,7 +7707,10 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         produce_kwargs["spawn_status"] = status_label
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
-    if "publish_commits" in task.meta:
+    # Same shape as the reply-byte exception below: a *measured* zero is a
+    # fact, so the structured key carries it too. A parent should never have
+    # to parse the prose line to learn something the frontmatter can state.
+    if published_commits is not None:
         produce_kwargs["spawn_commits"] = published_commits
     # Unlike the other produce handles, zero is meaningful here: an existing
     # response file with no content is different from an unreadable/missing
