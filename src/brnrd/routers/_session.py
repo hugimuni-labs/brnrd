@@ -366,7 +366,15 @@ def _set_repo_publish_layers_core(db: Session, account_id: str, repo_id: str, pu
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
-    repo.publish_layers = publish_scope.normalize_publish_layers(publish_layers)
+    normalized = publish_scope.normalize_publish_layers(publish_layers)
+    # No commit inside the purge: the removed mirror content and the consent
+    # column move together or neither does (#734, GDPR Art 7(3)).
+    publish_scope.purge_removed_scope(
+        db,
+        repo=repo,
+        new_publish_layers=normalized,
+    )
+    repo.publish_layers = normalized
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
     return "repo-publish-scope-updated"
@@ -486,6 +494,15 @@ def _needs_terms(db: Session, account: Account, kind: str) -> bool:
 
 
 def _document_status(db: Session, account: Account | None, kind: str) -> dict:
+    """Current acceptance state for one document.
+
+    ``needs_accept`` is meaningful only when the enclosing
+    ``_terms_status`` says ``authenticated``.  Anonymous callers receive
+    ``None`` — *unknown*, not *accepted* — because nobody is present to owe
+    acceptance and a falsy answer to "do you still owe me a signature?" is
+    indistinguishable from "no, you are clear" at every JS consumer (#690,
+    merged as #807; this docstring predates it and said ``False``).
+    """
     doc = terms.current(kind)
     row = _accepted_terms(db, account.id, kind) if account is not None else None
     accepted_at = row.accepted_at if row is not None else None

@@ -254,6 +254,11 @@ their GDPR rights over Customer Content, through:
   When Customer's last connected repository is disconnected, the
   dashboard mirror for that account is emptied as well.
   <!-- src/brnrd/routers/_session.py:392-399 -->
+  Narrowing a repository's publish-scope consent immediately deletes the
+  stored lane rows attributable to that repository and any corpus slices the
+  account no longer jointly permits, while retaining other repositories'
+  attributable rows and still-permitted slices.
+  <!-- src/brnrd/publish_scope.py `purge_removed_scope`; src/brnrd/routers/_session.py `_set_repo_publish_layers_core` -->
 - **Account deletion.** Deleting the account itself (dashboard settings,
   "danger zone") sweeps every Customer Content store the repo-disconnect
   path above does, for every connected repository at once, plus the
@@ -452,7 +457,7 @@ avoid.
 | Session token | Expires 30 days after issuance | `routers/accounts.py:22` (`SESSION_TTL`) |
 | Review pack | Held in memory 3,600 seconds by default, then dropped; never persisted | `pack_relay.py:39`, `config.py:62` |
 | Pending/running task row | Replaced on every publish tick; dropped after 10 minutes of no report | `activity_records.py:11` (`ACTIVITY_STALE_TTL`) |
-| Dashboard corpus mirror | No fixed TTL — replaced wholesale roughly every 3 seconds on publish; deleted in full when the account's last repository disconnects | `routers/_session.py:392-399`; publish cadence per `SECURITY.md` §"What dashboard publishing mirrors" |
+| Dashboard corpus mirror | No fixed TTL — replaced wholesale roughly every 3 seconds on publish; removed slices are deleted immediately when publish-scope consent narrows; deleted in full when the account's last repository disconnects | `publish_scope.py` (`purge_removed_scope`); `routers/_session.py` (`_set_repo_publish_layers_core`, `_disconnect_repo_core`); publish cadence per `SECURITY.md` §"What dashboard publishing mirrors" |
 | Run pages within the mirror | Customer's own daemon stops mirroring run pages older than 14 days by default (Customer-configurable, `publish.runs_window_days`) | `brr/gates/cloud.py:1194` (`_RUNS_WINDOW_DAYS_DEFAULT`) |
 
 The retention numbers published on HugiMuni's public `/privacy` notice
