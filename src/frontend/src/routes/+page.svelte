@@ -12,6 +12,8 @@
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
+	import WithheldNotice from '$lib/WithheldNotice.svelte';
+	import type { WithheldLane } from '$lib/withheld';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import {
 		RunnersAuthError,
@@ -81,6 +83,7 @@
 	const TICK_MS = 1_000;
 
 	let shells = $state<QuotaShell[] | null>(null);
+	let quotaWithheld = $state<WithheldLane | null>(null);
 	// Three states, not two (#480's tensed-absence family): an anonymous
 	// visitor must never see the dashboard scaffolding flash before the
 	// landing swaps in, and a signed-in reader must never glimpse the
@@ -89,6 +92,7 @@
 	let now = $state(Date.now());
 
 	let runnersData = $state<RunnersResponse | null>(null);
+	let runnersWithheld = $state<WithheldLane | null>(null);
 	let runnersError = $state<string | null>(null);
 	// Transient receipt for the last rack action. A tap has no approval
 	// step and no modal — this line is its only textual acknowledgment,
@@ -176,6 +180,7 @@
 	}
 
 	let liveRuns = $state<LiveRun[] | null>(null);
+	let liveRunsWithheld = $state<WithheldLane | null>(null);
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
 	// Loom slice 4 (kb/design-continuous-presence.md §3.2.1): queued intent —
@@ -185,6 +190,7 @@
 	// still publishes to it and this lane and the live-runs view both read it.
 	// Retiring the endpoint itself is a separate cut with its own blast.)
 	let scheduledWakes = $state<ScheduledWake[] | null>(null);
+	let activityWithheld = $state<WithheldLane | null>(null);
 	let scheduledWakesError = $state<string | null>(null);
 	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
 	// §"Loom envelope") — piggybacked on the same live-runs fetch, not a
@@ -199,10 +205,12 @@
 	let wordmark = $derived(wordmarkMood(liveRuns, daemonMood));
 
 	let prReviewQueue = $state<PRReviewItem[] | null>(null);
+	let prReviewQueueWithheld = $state<WithheldLane | null>(null);
 	let prReviewQueueStale = $state(false);
 	let prReviewQueueError = $state<string | null>(null);
 
 	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
+	let runLedgerWithheld = $state<WithheldLane | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
 	let loomPastWindowMs = $state(LOOM_PAST_WINDOW_MS);
@@ -254,6 +262,7 @@
 			const spanMs = Math.max(loomPastWindowMs, LOOM_PAST_WINDOW_MS);
 			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, spanMs);
 			runLedgerRows = receipts.rows;
+			runLedgerWithheld = receipts.withheld ?? null;
 			runLedgerStale = receipts.stale;
 			runLedgerError = null;
 		} catch (e) {
@@ -454,6 +463,7 @@
 		try {
 			const data = await fetchQuota();
 			shells = data.runner_quotas;
+			quotaWithheld = data.withheld ?? null;
 			authState = 'authed';
 		} catch (e) {
 			if (e instanceof QuotaAuthError) {
@@ -472,6 +482,7 @@
 		try {
 			const runners = await fetchRunners();
 			runnersData = runners;
+			runnersWithheld = runners.withheld ?? null;
 			runnersError = null;
 		} catch (e) {
 			// 401 already surfaced by the quota fetch's unauthenticated state.
@@ -493,6 +504,7 @@
 		try {
 			const live = await fetchLiveRuns();
 			liveRuns = live.runs;
+			liveRunsWithheld = live.withheld ?? null;
 			liveRunsStale = live.stale;
 			spawnMaxConcurrent = live.spawn_max_concurrent;
 			daemonMood = live.daemon_mood ?? null;
@@ -507,6 +519,7 @@
 		try {
 			const scheduled = await fetchScheduledWakes();
 			scheduledWakes = scheduled.rows;
+			activityWithheld = scheduled.withheld ?? null;
 			scheduledWakesError = null;
 		} catch (e) {
 			if (!(e instanceof ScheduledWakesAuthError)) {
@@ -516,6 +529,7 @@
 		try {
 			const queue = await fetchPRReviewQueue();
 			prReviewQueue = queue.prs;
+			prReviewQueueWithheld = queue.withheld ?? null;
 			prReviewQueueStale = queue.stale;
 			prReviewQueueError = null;
 		} catch (e) {
@@ -640,6 +654,12 @@
 							: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
 				</p>
 			</div>
+			{#if runnersData?.profiles.length === 0 && runnersWithheld}
+				<div class="mt-2"><WithheldNotice withheld={runnersWithheld} /></div>
+			{/if}
+			{#if shells?.length === 0 && quotaWithheld}
+				<div class="mt-2"><WithheldNotice withheld={quotaWithheld} /></div>
+			{/if}
 			<ControlStrip
 				runners={runnersData}
 				repos={connectedRepos}
@@ -688,6 +708,12 @@
 					{daemonMood}
 				/>
 			</div>
+			{#if scheduledWakes?.length === 0 && activityWithheld}
+				<div class="mt-2"><WithheldNotice withheld={activityWithheld} /></div>
+			{/if}
+			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
+				<div class="mt-2"><WithheldNotice withheld={prReviewQueueWithheld} /></div>
+			{/if}
 
 			<!-- The detail sheet: the band's other half. Everything the dissolved
 	     live-runs / scheduled-wakes / run-receipts sections used to say is
@@ -738,7 +764,12 @@
 						{:else if prReviewQueue === null}
 							<p class="text-sm text-ink-quiet">Loading…</p>
 						{:else}
-							<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+							<PRReviewQueue
+								prs={prReviewQueue}
+								stale={prReviewQueueStale}
+								{now}
+								withheld={prReviewQueueWithheld}
+							/>
 						{/if}
 					{:else if loomSelection?.kind === 'wake'}
 						{#if scheduledWakesError}
@@ -766,7 +797,12 @@
 								identity={selectedIdentity}
 							/>
 						{:else if selectedLiveRuns.length > 0}
-							<LiveRuns runs={selectedLiveRuns} stale={liveRunsStale} {now} />
+							<LiveRuns
+								runs={selectedLiveRuns}
+								stale={liveRunsStale}
+								{now}
+								withheld={liveRunsWithheld}
+							/>
 						{:else if selectedLedgerRows.length > 0}
 							<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
 						{:else}
@@ -789,6 +825,7 @@
 							runs={liveRuns}
 							stale={liveRunsStale}
 							{now}
+							withheld={liveRunsWithheld}
 							onSelect={(id) => selectFromLoom('run', id)}
 						/>
 					{/if}
@@ -822,6 +859,8 @@
 						<p class="text-sm text-red-400">{runLedgerError}</p>
 					{:else if runLedgerRows === null}
 						<p class="text-sm text-ink-quiet">Loading…</p>
+					{:else if runLedgerRows.length === 0 && runLedgerWithheld}
+						<WithheldNotice withheld={runLedgerWithheld} />
 					{:else}
 						<ProduceGauge
 							rows={applyLens(runLedgerRows, loomLens)}

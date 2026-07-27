@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // Slice 3 (kb/design-dashboard-live-surface.md "Reconsidered 2026-07-06"):
 // account-scoped live/coexisting-runs view. Types mirror the JSON
 // `GET /v1/dashboard/live-runs` returns (`src/brnrd/routers/dashboard.py::
@@ -92,6 +94,7 @@ export interface LiveRunsResponse {
 	// `running`, richer states later). Feeds the loom NOW seam and the
 	// wordmark at rest. `null` before any daemon has reported it.
 	daemon_mood?: DaemonMood | null;
+	withheld?: WithheldLane;
 }
 
 export interface DaemonMood {
