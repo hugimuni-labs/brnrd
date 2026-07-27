@@ -48,11 +48,19 @@ _PARKED_STATUSES = {"parked", "respawn", "respawned"}
 _DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
 
 
-def _withheld_lane(db: Session, account_id: str, lane: str) -> dict[str, Any]:
-    """Optional dashboard payload block for a provably consent-empty lane."""
-    if lane not in publish_scope.lanes_withheld(db, account_id):
+def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
+    """Optional dashboard payload block for a provably consent-empty lane.
+
+    Emitted only when the claim is provable — absent, never ``null``-as-maybe,
+    so a reader cannot mistake "we did not check" for "consent is fine".
+
+    Takes the repo list the caller already loaded. Every one of the seven
+    callers is on the 2 s dashboard poll, so a signature that re-queried would
+    have spent a round trip per lane per tick to answer "not withheld".
+    """
+    if lane not in publish_scope.lanes_withheld(repos):
         return {}
-    absent = publish_scope.repos_without_publish_consent(db, account_id)
+    absent = publish_scope.repos_without_publish_consent(repos)
     return {
         "withheld": {
             "lane": lane,
@@ -787,7 +795,7 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
-            **_withheld_lane(db, account.id, "quota"),
+            **_withheld_lane(repos, "quota"),
         }
     )
 
@@ -809,7 +817,7 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
             "generated_at": datetime.now(timezone.utc).isoformat(),
             **views,
             "wake_request": wake_requests.view(pending) if pending else None,
-            **_withheld_lane(db, account.id, "runners"),
+            **_withheld_lane(repos, "runners"),
         }
     )
 
@@ -900,7 +908,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "reported_at": view["generated_at"],
             "spawn_max_concurrent": view["spawn_max_concurrent"],
             "daemon_mood": view["daemon_mood"],
-            **_withheld_lane(db, account.id, "live_runs"),
+            **_withheld_lane(repos, "live_runs"),
         }
     )
 
@@ -959,7 +967,7 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
             "prs": view["prs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
-            **_withheld_lane(db, account.id, "pr_review_queue"),
+            **_withheld_lane(repos, "pr_review_queue"),
         }
     )
 
@@ -988,7 +996,7 @@ def dashboard_run_ledger_api(
             "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
-            **_withheld_lane(db, account.id, "run_ledger"),
+            **_withheld_lane(repos, "run_ledger"),
         }
     )
 
@@ -1027,12 +1035,15 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JS
         files = []
     if not isinstance(files, list):
         files = []
+    # The one lane endpoint that had no repo list of its own; the corpus is
+    # account-wide, so it never needed one until the consent question arrived.
+    repos = _repos(db, account.id)
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "files": files,
             "reported_at": account.surface_updated_at.isoformat() if account.surface_updated_at else None,
-            **_withheld_lane(db, account.id, "corpus"),
+            **_withheld_lane(repos, "corpus"),
         }
     )
 
@@ -1104,7 +1115,7 @@ def dashboard_activity_api(
             "kinds": kinds,
             "statuses": statuses,
             "repos": [{"id": repo.id, "label": repo.repo_full_name} for repo in repos],
-            **_withheld_lane(db, account.id, "activity"),
+            **_withheld_lane(repos, "activity"),
         }
     )
 
