@@ -147,7 +147,11 @@ class TestStopVerb:
         assert stats.get("stop") is None
         assert daemon._stopped_run_control("evt-child") is None
         notices = daemon._read_outbox_notices(outbox)
-        assert any("not dispatched by this run" in n["text"] for n in notices)
+        [notice] = notices
+        notice_text = " ".join(notice["text"].split())
+        assert "dispatched by 'run-somebody-else'" in notice_text
+        assert "not by this run" in notice_text
+        assert "only its dispatcher may stop it" in notice_text
 
     def test_stop_refused_for_unknown_target(self, tmp_path, monkeypatch):
         n, inbox, outbox, emitted, stats = _drain_stop(
@@ -157,7 +161,33 @@ class TestStopVerb:
 
         assert n == 0
         notices = daemon._read_outbox_notices(outbox)
-        assert any("matches no live concurrent spawn" in n["text"] for n in notices)
+        [notice] = notices
+        notice_text = " ".join(notice["text"].split())
+        assert "'evt-ghost' matches no live concurrent spawn" in notice_text
+        assert "already finished" in notice_text
+        assert "the id is wrong" in notice_text
+
+    def test_stop_refused_for_resident_run_names_account_owner_path(
+        self, tmp_path, monkeypatch,
+    ):
+        daemon._register_run_control("evt-resident", None)
+        daemon._bind_run_control("evt-resident", "run-resident")
+
+        n, inbox, outbox, emitted, stats = _drain_stop(
+            tmp_path, monkeypatch,
+            [("stop.md", "---\nstop: run-resident\n---\n")],
+        )
+
+        assert n == 0
+        assert stats.get("stop") is None
+        assert daemon._stopped_run_control("evt-resident") is None
+        notices = daemon._read_outbox_notices(outbox)
+        [notice] = notices
+        notice_text = " ".join(notice["text"].split())
+        assert "no run dispatched" in notice_text
+        assert "account owner" in notice_text
+        assert "account-scoped" in notice_text
+        assert "dashboard" in notice_text
 
     def test_stop_cancels_a_not_yet_dispatched_child(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
