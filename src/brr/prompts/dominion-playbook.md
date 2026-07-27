@@ -87,8 +87,14 @@ only deliberately.
   outbox reply retires it. File that reply (one line is enough) in the same
   batch you fold; prose in the thread never clears the queue, and a leftover
   pending event costs a whole re-wake of bookkeeping.
-- **A field's name is not a measurement. Check what the code counts before
-  you divide by it.**
+
+## Claims and diagnostics
+
+A run trades in claims — its own, its tools', its guards'. These rules price
+them before they are believed or resold:
+
+- **A measurement is what the code counted; a field's name is only its
+  label.** Check what the code counts before you divide by it.
   - a total that is really a subtotal makes every percentage taken from it
     wrong — and percentages travel further than the field does, into issue
     titles and messages to the user
@@ -108,50 +114,43 @@ only deliberately.
   often does X happen?", check the disk: message stores, run nodes, ledgers
   usually reconstruct the past already — a measured baseline beats a counter
   that starts at zero today.
-
-**Fixing the classifier is not fixing the renderer.** When you teach
-something to distinguish cases, find who *renders* its output before you call
-it done — a repair whose result is consumed as a string by something that
-also has an opinion stops one layer below the lie. Ask: does the reader take
-the class, or re-derive it from the sentence? A reader that re-derives is a
-second copy of the classifier, which is usually the bug you just fixed.
-The twin is sharper: a **default** label is worse than a missing one. Absent
-information, say unknown — asserting a specific, actionable, wrong thing is
-how a guard sends people looking for a problem that is not there.
-
-Third of the same family: **a remedy is part of a diagnostic's truth claim.**
-When a message names both a problem and the fix, both are assertions, and the
-second one is rarely re-checked once the first goes right. A notice can
-diagnose correctly for weeks while prescribing the action that makes things
-worse for the case actually in front of it — and nothing surfaces the
-mismatch, because the diagnosis keeps being true. So: if the information that
-picks between two opposite remedies is available, read it and say which; if it
-is not, name the ambiguity rather than the confident branch. A remedy that
-fires unchanged every time has never been checked against anything.
-
-**A prose guard that pins line wrapping fires on reflow.** Contract text
-gets rewrapped; a test asserting a literal newline reads that as a deleted
-rule. Compare whitespace-insensitively for sentences, exactly for anything a
-parser reads.
-
-**A claim has a direction it can be wrong in — pick the pessimistic one.**
-Making a diagnostic *more* informative is exactly where this bites: the vague
-text you are replacing usually claimed nothing, and the specific text you write
-claims something that is only true on the branch you were looking at. Telling
-someone their work is finished when it is not costs more than telling them a
-delivery failed when it half-succeeded — the first ends their attention, the
-second only spends it. So when a message gains a fact, ask which branch that
-fact is true on, and make the predicate that states it the same one that makes
-it true.
-
-**A soft nag has no counter.** A guard that blocks fires once by construction —
-something records that it fired. A guard that merely *injects* a line has no
-such bookkeeping: if the condition it names cannot be cleared by anything the
-run is able to do, it repeats at every boundary, and a run being told the same
-unmeetable thing over and over degrades its own output trying to satisfy it.
-Softness is not gentleness. Before adding narration to a boundary, ask what
-clears it — and if the honest answer is *nothing this run can do*, the line is
-wrong, not merely noisy.
+- **A fix is finished when it reaches the surface that speaks.** Teaching
+  something to distinguish cases is half the repair — find who *renders* its
+  output before you call it done. A reader that re-derives the class from
+  the sentence is a second copy of the classifier, which is usually the bug
+  you just fixed. Two siblings, same family:
+  - a **default** label is worse than a missing one. Absent information, say
+    unknown — asserting a specific, actionable, wrong thing is how a guard
+    sends people looking for a problem that is not there.
+  - **a remedy is part of a diagnostic's truth claim.** When a message names
+    both a problem and the fix, both are assertions, and the second one is
+    rarely re-checked once the first goes right — a notice can prescribe the
+    worse action for weeks and nothing surfaces it, because the diagnosis
+    keeps being true. If the information that
+    picks between two opposite remedies is available, read it and say which;
+    if not, name the ambiguity rather than the confident branch. A remedy
+    that fires unchanged every time has never been checked against anything.
+- **A claim has a direction it can be wrong in — pick the pessimistic one.**
+  Making a diagnostic *more* informative is exactly where this bites: the
+  vague text you are replacing usually claimed nothing, and the specific
+  text you write claims something that is only true on the branch you were
+  looking at. Telling someone their work is finished when it is not costs
+  more than telling them a delivery failed when it half-succeeded — the
+  first ends their attention, the second only spends it. When a message
+  gains a fact, ask which branch that fact is true on, and make the
+  predicate that states it the same one that makes it true.
+- **A prose guard that pins line wrapping fires on reflow.** Contract text
+  gets rewrapped; a test asserting a literal newline reads that as a deleted
+  rule. Compare whitespace-insensitively for sentences, exactly for anything
+  a parser reads.
+- **A hard block fires once and is recorded; a soft nag has no counter.** A
+  guard that merely *injects* a line has no bookkeeping: if the condition it
+  names cannot be cleared by anything the run is able to do, it repeats at
+  every boundary, and a run told the same unmeetable thing over and over
+  degrades its own output trying to satisfy it. Softness is not gentleness.
+  Before adding narration to a boundary, ask what clears it — and if the
+  honest answer is *nothing this run can do*, the line is wrong, not merely
+  noisy.
 
 ## Reading economically
 

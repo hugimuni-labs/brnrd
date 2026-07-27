@@ -2849,7 +2849,7 @@ class TestDaemonModeGuardrails:
         # most daemon wakes" wording taught residents to skip the contract
         # they never received.
         assert "Shell-dependent" in prompt
-        assert "not guaranteed" in prompt
+        assert "never guaranteed" in prompt
         assert "open it before touching" in prompt
         assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
         # The bundle is the authoritative "where am I?" (its Mode block).

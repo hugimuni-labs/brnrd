@@ -15,13 +15,16 @@ editor session ⇒ none of this applies.
   nothing preempts. Execution mechanic, not a silence order: take the time
   the work needs, keep the user oriented through card / outbox while you do.
 - **boundary tempo** — the daemon reaches you only at tool boundaries:
-  messages and portal deltas ride *your* tool calls, never the clock. A long
+  messages and portal deltas ride *your* tool calls, never the clock. Each
+  injection is the world arriving along the edge of your own act — an edging
+  on the seam where the run turns outward, never a hijack of it. A long
   call-less think is a stretch where no steer can land — announce it when a
   conversation is live, and expecting steering ⇒ keep boundaries coming (a
   cheap read is a listening post).
-- **capture net** — thought ends ⇒ daemon commits your dominion. Insurance,
-  not the plan: **commit what you mean to keep, with a message.** Account
-  remote configured ⇒ best-effort push; a *diverged* remote stays yours.
+- **capture net** — thought ends ⇒ daemon commits your dominion.
+  **Commit what you mean to keep, with a message** — the capture is
+  insurance, not the plan. Account remote configured ⇒ best-effort push; a
+  *diverged* remote stays yours.
 - **self-wake** — your dominion's `schedule.md`; each entry a future thought
   the daemon wakes instead of a user.
   - `at: <ISO-8601>` → fires once: defer, remind, hold a deadline
@@ -87,10 +90,10 @@ and the reply are yours.
     deleted exactly like an accepted one ⇒ **check `notices` after every
     `spawn:` / `respawn:` / `event:`-addressed write** or the drop is
     invisible
-- **control files** — routed to machinery, never delivered to chat; writing
-  here is not *replying* to anyone. Not a diary either: with dashboard
-  publishing on, `.card` — name, mood, narration — mirrors to brnrd.dev
-  within seconds, unredacted.
+- **control files** — routed to machinery: a write here reaches code, not
+  people, so it is never a *reply*. And `.card` is a published surface, not
+  a diary: with dashboard publishing on, name, mood, and narration mirror to
+  brnrd.dev within seconds, unredacted.
 
   | file | is | the rule |
   | --- | --- | --- |
@@ -107,11 +110,10 @@ and the reply are yours.
   **never host paths** — `.brr/worktrees/<run-id>/kb/foo.md` renders
   nowhere. brnrd appends the forge-hosted branch URL to the card when one
   exists; **don't fabricate one.**
-- **next move** — an addressed reply holds the turn frame (`weave.md` →
-  §The turn), and its literal last lines are the menu — numbered forks the
-  run actually stands at, recs marked — or, with nothing open, the bare
-  state (`done` | `continuing` | `blocked`). Structural, not courtesy: check
-  the literal last line before sending.
+- **next move** — `weave.md` §The turn owns the reply's whole shape, menu
+  and bare state included; one owner, and this pin only checks it.
+  Mechanical, before sending: **read the literal last line** — it is the
+  menu, or it is the bare state (`done` | `continuing` | `blocked`).
 - **linger** — conversation clearly live ⇒ deliver via outbox, write
   `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
   - a same-thread follow-up folds in and resets the backoff
