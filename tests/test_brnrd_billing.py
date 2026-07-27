@@ -168,6 +168,30 @@ def test_signature_verification_tolerance_and_scheme():
 # --- wallet topup ------------------------------------------------------------
 
 
+def test_topup_checkout_payload_carries_product_tax_code(monkeypatch):
+    seen = {}
+
+    def fake_post(settings, path, data):
+        seen.update(path=path, data=data)
+        return {"url": "https://checkout.stripe.example/t"}
+
+    monkeypatch.setattr(stripe_api, "_post", fake_post)
+    stripe_api.create_topup_checkout(
+        Settings(stripe_api_key="sk_test_x"),
+        customer_id="cus_1",
+        credits=500,
+        account_id="acct_1",
+        success_url="https://brnrd.example/?billing=topup-complete",
+        cancel_url="https://brnrd.example/?billing=topup-canceled",
+    )
+
+    assert seen["path"] == "/checkout/sessions"
+    assert (
+        seen["data"]["line_items[0][price_data][product_data][tax_code]"]
+        == "txcd_10105003"
+    )
+
+
 def test_topup_grants_credits_idempotently():
     client = _client()
     headers = _account(client)
