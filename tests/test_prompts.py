@@ -30,6 +30,19 @@ from brr.prompts import (
 )
 
 
+def _says(haystack: str, phrase: str) -> bool:
+    """Whitespace-insensitive containment for prose contracts.
+
+    A prompt guard must assert the *rule*, never the line wrap that happened
+    to carry it. Pinning a literal ``"when none is\n  available"`` makes any
+    reflow read as a deleted rule — a guard that fires for a non-reason is a
+    guard that stops being read. Collapse runs of whitespace on both sides
+    and compare. Machine-parsed strings (JSON keys, frontmatter, CLI syntax)
+    keep their exact pins; this is for sentences.
+    """
+    return " ".join(phrase.split()) in " ".join(haystack.split())
+
+
 def _seed_pitfalls(repo_root, text: str) -> None:
     """Materialize a dominion dir with a ``pitfalls.md`` for prompt tests."""
     dom = dominion.dominion_path(repo_root)
@@ -923,7 +936,7 @@ class TestPromptBuilding:
         assert "Pitfalls that match this task" not in prompt
         assert "Rebuild the image before you trust the cache." not in prompt
         assert "bounded, single-purpose thought" in prompt
-        assert "next-move contract" in prompt
+        assert _says(prompt, "the turn frame in `weave.md` §The turn")
         # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
 
@@ -1219,8 +1232,8 @@ class TestPromptBuilding:
         assert "change_token" in prompt
         assert "plan / todo boundaries" in prompt
         assert "immediately before a terminal closeout" in prompt
-        assert "after the runner has already returned" in prompt
-        assert "statically dispatched by the daemon" in prompt
+        assert _says(prompt, "after the runner has already returned")
+        assert _says(prompt, "statically dispatched by the daemon")
         assert "nobody re-runs you to extract a sentence" in prompt
         assert "`gate: forge` is the explicit PR handoff" in prompt
         assert "does not own PR creation" in prompt
@@ -1343,7 +1356,7 @@ class TestPromptBuilding:
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
         assert "Own every" in prompt
-        assert "worker capacity and quota are healthy" in prompt
+        assert _says(prompt, "worker capacity and quota are healthy")
         assert "spawn:" in prompt
         assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
@@ -1556,7 +1569,7 @@ class TestPromptBuilding:
         )
 
         assert "chat client" in prompt
-        assert "basename only" in prompt
+        assert _says(prompt, "basename only")
         assert ".brr/worktrees/" in prompt  # cited as the bad pattern
         assert "forge-hosted branch URL" in prompt
 
@@ -1940,8 +1953,8 @@ class TestPromptBuilding:
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
-        assert "worker capacity and quota are healthy" in prompt
-        assert "queue never starves" in prompt
+        assert _says(prompt, "worker capacity and quota are healthy")
+        assert _says(prompt, "queue never starves")
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
@@ -1972,10 +1985,10 @@ def test_kb_link_contract_uses_portal_url_with_basename_fallback():
     run_prompt = _read_bundled_run_prompt()
     substrate = _read_bundled_daemon_substrate()
 
-    assert "link the kb\n  URL when the portal provides one" in run_prompt
-    assert "otherwise name the file by basename only" in run_prompt
-    assert "link a kb page with the kb URL the portal provides" in substrate
-    assert "when none is\n  available, use its basename only" in substrate
+    assert _says(run_prompt, "the kb URL when the portal provides one")
+    assert _says(run_prompt, "otherwise name the file by basename only")
+    assert _says(substrate, "link a kb page with the kb URL the portal provides")
+    assert _says(substrate, "when none is available, use its basename only")
 
 
 def test_recent_conversation_renders_dedup_provenance():
@@ -2793,7 +2806,7 @@ class TestRevisitSignalGuardrails:
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
         assert "judgement on the substance" in prompt
-        assert "trust the intent, not trigger words" in prompt
+        assert _says(prompt, "trust the intent, not trigger words")
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
@@ -2843,14 +2856,14 @@ class TestDaemonModeGuardrails:
         assert "mode, run metadata" in prompt
         # Injected Recent Activity counts toward the kb/log.md step so
         # daemon runs don't re-read the log when the prompt already
-        # carries an extract. Checked as separate anchors so the
-        # paragraph can rewrap without breaking the guardrail.
-        assert "Recent Activity (from kb/log.md)" in prompt
-        assert "the log startup read" in prompt
-        assert "only for older history" in prompt
+        # carries an extract. `_says` ignores wrapping, so a reflow of the
+        # paragraph can never read as a deleted rule.
+        assert _says(prompt, "Recent Activity (from kb/log.md)")
+        assert _says(prompt, "the log startup read")
+        assert _says(prompt, "only for older history")
         # The run context file is recovery detail, not routine reading.
-        assert "runtime-recovery context file" in prompt
-        assert "only for what the" in prompt
+        assert _says(prompt, "runtime-recovery context file")
+        assert _says(prompt, "only for what the")
 
 
 class TestIntrospectionMode:

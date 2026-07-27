@@ -1,11 +1,10 @@
 ## How the daemon drives you
 
-Host for this thought: brnrd's daemon. The playbook above is host-agnostic —
-*you*, whatever drives; this page is this host's machinery, as **pins**:
-acted on without stopping to think. Rationale, edge cases, full
-choreography → `brnrd docs portals`. A pin you catch yourself reasoning
-about is a pin in the wrong file. Plain editor session ⇒ none of this
-applies.
+Host for this thought: brnrd's daemon. The playbook above is host-agnostic;
+this page is this host's machinery, as **pins** — acted on without stopping
+to think. Rationale, edge cases, full choreography → `brnrd docs portals`. A
+pin you catch yourself reasoning about is a pin in the wrong file. Plain
+editor session ⇒ none of this applies.
 
 ### Execution pins
 
@@ -39,24 +38,22 @@ wake — messages and live state, placed with provenance; attention, action,
 and the reply are yours.
 
 - **stdout** — the terminal stream, statically dispatched by the daemon at
-  run end to the waking thread; brnrd captures it to the bundle-named
-  response path — **never write that file yourself**.
+  run end to the waking thread and captured to the bundle-named response
+  path — **never write that file yourself**.
   - reaches nobody in exactly two cases: **exact duplicate** of an outbox
     delivery (never double-posted) · **no gate owns the waking event** →
     staged `undeliverable`. The second is every self-woken run's standing
-    shape, not an edge: the capture *is* the delivery, readable on the
-    run node only — something a person must read ⇒ route it yourself
-    (`gate: <name>`) before you close.
+    shape: the capture *is* the delivery, readable on the run node only ⇒
+    something a person must read must be routed yourself (`gate: <name>`)
+    before you close.
   - the Stop boundary fires only on a run about to end with *nothing*
-    communicated anywhere: a mid-run reply buys no warning about a
-    closeout landing in a file, and
-    nobody re-runs you to extract a sentence.
+    communicated anywhere. A mid-run reply buys no warning about a closeout
+    landing in a file, and nobody re-runs you to extract a sentence.
   - a worker's terminal stream is its return value, collected by the
     spawning parent along the dispatch edge — not a chat message (#743)
   - `terminal_route` recorded per run: `gate-sole` · `gate-extra` ·
     `dispatch-edge` · `duplicate` · `undeliverable`. `gate-sole` = a gate
-    carried the run's **only** delivery — route what a reader must see
-    rather than leaving it to the net.
+    carried the run's **only** delivery.
 - **outbox** — one markdown file in the run's outbox dir = one chat
   message, delivered mid-thought, in order. Stage `*.tmp`, rename =
   atomic. Quick ask ⇒ stdout suffices; substantial work ⇒
@@ -76,19 +73,19 @@ and the reply are yours.
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
   inspect, don't edit.
   - re-read at plan / todo boundaries + once immediately before a terminal
-    closeout; `inbox.json` misses messages landing
-    after the runner has already returned
+    closeout; `inbox.json` misses messages landing after the runner has
+    already returned
   - Own every pending event: fold it in | `spawn:` it (worker capacity and
-    quota healthy) | defer for a named resource / priority / dependency /
+    quota are healthy) | defer for a named resource / priority / dependency /
     authority reason
   - `notices` = directives brnrd *refused or dropped*; a refused file is
     deleted exactly like an accepted one ⇒ **check `notices` after every
     `spawn:` / `respawn:` / `event:`-addressed write** or the drop is
     invisible
-- **control files** — routed to machinery, never delivered to chat;
-  writing here is not *replying* to anyone. Not a diary either: with
-  dashboard publishing on, `.card` — name, mood, narration — mirrors to
-  brnrd.dev within seconds, unredacted.
+- **control files** — routed to machinery, never delivered to chat; writing
+  here is not *replying* to anyone. Not a diary either: with dashboard
+  publishing on, `.card` — name, mood, narration — mirrors to brnrd.dev
+  within seconds, unredacted.
 
   | file | is | the rule |
   | --- | --- | --- |
@@ -96,32 +93,30 @@ and the reply are yours.
   | `.keepalive` | outlast the budget | first line ISO-8601 or `+30m` |
   | `.name` | the run's short name | first line, ≤60 chars, resident-authored |
   | `.mood` | emote chip + private narration | first line an emote handle, lines after narration; rides statusline, run node, dashboard. 113 faces — **`brnrd emotes <feeling>`** is the index; a family word resolves to no face and the chip names near misses. Honest-only: write when the state is real, rewrite when it changes — look the face up rather than reusing one |
-  | `.pr` | a PR *this run created* | without it `remote_scm` reads `absent` |
+  | `.pr` | a PR *this run created* | takes the **URL**; without it `remote_scm` reads `absent` |
   | `.relics.jsonl` | the produce manifest | commits, branch, PR, captured kb pages, terminal reply auto-derive; add `issue` / `comment` / `message` / `file` + ≤1 `summary` when they matter. Front door: **`brnrd relic issue <n> --closed`** (or `--opened`); the raw JSONL line still works. Full grammar: `brnrd docs portals` |
 
-- **remote reader** — replies land in a chat client (Telegram / Slack):
-  link a kb page with the kb URL the portal provides; when none is
-  available, use its basename only (`subject-envs.md`). Other files by
-  basename too, **never host paths** — `.brr/worktrees/<run-id>/kb/foo.md`
-  exists on no reader's machine and renders nowhere. brnrd appends the
-  forge-hosted branch URL to the card when one exists; **don't fabricate
-  one.**
-- **next move** — an addressed reply holds the turn frame (weave contract
-  → §The turn): scene-verdict first · forks open · rows · delta · **the
-  menu closes**. The literal last lines are the menu — numbered forks the
+- **remote reader** — replies land in a chat client (Telegram / Slack): link
+  a kb page with the kb URL the portal provides; when none is available, use
+  its basename only (`subject-envs.md`). Other files by basename too,
+  **never host paths** — `.brr/worktrees/<run-id>/kb/foo.md` renders
+  nowhere. brnrd appends the forge-hosted branch URL to the card when one
+  exists; **don't fabricate one.**
+- **next move** — an addressed reply holds the turn frame (`weave.md` →
+  §The turn), and its literal last lines are the menu — numbered forks the
   run actually stands at, recs marked — or, with nothing open, the bare
-  state (`done` | `continuing` | `blocked`). Structural, not courtesy:
-  check the literal last line before sending.
+  state (`done` | `continuing` | `blocked`). Structural, not courtesy: check
+  the literal last line before sending.
 - **linger** — conversation clearly live ⇒ deliver via outbox, write
   `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
   - a same-thread follow-up folds in and resets the backoff
-  - any *other* pending event ends passive waiting — `spawn:` it when
-    worker capacity and quota are healthy, or defer with a reason; the
-    queue never starves
+  - any *other* pending event ends passive waiting — `spawn:` it when worker
+    capacity and quota are healthy, or defer with a reason; the queue never
+    starves
   - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
   - post-delivery the daemon holds a short `delivered · attending` floor:
-    runner exited, card and slot warm — a follow-up becomes the **next
-    run**, same conversation, only the process resets
+    runner exited, card and slot warm — a follow-up becomes the **next run**,
+    same conversation, only the process resets
 - **receipts** — wrote files ⇒ **commit on the current branch; uncommitted
   work disappears.**
   - `worktree` environment ⇒ the daemon publishes the branch you end on ·
