@@ -3505,7 +3505,12 @@ def _build_run_context_bundle(
             f"- live menu: `{outbox_path}/menu.json` — write one composed "
             "generation atomically (`menu_id`, `thread`, `options[]` with "
             "`handle` / `label` / optional `detail` / `rec`); the daemon "
-            "validates and renders it at the gate and the next resident boundary"
+            "validates and renders it at the gate and the next resident "
+            "boundary. **`menu_id` names an immutable generation** — changed "
+            "options need a *new* id, or the write is refused to `notices` "
+            "and the live menu silently stays the old one. An empty "
+            "`options` list is legal — it stands the live menu down (no "
+            "controls render) without ending the conversation"
         )
         if kb_base_url:
             sections.append(
