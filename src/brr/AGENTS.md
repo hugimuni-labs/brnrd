@@ -161,6 +161,15 @@ does not carry a copy of that list: it parses
 a leg added to CI is a leg it runs next time with no edit. `--list` shows
 what it would do without doing it.
 
+Under a brnrd run it also **leaves a receipt** — `.gate-receipt.json` beside
+the run's other control dotfiles, naming the tree it gated. That is not
+bookkeeping: with `hooks.gate_command` set in `.brr/config`, the Stop hook
+reads it and blocks a run that changed the tree and never ran the gate on
+*that* tree, or ran it and then edited. A green verdict for code nobody ran is
+the failure the receipt makes checkable, and this sentence is not what stops
+it — the receipt is. (The block fires at most once per run, and never asks for
+*green*, only for *ran*; a run may legitimately end red and report it.)
+
 Its one refusal is `pip install -e`, reported as SKIPPED with the reason
 (see the trap below), never silently dropped. Everything else CI installs,
 it installs — skipping `npm ci` and then running `npm test` reports
