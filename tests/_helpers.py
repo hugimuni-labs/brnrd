@@ -240,6 +240,17 @@ def succeed_invoke(response: str = "all done\n") -> InvokeFn:
 # ── brnrd backend scaffolding ───────────────────────────────────────
 
 
+# The consent an operator records by picking the "everything" preset on the
+# repos surface — all seven lanes plus all three corpus slices, exactly the
+# string `publish_scope.normalize_publish_layers` canonicalizes that choice
+# to. Fixtures that drive a *published* lane record it explicitly, because an
+# unrecorded consent publishes nothing (`brnrd.publish_scope`): a repo that
+# never answered the question is not a repo that said yes. Spelled as a
+# literal rather than derived from the lane vocabulary so that adding a lane
+# makes the fixtures' consent visibly stale instead of silently widening it.
+PUBLISH_EVERYTHING = "runners,live_runs,activity,corpus,quota,pr_review_queue,run_ledger,authored,knowledge,runs"
+
+
 def brnrd_account_headers(
     app,
     *,
