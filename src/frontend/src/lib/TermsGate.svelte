@@ -63,7 +63,7 @@
 
 {#if status === null}
 	<p class="mt-6 text-sm text-ink-quiet">Loading…</p>
-{:else if status.needs_accept}
+{:else if authenticated && status.needs_accept === true}
 	<div class="subpanel mt-6 p-4">
 		<label class="flex items-start gap-3 text-sm text-stone-300">
 			<input
@@ -92,7 +92,7 @@
 			</p>
 		{/if}
 	</div>
-{:else if authenticated}
+{:else if authenticated && status.needs_accept === false}
 	<p class="mt-6 text-sm text-ink-quiet">
 		{#if status.accepted_at}
 			Accepted {new Date(status.accepted_at).toLocaleString()} — version {status.version}{#if status.accepted_sha256},
@@ -102,7 +102,7 @@
 			Your account does not need a {name} update.
 		{/if}
 	</p>
-{:else}
+{:else if !authenticated}
 	<p class="mt-6 text-sm text-stone-400">
 		This page is readable signed out. To record acceptance, <a
 			class="text-sky-400 underline"
@@ -110,4 +110,6 @@
 			rel="external">log in</a
 		>.
 	</p>
+{:else}
+	<p class="mt-6 text-sm text-ink-quiet">Acceptance status unavailable.</p>
 {/if}
