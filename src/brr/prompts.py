@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import account, card, config as conf, dev_reload, forge_state
+from . import account, card, config as conf, dev_reload, forge_state, menus
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -3501,6 +3501,12 @@ def _build_run_context_bundle(
             f"- portal state: `{outbox_path}/portal-state.json` (env "
             "`BRR_PORTAL_STATE`) — pending events, posture, `change_token`"
         )
+        sections.append(
+            f"- live menu: `{outbox_path}/menu.json` — write one composed "
+            "generation atomically (`menu_id`, `thread`, `options[]` with "
+            "`handle` / `label` / optional `detail` / `rec`); the daemon "
+            "validates and renders it at the gate and the next resident boundary"
+        )
         if kb_base_url:
             sections.append(
                 f"- kb page URL base: {kb_base_url} — append the page path; "
@@ -3791,6 +3797,17 @@ def _format_communication_snapshot(
         if lines:
             lines.append("")
         lines.append(forge_block)
+
+    live_menu = snapshot.get("live_menu")
+    if isinstance(live_menu, dict):
+        rendered_menu = menus.render_numbered(live_menu)
+        if lines:
+            lines.append("")
+        lines.append(
+            "Live menu — the same validated generation rendered at the gate; "
+            "free text always overrides it:"
+        )
+        lines.append(rendered_menu or "(no standing options)")
 
     turns = _format_recent_conversation(
         snapshot.get("recent_turns"),

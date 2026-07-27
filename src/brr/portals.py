@@ -1,9 +1,10 @@
-"""Portal surfaces — the daemon-owned control files a wake reads.
+"""Portal surfaces — the control files shared by a wake and its driver.
 
-Two files sit in every run's outbox dir and are *written by the driver,
-read by the wake*: ``inbox.json`` (what else is waiting) and
-``portal-state.json`` (posture, notices, pending events). They are not
-deliverables — nothing in this module speaks to a user.
+Three files may sit in a run's outbox dir. The driver writes ``inbox.json``
+(what else is waiting) and ``portal-state.json`` (posture, notices, pending
+events); the resident writes ``menu.json`` (the one composed live menu for
+its thread), which the driver validates and promotes through :mod:`brr.menus`.
+They are control state, not deliverable outbox messages.
 
 Extracted from ``daemon`` (#507 L3) because ``init`` now plays the
 driver's part for exactly one run: it needs the same file names, the same
@@ -26,9 +27,12 @@ from . import protocol
 
 LIVE_INBOX_NAME = "inbox.json"
 LIVE_PORTAL_STATE_NAME = "portal-state.json"
+LIVE_MENU_NAME = "menu.json"
 
 #: Control files a drain loop must never mistake for a chat message.
-CONTROL_NAMES = frozenset({LIVE_INBOX_NAME, LIVE_PORTAL_STATE_NAME})
+CONTROL_NAMES = frozenset(
+    {LIVE_INBOX_NAME, LIVE_PORTAL_STATE_NAME, LIVE_MENU_NAME}
+)
 
 
 def is_staging_name(name: str | Path) -> bool:

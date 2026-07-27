@@ -13,6 +13,8 @@ incoming messages and stored on each event.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 import threading
 from pathlib import Path
@@ -20,7 +22,7 @@ from typing import Any
 
 import requests
 
-from .. import protocol, run_progress, trust
+from .. import menus, protocol, run_progress, trust
 from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
@@ -121,6 +123,7 @@ def _send_message(
     *,
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
 ) -> dict:
     params: dict = {"chat_id": chat_id, "text": text}
     if topic_id:
@@ -134,6 +137,8 @@ def _send_message(
         # and the response would be dropped.
         params["reply_to_message_id"] = reply_to_message_id
         params["allow_sending_without_reply"] = True
+    if reply_markup is not None:
+        params["reply_markup"] = reply_markup
     return _api_call(token, "sendMessage", params)
 
 
@@ -144,6 +149,7 @@ def _edit_message(
     text: str,
     *,
     parse_mode: str | None = None,
+    reply_markup: dict[str, Any] | None = None,
 ) -> dict:
     params: dict = {
         "chat_id": chat_id,
@@ -152,7 +158,22 @@ def _edit_message(
     }
     if parse_mode:
         params["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        params["reply_markup"] = reply_markup
     return _api_call(token, "editMessageText", params)
+
+
+def _answer_callback(token: str, callback_id: str, text: str = "") -> None:
+    params: dict[str, Any] = {"callback_query_id": callback_id}
+    if text:
+        params["text"] = text
+    try:
+        _api_call(token, "answerCallbackQuery", params)
+    except RuntimeError:
+        # The event is already durable. A transient failure to dismiss the
+        # Telegram spinner must not abort offset persistence and replay the
+        # same tap into a second event.
+        pass
 
 
 def _send_with_overflow(
@@ -461,6 +482,80 @@ def _authorized_sender(state: dict, user_id: int | None) -> bool:
     return _sender_tier(state, user_id) is not None
 
 
+def _handle_menu_callback(
+    brr_dir: Path,
+    inbox_dir: Path,
+    state: dict,
+    callback: dict[str, Any],
+    *,
+    configured_chat_id: int | None,
+    configured_topic_id: int | None,
+) -> None:
+    """Resolve one inline-keyboard tap into a pending ``menu_answer`` event."""
+    token = str(state["token"])
+    callback_id = str(callback.get("id") or "")
+    parsed = menus.parse_callback_data(callback.get("data"))
+    message = callback.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    topic_id = message.get("message_thread_id")
+    sender = callback.get("from") or {}
+    user_id = sender.get("id")
+    sender_tier = _sender_tier(state, user_id)
+
+    if (
+        parsed is None
+        or chat_id is None
+        or sender_tier is None
+        or (
+            configured_chat_id is not None
+            and chat_id != configured_chat_id
+        )
+        or (
+            configured_topic_id is not None
+            and topic_id != configured_topic_id
+        )
+    ):
+        if sender_tier is None:
+            print(
+                f"[brnrd] telegram callback authz denied: "
+                f"chat={chat_id} user={user_id}"
+            )
+        if callback_id:
+            _answer_callback(token, callback_id, "That menu answer is not valid.")
+        return
+
+    menu_id, option = parsed
+    thread = f"telegram:{chat_id}:{topic_id or ''}"
+    state["last_chat_id"] = chat_id
+    path = menus.create_answer_event(
+        brr_dir,
+        inbox_dir,
+        source="telegram",
+        thread=thread,
+        menu_id=menu_id,
+        option=option,
+        telegram_chat_id=chat_id,
+        telegram_topic_id=topic_id or "",
+        telegram_user=_sanitize_meta_str(str(sender.get("first_name") or "?")),
+        telegram_user_id=user_id,
+        telegram_username=_sanitize_meta_str(
+            str(sender.get("username") or "")
+        ),
+        telegram_message_id=message.get("message_id") or "",
+        trust_tier=sender_tier,
+    )
+    event = protocol._read_event(path) or {}
+    status = str(event.get("menu_status") or "unknown")
+    callback_text = {
+        "live": "Got it.",
+        "stale": "That menu was superseded; your answer was still sent.",
+        "expired": "That menu expired; your answer was still sent.",
+        "unknown": "That menu is no longer known; your answer was still sent.",
+    }.get(status, "Your answer was sent.")
+    if callback_id:
+        _answer_callback(token, callback_id, callback_text)
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = state["token"]
@@ -471,11 +566,22 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     updates = _api_call(token, "getUpdates", {
         "offset": offset,
         "timeout": _POLL_TIMEOUT,
-        "allowed_updates": ["message"],
+        "allowed_updates": ["message", "callback_query"],
     }, poll=True).get("result", [])
 
     for update in updates:
         offset = update["update_id"] + 1
+        callback = update.get("callback_query")
+        if isinstance(callback, dict):
+            _handle_menu_callback(
+                brr_dir,
+                inbox_dir,
+                state,
+                callback,
+                configured_chat_id=configured_chat_id,
+                configured_topic_id=configured_topic_id,
+            )
+            continue
         msg = update.get("message", {})
         chat_id = msg.get("chat", {}).get("id")
         if chat_id is None:
@@ -734,6 +840,127 @@ class _CardTransport:
             raise delivery.CardUnchanged from None
 
 
+def _menu_render_state_path(brr_dir: Path, thread: str) -> Path:
+    digest = hashlib.sha256(thread.encode("utf-8")).hexdigest()[:24]
+    return brr_dir / "gates" / "telegram" / "menus" / f"{digest}.json"
+
+
+def _load_menu_render_state(brr_dir: Path, thread: str) -> dict[str, Any]:
+    path = _menu_render_state_path(brr_dir, thread)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _save_menu_render_state(
+    brr_dir: Path,
+    thread: str,
+    state: dict[str, Any],
+) -> None:
+    path = _menu_render_state_path(brr_dir, thread)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    protocol._atomic_write(
+        path,
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def _telegram_thread_target(thread: str) -> tuple[int, int | None] | None:
+    parts = thread.split(":", 2)
+    if len(parts) != 3 or parts[0] != "telegram":
+        return None
+    chat_id = _coerce_optional_int(parts[1])
+    if chat_id is None:
+        return None
+    return chat_id, _coerce_optional_int(parts[2])
+
+
+def _menu_reply_markup(menu: dict[str, Any]) -> dict[str, Any]:
+    rows: list[list[dict[str, str]]] = []
+    menu_id = str(menu.get("menu_id") or "")
+    for option in menu.get("options", []):
+        if not isinstance(option, dict):
+            continue
+        handle = str(option.get("handle") or "")
+        label = str(option.get("label") or handle)
+        if option.get("rec"):
+            label = f"★ {label}"
+        rows.append([
+            {
+                "text": label,
+                "callback_data": menus.callback_data(menu_id, handle),
+            }
+        ])
+    return {"inline_keyboard": rows}
+
+
+def _menu_message_text(menu: dict[str, Any]) -> str:
+    rendered = menus.render_numbered(menu).replace("`", "")
+    if rendered:
+        return rendered
+    return "No standing options."
+
+
+def _render_live_menu(brr_dir: Path, token: str, packet: Any) -> None:
+    payload = getattr(packet, "payload", None) or {}
+    menu = payload.get("menu")
+    if not isinstance(menu, dict):
+        return
+    thread = str(menu.get("thread") or "").strip()
+    target = _telegram_thread_target(thread)
+    if target is None:
+        return
+    chat_id, topic_id = target
+    markup = (
+        {"inline_keyboard": []}
+        if menus.is_expired(menu)
+        else _menu_reply_markup(menu)
+    )
+    text = (
+        "This menu has expired."
+        if menus.is_expired(menu)
+        else _menu_message_text(menu)
+    )
+    state = _load_menu_render_state(brr_dir, thread)
+    message_id = _coerce_optional_int(state.get("message_id"))
+    if message_id is not None:
+        try:
+            _edit_message(
+                token,
+                chat_id,
+                message_id,
+                text,
+                reply_markup=markup,
+            )
+        except _TelegramNotModified:
+            pass
+    elif menu.get("options") and not menus.is_expired(menu):
+        sent = _send_message(
+            token,
+            chat_id,
+            text,
+            topic_id,
+            reply_markup=markup,
+        )
+        message_id = _coerce_optional_int(
+            (sent.get("result") or {}).get("message_id")
+        )
+    if message_id is not None:
+        _save_menu_render_state(
+            brr_dir,
+            thread,
+            {
+                "thread": thread,
+                "menu_id": menu.get("menu_id"),
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "topic_id": topic_id,
+            },
+        )
+
+
 def render_update(brr_dir: Path, packet: Any) -> None:
     """Send/edit a Telegram progress card for *packet*.
 
@@ -743,12 +970,19 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     — the daemon must keep running even if Telegram is misconfigured.
     """
     ptype = getattr(packet, "type", None)
-    if ptype != "mirror_card" and ptype not in _RENDERABLE_PACKETS:
+    if (
+        ptype not in {"mirror_card", "menu_composed"}
+        and ptype not in _RENDERABLE_PACKETS
+    ):
         return
 
     state = _load_state(brr_dir)
     token = state.get("token")
     if not token:
+        return
+
+    if ptype == "menu_composed":
+        _render_live_menu(brr_dir, str(token), packet)
         return
 
     if ptype == "mirror_card":
