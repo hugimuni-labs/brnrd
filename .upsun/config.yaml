@@ -117,3 +117,14 @@ routes:
   "https://{default}/":
     type: upstream
     upstream: "brnrd:http"
+    # HSTS: probed absent 2026-07-27 (open-facts item, settled negatively —
+    # a security page that promises TLS and serves no HSTS header leaves
+    # first-visit downgrade open). enabled:true = 1-year max-age.
+    # include_subdomains / preload deliberately left at their false
+    # defaults: preload is semi-irreversible (list removal is slow) and
+    # subdomain coverage is an inventory question — both the operator's
+    # call, not a default. Upsun caveat: HSTS on exactly one route per
+    # domain; this is the only route.
+    tls:
+      strict_transport_security:
+        enabled: true
