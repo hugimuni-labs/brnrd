@@ -49,7 +49,7 @@ _DISPATCH_ENVIRONMENTS = {"worktree", "docker", "solitary"}
 
 
 def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
-    """Optional dashboard payload block for a provably consent-empty lane.
+    """Mark a provably consent-empty lane without repeating account state.
 
     Emitted only when the claim is provable — absent, never ``null``-as-maybe,
     so a reader cannot mistake "we did not check" for "consent is fine".
@@ -60,14 +60,7 @@ def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
     """
     if lane not in publish_scope.lanes_withheld(repos):
         return {}
-    absent = publish_scope.repos_without_publish_consent(repos)
-    return {
-        "withheld": {
-            "lane": lane,
-            "unrecorded": list(absent.unrecorded),
-            "opted_out": list(absent.opted_out),
-        }
-    }
+    return {"withheld": {"lane": lane}}
 
 
 def _duration_label(start: datetime | None, end: datetime | None = None) -> str:

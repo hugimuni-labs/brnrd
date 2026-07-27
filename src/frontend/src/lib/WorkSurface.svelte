@@ -16,7 +16,6 @@
 		splitIntoSections,
 		type SurfaceResponse
 	} from './surface';
-	import WithheldNotice from './WithheldNotice.svelte';
 
 	interface Props {
 		data: SurfaceResponse;
@@ -144,7 +143,7 @@
 	</div>
 	{#if data.files.length === 0}
 		{#if data.withheld}
-			<WithheldNotice withheld={data.withheld} />
+			<p class="text-sm text-amber-200">paused — no publish scope</p>
 		{:else}
 			<p class="text-sm text-ink-quiet">No corpus mirrored yet.</p>
 		{/if}

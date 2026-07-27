@@ -921,7 +921,7 @@ _WITHHELD_DASHBOARD_LANES = [
     _WITHHELD_DASHBOARD_LANES,
     ids=[lane for lane, _path in _WITHHELD_DASHBOARD_LANES],
 )
-def test_dashboard_empty_lane_names_why_consent_withheld_it(lane, path):
+def test_dashboard_empty_lane_marks_consent_without_repeating_account_state(lane, path):
     client = _client()
     token = _login(client)
     _mint_legacy_repo(client, token, "Gurio/legacy")
@@ -932,11 +932,7 @@ def test_dashboard_empty_lane_names_why_consent_withheld_it(lane, path):
 
     body = client.get(path).json()
 
-    assert body["withheld"] == {
-        "lane": lane,
-        "unrecorded": ["Gurio/legacy"],
-        "opted_out": ["Gurio/off"],
-    }
+    assert body["withheld"] == {"lane": lane}
 
 
 def test_dashboard_omits_withheld_when_any_repo_permits_the_lane():
