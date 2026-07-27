@@ -2,6 +2,7 @@
 	import { fade } from 'svelte/transition';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import MarkdownContent from './MarkdownContent.svelte';
+	import WithheldNotice from './WithheldNotice.svelte';
 	import { setContext } from 'svelte';
 	import { REVEAL_LEDGER, revealLedger, typeReveal } from './transitions';
 	import {
@@ -138,12 +139,13 @@
 	<div class="mb-3 flex items-center justify-between gap-3 text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">corpus</span>
 		{#if data.reported_at}<span class="font-mono text-[10px] text-ink-mute"
-				>mirrored {new Date(data.reported_at).toLocaleString()}</span
+				>{data.files.length === 0 ? 'last checked' : 'mirrored'}
+				{new Date(data.reported_at).toLocaleString()}</span
 			>{/if}
 	</div>
 	{#if data.files.length === 0}
 		{#if data.withheld}
-			<p class="text-sm text-amber-200">paused — no publish scope</p>
+			<WithheldNotice withheld={data.withheld} />
 		{:else}
 			<p class="text-sm text-ink-quiet">No corpus mirrored yet.</p>
 		{/if}
