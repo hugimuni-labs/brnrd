@@ -3085,12 +3085,13 @@ def _run_worker(
         # Not armed for workers: `worker.md` grants no chat seam, so a worker owes no
         # closeout, and a guard demanding one would block a run for failing to keep a
         # contract it was never given.
+        obligations: list[str] = []
         if cfg.get("hooks.next_move", False) and not task.meta.get("worker"):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
             # Same arming, same control-arm discipline: the guard also escalates
             # the clean artifact obligation (card) from format_delta's soft
             # `inject` mention to a hard block. A pure fresh-file existence check.
-            obligations = ["card"]
+            obligations.append("card")
             # The SCM obligation, now armed (product call made 2026-07-15). It
             # is NOT a file check but a fresh-git read at Stop, so the hook needs
             # the checkout + seed ref. Armed only for `host`: that is the one
@@ -3111,6 +3112,43 @@ def _run_worker(
                 # Absent ⇒ the hook treats it as off (see there).
                 if _gate_can_deliver(brr_dir, "forge"):
                     env["BRR_FORGE_GATE"] = "1"
+
+        # The local CI-gate obligation, armed by a repo that declares what its
+        # gate *is* (`hooks.gate_command`). brr ships no default: guessing a
+        # stranger's build command is how a guard fires constantly for a
+        # non-reason, and a project with no local gate owes nothing.
+        #
+        # Deliberately NOT behind `hooks.next_move`. That flag is a control arm
+        # for an unmeasured reply-shape intervention; this is an explicit
+        # per-repo declaration, which is already the opt-in. Chaining one to the
+        # other would make a project that named its gate wonder why nothing
+        # checks it.
+        #
+        # Not host-only either, unlike `scm`: that clause is about *publishing*,
+        # which only the host environment fails to do for you, while this one is
+        # about whether the code was checked — equally true in a worktree. It
+        # needs the same fresh-git read, so it arms `BRR_REPO_DIR` itself when
+        # the host branch above did not.
+        #
+        # Workers stay out for now, and the reason is cost, not principle: the
+        # parent reviews the child's diff and runs the gate on the merged tree
+        # itself (that is the standing rule, because a worker's own suite claim
+        # is not evidence), so the tree that matters is already covered — while
+        # arming every child would multiply full-gate minutes across a fleet, a
+        # regression nobody has measured.
+        gate_command = str(cfg.get("hooks.gate_command", "") or "").strip()
+        if (
+            gate_command
+            and not task.meta.get("worker")
+            and task.meta.get("root_kind") != "home"
+        ):
+            obligations.append("gate")
+            env["BRR_GATE_COMMAND"] = gate_command
+            env.setdefault("BRR_REPO_DIR", str(run_root))
+            if env_ctx.branch_plan is not None:
+                env.setdefault("BRR_SEED_REF", env_ctx.branch_plan.seed_ref)
+
+        if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
         if env_ctx.outbox_env:

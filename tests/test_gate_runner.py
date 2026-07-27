@@ -8,6 +8,8 @@ whose steps are silently dropped.
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -118,3 +120,88 @@ def test_the_real_workflow_has_no_unrefused_editable_install():
     ]
     for leg in installs:
         assert gate.refusal(leg["command"]) is not None
+
+
+# ── The receipt: what makes "did the gate run" a fact instead of a memory ──
+
+
+def _repo(tmp_path):
+    """A git repo with one commit, one tracked edit, one untracked file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@t"],
+        ["config", "user.name", "t"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "tracked.py").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "seed"], check=True, capture_output=True
+    )
+    (repo / "tracked.py").write_text("one\ntwo\n", encoding="utf-8")
+    (repo / "brand-new.py").write_text("never committed\n", encoding="utf-8")
+    return repo
+
+
+def _git_for(repo):
+    def run(*args):
+        done = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True
+        )
+        return done.stdout if done.returncode == 0 else None
+
+    return run
+
+
+def test_untracked_digest_agrees_with_the_hook_that_reads_it():
+    """The one rule implemented on both sides of the receipt.
+
+    Everything else in a receipt is git's raw output compared against git's
+    raw output. This is the exception — a compose-then-hash rule written once
+    here and once in `brr.hooks` — so it gets the pin that shape demands: both
+    implementations driven against one real repository, in one assertion. Two
+    copies that agree with each other and are wrong together is the failure
+    this forecloses; two copies that quietly *disagree* would make the guard
+    fire on every run, which is how a guard stops being read.
+    """
+    import tempfile
+
+    from brr import hooks
+
+    gate = _gate()
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _repo(Path(tmp))
+        mine = gate.untracked_digest(_git_for(repo))
+        theirs = hooks._untracked_digest(repo)
+        assert mine == theirs
+        assert mine != ""  # the repo really does have an untracked file
+
+        # And it is *content*-sensitive, not merely name-sensitive — the gap
+        # `status --porcelain` alone leaves open.
+        (repo / "brand-new.py").write_text("edited after the gate ran\n", encoding="utf-8")
+        assert gate.untracked_digest(_git_for(repo)) != mine
+
+
+def test_no_receipt_is_written_outside_a_run(tmp_path, monkeypatch):
+    """A hand invocation in the operator's shell has no guard watching it."""
+    gate = _gate()
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    assert gate.receipt_path() is None
+    assert gate.write_receipt("GREEN", []) is None
+
+
+def test_receipt_lands_in_the_outbox_and_names_the_verdict(tmp_path, monkeypatch):
+    """Under a run it is written beside the other control dotfiles — never
+    delivered to chat (the drain skips dotfiles), read by the closeout guard."""
+    gate = _gate()
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
+    path = gate.write_receipt("RED", [("backend: Run tests", "FAIL rc=1", 12.34)])
+    assert path == tmp_path / gate.RECEIPT_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    # RED is recorded, not suppressed: the obligation a reader checks is that
+    # the gate *ran* on this tree, never that it was green.
+    assert payload["verdict"] == "RED"
+    assert payload["legs"][0]["verdict"] == "FAIL rc=1"
+    assert set(payload) >= {"head", "status", "diff_digest", "untracked_digest"}
