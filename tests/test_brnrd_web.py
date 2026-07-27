@@ -236,19 +236,26 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["code_challenge"][0]
 
 
-def test_terms_status_is_public_for_anonymous_users(client):
+def test_terms_status_is_public_but_acceptance_is_unknown_for_anonymous_users(client):
     r = client.get("/v1/dashboard/terms-status")
     assert r.status_code == 200
     body = r.json()
     assert body["authenticated"] is False
     assert sorted(body["documents"]) == ["hosted-execution", "tos"]
     for kind, doc in body["documents"].items():
-        # Nothing is owed by nobody: an anonymous reader is not withholding
-        # consent, and rendering "you must accept" at them would be a lie.
-        assert doc["needs_accept"] is False
+        # Without an account the acceptance question does not apply. None
+        # preserves that unknown state instead of claiming acceptance.
+        assert doc["needs_accept"] is None
         assert doc["accepted_at"] is None
         assert doc["version"] == terms.current(kind).version
         assert doc["sha256"] == terms.current(kind).sha256
+
+
+def test_anonymous_terms_status_cannot_be_mistaken_for_accepted(client):
+    body = client.get("/v1/dashboard/terms-status").json()
+    assert body["authenticated"] is False
+    for doc in body["documents"].values():
+        assert doc["needs_accept"] is not False
 
 
 def test_terms_status_reports_authenticated_acceptance_state(client, monkeypatch):
