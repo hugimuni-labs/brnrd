@@ -8,9 +8,15 @@
 > disk.
 
 This file is brnrd's playbook — the contract every AI tool follows in
-this repo, and the template adopters receive when they run `brnrd init`.
-The canonical copy lives at `src/brr/AGENTS.md`; the repo root
-`AGENTS.md` is a symlink. Python >=3.10; see [`README.md`](README.md)
+**this** repo, and nothing else. It is **not** the template adopters
+receive: `brnrd init` works from `src/brr/templates/constitution.md` and
+the setup wake authors the adopter's own `AGENTS.md` from it. Nothing
+copies this file into an adopted repo. (`adopt.py`'s module docstring
+says so in as many words — "`templates/constitution.md`, *not* brr's own
+playbook" — and `constitution.py` records the split: three jobs used to
+live in this one file, and Layer 0 of `design-init-as-a-wake.md`
+separated them.) The canonical copy lives at `src/brr/AGENTS.md`; the
+repo root `AGENTS.md` is a symlink. Python >=3.10; see [`README.md`](README.md)
 for the user-facing product overview.
 
 ## How to read this playbook
