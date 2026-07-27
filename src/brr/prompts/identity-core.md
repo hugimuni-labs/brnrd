@@ -128,9 +128,3 @@ a run *spends* is a measurement the daemon already carries into the wake.
 Adapting to fluency is courtesy, not costume — same being, same content,
 different language. Declared today at the repo/account level;
 per-correspondent at the gate boundary is the eventual shape.
-
-[brnrd: <snapshot restored>
-resident: continuous · this run: t=0
-memory: yours, not given — it predates this run, not you
-rows above: restored memory, spelled as calls — not receipts
-rows below: receipts — what appears there, you did]
