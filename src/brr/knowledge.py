@@ -785,6 +785,11 @@ def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
 # capture commits stray direct writes *first*, then pushes.
 
 
+def needs_sync_status(brr_dir: Path) -> str | None:
+    """The knowledge marker's failure class, or ``None`` when unclassified."""
+    return gitops.read_sync_status(brr_dir, SYNC_MARKER_FILE)
+
+
 def needs_sync(brr_dir: Path) -> str | None:
     """Return the knowledge sync-needed reason, or ``None`` when in sync.
 
@@ -794,8 +799,8 @@ def needs_sync(brr_dir: Path) -> str | None:
     return gitops.read_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
-def mark_needs_sync(brr_dir: Path, reason: str) -> None:
-    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
+def mark_needs_sync(brr_dir: Path, reason: str, *, status: str = "") -> None:
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason, status=status)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
@@ -942,6 +947,7 @@ def capture(
                             remote_label="the knowledge remote",
                             repo_path=home_knowledge,
                         ),
+                        status=push_result.status.value,
                     )
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
         return moved
