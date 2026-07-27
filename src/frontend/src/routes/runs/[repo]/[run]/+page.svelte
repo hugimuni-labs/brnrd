@@ -9,6 +9,8 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import RunNode from '$lib/RunNode.svelte';
+	import WithheldNotice from '$lib/WithheldNotice.svelte';
+	import type { WithheldLane } from '$lib/withheld';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { runLedgerRowsForNode } from '$lib/runNode';
@@ -22,6 +24,7 @@
 	let error = $state<string | null>(null);
 	let unauthenticated = $state(false);
 	let ledgerRows = $state<RunLedgerRow[] | null>(null);
+	let ledgerWithheld = $state<WithheldLane | null>(null);
 	let ledgerStale = $state(false);
 	let ledgerError = $state<string | null>(null);
 
@@ -40,6 +43,7 @@
 			// Route segments are sanitized directory names. Match both of them:
 			// one account can mirror several repos whose generated run ids may overlap.
 			ledgerRows = runLedgerRowsForNode(receipts.rows, repoSlug, runId);
+			ledgerWithheld = receipts.withheld ?? null;
 			ledgerStale = receipts.stale;
 			ledgerError = null;
 		} catch (e) {
@@ -68,6 +72,13 @@
 	</div>
 {:else if data === null}
 	<div class="mx-auto max-w-xl p-6 font-mono text-sm text-ink-quiet">reading run node…</div>
+{:else if data.files.length === 0 && data.withheld}
+	<div class="mx-auto max-w-xl p-6">
+		<div class="panel p-4"><WithheldNotice withheld={data.withheld} /></div>
+	</div>
 {:else}
+	{#if ledgerRows?.length === 0 && ledgerWithheld}
+		<div class="mx-auto max-w-xl px-6 pt-6"><WithheldNotice withheld={ledgerWithheld} /></div>
+	{/if}
 	<RunNode {data} {repoSlug} {runId} {ledgerRows} {ledgerStale} {ledgerError} />
 {/if}

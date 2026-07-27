@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // Slice 4 (#259): account-scoped PR-review queue. Types mirror the JSON
 // `GET /v1/dashboard/pr-review-queue` returns, sourced from `gh pr list`
 // via the daemon's `PUT /v1/daemons/pr-review-queue` publish.
@@ -17,6 +19,7 @@ export interface PRReviewQueueResponse {
 	prs: PRReviewItem[];
 	stale: boolean;
 	reported_at: string | null;
+	withheld?: WithheldLane;
 }
 
 export class PRReviewQueueAuthError extends Error {}

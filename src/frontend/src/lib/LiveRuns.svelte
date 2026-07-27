@@ -15,6 +15,8 @@
 	import { relicIcon } from './runLedger';
 	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
+	import WithheldNotice from './WithheldNotice.svelte';
+	import type { WithheldLane } from './withheld';
 
 	interface Props {
 		runs: LiveRun[];
@@ -28,9 +30,10 @@
 		 *  never reached). Without the callback (the unmirrored fallbacks,
 		 *  where no node can answer) the local expansion remains the detail. */
 		onSelect?: (runId: string) => void;
+		withheld?: WithheldLane | null;
 	}
 
-	let { runs, stale, now, onSelect }: Props = $props();
+	let { runs, stale, now, onSelect, withheld = null }: Props = $props();
 
 	// Maintainer ask (2026-07-09, same thread as #329/#331): "why don't we
 	// also fix the fact that the active run is unclickable?" — the receipts
@@ -134,7 +137,11 @@
 		{/if}
 	</div>
 	{#if runs.length === 0}
-		<p class="text-sm text-ink-quiet">Nothing awake right now.</p>
+		{#if withheld}
+			<WithheldNotice {withheld} />
+		{:else}
+			<p class="text-sm text-ink-quiet">Nothing awake right now.</p>
+		{/if}
 	{:else}
 		<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each runs as run (run.id)}

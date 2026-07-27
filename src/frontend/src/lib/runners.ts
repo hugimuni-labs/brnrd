@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // #328 spool rack: the runner catalog as the loom's thread inventory.
 // Types mirror `GET /v1/dashboard/runners` (`src/brnrd/routers/
 // dashboard.py::dashboard_runners_api`), which merges each
@@ -49,6 +51,7 @@ export interface RunnersResponse {
 	/** The account's pending tap, if any — supersedes `default` as the
 	 *  answer to "who wakes next". */
 	wake_request: WakeRequest | null;
+	withheld?: WithheldLane;
 }
 
 export class RunnersAuthError extends Error {}

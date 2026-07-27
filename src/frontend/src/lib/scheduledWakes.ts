@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // Loom slice 4 (kb/design-continuous-presence.md §3.2.1): the schedule
 // lane — queued intent, rendered. The daemon has published scheduled wakes
 // all along (`cloud.py::_schedule_activity_records`, kind="scheduled",
@@ -25,6 +27,7 @@ export interface ScheduledWakesResponse {
 	generated_at: string;
 	rows: ScheduledWake[];
 	total: number;
+	withheld?: WithheldLane;
 }
 
 export class ScheduledWakesAuthError extends Error {}

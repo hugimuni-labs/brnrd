@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 // Loom slice 3 (#271): closed-run receipt feed. Types mirror the JSON
 // `GET /v1/dashboard/run-ledger` returns, sourced from the daemon's local
 // `.brr/run-ledger.jsonl` via `PUT /v1/daemons/run-ledger`.
@@ -238,6 +240,7 @@ export interface RunLedgerResponse {
 	rows: RunLedgerRow[];
 	stale: boolean;
 	reported_at: string | null;
+	withheld?: WithheldLane;
 }
 
 export class RunLedgerAuthError extends Error {}
