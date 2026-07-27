@@ -1347,3 +1347,92 @@ def test_cmd_kb_with_query_no_match_exits_1(tmp_path, capsys, monkeypatch):
 
     rc = main(["kb", "xyzzy-no-such-term-8675309"])
     assert rc == 1
+
+
+# ── `brnrd prompts wake` — a run's context, both halves ──────────────────
+
+
+def _run_dir_with(tmp_path, *, prompt=None, boundaries=None):
+    run_dir = tmp_path / ".brr" / "runs" / "run-260727-1716-54h0"
+    run_dir.mkdir(parents=True)
+    if prompt is not None:
+        (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    if boundaries is not None:
+        (run_dir / "boundaries.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in boundaries),
+            encoding="utf-8",
+        )
+    return run_dir
+
+
+def test_wake_dump_renders_the_boot_then_every_boundary_in_order(tmp_path):
+    from brr.cli import _wake_dump
+
+    run_dir = _run_dir_with(
+        tmp_path,
+        prompt="# the wake\nbody\n",
+        boundaries=[
+            {"at": "2026-07-27T17:21:31Z", "phase": "session-start",
+             "inject": "seed capsule", "block": False, "block_reason": None},
+            {"at": "2026-07-27T17:21:34Z", "phase": "post-tool",
+             "inject": None, "block": False, "block_reason": None},
+            {"at": "2026-07-27T17:25:02Z", "phase": "stop",
+             "inject": "closeout", "block": True,
+             "block_reason": "one more thing"},
+        ],
+    )
+    out = _wake_dump(run_dir, boot=True, limit=None)
+
+    assert "# the wake" in out
+    assert "3 hook fire(s)" in out
+    # Order is the run's own, and it is the whole point of the file.
+    assert out.index("seed capsule") < out.index("closeout")
+    # A silent boundary is rendered, not skipped — the count must stay honest.
+    assert "_silent" in out
+    assert "**BLOCKED**" in out
+    assert "one more thing" in out
+
+
+def test_wake_dump_distinguishes_an_old_run_from_a_quiet_one(tmp_path):
+    """No transcript file is 'this run predates it', never 'no boundaries'.
+
+    Absent and empty are different answers, and every run written before the
+    transcript existed has no file — reading that as "nothing was injected"
+    would be a wrong fact about the busiest runs in the archive.
+    """
+    from brr.cli import _wake_dump
+
+    run_dir = _run_dir_with(tmp_path, prompt="# the wake\n")
+    out = _wake_dump(run_dir, boot=True, limit=None)
+
+    assert "predates the boundary transcript" in out
+    assert "hook fire(s)" not in out
+
+
+def test_wake_dump_limit_says_it_is_showing_only_the_first_n(tmp_path):
+    from brr.cli import _wake_dump
+
+    run_dir = _run_dir_with(
+        tmp_path,
+        prompt="# the wake\n",
+        boundaries=[
+            {"at": f"2026-07-27T17:2{i}:00Z", "phase": "post-tool",
+             "inject": f"tick {i}", "block": False, "block_reason": None}
+            for i in range(5)
+        ],
+    )
+    out = _wake_dump(run_dir, boot=False, limit=2)
+
+    assert "5 hook fire(s), showing the first 2" in out
+    assert "tick 1" in out
+    assert "tick 4" not in out
+    assert "# the wake" not in out  # --no-boot
+
+
+def test_wake_dump_names_a_missing_boot_rather_than_omitting_it(tmp_path):
+    from brr.cli import _wake_dump
+
+    run_dir = _run_dir_with(tmp_path, boundaries=[])
+    out = _wake_dump(run_dir, boot=True, limit=None)
+
+    assert "absent: no `prompt.md`" in out
