@@ -12,8 +12,12 @@ copies.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -68,6 +72,52 @@ def commit_files(
         cwd=repo, check=True, capture_output=True, text=True,
     )
     return head.stdout.strip()
+
+
+@contextlib.contextmanager
+def rejecting_git_http_remote(
+    *,
+    status: int = 401,
+    body: str = "Authentication required\n",
+):
+    """Yield a real HTTP remote endpoint that refuses every git request."""
+
+    class RejectingHandler(BaseHTTPRequestHandler):
+        def _reject(self) -> None:
+            payload = body.encode("utf-8")
+            self.send_response(status)
+            if status == 401:
+                self.send_header("WWW-Authenticate", 'Basic realm="private git"')
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = _reject
+        do_POST = _reject
+
+        def log_message(self, _format, *_args) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RejectingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        yield f"http://{host}:{port}/private.git"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def unreachable_git_http_remote() -> str:
+    """Return a localhost HTTP URL whose just-reserved port is closed."""
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        host, port = sock.getsockname()
+    return f"http://{host}:{port}/private.git"
 
 
 # ── daemon-test scaffolding ─────────────────────────────────────────

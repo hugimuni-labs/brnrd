@@ -785,17 +785,22 @@ def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
 # capture commits stray direct writes *first*, then pushes.
 
 
+def needs_sync_status(brr_dir: Path) -> str | None:
+    """The knowledge marker's failure class, or ``None`` when unclassified."""
+    return gitops.read_sync_status(brr_dir, SYNC_MARKER_FILE)
+
+
 def needs_sync(brr_dir: Path) -> str | None:
     """Return the knowledge sync-needed reason, or ``None`` when in sync.
 
-    Same divergence protocol as the dominion's marker — one mechanism
+    Same classified failure protocol as the dominion's marker — one mechanism
     (:func:`brr.gitops.read_sync_marker`), two memories.
     """
     return gitops.read_sync_marker(brr_dir, SYNC_MARKER_FILE)
 
 
-def mark_needs_sync(brr_dir: Path, reason: str) -> None:
-    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
+def mark_needs_sync(brr_dir: Path, reason: str, *, status: str = "") -> None:
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason, status=status)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
@@ -821,10 +826,10 @@ def capture(
     markdown pages this capture found dirty (relative to the kb root); this
     lets closeout derive kb relics from the same evidence it commits instead
     of relying on resident bookkeeping. Symmetric with
-    :func:`brr.dominion.commit`: a clean chain is a no-op, a *rejected*
-    push to the forge sets a ``needs_sync`` marker (the remote diverged —
-    reconciling is the resident's judgement, not something to paper over),
-    and a successful push clears it.
+    :func:`brr.dominion.commit`: a clean chain is a no-op, a failed forge
+    push sets a classified ``needs_sync`` marker, and a successful push
+    clears it. Only non-fast-forward rejection asks the resident to reconcile
+    refs; access and reachability failures say what actually broke.
 
     ``mirror_notes``, when supplied, is extended with the reason the
     ``.brnrd-kb/`` mirror was left behind, if it was (#659) — a stale mirror
@@ -928,15 +933,21 @@ def capture(
             if not remote:
                 return moved
             if _ahead_of_upstream(home_knowledge) or needs_sync(brr_dir):
-                if gitops.push_branch(home_knowledge, remote, branch):
+                push_result = gitops.push_branch(home_knowledge, remote, branch)
+                if push_result:
                     moved = True
                     clear_needs_sync(brr_dir)
                 else:
                     mark_needs_sync(
                         brr_dir,
-                        f"push of {branch} to {remote} was rejected — the knowledge "
-                        f"remote has diverged; reconcile by hand (fetch / merge / "
-                        f"push) in {home_knowledge}",
+                        gitops.format_push_failure(
+                            push_result,
+                            branch=branch,
+                            remote=remote,
+                            remote_label="the knowledge remote",
+                            repo_path=home_knowledge,
+                        ),
+                        status=push_result.status.value,
                     )
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
         return moved
