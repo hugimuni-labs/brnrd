@@ -31,6 +31,7 @@ fields. Keeping that split is what lets one endpoint serve three runners.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -78,6 +79,11 @@ GATELESS_ROUTING_KEY = "gateless_routing_noted"
 # than promoting the portal-derived `inject` lines in place.
 CARD_NAME = ".card"
 FORGE_HANDOFF_NAME = ".forge-handoff"
+# The local CI-gate receipt: written by whatever command the repo declares as
+# its gate (`hooks.gate_command`), read by `_gate_closeout_clause`. brr never
+# names or runs that command — the repo does — so this file is the entire
+# interface between a project's gate and the guard that checks it ran.
+GATE_RECEIPT_NAME = ".gate-receipt.json"
 # Resident-authored mood glyph/name (#566 layer 2 — the daemon-derived mood
 # is computed elsewhere; this is the resident's own meta-channel). A control
 # dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
@@ -157,6 +163,12 @@ class HookContext:
         self.forge_gate = (
             env.get("BRR_FORGE_GATE") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        # The command this repo calls its CI gate, verbatim from `.brr/config`
+        # (`hooks.gate_command`) via the daemon. brr owns no opinion about what
+        # a project's gate is — it only knows the name to say back when the
+        # receipt is missing. Unset ⇒ the `gate` obligation is unassertable and
+        # stays silent, the same doctrine as `BRR_REPO_DIR`.
+        self.gate_command = (env.get("BRR_GATE_COMMAND") or "").strip() or None
         self.flush_sync = (
             env.get("BRR_FLUSH_SYNC") or ""
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -1906,6 +1918,123 @@ def _scm_closeout_clause(ctx: "HookContext") -> str | None:
     )
 
 
+def _untracked_digest(repo: Path) -> str:
+    """Content digest of every untracked, non-ignored file in `repo`.
+
+    The one piece of shared *composition* between this guard and whatever
+    writes the receipt — everything else compares git's raw output against
+    git's raw output. Two implementations of one rule is the shape where
+    copies agree and are wrong together (#722), so it is pinned by a test that
+    drives both sides against the same repository rather than by care.
+    """
+    listing = _git_out(repo, ["ls-files", "--others", "--exclude-standard"])
+    if not listing:
+        return ""
+    paths = [line for line in listing.splitlines() if line]
+    if not paths:
+        return ""
+    hashes = _git_out(repo, ["hash-object", "--", *paths]) or ""
+    return hashlib.sha256(
+        "\n".join(
+            f"{path}\t{blob}" for path, blob in zip(paths, hashes.splitlines())
+        ).encode("utf-8", "replace")
+    ).hexdigest()
+
+
+def _gate_closeout_clause(ctx: "HookContext") -> str | None:
+    """The `gate` closeout obligation: a run changed the tree and never ran the
+    project's own CI gate on *this* tree.
+
+    The failure this exists for is not laziness, it is arithmetic. A resident
+    runs the test command it remembers — `pytest` — and reports green, while CI
+    defines four legs in two working directories. The rule *"run what CI runs"*
+    was written into this account's standing memory and broken twice within an
+    hour by its author; a project-level instruction (`AGENTS.md`) sits in a
+    38 KB file a wake is explicitly allowed to skip. Prose in a bigger, more
+    skippable place is not the escalation rung, it is the same rung repainted.
+    The rung is: **make forgetting checkable**, then check it at the one moment
+    the claim is about to ship.
+
+    Guard doctrine, clause by clause — this may only assert what an artifact
+    proves, and it is silent everywhere else:
+
+    - **no declared gate** (`hooks.gate_command` unset) ⇒ silent. brr does not
+      know what a stranger's gate is and never guesses one.
+    - **git unreadable** ⇒ silent, like `_scm_closeout_clause`.
+    - **nothing changed** ⇒ silent. The referent for *is a gate owed* is CI's
+      own trigger: `ci.yml` filters no paths, so anything this run changed is
+      something CI will run on. A repo whose CI is path-filtered wants that
+      filter read, not a list maintained here — noted as the next honest
+      narrowing, not faked now.
+    - **receipt present and matching** ⇒ silent, *including when it is RED*.
+      The obligation is that the gate ran on this tree, never that it passed:
+      a run may end red and report it. A run that never looked is the defect.
+    """
+    if not ctx.gate_command:
+        return None
+    repo = ctx.repo_dir
+    if repo is None or not repo.exists():
+        return None
+    head = _git_out(repo, ["rev-parse", "HEAD"])
+    status = _git_out(repo, ["status", "--porcelain"])
+    diff = _git_out(repo, ["diff", "HEAD"])
+    if head is None or status is None or diff is None:
+        return None
+
+    # Did this run change anything at all? Commits beyond the seed, a dirty
+    # tree, or commits the remote has not seen. The third is not redundant: a
+    # host run that commits straight onto `main` moves the seed with it, so
+    # `merge-base(main, HEAD) == HEAD` and the first count reads zero on a run
+    # that changed plenty.
+    seed = ctx.seed_ref or "HEAD"
+    base = seed
+    merge_base = _git_out(repo, ["merge-base", seed, "HEAD"])
+    if merge_base and merge_base.strip():
+        base = merge_base.strip()
+    commits = 0
+    count = _git_out(repo, ["rev-list", "--count", f"{base}..HEAD"])
+    if count and count.strip().isdigit():
+        commits = int(count.strip())
+    unpushed = 0
+    ahead = _git_out(repo, ["rev-list", "--count", "@{upstream}..HEAD"])
+    if ahead is not None and ahead.strip().isdigit():
+        unpushed = int(ahead.strip())
+    if commits == 0 and unpushed == 0 and not status.strip():
+        return None
+    changed = max(commits, unpushed)
+
+    # `_read_json` collapses absent, unreadable and malformed into `{}`. That
+    # collapse is deliberate here rather than sloppy: all three mean *no
+    # trustworthy record that the gate ran*, and the direction this claim is
+    # allowed to be wrong in is the pessimistic one.
+    receipt = _read_json(
+        ctx.outbox_dir / GATE_RECEIPT_NAME if ctx.outbox_dir else None
+    )
+    if not receipt:
+        return (
+            f"the gate never ran — {changed} commit(s) and a changed tree, no "
+            f"`{ctx.gate_command}` receipt. The test command you remember is "
+            f"one leg of what CI runs; run `{ctx.gate_command}` before "
+            f"claiming green"
+        )
+    stale = (
+        receipt.get("head") != head.strip()
+        or receipt.get("status") != status
+        or receipt.get("diff_digest")
+        != hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()
+        or receipt.get("untracked_digest", "") != _untracked_digest(repo)
+    )
+    if stale:
+        return (
+            f"the gate ran on a different tree than the one you are ending on "
+            f"(receipt: {str(receipt.get('verdict') or '?')} at "
+            f"{str(receipt.get('head') or '?')[:8]}). Re-run "
+            f"`{ctx.gate_command}` — a green verdict for a tree you have since "
+            f"edited is a claim about code nobody ran"
+        )
+    return None
+
+
 def _render_closeout_capsule(unmet: list[str]) -> str:
     """One differential capsule naming every unmet obligation — the closeout
     twin of the SessionStart capsule, listing what is still open rather than
@@ -1975,6 +2104,14 @@ def _armed_closeout_block(
     # SCM is not a file-existence check but a fresh-git computation, so it
     # lives outside the artifact loop. Last in the capsule: the reply-shape and
     # the control files come first, the land-the-work imperative closes it.
+    # Same shape as `scm` — a fresh-git computation, not a file-existence
+    # check. Ordered *before* it: "you never ran the gate" is a claim about the
+    # work being right, and it should be read before "now land it".
+    if "gate" in ctx.closeout_obligations:
+        gate_clause = _gate_closeout_clause(ctx)
+        if gate_clause:
+            unmet.append(gate_clause)
+
     if "scm" in ctx.closeout_obligations:
         scm_clause = _scm_closeout_clause(ctx)
         if scm_clause:
