@@ -2026,6 +2026,89 @@ def test_notify_spawn_parent_worker_ran_declared_mismatch_still_indicts(tmp_path
 # ── #648: spawn_completed carries child produce handles ─────────────────────
 
 
+def test_notify_spawn_parent_carries_publish_count_and_reply_bytes(
+    tmp_path, monkeypatch,
+):
+    """A pushed child carries both produce facts through the real publish and
+    notification paths; substantial produce needs no extra prose annotation.
+    """
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    inbox = brr_dir / "inbox"
+    response = tmp_path / "response.md"
+    reply = "é" * (daemon._SPAWN_NOTIFY_RESPONSE_MAX_CHARS + 10)
+    response.write_text(reply, encoding="utf-8")
+    task = Run(
+        id="run-child", event_id="evt-child", body="",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "publish_branch": "brr/delivered",
+            "response_path": str(response),
+        },
+    )
+    monkeypatch.setattr(daemon, "_refuse_publish", lambda *_a: None)
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(
+        daemon.gitops, "branch_upstream",
+        lambda _r, branch: f"origin/{branch}",
+    )
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda *_a: "origin")
+    monkeypatch.setattr(
+        daemon, "_commits_between", lambda *_a: ["first", "second"],
+    )
+    monkeypatch.setattr(
+        daemon.subprocess, "run",
+        lambda args, **_kw: daemon.subprocess.CompletedProcess(args, 0, "", ""),
+    )
+
+    # Production order: publish stamps the Run, then the parent-reap path
+    # asks the notifier to build the event. No event dict is assembled here.
+    daemon.publish(tmp_path, task)
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_commits") == 2
+    assert note.get("spawn_reply_bytes") == len(reply.encode("utf-8"))
+    assert "…(truncated)" in note["body"]
+    assert "\nproduce:" not in note["body"]
+
+
+def test_notify_spawn_parent_present_empty_reply_is_a_real_zero(tmp_path):
+    """An existing zero-byte response is known produce, not an absent fact."""
+    inbox = tmp_path / ".brr" / "inbox"
+    response = tmp_path / "response.md"
+    response.write_bytes(b"")
+    task = _spawn_child_run(body="")
+    task.meta["response_path"] = str(response)
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note.get("spawn_reply_bytes") == 0
+    assert "spawn_commits" not in note
+    assert "produce:" in note["body"]
+    assert "reply 0 B" in note["body"]
+    assert "empty" not in note["body"].lower()
+
+
+def test_notify_spawn_parent_unknown_reply_stays_absent(tmp_path):
+    """No response_path is unknown, so it must never be rendered as zero."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = _spawn_child_run(body="")
+    assert "response_path" not in task.meta
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert "spawn_reply_bytes" not in note
+    assert "spawn_commits" not in note
+    assert "reply 0 B" not in note["body"]
+    assert "\nproduce:" in note["body"]
+    assert "reply unknown" in note["body"]
+
+
 def test_notify_spawn_parent_clean_reap_carries_produce_handles(tmp_path):
     """A clean spawn reap emits branch, PR number, and report path/found as
     structured frontmatter keys on the spawn_completed event.
