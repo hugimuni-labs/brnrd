@@ -7,6 +7,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 try:  # pragma: no cover - POSIX only, and every supported host is POSIX
@@ -63,19 +64,37 @@ def file_lock(lock_path: Path, timeout: float = 30.0):
         os.close(fd)
 
 
-# ── Divergence markers ───────────────────────────────────────────────
+# ── Capture sync markers ─────────────────────────────────────────────
 #
 # One protocol, two memories. A capture net (dominion, knowledge) pushes
-# best-effort; a *rejected* push is never swallowed — it writes a marker to
-# the gitignored runtime dir, the wake prompt surfaces it, and the resident
-# reconciles by hand (fetch / merge / resolve / push is judgement, not a
-# reflex the daemon should fake). A successful push clears it.
+# best-effort; a failed push is never mislabeled or swallowed — it writes a
+# classified marker to the gitignored runtime dir and the wake prompt surfaces
+# it. Only a non-fast-forward rejection asks the resident to reconcile refs by
+# hand. A successful push clears the marker.
 
 
-def write_sync_marker(brr_dir: Path, name: str, reason: str) -> None:
+_SYNC_STATUS_PREFIX = "status: "
+
+
+def write_sync_marker(
+    brr_dir: Path, name: str, reason: str, *, status: str = "",
+) -> None:
+    """Write a capture-sync marker, optionally carrying its failure class.
+
+    The classification is written as a machine-readable first line
+    (``status: <PushStatus value>``) ahead of the human sentence, because
+    the wake prompt has to *render* the failure and a renderer that
+    re-derives the class by matching the sentence is a second copy of the
+    classifier — the thing this whole change exists to remove. Absent
+    status ⇒ the marker is a bare reason, which is what every pre-#786
+    marker on disk already is.
+    """
     try:
         brr_dir.mkdir(parents=True, exist_ok=True)
-        (brr_dir / name).write_text(reason.strip() + "\n", encoding="utf-8")
+        body = reason.strip()
+        if status:
+            body = f"{_SYNC_STATUS_PREFIX}{status}\n{body}"
+        (brr_dir / name).write_text(body + "\n", encoding="utf-8")
     except OSError:
         pass
 
@@ -88,11 +107,35 @@ def clear_sync_marker(brr_dir: Path, name: str) -> None:
 
 
 def read_sync_marker(brr_dir: Path, name: str) -> str | None:
+    """Return the marker's human sentence, status line stripped."""
+    return _read_sync_marker_parts(brr_dir, name)[1]
+
+
+def read_sync_status(brr_dir: Path, name: str) -> str | None:
+    """Return the marker's :class:`PushStatus` value, or ``None``.
+
+    ``None`` covers both "no marker" and "a marker written before markers
+    carried a class" — a caller must treat an unknown class as *unknown*,
+    never as divergence. That defaulting is the original defect.
+    """
+    return _read_sync_marker_parts(brr_dir, name)[0]
+
+
+def _read_sync_marker_parts(
+    brr_dir: Path, name: str,
+) -> tuple[str | None, str | None]:
     try:
         text = (brr_dir / name).read_text(encoding="utf-8").strip()
     except OSError:
-        return None
-    return text or None
+        return None, None
+    if not text:
+        return None, None
+    head, _, rest = text.partition("\n")
+    if head.startswith(_SYNC_STATUS_PREFIX):
+        status = head[len(_SYNC_STATUS_PREFIX):].strip() or None
+        reason = rest.strip() or None
+        return status, reason
+    return None, text
 
 
 @dataclass
@@ -103,6 +146,29 @@ class BranchUpdateResult:
     branch: str
     commit: str = ""
     detail: str = ""
+
+
+class PushStatus(str, Enum):
+    """Outcome class for a best-effort git push."""
+
+    OK = "ok"
+    REJECTED_NON_FAST_FORWARD = "rejected_non_fast_forward"
+    AUTH_FAILED = "auth_failed"
+    UNREACHABLE = "unreachable"
+    OTHER = "other"
+
+
+@dataclass(frozen=True)
+class PushResult:
+    """Structured push outcome with backward-compatible truthiness."""
+
+    status: PushStatus
+    detail: str = ""
+    remote_url: str = ""
+    transport: str = "unknown"
+
+    def __bool__(self) -> bool:
+        return self.status is PushStatus.OK
 
 
 # Git's two environment-level repository overrides. Both outrank *every*
@@ -140,12 +206,12 @@ def explicit_repo_env(base: dict[str, str] | None = None) -> dict[str, str]:
 # — #475 split those two, and #746 re-opened the split by a different route:
 # identity resolution fell through to the shared checkout's config and a
 # daemon-made commit was authored *and* committed as the human maintainer,
-# in their own repository, with a message they never wrote. Values are the
-# ones ``repo_deed`` had been carrying as its no-identity fallback; they are
+# in their own repository, with a message they never wrote. The identity is
 # stated once, here, next to the other environment invariant every git call
-# in this module already obeys.
-BOT_NAME = "brnrd"
-BOT_EMAIL = "brnrd@users.noreply.github.com"
+# in this module already obeys. The numeric-id noreply form cannot be
+# reassigned to another GitHub login.
+BOT_NAME = "brnrd-bot"
+BOT_EMAIL = "289761152+brnrd-bot@users.noreply.github.com"
 
 
 def bot_identity_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -710,16 +776,136 @@ def push_branch(
     branch: str,
     *,
     set_upstream: bool = True,
-) -> bool:
-    """Push local *branch* to *remote*. Best-effort; returns success."""
+) -> PushResult:
+    """Push local *branch* to *remote* and classify any failure.
+
+    ``PushResult`` keeps the old boolean contract: successful results are
+    truthy and every failure is falsey.
+    """
+    configured_url = remote_url(repo_root, remote) or remote
+    transport = _remote_transport(configured_url)
     if not remote or not branch:
-        return False
+        return PushResult(
+            PushStatus.OTHER,
+            detail="remote and branch are required",
+            remote_url=configured_url,
+            transport=transport,
+        )
     args = ["push"]
     if set_upstream:
         args.append("-u")
     args += [remote, branch]
     result = _git(repo_root, *args, check=False)
-    return result.returncode == 0
+    if result.returncode == 0:
+        return PushResult(
+            PushStatus.OK,
+            remote_url=configured_url,
+            transport=transport,
+        )
+    detail = result.stderr.strip()
+    return PushResult(
+        _classify_push_failure(detail),
+        detail=detail,
+        remote_url=configured_url,
+        transport=transport,
+    )
+
+
+def _remote_transport(url: str) -> str:
+    """Name the configured transport for a remote URL."""
+    value = url.strip()
+    lowered = value.lower()
+    if lowered.startswith("ssh://") or (
+        "://" not in value
+        and ":" in value
+        and "@" in value.split(":", 1)[0]
+    ):
+        return "SSH"
+    if lowered.startswith("https://"):
+        return "HTTPS"
+    if lowered.startswith("http://"):
+        return "HTTP"
+    if lowered.startswith("file://") or value.startswith(("/", "./", "../")):
+        return "local"
+    if "://" in value:
+        return value.split("://", 1)[0].upper()
+    return "unknown"
+
+
+def _classify_push_failure(stderr: str) -> PushStatus:
+    """Classify git-push stderr without treating an unknown as divergence."""
+    detail = stderr.lower()
+    non_fast_forward = (
+        "non-fast-forward",
+        "(fetch first)",
+        "updates were rejected because the remote contains work",
+    )
+    if any(marker in detail for marker in non_fast_forward):
+        return PushStatus.REJECTED_NON_FAST_FORWARD
+
+    auth_failed = (
+        "authentication failed",
+        "permission denied (publickey)",
+        "could not read username",
+        "invalid username or password",
+        "http basic: access denied",
+        "repository not found",
+        "remote: not found",
+        "requested url returned error: 401",
+        "requested url returned error: 403",
+        "requested url returned error: 404",
+    )
+    if any(marker in detail for marker in auth_failed):
+        return PushStatus.AUTH_FAILED
+
+    unreachable = (
+        "could not resolve host",
+        "could not resolve hostname",
+        "connection timed out",
+        "connection refused",
+        "network is unreachable",
+        "couldn't connect to server",
+        "failed to connect to",
+        "no route to host",
+        "connection reset by peer",
+    )
+    if any(marker in detail for marker in unreachable):
+        return PushStatus.UNREACHABLE
+    return PushStatus.OTHER
+
+
+def format_push_failure(
+    result: PushResult,
+    *,
+    branch: str,
+    remote: str,
+    remote_label: str,
+    repo_path: Path,
+) -> str:
+    """Render one truthful capture marker sentence for a failed push."""
+    if result.status is PushStatus.REJECTED_NON_FAST_FORWARD:
+        return (
+            f"push of {branch} to {remote} was rejected — {remote_label} "
+            f"has diverged; reconcile by hand (fetch / merge / push) in "
+            f"{repo_path}"
+        )
+    if result.status is PushStatus.AUTH_FAILED:
+        return (
+            f"push of {branch} to {remote} failed authentication against "
+            f"{result.remote_url} over {result.transport} — check remote "
+            f"access in {repo_path}"
+        )
+    if result.status is PushStatus.UNREACHABLE:
+        return (
+            f"push of {branch} to {remote} could not reach {result.remote_url} "
+            f"over {result.transport} — check the network or remote "
+            f"availability in {repo_path}"
+        )
+    return (
+        f"push of {branch} to {remote} failed for an unclassified reason "
+        f"against {result.remote_url} over {result.transport} — retry from "
+        f"{repo_path} to inspect git's error"
+    )
 
 
 # Git trailer stamped on every brr-created commit so brnrd's metadata-only

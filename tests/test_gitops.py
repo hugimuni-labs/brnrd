@@ -4,6 +4,9 @@ import subprocess
 from pathlib import Path
 
 from brr.gitops import (
+    BOT_EMAIL,
+    BOT_NAME,
+    PushStatus,
     branch_head,
     commit_all,
     current_branch,
@@ -11,6 +14,7 @@ from brr.gitops import (
     fast_forward_branch,
     is_tracked,
     main_worktree_root,
+    push_branch,
     shared_brr_dir,
 )
 from brr.worktree import (
@@ -25,12 +29,125 @@ from brr.worktree import (
     remove,
 )
 
-from _helpers import init_git_repo
+from _helpers import (
+    commit_files,
+    init_git_repo,
+    rejecting_git_http_remote,
+    unreachable_git_http_remote,
+)
 
 
 def _init_repo(repo: Path) -> str:
     init_git_repo(repo)
     return "main"
+
+
+def _committed_repo(tmp_path: Path, name: str = "repo") -> Path:
+    repo = tmp_path / name
+    init_git_repo(repo)
+    commit_files(repo, {"README.md": "base\n"})
+    return repo
+
+
+def test_bot_identity_uses_the_stable_github_numeric_id_form():
+    assert BOT_NAME == "brnrd-bot"
+    assert BOT_EMAIL == "289761152+brnrd-bot@users.noreply.github.com"
+
+
+def test_push_branch_success_is_structured_and_truthy(tmp_path):
+    repo = _committed_repo(tmp_path)
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(remote)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+
+    result = push_branch(repo, "origin", "main")
+
+    assert result
+    assert result.status is PushStatus.OK
+    assert result.remote_url == str(remote)
+    assert result.transport == "local"
+
+
+def test_push_branch_classifies_non_fast_forward_rejection(tmp_path):
+    repo = _committed_repo(tmp_path, "a")
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(repo), str(remote)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+    other = tmp_path / "b"
+    subprocess.run(
+        ["git", "clone", str(remote), str(other)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    commit_files(other, {"other.txt": "other\n"}, message="other")
+    subprocess.run(["git", "push", "origin", "main"], cwd=other, check=True)
+    commit_files(repo, {"mine.txt": "mine\n"}, message="mine")
+
+    result = push_branch(repo, "origin", "main", set_upstream=False)
+
+    assert not result
+    assert result.status is PushStatus.REJECTED_NON_FAST_FORWARD
+
+
+def test_push_branch_classifies_real_http_authentication_failure(
+    tmp_path, monkeypatch,
+):
+    repo = _committed_repo(tmp_path)
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    with rejecting_git_http_remote() as url:
+        subprocess.run(["git", "remote", "add", "origin", url], cwd=repo, check=True)
+        result = push_branch(repo, "origin", "main", set_upstream=False)
+
+    assert not result
+    assert result.status is PushStatus.AUTH_FAILED
+    assert result.remote_url == url
+    assert result.transport == "HTTP"
+
+
+def test_push_branch_treats_private_repo_404_as_authentication_failure(
+    tmp_path,
+):
+    repo = _committed_repo(tmp_path)
+    with rejecting_git_http_remote(
+        status=404, body="Repository not found\n",
+    ) as url:
+        subprocess.run(["git", "remote", "add", "origin", url], cwd=repo, check=True)
+        result = push_branch(repo, "origin", "main", set_upstream=False)
+
+    assert not result
+    assert result.status is PushStatus.AUTH_FAILED
+
+
+def test_push_branch_classifies_unreachable_remote(tmp_path):
+    repo = _committed_repo(tmp_path)
+    url = unreachable_git_http_remote()
+    subprocess.run(["git", "remote", "add", "origin", url], cwd=repo, check=True)
+
+    result = push_branch(repo, "origin", "main", set_upstream=False)
+
+    assert not result
+    assert result.status is PushStatus.UNREACHABLE
+    assert result.remote_url == url
+    assert result.transport == "HTTP"
+
+
+def test_push_branch_leaves_unrecognised_failure_as_other(tmp_path):
+    repo = _committed_repo(tmp_path)
+    missing = tmp_path / "missing.git"
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(missing)], cwd=repo, check=True,
+    )
+
+    result = push_branch(repo, "origin", "main", set_upstream=False)
+
+    assert not result
+    assert result.status is PushStatus.OTHER
+    assert "does not appear to be a git repository" in result.detail
 
 
 def test_is_tracked(tmp_path, monkeypatch):

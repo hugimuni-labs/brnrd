@@ -16,7 +16,12 @@ import subprocess
 from brr import daemon, dominion, gitops
 from brr.run import Run
 
-from _helpers import commit_files, init_git_repo
+from _helpers import (
+    commit_files,
+    init_git_repo,
+    rejecting_git_http_remote,
+    unreachable_git_http_remote,
+)
 
 
 def _repo(tmp_path, name="repo"):
@@ -182,3 +187,61 @@ def test_commit_marks_needs_sync_on_rejected_push(tmp_path):
     reason = dominion.needs_sync(path_a.parent)
     assert reason is not None
     assert "diverged" in reason
+    assert "fetch / merge / push" in reason
+
+
+def test_commit_marks_auth_failure_without_inventing_divergence(
+    tmp_path, monkeypatch,
+):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    with rejecting_git_http_remote() as url:
+        subprocess.run(["git", "remote", "add", "private", url], cwd=repo, check=True)
+        (path / "note.md").write_text("capture me\n", encoding="utf-8")
+        assert dominion.commit(
+            path, "capture", remote="private", branch="brr-home", push=True,
+        ) is True
+
+    reason = dominion.needs_sync(path.parent) or ""
+    assert f"failed authentication against {url} over HTTP" in reason
+    assert str(path) in reason
+    assert "diverged" not in reason
+    assert "merge" not in reason
+
+
+def test_commit_marks_unreachable_without_prescribing_a_merge(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    url = unreachable_git_http_remote()
+    subprocess.run(["git", "remote", "add", "offline", url], cwd=repo, check=True)
+    (path / "note.md").write_text("capture me\n", encoding="utf-8")
+
+    assert dominion.commit(
+        path, "capture", remote="offline", branch="brr-home", push=True,
+    ) is True
+
+    reason = dominion.needs_sync(path.parent) or ""
+    assert f"could not reach {url} over HTTP" in reason
+    assert str(path) in reason
+    assert "diverged" not in reason
+    assert "merge" not in reason
+
+
+def test_commit_marks_unclassified_push_failure_as_unclassified(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    missing = tmp_path / "missing.git"
+    subprocess.run(
+        ["git", "remote", "add", "broken", str(missing)], cwd=repo, check=True,
+    )
+    (path / "note.md").write_text("capture me\n", encoding="utf-8")
+
+    assert dominion.commit(
+        path, "capture", remote="broken", branch="brr-home", push=True,
+    ) is True
+
+    reason = dominion.needs_sync(path.parent) or ""
+    assert f"unclassified reason against {missing} over local" in reason
+    assert str(path) in reason
+    assert "diverged" not in reason

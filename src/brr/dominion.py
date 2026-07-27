@@ -212,25 +212,29 @@ def _commit_lock(dominion_dir: Path, timeout: float):
     return gitops.file_lock(dominion_dir.parent / COMMIT_LOCK_FILE, timeout)
 
 
-def mark_needs_sync(brr_dir: Path, reason: str) -> None:
-    """Record that the dominion's remote diverged (a push was rejected).
+def mark_needs_sync(brr_dir: Path, reason: str, *, status: str = "") -> None:
+    """Record why the dominion could not reach its remote.
 
     A best-effort hint, written to the runtime dir (gitignored), surfaced
-    in the next wake prompt so the resident reconciles the dominion remote
-    itself — pull / merge / resolve / push is git-layer dissonance resolution,
-    the agent's judgement, not the daemon's (``kb/design-self-scheduled-
-    thoughts.md`` → sync companion). Cleared by the next successful push.
+    in the next wake prompt so the resident responds to the real failure.
+    Ref reconciliation remains the agent's judgement only when git reports
+    a non-fast-forward rejection. Cleared by the next successful push.
 
     The mechanism is shared with the knowledge chain's marker
-    (:func:`brr.gitops.write_sync_marker`) — two memories, one divergence
+    (:func:`brr.gitops.write_sync_marker`) — two memories, one failure
     protocol.
     """
-    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason, status=status)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
     """Clear the dominion sync-needed marker (best-effort)."""
     gitops.clear_sync_marker(brr_dir, SYNC_MARKER_FILE)
+
+
+def needs_sync_status(brr_dir: Path) -> str | None:
+    """The dominion marker's failure class, or ``None`` when unclassified."""
+    return gitops.read_sync_status(brr_dir, SYNC_MARKER_FILE)
 
 
 def needs_sync(brr_dir: Path) -> str | None:
@@ -267,13 +271,12 @@ def commit(
     must never break the thought that produced it.
 
     **Push is a durability floor, not a merge.** When *push* is on, brr
-    best-effort pushes the dominion repo after committing. A *rejected* push
-    (the remote diverged — a second machine / failover host wrote it) is
-    **not** silently swallowed: it sets a ``needs_sync`` marker so the next
-    thought reconciles by hand (fetch / merge / resolve / push is the
-    agent's judgement). A successful push clears the marker — including a
-    clean-tree no-op push, so a resident that reconciled out-of-band clears
-    its own stale marker on the next capture.
+    best-effort pushes the dominion repo after committing. A failed push is
+    **not** silently swallowed: it sets a classified ``needs_sync`` marker so
+    the next thought fixes credentials or reachability, or reconciles refs
+    only for a non-fast-forward rejection. A successful push clears the
+    marker — including a clean-tree no-op push, so a resident that repaired
+    the failure out-of-band clears its stale marker on the next capture.
     """
     if not dominion_dir.is_dir():
         return False
@@ -293,14 +296,20 @@ def commit(
             # (clean tree but a marker is set — the agent may have just
             # reconciled). Otherwise leave the network alone.
             if target and target != "HEAD" and (committed or needs_sync(brr_dir)):
-                if gitops.push_branch(dominion_dir, remote, target):
+                push_result = gitops.push_branch(dominion_dir, remote, target)
+                if push_result:
                     clear_needs_sync(brr_dir)
                 else:
                     mark_needs_sync(
                         brr_dir,
-                        f"push of {target} to {remote} was rejected — the "
-                        f"dominion's remote has diverged; reconcile by hand "
-                        f"(fetch / merge / push) in {dominion_dir}",
+                        gitops.format_push_failure(
+                            push_result,
+                            branch=target,
+                            remote=remote,
+                            remote_label="the dominion's remote",
+                            repo_path=dominion_dir,
+                        ),
+                        status=push_result.status.value,
                     )
         return committed
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
