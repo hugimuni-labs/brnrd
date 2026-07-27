@@ -18,8 +18,12 @@ second parser here would reopen it one layer up.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from typing import Any
+
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from brr.gates.cloud import (
@@ -29,7 +33,8 @@ from brr.gates.cloud import (
     _resolve_publish_scopes,
 )
 
-from .models import Repo
+from .db import Base
+from .models import Account, Repo
 
 # New connects consent explicitly and the product default is off — never the
 # daemon-side "absent means everything" rule, which is a legacy-config
@@ -101,6 +106,207 @@ def _repo_scopes(publish_layers: str | None) -> tuple[frozenset[str], frozenset[
     if publish_layers is None:
         return _resolve_publish_scopes({"publish.layers": OFF})
     return _resolve_publish_scopes({"publish.layers": publish_layers})
+
+
+def _purge_targets() -> list[tuple[str, str, type, str | None]]:
+    """Persisted publish stores, discovered from their model metadata.
+
+    A model-level marker describes a repo-keyed row store such as
+    ``ActivityRecord``.  Column markers describe JSON/scalar mirror fields.
+    The canonical lane vocabulary remains ``LANES``; this discovery is
+    deliberately checked against it so a newly registered publisher cannot
+    exist without a withdrawal target.
+    """
+    targets: list[tuple[str, str, type, str | None]] = []
+    for mapper in Base.registry.mappers:
+        model = mapper.class_
+        lane = getattr(model, "__publish_lane__", None)
+        purge = getattr(model, "__publish_purge__", None)
+        if isinstance(lane, str) and isinstance(purge, str):
+            targets.append((lane, purge, model, None))
+        for column in mapper.columns:
+            lane = column.info.get("publish_lane")
+            purge = column.info.get("publish_purge")
+            if isinstance(lane, str) and isinstance(purge, str):
+                targets.append((lane, purge, model, column.key))
+    return targets
+
+
+def purge_storage_lanes() -> frozenset[str]:
+    """Canonical publish lanes for which persisted purge targets exist.
+
+    Raises when discovery and the canonical vocabulary disagree, so a new
+    publisher cannot ship without a withdrawal target. **This is a
+    development-time assertion and it is deliberately not called on the
+    withdrawal path** — see ``purge_removed_scope``. A user must never be
+    unable to withdraw consent because *we* forgot to mark a store.
+    """
+    targets = _purge_targets()
+    covered = frozenset(lane for lane, _purge, _model, _field in targets)
+    canonical = frozenset(LANES)
+    if covered != canonical:
+        missing = sorted(canonical - covered)
+        unknown = sorted(covered - canonical)
+        raise RuntimeError(
+            "publish purge storage does not match the canonical lane vocabulary: "
+            f"missing={missing}, unknown={unknown}"
+        )
+    return covered
+
+
+def _transition_scopes(value: str | None) -> tuple[frozenset[str], frozenset[str]]:
+    """Scopes whose stored copies ``value`` currently permits.
+
+    ``_repo_scopes`` is total and reads legacy ``NULL`` as ``OFF``. Recording
+    a scope on an old row is therefore a widening from nothing, not a
+    narrowing from the permissive state that existed before #778.
+    """
+    return _repo_scopes(value)
+
+
+_UNPARSEABLE = object()
+
+
+def _json_list(raw: Any) -> list[Any] | object:
+    """Stored mirror content as a list, or ``_UNPARSEABLE``.
+
+    **Never raises.** An earlier shape answered malformed stored JSON with a
+    409 *"publish scope was not changed"* — which makes our own corrupt render
+    cache a reason the user cannot withdraw their consent, and that is the one
+    direction this whole module exists to forbid (GDPR Art 7(3): withdrawal at
+    least as easy as consent). The caller treats this sentinel as *erase the
+    whole field*: on a withdrawal the safe error is always to delete more.
+    Over-erasing a replaceable cache costs one republish; under-erasing is the
+    violation.
+    """
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return _UNPARSEABLE
+    if not isinstance(value, list):
+        return _UNPARSEABLE
+    return value
+
+
+def _column_reset_value(column) -> Any:
+    default = column.default
+    if default is None or callable(default.arg):
+        return None
+    return default.arg
+
+
+def purge_removed_scope(
+    db: Session,
+    *,
+    repo: Repo,
+    new_publish_layers: str,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Remove stored mirror content covered by a narrowing consent change.
+
+    This function never commits.  The caller writes ``Repo.publish_layers``
+    and commits once after this returns, making the erasure and the consent
+    record one transaction.
+
+    Repo-keyed stores are cleared only for this repo.  Account-wide row
+    snapshots are filtered by their ``repo_label`` and retain rows with no
+    attributable subject.  The corpus has no per-repo attribution at all;
+    its safe coordinate is the file's canonical ``layer``, so only removed
+    corpus slices are filtered and every other slice survives.
+    """
+    old_lanes, old_slices = _transition_scopes(repo.publish_layers)
+    new_lanes, new_slices = _transition_scopes(new_publish_layers)
+    removed_lanes = old_lanes - new_lanes
+    removed_slices = old_slices - new_slices
+    if not removed_lanes and not removed_slices:
+        return frozenset(), frozenset()
+
+    # Deliberately NOT `purge_storage_lanes()` here. That assertion is a
+    # development-time guarantee (see its docstring and the coverage test); at
+    # runtime it would mean a lane someone forgot to mark makes the *user*
+    # unable to withdraw. Purge every target we can discover and let the
+    # consent write land regardless.
+    affected_lanes = set(removed_lanes)
+    if removed_slices:
+        affected_lanes.add("corpus")
+
+    targets = [
+        target
+        for target in _purge_targets()
+        if target[0] in affected_lanes
+    ]
+    wanted_label = repo.repo_full_name.casefold()
+    surface_changed = False
+
+    for lane, purge, model, field in targets:
+        if field is None:
+            # Relational row store: ActivityRecord today, and any future
+            # repo-FK publish store that carries the same model marker.
+            db.execute(delete(model).where(model.repo_id == repo.id))
+            continue
+
+        column = model.__table__.columns[field]
+        if purge == "repo":
+            rows = db.execute(select(model).where(model.repo_id == repo.id)).scalars()
+            for row in rows:
+                setattr(row, field, _column_reset_value(column))
+            continue
+
+        if purge == "repo_label":
+            rows = db.execute(
+                select(model).where(model.account_id == repo.account_id)
+            ).scalars()
+            for row in rows:
+                stored = _json_list(getattr(row, field))
+                if stored is _UNPARSEABLE:
+                    # Cannot tell whose rows these are ⇒ erase the field. See
+                    # `_json_list`: on a withdrawal the safe error is to delete
+                    # more, never to refuse.
+                    setattr(row, field, _column_reset_value(column))
+                    continue
+                kept = [
+                    item
+                    for item in stored
+                    if not (
+                        isinstance(item, dict)
+                        and isinstance(item.get("repo_label"), str)
+                        and item["repo_label"].casefold() == wanted_label
+                    )
+                ]
+                if kept != stored:
+                    setattr(row, field, json.dumps(kept, separators=(",", ":")))
+            continue
+
+        if purge == "slice":
+            if lane != "corpus" or not removed_slices:
+                continue
+            account = db.get(Account, repo.account_id)
+            if account is None:
+                continue
+            stored = _json_list(getattr(account, field))
+            if stored is _UNPARSEABLE:
+                setattr(account, field, _column_reset_value(column))
+                surface_changed = True
+                continue
+            kept = [
+                item
+                for item in stored
+                if not (
+                    isinstance(item, dict)
+                    and item.get("layer") in removed_slices
+                )
+            ]
+            if kept != stored:
+                setattr(account, field, json.dumps(kept, separators=(",", ":")))
+                surface_changed = True
+            continue
+
+        raise RuntimeError(f"unknown publish purge strategy {purge!r}")
+
+    if surface_changed:
+        account = db.get(Account, repo.account_id)
+        if account is not None:
+            account.surface_updated_at = datetime.now(timezone.utc)
+    return frozenset(removed_lanes), frozenset(removed_slices)
 
 
 def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:

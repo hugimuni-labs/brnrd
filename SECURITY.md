@@ -284,6 +284,13 @@ account. A repo with no recorded value (below) counts as having consented to
 nothing, so it silences the slice for the account exactly as an explicit
 `none` would.
 
+Narrowing this server-side consent also removes the stored copy covered by
+the withdrawn scope, in the same database transaction as the consent change.
+Repo-keyed snapshots are cleared for that repo; rows in account-wide snapshots
+are removed by their `repo_label`; and corpus files are removed by the slices
+that no longer have every repo's consent. Other repos' attributable rows and
+every still-consented corpus slice survive. Widening a scope deletes nothing.
+
 **Repos with no recorded consent publish nothing.** A repo connected before
 this consent step existed carries no recorded value at all (distinct from an
 explicit `none`), and the server now reads that as consent to nothing rather
