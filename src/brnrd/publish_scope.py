@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import HTTPException
 from sqlalchemy import delete, select
@@ -46,6 +46,17 @@ from .models import Account, Repo
 DEFAULT_NEW_CONNECT = OFF
 
 _KNOWN_TOKENS = frozenset(LANES) | frozenset(CORPUS_SLICES) | {OFF}
+
+
+class ReposWithoutPublishConsent(NamedTuple):
+    """Connected repo labels split by why they permit no publish lanes."""
+
+    unrecorded: tuple[str, ...]
+    opted_out: tuple[str, ...]
+
+
+def _account_repos(db: Session, account_id: str) -> list[Repo]:
+    return list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
 
 
 def normalize_publish_layers(raw: str | None) -> str:
@@ -307,6 +318,37 @@ def purge_removed_scope(
         if account is not None:
             account.surface_updated_at = datetime.now(timezone.utc)
     return frozenset(removed_lanes), frozenset(removed_slices)
+
+
+def lanes_withheld(db: Session, account_id: str) -> frozenset[str]:
+    """Lanes where an empty payload is certainly consent, not absence.
+
+    A lane is withheld only when no connected repo in the account permits it.
+    One permitting repo keeps an empty payload ambiguous: that repo may simply
+    be idle. With zero connected repos there is no consent question and thus
+    no provable claim, so this returns an empty set.
+    """
+    repos = _account_repos(db, account_id)
+    if not repos:
+        return frozenset()
+    permitted = frozenset().union(*(_repo_scopes(repo.publish_layers)[0] for repo in repos))
+    return frozenset(LANES) - permitted
+
+
+def repos_without_publish_consent(
+    db: Session, account_id: str
+) -> ReposWithoutPublishConsent:
+    """Repos that were never asked, and repos that explicitly chose nothing."""
+    repos = _account_repos(db, account_id)
+    unrecorded = sorted(
+        (repo.repo_full_name for repo in repos if repo.publish_layers is None),
+        key=str.casefold,
+    )
+    opted_out = sorted(
+        (repo.repo_full_name for repo in repos if repo.publish_layers == OFF),
+        key=str.casefold,
+    )
+    return ReposWithoutPublishConsent(tuple(unrecorded), tuple(opted_out))
 
 
 def lane_permitted(db: Session, *, repo_id: str | None, lane: str) -> bool:
