@@ -144,10 +144,12 @@ def create_topup_checkout(
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": "1",
         "line_items[0][price_data][product_data][name]": "Brnrd Wallet Top-up",
+        "line_items[0][price_data][product_data][tax_code]": "txcd_10105003",
         "line_items[0][quantity]": str(credits),
         "success_url": success_url,
-        # See create_subscription_checkout: Managed Payments owns tax and
-        # rejects an explicit automatic_tax parameter.
+        # Unlike subscription checkout, this ad-hoc line item references no
+        # persistent Stripe Product. Its inline product_data must therefore
+        # carry the tax code Managed Payments requires.
         "cancel_url": cancel_url,
         "metadata[brnrd_account_id]": account_id,
         "metadata[brnrd_purpose]": "wallet_topup",
