@@ -134,6 +134,25 @@ gets rewrapped; a test asserting a literal newline reads that as a deleted
 rule. Compare whitespace-insensitively for sentences, exactly for anything a
 parser reads.
 
+**A claim has a direction it can be wrong in — pick the pessimistic one.**
+Making a diagnostic *more* informative is exactly where this bites: the vague
+text you are replacing usually claimed nothing, and the specific text you write
+claims something that is only true on the branch you were looking at. Telling
+someone their work is finished when it is not costs more than telling them a
+delivery failed when it half-succeeded — the first ends their attention, the
+second only spends it. So when a message gains a fact, ask which branch that
+fact is true on, and make the predicate that states it the same one that makes
+it true.
+
+**A soft nag has no counter.** A guard that blocks fires once by construction —
+something records that it fired. A guard that merely *injects* a line has no
+such bookkeeping: if the condition it names cannot be cleared by anything the
+run is able to do, it repeats at every boundary, and a run being told the same
+unmeetable thing over and over degrades its own output trying to satisfy it.
+Softness is not gentleness. Before adding narration to a boundary, ask what
+clears it — and if the honest answer is *nothing this run can do*, the line is
+wrong, not merely noisy.
+
 ## Reading economically
 
 The weave disciplines output; this is its input mirror. Size the question
@@ -218,6 +237,13 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   in the fix: a synthesised number must not land in a slot that means
   something else, and making the number exist ≠ putting it where the
   decision reads — check the surface you actually consult.
+- **And a field can be empty for more than one reason.** Before rendering
+  "unknown", count the ways the value could have ended up missing. One of
+  them is usually a measurement the system already took and discarded — a
+  count that came back zero, a size that was on disk the whole time. Reporting
+  a measured zero as unknown is the same lie as reporting an unknown as fine,
+  pointed the other way, and it is the harder one to notice: honest-looking
+  caution, spent on a fact you were holding.
 
 ## Identity and delivery — seams that fail politely
 
