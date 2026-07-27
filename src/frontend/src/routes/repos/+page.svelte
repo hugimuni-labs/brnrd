@@ -354,7 +354,8 @@
 										<p
 											class="font-mono text-[11px] {repo.publish_layers == null
 												? 'text-amber-400'
-												: 'text-ink-quiet'}">
+												: 'text-ink-quiet'}"
+										>
 											<span class="text-ink-mute uppercase tracking-wide">publish scope</span>
 											— {publishScopeSummary(repo.publish_layers)}
 										</p>
