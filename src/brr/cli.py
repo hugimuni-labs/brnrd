@@ -452,6 +452,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the session file where the Shell looks for it")
     p.set_defaults(func=cmd_prompts_transcript)
 
+    p = prompts_sub.add_parser(
+        "wake",
+        help="print a past run's context as the runner received it — the boot "
+             "prompt plus every hook boundary injection after it, in order. "
+             "Defaults to the most recent run.")
+    p.add_argument(
+        "run_id", nargs="?", default=None,
+        help="run id (default: the most recent run directory)")
+    p.add_argument(
+        "--boundaries", type=int, default=None,
+        help="show only the first N boundaries (default: all)")
+    p.add_argument(
+        "--no-boot", action="store_true",
+        help="skip the boot prompt and print only the boundaries")
+    p.set_defaults(func=cmd_prompts_wake)
+
     bench_p = sub.add_parser(
         "bench",
         help="probe daemon/runner seams with a scripted lesser-light run")
@@ -699,6 +715,144 @@ def cmd_prompts_show(args):
         print(json.dumps(bootscore.to_dict(score), indent=2))
     else:
         print(bootscore.format_manifest(score))
+    return 0
+
+
+def _wake_dump(run_dir: Path, *, boot: bool, limit: int | None) -> str:
+    """Render one run's whole received context as readable Markdown.
+
+    Pure apart from the two file reads, so the tests drive it directly. The
+    ordering is the run's own: the boot prompt the daemon assembled, then each
+    hook boundary in the order it fired. That order *is* the point — reading
+    the wake alone answers "what was it told", and only the boundaries answer
+    "what did it keep being told".
+    """
+    import json
+
+    parts: list[str] = [f"# Received context — `{run_dir.name}`\n"]
+    prompt_path = run_dir / "prompt.md"
+    boundaries_path = run_dir / "boundaries.jsonl"
+
+    if boot:
+        if prompt_path.exists():
+            body = prompt_path.read_text(encoding="utf-8", errors="replace")
+            parts.append(
+                f"## Boot — the assembled wake ({len(body.encode())} B)\n\n"
+                f"{body.rstrip()}\n"
+            )
+        else:
+            parts.append(
+                "## Boot — the assembled wake\n\n"
+                "_absent: no `prompt.md` in this run directory._\n"
+            )
+
+    # Absent and empty are different answers, and the boundary transcript is
+    # young enough that "no file" usually means "this run predates it" rather
+    # than "this run had no boundaries" — say which.
+    if not boundaries_path.exists():
+        parts.append(
+            "## Boundaries\n\n"
+            "_no `boundaries.jsonl` — this run predates the boundary "
+            "transcript, or ran with no boot-score path armed._\n"
+        )
+        return "\n".join(parts)
+
+    records = []
+    for line in boundaries_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            records.append({"phase": "?", "inject": line, "malformed": True})
+
+    total = len(records)
+    shown = records if limit is None else records[:limit]
+    header = f"## Boundaries — {total} hook fire(s)"
+    if len(shown) != total:
+        header += f", showing the first {len(shown)}"
+    parts.append(header + "\n")
+    for index, record in enumerate(shown, start=1):
+        phase = record.get("phase", "?")
+        at = record.get("at", "?")
+        inject = record.get("inject")
+        blocked = " · **BLOCKED**" if record.get("block") else ""
+        parts.append(f"### {index}. `{phase}` · {at}{blocked}\n")
+        if inject:
+            parts.append("```\n" + str(inject).rstrip() + "\n```\n")
+        else:
+            # A fired-but-silent boundary is a result, not a gap: it is the
+            # hook deciding the runner already has this text. Rendering it
+            # keeps the count honest against the fire count.
+            parts.append("_silent — nothing injected at this boundary._\n")
+        if record.get("block_reason"):
+            parts.append(
+                "block reason:\n\n```\n"
+                + str(record["block_reason"]).rstrip()
+                + "\n```\n"
+            )
+    return "\n".join(parts)
+
+
+def _default_wake_run(runs_dir: Path) -> Path | None:
+    """The run to print when the caller named none.
+
+    ``BRR_RUN_ID`` first, most-recent-by-mtime second — and the order matters
+    more than it looks. Called from *inside* a run that has spawned a worker,
+    newest-directory-wins resolves to the **child's** run, silently: the
+    command answers a different question than the one asked and nothing about
+    the output says so. A run asking for "the wake" means its own.
+    """
+    current = (os.environ.get("BRR_RUN_ID") or "").strip()
+    if current:
+        mine = runs_dir / current
+        if mine.is_dir():
+            return mine
+    candidates = [d for d in runs_dir.iterdir() if d.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime)
+
+
+def cmd_prompts_wake(args):
+    """``brnrd prompts wake [RUN_ID]`` — a run's context, both halves.
+
+    The daemon has always written `prompt.md` per run; nothing wrote what the
+    hooks injected afterwards, so the only inspectable record of a runner's
+    environment ended at t=0. `hooks.record_boundary` writes the other half
+    and this prints them together, which is the whole of what a run was ever
+    told.
+    """
+    import sys
+
+    repo_root = _maybe_repo_root()
+    if repo_root is None:
+        print("brnrd: not inside a git repository", file=sys.stderr)
+        return 1
+    runs_dir = repo_root / ".brr" / "runs"
+    if not runs_dir.is_dir():
+        print(f"brnrd: no run directory at {runs_dir}", file=sys.stderr)
+        return 1
+
+    if args.run_id:
+        run_dir = runs_dir / args.run_id
+        if not run_dir.is_dir():
+            print(f"brnrd: unknown run {args.run_id!r}", file=sys.stderr)
+            return 1
+    else:
+        run_dir = _default_wake_run(runs_dir)
+        if run_dir is None:
+            print(f"brnrd: no runs under {runs_dir}", file=sys.stderr)
+            return 1
+
+    sys.stdout.write(
+        _wake_dump(
+            run_dir,
+            boot=not getattr(args, "no_boot", False),
+            limit=getattr(args, "boundaries", None),
+        )
+    )
     return 0
 
 
