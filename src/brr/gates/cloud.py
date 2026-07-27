@@ -1341,19 +1341,39 @@ def _publish_corpus(brr_dir: Path, inbox_dir: Path | None, state: dict) -> None:
     key = str(brr_dir)
     if _corpus_publish_hash.get(key) == fingerprint:
         return  # unchanged since the last publish — skip the network round-trip
+    payload = _corpus_payload(files)
     try:
-        _request(
+        out = _request(
             state["brnrd_url"],
             "PUT",
             "/v1/daemons/surface",
             token=state["token"],
-            json={"files": _corpus_payload(files)},
+            json={"files": payload},
             timeout=15,
         )
         # Mark clean only after a successful PUT so a failed publish retries.
         _corpus_publish_hash[key] = fingerprint
     except Exception as e:
         print(f"[brnrd:cloud] corpus publish failed: {e}")
+        return
+    # A 200 is not a mirrored corpus: the server drops layers the account's
+    # repos have not jointly consented to and answers OK for what remains —
+    # found live 2026-07-27 with the dashboard reading "No corpus mirrored
+    # yet" while this lane believed it had published 2,814 files. `files` in
+    # the response is the accepted subset; sent-some-got-none is the one
+    # provably-narrowed shape, so it is the one this names. Fingerprint stays
+    # marked clean on purpose — re-PUTting an all-dropped payload every 3 s
+    # tick would hammer the same refusal; the message re-fires on the next
+    # real corpus change instead, which in practice is every run.
+    accepted = out.get("files") if isinstance(out, dict) else None
+    if payload and isinstance(accepted, list) and not accepted:
+        print(
+            f"[brnrd:cloud] corpus publish: server accepted 0 of {len(payload)} "
+            "file(s) — every layer was dropped at the publish-consent seam "
+            "(no connected repo has recorded corpus consent, or their scopes "
+            "intersect to nothing). The dashboard work surface stays empty "
+            "until consent is recorded."
+        )
 
 
 def _quota_window(
