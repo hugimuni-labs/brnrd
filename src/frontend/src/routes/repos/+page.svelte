@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import {
@@ -73,6 +74,14 @@
 	function saveScope(repo: ConnectedRepo) {
 		runAction(`scope:${repo.id}`, async () => {
 			const result = await setPublishLayers(repo.id, serializePublishLayers(editScopeCustom));
+			if (result.ok) editingScopeRepo = null;
+			return result;
+		});
+	}
+
+	function saveEverything(repo: ConnectedRepo) {
+		runAction(`scope:${repo.id}`, async () => {
+			const result = await setPublishLayers(repo.id, PUBLISH_SCOPE_EVERYTHING);
 			if (result.ok) editingScopeRepo = null;
 			return result;
 		});
@@ -203,7 +212,18 @@
 		return pendingAction === label;
 	}
 
-	onMount(refresh);
+	onMount(async () => {
+		await refresh();
+		const targetId = page.url.searchParams.get('scope');
+		const target = connectedRepos.find((repo) => repo.id === targetId);
+		if (!target) return;
+		startEditingScope(target);
+		await tick();
+		document.getElementById(`repo-${encodeURIComponent(target.id)}`)?.scrollIntoView({
+			behavior: 'smooth',
+			block: 'center'
+		});
+	});
 </script>
 
 <div class="mx-auto max-w-4xl p-6">
@@ -312,7 +332,7 @@
 				<div class="space-y-2">
 					{#each connectedRepos as repo (repo.id)}
 						{@const statusColor = daemonColor(repo.daemon_status)}
-						<div class="subpanel p-3">
+						<div class="subpanel p-3" id={`repo-${encodeURIComponent(repo.id)}`}>
 							<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
 								<div class="min-w-0">
 									<div class="flex min-w-0 items-center gap-2">
@@ -374,6 +394,15 @@
 												{/each}
 											</div>
 											<div class="mt-2 flex gap-2">
+												<button
+													type="button"
+													class="cursor-pointer border border-amber-700 bg-amber-950/40 px-2 py-1 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-wait disabled:opacity-50"
+													disabled={pendingAction !== null}
+													onclick={() => saveEverything(repo)}
+													>{actionBusy(`scope:${repo.id}`)
+														? 'saving'
+														: 'publish everything'}</button
+												>
 												<button
 													type="button"
 													class="cursor-pointer border border-amber-700 bg-amber-950/40 px-2 py-1 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500 disabled:cursor-wait disabled:opacity-50"
