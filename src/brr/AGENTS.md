@@ -153,6 +153,20 @@ old shape costs more than it saves.
 imports the tree it is running in — the checkout, or a worktree, whichever
 holds the tests you invoked.
 
+**To run what CI runs, run `python scripts/gate.py`.** `pytest` is one of
+four legs; the others are the frontend suite, its lint and type-check, and
+the npm launcher pack — in two different working directories. The script
+does not carry a copy of that list: it parses
+`.github/workflows/ci.yml` and executes the `run:` steps it finds there, so
+a leg added to CI is a leg it runs next time with no edit. `--list` shows
+what it would do without doing it.
+
+Its one refusal is `pip install -e`, reported as SKIPPED with the reason
+(see the trap below), never silently dropped. Everything else CI installs,
+it installs — skipping `npm ci` and then running `npm test` reports
+*228 pass / 2 fail* against a suite that is 238/238 green, and an install
+you skipped does not raise an error, it returns a plausible wrong answer.
+
 The editable install is a **one-time setup step for the operator's own
 checkout**, not something a task re-runs:
 
