@@ -1,3 +1,5 @@
+import type { WithheldLane } from './withheld';
+
 export interface SurfaceFile {
 	path: string;
 	markdown: string;
@@ -11,6 +13,7 @@ export interface SurfaceResponse {
 	generated_at: string;
 	files: SurfaceFile[];
 	reported_at: string | null;
+	withheld?: WithheldLane;
 }
 
 // Reading order for the corpus browser: what the resident authored, then the

@@ -3,14 +3,17 @@
 	import { flip } from 'svelte/animate';
 	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
+	import WithheldNotice from './WithheldNotice.svelte';
+	import type { WithheldLane } from './withheld';
 
 	interface Props {
 		prs: PRReviewItem[];
 		stale: boolean;
 		now: number;
+		withheld?: WithheldLane | null;
 	}
 
-	let { prs, stale, now }: Props = $props();
+	let { prs, stale, now, withheld = null }: Props = $props();
 
 	// Same palette module as WindowTrack / LiveRuns (`statusPalette.ts`):
 	// ready = good (amber), draft = warn (frost), stale recedes.
@@ -31,7 +34,11 @@
 		{/if}
 	</div>
 	{#if prs.length === 0}
-		<p class="text-sm text-ink-quiet">No open PRs waiting on review.</p>
+		{#if withheld}
+			<WithheldNotice {withheld} />
+		{:else}
+			<p class="text-sm text-ink-quiet">No open PRs waiting on review.</p>
+		{/if}
 	{:else}
 		<ul class="space-y-2">
 			{#each prs as pr (`${pr.repo_label}#${pr.number}`)}
