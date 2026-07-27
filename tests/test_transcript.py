@@ -343,3 +343,36 @@ def test_mounted_shells_only_names_shells_with_a_renderer():
     """The registry is the guard; keep it honest about what actually exists."""
     assert tx.MOUNTED_SHELLS == frozenset({"claude"})
     assert hasattr(tx, "render_claude_jsonl")
+
+
+def test_no_prompt_file_carries_a_static_copy_of_the_seam():
+    """The fence is the *renderer's*, and a source file may not keep a copy.
+
+    ``_seed_turns`` appends :data:`SNAPSHOT_SEAM` to the **last** perception
+    (``transcript.py:391``). A prompt file that also ends with the same stanza
+    therefore prints the fence twice, back to back, in every mounted wake — and
+    the block whose entire job is to mark one boundary unambiguously states it
+    two ways in the same breath.
+
+    That is what shipped in `4c81e58c` (#787), a *compression* pass: the wake's
+    own rendered tail was pasted back into `identity-core.md`, which is the file
+    that happens to be last. The same class as #748 — content the renderer owns,
+    written into the source.
+
+    Two copies of this sentence *are* deliberate and measured: the seed fence and
+    :func:`bootscore` kernel line, n=3+3, 2026-07-14. Both of those have an owner
+    in code. A third, static, inside a document has none — and a copy with no
+    owner is the one that drifts.
+    """
+    prompts = Path(__file__).resolve().parents[1] / "src" / "brr" / "prompts"
+    assert prompts.is_dir(), prompts
+    offenders = [
+        p.name
+        for p in sorted(prompts.glob("*.md"))
+        if "<snapshot restored>" in p.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        "prompt files carrying a static copy of the seam: "
+        f"{offenders}. The fence rides on the last seeded perception "
+        "(transcript.SNAPSHOT_SEAM); a file copy prints it twice."
+    )
