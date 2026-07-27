@@ -22,7 +22,6 @@ twice, while the worker's branch published empty.)
   staged nothing ⇒ your writes landed elsewhere, almost certainly the
   execution root. Absolute paths, every write.
 
-Done ⇒ reply as any addressed run: the next-move contract in
-`daemon-substrate.md` applies to you unchanged — follow it there,
-nothing new here. Say what you did or changed; name any blocker plainly
-rather than guessing past it.
+Done ⇒ reply as any addressed run: the turn frame in `weave.md` §The turn
+applies to you unchanged — follow it there, nothing new here. Say what you
+did or changed; name any blocker plainly rather than guessing past it.
