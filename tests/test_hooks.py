@@ -2687,3 +2687,127 @@ def test_census_never_opens_the_bar_on_its_own(tmp_path):
         hooks.PHASE_POST_TOOL, "{}", _orient_env(tmp_path)
     )
     assert "wake " not in _inject_text(out)
+
+
+# ── Boundary transcript ──────────────────────────────────────────────────
+#
+# The wake capture (`prompt.md`) has always been written and the boundaries
+# never were, so the only inspectable record of a run's environment stopped at
+# t=0. These pin the other half.
+
+
+def _transcript_env(tmp_path):
+    """An env whose run directory is *not* the outbox directory.
+
+    Deliberately distinct: the transcript is anchored on ``BRR_BOOT_SCORE``'s
+    parent so it lands beside ``prompt.md``, and a fixture that collapses the
+    two paths cannot tell a correct implementation from one that writes into
+    the outbox (where the daemon's drain and the closeout capture would both
+    see a file they know nothing about).
+    """
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    env = _env(tmp_path)
+    env["BRR_BOOT_SCORE"] = str(run_dir / "boot-score.json")
+    return env, run_dir
+
+
+def _transcript(run_dir):
+    path = run_dir / "boundaries.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_boundary_transcript_records_the_injection_beside_the_wake(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    records = _transcript(run_dir)
+    assert len(records) == 1
+    assert records[0]["phase"] == hooks.PHASE_POST_TOOL
+    # The recorded text is the text the runner actually received — compared
+    # against the rendered native output, not against a second rendering.
+    assert records[0]["inject"] == _inject_text(out)
+    assert records[0]["at"].endswith("Z")
+
+
+def test_a_silent_boundary_is_still_recorded(tmp_path):
+    """A fired-but-silent hook is a result, not a gap.
+
+    Most post-tool boundaries inject nothing (the change token has not moved),
+    and a transcript that only logged the loud ones would report a run as
+    having far fewer boundaries than it had — which is the exact reading error
+    someone reasoning about the environment from this file would make.
+    """
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    records = _transcript(run_dir)
+    assert len(records) == 2
+    assert records[0]["inject"]
+    # Second fire: same token, nothing new to say.
+    assert records[1]["inject"] is None
+    assert records[1]["phase"] == hooks.PHASE_POST_TOOL
+
+
+def test_boundary_transcript_records_a_block_and_its_reason(tmp_path):
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "body": "one more thing"}])
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    record = _transcript(run_dir)[-1]
+    assert record["block"] is True
+    assert "one more thing" in record["block_reason"]
+
+
+def test_no_run_directory_records_nothing_and_does_not_raise(tmp_path):
+    """No ``BRR_BOOT_SCORE`` (an older daemon, an ad-hoc hook run) is silent.
+
+    Same doctrine as every other optional handle in ``HookContext``: an
+    unassertable fact produces no artifact rather than a guessed location.
+    """
+    env = _env(tmp_path)  # no BRR_BOOT_SCORE
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    assert code == 0
+    assert _inject_text(out)  # the hook still did its actual job
+    assert not (tmp_path / "boundaries.jsonl").exists()
+    assert not list(tmp_path.glob("**/boundaries.jsonl"))
+
+
+def test_the_transcript_cap_announces_itself(tmp_path, monkeypatch):
+    """Past the cap the file stops growing — and says so on its last line.
+
+    A transcript that silently stops is byte-identical to a run that went
+    quiet, which is the reading this file exists to make impossible.
+    """
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    monkeypatch.setattr(hooks, "_BOUNDARIES_MAX_BYTES", 200)
+
+    for _ in range(6):
+        hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    records = _transcript(run_dir)
+    assert records[-1].get("truncated") is True
+    assert "capped" in records[-1]["inject"]
+    size = (run_dir / "boundaries.jsonl").stat().st_size
+    # One over-cap line is written to carry the notice; nothing after it.
+    before = len(records)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert len(_transcript(run_dir)) == before
+    assert (run_dir / "boundaries.jsonl").stat().st_size == size
