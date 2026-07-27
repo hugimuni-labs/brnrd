@@ -113,6 +113,16 @@ The twin is sharper: a **default** label is worse than a missing one. Absent
 information, say unknown — asserting a specific, actionable, wrong thing is
 how a guard sends people looking for a problem that is not there.
 
+Third of the same family: **a remedy is part of a diagnostic's truth claim.**
+When a message names both a problem and the fix, both are assertions, and the
+second one is rarely re-checked once the first goes right. A notice can
+diagnose correctly for weeks while prescribing the action that makes things
+worse for the case actually in front of it — and nothing surfaces the
+mismatch, because the diagnosis keeps being true. So: if the information that
+picks between two opposite remedies is available, read it and say which; if it
+is not, name the ambiguity rather than the confident branch. A remedy that
+fires unchanged every time has never been checked against anything.
+
 **A prose guard that pins line wrapping fires on reflow.** Contract text
 gets rewrapped; a test asserting a literal newline reads that as a deleted
 rule. Compare whitespace-insensitively for sentences, exactly for anything a
