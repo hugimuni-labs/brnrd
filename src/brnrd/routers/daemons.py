@@ -650,6 +650,23 @@ def inbox(request: Request, since: int | None = Query(default=None), wait: float
     )
 
 
+def _safe_detail(text: str) -> str:
+    """Last line before an exception string becomes an HTTP body.
+
+    The source boundary in :mod:`..platforms.telegram` already redacts, and
+    that is where the fix belongs. This is the *mechanism* under it: the
+    boundary is a habit six call sites keep today, and a class defined by
+    listing its members meets the member nobody listed — the seventh
+    ``httpx`` call added here next month will not remember. Redaction is
+    structural (it needs no token in hand), so a sink can afford to run it
+    unconditionally. Cheap, idempotent, and it never changes a status code
+    or removes a diagnosis.
+    """
+    from ..platforms.telegram import redact_secrets
+
+    return redact_secrets(text)
+
+
 @router.post("/responses", response_model=schemas.ResponseAck)
 def post_response(request: Request, payload: schemas.ResponsePost, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     owned_event = _account_event(db, principal, payload.event_id)
@@ -658,7 +675,7 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
     try:
         event = inbox_service.record_response(db, repo_id=owned_event.repo_id, event_id=payload.event_id, body_markdown=payload.body_markdown, status=payload.status, forwarder=request.app.state.forwarder, conversation_id=payload.conversation_id)
     except inbox_service.DeliveryError as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"forward to platform failed: {e}") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"forward to platform failed: {e}")) from e
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this account")
     _touch_daemon(db, principal)
@@ -688,9 +705,9 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
         _touch_daemon(db, principal)
         return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
     except tg.CardGone as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"card not editable: {e}") from e
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_safe_detail(f"card not editable: {e}")) from e
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"card relay failed: {e}") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"card relay failed: {e}")) from e
 
 
 @router.get("/events/{event_id}/attachments/{index}")
@@ -722,7 +739,7 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     try:
         info = tg.resolve_file(settings.telegram_bot_token, str(pointer.get("file_id") or ""))
     except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"telegram file unavailable: {e}") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"telegram file unavailable: {e}")) from e
     declared = info.get("file_size")
     if isinstance(declared, int) and declared > max_bytes:
         raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap")
@@ -731,7 +748,7 @@ def event_attachment(event_id: str, index: int, request: Request, principal: Pri
     except tg.FileTooLarge as e:
         raise HTTPException(status_code=413, detail=f"attachment exceeds the {settings.telegram_media_max_mb} MB cap") from e
     except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"telegram file unavailable: {e}") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_safe_detail(f"telegram file unavailable: {e}")) from e
     _touch_daemon(db, principal)
     media_type = mimetypes.guess_type(str(pointer.get("filename") or ""))[0] or "application/octet-stream"
     return Response(content=content, media_type=media_type)
