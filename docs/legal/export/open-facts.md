@@ -47,11 +47,18 @@ Stripe.
 
 ### 4. Does production enforce HSTS?
 
-Answer: ________________________________________________
+Answer: **No, as probed — fix in flight.** `https://brnrd.dev` served no
+`Strict-Transport-Security` header when checked live.
 
-Observed `Strict-Transport-Security` header and max-age: ______________________
+Observed `Strict-Transport-Security` header and max-age: absent (no header
+in the response).
 
-Evidence/date checked: _______________________________________________________
+Evidence/date checked: `curl -sI https://brnrd.dev` → `HTTP/2 200`, no
+`strict-transport-security` line; 2026-07-27, run-260727-2005-f5u5. Fix:
+this same change set enables `tls.strict_transport_security.enabled: true`
+on the sole Upsun route (1-year max-age; `include_subdomains`/`preload`
+left off as operator decisions). **Re-verify after the merge deploys** —
+this answer describes the pre-fix edge, and the fix is not proof of itself.
 
 Why this matters: application source and deployment configuration do not prove
 the headers served by the production edge.
