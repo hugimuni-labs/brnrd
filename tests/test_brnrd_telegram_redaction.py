@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -101,3 +103,51 @@ def test_redaction_matches_a_token_from_an_unconfigured_account():
     assert redacted.endswith(
         "'https://api.telegram.org/bot<redacted>/sendMessage'"
     )
+
+
+def test_router_detail_sinks_all_go_through_the_redactor():
+    """The source boundary is a habit; this is the mechanism under it.
+
+    ``platforms/telegram.py`` wraps six ``httpx`` calls today, and that is the
+    right place for the fix. But a class defined by listing its members meets
+    the member nobody listed: the seventh call added to ``routers/daemons.py``
+    next month will interpolate ``{e}`` the way all five did before this change,
+    and nothing would notice. Redaction is *structural* — it needs no token in
+    hand — so the sink can afford to run it unconditionally.
+
+    Guards the class, not the instances: no ``HTTPException`` in that module may
+    interpolate an exception into ``detail`` without passing through
+    ``_safe_detail``.
+    """
+    import re
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "brnrd" / "routers" / "daemons.py"
+    ).read_text(encoding="utf-8")
+    raw = [
+        line.strip()
+        for line in src.splitlines()
+        if re.search(r'detail=f"[^"]*\{e[a-z_]*\}', line)
+        and "_safe_detail(" not in line
+    ]
+    assert not raw, (
+        "these HTTPException details interpolate an exception without the "
+        f"redactor: {raw}"
+    )
+
+
+def test_safe_detail_redacts_an_exception_that_no_source_boundary_wrapped():
+    """The failure the sink exists for: a path nobody remembered to wrap."""
+    from brnrd.routers.daemons import _safe_detail
+
+    leaked = (
+        "card relay failed: Client error '401 Unauthorized' for url "
+        f"'https://api.telegram.org/bot{_TOKEN}/sendMessage'"
+    )
+    safe = _safe_detail(leaked)
+    assert _TOKEN not in safe
+    assert "<redacted>" in safe
+    # The diagnosis survives — redaction removes the secret, never the cause.
+    assert "401 Unauthorized" in safe
+    assert "card relay failed" in safe
