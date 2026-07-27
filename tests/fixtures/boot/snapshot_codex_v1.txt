@@ -78,6 +78,7 @@ Live values for this run's portals. Standing rules: §How the daemon drives you 
 - outbox: `/tmp/brr-fixture-outbox/` — one file = one mid-thought chat message; frontmatter routes (`event:` / `gate:` / `respawn:` / `spawn:`)
 - inbox: `/tmp/brr-fixture-outbox/inbox.json` — re-read at plan / todo boundaries, and immediately before a terminal closeout
 - portal state: `/tmp/brr-fixture-outbox/portal-state.json` (env `BRR_PORTAL_STATE`) — pending events, posture, `change_token`
+- live menu: `/tmp/brr-fixture-outbox/menu.json` — write one composed generation atomically (`menu_id`, `thread`, `options[]` with `handle` / `label` / optional `detail` / `rec`); the daemon validates and renders it at the gate and the next resident boundary
 - codex Shell: native progress/final channels are runner-local under brr — user-visible mid-run communication goes through `.card` / outbox / `gate:`; stdout stays the plain current-thread fallback
 - keepalive: `/tmp/brr-fixture-outbox/.keepalive` — first line ISO-8601 or `+<duration>` (`+30m`); rewrite to extend
 - card/run body: `/tmp/brr-fixture-outbox/.card` — resident-owned Markdown write-head; keep `## Now` current for the live projection, preserve the full run story below it; closeout captures it as `body.md`
@@ -125,7 +126,7 @@ source manifest:
   · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
   · Your last run (node frame + Now + shape)        resident     memory             0  computed
   · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        3,815  computed
+  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        4,076  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
