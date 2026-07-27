@@ -627,6 +627,10 @@ def publish(
             "force_with_lease": force_with_lease,
             "run_id": task.id,
         }
+        # The parent reaps the Run after publish(), so preserve the count on
+        # that shared handoff object instead of leaving it only in progress
+        # packets the parent does not read.
+        task.meta["publish_commits"] = push_payload["commits"]
         if task.conversation_key:
             emit("push_started", **push_payload)
         print(f"[brnrd] pushing {push_branch}...")
@@ -7619,13 +7623,56 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
 
     response_path = task.meta.get("response_path")
     text = ""
+    reply_bytes: int | None = None
     if response_path:
+        reply_file = Path(str(response_path))
         try:
-            text = Path(str(response_path)).read_text(encoding="utf-8").strip()
+            untruncated = reply_file.read_text(encoding="utf-8")
+            reply_bytes = len(untruncated.encode("utf-8"))
+            text = untruncated.strip()
+        except UnicodeError:
+            # The file is there and its *size* is not in doubt — only its
+            # decoding is. Dropping to "unknown" here would render a fact we
+            # hold as one we don't, which is the defect this whole handle
+            # exists to close. The prose stays empty: undecodable bytes are
+            # not a reply anyone can read.
+            text = ""
+            try:
+                reply_bytes = reply_file.stat().st_size
+            except OSError:
+                reply_bytes = None
         except OSError:
             text = ""
         if text and len(text) > _SPAWN_NOTIFY_RESPONSE_MAX_CHARS:
             text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
+
+    published_branch = str(task.meta.get("publish_branch") or "").strip()
+    published_commits = task.meta.get("publish_commits")
+    if published_commits is None and task.meta.get("publish_status") == "nothing":
+        # ``publish()`` returns before stamping a count when there is no branch
+        # to push, so the count is absent for *two* different reasons and only
+        # one of them is unknown. ``publish_status == "nothing"`` is the env
+        # layer saying it checked ``has_commits_beyond(seed)`` and found none
+        # (``envs/__init__.py`` → ``_resolve_outcome``) — a measured zero, not
+        # a missing reading. ``detached`` is the genuinely-unknown arm and is
+        # deliberately left absent.
+        published_commits = 0
+    thin_block = ""
+    terminal = task.status in {"done", "error", "conflict", "stopped"}
+    if (
+        terminal
+        and not published_branch
+        and (published_commits is None or published_commits == 0)
+    ):
+        commits_fact = (
+            "commits unknown"
+            if published_commits is None
+            else f"{published_commits} commits"
+        )
+        reply_fact = (
+            "reply unknown" if reply_bytes is None else f"reply {reply_bytes} B"
+        )
+        thin_block = f"\nproduce: {commits_fact} · no branch · {reply_fact}"
 
     if runner_failed:
         # #633: the provider's own message is the finding here — promote
@@ -7636,28 +7683,40 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             if text
             else f"concurrent spawn {task.id} finished: status=runner-failed"
         )
+        summary = f"{summary}{thin_block}"
     else:
         summary = (
             f"concurrent spawn {task.id} finished: status={status_label}"
-            f"{stray_block}{contract_block}"
+            f"{stray_block}{contract_block}{thin_block}"
         )
         if text:
             summary = f"{summary}\n\n{text}"
     # #648: produce handles — what the child actually delivered.
     # Rule 1: absent stays absent. No .pr → no spawn_pr_number at all;
-    # no publish_branch → no spawn_published_branch. Never 0, None, or
-    # empty-string in place of a missing fact. These keys answer "what did
-    # the child deliver?" and are in a distinct namespace from
+    # no publish path → no spawn_commits; no publish_branch → no
+    # spawn_published_branch. Never None or an empty-string in place of a
+    # missing fact. The deliberate exception is spawn_reply_bytes=0: an
+    # existing zero-byte response is known, not missing. These keys answer
+    # "what did the child deliver?" and are in a distinct namespace from
     # spawn_contract_* (which answers "did it meet its declared spec?").
     produce_kwargs: dict = {}
     # A completion status is useful only after the Run reached a terminal
     # state. Keep pending/running absent rather than turning "not determined"
     # into a misleading completion fact.
-    if task.status in {"done", "error", "conflict", "stopped"}:
+    if terminal:
         produce_kwargs["spawn_status"] = status_label
-    published_branch = str(task.meta.get("publish_branch") or "").strip()
     if published_branch:
         produce_kwargs["spawn_published_branch"] = published_branch
+    # Same shape as the reply-byte exception below: a *measured* zero is a
+    # fact, so the structured key carries it too. A parent should never have
+    # to parse the prose line to learn something the frontmatter can state.
+    if published_commits is not None:
+        produce_kwargs["spawn_commits"] = published_commits
+    # Unlike the other produce handles, zero is meaningful here: an existing
+    # response file with no content is different from an unreadable/missing
+    # response path, which stays absent.
+    if reply_bytes is not None:
+        produce_kwargs["spawn_reply_bytes"] = reply_bytes
     # The PR handle is read from ``task.meta``, captured by
     # ``_capture_pr_handle`` while the outbox still existed. Reading the
     # ``.pr`` control *here* cannot work: this function runs after the child's
