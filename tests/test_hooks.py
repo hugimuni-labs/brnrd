@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import subprocess
 import threading
@@ -1362,6 +1363,153 @@ def test_scm_omits_forge_gate_route_when_unarmed(tmp_path):
     assert out["decision"] == "block"
     assert "open the PR yourself" in out["reason"]
     assert "gate: forge" not in out["reason"]
+
+
+# ── The `gate` closeout obligation (ran-the-project's-own-CI block) ───────
+
+
+def _gate_receipt(tmp_path, repo, **overrides):
+    """Write the receipt `scripts/gate.py` would write for `repo`'s current tree."""
+    def out(*args):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+        ).stdout
+
+    payload = {
+        "head": out("rev-parse", "HEAD").strip(),
+        "status": out("status", "--porcelain"),
+        "diff_digest": hashlib.sha256(
+            out("diff", "HEAD").encode("utf-8", "replace")
+        ).hexdigest(),
+        # Agreement between this and `scripts/gate.py`'s own writer is pinned
+        # in `test_gate_runner.py`, against a real repo — not assumed here.
+        "untracked_digest": hooks._untracked_digest(repo),
+        "verdict": "GREEN",
+        "legs": [],
+    }
+    payload.update(overrides)
+    (tmp_path / hooks.GATE_RECEIPT_NAME).write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+    return payload
+
+
+def _armed_gate(tmp_path, repo, command="python scripts/gate.py"):
+    """Arm only the `gate` obligation, card already satisfied, so a block can
+    come from nowhere else."""
+    (tmp_path / hooks.CARD_NAME).write_text("progress", encoding="utf-8")
+    env = _armed_obl(tmp_path, obligations="gate")
+    env["BRR_REPO_DIR"] = str(repo)
+    env["BRR_SEED_REF"] = "main"
+    env["BRR_GATE_COMMAND"] = command
+    return env
+
+
+def test_gate_blocks_when_the_tree_changed_and_no_receipt_exists(tmp_path):
+    """The whole point: code changed, the gate never ran, the run is about to
+    claim it is done. `pytest` alone is one leg of four."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "the gate never ran" in out["reason"]
+    # It names the repo's own command, never one brr invented.
+    assert "python scripts/gate.py" in out["reason"]
+
+
+def test_gate_silent_when_the_receipt_matches_the_tree(tmp_path):
+    """Ran, on this tree ⇒ nothing owed. The receipt is the whole interface."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _gate_receipt(tmp_path, repo)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_gate_silent_on_a_red_receipt_for_this_tree(tmp_path):
+    """The obligation is *the gate ran*, never *the gate was green*. A run may
+    end red and report it; a run that never looked is the defect."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _gate_receipt(tmp_path, repo, verdict="RED")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_gate_blocks_when_the_tree_moved_after_the_receipt(tmp_path):
+    """A green verdict for a tree you have since edited is a claim about code
+    nobody ran — the exact shape of the failure this guard exists for."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _gate_receipt(tmp_path, repo)
+    (repo / "feature.py").write_text("x\nthe one-line fix nobody re-ran\n", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "a different tree" in out["reason"]
+
+
+def test_gate_blocks_when_a_commit_landed_after_the_receipt(tmp_path):
+    """Committing does not change `status --porcelain` or `diff HEAD` — both go
+    back to empty — so HEAD is the referent that has to catch this. Without it
+    a receipt taken on a dirty tree would validate the commit of that tree,
+    which is *almost* right and therefore the dangerous kind of wrong."""
+    repo = _seeded_repo(tmp_path)
+    _git(repo, "switch", "-qc", "brr/work")
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "one")
+    _gate_receipt(tmp_path, repo)
+    (repo / "feature.py").write_text("y\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "two")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "a different tree" in out["reason"]
+
+
+def test_gate_silent_when_nothing_changed(tmp_path):
+    """Nothing for CI to run on ⇒ nothing owed. A guard that fires on a
+    read-only run is a guard that stops being read."""
+    repo = _seeded_repo(tmp_path)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_gate_silent_when_the_repo_declares_no_gate(tmp_path):
+    """brr owns no opinion about what a stranger's gate is. No
+    `hooks.gate_command` ⇒ unassertable, silent — never a guessed build."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    env = _armed_gate(tmp_path, repo)
+    del env["BRR_GATE_COMMAND"]
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY), env)
+    assert out.get("decision") != "block"
+
+
+def test_gate_treats_a_malformed_receipt_as_no_receipt(tmp_path):
+    """A claim has a direction it can be wrong in; this one picks the
+    pessimistic one. Unreadable JSON is not evidence the gate ran."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / hooks.GATE_RECEIPT_NAME).write_text("{not json", encoding="utf-8")
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "the gate never ran" in out["reason"]
 
 
 class TestStopRunBody:
