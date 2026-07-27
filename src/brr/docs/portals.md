@@ -52,6 +52,7 @@ other so they don't drift.
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
+| `menu.json` | outbound ▸ desired-state | **Maintain the thread's one live menu.** Write one JSON object atomically with `menu_id`, `thread`, and `options` (`handle`, `label`, optional `detail`, optional `rec: true`); `expires_at` is optional. The daemon validates and archives the generation, supersedes the prior one, and renders the same stored menu at gates and at the next resident boundary. Malformed menus land in `portal-state.json` → `notices`. A worker child has no v1 menu transport; its parent composes. |
 | `.mood` | slot control | **Your own resident-authored mood** — an almost-free meta-channel from resident to user (#566 layer 2). First line only: an emote name or a free glyph string. The hook boundary re-reads it fresh and folds it into the live delta every boundary — a bar segment mid-run, a plain line at seed/stop. It **displays** every boundary and **asks** only on an edge: when a tool in the batch just came back wrong, the chip renders as `mood fo.cus ← Bash ✗`, setting the face you claimed beside the thing that broke. Transition-stamped, so a run debugging a red test is asked once, not at every pass. A control file, never delivered. |
 | `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
@@ -160,6 +161,14 @@ surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
 `BRR_CONTEXT_PATH` when those paths exist in the run environment. The
 file remains the universal portal contract; the env vars are discovery
 handles so a runner does not have to copy paths out of prose.
+
+Telegram renders a live menu as one inline-keyboard message per thread and
+edits that message on supersession. A tap creates a pending
+`kind: menu_answer` event whose JSON body carries `menu_id`, `option`, optional
+`text`, and the resolution status (`live`, `stale`, `expired`, or `unknown`).
+Expiry is decided authoritatively when the answer is ingested; fresh renders
+and boot boundaries filter expired menus. A stale, expired, or pruned
+generation therefore remains answerable instead of becoming a dropped tap.
 
 Fresh state reaches the runner two ways. A **Tier 2 runner with a
 boundary back channel** gets it pushed automatically: at each runner

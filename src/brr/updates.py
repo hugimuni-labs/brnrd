@@ -35,6 +35,7 @@ PACKET_TYPES = (
     "artifact_created",
     "interim_response",
     "card_composed",
+    "menu_composed",
     "mirror_card",
     "heartbeat",
     "hooks_installed",
@@ -98,6 +99,10 @@ _QUIET_TYPES = {
     # persisted as a record of what the agent said, but it doesn't earn
     # a daemon-console line each time.
     "card_composed",
+    # ``menu_composed`` is the same resident-authored control cadence for the
+    # thread's one live menu. Gates render it; the console does not need a
+    # line for every replacement.
+    "menu_composed",
     # ``mirror_card`` mirrors that narration into a waiting
     # correspondent's own thread (see daemon.py::_emit_mirror_cards);
     # same cadence as ``card_composed``, same console quiet.
