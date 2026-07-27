@@ -351,7 +351,10 @@
 										</p>
 									{/if}
 									<div class="mt-2 border-t border-stone-800/70 pt-2">
-										<p class="font-mono text-[11px] text-ink-quiet">
+										<p
+											class="font-mono text-[11px] {repo.publish_layers == null
+												? 'text-amber-400'
+												: 'text-ink-quiet'}">
 											<span class="text-ink-mute uppercase tracking-wide">publish scope</span>
 											— {publishScopeSummary(repo.publish_layers)}
 										</p>

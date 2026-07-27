@@ -62,12 +62,14 @@ function normalizePublishLayers(value: string): string {
 }
 
 // A short, honest one-liner for a repo row — never longer than the fact
-// itself. `null` is the legacy case: no consent was ever recorded for this
-// repo, so nothing here is enforced and the daemon's own `.brr/config`
-// `publish.layers` is the only control that applies.
+// itself. `null` means no consent was ever recorded for this repo (it
+// connected before this setting existed, or was minted through the account
+// API before that surface asked). The server reads an unrecorded consent as
+// "publish nothing", so this repo is paused rather than unenforced — say so,
+// because a repo that has gone quiet without explanation is the failure mode.
 export function publishScopeSummary(value: string | null | undefined): string {
 	if (value == null)
-		return 'not set — daemon config controls this (connected before this setting existed)';
+		return 'no consent recorded — publishing paused. Pick a scope below to resume.';
 	const lanes = parsePublishLayers(value);
 	if (lanes.size === 0) return 'nothing — dashboard mirroring is off for this repo';
 	if (lanes.size === PUBLISH_LANES.length) return 'everything (all seven lanes)';

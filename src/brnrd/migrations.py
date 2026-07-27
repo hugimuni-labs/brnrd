@@ -98,7 +98,10 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_github_login ON accounts (github_login)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_email ON accounts (email)"))
 
-    # Discovered corpus mirror (authored surface + home knowledge + replies).
+    # Discovered corpus mirror. The layers are `authored`, `knowledge` and
+    # `runs` — the same three the consent vocabulary names
+    # (`brr.gates.cloud._PUBLISH_CORPUS_SLICES`); this comment used to say
+    # "replies", a fourth layer nothing produces and no consent can permit.
     # The layered files carry ``layer``/``truncated`` inside this JSON blob, so
     # the corpus join needed no DDL — pre-corpus rows self-heal on the next
     # full-replace publish (the daemon republishes once on boot).
