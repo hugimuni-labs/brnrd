@@ -231,6 +231,13 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   in the fix: a synthesised number must not land in a slot that means
   something else, and making the number exist ≠ putting it where the
   decision reads — check the surface you actually consult.
+- **And a field can be empty for more than one reason.** Before rendering
+  "unknown", count the ways the value could have ended up missing. One of
+  them is usually a measurement the system already took and discarded — a
+  count that came back zero, a size that was on disk the whole time. Reporting
+  a measured zero as unknown is the same lie as reporting an unknown as fine,
+  pointed the other way, and it is the harder one to notice: honest-looking
+  caution, spent on a fact you were holding.
 
 ## Identity and delivery — seams that fail politely
 
