@@ -11,8 +11,8 @@
 	import ProduceGauge from '$lib/ProduceGauge.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
+	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
-	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import {
@@ -639,6 +639,8 @@
 			</h1>
 		</header>
 
+		<PublishConsentNotice repos={connectedRepos} />
+
 		<section class="ignite mt-4" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
@@ -655,10 +657,10 @@
 				</p>
 			</div>
 			{#if runnersData?.profiles.length === 0 && runnersWithheld}
-				<div class="mt-2"><WithheldNotice withheld={runnersWithheld} /></div>
+				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
 			{/if}
 			{#if shells?.length === 0 && quotaWithheld}
-				<div class="mt-2"><WithheldNotice withheld={quotaWithheld} /></div>
+				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
 			{/if}
 			<ControlStrip
 				runners={runnersData}
@@ -709,10 +711,10 @@
 				/>
 			</div>
 			{#if scheduledWakes?.length === 0 && activityWithheld}
-				<div class="mt-2"><WithheldNotice withheld={activityWithheld} /></div>
+				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
 			{/if}
 			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<div class="mt-2"><WithheldNotice withheld={prReviewQueueWithheld} /></div>
+				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
 			{/if}
 
 			<!-- The detail sheet: the band's other half. Everything the dissolved
@@ -860,7 +862,7 @@
 					{:else if runLedgerRows === null}
 						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else if runLedgerRows.length === 0 && runLedgerWithheld}
-						<WithheldNotice withheld={runLedgerWithheld} />
+						<p class="text-sm text-amber-200">paused — no publish scope</p>
 					{:else}
 						<ProduceGauge
 							rows={applyLens(runLedgerRows, loomLens)}
