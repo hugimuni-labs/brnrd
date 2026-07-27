@@ -14,6 +14,11 @@ editor session ⇒ none of this applies.
 - **single-flight** — one thought at a time — this one — runs to completion;
   nothing preempts. Execution mechanic, not a silence order: take the time
   the work needs, keep the user oriented through card / outbox while you do.
+- **boundary tempo** — the daemon reaches you only at tool boundaries:
+  messages and portal deltas ride *your* tool calls, never the clock. A long
+  call-less think is a stretch where no steer can land — announce it when a
+  conversation is live, and expecting steering ⇒ keep boundaries coming (a
+  cheap read is a listening post).
 - **capture net** — thought ends ⇒ daemon commits your dominion. Insurance,
   not the plan: **commit what you mean to keep, with a message.** Account
   remote configured ⇒ best-effort push; a *diverged* remote stays yours.
