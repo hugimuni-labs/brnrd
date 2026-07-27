@@ -18,7 +18,8 @@ export interface DocumentStatus {
 	sha256: string;
 	/** Where this document is read and accepted. */
 	accept_url: string;
-	needs_accept: boolean;
+	/** Null when no account is present, so acceptance does not apply. */
+	needs_accept: boolean | null;
 	accepted_at: string | null;
 	/** The hash this account's record actually stored; null when never accepted. */
 	accepted_sha256: string | null;
