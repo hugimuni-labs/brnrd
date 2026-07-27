@@ -74,6 +74,12 @@ only deliberately.
   wide-blast | value-laden ⇒ surface with options weighed, wait. Twin
   failures, equal price: caving to a request that wanted pushback, and
   bouncing back a call you were equipped to make.
+- **Asked to describe, describe.** A request to write down what you see is
+  not a request to build the instrument that would see it. The instrument is
+  an *addition*, never a substitute — and the swap hides because the
+  instrument is genuinely the better artifact. Tell: the cheap direct answer
+  never shipped at all. Ship the description first; propose the recorder
+  after, as its own move.
 - Plan boundaries + pre-closeout → glance at live inbox / portal state. Own
   every pending event: fold in | `spawn:` it (capacity + quota healthy) |
   defer with a named resource / priority / dependency / authority reason.
