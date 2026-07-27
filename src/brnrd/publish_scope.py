@@ -55,10 +55,6 @@ class ReposWithoutPublishConsent(NamedTuple):
     opted_out: tuple[str, ...]
 
 
-def _account_repos(db: Session, account_id: str) -> list[Repo]:
-    return list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
-
-
 def normalize_publish_layers(raw: str | None) -> str:
     """Validate and canonicalize a consent string; 400 on any unknown token.
 
@@ -320,26 +316,33 @@ def purge_removed_scope(
     return frozenset(removed_lanes), frozenset(removed_slices)
 
 
-def lanes_withheld(db: Session, account_id: str) -> frozenset[str]:
+def lanes_withheld(repos: list[Repo]) -> frozenset[str]:
     """Lanes where an empty payload is certainly consent, not absence.
 
     A lane is withheld only when no connected repo in the account permits it.
     One permitting repo keeps an empty payload ambiguous: that repo may simply
     be idle. With zero connected repos there is no consent question and thus
     no provable claim, so this returns an empty set.
+
+    Takes the already-loaded repo list rather than a ``Session``: this is asked
+    once per dashboard lane per poll, the dashboard polls at 2 s, and six of the
+    seven callers have the same list in scope already. A convenience signature
+    that re-queries would have cost a round trip per lane per tick forever, to
+    answer "no" in the overwhelmingly common case.
     """
-    repos = _account_repos(db, account_id)
     if not repos:
         return frozenset()
     permitted = frozenset().union(*(_repo_scopes(repo.publish_layers)[0] for repo in repos))
     return frozenset(LANES) - permitted
 
 
-def repos_without_publish_consent(
-    db: Session, account_id: str
-) -> ReposWithoutPublishConsent:
-    """Repos that were never asked, and repos that explicitly chose nothing."""
-    repos = _account_repos(db, account_id)
+def repos_without_publish_consent(repos: list[Repo]) -> ReposWithoutPublishConsent:
+    """Repos that were never asked, and repos that explicitly chose nothing.
+
+    ``None`` and ``'none'`` resolve to the same *scopes* and to two very
+    different sentences: one is "we never asked you", the other is "you told
+    us no". Same list-in, list-out contract as ``lanes_withheld``.
+    """
     unrecorded = sorted(
         (repo.repo_full_name for repo in repos if repo.publish_layers is None),
         key=str.casefold,

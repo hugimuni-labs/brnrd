@@ -832,12 +832,24 @@ def test_account_with_no_repos_at_all_is_unenforced():
 # ── dashboard read-side consent explanation ────────────────────────
 
 
+def _connected_repos(db, account_id: str) -> list[Repo]:
+    """The list the dashboard endpoints already hold when they ask.
+
+    `lanes_withheld` and `repos_without_publish_consent` take the repo list
+    rather than a Session on purpose: they are asked once per lane per 2 s
+    poll, and a signature that re-queried would spend a round trip per lane
+    per tick to answer "not withheld".
+    """
+    return list(db.query(Repo).filter(Repo.account_id == account_id))
+
+
+
 def test_no_repos_proves_no_lane_is_withheld():
     client = _client()
     _login(client)
     with client.app.state.SessionLocal() as db:
         account_id = db.query(Account.id).one()[0]
-        assert publish_scope.lanes_withheld(db, account_id) == frozenset()
+        assert publish_scope.lanes_withheld(_connected_repos(db, account_id)) == frozenset()
 
 
 def test_one_unrecorded_repo_withholds_every_lane():
@@ -845,7 +857,7 @@ def test_one_unrecorded_repo_withholds_every_lane():
     token = _login(client)
     _mint_legacy_repo(client, token, "Gurio/legacy")
     with client.app.state.SessionLocal() as db:
-        assert publish_scope.lanes_withheld(db, _account_id(client)) == frozenset(
+        assert publish_scope.lanes_withheld(_connected_repos(db, _account_id(client))) == frozenset(
             publish_scope.LANES
         )
 
@@ -858,7 +870,7 @@ def test_one_repo_permitting_activity_leaves_only_activity_ambiguous():
         json={"repo_full_name": "Gurio/active", "publish_layers": "activity"},
     )
     with client.app.state.SessionLocal() as db:
-        withheld = publish_scope.lanes_withheld(db, _account_id(client))
+        withheld = publish_scope.lanes_withheld(_connected_repos(db, _account_id(client)))
     assert "activity" not in withheld
     assert withheld == frozenset(publish_scope.LANES) - {"activity"}
 
@@ -875,7 +887,7 @@ def test_any_permitting_repo_keeps_a_lane_out_of_withheld():
         json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
     )
     with client.app.state.SessionLocal() as db:
-        withheld = publish_scope.lanes_withheld(db, _account_id(client))
+        withheld = publish_scope.lanes_withheld(_connected_repos(db, _account_id(client)))
     assert "activity" not in withheld
 
 
@@ -888,7 +900,7 @@ def test_consent_absence_distinguishes_unrecorded_from_explicit_none():
         json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
     )
     with client.app.state.SessionLocal() as db:
-        absence = publish_scope.repos_without_publish_consent(db, _account_id(client))
+        absence = publish_scope.repos_without_publish_consent(_connected_repos(db, _account_id(client)))
     assert absence.unrecorded == ("Gurio/legacy",)
     assert absence.opted_out == ("Gurio/off",)
 
