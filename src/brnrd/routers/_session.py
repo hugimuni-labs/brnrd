@@ -498,8 +498,10 @@ def _document_status(db: Session, account: Account | None, kind: str) -> dict:
 
     ``needs_accept`` is meaningful only when the enclosing
     ``_terms_status`` says ``authenticated``.  Anonymous callers receive
-    ``False`` because nobody is present to owe acceptance; that value must
-    never be read as evidence that an unidentified user accepted (#690).
+    ``None`` — *unknown*, not *accepted* — because nobody is present to owe
+    acceptance and a falsy answer to "do you still owe me a signature?" is
+    indistinguishable from "no, you are clear" at every JS consumer (#690,
+    merged as #807; this docstring predates it and said ``False``).
     """
     doc = terms.current(kind)
     row = _accepted_terms(db, account.id, kind) if account is not None else None
