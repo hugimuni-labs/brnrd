@@ -795,6 +795,26 @@ def _wake_dump(run_dir: Path, *, boot: bool, limit: int | None) -> str:
     return "\n".join(parts)
 
 
+def _default_wake_run(runs_dir: Path) -> Path | None:
+    """The run to print when the caller named none.
+
+    ``BRR_RUN_ID`` first, most-recent-by-mtime second — and the order matters
+    more than it looks. Called from *inside* a run that has spawned a worker,
+    newest-directory-wins resolves to the **child's** run, silently: the
+    command answers a different question than the one asked and nothing about
+    the output says so. A run asking for "the wake" means its own.
+    """
+    current = (os.environ.get("BRR_RUN_ID") or "").strip()
+    if current:
+        mine = runs_dir / current
+        if mine.is_dir():
+            return mine
+    candidates = [d for d in runs_dir.iterdir() if d.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime)
+
+
 def cmd_prompts_wake(args):
     """``brnrd prompts wake [RUN_ID]`` — a run's context, both halves.
 
@@ -821,11 +841,10 @@ def cmd_prompts_wake(args):
             print(f"brnrd: unknown run {args.run_id!r}", file=sys.stderr)
             return 1
     else:
-        candidates = [d for d in runs_dir.iterdir() if d.is_dir()]
-        if not candidates:
+        run_dir = _default_wake_run(runs_dir)
+        if run_dir is None:
             print(f"brnrd: no runs under {runs_dir}", file=sys.stderr)
             return 1
-        run_dir = max(candidates, key=lambda d: d.stat().st_mtime)
 
     sys.stdout.write(
         _wake_dump(

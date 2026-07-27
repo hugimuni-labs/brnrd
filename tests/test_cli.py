@@ -1436,3 +1436,32 @@ def test_wake_dump_names_a_missing_boot_rather_than_omitting_it(tmp_path):
     out = _wake_dump(run_dir, boot=True, limit=None)
 
     assert "absent: no `prompt.md`" in out
+
+
+def test_the_default_run_is_my_own_run_not_the_newest_directory(tmp_path, monkeypatch):
+    """Inside a run that spawned a worker, newest-wins picks the *child*.
+
+    The failure this guards is silent: the command answers a different
+    question than the one asked and nothing in the output says so. A run
+    asking for "the wake" means its own.
+    """
+    import os
+    from brr.cli import _default_wake_run
+
+    runs_dir = tmp_path / "runs"
+    mine = runs_dir / "run-260727-1716-54h0"
+    child = runs_dir / "run-260727-1724-szdg"
+    mine.mkdir(parents=True)
+    child.mkdir(parents=True)
+    os.utime(child, (2_000_000_000, 2_000_000_000))  # decisively newer
+
+    monkeypatch.setenv("BRR_RUN_ID", mine.name)
+    assert _default_wake_run(runs_dir) == mine
+
+    # Outside a run there is no "my own", so newest is the honest answer.
+    monkeypatch.delenv("BRR_RUN_ID")
+    assert _default_wake_run(runs_dir) == child
+
+    # A stale id naming a directory that no longer exists must not win.
+    monkeypatch.setenv("BRR_RUN_ID", "run-gone")
+    assert _default_wake_run(runs_dir) == child
