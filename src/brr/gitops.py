@@ -73,10 +73,28 @@ def file_lock(lock_path: Path, timeout: float = 30.0):
 # hand. A successful push clears the marker.
 
 
-def write_sync_marker(brr_dir: Path, name: str, reason: str) -> None:
+_SYNC_STATUS_PREFIX = "status: "
+
+
+def write_sync_marker(
+    brr_dir: Path, name: str, reason: str, *, status: str = "",
+) -> None:
+    """Write a capture-sync marker, optionally carrying its failure class.
+
+    The classification is written as a machine-readable first line
+    (``status: <PushStatus value>``) ahead of the human sentence, because
+    the wake prompt has to *render* the failure and a renderer that
+    re-derives the class by matching the sentence is a second copy of the
+    classifier — the thing this whole change exists to remove. Absent
+    status ⇒ the marker is a bare reason, which is what every pre-#786
+    marker on disk already is.
+    """
     try:
         brr_dir.mkdir(parents=True, exist_ok=True)
-        (brr_dir / name).write_text(reason.strip() + "\n", encoding="utf-8")
+        body = reason.strip()
+        if status:
+            body = f"{_SYNC_STATUS_PREFIX}{status}\n{body}"
+        (brr_dir / name).write_text(body + "\n", encoding="utf-8")
     except OSError:
         pass
 
@@ -89,11 +107,35 @@ def clear_sync_marker(brr_dir: Path, name: str) -> None:
 
 
 def read_sync_marker(brr_dir: Path, name: str) -> str | None:
+    """Return the marker's human sentence, status line stripped."""
+    return _read_sync_marker_parts(brr_dir, name)[1]
+
+
+def read_sync_status(brr_dir: Path, name: str) -> str | None:
+    """Return the marker's :class:`PushStatus` value, or ``None``.
+
+    ``None`` covers both "no marker" and "a marker written before markers
+    carried a class" — a caller must treat an unknown class as *unknown*,
+    never as divergence. That defaulting is the original defect.
+    """
+    return _read_sync_marker_parts(brr_dir, name)[0]
+
+
+def _read_sync_marker_parts(
+    brr_dir: Path, name: str,
+) -> tuple[str | None, str | None]:
     try:
         text = (brr_dir / name).read_text(encoding="utf-8").strip()
     except OSError:
-        return None
-    return text or None
+        return None, None
+    if not text:
+        return None, None
+    head, _, rest = text.partition("\n")
+    if head.startswith(_SYNC_STATUS_PREFIX):
+        status = head[len(_SYNC_STATUS_PREFIX):].strip() or None
+        reason = rest.strip() or None
+        return status, reason
+    return None, text
 
 
 @dataclass

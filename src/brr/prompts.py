@@ -946,14 +946,14 @@ def _build_dominion_block(repo_root: Path) -> str:
     sync_note = ""
     diverged = dominion.needs_sync(chosen.capture_root.parent)
     if diverged:
-        sync_note = (
-            "\n\n**Your dominion remote has diverged** — brr's last push of "
-            "the account dominion repo was rejected, so another machine or "
-            "session wrote it too. brr commits locally so nothing is lost, but "
-            "reconciling the remote is yours (it's a merge — judgement, not a "
-            f"reflex): when you're the one awake, in `{chosen.capture_root}` "
-            "fetch, merge / resolve any conflicts, and push. "
-            f"(Reason on record: {diverged})"
+        sync_note = "\n\n" + _sync_marker_banner(
+            status=dominion.needs_sync_status(chosen.capture_root.parent),
+            reason=diverged,
+            subject="your dominion remote",
+            repo_path=str(chosen.capture_root),
+            stakes=(
+                "Until it lands, this memory lives on one machine only."
+            ),
         )
     if chosen.legacy:
         location = (
@@ -1555,15 +1555,74 @@ def _build_knowledge_sources_block(repo_root: Path) -> str:
     diverged = knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
     if not diverged:
         return block
-    warning = (
-        "**The knowledge remote has diverged** — brr's last push of the "
-        "knowledge repo was rejected, so another machine or session wrote it "
-        "too. Nothing is lost (it's committed locally), but reconciling is "
-        "yours: fetch, merge / resolve, push. Until then the kb pages this "
-        "run writes will not reach the archive, and they will not be "
-        f"linkable. (Reason on record: {diverged})"
+    warning = _sync_marker_banner(
+        status=knowledge.needs_sync_status(gitops.shared_brr_dir(repo_root)),
+        reason=diverged,
+        subject="the knowledge remote",
+        repo_path=str(gitops.shared_brr_dir(repo_root)),
+        stakes=(
+            "Until it lands, the kb pages this run writes will not reach the "
+            "archive, and they will not be linkable."
+        ),
     )
     return f"{warning}\n\n{block}" if block else warning
+
+
+def _sync_marker_banner(
+    *,
+    status: str | None,
+    reason: str,
+    subject: str,
+    repo_path: str,
+    stakes: str,
+) -> str:
+    """Render a capture-push failure for the wake, keyed on its class.
+
+    The marker carries its own classification (#786); this reads it rather
+    than re-deriving one from the sentence. Before that, both banners
+    hard-coded *"has diverged … reconcile by hand"* around whatever reason
+    the marker held — so an auth failure arrived wearing a merge
+    prescription, and two consecutive wakes went looking for a divergence
+    that did not exist while the repo sat 22 commits ahead and 0 behind.
+
+    An unknown class renders as unknown. That is the point: the old
+    behaviour's defect was not a wrong label, it was a *default* label.
+    """
+    from . import gitops
+
+    if status == gitops.PushStatus.REJECTED_NON_FAST_FORWARD.value:
+        head = f"**{subject} has diverged**"
+        body = (
+            "brr's last push was rejected because the remote moved — another "
+            "machine or session wrote it too. Nothing is lost (it is "
+            "committed locally), but reconciling is yours (a merge is "
+            f"judgement, not a reflex): in `{repo_path}` fetch, merge / "
+            "resolve any conflicts, and push."
+        )
+    elif status in (
+        gitops.PushStatus.AUTH_FAILED.value,
+        gitops.PushStatus.UNREACHABLE.value,
+    ):
+        verb = (
+            "could not authenticate to"
+            if status == gitops.PushStatus.AUTH_FAILED.value
+            else "could not reach"
+        )
+        head = f"**brnrd {verb} {subject}**"
+        body = (
+            "Nothing is lost and **nothing has diverged** — there is no merge "
+            "to do. The local history is intact and ahead; the push simply "
+            "never landed. Fix the credential or the network, or say so and "
+            "move on: a repair you cannot make is a report, not a blocker."
+        )
+    else:
+        head = f"**brnrd could not push {subject}**"
+        body = (
+            "The failure did not match a known class, so it is reported "
+            "unclassified rather than guessed at. Nothing is lost; do not "
+            "assume a merge is needed until the reason below says so."
+        )
+    return f"{head} — {body} {stakes} (Reason on record: {reason})"
 
 
 def _build_introspection_block(repo_root: Path) -> str:

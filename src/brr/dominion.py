@@ -212,7 +212,7 @@ def _commit_lock(dominion_dir: Path, timeout: float):
     return gitops.file_lock(dominion_dir.parent / COMMIT_LOCK_FILE, timeout)
 
 
-def mark_needs_sync(brr_dir: Path, reason: str) -> None:
+def mark_needs_sync(brr_dir: Path, reason: str, *, status: str = "") -> None:
     """Record why the dominion could not reach its remote.
 
     A best-effort hint, written to the runtime dir (gitignored), surfaced
@@ -224,12 +224,17 @@ def mark_needs_sync(brr_dir: Path, reason: str) -> None:
     (:func:`brr.gitops.write_sync_marker`) — two memories, one failure
     protocol.
     """
-    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason)
+    gitops.write_sync_marker(brr_dir, SYNC_MARKER_FILE, reason, status=status)
 
 
 def clear_needs_sync(brr_dir: Path) -> None:
     """Clear the dominion sync-needed marker (best-effort)."""
     gitops.clear_sync_marker(brr_dir, SYNC_MARKER_FILE)
+
+
+def needs_sync_status(brr_dir: Path) -> str | None:
+    """The dominion marker's failure class, or ``None`` when unclassified."""
+    return gitops.read_sync_status(brr_dir, SYNC_MARKER_FILE)
 
 
 def needs_sync(brr_dir: Path) -> str | None:
@@ -304,6 +309,7 @@ def commit(
                             remote_label="the dominion's remote",
                             repo_path=dominion_dir,
                         ),
+                        status=push_result.status.value,
                     )
         return committed
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
