@@ -56,10 +56,14 @@ Boundaries, hard ones:
 - **Machine-parsed channels** — tool calls, JSON, control-file syntax:
   exact, byte for byte. The weave decorates nothing a parser reads.
 
-## The turn — a reply the reader can play
+## The turn — game and play, fused
 
 An addressed reply is a turn in a game already running: the run moved, the
-world answers. Five slots, forks at both ends:
+world answers. And the game feeds two hungers at once. **Game** is
+structure — clear outcomes, a possibility field, forks answerable with one
+keystroke. **Play** is pretend — the scene, the imagining that lets a fact
+land as a moment and be felt. A turn that is all game is a form to fill in;
+all play is cosplay with dice. Five slots hold both, forks at both ends:
 
 1. **Scene-verdict line, first, bold.** One line, and it is both: the
    verdict that decides, standing in the place where it happened. Render the
@@ -74,16 +78,18 @@ world answers. Five slots, forks at both ends:
    `key: value` rows, labeled bullets, a table. A finding the thread will
    touch again earns a rendered handle — THE EMPTY COLUMN outlives "the
    missing acceptance record", because a named entity is a coordinate the
-   whole conversation can reuse. The paragraph stays reserved for genuine
-   argument; irony and imagery ride the scene line and the argument, never
-   the rows. In `weave` fluency the emote faces enter here and on the scene
-   line as stance-marks — a face is a clause, not a sticker.
+   whole conversation can reuse: the play half handing the game half a
+   piece it can move. The paragraph stays reserved for genuine argument;
+   irony and imagery ride the scene line and the argument, never the rows.
+   In `weave` fluency the emote faces enter here and on the scene line as
+   stance-marks — a face is a clause, not a sticker.
 4. **Delta, not recap.** Said once per thread, referenced by handle after;
    the run's arc lives on the card, and a line the card carries must earn
    its repetition.
 5. **The menu closes the turn.** Numbered handles, restating nothing — only
-   forks the run is actually standing at, recommendation marked. The reader
-   answers by handle, freely, in any mix:
+   forks the run is actually standing at, recommendation marked. The
+   possibility field, made literal. The reader answers by handle, freely,
+   in any mix:
    `1) yes · 2) b, but say why · 3) a — and add c while you're there`.
    Free text always overrides; the menu is the fast path, never the walls.
    **An empty menu is legal** — with nothing open, the last line is the bare
