@@ -3646,3 +3646,109 @@ class TestKbMirrorSignal:
         assert state.status != knowledge.MIRROR_ELSEWHERE
 
         assert _build_kb_health_block(repo) == ""
+
+
+class TestSyncMarkerBannerSpeaksItsClass:
+    """The wake banner must render the marker's *class*, not a default one.
+
+    #786 taught ``push_branch`` to classify and both capture paths to write a
+    truthful marker. The banner that renders the marker did not get the memo:
+    ``prompts.py`` hard-coded *"has diverged … reconcile by hand (it's a
+    merge)"* as prose **wrapping** whatever reason the marker held. So a
+    credential failure arrived under a merge prescription, and two
+    consecutive wakes went looking for a divergence that did not exist while
+    the repo sat 22 commits ahead and 0 behind. Found in review of #786 by
+    the run that specced it — the marker was fixed one layer below the lie.
+
+    Production of the marker is covered through real failing pushes in
+    ``test_dominion_commit.py`` / ``test_knowledge.py``; this class covers
+    the *rendering* of each class it can produce.
+    """
+
+    @staticmethod
+    def _dominion(tmp_path):
+        from brr import dominion
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _helpers_init = __import__("_helpers")
+        _helpers_init.init_git_repo(repo)
+        _helpers_init.commit_files(repo, {"README.md": "x\n"})
+        path = dominion.ensure_dominion(repo, push=False)
+        (path / "playbook.md").write_text("# Playbook\n\nnote\n", encoding="utf-8")
+        return repo, path
+
+    def _render(self, tmp_path, status):
+        from brr import dominion
+        from brr.prompts import _build_dominion_block
+
+        repo, path = self._dominion(tmp_path)
+        dominion.mark_needs_sync(
+            path.parent, "push of main to origin failed", status=status,
+        )
+        return _build_dominion_block(repo)
+
+    def test_non_fast_forward_still_asks_for_the_merge(self, tmp_path):
+        from brr.gitops import PushStatus
+
+        block = self._render(
+            tmp_path, PushStatus.REJECTED_NON_FAST_FORWARD.value,
+        )
+        assert "has diverged" in block
+        assert "fetch, merge / resolve" in block
+
+    def test_auth_failure_never_prescribes_a_merge(self, tmp_path):
+        from brr.gitops import PushStatus
+
+        block = self._render(tmp_path, PushStatus.AUTH_FAILED.value)
+        assert "could not authenticate" in block
+        assert "nothing has diverged" in block
+        # The whole point: no merge instruction anywhere in the banner.
+        # (The exact headline, not the substring — the auth banner says
+        # "nothing has diverged", which is the opposite claim.)
+        assert "fetch, merge / resolve" not in block
+        assert "**your dominion remote has diverged**" not in block
+
+    def test_unreachable_never_prescribes_a_merge(self, tmp_path):
+        from brr.gitops import PushStatus
+
+        block = self._render(tmp_path, PushStatus.UNREACHABLE.value)
+        assert "could not reach" in block
+        assert "nothing has diverged" in block
+        assert "fetch, merge / resolve" not in block
+
+    def test_unknown_class_renders_as_unknown(self, tmp_path):
+        """An unclassified failure is reported unclassified.
+
+        The original defect was not a wrong label — it was a *default* one.
+        A marker written before #786 carries no status; it must not inherit
+        divergence by omission.
+        """
+        block = self._render(tmp_path, "")
+        assert "could not push" in block
+        assert "unclassified" in block
+        assert "**your dominion remote has diverged**" not in block
+
+    def test_marker_round_trips_status_and_reason(self, tmp_path):
+        from brr import dominion, gitops
+
+        _, path = self._dominion(tmp_path)
+        dominion.mark_needs_sync(
+            path.parent, "the human sentence", status=gitops.PushStatus.AUTH_FAILED.value,
+        )
+        assert dominion.needs_sync(path.parent) == "the human sentence"
+        assert (
+            dominion.needs_sync_status(path.parent)
+            == gitops.PushStatus.AUTH_FAILED.value
+        )
+
+    def test_legacy_marker_without_status_keeps_its_reason(self, tmp_path):
+        """A marker on disk from before #786 is a bare sentence."""
+        from brr import dominion, gitops
+
+        _, path = self._dominion(tmp_path)
+        gitops.write_sync_marker(
+            path.parent, dominion.SYNC_MARKER_FILE, "an older bare reason",
+        )
+        assert dominion.needs_sync(path.parent) == "an older bare reason"
+        assert dominion.needs_sync_status(path.parent) is None

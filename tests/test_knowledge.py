@@ -6,7 +6,12 @@ import subprocess
 from brr import account, knowledge
 from brr.prompts import _build_knowledge_sources_block
 
-from _helpers import commit_files, init_git_repo
+from _helpers import (
+    commit_files,
+    init_git_repo,
+    rejecting_git_http_remote,
+    unreachable_git_http_remote,
+)
 
 
 def _commit(repo: Path, message: str = "commit") -> None:
@@ -628,7 +633,9 @@ def test_capture_marks_needs_sync_when_the_forge_diverged(tmp_path):
     knowledge.capture(repo, "kb: capture", cfg=cfg)
 
     brr_dir = repo / ".brr"
-    assert "diverged" in (knowledge.needs_sync(brr_dir) or "")
+    reason = knowledge.needs_sync(brr_dir) or ""
+    assert "diverged" in reason
+    assert "fetch / merge / push" in reason
     assert not _forge_has(forge, "repos/Gurio__brr/mine.md")
 
     # And the marker clears once the resident reconciles and capture retries.
@@ -636,6 +643,58 @@ def test_capture_marks_needs_sync_when_the_forge_diverged(tmp_path):
     knowledge.capture(repo, "kb: capture", cfg=cfg)
     assert knowledge.needs_sync(brr_dir) is None
     assert _forge_has(forge, "repos/Gurio__brr/mine.md")
+
+
+def test_capture_marks_auth_failure_without_inventing_divergence(
+    tmp_path, monkeypatch,
+):
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    with rejecting_git_http_remote() as url:
+        _git(knowledge_repo, "remote", "set-url", "origin", url)
+        page = knowledge_repo / "repos" / "Gurio__brr" / "mine.md"
+        page.write_text("x\n", encoding="utf-8")
+        knowledge.capture(repo, "kb: capture", cfg=cfg)
+
+    reason = knowledge.needs_sync(repo / ".brr") or ""
+    assert f"failed authentication against {url} over HTTP" in reason
+    assert str(knowledge_repo) in reason
+    assert "diverged" not in reason
+    assert "merge" not in reason
+
+
+def test_capture_marks_unreachable_without_prescribing_a_merge(tmp_path):
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    url = unreachable_git_http_remote()
+    _git(knowledge_repo, "remote", "set-url", "origin", url)
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mine.md"
+    page.write_text("x\n", encoding="utf-8")
+
+    knowledge.capture(repo, "kb: capture", cfg=cfg)
+
+    reason = knowledge.needs_sync(repo / ".brr") or ""
+    assert f"could not reach {url} over HTTP" in reason
+    assert str(knowledge_repo) in reason
+    assert "diverged" not in reason
+    assert "merge" not in reason
+
+
+def test_capture_marks_unclassified_push_failure_as_unclassified(tmp_path):
+    repo, cfg, _forge = _capture_chain(tmp_path, checkout=False)
+    knowledge_repo = tmp_path / "home" / "knowledge"
+    missing = tmp_path / "missing.git"
+    _git(knowledge_repo, "remote", "set-url", "origin", str(missing))
+    page = knowledge_repo / "repos" / "Gurio__brr" / "mine.md"
+    page.write_text("x\n", encoding="utf-8")
+
+    knowledge.capture(repo, "kb: capture", cfg=cfg)
+
+    reason = knowledge.needs_sync(repo / ".brr") or ""
+    assert f"unclassified reason against {missing} over local" in reason
+    assert str(knowledge_repo) in reason
+    assert "diverged" not in reason
 
 
 # ── The mirror reads current (#659) ──────────────────────────────────
