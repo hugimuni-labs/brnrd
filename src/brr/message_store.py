@@ -190,9 +190,17 @@ def receipt_id(receipt: object) -> str:
 
 
 def message_path_from_queue(path: Path) -> Path | None:
+    # ``UnicodeError`` alongside ``OSError``: a queue file that is not UTF-8
+    # is unreadable in exactly the same sense as one that is missing, and the
+    # caller's contract is already "None means no message path here". Before
+    # this it *raised*, out of ``_mark_report_collected`` and therefore out of
+    # ``_notify_spawn_parent`` — after the completion event had already been
+    # written — so an undecodable worker response took the reap path down
+    # behind a receipt that had already landed. Surfaced by the undecodable
+    # -reply test added with the #770 review.
     try:
         meta = protocol.parse_frontmatter(path.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     raw = str(meta.get("message_path") or "").strip()
     return Path(raw) if raw else None
