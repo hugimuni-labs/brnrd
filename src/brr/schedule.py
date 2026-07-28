@@ -19,6 +19,10 @@ Two trigger forms cover the ground without cron's 5-field grammar:
   daemon pushes this entry's cooldown out from the dispatch time, instead
   of firing redundantly moments after related work already happened.
 
+Either trigger may name the Runner it is willing to cost with ``shell:``
+and/or ``core:``, or with the legacy profile selector ``runner:``. The parser
+keeps these names verbatim; the daemon resolves them when the entry fires.
+
 Split of concerns mirrors the memory layers: the **specs** are owned and
 durable (dominion, committed); the **firing-state** (last-fired
 timestamps) is operational — daemon-owned, gitignored, machine-persistent
@@ -50,7 +54,8 @@ SIGNAL_FILE = "signals.json"  # also under STATE_DIRNAME
 DEFAULT_STALE_GRACE_S = 7 * 24 * 3600  # an `at:` older than this won't surprise-fire
 
 _FIELD_RE = re.compile(
-    r"^\s*(at|every|conversation_key|reset_on)\s*:\s*(.+?)\s*$", re.IGNORECASE
+    r"^\s*(at|every|conversation_key|reset_on|shell|core|runner)\s*:\s*(.+?)\s*$",
+    re.IGNORECASE,
 )
 _DURATION_TOKEN_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -76,6 +81,9 @@ class ScheduleEntry:
     # cooldown as if it had just fired, without actually firing it. Only
     # meaningful for ``every`` entries — see ``apply_reset_signals``.
     reset_on: str | None = None
+    shell: str | None = None
+    core: str | None = None
+    runner: str | None = None
 
 
 # ── Parsing ──────────────────────────────────────────────────────────
@@ -129,6 +137,10 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
     body = "\n".join(body_lines).strip()
     conv = (fields.get("conversation_key") or "").strip() or None
     reset_on = (fields.get("reset_on") or "").strip() or None
+    runner_fields = {
+        key: (fields.get(key) or "").strip() or None
+        for key in ("shell", "core", "runner")
+    }
     # `every` wins if both are present (one trigger per entry is the convention).
     if "every" in fields:
         interval = parse_duration(fields["every"])
@@ -137,6 +149,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
         return ScheduleEntry(
             eid, "every", body, interval=interval,
             raw_when=fields["every"], conversation_key=conv, reset_on=reset_on,
+            **runner_fields,
         )
     if "at" in fields:
         at = parse_iso(fields["at"])
@@ -144,6 +157,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
             return None
         return ScheduleEntry(
             eid, "at", body, at=at, raw_when=fields["at"], conversation_key=conv,
+            **runner_fields,
         )
     return None  # no trigger → inert, skipped
 
@@ -158,9 +172,10 @@ def parse_schedule(dominion_dir: Path) -> list[ScheduleEntry]:
     currently only ``spawn`` — that pushes this entry's cooldown out as if
     it had just fired, so it doesn't redundantly fire right after other,
     more specific work already covered similar ground; see
-    ``apply_reset_signals``), then optional body prose (the thought to
-    run). Text before the first heading is a comment/header and ignored.
-    An entry with no/invalid trigger is dropped.
+    ``apply_reset_signals``), optional ``shell:``, ``core:``, and legacy
+    ``runner:`` Runner pins, then optional body prose (the thought to run).
+    Text before the first heading is a comment/header and ignored. An entry
+    with no/invalid trigger is dropped; Runner names are not validated here.
     """
     path = dominion_dir / SCHEDULE_FILE
     try:
@@ -672,9 +687,10 @@ UNRECORDED_TIER_FLOOR = trust.COLLABORATOR
 def entry_fingerprint(entry: ScheduleEntry) -> str:
     """Return a stable content fingerprint for *entry*.
 
-    Covers everything that decides *what gets said and when* — kind,
-    trigger, ``conversation_key``, ``reset_on``, body — so that editing an
-    entry in place is a visible event to attribution.  The id is
+    Covers everything that decides *what gets said, when, and on which
+    Runner* — kind, trigger, ``conversation_key``, ``reset_on``, Runner
+    pins, body — so that editing an entry in place is a visible event to
+    attribution.  The id is
     deliberately excluded: the fingerprint is the record's *value*, keyed
     by id, and folding the key into the value buys nothing.
 
@@ -691,6 +707,9 @@ def entry_fingerprint(entry: ScheduleEntry) -> str:
             entry.raw_when,
             entry.conversation_key or "",
             entry.reset_on or "",
+            entry.shell or "",
+            entry.core or "",
+            entry.runner or "",
             entry.body,
         ],
         ensure_ascii=False,
