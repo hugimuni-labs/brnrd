@@ -841,14 +841,10 @@ def prune_entry_records(state: dict, present_ids: "set[str] | frozenset[str]") -
 
     Mutates *state* in place; returns whether anything changed.
 
-    **Call this against the full parsed entry list, never against the
-    pacing-filtered one.**  A quota-critical tick drops every ``every:``
-    entry from the list handed to :func:`due_entries`, and pruning against
-    *that* would delete the tier record of every recurring entry the
-    moment quota dipped — after which each one would fire as ``owner``.
-    It is the same hazard ``dropped_ids`` already exists to prevent for
-    firing state, in the one direction where the cost is an escalation
-    rather than a missed beat.
+    **Call this against the full parsed entry list, never a cadence-transformed
+    derivative.** Pacing is execution state, not deletion; pruning against a
+    policy view could delete a recurring entry's tier record and let it return
+    as ``owner``.
     """
     changed = False
     tier_map = state.get(_TIER_BY_ENTRY_KEY)
