@@ -49,9 +49,10 @@ not closed, on issue #533 and in ``account.py``.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 SECURITY_CONFIG_FILENAME = "security.config"
 
@@ -256,17 +257,47 @@ def home_profiles_path(repo_root: Path) -> Path | None:
     return None if sec_path is None else sec_path.parent / PROFILES_FILENAME
 
 
-def ignored_repo_profile_files(repo_root: Path) -> list[str]:
-    """Return repo-side ``runners.md`` paths that exist and are ignored (#693).
+@dataclass(frozen=True)
+class IgnoredRepoProfileFile:
+    """An ignored repo-side profile file compared with the active catalog."""
+
+    relpath: str
+    classification: Literal["mirror", "divergent", "unknown"]
+    new_profiles: tuple[str, ...] = ()
+    differing_profiles: tuple[str, ...] = ()
+    reason: str | None = None
+
+
+def _parsed_profile_semantics(text: str) -> dict[str, dict[str, Any]]:
+    """Parse the profile fields the runner loader sees, rejecting no-catalog input."""
+    from . import protocol
+
+    if not re.match(r"^---\n.*?\n---", text, re.DOTALL):
+        raise ValueError("no parseable frontmatter")
+    parsed = protocol.parse_frontmatter(text)
+    if any(not isinstance(body, dict) for body in parsed.values()):
+        raise ValueError("a profile body is not a field mapping")
+    return {name: dict(body) for name, body in parsed.items()}
+
+
+def ignored_repo_profile_files(repo_root: Path) -> list[IgnoredRepoProfileFile]:
+    """Classify ignored repo-side ``runners.md`` files against what loads.
 
     Display strings relative to the shared ``.brr`` dir (``.brr/runners.md``),
     not absolute host paths: this list is read out to a remote operator in a
     chat notice, where a host path renders as noise.
 
-    The visibility half of #693, mirroring ``load_config_report``'s
-    ``ignored_keys``. A user with a working custom profile is exactly the
-    user this change breaks, and "the daemon quietly ran a different runner"
-    is not an acceptable way to find out.
+    ``mirror`` means every profile defined by the ignored file has the same
+    parsed field mapping in the active daemon-owned or bundled catalog.
+    ``divergent`` names profiles missing from that catalog and profiles whose
+    parsed fields differ. ``unknown`` is fail-open about neither remedy: an
+    unreadable file, catalog, or daemon-owned home is not evidence of either
+    equivalence or divergence.
+
+    The comparison intentionally uses ``runner._profiles_source`` plus the
+    same frontmatter parser as ``runner._load_profiles``. The prose after
+    frontmatter and formatting inside it are not profile semantics; parsed
+    field names and values are exact.
     """
     from . import gitops
 
@@ -274,7 +305,75 @@ def ignored_repo_profile_files(repo_root: Path) -> list[str]:
         brr_dir = gitops.shared_brr_dir(repo_root)
     except Exception:  # noqa: BLE001 - non-repo invocations have nothing to ignore
         brr_dir = repo_root / ".brr"
-    return [rel for rel in _REPO_PROFILE_RELPATHS if (brr_dir / rel).exists()]
+    paths = [
+        (rel, brr_dir / rel)
+        for rel in _REPO_PROFILE_RELPATHS
+        if (brr_dir / rel).exists()
+    ]
+    if not paths:
+        return []
+
+    try:
+        home_unreachable = home_profiles_unreachable(repo_root)
+        home_path = home_profiles_path(repo_root)
+    except Exception:  # noqa: BLE001 - comparison failure is a first-class result
+        home_unreachable = True
+        home_path = None
+    if home_unreachable or home_path is None:
+        return [
+            IgnoredRepoProfileFile(
+                rel,
+                "unknown",
+                reason="daemon-owned home profile path is unresolvable",
+            )
+            for rel, _path in paths
+        ]
+
+    try:
+        from . import runner
+
+        _source, active_text = runner._profiles_source(repo_root)
+        active = _parsed_profile_semantics(active_text)
+    except Exception:  # noqa: BLE001 - comparison failure is a first-class result
+        reason = "active profile catalog could not be read or parsed"
+        return [
+            IgnoredRepoProfileFile(rel, "unknown", reason=reason)
+            for rel, _path in paths
+        ]
+
+    results: list[IgnoredRepoProfileFile] = []
+    for rel, path in paths:
+        try:
+            ignored = _parsed_profile_semantics(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - comparison failure is a first-class result
+            results.append(
+                IgnoredRepoProfileFile(
+                    rel,
+                    "unknown",
+                    reason="repo-side profile file could not be read or parsed",
+                )
+            )
+            continue
+        new_profiles = tuple(sorted(set(ignored) - set(active)))
+        differing_profiles = tuple(
+            sorted(
+                name
+                for name in set(ignored) & set(active)
+                if ignored[name] != active[name]
+            )
+        )
+        classification: Literal["mirror", "divergent"] = (
+            "divergent" if new_profiles or differing_profiles else "mirror"
+        )
+        results.append(
+            IgnoredRepoProfileFile(
+                rel,
+                classification,
+                new_profiles=new_profiles,
+                differing_profiles=differing_profiles,
+            )
+        )
+    return results
 
 
 def home_profiles_unreachable(repo_root: Path) -> bool:
