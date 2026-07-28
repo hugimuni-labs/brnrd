@@ -39,7 +39,7 @@ reach when you are away from the terminal.
 | 🧠 | **A resident, not a reset** | Each repo gets a coworker with working memory, project knowledge, and a playbook. A new run is the same mind's next thought — not an amnesiac subprocess wearing yesterday's name tag. |
 | 💬 | **Interrupt-free interaction** | Follow the live plan and progress card. Add a fact or change direction at runner boundaries, without killing the thought in flight. |
 | 🔀 | **The model is a medium** | Pin Claude or Codex. Escalate a core for a hard pass, downshift for grunt work, and see quota posture before it becomes a surprise. |
-| 🏠 | **Local means local** | Checkout, shell, runner process, and execution stay on your machine. Managed gates relay messages and status; your source never leaves home. |
+| 🏠 | **Local means local** | Your checkout, `.git`, and run execution stay on your machine; with `brnrd account connect`, dashboard publishing continuously mirrors derived project knowledge—including any code quoted there—to brnrd.dev, but it does not read your source tree. |
 | 🧾 | **Git-native receipts** | Every run ends somewhere durable: a branch, a PR, or an answer in the thread. The diff is the proof. |
 | 📁 | **The seams are files** | Gates and live controls speak a small file protocol. A new transport is not a new religion for the daemon. |
 
@@ -177,10 +177,11 @@ approval prompts bypassed, on purpose. So the honest posture *is* the product:
   collaborators through `trust.collaborator_env=solitary` when they should not inherit
   your normal execution authority.
 - **Local stays local — with one honest caveat.** Your checkout, `.git`, and run
-  execution never leave the machine. Remote messages travel through the transport you
-  choose (and, in managed mode, transit brnrd.dev on the way to your daemon). If you
-  run `brnrd account connect`, the dashboard also mirrors *derived* knowledge — plans, the
-  decision ledger, run summaries, PR titles — to brnrd.dev; your source code does not.
+  execution stay on your machine; with `brnrd account connect`, dashboard
+  publishing continuously mirrors derived project knowledge—including any code
+  quoted there—to brnrd.dev, but it does not read your source tree. Remote
+  messages travel through the transport you choose and, in managed mode, transit
+  brnrd.dev on the way to your daemon.
 - **Never paste credentials into a task.** Configure them through the runner or gate.
 
 The full threat model, the per-gate authorization table, and the honest environment

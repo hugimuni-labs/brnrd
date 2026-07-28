@@ -93,6 +93,12 @@ never escalate the environment a higher tier configured.
 
 ## Credentials & data flow
 
+<!-- dashboard-copy-truth -->
+Your checkout, `.git`, and run execution stay on your machine; with
+`brnrd account connect`, dashboard publishing continuously mirrors derived
+project knowledge—including any code quoted there—to brnrd.dev, but it does
+not read your source tree.
+
 - **Where data crosses the network.** Inbound: a gate poll or a managed webhook.
   Outbound: the gate reply, a `git push` to your forge, an overflow reply posted to
   your own GitHub **secret** gist (unlisted URL — anyone with the link can read it),
