@@ -96,6 +96,42 @@ def test_parse_reset_on_optional(tmp_path: Path):
     assert e.reset_on is None
 
 
+def test_parse_reads_optional_runner_fields(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## Cheap sweep\nevery: 1h\n"
+        "shell: codex\ncore: gpt-5.6-luna\nrunner: codex-mini\nrun it\n",
+    )
+
+    (e,) = schedule.parse_schedule(dom)
+
+    assert e.shell == "codex"
+    assert e.core == "gpt-5.6-luna"
+    assert e.runner == "codex-mini"
+    assert e.body == "run it"
+
+
+def test_parse_runner_fields_default_to_none(tmp_path: Path):
+    dom = _write(tmp_path / "dom", "## Ping\nevery: 1h\ndo a thing\n")
+
+    (e,) = schedule.parse_schedule(dom)
+
+    assert e.shell is None
+    assert e.core is None
+    assert e.runner is None
+
+
+def test_parse_keeps_unknown_runner_value_for_daemon(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## Typo\nevery: 1h\nshell: definitely-not-a-runner\ntry anyway\n",
+    )
+
+    (e,) = schedule.parse_schedule(dom)
+
+    assert e.shell == "definitely-not-a-runner"
+
+
 def test_parse_ignores_preamble_and_inert_entries(tmp_path: Path):
     dom = _write(
         tmp_path / "dom",

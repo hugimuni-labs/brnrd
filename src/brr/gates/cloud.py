@@ -1062,9 +1062,15 @@ def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
     state = schedule_mod.load_state(brr_dir)
     pacing = state.get("_pacing") if isinstance(state, dict) else None
     pacing = pacing if isinstance(pacing, dict) else {}
-    pacing_mode = str(pacing.get("mode") or "normal")
     records: list[dict[str, Any]] = []
     for entry in entries:
+        entry_pacing = pacing
+        per_entry = pacing.get("entries")
+        if isinstance(per_entry, dict):
+            candidate = per_entry.get(entry.id)
+            if isinstance(candidate, dict):
+                entry_pacing = candidate
+        entry_pacing_mode = str(entry_pacing.get("mode") or "normal")
         scheduled_for: float | None = None
         status = "scheduled"
         if entry.kind == "at":
@@ -1081,15 +1087,15 @@ def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 last_fired = None
             if last_fired is not None and entry.interval:
                 effective_interval = entry.interval
-                if pacing_mode == "quota-paced":
+                if entry_pacing_mode == "quota-paced":
                     try:
-                        effective_interval *= float(pacing.get("factor") or 1)
+                        effective_interval *= float(entry_pacing.get("factor") or 1)
                     except (TypeError, ValueError):
                         pass
                 scheduled_for = last_fired + effective_interval
             status = (
-                pacing_mode
-                if pacing_mode in {"quota-paced", "quota-paused"}
+                entry_pacing_mode
+                if entry_pacing_mode in {"quota-paced", "quota-paused"}
                 else "recurring"
             )
         records.append(
