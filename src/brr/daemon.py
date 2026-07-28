@@ -173,9 +173,10 @@ _FLUSH_POLL_INTERVAL = 1.0
 # yields the moment any pending event appears.
 _POST_DELIVERY_ATTEND_SECONDS_DEFAULT = 90.0
 _POST_DELIVERY_ATTEND_POLL_INTERVAL = 1.0
-# Quota-aware pacing floors (kb/design-director-loop.md §B1, decided
-# 2026-07-04): below the low floor, `every:` schedule entries stretch their
-# interval; below the critical floor, they stop firing this beat entirely.
+# Quota-aware pacing floors (kb/design-director-loop.md §B1, refined
+# 2026-07-28): below the low floor, `every:` schedule entries stretch their
+# interval. The critical floor remains a resident-facing scarcity signal; it
+# never silences a wake before the resident can weigh task value against cost.
 # `at:` entries and anything gate-addressed are never bent by this policy.
 _QUOTA_LOW_FLOOR_PCT_DEFAULT = 20.0
 _QUOTA_CRITICAL_FLOOR_PCT_DEFAULT = 8.0
@@ -7193,7 +7194,6 @@ def _fire_due_schedules(
         # Runner pin retain the config-wide read; a pinned entry reads its
         # resolved Runner instead. Level collection is cached per Runner so
         # repeated entries cost one cache read.
-        dropped_ids: set[str] = set()
         shell_pin = str(cfg.get("shell") or "").strip()
         runner_cfg = str(cfg.get("runner") or "").strip()
         default_runner_name = shell_pin or (
@@ -7238,11 +7238,6 @@ def _fire_due_schedules(
             )
             if binding_pct is None:
                 return {"mode": "normal"}
-            if binding_pct < _quota_critical_floor_pct(cfg):
-                return {
-                    "mode": "quota-paused",
-                    "remaining_pct": round(binding_pct, 1),
-                }
             if binding_pct < _quota_low_floor_pct(cfg):
                 return {
                     "mode": "quota-paced",
@@ -7265,8 +7260,6 @@ def _fire_due_schedules(
                 entry_pacing[entry.id] = pacing
             if entry.kind != "every" or pacing["mode"] == "normal":
                 scheduled_entries.append(entry)
-            elif pacing["mode"] == "quota-paused":
-                dropped_ids.add(entry.id)
             else:
                 scheduled_entries.append(
                     replace(
@@ -7283,13 +7276,6 @@ def _fire_due_schedules(
         due, new_state = schedule_mod.due_entries(
             scheduled_entries, state, now, stale_grace=grace,
         )
-        # due_entries prunes new_state to the ids it was actually handed —
-        # carry forward the anchor/last-fired record for entries the
-        # critical-floor pause dropped this beat, so a recovering quota
-        # resumes cadence instead of re-anchoring from zero.
-        for did in dropped_ids:
-            if did in state and did not in new_state:
-                new_state[did] = state[did]
         # The dashboard must render the same effective schedule this tick
         # used. Without this receipt it applies the authored interval and can
         # call a deliberately stretched/paused wake "overdue".
@@ -9350,7 +9336,7 @@ def _quota_low_floor_pct(cfg: dict) -> float:
 
 
 def _quota_critical_floor_pct(cfg: dict) -> float:
-    """Below this remaining-percent, `every:` entries don't fire this beat."""
+    """Below this remaining-percent, surface critical scarcity to the resident."""
     return _seconds_config(
         cfg, "pacing.quota_critical_floor_pct",
         default=_QUOTA_CRITICAL_FLOOR_PCT_DEFAULT,
