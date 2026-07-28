@@ -846,13 +846,33 @@ def read_recent_for_correspondent(
     return records[-limit:]
 
 
+def split_conversation_key(key: str) -> tuple[str | None, str]:
+    """Separate an optional transport wrapper from a gate conversation key.
+
+    A native gate key has three fields, ``source:anchor:thread``. A
+    transport wrapper prepends one field, producing
+    ``wrapper:source:anchor:thread``. Deriving the split from that extra
+    field keeps the grammar open to new wrappers without teaching this
+    parser their names. Shallow fallback keys such as ``cloud:default`` and
+    non-gate keys such as ``schedule:<name>`` are not wrapped.
+    """
+    wrapper, separator, inner = key.partition(":")
+    if not separator or inner.count(":") < 2:
+        return None, key
+    return wrapper, inner
+
+
 def _conversation_source_from_key(key: str) -> str:
     """Best-effort source label from a conversation key."""
-    if key.startswith("cloud:"):
-        parts = key.split(":", 2)
-        if len(parts) >= 2 and parts[1]:
-            return f"cloud/{parts[1]}"
-        return "cloud"
+    wrapper, inner = split_conversation_key(key)
+    if wrapper is not None:
+        source = inner.split(":", 1)[0]
+        return f"{wrapper}/{source}" if source else wrapper
+    # Preserve the source label of cloud's shallow fallback key. It does not
+    # have enough structure to be a wrapped gate key.
+    source, separator, remainder = key.partition(":")
+    if source == "cloud" and separator:
+        return f"cloud/{remainder}" if remainder else "cloud"
     return key.split(":", 1)[0] if ":" in key else key
 
 
