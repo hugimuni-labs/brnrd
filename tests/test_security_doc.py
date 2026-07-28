@@ -35,6 +35,7 @@ from brr.gates import cloud
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SECURITY_MD = REPO_ROOT / "SECURITY.md"
+_COPY_TRUTH_MARKER = "<!-- dashboard-copy-truth -->"
 
 # The one form the document is allowed to state the publish cadence in. Prose
 # either matches this or the test reds; there is no "close enough" branch.
@@ -45,6 +46,38 @@ _CADENCE_CLAIM = re.compile(r"\bevery (\d+) seconds\b")
 # publishing mirrors* (the render-cache setup). Both are load-bearing and
 # neither is redundant, so the count is pinned rather than floored.
 _EXPECTED_CADENCE_CLAIMS = 2
+
+
+def _normalise_markdown(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_public_surfaces_copy_the_dashboard_boundary_from_security_md():
+    """The release-facing summaries share one sentence, not four paraphrases.
+
+    #417 existed because each reassuring surface drifted independently. The
+    marker chooses the canonical paragraph in SECURITY.md; the assertion then
+    compares text, so a rewrite must move every public copy in the same diff.
+    README carries it twice because both the feature table and the security
+    section make the local-data claim.
+    """
+    security = SECURITY_MD.read_text(encoding="utf-8")
+    assert security.count(_COPY_TRUTH_MARKER) == 1
+    canonical = security.split(_COPY_TRUTH_MARKER, 1)[1].strip().split("\n\n", 1)[0]
+    canonical = _normalise_markdown(canonical)
+
+    expected_counts = {
+        REPO_ROOT / "README.md": 2,
+        REPO_ROOT / "docs/src/content/docs/security.md": 1,
+        REPO_ROOT / "docs/src/content/docs/index.md": 1,
+    }
+    for path, expected in expected_counts.items():
+        count = _normalise_markdown(path.read_text(encoding="utf-8")).count(canonical)
+        assert count == expected, (
+            f"{path.relative_to(REPO_ROOT)} carries the canonical dashboard "
+            f"boundary {count} time(s); expected {expected}. Copy the marked "
+            "sentence from SECURITY.md verbatim instead of paraphrasing it."
+        )
 
 
 def test_imported_cloud_module_is_this_repos():
