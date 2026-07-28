@@ -105,6 +105,67 @@ def test_fire_due_honors_explicit_conversation_key(tmp_path):
     assert ev["conversation_key"] == "telegram:7:"
 
 
+def test_fire_due_carries_valid_runner_pins_only(tmp_path, monkeypatch):
+    from brr.runner_select import RunnerProfile
+
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(
+        path,
+        f"## Cheap\nat: {past}\nshell: codex\ncore: luna\ncheap task\n\n"
+        f"## Default\nat: {past}\ndefault task\n",
+    )
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, pins: RunnerProfile(
+            name="codex-mini", profile="codex-mini", shell="codex", model="luna"
+        ),
+    )
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    events = {event["schedule_id"]: event for event in protocol.list_pending(inbox)}
+    assert events["cheap"]["shell"] == "codex"
+    assert events["cheap"]["core"] == "luna"
+    assert "runner" not in events["cheap"]
+    assert all(
+        key not in events["default"] for key in ("shell", "core", "runner")
+    )
+
+
+def test_fire_due_bad_runner_pin_falls_back_to_config_default(
+    tmp_path, monkeypatch, capsys,
+):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(
+        path,
+        f"## Typo\nat: {past}\nshell: definitely-missing\nstill run\n",
+    )
+
+    def unavailable(_root, _pins):
+        raise RuntimeError("not found on PATH")
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", unavailable)
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
+
+    (event,) = protocol.list_pending(inbox)
+    assert event["schedule_id"] == "typo"
+    assert all(key not in event for key in ("shell", "core", "runner"))
+    log = capsys.readouterr().out
+    assert "typo Runner pin unavailable" in log
+    assert "shell='definitely-missing'" in log
+    assert "firing on config default" in log
+
+
 def test_fire_due_every_anchors_then_fires(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
@@ -311,6 +372,69 @@ def test_fire_due_ignores_quota_pacing_without_resolvable_runner(tmp_path):
 
     fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
     assert fired == {"upkeep"}
+
+
+def test_fire_due_paces_each_entry_against_its_runner_and_caches_levels(
+    tmp_path, monkeypatch,
+):
+    from brr.runner_select import RunnerProfile
+
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(
+        path,
+        "## Cheap one\nevery: 60s\nshell: codex-mini\none\n\n"
+        "## Cheap two\nevery: 60s\nshell: codex-mini\ntwo\n\n"
+        "## Default\nevery: 60s\ndefault\n",
+    )
+    schedule.save_state(
+        brr_dir,
+        {
+            entry_id: {"kind": "every", "last_fired": 0.0}
+            for entry_id in ("cheap-one", "cheap-two", "default")
+        },
+    )
+    monkeypatch.setattr(
+        daemon.runner,
+        "resolve_runner_profile",
+        lambda _root, _pins: RunnerProfile(
+            name="codex-mini", profile="codex-mini", shell="codex", model="luna"
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.runner,
+        "runner_profile",
+        lambda _name, _root: RunnerProfile(
+            name="claude", profile="claude", shell="claude", model="opus"
+        ),
+    )
+    level_reads = []
+
+    def collect_levels(runner_name, *_args, **_kwargs):
+        level_reads.append(runner_name)
+        remaining = 80.0 if runner_name == "codex-mini" else 1.0
+        return (
+            {
+                "quota": {
+                    "buckets": {"week": {"remaining_percentage": remaining}}
+                }
+            },
+            True,
+        )
+
+    monkeypatch.setattr(daemon, "_collect_levels", collect_levels)
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
+
+    fired = {event["schedule_id"] for event in protocol.list_pending(inbox)}
+    assert fired == {"cheap-one", "cheap-two"}
+    assert level_reads.count("codex-mini") == 1
+    assert level_reads.count("claude") == 1
+    pacing = schedule.load_state(brr_dir)["_pacing"]
+    assert pacing["mode"] == "quota-paused"
+    assert pacing["entries"]["cheap-one"]["mode"] == "normal"
 
 
 def test_retire_internal_event_closes_schedule_source_in_place(tmp_path):
