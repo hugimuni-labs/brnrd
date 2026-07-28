@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from brr import daemon, menus, prompts, protocol
 from brr.gates import telegram
 from brr.run import Run
@@ -51,6 +53,62 @@ def _emit(brr_dir, thread="telegram:555:"):
         conversation_key=thread,
         event_id="evt-lead",
     )
+
+
+@pytest.mark.parametrize(
+    ("thread", "expected"),
+    [
+        ("telegram:155783668:", (155783668, None)),
+        ("telegram:155783668:42", (155783668, 42)),
+        ("cloud:telegram:155783668:", (155783668, None)),
+        ("cloud:telegram:155783668:42", (155783668, 42)),
+        ("schedule:release-push-dispatch-tick", None),
+        ("slack:C123:", None),
+        ("cloud:slack:C123:", None),
+        ("telegram:notanint:", None),
+    ],
+)
+def test_telegram_thread_target(thread, expected):
+    assert telegram._telegram_thread_target(thread) == expected
+
+
+def test_cloud_wrapped_telegram_live_menu_sends_reply_markup(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    thread = "cloud:telegram:155783668:42"
+    outbox = brr_dir / "outbox" / "evt-lead"
+    outbox.mkdir(parents=True)
+    telegram._save_state(
+        brr_dir,
+        {"token": "secret", "paired_user_id": 41},
+    )
+    _write_menu(outbox, _menu("cloud-deploy", thread=thread))
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        calls.append((method, params or {}))
+        if method == "sendMessage":
+            return {"result": {"message_id": 700}}
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    assert daemon._drain_live_menu(
+        _emit(brr_dir, thread),
+        _task(thread),
+        outbox / menus.MENU_NAME,
+        {},
+        outbox_dir=outbox,
+    )
+
+    sent = next(params for method, params in calls if method == "sendMessage")
+    assert sent["chat_id"] == 155783668
+    assert sent["message_thread_id"] == 42
+    assert sent["reply_markup"]["inline_keyboard"][0][0] == {
+        "text": "★ Ship it",
+        "callback_data": "m:cloud-deploy:ship",
+    }
 
 
 def test_menu_written_rendered_tapped_arrives_as_pending_event(

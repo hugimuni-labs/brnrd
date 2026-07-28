@@ -22,7 +22,7 @@ from typing import Any
 
 import requests
 
-from .. import menus, protocol, run_progress, trust
+from .. import conversations, menus, protocol, run_progress, trust
 from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
@@ -868,6 +868,7 @@ def _save_menu_render_state(
 
 
 def _telegram_thread_target(thread: str) -> tuple[int, int | None] | None:
+    _, thread = conversations.split_conversation_key(thread)
     parts = thread.split(":", 2)
     if len(parts) != 3 or parts[0] != "telegram":
         return None
