@@ -231,7 +231,7 @@ def _write_quota_cache(brr_dir, remaining_pct):
     })
 
 
-def test_fire_due_pauses_every_entries_under_critical_quota_floor(tmp_path):
+def test_fire_due_paces_but_does_not_silence_critical_quota_floor(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     inbox = brr_dir / "inbox"
@@ -239,19 +239,30 @@ def test_fire_due_pauses_every_entries_under_critical_quota_floor(tmp_path):
     past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
     _write_schedule(
         path,
-        f"## Upkeep\nevery: 60s\nrun upkeep\n\n## Followup\nat: {past}\ncheck the CI run\n",
+        f"## Upkeep\nevery: 60s\nrun upkeep\n\n"
+        "## Soon\nevery: 100s\nnot yet under paced cadence\n\n"
+        f"## Followup\nat: {past}\ncheck the CI run\n",
     )
-    # Anchor the every: entry as already due under its stated interval.
-    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 0.0}})
-    # Below the default critical floor (8%) — `every:` entries must not fire.
+    # One recurring entry is due even under 3x pacing; the other is 250s into
+    # a paced 300s interval and must wait.
+    schedule.save_state(
+        brr_dir,
+        {
+            "upkeep": {"kind": "every", "last_fired": 0.0},
+            "soon": {"kind": "every", "last_fired": time.time() - 250},
+        },
+    )
+    # Below the default critical floor (8%): the datum stays actionable. The
+    # recurring entry stretches, but a due one still reaches the resident.
     _write_quota_cache(brr_dir, 5.0)
 
     daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
 
     fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
-    assert fired == {"followup"}  # every: paused; at: is a deadline, still fires
+    assert fired == {"followup", "upkeep"}  # `soon` was paced, not silenced
     assert schedule.load_state(brr_dir)["_pacing"] == {
-        "mode": "quota-paused",
+        "mode": "quota-paced",
+        "factor": 3.0,
         "remaining_pct": 5.0,
     }
 
@@ -327,9 +338,9 @@ def test_fire_due_ignores_other_core_week_model_bucket(tmp_path, monkeypatch):
     assert schedule.load_state(brr_dir)["_pacing"] == {"mode": "normal"}
 
 
-def test_fire_due_pauses_on_own_core_week_model_bucket(tmp_path, monkeypatch):
+def test_fire_due_paces_own_core_week_model_bucket(tmp_path, monkeypatch):
     """The same snapshot, this time pinned to the Core the thin bucket
-    actually names — it must still bind and pause `every:` entries."""
+    actually names — it must still bind and pace `every:` entries."""
     from brr import runner as runner_mod
     from brr.runner_select import RunnerProfile
 
@@ -350,9 +361,10 @@ def test_fire_due_pauses_on_own_core_week_model_bucket(tmp_path, monkeypatch):
     daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude-fable"})
 
     fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
-    assert fired == set()  # paused — this tick's own Core is the thin bucket
+    assert fired == {"upkeep"}
     assert schedule.load_state(brr_dir)["_pacing"] == {
-        "mode": "quota-paused",
+        "mode": "quota-paced",
+        "factor": 3.0,
         "remaining_pct": 4.0,
     }
 
@@ -429,11 +441,12 @@ def test_fire_due_paces_each_entry_against_its_runner_and_caches_levels(
     daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
 
     fired = {event["schedule_id"] for event in protocol.list_pending(inbox)}
-    assert fired == {"cheap-one", "cheap-two"}
+    assert fired == {"cheap-one", "cheap-two", "default"}
     assert level_reads.count("codex-mini") == 1
     assert level_reads.count("claude") == 1
     pacing = schedule.load_state(brr_dir)["_pacing"]
-    assert pacing["mode"] == "quota-paused"
+    assert pacing["mode"] == "quota-paced"
+    assert pacing["factor"] == 3.0
     assert pacing["entries"]["cheap-one"]["mode"] == "normal"
 
 

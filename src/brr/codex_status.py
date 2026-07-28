@@ -306,9 +306,12 @@ def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> d
                 "primary_window_minutes": _num(primary.get("window_minutes")),
                 "secondary_window_minutes": _num(secondary.get("window_minutes")),
             }
-            if credits:
-                # Windows won the summary; credits ride along as extra text
-                # and structured fields, never overriding a measured window.
+            if credits and credits.get("credits_exhausted") is not True:
+                # A positive/unlimited credit wallet can ride alongside window
+                # quota. ``has_credits: false`` on a subscription plan means
+                # there is no separate wallet, not that the measured
+                # subscription window is exhausted; merging its zero bucket
+                # would turn a healthy Plus plan into a false critical floor.
                 levels["quota"]["summary"] += "; " + credits["summary"]
                 for key in ("credits_exhausted", "credits_balance"):
                     if key in credits:
