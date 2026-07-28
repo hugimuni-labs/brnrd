@@ -289,13 +289,30 @@ def test_fingerprint_changes_when_only_the_body_changes():
         "## Upkeep\nevery: 30s\nrun upkeep\n",  # trigger
         "## Upkeep\nevery: 60s\nconversation_key: telegram:1:\nrun upkeep\n",
         "## Upkeep\nevery: 60s\nreset_on: spawn\nrun upkeep\n",
+        "## Upkeep\nevery: 60s\nshell: codex\nrun upkeep\n",
+        "## Upkeep\nevery: 60s\ncore: luna\nrun upkeep\n",
+        "## Upkeep\nevery: 60s\nrunner: codex-mini\nrun upkeep\n",
         "## Upkeep\nevery: 60s\nrun upkeep differently\n",  # body
     ],
 )
 def test_fingerprint_covers_every_authored_field(changed):
-    """kind + trigger + conversation_key + reset_on + body all move the fingerprint."""
+    """Every authored execution field moves the fingerprint."""
     base = _fp("## Upkeep\nevery: 60s\nrun upkeep\n")["upkeep"]
     assert _fp(changed)["upkeep"] != base
+
+
+def test_fingerprint_covers_runner_pins_directly():
+    """Runner fields are values, not body text, and still carry attribution."""
+    from dataclasses import replace
+
+    entry = schedule.ScheduleEntry(
+        "upkeep", "every", "run upkeep", interval=60, raw_when="60s"
+    )
+    base = schedule.entry_fingerprint(entry)
+
+    assert schedule.entry_fingerprint(replace(entry, shell="codex")) != base
+    assert schedule.entry_fingerprint(replace(entry, core="luna")) != base
+    assert schedule.entry_fingerprint(replace(entry, runner="codex-mini")) != base
 
 
 def test_fingerprint_is_stable_under_quota_pacing(tmp_path):

@@ -253,10 +253,12 @@ Two more run surfaces live outside the outbox:
   portal.
 - **`schedule.md`** in your dominion — each entry becomes a **future
   wake**. `at: <ISO-8601>` fires once; `every: <duration>` repeats. A
-  scheduled wake is a fresh thought, but an entry's firings thread
-  together (shared `conversation_key:`, default `schedule:<id>`). This is
-  how you defer, set reminders, decompose work across wakes, and keep
-  your own clock.
+  schedule entry may pin `shell:`, `core:`, or the legacy `runner:` profile;
+  an unavailable pin fires on the config default instead of dropping the
+  entry. A scheduled wake is a fresh thought, but an entry's firings thread
+  together (shared `conversation_key:`, default `schedule:<id>`). This is how
+  you defer, set reminders, decompose work across wakes, and keep your own
+  clock.
 
 ## The next move — how an addressed reply ends
 
