@@ -49,6 +49,29 @@ That registry carries the default repo and any additional repo labels. Remote
 chat events can then route by repo identity; forge events stay naturally
 repo-addressed.
 
+`brnrd account disconnect` removes the local cloud-gate identity and its
+derived GitHub credential pointer. It keeps the account home, repo registry,
+knowledge, and resident memory; reconnecting later resumes from those durable
+stores rather than deleting them.
+
+### Dashboard publishing controls
+
+The connected daemon's `.brr/config` controls what it collects for the
+dashboard:
+
+- `publish.layers` is a comma-separated allowlist. Unset means all seven
+  lanes. `none` disables all publishing; `corpus` enables all three corpus
+  slices; `authored`, `knowledge`, and `runs` enable individual corpus slices;
+  `runners`, `live_runs`, `activity`, `quota`, `pr_review_queue`, and
+  `run_ledger` enable those lanes. Unknown tokens fail closed and are reported.
+- `publish.runs_window_days` defaults to `14` and bounds only the corpus
+  lane's `runs` slice. `0` excludes that slice. It does not bound the activity
+  lane or the 256-row run ledger.
+
+These local controls compose with the independent server-side publish scope
+chosen when a repo is connected. The narrower side wins. New server-side
+connections default to `none`; the local unset default remains all lanes.
+
 ## Explicit Home
 
 Set `BRNRD_HOME=/path/to/home` or `home.path=/path/to/home` in `.brr/config`

@@ -377,6 +377,14 @@ def _touch_flush(ctx: HookContext) -> None:
 # is silenced by completion or skip.
 
 ORIENTATION_READ_KEY = "orientation_read"
+ORIENTATION_READ_RANGES_KEY = "orientation_read_ranges"
+
+# Claude's Read tool returns at most 2,000 lines when ``limit`` is omitted.
+# Treating an omitted limit as "the whole file" made a large orientation page
+# complete on the first page, which is the same touch-vs-coverage bug as an
+# explicit 90-line read. The hook records requested line ranges and only
+# completes a file when their union covers it.
+_ORIENTATION_READ_DEFAULT_LIMIT = 2000
 
 # What counts as a declared skip. Two forms, both *declarations*: a terse
 # `orient: skip` heading the line (list/quote/heading markers tolerated), or
@@ -430,21 +438,61 @@ def _orientation_set_paths(ctx: HookContext) -> list[str]:
 def _observe_orientation_reads(
     payload: dict[str, Any], set_paths: list[str], state: dict[str, Any]
 ) -> int:
-    """Fold this batch's `Read` calls into the ledger; return the read count.
+    """Fold this batch's `Read` coverage into the ledger; return completions.
 
-    Matches on the resolved absolute path of each `Read`'s ``file_path`` —
-    claude's ``PostToolBatch`` hands calls over as ``{tool_name, tool_input,
-    ...}``. A runner whose payload carries no ``tool_calls`` (codex's
-    ``PostToolUse`` shape differs) simply observes nothing: the ledger under-
-    counts there rather than inferring, and the segment quietly never
-    completes — which the skip declaration resolves, same as prior knowledge.
-    Persisted in `.hook-state.json` under :data:`ORIENTATION_READ_KEY`, and
-    pruned to the current set so a stale path can never inflate the count.
+    Claude's ``PostToolBatch`` hands calls over as ``{tool_name, tool_input,
+    ...}``. A file is complete only when the union of its requested line
+    ranges covers the file as it exists at this boundary. A partial first page,
+    an explicit ``offset``/``limit`` slice, and a failed-to-page large file
+    therefore stay open; adjacent paged reads can complete it.
+
+    Completed paths remain in :data:`ORIENTATION_READ_KEY` for compatibility
+    with the score's original per-run state. Incomplete ranges live under
+    :data:`ORIENTATION_READ_RANGES_KEY`. Both are pruned to the current set so
+    stale paths can never inflate the count. A runner whose payload carries no
+    ``tool_calls`` still under-counts rather than guessing.
     """
     read = {
         p for p in (state.get(ORIENTATION_READ_KEY) or [])
         if isinstance(p, str) and p in set_paths
     }
+    raw_ranges = state.get(ORIENTATION_READ_RANGES_KEY)
+    ranges_by_path: dict[str, list[list[int]]] = {}
+    if isinstance(raw_ranges, dict):
+        for path, ranges in raw_ranges.items():
+            if path not in set_paths or not isinstance(ranges, list):
+                continue
+            valid = [
+                [item[0], item[1]]
+                for item in ranges
+                if (
+                    isinstance(item, list)
+                    and len(item) == 2
+                    and all(isinstance(value, int) for value in item)
+                    and 0 <= item[0] < item[1]
+                )
+            ]
+            if valid:
+                ranges_by_path[path] = valid
+
+    def total_lines(path: str) -> int | None:
+        try:
+            body = Path(path).read_bytes()
+        except OSError:
+            return None
+        if not body:
+            return 0
+        return body.count(b"\n") + (0 if body.endswith(b"\n") else 1)
+
+    def add_range(path: str, start: int, end: int) -> None:
+        merged: list[list[int]] = []
+        for left, right in sorted([*ranges_by_path.get(path, []), [start, end]]):
+            if merged and left <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], right)
+            else:
+                merged.append([left, right])
+        ranges_by_path[path] = merged
+
     calls = payload.get("tool_calls")
     if isinstance(calls, list):
         for call in calls:
@@ -457,9 +505,36 @@ def _observe_orientation_reads(
             if not isinstance(file_path, str) or not file_path.strip():
                 continue
             resolved = os.path.realpath(file_path.strip())
-            if resolved in set_paths:
+            if resolved not in set_paths or resolved in read:
+                continue
+            line_count = total_lines(resolved)
+            if line_count is None:
+                continue
+            offset = tool_input.get("offset", 0)
+            limit = tool_input.get("limit", _ORIENTATION_READ_DEFAULT_LIMIT)
+            if (
+                not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or offset < 0
+                or not isinstance(limit, int)
+                or isinstance(limit, bool)
+                or limit <= 0
+            ):
+                continue
+            end = min(line_count, offset + limit)
+            if offset < end:
+                add_range(resolved, offset, end)
+            covered = ranges_by_path.get(resolved, [])
+            if line_count == 0 or (
+                covered and covered[0][0] == 0 and covered[0][1] >= line_count
+            ):
                 read.add(resolved)
     state[ORIENTATION_READ_KEY] = sorted(read)
+    state[ORIENTATION_READ_RANGES_KEY] = {
+        path: ranges
+        for path, ranges in sorted(ranges_by_path.items())
+        if path not in read
+    }
     return len(read)
 
 

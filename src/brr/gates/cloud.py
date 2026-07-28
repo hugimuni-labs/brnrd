@@ -315,6 +315,35 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     return state
 
 
+def disconnect(brr_dir: Path) -> bool:
+    """Remove this daemon's local managed-gate identity.
+
+    The account home, its repo registry, knowledge, and resident memory are
+    deliberately not removed: disconnect severs the transport, not the
+    durable work. Check both the account-owned state directory and the legacy
+    repo-local one so the command also repairs installations that have not
+    completed the gate-state migration.
+    """
+    state_dirs = {_state_dir(brr_dir), brr_dir}
+    removed = False
+    for state_dir in state_dirs:
+        for path in (
+            runtime.state_path(state_dir, "cloud"),
+            runtime.health_path(state_dir, "cloud"),
+        ):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            else:
+                removed = True
+        credential_dir = state_dir / "credentials" / "github"
+        if credential_dir.is_dir():
+            shutil.rmtree(credential_dir)
+            removed = True
+    return removed
+
+
 def setup(brr_dir: Path) -> None:
     print("[brnrd] Run `brnrd account connect` to link this daemon to a brnrd repo.")
 

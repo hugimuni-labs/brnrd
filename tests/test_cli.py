@@ -431,6 +431,48 @@ def test_add_registers_repo_in_connected_account_home(monkeypatch, tmp_path, cap
     assert registry["account_id"] == "acct-1"
 
 
+def test_account_disconnect_removes_gate_state_but_keeps_the_home(
+    monkeypatch, tmp_path, capsys
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    from brr import account
+    from brr.gates import cloud, runtime
+
+    ctx = account.resolve_context(
+        repo,
+        {
+            "home.kind": "account",
+            "account.id": "acct-1",
+            "repo.label": "owner/repo",
+        },
+    )
+    account_root = account.context_home_root(ctx) / "account"
+    runtime.save_state(
+        account_root,
+        "cloud",
+        {
+            "brnrd_url": "https://brnrd.example",
+            "token": "secret",
+            "account_id": "acct-1",
+            "repo_id": "repo-1",
+        },
+    )
+    credential = account_root / "credentials" / "github" / "token"
+    credential.parent.mkdir(parents=True)
+    credential.write_text("derived-token\n", encoding="utf-8")
+
+    assert main(["account", "disconnect"]) is None
+
+    assert not runtime.state_path(account_root, "cloud").exists()
+    assert not credential.parent.exists()
+    assert (account_root / "repos.json").exists()
+    assert not cloud.is_configured(repo / ".brr")
+    assert "Disconnected this daemon" in capsys.readouterr().out
+
+
 def test_home_link_yes_asks_nothing(monkeypatch, tmp_path, capsys):
     """``--yes`` is the whole non-interactive contract: no confirm, no stdin read."""
     repo = tmp_path / "repo"
@@ -1186,7 +1228,7 @@ def test_completions_track_the_parser_not_a_hand_list(capsys):
     # completions without anyone remembering to update a table.
     assert main(["completions", "bash"]) == 0
     out = capsys.readouterr().out
-    assert "add connect relabel status" in out  # brnrd account
+    assert "add connect disconnect relabel status" in out  # brnrd account
     assert "auth bind list setup" in out  # brnrd gate
 
 
