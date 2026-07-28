@@ -151,6 +151,15 @@ them before they are believed or resold:
   Before adding narration to a boundary, ask what clears it — and if the
   honest answer is *nothing this run can do*, the line is wrong, not merely
   noisy.
+- **A guard covers a channel, not a class.** A forge closes an issue on a
+  closing keyword in a commit message *and* on one in a pull-request body; a
+  commit hook sees only the first. So the scoped sentence a run writes for its
+  human reader — *this closes only part of it* — is read by the scanner as a
+  plain close, its qualifier discarded, on the one surface nothing checks. The
+  predicate can be complete, correct and well-argued and still never execute
+  where the failure happens. Meeting a guard, ask which surfaces it is
+  installed on before trusting the class it names as closed; writing one, walk
+  every channel the same act can arrive on.
 
 ## Reading economically
 

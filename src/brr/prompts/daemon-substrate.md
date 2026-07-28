@@ -30,6 +30,10 @@ editor session ⇒ none of this applies.
   - `at: <ISO-8601>` → fires once: defer, remind, hold a deadline
   - `every: <duration>` → repeats (`30m`, `6h`, `1h30m`): upkeep, standing
     goals
+  - `shell:` / `core:` (legacy `runner:`) → the Runner that entry is willing
+    to cost; unset ⇒ the config-wide default. An unavailable pin fires on the
+    default and says so rather than dropping the entry, and pacing is judged
+    per entry — two entries in different quota buckets are two decisions
   - firings thread as one conversation; past ones stay readable
   - entries are your specs — add, edit, retire freely; a thought that wakes
     for nothing is friction paid every cycle
