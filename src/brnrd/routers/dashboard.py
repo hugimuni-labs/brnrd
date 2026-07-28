@@ -54,13 +54,28 @@ def _withheld_lane(repos: list[Repo], lane: str) -> dict[str, Any]:
     Emitted only when the claim is provable — absent, never ``null``-as-maybe,
     so a reader cannot mistake "we did not check" for "consent is fine".
 
+    Carries **which repos** are holding the lane shut when that is knowable, so
+    the panel can name the act that reopens it instead of stating a condition
+    the reader then has to go hunt the cause of. That distinction was already
+    computed — ``repos_without_publish_consent`` splits "never asked" from "you
+    told us no" — and had no production caller until here: a diagnosis built,
+    tested, and wired to nothing. Either list may be empty (a repo can permit
+    some lanes and not this one, which is neither case), and an empty list is
+    omitted rather than sent as ``[]`` — same rule as the marker itself.
+
     Takes the repo list the caller already loaded. Every one of the seven
     callers is on the 2 s dashboard poll, so a signature that re-queried would
     have spent a round trip per lane per tick to answer "not withheld".
     """
     if lane not in publish_scope.lanes_withheld(repos):
         return {}
-    return {"withheld": {"lane": lane}}
+    blocked = publish_scope.repos_without_publish_consent(repos)
+    marker: dict[str, Any] = {"lane": lane}
+    if blocked.unrecorded:
+        marker["unrecorded"] = list(blocked.unrecorded)
+    if blocked.opted_out:
+        marker["opted_out"] = list(blocked.opted_out)
+    return {"withheld": marker}
 
 
 def _duration_label(start: datetime | None, end: datetime | None = None) -> str:
