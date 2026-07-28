@@ -12,9 +12,6 @@ outcome lands as a plain inbox ``Event`` the daemon's existing
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 import pytest
 
 pytest.importorskip("fastapi")
@@ -130,25 +127,22 @@ def test_config_approve_context_requires_login_and_spa_handoff_is_compatible():
 
     assert r.status_code == 401
     assert r.json() == {"detail": "unauthenticated"}
-    handoff = client.get(f"/config-approve/{minted['request_id']}", follow_redirects=False)
-    assert handoff.status_code == 308
-    assert handoff.headers["location"] == "/"
 
 
-def test_config_approve_deep_link_is_spa_owned_in_production():
-    """The static host must not passthru the retired Jinja URL to FastAPI.
+def test_config_approve_deep_link_is_spa_owned():
+    """An emailed approval link must reach SvelteKit, not a backend route.
 
-    FastAPI retains a bare-uvicorn compatibility redirect, but production
-    deep links must reach SvelteKit's fallback shell. Keeping
-    ``config-approve`` in this rule makes every emailed approval link land on
-    the dashboard instead of the approval page.
+    This used to read `.upsun/config.yaml`'s passthru regex, which made the
+    test one more reader of a hand-maintained copy of the route list. #847
+    moved the boundary into `create_app`, and the 308 bare-uvicorn shim that
+    sat at this path went with it — with the app serving the SPA, a backend
+    route here would beat the page it was standing in for.
     """
-    config = (Path(__file__).parents[1] / ".upsun" / "config.yaml").read_text()
-    backend_rule = re.search(r"'\^/\(([^)]*)\)\(/\|\$\)'", config)
-
-    assert backend_rule is not None
-    assert "v1" in backend_rule.group(1).split("|")
-    assert "config-approve" not in backend_rule.group(1).split("|")
+    app = _client().app
+    claimed = app.state.backend_namespaces
+    # Positive control: this really is the backend's namespace set.
+    assert "v1" in claimed
+    assert "config-approve" not in claimed
 
 
 def test_config_approve_context_shows_account_owned_details():

@@ -284,15 +284,20 @@ def test_dashboard_activity_api_bounds_rows_and_reports_total():
     assert [row["summary"] for row in body["rows"]] == ["job 2", "job 1"]
 
 
-def test_activity_page_redirects_to_dashboard():
-    """#327 Jinja cut: the legacy /activity page is gone; the URL stays
-    alive as a 308 to "/" (same shape as /plans, #326). In production the
-    passthru no longer routes /activity here at all — the SPA serves it.
+def test_the_backend_does_not_claim_the_activity_path():
+    """#847: the `/activity` 308 shim is gone, and its absence is the point.
+
+    It was written for bare `uvicorn` and never fired in production, where
+    Upsun's router handed `/activity` to the SPA. Now that the app serves the
+    SPA itself, a backend route here would *win* — turning a client-side path
+    into a redirect to "/". So the assertion is that nothing declares it.
+    Reachability of SPA paths is covered by tests/test_spa_serving.py.
     """
     client = _client()
-    r = client.get("/activity", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "/"
+    # Read the derived namespace set, not `app.routes`: FastAPI stores an
+    # included router as an opaque object with no `path`, so scanning routes
+    # directly would pass whether or not the route came back.
+    assert "activity" not in client.app.state.backend_namespaces
 
 
 def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():

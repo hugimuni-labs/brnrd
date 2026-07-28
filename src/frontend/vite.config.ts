@@ -34,11 +34,18 @@ export default defineConfig({
 	server: {
 		// Dev-only: `npm run dev` serves this app on its own port, so JSON
 		// fetches to the FastAPI backend (`/v1/dashboard/quota` etc.) need a
-		// proxy to a locally-running `brnrd` instance. Mirrors the same
-		// route list `.upsun/config.yaml`'s production passthru rule
-		// covers — keep the two in sync.
+		// proxy to a locally-running `brnrd` instance.
+		//
+		// This list used to claim it mirrored `.upsun/config.yaml`'s passthru
+		// rule; it had already drifted from it (no `logout`, no
+		// `terms/accept`) and nothing noticed, because nothing checked. There
+		// is no production copy to mirror any more (#847) — the boundary is
+		// derived from the route table in `src/brnrd/spa.py`, and
+		// `tests/test_spa_serving.py` asserts this pattern reaches every
+		// namespace the backend declares and steals none of the SPA's own.
+		// Adding a backend prefix without adding it here now fails the suite.
 		proxy: {
-			'^/(v1|api|r|auth|plans|static)(/|$)': {
+			'^/(api|auth|healthz|logout|r|static|v1)(/|$)': {
 				target: process.env.BRNRD_DEV_TARGET ?? 'http://localhost:8000',
 				changeOrigin: true
 			}

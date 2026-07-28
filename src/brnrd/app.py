@@ -18,6 +18,7 @@ from .routers import accounts, billing, config_approval, daemons, dev, github_ap
 from .routers import dashboard as dashboard_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
+from .spa import backend_namespaces, declared_paths, mount_frontend, resolve_frontend_dir
 
 _STATIC_DIR = Path(__file__).with_name("static")
 
@@ -76,19 +77,27 @@ def create_app(
     # the database — brnrd renders a relayed pack, it does not store it.
     app.state.pack_relay = PackRelayStore(default_ttl_s=settings.pack_relay_ttl_s)
 
-    app.include_router(accounts.router)
-    app.include_router(billing.router)
-    app.include_router(pairing.router)
-    app.include_router(config_approval.router)
-    app.include_router(daemons.router)
-    app.include_router(render.router)
-    app.include_router(webhooks.router)
-    app.include_router(github_app.router)
-    app.include_router(stats.router)
+    # One list, in registration order — and the same object the SPA fallback
+    # reads its namespace set from below (#847). Anything appended here is
+    # claimed by the backend automatically; there is no second list to update.
+    routers = [
+        accounts.router,
+        billing.router,
+        pairing.router,
+        config_approval.router,
+        daemons.router,
+        render.router,
+        webhooks.router,
+        github_app.router,
+        stats.router,
+    ]
     if settings.enable_dev_endpoints:
-        app.include_router(dev.router)
-
+        routers.append(dev.router)
     # Dashboard routers (migrated from src/brnrd_web into src/brnrd/routers/).
+    routers += [dashboard_router.router, repo_actions_router.router, web_auth_router.router]
+    for router in routers:
+        app.include_router(router)
+
     # Static assets (app.css, dashboard.css) are served from src/brnrd/static/
     # under the same URL prefix (/static/brnrd_web/) so deployed CDN cache keys
     # and existing client references remain byte-compatible.
@@ -97,12 +106,22 @@ def create_app(
         StaticFiles(directory=_STATIC_DIR),
         name="brnrd_static",
     )
-    app.include_router(dashboard_router.router)
-    app.include_router(repo_actions_router.router)
-    app.include_router(web_auth_router.router)
 
     @app.get("/healthz")
     def healthz() -> dict:
         return {"status": "ok", "service": "brnrd"}
+
+    # Last, on purpose: the SvelteKit build is served by this process, not by
+    # whatever router happens to sit in front of it (#847). Registration order
+    # is the priority order, so every route declared above still wins and only
+    # unmatched requests fall through to the SPA shell. See spa.py for why the
+    # backend/SPA boundary is derived from the route table rather than listed.
+    # Published on app.state so it is readable without a build directory —
+    # tests/test_spa_serving.py asserts it stays disjoint from the SvelteKit
+    # route tree, which is the check that keeps the boundary honest.
+    app.state.backend_namespaces = backend_namespaces(declared_paths(app, routers))
+    frontend_dir = resolve_frontend_dir(settings.frontend_dir)
+    if frontend_dir is not None:
+        mount_frontend(app, frontend_dir, app.state.backend_namespaces)
 
     return app
