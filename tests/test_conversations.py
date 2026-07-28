@@ -1413,3 +1413,34 @@ def test_grouped_history_files_are_owner_only(tmp_path):
     assert jsonl
     for f in jsonl:
         assert stat.S_IMODE(f.stat().st_mode) == 0o600
+
+
+def test_no_native_gate_thread_key_is_read_as_wrapped():
+    """The wrapper split rests on a premise: only the cloud wrapper mints a
+    four-field conversation key. Pin it at the seam between the two
+    functions, so a gate that later mints one breaks here loudly instead of
+    having its first field silently reinterpreted as a transport wrapper.
+    """
+    native = [
+        {"source": "telegram", "telegram_chat_id": 155783668,
+         "telegram_topic_id": 42},
+        {"source": "telegram", "telegram_chat_id": 155783668},
+        {"source": "slack", "slack_channel": "C123",
+         "slack_thread_ts": "1700000000.123"},
+        {"source": "github", "github_repo": "acme/widget",
+         "github_issue_number": 7},
+        {"source": "schedule"},
+        {"source": "cloud"},
+    ]
+    for meta in native:
+        key = conversations.gate_thread_key(meta)
+        assert key is not None, meta
+        assert conversations.split_conversation_key(key) == (None, key), key
+
+    wrapped = conversations.gate_thread_key(
+        {"source": "cloud", "cloud_platform": "telegram",
+         "cloud_chat_id": 155783668, "cloud_topic_id": 42},
+    )
+    assert conversations.split_conversation_key(wrapped) == (
+        "cloud", "telegram:155783668:42",
+    )
