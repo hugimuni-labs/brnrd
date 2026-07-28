@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -1128,13 +1128,8 @@ def dashboard_activity_api(
     )
 
 
-@router.get("/repos")
-def repos_redirect() -> RedirectResponse:
-    """308: repo-management page now lives in the SvelteKit `/repos` route (#327)."""
-    return RedirectResponse(url="/", status_code=308)
-
-
-@router.get("/activity")
-def activity_redirect() -> RedirectResponse:
-    """308: unbounded legacy activity feed superseded by the SvelteKit ``/activity`` route (#327)."""
-    return RedirectResponse(url="/", status_code=308)
+# `/repos` and `/activity` used to 308 to "/" here — shims that existed only
+# because a bare `uvicorn` could not serve the SPA, and that never fired in
+# production because Upsun's router claimed those paths first. Removed with
+# #847: the app now serves the shell itself, so a backend route on an
+# SPA-owned path would *break* the deep link it used to stand in for.

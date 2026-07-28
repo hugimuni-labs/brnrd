@@ -109,13 +109,14 @@ def test_dashboard_shows_enabled_repo():
     assert "Waiting for local daemon" in daemon_labels
 
 
-def test_repos_page_redirects_to_dashboard():
+def test_the_backend_does_not_claim_the_repos_path():
+    """#847: the `/repos` 308 shim is gone — see test_spa_serving.py.
+
+    `src/frontend/src/routes/repos/` is the real page. A backend route on the
+    same path now beats it, so its absence is what keeps the deep link alive.
+    """
     client = _client()
-
-    r = client.get("/repos", follow_redirects=False)
-
-    assert r.status_code == 308
-    assert r.headers["location"] == "/"
+    assert "repos" not in client.app.state.backend_namespaces
 
 
 @pytest.mark.parametrize(
