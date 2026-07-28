@@ -175,6 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_brnrd_connect)
 
     p = account_sub.add_parser(
+        "disconnect", help="unlink this daemon from brnrd")
+    p.set_defaults(func=cmd_brnrd_disconnect)
+
+    p = account_sub.add_parser(
         "relabel",
         help="follow a repo that changed address, carrying its memory with it")
     p.add_argument("old_label", metavar="<old>", help="current label, e.g. Gurio/brr")
@@ -2326,6 +2330,19 @@ def cmd_brnrd_connect(args):
     daemon_name = args.daemon_name or socket.gethostname()
     cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     print("[brnrd] Start the daemon with `brnrd up` to begin draining the brnrd inbox.")
+
+
+def cmd_brnrd_disconnect(args):
+    from .gates import cloud
+
+    removed = cloud.disconnect(_brr_dir())
+    if removed:
+        print(
+            "[brnrd] Disconnected this daemon from brnrd. "
+            "Local home, knowledge, and repo registration were kept."
+        )
+    else:
+        print("[brnrd] This daemon is not connected to brnrd.")
 
 
 def _fmt_ts(epoch: float) -> str:
