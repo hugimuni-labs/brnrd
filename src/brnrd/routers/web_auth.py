@@ -42,7 +42,6 @@ from ._session import (
     _oauth_redirect_uri,
     _repos,
     _safe_next,
-    _terms_accept_url,
     _terms_status,
 )
 
@@ -143,10 +142,9 @@ def login_context_api(request: Request, next: str = "/", db: Session = Depends(g
     )
 
 
-@router.get("/login")
-def login_redirect() -> RedirectResponse:
-    # SPA owns /login; backend shim for bare uvicorn only.
-    return RedirectResponse(url="/", status_code=308)
+# `/login` used to 308 to "/" here (bare-uvicorn shim, dead in production
+# where Upsun's router owned the path). Removed with #847 — the app serves the
+# SPA now, and `src/frontend/src/routes/login/` is the real page.
 
 
 @router.get("/logout")
@@ -239,13 +237,12 @@ def terms_accept_api(
     return JSONResponse({"ok": True, "document": kind, "version": doc.version, "sha256": doc.sha256})
 
 
-@router.get("/terms/accept")
-def terms_accept_redirect(next: str = "/") -> RedirectResponse:
-    # In-flight OAuth/login links used the old Jinja acceptance URL. It now
-    # lands on /beta-hosted-execution, which is where the hosted-execution
-    # document and its acceptance checkbox moved when /terms became the
-    # service-wide Terms of Service (#569).
-    return RedirectResponse(url=_terms_accept_url(next), status_code=308)
+# `GET /terms/accept` used to 308 to the hosted-execution page here, covering
+# OAuth links minted before #569 moved that document. Removed with #847: those
+# links expired weeks ago, and it was the one backend route standing inside a
+# namespace the SPA owns (`/terms`), which would have forced a hand-written
+# exception into the very mechanism that replaces hand-written exceptions.
+# `_terms_accept_url` (routers/_session.py) still mints the live URL.
 
 
 @router.get("/auth/github/start")
@@ -417,11 +414,9 @@ def connect_approve_api(
     )
 
 
-@router.get("/connect/{code}")
-def connect_redirect(code: str) -> RedirectResponse:
-    # SPA owns /connect/[code] in production (passthru removed); backend
-    # shim for bare uvicorn only, same 308 shape as /login and /repos.
-    return RedirectResponse(url="/", status_code=308)
+# `/connect/{code}` used to 308 to "/" here — same bare-uvicorn shim as
+# `/login`, removed with #847. `src/frontend/src/routes/connect/[code]/` is
+# the page, and the app now serves it.
 
 
 def _config_change_request_view(db: Session, request_id: str) -> ConfigChangeRequest | None:
@@ -491,8 +486,6 @@ def config_approve_decide_api(
     return JSONResponse({"ok": True, "notice": _config_change_notice(row, repo), "request": _config_change_response(row, repo)})
 
 
-@router.get("/config-approve/{request_id}")
-def config_approve_redirect(request_id: str) -> RedirectResponse:
-    # The production frontend owns this route; bare backend servers preserve
-    # the same SPA handoff shape as the other retired Jinja pages.
-    return RedirectResponse(url="/", status_code=308)
+# `/config-approve/{request_id}` used to 308 to "/" here — the last of the
+# bare-uvicorn shims, removed with #847.
+# `src/frontend/src/routes/config-approve/[request_id]/` is the page.

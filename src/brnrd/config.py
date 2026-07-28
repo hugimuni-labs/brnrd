@@ -61,6 +61,11 @@ class Settings:
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
     pack_relay_ttl_s: int = _env_int("BRNRD_PACK_RELAY_TTL_S", 3600)
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"
+    # #847 — where the built SvelteKit SPA lives. Empty means "the source
+    # checkout layout" (src/frontend/build, resolved relative to this
+    # package); a container image that puts the build elsewhere names it here.
+    # No directory at all is a legal backend-only deployment.
+    frontend_dir: str = os.environ.get("BRNRD_FRONTEND_DIR", "")
 
     telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")

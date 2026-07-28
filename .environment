@@ -14,3 +14,11 @@ fi
 if [ -n "$PLATFORM_ROUTES" ]; then
   export BRNRD_PUBLIC_BASE_URL="$(printf '%s' "$PLATFORM_ROUTES" | base64 -d | python3 -c 'import json,sys; r=json.load(sys.stdin); print((([u for u,c in r.items() if c.get("primary")] or list(r)))[0].rstrip("/"))' 2>/dev/null)"
 fi
+
+# Where the built SvelteKit SPA is, for the app to serve itself (#847).
+# Required here, not optional: the build hook `pip install`s brnrd into the
+# platform's site-packages, so the package's own source-layout guess
+# (`<pkg>/../frontend/build`) resolves inside site-packages and finds nothing.
+# Without this, `web.locations` passes every fileless path — every SPA deep
+# link — to an app that would answer 404.
+export BRNRD_FRONTEND_DIR="${PLATFORM_APP_DIR:-/app}/src/frontend/build"
