@@ -10,6 +10,7 @@
 	import { onMount } from 'svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import RunNode from '$lib/RunNode.svelte';
+	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
@@ -85,11 +86,15 @@
 	</div>
 	{#if data.files.length === 0 && data.withheld}
 		<div class="mx-auto max-w-xl px-6 pt-6">
-			<div class="panel p-4 text-sm text-amber-200">paused — no publish scope</div>
+			<div class="panel p-4">
+				<WithheldNotice withheld={data.withheld} />
+			</div>
 		</div>
 	{/if}
 	{#if ledgerRows?.length === 0 && ledgerWithheld}
-		<div class="mx-auto max-w-xl px-6 pt-6 text-sm text-amber-200">paused — no publish scope</div>
+		<div class="mx-auto max-w-xl px-6 pt-6">
+			<WithheldNotice withheld={ledgerWithheld} />
+		</div>
 	{/if}
 	<!-- Render the node unless the consent marker has *replaced* it. Guarding on
 	     `files.length > 0` instead loses the case this page exists for: a live

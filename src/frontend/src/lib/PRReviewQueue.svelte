@@ -3,6 +3,7 @@
 	import { flip } from 'svelte/animate';
 	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
+	import WithheldNotice from './WithheldNotice.svelte';
 	import type { WithheldLane } from './withheld';
 
 	interface Props {
@@ -34,7 +35,7 @@
 	</div>
 	{#if prs.length === 0}
 		{#if withheld}
-			<p class="text-sm text-amber-200">paused — no publish scope</p>
+			<WithheldNotice {withheld} />
 		{:else}
 			<p class="text-sm text-ink-quiet">No open PRs waiting on review.</p>
 		{/if}

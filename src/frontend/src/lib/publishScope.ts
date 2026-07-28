@@ -75,3 +75,39 @@ export function publishScopeSummary(value: string | null | undefined): string {
 	if (lanes.size === PUBLISH_LANES.length) return 'everything (all seven lanes)';
 	return `${lanes.size} of ${PUBLISH_LANES.length} lanes: ${Array.from(lanes).sort().join(', ')}`;
 }
+
+// ── One vocabulary for the consent gap ──────────────────────────────────────
+//
+// Two surfaces state this same fact — WithheldNotice (lane-local: "this panel
+// is empty because of it") and PublishConsentNotice (account-level: "something
+// in this account is paused") — and briefly stated it in two hand-copied
+// wordings that could only drift apart. `unrecordedClause`/`optedOutClause`
+// are the one place either sentence is written; each caller is free to frame
+// it differently (a full paragraph vs. a `paused —`/`off —` fragment) but not
+// to re-word the fact itself.
+
+// Joins repo names into a natural-language list: "a", "a and b", "a, b, and c".
+export function joinRepoNames(names: string[]): string {
+	if (names.length === 0) return '';
+	if (names.length === 1) return names[0];
+	if (names.length === 2) return `${names[0]} and ${names[1]}`;
+	return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
+
+// The fact `publish_layers === null` actually proves: no scope was ever
+// recorded for these repos. Nothing more — a repo minted through the account
+// API today lands `null` the same as one that predates the consent setting
+// entirely, so this must not claim a history the data cannot support. Returns
+// `null` (not an empty string) when there is no gap of this kind to report,
+// so a caller can tell "no repos" apart from "no clause".
+export function unrecordedClause(repoNames: string[]): string | null {
+	if (repoNames.length === 0) return null;
+	return `${joinRepoNames(repoNames)} never recorded a publish scope`;
+}
+
+// The other half of the same fact: these repos' owners were asked and
+// answered "none" — a deliberate choice, not a gap in the record.
+export function optedOutClause(repoNames: string[]): string | null {
+	if (repoNames.length === 0) return null;
+	return `${joinRepoNames(repoNames)} chose to publish nothing`;
+}
