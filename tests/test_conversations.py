@@ -85,6 +85,49 @@ def test_conversation_key_cloud_without_routing_falls_back_to_default():
     )
 
 
+def test_split_conversation_key_derives_wrapper_from_structure():
+    expected = {
+        "telegram:155783668:42": (None, "telegram:155783668:42"),
+        "cloud:telegram:155783668:42": (
+            "cloud",
+            "telegram:155783668:42",
+        ),
+        "relay:slack:C123:1700000000.123": (
+            "relay",
+            "slack:C123:1700000000.123",
+        ),
+        "cloud:default": (None, "cloud:default"),
+        "schedule:release-push-dispatch-tick": (
+            None,
+            "schedule:release-push-dispatch-tick",
+        ),
+        "cli": (None, "cli"),
+    }
+
+    assert {
+        key: conversations.split_conversation_key(key)
+        for key in expected
+    } == expected
+
+
+def test_conversation_source_labels_remain_stable():
+    expected = {
+        "telegram:155783668:42": "telegram",
+        "cloud:telegram:155783668:42": "cloud/telegram",
+        "cloud:github:acme/widget:7": "cloud/github",
+        "cloud:default": "cloud/default",
+        "cloud:": "cloud",
+        "schedule:release-push-dispatch-tick": "schedule",
+        "cli": "cli",
+        "": "",
+    }
+
+    assert {
+        key: conversations._conversation_source_from_key(key)
+        for key in expected
+    } == expected
+
+
 def test_correspondent_key_telegram_user_id_matches_cloud_relay():
     native = {
         "source": "telegram",
