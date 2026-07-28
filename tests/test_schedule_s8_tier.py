@@ -566,15 +566,8 @@ def test_noticed_untiered_does_not_grow_without_bound(tmp_path):
     assert noticed == ["l2"]
 
 
-def test_quota_critical_tick_does_not_wipe_every_entry_tier_records(tmp_path, monkeypatch):
-    """F2c, the trap: pruning must run against `entries`, not the paced list.
-
-    A quota-critical tick drops every ``every:`` entry from
-    ``scheduled_entries``. Pruning against *that* would delete the tier
-    record of every recurring entry the instant quota dipped, and each one
-    would come back as ``owner`` on recovery — a silent escalation caused
-    by nothing but a low quota reading.
-    """
+def test_quota_critical_tick_keeps_every_entry_tier_records(tmp_path, monkeypatch):
+    """Critical scarcity paces the entry without changing its trust tier."""
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
@@ -584,7 +577,7 @@ def test_quota_critical_tick_does_not_wipe_every_entry_tier_records(tmp_path, mo
     _attribute(_run("run-collab", trust.COLLABORATOR), repo, brr_dir)
     fp_before = schedule.load_state(brr_dir)[schedule._TIER_BY_ENTRY_KEY]["upkeep"]
 
-    # Force the critical floor: the tick drops every `every:` entry.
+    # Force the critical floor: the tick still lets a due entry reach judgment.
     monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({}, None))
     monkeypatch.setattr(
         daemon.runner_quota, "binding_quota_remaining_pct", lambda *a, **k: 1.0,
@@ -593,8 +586,8 @@ def test_quota_critical_tick_does_not_wipe_every_entry_tier_records(tmp_path, mo
     _fire(repo, brr_dir, {"shell": "claude"})
 
     state = schedule.load_state(brr_dir)
-    assert state.get("_pacing", {}).get("mode") == "quota-paused"  # the tick really paused
-    assert not protocol.list_pending(brr_dir / "inbox")  # and really dropped the entry
+    assert state.get("_pacing", {}).get("mode") == "quota-paced"
+    assert protocol.list_pending(brr_dir / "inbox")
     assert state[schedule._TIER_BY_ENTRY_KEY]["upkeep"] == fp_before
 
     # Quota recovers: the entry must still be the collaborator's.
@@ -606,23 +599,6 @@ def test_quota_critical_tick_does_not_wipe_every_entry_tier_records(tmp_path, mo
 
     ev = protocol.list_pending(brr_dir / "inbox")[0]
     assert ev.get("trust_tier") == trust.COLLABORATOR
-
-
-def test_quota_critical_tick_still_carries_firing_state_forward(tmp_path, monkeypatch):
-    """The pre-existing `dropped_ids` guard is not disturbed by the new pruning."""
-    repo = _repo(tmp_path)
-    brr_dir = repo / ".brr"
-    dom = dominion.ensure_dominion(repo, push=False)
-    _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep\n")
-    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 12345.0}})
-
-    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **k: ({}, None))
-    monkeypatch.setattr(
-        daemon.runner_quota, "binding_quota_remaining_pct", lambda *a, **k: 1.0,
-    )
-    _fire(repo, brr_dir, {"shell": "claude"})
-
-    assert schedule.load_state(brr_dir)["upkeep"]["last_fired"] == 12345.0
 
 
 # ── Group 8: F3, concurrency, and the operator's hand-edit ───────────────────
