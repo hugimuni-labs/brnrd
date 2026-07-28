@@ -92,6 +92,37 @@ def test_schedule_activity_exposes_quota_pause_without_fabricating_recovery(
     assert record["scheduled_for"] == "1970-01-01T00:18:20+00:00"
 
 
+def test_schedule_activity_uses_entry_runner_pacing(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr_dir = repo / ".brr"
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    (dom / "schedule.md").write_text(
+        "## Cheap\nevery: 100s\nshell: codex\nkeep going\n", encoding="utf-8"
+    )
+    schedule.save_state(
+        brr_dir,
+        {
+            "cheap": {"kind": "every", "last_fired": 1_000.0},
+            "_pacing": {
+                "mode": "quota-paused",
+                "entries": {"cheap": {"mode": "normal"}},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        cloud.dominion,
+        "resident_dominion_candidates",
+        lambda *_args, **_kwargs: [type("Candidate", (), {"path": dom})()],
+    )
+
+    record = cloud._schedule_activity_records(brr_dir)[0]
+
+    assert record["status"] == "recurring"
+    assert record["scheduled_for"] == "1970-01-01T00:18:20+00:00"
+
+
 def _make_brnrd():
     forwarder = CapturingForwarder()
     app = create_app(
