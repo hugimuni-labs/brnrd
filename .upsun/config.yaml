@@ -31,40 +31,26 @@ applications:
       upstream:
         socket_family: tcp
       locations:
-        # The SvelteKit build (src/frontend, adapter-static) now serves
-        # "/" directly instead of previewing under "/app/" (maintainer
-        # call, 2026-07-06 — the earlier caution about clobbering the
-        # working login/repos/connect flows still applies, so every
-        # backend route the app actually serves is passthru'd below
-        # rather than silently dropped). Static assets first, FastAPI for
-        # anything the build doesn't own.
+        # Static files off disk, everything else to the app (#847).
+        #
+        # This block used to carry a `rules:` regex naming every backend
+        # prefix — a hand-maintained second copy of src/brnrd/app.py's
+        # include_router calls, which nothing could check, because CI never
+        # runs this router. `create_app` now serves the SvelteKit build
+        # itself and decides the backend/SPA boundary from its own route
+        # table (src/brnrd/spa.py, tests/test_spa_serving.py).
+        #
+        # What is left here is an optimisation, not a contract: nginx
+        # answers requests that name a real file in the build tree (hashed
+        # assets, robots.txt) without waking uvicorn, and passes everything
+        # else through. Delete this whole block and the app still behaves
+        # correctly — just with Python serving the assets. That is the
+        # portability property #848 needs, stated as a property.
         "/":
           root: "src/frontend/build"
           index: ["index.html"]
-          # SPA fallback: the frontend is adapter-static with
-          # `fallback: 'index.html'` (vite.config.ts) — client-side routes
-          # like /activity have no per-path file in build/, so any request
-          # the rules below don't claim serves the SPA shell and the
-          # router takes it from there. (#327: Jinja pages moved here one
-          # by one; config-approve was the final content template.)
-          passthru: "/index.html"
+          passthru: true
           scripts: false
-          rules:
-            # HTML routes (oauth, approval flows) plus every JSON/API/webhook
-            # surface (src/brnrd/routers/*) and the dashboard's static assets.
-            # Keep this list in sync with src/brnrd/app.py's include_router
-            # calls and src/brnrd/routers/web_auth.py / dashboard.py —
-            # anything added there needs a passthru rule here or it never
-            # reaches FastAPI. /activity, /repos, /login, /connect/<code>,
-            # /config-approve/<request>, and /runs/<repo>/<run> (the Wyrd
-            # run node, #476) deliberately absent: SPA-owned, so a deep link
-            # falls through to the index.html shell above and the client
-            # router resolves it.
-            # /plans stays passthru'd so old bookmarks hit the backend's
-            # 308 → "/" (#326) instead of the SPA's 404. /logout stays
-            # backend-owned (it must clear the session cookie).
-            '^/(v1|api|r|logout|auth|plans|static|terms/accept)(/|$)':
-              passthru: true
 
     variables:
       env:

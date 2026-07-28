@@ -43,7 +43,6 @@ from _helpers import brnrd_account_headers  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_ROUTES = REPO_ROOT / "src" / "frontend" / "src" / "routes"
 PRIVACY_PAGE = FRONTEND_ROUTES / "privacy" / "+page.svelte"
-UPSUN_CONFIG = REPO_ROOT / ".upsun" / "config.yaml"
 
 
 # ── reading the published numbers off the page ───────────────────────────
@@ -263,29 +262,25 @@ def test_run_pages_stop_being_mirrored_on_the_published_day(numbers):
 # ── the route itself ─────────────────────────────────────────────────────
 
 
-def _passthru_pattern() -> re.Pattern[str]:
-    """The production routing rule, read from the deploy config it lives in.
-
-    `/privacy` has no file of its own in the static build: it is a
-    client-side route served by the SPA fallback. It is therefore reachable
-    only if this regex does *not* claim it for FastAPI.
-    """
-    text = UPSUN_CONFIG.read_text(encoding="utf-8")
-    m = re.search(r"^\s*'(\^/\([a-z0-9|/]+\).*)':\s*$", text, re.MULTILINE)
-    assert m, "no passthru rule found in .upsun/config.yaml"
-    return re.compile(m.group(1))
-
-
 def test_the_privacy_route_exists_and_the_spa_serves_it():
+    """`/privacy` has no file of its own in the static build — it is a
+    client-side route, reachable only while the backend does not claim it.
+
+    This used to read the passthru regex out of `.upsun/config.yaml`, which
+    made a *test* one more consumer of the duplicated route list. #847 moved
+    the boundary into the app, so the question is now asked of the app.
+    """
+    from brnrd.app import create_app
+    from brnrd.config import Settings
+
     assert PRIVACY_PAGE.is_file()
-    pattern = _passthru_pattern()
-    # Positive control: the rule really is the API passthru, so a failure
-    # below means "the route got claimed", not "the regex was misread".
-    assert pattern.search("/v1/dashboard/terms-status")
-    assert pattern.search("/auth/github/start")
-    # …and neither /privacy nor its sibling legal page is claimed by it.
-    assert not pattern.search("/privacy")
-    assert not pattern.search("/terms")
+    app = create_app(Settings(database_url="sqlite://", telegram_auto_webhook=False))
+    claimed = app.state.backend_namespaces
+    # Positive control: the set really is the backend's, so a failure below
+    # means "the route got claimed", not "the set was read wrong".
+    assert "v1" in claimed and "auth" in claimed
+    assert "privacy" not in claimed
+    assert "terms" not in claimed
 
 
 def test_the_notice_links_only_to_pages_that_exist():
