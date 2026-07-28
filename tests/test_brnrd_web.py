@@ -153,11 +153,10 @@ def test_login_context_reports_authenticated_session(client, monkeypatch):
 
 
 def test_login_page_is_spa_owned(client):
-    # The SPA serves /login in production (passthru removed); the backend
-    # route only survives for bare uvicorn, same 308 shape as /repos.
-    r = client.get("/login", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "/"
+    # #847: the 308 bare-uvicorn shim is gone. The app serves the SPA now, so
+    # a backend route on /login would beat the page it stood in for — its
+    # absence is what keeps `src/frontend/src/routes/login/` reachable.
+    assert "login" not in client.app.state.backend_namespaces
 
 
 def _message_page(client, monkeypatch):
@@ -415,19 +414,20 @@ def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
     assert hosted["accepted_at"] is not None
 
 
-def test_terms_acceptance_shim_redirects_to_the_hosted_execution_page(client):
-    """The shim lands on /beta-hosted-execution, not /terms.
+def test_the_backend_does_not_claim_the_terms_namespace(client):
+    """#847: `GET /terms/accept` is gone, and `/terms` is the SPA's.
 
-    /terms now has an acceptance widget of its own (#735) — which makes this
-    guard *more* load-bearing, not less. Before, sending a hosted-terms
-    accept link to /terms landed on a page with no checkbox and the mistake
-    was visible. Now it would land on a live checkbox that records acceptance
-    of a different document, and the user would never know. Each document's
-    accept URL points at the page carrying that document's own words (#569).
+    That route was a 308 covering OAuth links minted before #569 moved the
+    hosted-execution document. It was also the single backend path standing
+    inside a namespace the SPA owns, which would have forced a hand-written
+    exception into the mechanism that replaces hand-written exceptions.
+
+    What it guarded — that each document's accept URL points at the page
+    carrying that document's own words — is asserted at the producer by
+    `test_hosted_terms_accept_url_is_not_the_general_terms_page` below, which
+    is the stronger place for it.
     """
-    r = client.get("/terms/accept?next=/connect/BR-123", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "/beta-hosted-execution?next=/connect/BR-123"
+    assert "terms" not in client.app.state.backend_namespaces
 
 
 def test_hosted_terms_accept_url_is_not_the_general_terms_page(client):
@@ -488,13 +488,12 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
 
 
 def test_connect_page_is_spa_owned(client):
-    # The SPA serves /connect/[code] in production (passthru removed); the
-    # backend route only survives for bare uvicorn, same 308 shape as /login.
-    _account_and_repo(client)
-    pair = client.post("/v1/accounts/pair").json()
-    r = client.get(f"/connect/{pair['pair_code']}", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "/"
+    # #847: same as /login — the 308 shim is gone and its absence is the
+    # guard. The device-flow JSON lives under /v1/connect/{code}, which stays
+    # backend-owned; only the HTML deep link belongs to SvelteKit.
+    claimed = client.app.state.backend_namespaces
+    assert "connect" not in claimed
+    assert "v1" in claimed
 
 
 def test_connect_api_requires_login(client):
