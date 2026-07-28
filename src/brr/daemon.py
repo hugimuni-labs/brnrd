@@ -7134,78 +7134,121 @@ def _fire_due_schedules(
             )
         )
 
+        # Resolve entry-level Runner pins once for both pacing and firing.
+        # A bad pin falls back to the config default instead of making a due
+        # entry disappear; the fire loop below records that fallback when it
+        # is observable. The parser deliberately does none of this work.
+        entry_runner_pins: dict[str, dict[str, str]] = {}
+        entry_runner_profiles: dict[str, runner_select.RunnerProfile] = {}
+        entry_runner_errors: dict[str, str] = {}
+        for entry in entries:
+            pins = {
+                key: str(getattr(entry, key) or "").strip()
+                for key in ("shell", "core", "runner")
+                if str(getattr(entry, key) or "").strip()
+            }
+            if not pins:
+                continue
+            try:
+                entry_runner_profiles[entry.id] = runner.resolve_runner_profile(
+                    repo_root, pins,
+                )
+                entry_runner_pins[entry.id] = pins
+            except Exception as exc:  # noqa: BLE001 - fire on config default
+                entry_runner_errors[entry.id] = str(exc)
+
         # Quota-aware pacing (kb/design-director-loop.md §B1, decided
         # 2026-07-04): bend ambient `every:` cadence by observed quota —
-        # never `at:` one-shots, those are deadlines. `schedule.due_entries`
-        # stays pure; the bending happens here, to the entry list passed in.
-        # There is no single "current run" outbox for an account-wide
-        # scheduler tick, so this reads whatever cache sits at *brr_dir*
-        # directly (shared, not per-run) for whichever runner is explicitly
-        # pinned in config (`shell=` or legacy `runner=`, excluding `auto` —
-        # `core=` names a model class, not a Shell, so it can't key the
-        # per-Shell level collector). An unresolved runner name or a cold
-        # cache just means no pacing signal this beat; the try/except this
-        # function already wraps everything in covers that, so no separate
-        # defensive layer is added here.
-        scheduled_entries = entries
+        # never `at:` one-shots, those are deadlines. Entries without a
+        # Runner pin retain the config-wide read; a pinned entry reads its
+        # resolved Runner instead. Level collection is cached per Runner so
+        # repeated entries cost one cache read.
         dropped_ids: set[str] = set()
-        pacing_snapshot: dict[str, object] = {"mode": "normal"}
         shell_pin = str(cfg.get("shell") or "").strip()
         runner_cfg = str(cfg.get("runner") or "").strip()
-        runner_name = shell_pin or (
+        default_runner_name = shell_pin or (
             runner_cfg if runner_cfg and runner_cfg != "auto" else ""
         )
-        if runner_name:
+        default_model: str | None = None
+        if default_runner_name:
+            try:
+                default_model = runner.runner_profile(
+                    default_runner_name, repo_root,
+                ).model
+            except Exception:  # noqa: BLE001 - no model means broad bucket only
+                pass
+
+        level_cache: dict[str, dict[str, object] | None] = {}
+
+        def _pacing_for(
+            runner_name: str, model: str | None,
+        ) -> dict[str, object]:
+            if not runner_name:
+                return {"mode": "normal"}
             # claude_usage/claude_status only ever cache into a *run's*
             # outbox dir, never brr_dir itself — brr_dir has no "current
             # run" of its own here, so go find the freshest one a recent
             # run left behind (previously always missed, since brr_dir was
             # passed straight through and never held the cache file).
-            levels_dir = brr_dir
-            if claude_status.supported(runner_name):
-                levels_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir) or brr_dir
-            # Codex needs none of that hunt: its probe cache is account-scoped and
-            # lives at brr_dir (`shared_dir`), warm across runs — which is what
-            # makes *this* read meaningful at all. Pacing decides between runs,
-            # exactly when the rollout file is frozen; before the app-server probe
-            # existed, an idle daemon paced its schedule off whatever quota the
-            # last Codex turn happened to leave behind, however old.
-            sched_levels, _ = _collect_levels(
-                runner_name, levels_dir, None, refresh=False, shared_dir=brr_dir,
-            )
-            # A scheduling tick has a pinned Shell/runner name, not
-            # necessarily a committed Core — resolve it to a profile only to
-            # read the Core it names, and fall back to no model (excluding
-            # every per-model bucket, per binding_quota_remaining_pct's own
-            # rule) rather than let an unresolvable pin wedge this tick.
-            sched_model: str | None = None
-            try:
-                sched_model = runner.runner_profile(runner_name, repo_root).model
-            except Exception:  # noqa: BLE001 - best-effort, never blocks pacing
-                sched_model = None
+            if runner_name not in level_cache:
+                levels_dir = brr_dir
+                if claude_status.supported(runner_name):
+                    levels_dir = (
+                        runner_quota.latest_claude_usage_outbox_dir(brr_dir)
+                        or brr_dir
+                    )
+                # Codex needs none of that hunt: its probe cache is
+                # account-scoped at brr_dir and warm across runs.
+                level_cache[runner_name], _ = _collect_levels(
+                    runner_name, levels_dir, None,
+                    refresh=False, shared_dir=brr_dir,
+                )
             binding_pct = runner_quota.binding_quota_remaining_pct(
-                sched_levels, model=sched_model,
+                level_cache[runner_name], model=model,
             )
-            if binding_pct is not None:
-                if binding_pct < _quota_critical_floor_pct(cfg):
-                    scheduled_entries = [e for e in entries if e.kind != "every"]
-                    dropped_ids = {e.id for e in entries if e.kind == "every"}
-                    pacing_snapshot = {
-                        "mode": "quota-paused",
-                        "remaining_pct": round(binding_pct, 1),
-                    }
-                elif binding_pct < _quota_low_floor_pct(cfg):
-                    stretch = _quota_stretch_factor(cfg)
-                    pacing_snapshot = {
-                        "mode": "quota-paced",
-                        "factor": stretch,
-                        "remaining_pct": round(binding_pct, 1),
-                    }
-                    scheduled_entries = [
-                        replace(e, interval=(e.interval or 0) * stretch)
-                        if e.kind == "every" else e
-                        for e in entries
-                    ]
+            if binding_pct is None:
+                return {"mode": "normal"}
+            if binding_pct < _quota_critical_floor_pct(cfg):
+                return {
+                    "mode": "quota-paused",
+                    "remaining_pct": round(binding_pct, 1),
+                }
+            if binding_pct < _quota_low_floor_pct(cfg):
+                return {
+                    "mode": "quota-paced",
+                    "factor": _quota_stretch_factor(cfg),
+                    "remaining_pct": round(binding_pct, 1),
+                }
+            return {"mode": "normal"}
+
+        default_pacing = _pacing_for(default_runner_name, default_model)
+        entry_pacing: dict[str, dict[str, object]] = {}
+        scheduled_entries = []
+        for entry in entries:
+            profile = entry_runner_profiles.get(entry.id)
+            pacing = (
+                _pacing_for(profile.name, profile.model)
+                if profile is not None
+                else default_pacing
+            )
+            if entry.id in entry_runner_profiles:
+                entry_pacing[entry.id] = pacing
+            if entry.kind != "every" or pacing["mode"] == "normal":
+                scheduled_entries.append(entry)
+            elif pacing["mode"] == "quota-paused":
+                dropped_ids.add(entry.id)
+            else:
+                scheduled_entries.append(
+                    replace(
+                        entry,
+                        interval=(entry.interval or 0)
+                        * float(pacing.get("factor") or 1),
+                    )
+                )
+
+        pacing_snapshot = dict(default_pacing)
+        if entry_pacing:
+            pacing_snapshot["entries"] = entry_pacing
 
         due, new_state = schedule_mod.due_entries(
             scheduled_entries, state, now, stale_grace=grace,
@@ -7294,6 +7337,19 @@ def _fire_due_schedules(
                 ),
             )
             event_meta["trust_tier"] = entry_tier
+            if entry.id in entry_runner_pins:
+                event_meta.update(entry_runner_pins[entry.id])
+            elif entry.id in entry_runner_errors:
+                bad_values = ", ".join(
+                    f"{key}={getattr(entry, key)!r}"
+                    for key in ("shell", "core", "runner")
+                    if getattr(entry, key)
+                )
+                print(
+                    f"[brnrd] schedule: {entry.id} Runner pin unavailable "
+                    f"({bad_values}: {entry_runner_errors[entry.id]}); "
+                    "firing on config default"
+                )
             protocol.create_event(inbox_dir, "schedule", body, **event_meta)
             print(f"[brnrd] schedule: fired {entry.id}")
         if new_state != loaded_state:
