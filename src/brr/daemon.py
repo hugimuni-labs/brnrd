@@ -2711,25 +2711,55 @@ def _run_worker(
     # Same channel as above deliberately: an operator learning that a
     # security-defining input was dropped should not have to learn a
     # second place to look depending on whether it was a key or a file.
-    # Unlike the key case this one is *load-bearing for a working setup* —
-    # a user with a custom profile loses it here — so the notice names the
-    # migration command, not just the refusal.
+    # Unlike the key case this can be either a spent mirror or load-bearing
+    # customisation, so the notice must carry the classifier's remedy rather
+    # than always naming the migration command.
     ignored_profile_files = conf.ignored_repo_profile_files(repo_root)
-    if ignored_profile_files:
-        joined = ", ".join(f".brr/{rel}" for rel in ignored_profile_files)
+    for ignored_file in ignored_profile_files:
+        display_path = f".brr/{ignored_file.relpath}"
+        if ignored_file.classification == "mirror":
+            remedy = (
+                "This file defines only equivalent profiles already loaded; "
+                "delete it."
+            )
+        elif ignored_file.classification == "divergent":
+            details = []
+            if ignored_file.new_profiles:
+                details.append(
+                    "New profile(s): "
+                    + ", ".join(f"`{name}`" for name in ignored_file.new_profiles)
+                    + "."
+                )
+            if ignored_file.differing_profiles:
+                details.append(
+                    "Differing profile(s): "
+                    + ", ".join(
+                        f"`{name}`" for name in ignored_file.differing_profiles
+                    )
+                    + "."
+                )
+            remedy = (
+                " ".join(details)
+                + " Run `brnrd config promote` to move this file there."
+            )
+        else:
+            reason = ignored_file.reason or "comparison unavailable"
+            remedy = (
+                f"Comparison unavailable: {reason}. Inspect the file before "
+                "choosing whether to delete or promote it."
+            )
         print(
             f"[brnrd] WARNING: run {task.id} (event {eid}): repo-side runner "
-            f"profile file(s) {joined} — ignored, not loaded (profiles load "
-            "only from the daemon-owned home or the bundled catalog; run "
-            "`brnrd config promote` to migrate them)"
+            f"profile file(s) {display_path} — ignored, not loaded (profiles "
+            "load only from the daemon-owned home or the bundled catalog). "
+            f"{remedy}"
         )
         _record_outbox_notice(
             outbox_dir,
-            f"repo-side runner profile file(s) {joined} — ignored, not "
+            f"repo-side runner profile file(s) {display_path} — ignored, not "
             "loaded. A profile carries `cmd:`, the command brnrd executes, "
             "so profiles load only from the daemon-owned home or the "
-            "bundled catalog. Run `brnrd config promote` to move them "
-            "there.",
+            f"bundled catalog. {remedy}",
         )
 
     # #700: the *unreachable* half of the same domain. #693 (above) covers
