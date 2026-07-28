@@ -34,9 +34,10 @@ you · Telegram / Slack / GitHub / dashboard
                 progress · replies · git
 ```
 
-Your checkout and run execution stay on your machine. Remote messages use the
-transport you choose, and managed mode has an additional, documented mirror
-for derived project knowledge. Read [Security & privacy](./security/) before
+Your checkout, `.git`, and run execution stay on your machine; with
+`brnrd account connect`, dashboard publishing continuously mirrors derived
+project knowledge—including any code quoted there—to brnrd.dev, but it does
+not read your source tree. Read [Security & privacy](./security/) before
 opening a gate.
 
 ## Start here
