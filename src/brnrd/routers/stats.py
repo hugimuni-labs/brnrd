@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import stripe_api
 from ..auth import get_db
 from ..models import Account, Subscription
 
@@ -27,6 +28,25 @@ _cache: dict[str, Any] = {"at": 0.0, "payload": None}
 def _reset_cache() -> None:
     """Test seam: forget the cached payload."""
     _cache.update(at=0.0, payload=None)
+
+
+# Stripe is the source of truth for what /pricing shows (#831): a
+# server-side read of the Price the checkout actually charges, so the page
+# and the invoice cannot silently drift. Long TTL — the catalog changes
+# about never, and every cache miss is up to four live Stripe reads.
+_PRICE_CACHE_TTL_S = 900.0
+_price_cache: dict[str, Any] = {"at": 0.0, "payload": None}
+_PRICE_TIERS = {
+    "supporter_monthly": "stripe_price_supporter_monthly",
+    "supporter_annual": "stripe_price_supporter_annual",
+    "public_monthly": "stripe_price_public_monthly",
+    "public_annual": "stripe_price_public_annual",
+}
+
+
+def _reset_price_cache() -> None:
+    """Test seam: forget the cached pricing payload."""
+    _price_cache.update(at=0.0, payload=None)
 
 
 @router.get("/public")
@@ -50,6 +70,43 @@ def public_stats(request: Request, db: Session = Depends(get_db)) -> dict[str, A
         "supporter_seats_taken": int(supporters),
     }
     _cache.update(at=now, payload=payload)
+    return payload
+
+
+@router.get("/pricing")
+def pricing(request: Request) -> dict[str, Any]:
+    """The subscription figures `/pricing` displays, read from the Stripe
+    Price objects checkout actually charges rather than duplicated as
+    literals (#831). USD only: no `currency_options` are set on these
+    Prices yet (checked live against production 2026-07-28 — the field
+    exists but only carries a `usd` entry), and the market is US-primary
+    with no location signal decided (#831's design report: whether
+    `CF-IPCountry` reaches the origin is unverified, and `/pricing` is a
+    static file that reaches no backend code today regardless).
+
+    A tier reads `None` when Stripe is unconfigured, its price ID is
+    unset, or the Stripe call fails — absence, not an error the visitor
+    must read; the caller keeps its baked-in USD literal as the floor
+    (see `$lib/pricing.ts`).
+    """
+    now = time.monotonic()
+    if _price_cache["payload"] is not None and now - _price_cache["at"] < _PRICE_CACHE_TTL_S:
+        return _price_cache["payload"]
+    settings = request.app.state.settings
+    payload: dict[str, Any] = {}
+    for tier, attr in _PRICE_TIERS.items():
+        price_id = getattr(settings, attr, "")
+        if not price_id:
+            payload[tier] = None
+            continue
+        try:
+            price = stripe_api.get_price(settings, price_id)
+        except stripe_api.StripeError:
+            payload[tier] = None
+            continue
+        amount, currency = price.get("unit_amount"), price.get("currency")
+        payload[tier] = {"amount": amount, "currency": currency} if amount and currency else None
+    _price_cache.update(at=now, payload=payload)
     return payload
 
 

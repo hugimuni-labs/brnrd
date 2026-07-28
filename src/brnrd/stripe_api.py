@@ -39,6 +39,10 @@ def _post(settings: Settings, path: str, data: dict) -> dict:
     return _request(settings, "POST", path, data)
 
 
+def _get(settings: Settings, path: str) -> dict:
+    return _request(settings, "GET", path, None)
+
+
 def _delete(settings: Settings, path: str) -> dict:
     return _request(settings, "DELETE", path, None)
 
@@ -160,6 +164,15 @@ def create_topup_checkout(
     if customer_id:
         data["customer"] = customer_id
     return _post(settings, "/checkout/sessions", data)
+
+
+def get_price(settings: Settings, price_id: str) -> dict:
+    """Read a Price object — its live ``unit_amount``/``currency`` (and, if
+    set, ``currency_options``). Used to derive `/pricing`'s displayed
+    figures from Stripe rather than duplicating them as literals (#831),
+    so the page and the checkout charge cannot silently drift apart.
+    """
+    return _get(settings, f"/prices/{price_id}?expand[]=currency_options")
 
 
 def create_portal_session(settings: Settings, *, customer_id: str, return_url: str) -> dict:
