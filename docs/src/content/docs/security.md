@@ -42,14 +42,15 @@ configured environment; collaborators can be tightened with
 
 ## Local stays local — with one honest caveat
 
-Your checkout, `.git`, and run execution stay on your machine. Remote messages
-travel through the transport you choose and, in managed mode, transit
-brnrd.dev on the way to your daemon.
+Your checkout, `.git`, and run execution stay on your machine; with
+`brnrd account connect`, dashboard publishing continuously mirrors derived
+project knowledge—including any code quoted there—to brnrd.dev, but it does
+not read your source tree.
 
-When you run `brnrd account connect`, the dashboard also mirrors **derived
-project knowledge** to brnrd.dev: plans, the decision ledger, run summaries,
-pull-request titles and URLs, and quota posture. Your source code does not
-leave the machine through that mirror.
+Remote messages travel through the transport you choose and, in managed mode,
+transit brnrd.dev on the way to your daemon. The dashboard mirror includes
+plans, the decision ledger, run summaries, pull-request titles and URLs, and
+quota posture.
 
 ## Operator checklist
 

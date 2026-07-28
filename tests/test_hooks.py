@@ -2010,6 +2010,22 @@ def _read_batch(*paths):
     })
 
 
+def _sliced_read_batch(path, *, offset=0, limit=90):
+    return json.dumps({
+        "hook_event_name": "PostToolBatch",
+        "tool_calls": [{
+            "tool_name": "Read",
+            "tool_input": {
+                "file_path": str(path),
+                "offset": offset,
+                "limit": limit,
+            },
+            "tool_use_id": f"read-{offset}-{limit}",
+            "tool_response": "file contents",
+        }],
+    })
+
+
 def _inject_text(out):
     return (out.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
@@ -2041,6 +2057,81 @@ def test_orient_segment_leaves_at_completion(tmp_path):
     text = _inject_text(second)
     assert text  # the bar still renders — only the meter has left
     assert "orient" not in text
+
+
+def test_orient_partial_read_is_not_a_completed_file(tmp_path):
+    """Opening ninety lines of a long page proves touch, not orientation."""
+    page = tmp_path / "long.md"
+    page.write_text(
+        "".join(f"line {number}\n" for number in range(240)),
+        encoding="utf-8",
+    )
+    _boot_score(tmp_path, [page])
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL,
+        _sliced_read_batch(page, offset=0, limit=90),
+        _orient_env(tmp_path),
+    )
+
+    assert "orient 0/1" in _inject_text(out)
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == []
+    assert state[hooks.ORIENTATION_READ_RANGES_KEY] == {
+        str(page.resolve()): [[0, 90]]
+    }
+
+
+def test_orient_paged_reads_complete_only_after_covering_the_file(tmp_path):
+    page = tmp_path / "long.md"
+    page.write_text(
+        "".join(f"line {number}\n" for number in range(240)),
+        encoding="utf-8",
+    )
+    _boot_score(tmp_path, [page])
+    env = _orient_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    first, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL,
+        _sliced_read_batch(page, offset=0, limit=90),
+        env,
+    )
+    assert "orient 0/1" in _inject_text(first)
+
+    _portal(tmp_path, token="t2", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    second, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL,
+        _sliced_read_batch(page, offset=90, limit=150),
+        env,
+    )
+
+    assert "orient" not in _inject_text(second)
+    state = json.loads(
+        (tmp_path / hooks.HOOK_STATE_NAME).read_text(encoding="utf-8")
+    )
+    assert state[hooks.ORIENTATION_READ_KEY] == [str(page.resolve())]
+    assert state[hooks.ORIENTATION_READ_RANGES_KEY] == {}
+
+
+def test_orient_unbounded_read_respects_the_runner_default_page(tmp_path):
+    page = tmp_path / "too-long-for-one-read.md"
+    page.write_text("line\n" * (hooks._ORIENTATION_READ_DEFAULT_LIMIT + 1),
+                    encoding="utf-8")
+    _boot_score(tmp_path, [page])
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+
+    out, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, _read_batch(page), _orient_env(tmp_path)
+    )
+
+    assert "orient 0/1" in _inject_text(out)
 
 
 def test_orient_ignores_reads_outside_the_set(tmp_path):
