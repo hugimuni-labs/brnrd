@@ -138,6 +138,32 @@ def test_quota_pacing_status_no_model_excludes_all_week_models():
     assert status["excluded_thin"] == ["Fable"]
 
 
+def test_quota_pacing_status_carries_default_thresholds():
+    status = daemon._quota_pacing_status({}, _live_shape_561_levels(), model="opus")
+
+    assert status["low_floor_pct"] == 20.0
+    assert status["critical_floor_pct"] == 8.0
+    assert status["stretch_factor"] == 3.0
+
+
+def test_quota_pacing_status_carries_configured_threshold_used_for_floor():
+    cfg = {"pacing.quota_low_floor_pct": 35}
+    levels = {
+        "quota": {
+            "buckets": {"week": {"remaining_percentage": 24.0}},
+        }
+    }
+
+    status = daemon._quota_pacing_status(cfg, levels)
+
+    assert status["low_floor_pct"] == 35.0
+    assert status["floor"] == "low"
+
+
+def test_quota_pacing_status_stays_absent_without_measurement():
+    assert daemon._quota_pacing_status({}, None) is None
+
+
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-1")

@@ -9304,12 +9304,19 @@ def _quota_pacing_status(
     if pct is None:
         return None
     low_floor = _quota_low_floor_pct(cfg)
+    critical_floor = _quota_critical_floor_pct(cfg)
     floor = None
-    if pct < _quota_critical_floor_pct(cfg):
+    if pct < critical_floor:
         floor = "critical"
     elif pct < low_floor:
         floor = "low"
-    status: "dict[str, object]" = {"binding_remaining_pct": pct, "floor": floor}
+    status: "dict[str, object]" = {
+        "binding_remaining_pct": pct,
+        "floor": floor,
+        "low_floor_pct": low_floor,
+        "critical_floor_pct": critical_floor,
+        "stretch_factor": _quota_stretch_factor(cfg),
+    }
     excluded = runner_quota.excluded_week_model_buckets(levels, model)
     thin = sorted(
         label for label, remaining in excluded.items() if remaining < low_floor
