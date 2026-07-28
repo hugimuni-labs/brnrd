@@ -374,6 +374,29 @@ def test_measured_windows_are_never_overridden_by_credits():
     assert runner_quota.binding_quota_remaining_pct(levels) == 80.0
 
 
+def test_subscription_window_is_not_overridden_by_absent_credit_wallet():
+    """Plus reports a real window and ``has_credits: false`` together.
+
+    The latter means there is no separate credit-wallet fallback; it must not
+    turn the usable subscription window into a binding zero.
+    """
+    from brr import runner_quota
+
+    levels = codex_status.parse_token_count({
+        "rate_limits": {
+            "primary": {"used_percent": 16.0, "window_minutes": 10080},
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+            "plan_type": "plus",
+        }
+    })
+    quota = levels["quota"]
+    assert quota["summary"].startswith("7d 84% left")
+    assert "credits exhausted" not in quota["summary"]
+    assert quota.get("credits_exhausted") is None
+    assert runner_quota.binding_quota_remaining_pct(levels) == 84.0
+
+
 def test_a_positive_balance_never_becomes_a_percentage():
     """A balance has no denominator. Null beats a borrowed ratio."""
     from brr import runner_quota
