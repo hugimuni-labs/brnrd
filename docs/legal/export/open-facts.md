@@ -8,15 +8,19 @@ No blank is an implied “yes”.
 
 ### 1. Is the production Upsun project pinned to an EU hosting region?
 
-Answer: ________________________________________________
+Answer: **No. The live project reports a Swiss region; Switzerland is outside
+the EU.**
 
-Region/project identifier: ______________________________
+Region/project identifier: `ch-1.platform.sh` / `6yxqptrmlmxuo`
 
-Evidence attached (Upsun console or contract export): _________________________
+Evidence attached (Upsun console or contract export): `upsun project:list
+--format csv`, read 2026-07-28 in `run-260728-1227-soax`
 
-Why this matters: the DPA's international-transfer analysis treats the hosting
-location as an open fact; `.upsun/config.yaml` does not contain the
-project-creation-time region.
+Why this matters: the DPA's international-transfer analysis currently treats
+the hosting location as an open fact. Switzerland has an
+[EU adequacy decision](https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en),
+but it remains a non-EU transfer that the DPA should identify accurately;
+`.upsun/config.yaml` does not contain the project-creation-time region.
 
 ### 2. Is the production GitHub webhook secret set?
 
@@ -47,18 +51,14 @@ Stripe.
 
 ### 4. Does production enforce HSTS?
 
-Answer: **No, as probed — fix in flight.** `https://brnrd.dev` served no
-`Strict-Transport-Security` header when checked live.
+Answer: **Yes, as probed after the deployment.**
 
-Observed `Strict-Transport-Security` header and max-age: absent (no header
-in the response).
+Observed `Strict-Transport-Security` header and max-age:
+`strict-transport-security: max-age=31536000`
 
-Evidence/date checked: `curl -sI https://brnrd.dev` → `HTTP/2 200`, no
-`strict-transport-security` line; 2026-07-27, run-260727-2005-f5u5. Fix:
-this same change set enables `tls.strict_transport_security.enabled: true`
-on the sole Upsun route (1-year max-age; `include_subdomains`/`preload`
-left off as operator decisions). **Re-verify after the merge deploys** —
-this answer describes the pre-fix edge, and the fix is not proof of itself.
+Evidence/date checked: `curl -sSI https://brnrd.dev`; 2026-07-28,
+`run-260728-1227-soax`. The edge now serves the one-year max-age enabled by
+#832; `includeSubDomains` and `preload` remain deliberately unset.
 
 Why this matters: application source and deployment configuration do not prove
 the headers served by the production edge.
