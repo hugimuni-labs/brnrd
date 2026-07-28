@@ -932,7 +932,31 @@ def test_dashboard_empty_lane_marks_consent_without_repeating_account_state(lane
 
     body = client.get(path).json()
 
-    assert body["withheld"] == {"lane": lane}
+    assert body["withheld"] == {
+        "lane": lane,
+        "unrecorded": ["Gurio/legacy"],
+        "opted_out": ["Gurio/off"],
+    }
+
+
+def test_withheld_marker_omits_an_absence_category_that_is_empty():
+    """Same rule as the marker itself: absent, never an empty list.
+
+    An empty `unrecorded` and a missing one would render identically to a
+    careless reader and differently to a careful one — and the careful reading
+    ("we checked, nobody is unrecorded") is the true one only when we did.
+    """
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/off", "publish_layers": "none"},
+    )
+
+    marker = client.get("/v1/dashboard/activity").json()["withheld"]
+
+    assert marker == {"lane": "activity", "opted_out": ["Gurio/off"]}
+    assert "unrecorded" not in marker
 
 
 def test_dashboard_omits_withheld_when_any_repo_permits_the_lane():
@@ -948,6 +972,89 @@ def test_dashboard_omits_withheld_when_any_repo_permits_the_lane():
     )
 
     assert "withheld" not in client.get("/v1/dashboard/activity").json()
+
+
+def test_corpus_is_withheld_when_a_sibling_repo_narrows_the_intersection():
+    """The mixed-consent case: one repo fully consented, one never asked.
+
+    Found live 2026-07-27. An account had `hugimuni-labs/brnrd` consenting to
+    every lane including `corpus`, and one forgotten repo with a daemon that
+    had never woken and no recorded scope. The write seam intersects corpus
+    slices across every connected repo, so all 2,863 files were dropped — and
+    `lanes_withheld` answered with a *union*, said "not withheld", and the
+    dashboard rendered a bare "No corpus mirrored yet." for a corpus that was
+    being refused every three seconds.
+
+    The two must agree: the marker is only worth anything in exactly the case
+    where a permitting repo exists, because that is the case a reader cannot
+    diagnose from their own consent screen.
+    """
+    client = _client()
+    token = _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/consented", "publish_layers": "corpus"},
+    )
+    _mint_legacy_repo(client, token, "Gurio/forgotten")
+
+    with client.app.state.SessionLocal() as db:
+        account_id = _account_id(client)
+        repos = _connected_repos(db, account_id)
+        # The enforcement side: nothing may ship.
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset()
+        # A repo *does* permit the lane — this is what the union saw.
+        permitted_by_someone = frozenset().union(
+            *(publish_scope._repo_scopes(repo.publish_layers)[0] for repo in repos)
+        )
+        assert "corpus" in permitted_by_someone
+        # ...and the explanation must still agree with the gate that runs.
+        assert "corpus" in publish_scope.lanes_withheld(repos)
+
+    marker = client.get("/v1/dashboard/surface").json()["withheld"]
+    assert marker["lane"] == "corpus"
+    assert marker["unrecorded"] == ["Gurio/forgotten"], (
+        "the panel has to name the repo whose consent is missing — the owner "
+        "cannot act on a condition without the subject of the sentence"
+    )
+
+
+def test_corpus_is_not_withheld_when_every_repo_agrees_on_a_slice():
+    """The inverse, so the fix cannot become "corpus is always withheld"."""
+    client = _client()
+    _login(client)
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/one", "publish_layers": "corpus"},
+    )
+    client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/two", "publish_layers": "knowledge"},
+    )
+
+    with client.app.state.SessionLocal() as db:
+        account_id = _account_id(client)
+        assert publish_scope.corpus_slices_permitted(db, account_id) == frozenset({"knowledge"})
+        assert "corpus" not in publish_scope.lanes_withheld(_connected_repos(db, account_id))
+
+    assert "withheld" not in client.get("/v1/dashboard/surface").json()
+
+
+def test_sliced_lanes_matches_the_lanes_slice_enforcement_governs():
+    """`SLICED_LANES` is a hand-named set; this is what stops it going stale.
+
+    `lanes_withheld` reduces sliced lanes by intersection and every other lane
+    by union, because that is how each is enforced. A second sliced lane added
+    to the vocabulary without being added here would silently inherit the union
+    and reintroduce the exact defect above — so pin the membership against the
+    slice vocabulary itself rather than trusting the next reader to notice.
+    """
+    assert publish_scope.SLICED_LANES <= frozenset(publish_scope.LANES)
+    assert publish_scope.SLICED_LANES == frozenset({"corpus"}), (
+        "corpus is the only account-wide lane today. If that changed, "
+        "`lanes_withheld` and `corpus_slices_permitted` both need the new lane."
+    )
+    # And the slice vocabulary is the corpus lane's, not a free-floating set.
+    assert frozenset(cloud._PUBLISH_CORPUS_SLICES) == frozenset({"authored", "knowledge", "runs"})
 
 
 def test_a_recorded_consent_is_an_enumeration_and_never_widens():

@@ -13,6 +13,7 @@
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
+	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import {
@@ -657,10 +658,10 @@
 				</p>
 			</div>
 			{#if runnersData?.profiles.length === 0 && runnersWithheld}
-				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
+				<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
 			{#if shells?.length === 0 && quotaWithheld}
-				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
+				<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
 			<ControlStrip
 				runners={runnersData}
@@ -711,10 +712,10 @@
 				/>
 			</div>
 			{#if scheduledWakes?.length === 0 && activityWithheld}
-				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
+				<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
 			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<p class="mt-2 text-sm text-amber-200">paused — no publish scope</p>
+				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
 
 			<!-- The detail sheet: the band's other half. Everything the dissolved
@@ -862,7 +863,7 @@
 					{:else if runLedgerRows === null}
 						<p class="text-sm text-ink-quiet">Loading…</p>
 					{:else if runLedgerRows.length === 0 && runLedgerWithheld}
-						<p class="text-sm text-amber-200">paused — no publish scope</p>
+						<WithheldNotice withheld={runLedgerWithheld} />
 					{:else}
 						<ProduceGauge
 							rows={applyLens(runLedgerRows, loomLens)}
