@@ -165,6 +165,23 @@ def test_signature_verification_tolerance_and_scheme():
     assert not stripe_api.verify_webhook_signature(payload, f"t={stale},v1={mac_stale}", secret)
 
 
+# --- price read (#831) --------------------------------------------------------
+
+
+def test_get_price_reads_the_price_object_by_id(monkeypatch):
+    seen = {}
+
+    def fake_get(settings, path):
+        seen["path"] = path
+        return {"id": "price_x", "unit_amount": 500, "currency": "usd"}
+
+    monkeypatch.setattr(stripe_api, "_get", fake_get)
+    price = stripe_api.get_price(Settings(stripe_api_key="sk_test_x"), "price_x")
+
+    assert seen["path"] == "/prices/price_x?expand[]=currency_options"
+    assert price == {"id": "price_x", "unit_amount": 500, "currency": "usd"}
+
+
 # --- wallet topup ------------------------------------------------------------
 
 

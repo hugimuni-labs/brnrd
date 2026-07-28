@@ -5,7 +5,9 @@
 	import { GITHUB_REPO, fetchPublicStats, type PublicStats } from '$lib/publicStats';
 	// Ex-tax figures on this page; a French buyer pays $6.00 for the $5 tier.
 	// Why the line exists and what is still open: $lib/pricing.ts.
-	import { TAX_NOTE } from '$lib/pricing';
+	// The numbers themselves are Stripe-derived (#831): fetchPricing refines
+	// the baked-in literals below after mount, same pattern as `stats`.
+	import { TAX_NOTE, fetchPricing, formatUsd, type PricingFigures } from '$lib/pricing';
 
 	// Pricing (#509): one click off the landing, never on it. Numbers are
 	// the accepted pricing decision (decision-pricing-shape, 2026-07):
@@ -16,17 +18,25 @@
 	// removes the free tier's headroom limits — no credit product exists
 	// yet, so the page doesn't promise one.
 	let stats = $state<PublicStats | null>(null);
+	let pricing = $state<PricingFigures | null>(null);
 
 	const legalNoticeReady = legalNoticeIsComplete();
 
 	onMount(async () => {
-		stats = await fetchPublicStats();
+		[stats, pricing] = await Promise.all([fetchPublicStats(), fetchPricing()]);
 	});
 
 	let seatsLeft = $derived(
 		stats === null ? null : Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken)
 	);
 	let supporterOpen = $derived(seatsLeft === null || seatsLeft > 0);
+
+	// Stripe-derived, with the accepted pricing decision as the no-JS /
+	// pre-refine floor (same numbers `billing.ts`'s PRICING constant names).
+	let supporterMonthly = $derived(formatUsd(pricing?.supporter_monthly) ?? '$5');
+	let supporterAnnual = $derived(formatUsd(pricing?.supporter_annual) ?? '$50');
+	let publicMonthly = $derived(formatUsd(pricing?.public_monthly) ?? '$7');
+	let publicAnnual = $derived(formatUsd(pricing?.public_annual) ?? '$70');
 </script>
 
 <svelte:head><title>pricing · brnrd</title></svelte:head>
@@ -95,11 +105,11 @@
 			{#if supporterOpen}
 				<p class="eyebrow">subscriber · supporter cohort</p>
 				<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-					$5<span class="text-sm text-ink-quiet">/mo</span>
+					{supporterMonthly}<span class="text-sm text-ink-quiet">/mo</span>
 				</p>
 				<p class="font-mono text-[11px] text-ink-quiet">
-					or $50/yr · first {stats?.supporter_seats_total ?? 200} accounts, price kept for the life of
-					the subscription
+					or {supporterAnnual}/yr · first {stats?.supporter_seats_total ?? 200} accounts, price kept for
+					the life of the subscription
 					{#if seatsLeft !== null}
 						· {seatsLeft} left
 					{/if}
@@ -108,9 +118,9 @@
 			{:else}
 				<p class="eyebrow">subscriber</p>
 				<p class="mt-2 font-mono text-2xl font-semibold text-amber-100">
-					$7<span class="text-sm text-ink-quiet">/mo</span>
+					{publicMonthly}<span class="text-sm text-ink-quiet">/mo</span>
 				</p>
-				<p class="font-mono text-[11px] text-ink-quiet">or $70/yr</p>
+				<p class="font-mono text-[11px] text-ink-quiet">or {publicAnnual}/yr</p>
 				<p class="mt-1 font-mono text-[11px] text-ink-quiet">{TAX_NOTE}</p>
 			{/if}
 			<ul class="mt-4 space-y-2 text-sm text-stone-400">

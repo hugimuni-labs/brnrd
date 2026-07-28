@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
-import { TAX_NOTE, disclosesTax } from './pricing.ts';
+import { TAX_NOTE, disclosesTax, fetchPricing, formatUsd } from './pricing.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const routePath = join(here, '..', 'routes', 'pricing', '+page.svelte');
@@ -54,4 +54,53 @@ test('disclosesTax rejects a note that omits the tax or the rate', () => {
 	ok(!disclosesTax('prices at checkout are set by Stripe and shown before you pay'));
 	ok(!disclosesTax('taxes may apply'));
 	ok(!disclosesTax('20% off for the first cohort'));
+});
+
+// --- Stripe-derived figures (#831) -------------------------------------------
+
+function fakeFetch(status: number, body: unknown): typeof fetch {
+	return (async () => ({
+		ok: status >= 200 && status < 300,
+		status,
+		json: async () => body
+	})) as unknown as typeof fetch;
+}
+
+test('fetchPricing returns the parsed payload on success', async () => {
+	const payload = {
+		supporter_monthly: { amount: 500, currency: 'usd' },
+		supporter_annual: null,
+		public_monthly: null,
+		public_annual: null
+	};
+	const result = await fetchPricing(fakeFetch(200, payload));
+	ok(result?.supporter_monthly?.amount === 500);
+});
+
+test('fetchPricing degrades to null on a non-2xx response, never throws', async () => {
+	ok((await fetchPricing(fakeFetch(500, {}))) === null);
+});
+
+test('fetchPricing degrades to null on a network failure, never throws', async () => {
+	const throws = (async () => {
+		throw new Error('offline');
+	}) as unknown as typeof fetch;
+	ok((await fetchPricing(throws)) === null);
+});
+
+test('formatUsd renders a whole-dollar Stripe amount compactly', () => {
+	ok(formatUsd({ amount: 500, currency: 'usd' }) === '$5');
+});
+
+test('formatUsd keeps cents when the amount is not a whole dollar', () => {
+	ok(formatUsd({ amount: 550, currency: 'usd' }) === '$5.50');
+});
+
+test('formatUsd refuses to mislabel a non-USD figure as dollars', () => {
+	ok(formatUsd({ amount: 500, currency: 'eur' }) === null);
+});
+
+test('formatUsd is null-safe for an absent figure', () => {
+	ok(formatUsd(null) === null);
+	ok(formatUsd(undefined) === null);
 });
