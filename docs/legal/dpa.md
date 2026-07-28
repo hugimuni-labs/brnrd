@@ -5,21 +5,18 @@ Every factual claim below is cited to the code that enforces it or to
 SECURITY.md; a claim that could not be verified this way is listed at the
 bottom of this comment instead of being asserted in the body.
 
-Companion documents (Terms of Service, /privacy, /legal-notice) live on
-sibling branches (`brr/the-legal-pack`) not yet merged to `main` as of this
-draft (2026-07-24). The entity identifiers used below (SIREN, RCS,
-registered office, VAT number, share capital) are sourced from
-`src/frontend/src/lib/legalNotice.ts` on that branch, itself sourced from
-the K-bis supplied by the maintainer 2026-07-24. If that branch changes
-before merge, re-sync this Annex I block against it.
+Companion documents (Terms of Service, `/privacy`, `/legal-notice`) are merged
+and published. The entity identifiers used below (SIREN, RCS, registered
+office, VAT number, share capital) are sourced from
+`src/frontend/src/lib/legalNotice.ts`, itself sourced from the K-bis supplied
+by the maintainer 2026-07-24.
 
 Claims from research-legal-review-hosted-vs-oss-2026-07-24.md that this
 draft could NOT independently confirm in the code, and therefore does not
 assert as fact:
-  - Upsun/Platform.sh hosting region pinned to the EU. No region directive
-    exists in `.upsun/config.yaml` or `src/brnrd/config.py`; Upsun regions
-    are set at project-creation time outside version control. Flagged in
-    §14 and Annex III as needing operational confirmation, not asserted.
+  - Upsun/Platform.sh hosting region. The repository cannot prove it, but a
+    live operational read on 2026-07-28 identified `ch-1`, Switzerland.
+    §14 and Annex III state that observed fact and the EU adequacy basis.
   - GitHub App installation-token lifetime of "1 hour". The code mints the
     token (`src/brnrd/platforms/github_app.py:72`) but the expiry is set by
     GitHub's API, not brnrd's code, so it is a platform fact, not a repo
@@ -364,12 +361,12 @@ stated basis, are listed in Annex III. In summary:
   reaches HugiMuni. HugiMuni flags this to Customer's counsel as the
   least tidy transfer in this list, worth an explicit sentence rather
   than folding it into the general clause above.
-- **HugiMuni's own infrastructure** — hosted on Upsun/Platform.sh.
-  HugiMuni intends this hosting to be pinned to an EU region, but no
-  region directive exists in the repository's committed configuration
-  (`.upsun/config.yaml`) to verify that from code; this is an operational
-  setting to confirm and, if not already so, pin, ahead of relying on
-  this clause.
+- **HugiMuni's own infrastructure** — hosted on Upsun/Platform.sh in
+  `ch-1`, Switzerland (live project read 2026-07-28). Switzerland is
+  outside the EEA; the transfer relies on the European Commission's
+  [adequacy decision](https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en).
+  The region is a project-creation-time operational setting and does not
+  appear in `.upsun/config.yaml`.
 
 ## 15. Precedence
 
@@ -502,7 +499,7 @@ actually touches, so the boundary in §0 stays intact through this table too
 
 | Sub-processor | Role | Location | Transfer basis | Processes |
 |---|---|---|---|---|
-| **Upsun** (Platform.sh SAS) | Hosting and the managed PostgreSQL database — the sole datastore for everything in Annex I | France (registered office Paris; hosting region intended EU, not pinned in committed config — see §14) | N/A if EU-hosted; to be confirmed | All Customer Content described in Annex I, and all HugiMuni controller-role data |
+| **Upsun** (Platform.sh SAS) | Hosting and the managed PostgreSQL database — the sole datastore for everything in Annex I | Switzerland (`ch-1`; provider registered office in France) | [European Commission adequacy decision for Switzerland](https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en) | All Customer Content described in Annex I, and all HugiMuni controller-role data |
 | **GitHub** | (a) OAuth sign-in identity; (b) delivery of relayed replies to Customer's own issues/PRs, and the webhook source of inbound Customer Content | United States | EU-US Data Privacy Framework / Standard Contractual Clauses | (a) is controller-role account data, out of this Agreement's scope; (b) is Customer Content, in scope |
 | **Telegram** | Message transport for Customers who elect a Telegram gate — both inbound and outbound | Outside the EEA / outside an adequacy decision | None stated; transport inherent to Customer's choice of gate (see §14) | Customer Content — applicable only if Customer connects a Telegram gate |
 | **Stripe** | Payments, as merchant of record | United States | EU-US Data Privacy Framework / Standard Contractual Clauses | Controller-role billing data only (Customer's email address and brnrd account id); Stripe does not receive Customer Content under this Agreement |
