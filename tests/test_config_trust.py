@@ -1063,16 +1063,12 @@ def test_profiles_cache_key_can_never_name_a_repo_path(tmp_path, cold_profiles):
     assert str(repo) not in key, f"cache key names a repo path: {key!r}"
 
 
-def test_ignored_repo_side_profile_file_surfaces_as_a_run_notice_and_warning(
-    tmp_path, monkeypatch, capsys,
-):
-    """A silent ignore is not acceptable: a user with a working custom
-    profile must be told, not surprised. Same notice channel as #533."""
+def _drive_repo_profile_notice(tmp_path, monkeypatch, profile_text, eid):
     write_repo_scaffold(tmp_path)
     (tmp_path / ".brr" / "runners.md").write_text(
-        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n", encoding="utf-8"
+        profile_text, encoding="utf-8"
     )
-    event = make_event(tmp_path, eid="evt-693-notice")
+    event = make_event(tmp_path, eid=eid)
     _stub_worktree_env(monkeypatch, tmp_path)
 
     monkeypatch.setattr(
@@ -1088,14 +1084,83 @@ def test_ignored_repo_side_profile_file_surfaces_as_a_run_notice_and_warning(
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     notices = daemon._read_outbox_notices(
-        tmp_path / ".brr" / "outbox" / "evt-693-notice"
+        tmp_path / ".brr" / "outbox" / eid
     )
-    assert any(".brr/runners.md" in n["text"] for n in notices), notices
-    assert any("brnrd config promote" in n["text"] for n in notices), notices
+    matching = [n["text"] for n in notices if ".brr/runners.md" in n["text"]]
+    assert len(matching) == 1, notices
+    return matching[0]
 
+
+def test_mirrored_repo_profile_notice_recommends_deletion(
+    tmp_path, monkeypatch, capsys,
+):
+    """A semantic mirror is spent; promoting it would create a drifting shadow."""
+    bundled = daemon.prompts.read_prompt("runners.md", None)
+    notice = _drive_repo_profile_notice(
+        tmp_path,
+        monkeypatch,
+        bundled + "\nRepo-side prose is deliberately irrelevant.\n",
+        "evt-profile-mirror",
+    )
     captured = capsys.readouterr()
     assert "WARNING" in captured.out
-    assert ".brr/runners.md" in captured.out
+    assert "delete it" in captured.out
+    assert "delete it" in notice
+    assert "config promote" not in captured.out
+    assert "config promote" not in notice
+
+
+def test_extra_repo_profile_notice_recommends_promotion_and_names_profile(
+    tmp_path, monkeypatch, capsys,
+):
+    notice = _drive_repo_profile_notice(
+        tmp_path,
+        monkeypatch,
+        "---\nlocal-agent:\n  cmd: 'local-agent run'\n---\n",
+        "evt-profile-extra",
+    )
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "brnrd config promote" in captured.out
+    assert "`local-agent`" in captured.out
+    assert "brnrd config promote" in notice
+    assert "New profile(s): `local-agent`." in notice
+
+
+def test_changed_repo_profile_notice_recommends_promotion_and_names_profile(
+    tmp_path, monkeypatch, capsys,
+):
+    notice = _drive_repo_profile_notice(
+        tmp_path,
+        monkeypatch,
+        "---\ncodex:\n  cmd: 'codex with-different-argv'\n---\n",
+        "evt-profile-changed",
+    )
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "brnrd config promote" in captured.out
+    assert "`codex`" in captured.out
+    assert "brnrd config promote" in notice
+    assert "Differing profile(s): `codex`." in notice
+
+
+def test_unparseable_repo_profile_notice_names_ambiguity_without_a_remedy(
+    tmp_path, monkeypatch, capsys,
+):
+    notice = _drive_repo_profile_notice(
+        tmp_path,
+        monkeypatch,
+        "codex:\n  cmd: this has no frontmatter fences\n",
+        "evt-profile-unknown",
+    )
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out
+    assert "Comparison unavailable" in captured.out
+    assert "could not be read or parsed" in notice
+    assert "brnrd config promote" not in captured.out
+    assert "brnrd config promote" not in notice
+    assert "delete it" not in captured.out
+    assert "delete it" not in notice
 
 
 def test_no_profile_notice_when_the_repo_has_no_runners_file(tmp_path, monkeypatch):
@@ -1252,6 +1317,9 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
         check=True, capture_output=True,
     )
     write_repo_scaffold(linked)
+    (linked / ".brr" / "runners.md").write_text(
+        "---\ncodex:\n  cmd: 'codex exec'\n---\n", encoding="utf-8"
+    )
     conf._SECURITY_PATH_CACHE.clear()
 
     event = make_event(linked, eid="evt-700-notice")
@@ -1273,10 +1341,21 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
     )
     assert any("not being read" in n["text"] for n in notices), notices
     assert any("#663" in n["text"] for n in notices), notices
+    comparison_notices = [
+        n["text"]
+        for n in notices
+        if "repo-side runner profile file(s)" in n["text"]
+    ]
+    assert len(comparison_notices) == 1, notices
+    assert "Comparison unavailable" in comparison_notices[0]
+    assert "home profile path is unresolvable" in comparison_notices[0]
+    assert "brnrd config promote" not in comparison_notices[0]
+    assert "delete it" not in comparison_notices[0]
 
     captured = capsys.readouterr()
     assert "WARNING" in captured.out
     assert "unreachable" in captured.out
+    assert "Comparison unavailable" in captured.out
 
 
 # ── ``brnrd config promote`` picks the profile file up ──────────────────
