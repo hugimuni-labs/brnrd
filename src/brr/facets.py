@@ -319,9 +319,11 @@ def build(
       and consent state (pending/approved/denied/capped).
     - ``pacing_status`` — the quota-aware scheduler-pacing read (kb/design-
       director-loop.md §B1): ``{"binding_remaining_pct": ..., "floor": None |
-      "low" | "critical", "excluded_thin": [...]}``. Attached as
+      "low" | "critical", "low_floor_pct": ..., "critical_floor_pct": ...,
+      "stretch_factor": ..., "excluded_thin": [...]}``. Attached as
       ``quota.pacing`` when present, so a mid-run boundary can see the same
-      binding percent the scheduler used to stretch/pause ``every:`` entries.
+      binding percent, thresholds, and interval multiplier the scheduler used
+      to stretch/pause ``every:`` entries.
       ``binding_remaining_pct`` only ever reflects the dispatched Core's own
       per-model bucket (or none, at a scheduling tick with no committed
       Core) — a different Core's thin ``week_models`` bucket never binds it,
