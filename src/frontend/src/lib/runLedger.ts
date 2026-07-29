@@ -302,9 +302,21 @@ export function usdLabel(value: number | null): string {
 	}).format(value);
 }
 
-export function endedLabel(endedAt: string | null): string {
-	if (!endedAt) return '—';
-	const ended = Date.parse(endedAt);
-	if (Number.isNaN(ended)) return '—';
-	return new Date(ended).toLocaleTimeString();
+/** Local time for today; local date + time once a timestamp can be mistaken
+ * for today. `now` is injectable so the calendar-day branch is testable
+ * without depending on the machine's timezone or wall clock. */
+export function dateTimeLabel(value: string | null, now = Date.now()): string {
+	if (!value) return '—';
+	const timestamp = Date.parse(value);
+	if (Number.isNaN(timestamp)) return '—';
+	const date = new Date(timestamp);
+	const today = new Date(now);
+	if (
+		date.getFullYear() === today.getFullYear() &&
+		date.getMonth() === today.getMonth() &&
+		date.getDate() === today.getDate()
+	) {
+		return date.toLocaleTimeString();
+	}
+	return date.toLocaleString();
 }

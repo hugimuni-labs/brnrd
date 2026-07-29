@@ -4,8 +4,8 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { typeReveal } from './transitions';
 	import {
+		dateTimeLabel,
 		durationLabel,
-		endedLabel,
 		familySuffix,
 		groupRelicFamilies,
 		groupWithChildren,
@@ -108,7 +108,10 @@
 								</p>
 							{/if}
 						</div>
-						<span class="shrink-0 font-mono text-ink-quiet">{endedLabel(row.ended_at)}</span>
+						<div class="shrink-0 text-right font-mono text-ink-quiet">
+							<p>started {dateTimeLabel(row.started_at)}</p>
+							<p>ended {dateTimeLabel(row.ended_at)}</p>
+						</div>
 					</div>
 
 					<div

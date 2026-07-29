@@ -161,11 +161,15 @@ test('runNodeFromSurface only accepts files tagged as the runs layer', () => {
 });
 
 test('frameFields orders the attested frame and drops empty or duplicated keys', () => {
+	const started = new Date('2026-07-29T15:00:00Z');
+	const ended = new Date('2026-07-29T15:03:00Z');
 	const fields = frameFields({
 		run_id: 'run-1',
 		repo_label: 'Gurio/brr',
 		status: 'done',
 		stage: 'closeout',
+		started_at: started.toISOString(),
+		ended_at: ended.toISOString(),
 		runner_name: 'claude-opus',
 		target_branch: '',
 		pid: '4242',
@@ -174,6 +178,8 @@ test('frameFields orders the attested frame and drops empty or duplicated keys',
 	assert.deepEqual(fields, [
 		{ label: 'status', value: 'done' },
 		{ label: 'stage', value: 'closeout' },
+		{ label: 'started', value: started.toLocaleString() },
+		{ label: 'ended', value: ended.toLocaleString() },
 		{ label: 'runner', value: 'claude-opus' },
 		{ label: 'some_new_key', value: 'kept' }
 	]);
