@@ -272,8 +272,11 @@ def _handle_github_assignment(
     repo_name = str(
         ((payload.get("repository") or {}).get("full_name") or "")
     ).strip()
-    issue = payload.get("issue") or {}
-    issue_number = _coerce_int(issue.get("number"))
+    is_pr = bool(payload.get("pull_request"))
+    item = (
+        payload.get("pull_request") if is_pr else payload.get("issue")
+    ) or {}
+    issue_number = _coerce_int(item.get("number") or payload.get("number"))
     if not repo_name or issue_number is None:
         return
 
@@ -284,14 +287,13 @@ def _handle_github_assignment(
     # only lets a triage-or-higher repo actor assign another user. Judge the
     # assigner, not the issue author — a maintainer must be able to summon the
     # resident on a drive-by report.
-    is_pr = bool(issue.get("pull_request"))
     reply_to: dict[str, Any] = {
         "platform": "github",
         "repo": repo_name,
         "issue_number": issue_number,
         "kind": "pr-assignment" if is_pr else "issue-assignment",
         "author": assigner,
-        "html_url": str(issue.get("html_url") or ""),
+        "html_url": str(item.get("html_url") or ""),
         "trigger": "assignee",
         "assignee": assignee,
     }
@@ -306,8 +308,8 @@ def _handle_github_assignment(
         return
 
     body = gh_parse._format_event_body(
-        str(issue.get("title") or "").strip(),
-        str(issue.get("body") or "").strip(),
+        str(item.get("title") or "").strip(),
+        str(item.get("body") or "").strip(),
     )
     decision = limits.check_event_admission(
         db,
