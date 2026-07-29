@@ -339,14 +339,19 @@ def test_long_poll_wakes_on_enqueue(env):
     acc = _account(client)
     rid = _repo(client, acc)
     dmn = _connect(client, acc, rid)
+    thread_errors = []
 
     def _enqueue_soon():
-        time.sleep(0.05)
-        client.post(
-            "/v1/_dev/enqueue",
-            json={"repo_id": rid, "body": "late"},
-            headers=acc,
-        )
+        try:
+            time.sleep(0.05)
+            response = client.post(
+                "/v1/_dev/enqueue",
+                json={"repo_id": rid, "body": "late"},
+                headers=acc,
+            )
+            response.raise_for_status()
+        except BaseException as exc:
+            thread_errors.append(exc)
 
     t = threading.Thread(target=_enqueue_soon)
     t.start()
@@ -356,6 +361,8 @@ def test_long_poll_wakes_on_enqueue(env):
         ).json()
     finally:
         t.join()
+    if thread_errors:
+        raise thread_errors[0]
     assert [e["body"] for e in result["events"]] == ["late"]
 
 
