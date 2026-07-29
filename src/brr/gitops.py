@@ -667,6 +667,27 @@ def remote_url(repo_root: Path, remote: str) -> str | None:
     return value or None
 
 
+def exclude_from_git(repo_root: Path, pattern: str) -> Path:
+    """Add *pattern* to this checkout's ``.git/info/exclude``.
+
+    Linked worktrees may keep the exclude file outside *repo_root*, so ask
+    git for its path rather than assuming ``.git`` is a directory.
+    """
+    result = _git(repo_root, "rev-parse", "--git-path", "info/exclude")
+    exclude = Path(result.stdout.strip())
+    if not exclude.is_absolute():
+        exclude = (repo_root / exclude).resolve()
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if pattern in {line.strip() for line in current.splitlines()}:
+        return exclude
+    with exclude.open("a", encoding="utf-8") as fh:
+        if current and not current.endswith("\n"):
+            fh.write("\n")
+        fh.write(f"{pattern}\n")
+    return exclude
+
+
 def remote_branch_exists(repo_root: Path, remote: str, branch: str) -> bool:
     """Return True if *branch* exists on *remote* (best-effort, networked).
 

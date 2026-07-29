@@ -34,7 +34,7 @@ RETIRED_COMMANDS = {
 
 #: Verbs listed by ``brnrd --help`` — the user-facing surface.
 PUBLIC_COMMANDS = (
-    "init", "run", "review", "up", "down",
+    "init", "enable", "run", "review", "up", "down",
     "daemon", "gate", "account", "home",
     "kb", "docs", "portal", "runners", "bench", "agent", "ergonomics",
     "completions", "gc",
@@ -97,6 +97,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-i", "--interactive", action="store_true",
                    help="deprecated no-op — the interview is the default")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser(
+        "enable", help="make a project agent-ready and register it locally")
+    p.add_argument(
+        "path", nargs="?", default=".",
+        help="git project to enable (default: current repository)",
+    )
+    p.add_argument(
+        "--borrowed", action="store_true",
+        help="keep every seeded addition local to this checkout",
+    )
+    p.add_argument("--label", default=None, help="household project label")
+    p.set_defaults(func=cmd_enable)
 
     p = sub.add_parser("run", help="run a task through the runner")
     p.add_argument("instruction", help="what to do")
@@ -613,6 +626,29 @@ def _maybe_repo_root() -> Path | None:
 def cmd_init(args):
     from . import adopt
     adopt.init_repo(args.url, interactive=getattr(args, "interactive", False))
+
+
+def cmd_enable(args):
+    from . import enable
+
+    result = enable.enable_project(
+        _repo_root_from_arg(args.path),
+        borrowed=bool(args.borrowed),
+        label=args.label,
+    )
+    agents = (
+        "AGENTS.md created"
+        if result.agents_md == "created"
+        else "AGENTS.md existing"
+    )
+    bridges = ", ".join(result.bridges) if result.bridges else "none needed"
+    print(f"[brnrd] seeded: {agents}; bridges: {bridges}")
+    print(f"[brnrd] mode: {result.seeding}")
+    print(f"[brnrd] registry: {result.registry_path}")
+    print(
+        f"[brnrd] household link: {result.household_link} "
+        f"({result.household_path})"
+    )
 
 
 def cmd_gc(args):
