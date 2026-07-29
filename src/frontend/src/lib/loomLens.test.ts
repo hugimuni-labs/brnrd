@@ -102,9 +102,7 @@ test('a lens matching nothing is not offered', () => {
 
 test('the backchannel lens appears only when something is actually waiting', () => {
 	assert.ok(!availableLenses([row()], 0).some((lens) => lens.id === LENS_BACKCHANNEL));
-	const lens = availableLenses([row()], 3).find(
-		(candidate) => candidate.id === LENS_BACKCHANNEL
-	);
+	const lens = availableLenses([row()], 3).find((candidate) => candidate.id === LENS_BACKCHANNEL);
 	assert.equal(lens?.count, 3);
 	assert.equal(lens?.facet, 'artifact');
 	assert.equal(lens?.label, 'backchannel');

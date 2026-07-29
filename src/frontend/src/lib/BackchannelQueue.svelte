@@ -46,11 +46,12 @@
 	{:else}
 		<ul class="space-y-2">
 			{#each items as item (item.key)}
-				{@const statusColor = stale && item.kind === 'pr'
-					? STALE_COLOR
-					: item.kind === 'pr'
-						? REVIEW_COLOR
-						: ACTION_COLOR}
+				{@const statusColor =
+					stale && item.kind === 'pr'
+						? STALE_COLOR
+						: item.kind === 'pr'
+							? REVIEW_COLOR
+							: ACTION_COLOR}
 				<li
 					class="subpanel px-2.5 py-2 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
