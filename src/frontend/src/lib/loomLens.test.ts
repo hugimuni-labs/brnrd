@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { RelicRecord, RunLedgerRow } from './runLedger.ts';
 import {
 	LENS_ALL,
-	LENS_REVIEW,
+	LENS_BACKCHANNEL,
 	applyLens,
 	availableLenses,
 	lensMatches,
@@ -100,19 +100,20 @@ test('a lens matching nothing is not offered', () => {
 	assert.ok(!ids.includes('stack:worker'));
 });
 
-test('the review lens appears only when something is actually waiting', () => {
-	assert.ok(!availableLenses([row()], 0).some((lens) => lens.id === LENS_REVIEW));
-	const lens = availableLenses([row()], 3).find((candidate) => candidate.id === LENS_REVIEW);
+test('the backchannel lens appears only when something is actually waiting', () => {
+	assert.ok(!availableLenses([row()], 0).some((lens) => lens.id === LENS_BACKCHANNEL));
+	const lens = availableLenses([row()], 3).find((candidate) => candidate.id === LENS_BACKCHANNEL);
 	assert.equal(lens?.count, 3);
 	assert.equal(lens?.facet, 'artifact');
+	assert.equal(lens?.label, 'backchannel');
 });
 
-test('the review lens leaves the shelf whole', () => {
-	// It is a lens over artifact edges, not over runs: an open PR outlives the
-	// run that opened it, so narrowing the spine to "runs whose PR is still
-	// unreviewed" would hide the board to answer a question nobody asked.
+test('the backchannel lens leaves the shelf whole', () => {
+	// It is a lens over artifact edges, not over runs: a PR review or settings
+	// approval outlives the run that opened it, so narrowing the spine would
+	// hide the board to answer a question nobody asked.
 	const rows = [row(), row({ external_refs: [relic('pr')] })];
-	assert.equal(applyLens(rows, LENS_REVIEW).length, 2);
+	assert.equal(applyLens(rows, LENS_BACKCHANNEL).length, 2);
 });
 
 test('chip counts and the filtered shelf are computed by one function', () => {

@@ -2,14 +2,13 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
+	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
-	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import ProduceGauge from '$lib/ProduceGauge.svelte';
-	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
@@ -55,9 +54,10 @@
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import { backchannelCount } from '$lib/backchannel';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
-	import { LENS_ALL, LENS_REVIEW, applyLens } from '$lib/loomLens';
+	import { LENS_ALL, LENS_BACKCHANNEL, applyLens } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
@@ -218,6 +218,7 @@
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
+	let pendingBackchannelCount = $derived(backchannelCount(prReviewQueue, configRequests));
 
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
@@ -705,7 +706,7 @@
 					onSelect={selectFromLoom}
 					onPastWindowChange={changeLoomPastWindow}
 					selectedId={loomSelection?.id ?? null}
-					reviewCount={prReviewQueue?.length ?? 0}
+					backchannelCount={pendingBackchannelCount}
 					lens={loomLens}
 					onLensChange={changeLoomLens}
 					{daemonMood}
@@ -727,8 +728,8 @@
 				     "· receipt" for any closed run, which stopped being true the
 				     moment the node became the single answer. -->
 					<p class="eyebrow">
-						§2a · {loomLens === LENS_REVIEW
-							? 'needs review'
+						§2a · {loomLens === LENS_BACKCHANNEL
+							? 'backchannel'
 							: loomSelection === null
 								? focusRunId === null
 									? 'now'
@@ -756,19 +757,22 @@
 					{/if}
 				</div>
 				<div class="mt-2">
-					{#if loomLens === LENS_REVIEW}
-						<!-- The review lens answers here rather than in a standing section
-					     of its own. §2d used to occupy the page permanently to say
-					     "0 PRs" most of the time; as a lens it is one chip that only
-					     exists when something is actually waiting, and it borrows the
-					     frame the loom already has. Same component, no new fetch. -->
+					{#if loomLens === LENS_BACKCHANNEL}
+						<!-- The resident's ask queue lives here now: review + approval in
+					     one surface, instead of one PR-shaped lens and one separate
+					     settings panel claiming the same job. -->
 						{#if prReviewQueueError}
-							<p class="text-sm text-red-400">{prReviewQueueError}</p>
-						{:else if prReviewQueue === null}
+							<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
+						{/if}
+						{#if configRequestsError}
+							<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
+						{/if}
+						{#if prReviewQueue === null && configRequests === null}
 							<p class="text-sm text-ink-quiet">Loading…</p>
 						{:else}
-							<PRReviewQueue
-								prs={prReviewQueue}
+							<BackchannelQueue
+								prs={prReviewQueue ?? []}
+								requests={configRequests ?? []}
 								stale={prReviewQueueStale}
 								{now}
 								withheld={prReviewQueueWithheld}
@@ -846,7 +850,7 @@
 			     it becomes an instrument holding its own constant under a band
 			     that has already moved, which is precisely the defect #486 fixed
 			     for the time axis. -->
-				{#if loomLens !== LENS_ALL && loomLens !== LENS_REVIEW}
+				{#if loomLens !== LENS_ALL && loomLens !== LENS_BACKCHANNEL}
 					<p class="mt-1 font-mono text-[10px] text-ink-mute">
 						lensed — counting only runs matching the selected lens
 					</p>
@@ -890,30 +894,10 @@
 				</div>
 			</div>
 
-			<div class="ignite" style="--ignite-delay: 1900ms">
-				<p class="eyebrow mt-8">§2c · config-change requests</p>
-				<h2
-					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-					use:typeReveal={{ text: 'pending settings requests', delay: 2050 }}
-				>
-					pending settings requests
-				</h2>
-				<div class="mt-3">
-					{#if configRequestsError}
-						<p class="text-sm text-red-400">{configRequestsError}</p>
-					{:else if configRequests === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else}
-						<ConfigRequests requests={configRequests} {now} />
-					{/if}
-				</div>
-			</div>
-
-			<!-- §2d (the standing PR review queue) retired 2026-07-19: it is a lens
-		     now, rendered in §2a when selected. A panel that reads "no PRs
-		     waiting" for most of a day is a panel spending permanent page space
-		     on an intermittent fact — wyrd §4 band 2 called it a lens over
-		     artifact edges from the start, and this is that. -->
+			<!-- §2c (the standing config-requests panel) retired 2026-07-29. The
+		     page had two separate surfaces for "the resident needs you to do
+		     something": PR review in the lens, settings approvals here. That is
+		     one job, so it now answers as the backchannel lens in §2a. -->
 		</section>
 
 		<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
