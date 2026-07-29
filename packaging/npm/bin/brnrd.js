@@ -278,8 +278,8 @@ async function main() {
   const args = process.argv.slice(2);
   const current = installed();
 
-  // The launcher's version is the contract: `npx brnrd@0.1.0` must give you
-  // brnrd 0.1.0, not whatever happens to be newest on PyPI.
+  // The launcher's version is the contract: a version-pinned `npx brnrd`
+  // must install that same brnrd version, not whatever is newest on PyPI.
   if (!current || !current.includes(VERSION)) {
     if (!await bootstrap()) process.exit(1);
   }
