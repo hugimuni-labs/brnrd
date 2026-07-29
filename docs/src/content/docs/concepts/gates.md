@@ -21,7 +21,7 @@ Slack still binds it to the configured channel.
 | Managed or self-hosted Telegram | The paired user plus explicitly allowlisted user ids. Other group members and unattributed senders are denied. |
 | Self-hosted Slack | Any member of the polled channel. |
 | GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
-| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Assignment to the configured marker account is also a summon; GitHub restricts that action to repository triagers and above. |
+| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Issue or pull-request assignment to the configured marker account is also a summon; GitHub restricts that action to repository triagers and above. |
 
 The operating rules follow from that boundary:
 

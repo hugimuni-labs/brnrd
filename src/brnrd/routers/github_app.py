@@ -165,7 +165,7 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
         except Exception as e:
             print(f"[brnrd] github installation webhook sync failed: {e}")
     elif (
-        x_github_event == "issues"
+        x_github_event in {"issues", "pull_request"}
         and payload.get("action") == "assigned"
         and str(
             ((payload.get("assignee") or {}).get("login") or "")

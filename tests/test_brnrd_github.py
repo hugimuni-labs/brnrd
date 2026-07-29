@@ -260,7 +260,7 @@ def _assignment_payload(
     assigner="alice",
     is_pr=False,
 ):
-    issue = {
+    item = {
         "number": number,
         "title": "Fix the capacity cliff",
         "body": "The long poll owns a worker.",
@@ -269,11 +269,7 @@ def _assignment_payload(
             f"{'pull' if is_pr else 'issues'}/{number}"
         ),
     }
-    if is_pr:
-        issue["pull_request"] = {
-            "url": f"https://api.github.com/repos/{repo}/pulls/{number}",
-        }
-    return {
+    payload = {
         "action": "assigned",
         "installation": {"id": 42},
         "repository": {
@@ -281,10 +277,15 @@ def _assignment_payload(
             "name": repo.rsplit("/", 1)[-1],
             "full_name": repo,
         },
-        "issue": issue,
         "assignee": {"login": assignee},
         "sender": {"login": assigner, "type": "User"},
     }
+    if is_pr:
+        payload["number"] = number
+        payload["pull_request"] = item
+    else:
+        payload["issue"] = item
+    return payload
 
 
 def test_repo_create_list_is_idempotent(env):
@@ -494,6 +495,47 @@ def test_app_assignment_ignores_a_different_assignee(env, monkeypatch):
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
     assert minted == []
+
+
+def test_app_pull_request_assignment_uses_pull_request_event(env, monkeypatch):
+    _app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    response = _github_app_post(
+        client,
+        _assignment_payload(is_pr=True),
+        event="pull_request",
+    )
+    assert response.status_code == 200, response.text
+
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"] == {
+        "platform": "github",
+        "repo": "owner/repo",
+        "issue_number": 17,
+        "kind": "pr-assignment",
+        "author": "alice",
+        "html_url": "https://github.com/owner/repo/pull/17",
+        "trigger": "assignee",
+        "assignee": "brr-bot",
+        "installation_id": "42",
+        "pr_number": 17,
+        "branch_target": "feature-x",
+    }
 
 
 def test_app_assignment_token_failure_asks_github_to_retry(env, monkeypatch):
