@@ -487,6 +487,37 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
     assert "provider down" in r.text
 
 
+def test_github_callback_discovers_only_the_authenticated_users_installations(
+    monkeypatch,
+):
+    client = _make_client(
+        github_app_id="123",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.web_auth.sync_app_installations_for_account",
+        lambda db, settings, account_id, *, user_access_token=None: synced.append(
+            (account_id, user_access_token)
+        ),
+    )
+
+    _start, callback, _seen = _login_web(
+        client,
+        monkeypatch,
+        identity=GitHubIdentity(
+            github_id=_GITHUB_ID,
+            login=_LOGIN,
+            email=_EMAIL,
+            access_token="ghu_login",
+        ),
+    )
+
+    assert callback.status_code == 303
+    assert len(synced) == 1
+    assert synced[0][1] == "ghu_login"
+
+
 def test_connect_page_is_spa_owned(client):
     # #847: same as /login — the 308 shim is gone and its absence is the
     # guard. The device-flow JSON lives under /v1/connect/{code}, which stays
