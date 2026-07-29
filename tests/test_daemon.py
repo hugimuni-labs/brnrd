@@ -6213,6 +6213,8 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
             "runner_name": "codex",
             "reply_archive": "archived",
             "terminal_route": "gate-sole",
+            "started_at": "2026-07-29T15:00:00Z",
+            "ended_at": "2026-07-29T15:03:00Z",
         },
     )
 
@@ -6227,6 +6229,8 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "run_id: run-state" in text
     assert "repo_label: Gurio/brr" in text
+    assert "started_at: 2026-07-29T15:00:00Z" in text
+    assert "ended_at: 2026-07-29T15:03:00Z" in text
     assert "runner_name: codex" in text
     assert "reply_archive: archived" in text
     # #743: which channel carried the terminal stream reaches the run node,
@@ -6240,6 +6244,37 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     # remote on the dominion there is no web URL to surface yet.
     assert task.meta["run_state_path"] == str(path)
     assert "run_state_url" not in task.meta
+
+
+def test_account_run_state_doc_does_not_invent_clock_readings(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    task = Run(
+        id="run-not-started",
+        event_id="evt-not-started",
+        body="duplicate delivery",
+        source="telegram",
+        status="done",
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx,
+        task,
+        repo_label="Gurio/brr",
+        stage="deduplicated",
+    )
+
+    fields = protocol.parse_frontmatter(path.read_text(encoding="utf-8"))
+    assert "started_at" not in fields
+    assert "ended_at" not in fields
 
 
 def test_dispatch_edge_is_recorded_on_both_run_nodes(tmp_path):

@@ -8491,6 +8491,15 @@ def _persist_run_state_doc(
         f"repo_label: {repo_label}",
         f"source: {task.source}",
     ]
+    # The ledger owns both clock readings: ``mark_run_started`` records the
+    # start, and ``append_closed_run`` records the end before the finished
+    # frame is persisted. Carry only those attested values here. In
+    # particular, a deduplicated or trust-refused run never reaches
+    # ``mark_run_started`` and must not acquire a fabricated start time.
+    for key in ("started_at", "ended_at"):
+        value = task.meta.get(key)
+        if value not in (None, ""):
+            lines.append(f"{key}: {value}")
     if task.conversation_key:
         lines.append(f"conversation_key: {task.conversation_key}")
     # Dispatch edge, child half (wyrd §1): who dispatched this run. `source`

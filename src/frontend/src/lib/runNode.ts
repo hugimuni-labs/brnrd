@@ -174,6 +174,8 @@ export function runNodeFromSurface(
 export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 	{ key: 'status', label: 'status' },
 	{ key: 'stage', label: 'stage' },
+	{ key: 'started_at', label: 'started' },
+	{ key: 'ended_at', label: 'ended' },
 	{ key: 'source', label: 'source' },
 	{ key: 'runner_name', label: 'runner' },
 	{ key: 'runner_shell', label: 'shell' },
@@ -204,6 +206,12 @@ export interface FrameField {
 	value: string;
 }
 
+function frameValue(key: string, value: string): string {
+	if (key !== 'started_at' && key !== 'ended_at') return value;
+	const timestamp = Date.parse(value);
+	return Number.isNaN(timestamp) ? value : new Date(timestamp).toLocaleString();
+}
+
 /** Ordered, non-empty frame fields; unknown keys keep their raw name, last. */
 export function frameFields(metadata: Record<string, string>): FrameField[] {
 	const fields: FrameField[] = [];
@@ -211,7 +219,7 @@ export function frameFields(metadata: Record<string, string>): FrameField[] {
 	for (const { key, label } of FRAME_FIELDS) {
 		seen.add(key);
 		const value = metadata[key];
-		if (value) fields.push({ label, value });
+		if (value) fields.push({ label, value: frameValue(key, value) });
 	}
 	for (const [key, value] of Object.entries(metadata)) {
 		if (!seen.has(key) && value) fields.push({ label: key, value });
