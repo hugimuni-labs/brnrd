@@ -23,13 +23,14 @@ export interface ProduceGaugeSummary {
 	weeklyQuota: ShellQuotaSpend[];
 	usdSubscriptionAttributed: number | null;
 	prs: number;
+	mergedPrs: number;
 	commits: number;
 	kbPages: number;
 	replies: number;
 }
 
 export interface ProduceGaugeLink {
-	kind: 'pr' | 'commit' | 'kb' | 'reply';
+	kind: 'pr' | 'merge' | 'commit' | 'kb' | 'reply';
 	label: string;
 	url: string;
 }
@@ -62,6 +63,8 @@ function produceLinkLabel(relic: RelicRecord): string {
 	switch (relic.kind) {
 		case 'pr':
 			return `PR #${relic.number ?? '?'}`;
+		case 'merge':
+			return relic.pr ? `merged PR #${relic.pr}` : 'merge';
 		case 'commit':
 			return `${String(relic.sha ?? '').slice(0, 7)} ${relic.subject ?? ''}`.trim() || 'commit';
 		case 'kb':
@@ -95,6 +98,7 @@ export function rollupProduceGauge(
 	}
 
 	const prNumbers = new Set<string>();
+	const mergedPrNumbers = new Set<string>();
 	let commits = 0;
 	let kbPages = 0;
 	let replies = 0;
@@ -107,6 +111,9 @@ export function rollupProduceGauge(
 			if (kind === 'pr' && relic.number !== null && relic.number !== undefined) {
 				const number = String(relic.number).trim();
 				if (number) prNumbers.add(`${repo}#${number}`);
+			} else if (kind === 'merge' && relic.pr !== null && relic.pr !== undefined) {
+				const number = String(relic.pr).trim();
+				if (number) mergedPrNumbers.add(`${repo}#${number}`);
 			} else if (kind === 'commit') {
 				commits += 1;
 			} else if (kind === 'kb' || kind === 'kb_page') {
@@ -127,6 +134,7 @@ export function rollupProduceGauge(
 			.sort((a, b) => a.shell.localeCompare(b.shell)),
 		usdSubscriptionAttributed: sumPresent(recent, 'usd_subscription_attributed'),
 		prs: prNumbers.size,
+		mergedPrs: mergedPrNumbers.size,
 		commits,
 		kbPages,
 		replies
@@ -148,7 +156,7 @@ export function produceGaugeLinks(
 			if (relic === null || typeof relic !== 'object') continue;
 			const rawKind = String(relic.kind ?? '').toLowerCase();
 			const kind = rawKind === 'kb_page' ? 'kb' : rawKind;
-			if (!['pr', 'commit', 'kb', 'reply'].includes(kind)) continue;
+			if (!['pr', 'merge', 'commit', 'kb', 'reply'].includes(kind)) continue;
 			const url = String(relic.url ?? '').trim();
 			if (!url || seen.has(url)) continue;
 			try {

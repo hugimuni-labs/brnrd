@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from urllib.parse import urlencode
 
 import httpx
@@ -27,6 +27,11 @@ class GitHubIdentity:
     github_id: str
     login: str
     email: str | None = None
+    # Kept only for the callback request so installation discovery can use
+    # GitHub's user-scoped view.  Account records never persist this token.
+    access_token: str | None = dataclass_field(
+        default=None, repr=False, compare=False
+    )
 
 
 def _b64url(raw: bytes) -> str:
@@ -146,7 +151,12 @@ def fetch_identity(settings: Settings, token: str) -> GitHubIdentity:
     else:
         email = _primary_verified_email(_fetch_json(settings, token, "/user/emails"))
 
-    return GitHubIdentity(github_id=str(github_id), login=str(login), email=email)
+    return GitHubIdentity(
+        github_id=str(github_id),
+        login=str(login),
+        email=email,
+        access_token=token,
+    )
 
 
 def resolve_identity(

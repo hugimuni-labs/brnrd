@@ -18,6 +18,7 @@ from brnrd import create_app, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.platforms import github_app as github_app_platform  # noqa: E402
+from brnrd.routers import github_app as github_app_router  # noqa: E402
 from brnrd.routers import webhooks as webhook_routes  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -305,6 +306,14 @@ def _review_request_payload(
     return payload
 
 
+def _label_payload(*, label="brnrd", is_pr=False):
+    payload = _assignment_payload(is_pr=is_pr)
+    payload["action"] = "labeled"
+    payload.pop("assignee")
+    payload["label"] = {"name": label}
+    return payload
+
+
 def test_repo_create_list_is_idempotent(env):
     _, client, _ = env
     acc = _account(client)
@@ -401,6 +410,58 @@ def test_bound_pr_comment_enqueues_and_response_posts_back(env):
     assert posts[0]["body"].endswith("fixed on the branch")
 
 
+def test_app_webhook_routes_issue_mentions_through_the_same_ingress(
+    env,
+    monkeypatch,
+):
+    app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    response = _github_app_post(
+        client,
+        _payload(body="@brr-bot do the thing"),
+        event="issue_comment",
+    )
+
+    assert response.status_code == 200, response.text
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    assert drained["events"][0]["reply_to"]["installation_id"] == "42"
+    assert drained["events"][0]["reply_to"]["mention"] == "@brr-bot"
+
+
+def test_legacy_webhook_routes_assignment_through_the_same_ingress(env):
+    _app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    response = _github_post(
+        client,
+        _assignment_payload(),
+        event="issues",
+    )
+
+    assert response.status_code == 200, response.text
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    assert drained["events"][0]["reply_to"]["kind"] == "issue-assignment"
+
+
 def test_app_assignment_enqueues_and_replies_as_installation_bot(
     env,
     monkeypatch,
@@ -489,6 +550,69 @@ def test_app_assignment_enqueues_and_replies_as_installation_bot(
             ),
         },
     ]
+
+
+def test_app_label_is_the_universal_assignment_without_a_bot_collaborator(
+    env,
+    monkeypatch,
+):
+    _app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    response = _github_app_post(
+        client,
+        _label_payload(),
+        event="issues",
+    )
+
+    assert response.status_code == 200, response.text
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "issue-label"
+    assert event["reply_to"]["label"] == "brnrd"
+
+
+def test_app_label_summons_on_pull_requests_too(env, monkeypatch):
+    _app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    response = _github_app_post(
+        client,
+        _label_payload(is_pr=True),
+        event="pull_request",
+    )
+
+    assert response.status_code == 200, response.text
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "pr-label"
+    assert event["reply_to"]["label"] == "brnrd"
 
 
 def test_app_assignment_ignores_a_different_assignee(env, monkeypatch):
@@ -633,6 +757,18 @@ def test_app_pull_request_review_request_summons_and_replies(env, monkeypatch):
             _review_request_payload(),
             True,
             id="pull-request-review-request",
+        ),
+        pytest.param(
+            "issues",
+            _label_payload(),
+            True,
+            id="issue-label",
+        ),
+        pytest.param(
+            "issues",
+            _label_payload(label="someone-else"),
+            False,
+            id="different-label",
         ),
         pytest.param(
             "pull_request",
@@ -1015,7 +1151,20 @@ def test_sync_installation_prunes_rows_dropped_from_listing(env, monkeypatch):
     monkeypatch.setattr(
         github_app_router.gh_app,
         "list_installation_repositories",
-        lambda settings, installation_id: listings.pop(0),
+        lambda settings, installation_id, **_kwargs: listings.pop(0),
+    )
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "installation_access_token",
+        lambda *_args: "ghs_installation",
+    )
+    labels = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "ensure_repository_label",
+        lambda _settings, token, repo, label: labels.append(
+            (token, repo, label)
+        ),
     )
 
     with app.state.SessionLocal() as db:
@@ -1049,6 +1198,11 @@ def test_sync_installation_prunes_rows_dropped_from_listing(env, monkeypatch):
             for row in db.execute(select(GitHubInstalledRepo)).scalars()
         }
         assert "other/kept-elsewhere" in all_names
+    assert labels == [
+        ("ghs_installation", "owner/kept", "brnrd"),
+        ("ghs_installation", "owner/dropped", "brnrd"),
+        ("ghs_installation", "owner/kept", "brnrd"),
+    ]
 
 
 # ── the GitHub App router's own webhook and session surface ─────────
@@ -1229,7 +1383,10 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     synced = []
     monkeypatch.setattr(
         "brnrd.routers.github_app.sync_app_installations_for_account",
-        lambda *a, **k: synced.append(a) or 1,
+        lambda *a, **k: (
+            synced.append(a)
+            or github_app_router.InstallationSyncResult(synced=1)
+        ),
     )
     app, client, _acc, account_id = _session_cookie_client(monkeypatch)
 
@@ -1246,6 +1403,172 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     assert r.status_code == 303
     assert r.headers["location"] == "/login?next=/", "expired cookie still authenticated"
     assert len(synced) == 1, "sync ran for an expired session"
+
+
+def test_github_sync_does_not_attach_another_users_installation(monkeypatch):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_user_installations",
+        lambda _settings, _token: [
+            {"id": 41, "account": {"login": "someone-else", "type": "User"}},
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db,
+            app.state.settings,
+            account_id,
+            user_access_token="ghu_login",
+        )
+
+    assert attached == []
+    assert result.synced == 0
+    assert result.skipped == 1
+
+
+def test_github_sync_attaches_personal_installation_owned_by_account(monkeypatch):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_user_installations",
+        lambda _settings, _token: [
+            {"id": 42, "account": {"login": "octocat", "type": "User"}}
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db,
+            app.state.settings,
+            account_id,
+            user_access_token="ghu_login",
+        )
+
+    assert attached == [("42", account_id)]
+    assert result.synced == 1
+    assert result.skipped == 0
+
+
+def test_github_sync_keeps_organization_installations_the_user_can_access(
+    monkeypatch,
+):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_user_installations",
+        lambda _settings, _token: [
+            {
+                "id": 43,
+                "account": {
+                    "login": "hugimuni-labs",
+                    "type": "Organization",
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "organization_membership",
+        lambda _settings, installation_id, org, username: {
+            "state": "active",
+            "role": "admin",
+        }
+        if (installation_id, org, username)
+        == ("43", "hugimuni-labs", "octocat")
+        else None,
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db,
+            app.state.settings,
+            account_id,
+            user_access_token="ghu_login",
+        )
+
+    assert attached == [("43", account_id)]
+    assert result.synced == 1
+    assert result.skipped == 0
+
+
+def test_github_sync_refuses_organization_installation_for_non_owner(
+    monkeypatch,
+):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_user_installations",
+        lambda _settings, _token: [
+            {
+                "id": 43,
+                "account": {
+                    "login": "hugimuni-labs",
+                    "type": "Organization",
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "organization_membership",
+        lambda *_args: {"state": "active", "role": "member"},
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda *args, **kwargs: attached.append((args, kwargs)),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db,
+            app.state.settings,
+            account_id,
+            user_access_token="ghu_login",
+        )
+
+    assert attached == []
+    assert result == github_app_router.InstallationSyncResult(skipped=1)
+
+
+def test_github_sync_notice_refuses_all_skipped_installations(monkeypatch):
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installations_for_account",
+        lambda *args: github_app_router.InstallationSyncResult(skipped=1),
+    )
+
+    response = client.post("/api/github/sync", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?notice=github-sync-refused"
 
 
 def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
@@ -1265,6 +1588,38 @@ def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkey
 
     assert r.status_code == 303
     assert seen == [None], "an expired cookie attributed the installation to its account"
+
+
+def test_github_setup_refuses_an_unproven_installation(
+    monkeypatch,
+):
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "get_app_installation",
+        lambda _settings, _installation_id: {
+            "id": 42,
+            "account": {"login": "someone-else", "type": "User"},
+        },
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    response = client.get(
+        "/api/github/setup",
+        params={"installation_id": "42"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("notice=github-sync-refused")
+    assert attached == []
 
 
 def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):
