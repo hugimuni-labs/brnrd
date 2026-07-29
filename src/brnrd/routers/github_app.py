@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .. import ids
+from .. import github_summons, ids
 from ..auth import account_id_from_session_cookie, get_db
 from ..models import GitHubInstallation, GitHubInstalledRepo
 from ..platforms import github_app as gh_app
@@ -164,13 +164,11 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                 sync_installation(db, settings, installation_id)
         except Exception as e:
             print(f"[brnrd] github installation webhook sync failed: {e}")
-    elif (
-        x_github_event in {"issues", "pull_request"}
-        and payload.get("action") == "assigned"
-        and str(
-            ((payload.get("assignee") or {}).get("login") or "")
-        ).casefold() == settings.github_bot_login.casefold()
-    ):
+    elif github_summons.resolve_github_summons(
+        x_github_event,
+        payload,
+        settings.github_bot_login,
+    ) is not None:
         installation_id = str(
             ((payload or {}).get("installation") or {}).get("id") or ""
         )
@@ -190,9 +188,10 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                 token = credential["token"]
                 from . import webhooks
 
-                webhooks._handle_github_assignment(
+                webhooks._handle_github_summons(
                     db,
                     settings,
+                    x_github_event,
                     payload,
                     token=token,
                     installation_id=installation_id,
