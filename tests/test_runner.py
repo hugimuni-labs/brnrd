@@ -1021,6 +1021,13 @@ class TestCommandBuilding:
             # installs for the `hooks: claude` profile.
             "--setting-sources",
             "local",
+            # The MCP stance rides its own flag, not the settings flag (#853).
+            # --setting-sources local happens to exclude user- and
+            # project-scope MCP servers too; leaving the stance to that side
+            # effect meant any future edit to settings isolation would move
+            # it silently. --strict-mcp-config states it, and --mcp-config
+            # stays available as the opt-in lever without reopening settings.
+            "--strict-mcp-config",
             "--system-prompt",
             _RUNNER_BASE,
         ]
