@@ -1,6 +1,9 @@
 """Tests for CLI dispatch."""
 
 import json
+import os
+from pathlib import Path
+import subprocess
 import sys
 import types
 
@@ -9,6 +12,9 @@ import pytest
 from brr.cli import main
 
 from _helpers import init_git_repo
+
+
+REPO = Path(__file__).parents[1]
 
 
 def _write_review_pack(path):
@@ -471,6 +477,60 @@ def test_account_disconnect_removes_gate_state_but_keeps_the_home(
     assert (account_root / "repos.json").exists()
     assert not cloud.is_configured(repo / ".brr")
     assert "Disconnected this daemon" in capsys.readouterr().out
+
+
+def test_account_connect_refused_connection_exits_with_recovery_not_traceback(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    env = {
+        **os.environ,
+        "BRNRD_URL": "http://127.0.0.1:9",
+        "PYTHONPATH": str(REPO / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "brr", "account", "connect"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "account service at http://127.0.0.1:9 is unreachable" in output
+    assert "Check the URL and network connection" in output
+    assert "re-run `brnrd account connect`" in output
+    assert "Traceback" not in output
+
+
+def test_account_connect_pairing_timeout_exits_with_approval_recovery(
+    tmp_path, monkeypatch,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    from brr.gates import cloud
+
+    replies = iter([
+        {"pair_code": "BR-TEST", "pair_url": "https://pair", "poll_secret": "secret"},
+        {"status": "pending"},
+    ])
+    ticks = iter([0.0, 601.0])
+    monkeypatch.setattr(cloud, "_request", lambda *_args, **_kwargs: next(replies))
+    monkeypatch.setattr(cloud.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["account", "connect", "https://brnrd.example"])
+
+    assert excinfo.value.code != 0
+    message = str(excinfo.value)
+    assert "pairing was not approved" in message
+    assert "Approve the pairing link" in message
+    assert "re-run `brnrd account connect`" in message
 
 
 def test_home_link_yes_asks_nothing(monkeypatch, tmp_path, capsys):
