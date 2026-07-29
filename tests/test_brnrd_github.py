@@ -199,7 +199,11 @@ def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
     return {
         "action": action,
         "installation": {"id": installation_id},
-        "repository": {"full_name": repo},
+        "repository": {
+            "id": 8675309,
+            "name": repo.rsplit("/", 1)[-1],
+            "full_name": repo,
+        },
         "issue": issue,
         "comment": {
             "id": comment_id,
@@ -228,6 +232,59 @@ def _github_post(client, payload, *, event="issue_comment", secret=_SECRET):
             "X-Hub-Signature-256": sig,
         },
     )
+
+
+def _github_app_post(client, payload, *, event, secret=_SECRET):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = "sha256=" + hmac.new(
+        secret.encode("utf-8"),
+        raw,
+        hashlib.sha256,
+    ).hexdigest()
+    return client.post(
+        "/api/github/webhook",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": event,
+            "X-Hub-Signature-256": sig,
+        },
+    )
+
+
+def _assignment_payload(
+    *,
+    repo="owner/repo",
+    number=17,
+    assignee="brr-bot",
+    assigner="alice",
+    is_pr=False,
+):
+    issue = {
+        "number": number,
+        "title": "Fix the capacity cliff",
+        "body": "The long poll owns a worker.",
+        "html_url": (
+            f"https://github.com/{repo}/"
+            f"{'pull' if is_pr else 'issues'}/{number}"
+        ),
+    }
+    if is_pr:
+        issue["pull_request"] = {
+            "url": f"https://api.github.com/repos/{repo}/pulls/{number}",
+        }
+    return {
+        "action": "assigned",
+        "installation": {"id": 42},
+        "repository": {
+            "id": 8675309,
+            "name": repo.rsplit("/", 1)[-1],
+            "full_name": repo,
+        },
+        "issue": issue,
+        "assignee": {"login": assignee},
+        "sender": {"login": assigner, "type": "User"},
+    }
 
 
 def test_repo_create_list_is_idempotent(env):
@@ -324,6 +381,144 @@ def test_bound_pr_comment_enqueues_and_response_posts_back(env):
         "(https://github.com/owner/repo/pull/17#issuecomment-100)"
     )
     assert posts[0]["body"].endswith("fixed on the branch")
+
+
+def test_app_assignment_enqueues_and_replies_as_installation_bot(
+    env,
+    monkeypatch,
+):
+    app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    minted = []
+
+    def mint(_settings, installation_id, **scope):
+        minted.append((installation_id, scope))
+        return {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        mint,
+    )
+
+    response = _github_app_post(
+        client,
+        _assignment_payload(),
+        event="issues",
+    )
+    assert response.status_code == 200, response.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=dmn,
+    ).json()
+    event = drained["events"][0]
+    assert event["body"] == (
+        "# Fix the capacity cliff\n\nThe long poll owns a worker.\n"
+    )
+    assert event["reply_to"] == {
+        "platform": "github",
+        "repo": "owner/repo",
+        "issue_number": 17,
+        "kind": "issue-assignment",
+        "author": "alice",
+        "html_url": "https://github.com/owner/repo/issues/17",
+        "trigger": "assignee",
+        "assignee": "brr-bot",
+        "installation_id": "42",
+    }
+
+    posted = client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event["event_id"],
+            "body_markdown": "fixed on the branch",
+            "status": "done",
+        },
+        headers=dmn,
+    )
+    assert posted.status_code == 200, posted.text
+    assert minted == [
+        (
+            "42",
+            {
+                "repository_ids": [8675309],
+                "repositories": None,
+            },
+        ),
+        (
+            "42",
+            {
+                "repositories": ["repo"],
+            },
+        ),
+    ]
+    assert posts == [
+        {
+            "token": "ghs_installation",
+            "repo": "owner/repo",
+            "issue_number": 17,
+            "body": (
+                "> Work assigned by [@alice]"
+                "(https://github.com/owner/repo/issues/17)\n\n"
+                "fixed on the branch"
+            ),
+        },
+    ]
+
+
+def test_app_assignment_ignores_a_different_assignee(env, monkeypatch):
+    app, client, _posts = env
+    acc = _account(client)
+    _repo(client, acc)
+    minted = []
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: minted.append(True),
+    )
+
+    response = _github_app_post(
+        client,
+        _assignment_payload(assignee="someone-else"),
+        event="issues",
+    )
+    assert response.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert minted == []
+
+
+def test_app_assignment_token_failure_asks_github_to_retry(env, monkeypatch):
+    app, client, _posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("temporary mint failure")
+
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        fail,
+    )
+
+    response = _github_app_post(
+        client,
+        _assignment_payload(),
+        event="issues",
+    )
+    assert response.status_code == 502
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
 
 
 def test_github_webhook_ignores_unaddressed_comments(env):
