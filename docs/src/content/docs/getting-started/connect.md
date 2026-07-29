@@ -10,15 +10,18 @@ Pick one door. Both routes run the agent on your machine.
 From the repository you want the resident to know:
 
 ```bash
-brnrd account connect       # pair this machine with brnrd.dev
-brnrd account add .         # add the current repo
-brnrd daemon install        # install and start the user service
+brnrd account connect       # pair, install, and start
 ```
 
 The managed connection relays messages and status between brnrd.dev and your
 daemon. It does not move run execution to hosted compute. See
 [Security & privacy](../../security/) for the derived-knowledge mirror used by
 the dashboard.
+
+The command installs a systemd user service on Linux or a LaunchAgent on macOS
+and starts it immediately. Use `--no-service` when you want to keep the daemon
+in a foreground terminal instead. Add further repositories to the same account
+later with `brnrd account add <path>`.
 
 ## Self-hosted: bring your own gate
 

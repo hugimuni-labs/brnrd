@@ -185,6 +185,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="brnrd base URL (same as positional URL)")
     p.add_argument("--daemon-name", default=None,
                    help="name to register this daemon under (default: hostname)")
+    p.add_argument(
+        "--no-service",
+        action="store_true",
+        help="pair only; do not install or start the systemd/launchd service",
+    )
+    linger = p.add_mutually_exclusive_group()
+    linger.add_argument(
+        "--yes-linger",
+        action="store_true",
+        help="linux: enable systemd linger without prompting",
+    )
+    linger.add_argument(
+        "--no-linger",
+        action="store_true",
+        help="linux: skip the linger prompt",
+    )
     p.set_defaults(func=cmd_brnrd_connect)
 
     p = account_sub.add_parser(
@@ -2368,7 +2384,21 @@ def cmd_brnrd_connect(args):
         cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     except (cloud.CloudUnavailableError, TimeoutError) as exc:
         raise SystemExit(f"[brnrd] {exc}") from None
-    print("[brnrd] Start the daemon with `brnrd up` to begin draining the brnrd inbox.")
+    if args.no_service:
+        print(
+            "[brnrd] Paired without a background service. "
+            "Run `brnrd up --foreground` to begin draining the brnrd inbox."
+        )
+        return
+
+    from . import daemon_install
+
+    daemon_install.install(
+        no_start=False,
+        prompt_linger=not args.no_linger,
+        assume_yes_linger=args.yes_linger,
+    )
+    print("[brnrd] Connected and listening in the background.")
 
 
 def cmd_brnrd_disconnect(args):
