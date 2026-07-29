@@ -6,7 +6,11 @@ description = "Structured guardrails for AI agent work, managed from a chat"
 authors = [ { name = "HugiMuni" } ]
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.31,<3", "packaging>=23"]
+dependencies = [
+  "requests>=2.31,<3",
+  "packaging>=23",
+  "tomli; python_version < '3.11'",
+]
 license = "MIT AND AGPL-3.0-only"
 license-files = [
   "LICENSE",

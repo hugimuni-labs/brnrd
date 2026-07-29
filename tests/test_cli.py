@@ -972,7 +972,8 @@ def test_help_stays_small_enough_to_read():
     # arguing that it earns one of these slots.
     from brr.cli import PUBLIC_COMMANDS
 
-    assert len(PUBLIC_COMMANDS) <= 18
+    # `enable` earns the nineteenth slot as the tier-1 adoption verb.
+    assert len(PUBLIC_COMMANDS) <= 19
 
 
 def test_hidden_commands_parse_but_are_not_listed():
