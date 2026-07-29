@@ -79,6 +79,14 @@
 		>
 			a resident, not a chatbot
 		</h1>
+		<!-- The bodies belong on the fold, not in paragraph two (2026-07-29):
+		     "does it drive the thing I already pay for" is a one-glance
+		     question, and making a visitor read for it loses the ones who
+		     don't. Named CLIs only — "more to come" is a roadmap, not a
+		     claim, so it must never read as a list of what works today. -->
+		<p class="mt-2 font-mono text-[13px] leading-relaxed text-amber-200/80">
+			runs on Claude Code and Codex — more to come
+		</p>
 		<p class="mt-4 text-sm leading-relaxed text-stone-400">
 			brnrd runs resident coding agents that live with your repositories. Work arrives from GitHub
 			issues, review requests, and Telegram messages; a daemon on your own machine turns it into
@@ -87,8 +95,8 @@
 			better at your project instead of starting over.
 		</p>
 		<p class="mt-3 text-sm leading-relaxed text-stone-400">
-			Your models, your keys, your hardware. brnrd drives the coding CLIs you already subscribe to —
-			Claude Code, Codex, and friends — and paces itself against your quotas.
+			Your models, your keys, your hardware. brnrd drives the coding CLIs you already subscribe to,
+			and paces itself against your quotas.
 		</p>
 	</section>
 
