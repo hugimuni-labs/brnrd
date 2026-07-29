@@ -18,6 +18,7 @@ from brnrd import create_app, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.platforms import github_app as github_app_platform  # noqa: E402
+from brnrd.routers import github_app as github_app_router  # noqa: E402
 from brnrd.routers import webhooks as webhook_routes  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -1229,7 +1230,10 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     synced = []
     monkeypatch.setattr(
         "brnrd.routers.github_app.sync_app_installations_for_account",
-        lambda *a, **k: synced.append(a) or 1,
+        lambda *a, **k: (
+            synced.append(a)
+            or github_app_router.InstallationSyncResult(synced=1)
+        ),
     )
     app, client, _acc, account_id = _session_cookie_client(monkeypatch)
 
@@ -1246,6 +1250,106 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     assert r.status_code == 303
     assert r.headers["location"] == "/login?next=/", "expired cookie still authenticated"
     assert len(synced) == 1, "sync ran for an expired session"
+
+
+def test_github_sync_does_not_attach_another_accounts_installation(monkeypatch):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_app_installations",
+        lambda _settings: [
+            {"id": 41, "account": {"login": "someone-else", "type": "User"}},
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db, app.state.settings, account_id
+        )
+
+    assert attached == []
+    assert result.synced == 0
+    assert result.skipped == 1
+
+
+def test_github_sync_attaches_installation_owned_by_account(monkeypatch):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_app_installations",
+        lambda _settings: [
+            {"id": 42, "account": {"login": "octocat", "type": "User"}},
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db, app.state.settings, account_id
+        )
+
+    assert attached == [("42", account_id)]
+    assert result.synced == 1
+    assert result.skipped == 0
+
+
+def test_github_sync_mixed_listing_reports_refusal(monkeypatch, caplog):
+    app, _client, _acc, account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_app_installations",
+        lambda _settings: [
+            {"id": 42, "account": {"login": "OCTOCAT", "type": "User"}},
+            {"id": 43, "account": {"login": "someone-else", "type": "User"}},
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    with app.state.SessionLocal() as db:
+        result = github_app_router.sync_app_installations_for_account(
+            db, app.state.settings, account_id
+        )
+
+    assert attached == [("42", account_id)]
+    assert result.synced == 1
+    assert result.skipped == 1
+    assert github_app_router.github_sync_notice(result) == "github-sync-partial"
+    assert "refused GitHub App installation 43" in caplog.text
+
+
+def test_github_sync_notice_refuses_all_skipped_installations(monkeypatch):
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installations_for_account",
+        lambda *args: github_app_router.InstallationSyncResult(skipped=1),
+    )
+
+    response = client.post("/api/github/sync", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?notice=github-sync-refused"
 
 
 def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
@@ -1265,6 +1369,35 @@ def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkey
 
     assert r.status_code == 303
     assert seen == [None], "an expired cookie attributed the installation to its account"
+
+
+def test_github_setup_refuses_installation_owned_by_another_account(monkeypatch):
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+    attached = []
+    monkeypatch.setattr(
+        github_app_router.gh_app,
+        "list_app_installations",
+        lambda _settings: [
+            {"id": 42, "account": {"login": "someone-else", "type": "User"}},
+        ],
+    )
+    monkeypatch.setattr(
+        github_app_router,
+        "sync_installation",
+        lambda db, settings, installation_id, account_id=None: attached.append(
+            (installation_id, account_id)
+        ),
+    )
+
+    response = client.get(
+        "/api/github/setup",
+        params={"installation_id": "42"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("notice=github-sync-refused")
+    assert attached == []
 
 
 def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):
