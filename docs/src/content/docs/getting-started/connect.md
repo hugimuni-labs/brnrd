@@ -18,6 +18,12 @@ daemon. It does not move run execution to hosted compute. See
 [Security & privacy](../../security/) for the derived-knowledge mirror used by
 the dashboard.
 
+GitHub organization installations are supported. A personal installation is
+bound only when its target matches the signed-in GitHub login; an organization
+installation is bound only after the App verifies that login as an active
+organization owner. The ownership check uses the installation's short-lived
+token and the App's Members-read permission—no user OAuth token is persisted.
+
 The command installs a systemd user service on Linux or a LaunchAgent on macOS
 and starts it immediately. Use `--no-service` when you want to keep the daemon
 in a foreground terminal instead. Add further repositories to the same account

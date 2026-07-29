@@ -94,6 +94,7 @@ def test_fetch_identity_uses_primary_verified_email(monkeypatch):
     assert identity == oauth.GitHubIdentity(
         github_id="123", login="octocat", email="octo@example.com"
     )
+    assert identity.access_token == "ghu_token"
     assert [call[0] for call in calls] == [
         "https://api.github.example/user",
         "https://api.github.example/user/emails",
