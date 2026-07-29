@@ -30,16 +30,16 @@ project home.
 
 ## Account Lane
 
-For multi-repo routing through brnrd service, connect once and add repos:
+For multi-repo routing through brnrd service, connect once:
 
 ```bash
 brnrd account connect https://brnrd.dev
-brnrd account add .
-brnrd up
 ```
 
 `brnrd account connect` persists the connected `account_id` in the repo's cloud gate
-state. `brnrd account add <repo>` registers the target repo in:
+state, installs the native systemd/launchd user service, and starts it. Use
+`--no-service` for a foreground-only setup. `brnrd account add <repo>` adds
+another repo to the same account by registering it in:
 
 ```text
 $XDG_STATE_HOME/brnrd/accounts/<account-id>/home/account/repos.json
