@@ -41,13 +41,18 @@ def _repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _fake_result(invocation, returncode=0, stdout="done — receipt"):
+def _fake_result(
+    invocation,
+    returncode=0,
+    stdout="done — receipt",
+    stderr="",
+):
     return RunnerResult(
         invocation=invocation,
         runner_name="mock-runner",
         command=["mock"],
         stdout=stdout,
-        stderr="",
+        stderr=stderr,
         returncode=returncode,
         trace_dir=None,
         artifacts=[],
@@ -330,6 +335,25 @@ class TestTerminalLoop:
         )
         assert not result.ok and "auth expired" in result.error
 
+    def test_runner_nonzero_exit_preserves_its_authentication_stderr(self, tmp_path):
+        repo = _repo(tmp_path)
+
+        def _invoke(runner_name, invocation, cfg=None):
+            return _fake_result(
+                invocation,
+                returncode=1,
+                stdout="",
+                stderr="Not logged in. Run 'codex login' first.",
+            )
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={}, invoke=_invoke,
+            writer=lambda _t: None, reader=lambda: "", poll_interval=0.01,
+        )
+
+        assert not result.ok
+        assert result.error == "Not logged in. Run 'codex login' first."
+
     def test_card_is_captured_at_close(self, tmp_path):
         repo = _repo(tmp_path)
 
@@ -532,3 +556,35 @@ class TestWakeDispatchFromInit:
         assert "✓ AGENTS.md" in out
         assert "interviewed, authored" in out
         assert "brnrd up" in out
+
+    def test_failed_wake_stops_before_verification_and_next_step(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(
+            "brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"],
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(init_wake, "_default_reader", lambda *_a: "")
+
+        def _invoke(runner_name, invocation, cfg=None):
+            return _fake_result(
+                invocation,
+                returncode=1,
+                stdout="",
+                stderr="Not logged in. Run 'codex login' first.",
+            )
+
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+
+        with pytest.raises(SystemExit) as excinfo:
+            adopt.init_repo()
+
+        assert excinfo.value.code == 1
+        out = capsys.readouterr().out
+        assert "Not logged in. Run 'codex login' first." in out
+        assert "AGENTS.md missing" not in out
+        assert "next: `brnrd up`" not in out

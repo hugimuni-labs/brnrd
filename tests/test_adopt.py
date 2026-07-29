@@ -1,12 +1,17 @@
 """Tests for adopt module."""
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from brr import adopt
 from brr.runner import RunnerResult
+
+
+REPO = Path(__file__).parents[1]
 
 
 def _mock_runner(monkeypatch, output=""):
@@ -97,6 +102,61 @@ def test_git_init_if_needed(tmp_path, monkeypatch):
 
     adopt.init_repo()
     assert (tmp_path / ".git").exists()
+
+
+def test_missing_git_exits_with_install_recovery_instead_of_a_traceback(tmp_path):
+    env = {
+        **os.environ,
+        "PATH": "",
+        "PYTHONPATH": str(REPO / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "brr", "init"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Git is required" in output and "Install Git" in output
+    assert "re-run `brnrd init`" in output
+    assert "Traceback" not in output
+
+
+def test_failed_remote_clone_exits_with_url_and_access_recovery(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        "echo 'fatal: repository access refused' >&2\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": str(fake_bin),
+        "PYTHONPATH": str(REPO / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "brr", "init", "https://example.invalid/private.git"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Git could not clone https://example.invalid/private.git" in output
+    assert "Check that the URL exists and that you have access" in output
+    assert "repository access refused" in output
+    assert "Traceback" not in output
 
 
 class TestConfigureEnvironment:

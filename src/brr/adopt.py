@@ -124,7 +124,16 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
     if url:
         name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         print(f"[brnrd] cloning {url}")
-        subprocess.run(["git", "clone", url, name], check=True)
+        try:
+            subprocess.run(["git", "clone", url, name], check=True)
+        except FileNotFoundError:
+            raise _git_missing() from None
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                f"[brnrd] Git could not clone {url} (exit {exc.returncode}). "
+                "Check that the URL exists and that you have access, then "
+                "re-run `brnrd init`."
+            ) from None
         os.chdir(name)
 
     repo_root = _ensure_repo()
@@ -212,11 +221,13 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
             "already written is independently useful.\n"
             "        Re-run `brnrd init` to continue where this left off."
         )
-    elif result.error:
+        return
+    if result.error:
         print(f"\n[brnrd] the init wake did not finish: {result.error}\n")
         print(
             runner_mod_doctor(repo_root, attempted=runner_name, error=result.error)
         )
+        raise SystemExit(1)
 
     shells = _detect_shells()
     written = constitution.write_bridges(repo_root, shells)
@@ -231,8 +242,6 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
     if result.gates_configured:
         print(f"[brnrd] gates configured: {', '.join(result.gates_configured)}")
     print("[brnrd] next: `brnrd up`, then send it work.")
-    if result.error and not result.aborted:
-        raise SystemExit(1)
 
 
 def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:
@@ -571,10 +580,24 @@ def _ensure_repo() -> Path:
     """Ensure we're in a git repo, initializing one if needed."""
     try:
         return gitops.ensure_git_repo()
+    except FileNotFoundError:
+        raise _git_missing() from None
     except (RuntimeError, SystemExit):
         print("[brnrd] not a git repo — running git init")
-        subprocess.run(["git", "init"], check=True)
+        try:
+            subprocess.run(["git", "init"], check=True)
+        except FileNotFoundError:
+            raise _git_missing() from None
         return gitops.ensure_git_repo()
+
+
+def _git_missing() -> SystemExit:
+    """The clean-machine failure shared by clone, discovery, and init."""
+    return SystemExit(
+        "[brnrd] Git is required to initialize a repository, but `git` was "
+        "not found on PATH. Install Git, open a fresh terminal, and re-run "
+        "`brnrd init`."
+    )
 
 
 def _setup_brr_dir(repo_root: Path) -> None:

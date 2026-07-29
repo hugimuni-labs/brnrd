@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 import brr
 
@@ -68,7 +69,7 @@ def _pin_pyproject_version(tree: Path, version: str) -> None:
     """
     path = tree / "pyproject.toml"
     text = path.read_text()
-    for existing in ('dynamic = ["version"]', 'version = "0.1.0"'):
+    for existing in ('dynamic = ["version"]', f'version = "{brr.__version__}"'):
         if existing in text:
             path.write_text(text.replace(existing, f'version = "{version}"', 1))
             return
@@ -137,11 +138,18 @@ def test_a_release_that_bumps_the_manifests_but_not_the_source_is_caught(tmp_pat
     release whose ``brnrd --version`` said 0.1.0 forever.
     """
     tree = _release_tree(tmp_path / "release")
-    _pin_pyproject_version(tree, "0.2.0")
-    _rewrite(tree / "packaging/npm/package.json", '"version": "0.1.0"', '"version": "0.2.0"')
-    assert '__version__ = "0.1.0"' in (tree / "src/brr/__init__.py").read_text()
+    target = "9.9.9"
+    _pin_pyproject_version(tree, target)
+    _rewrite(
+        tree / "packaging/npm/package.json",
+        f'"version": "{brr.__version__}"',
+        f'"version": "{target}"',
+    )
+    assert f'__version__ = "{brr.__version__}"' in (
+        tree / "src/brr/__init__.py"
+    ).read_text()
 
-    result = _run_guard(tree, "v0.2.0")
+    result = _run_guard(tree, f"v{target}")
 
     assert result.returncode != 0, result.stdout
     assert "agrees" not in result.stdout
@@ -150,12 +158,17 @@ def test_a_release_that_bumps_the_manifests_but_not_the_source_is_caught(tmp_pat
 
 def test_an_npm_mirror_left_behind_is_caught(tmp_path):
     tree = _release_tree(tmp_path / "release")
-    _rewrite(tree / "packaging/npm/package.json", '"version": "0.1.0"', '"version": "0.2.0"')
+    target = "9.9.9"
+    _rewrite(
+        tree / "packaging/npm/package.json",
+        f'"version": "{brr.__version__}"',
+        f'"version": "{target}"',
+    )
 
-    result = _run_guard(tree, "v0.1.0")
+    result = _run_guard(tree, f"v{brr.__version__}")
 
     assert result.returncode != 0, result.stdout
-    assert "0.1.0" in result.stderr and "0.2.0" in result.stderr
+    assert brr.__version__ in result.stderr and target in result.stderr
 
 
 def test_a_pyproject_that_stops_deriving_its_version_is_caught(tmp_path):
@@ -197,7 +210,7 @@ def test_the_version_is_read_without_importing_brr(tmp_path):
     source = tree / "src/brr/__init__.py"
     source.write_text(source.read_text() + "\nimport a_module_that_does_not_exist\n")
 
-    result = _run_guard(tree, "v0.1.0")
+    result = _run_guard(tree, f"v{brr.__version__}")
 
     assert result.returncode == 0, result.stderr
 
@@ -228,3 +241,21 @@ def test_main_fails_on_a_wrong_tag_and_passes_on_the_right_one():
     assert checker.main(["check", f"v{declared}"]) == 0
     assert checker.main(["check", "v0.0.0"]) == 1
     assert checker.main(["check"]) == 0
+
+
+def test_release_workflow_installs_the_wheel_and_drives_documented_commands():
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "release.yml").read_text()
+    )
+    steps = workflow["jobs"]["test-and-build"]["steps"]
+    smoke = next(step for step in steps if step.get("name") == "Smoke-test the built wheel")
+    command = smoke["run"]
+
+    assert "python -m venv .release-smoke" in command
+    assert ".release-smoke/bin/python -m pip install dist/*.whl" in command
+    for invocation in (
+        ".release-smoke/bin/brnrd --version",
+        ".release-smoke/bin/brnrd account connect --help",
+        ".release-smoke/bin/brnrd gate setup --help",
+    ):
+        assert invocation in command

@@ -74,6 +74,10 @@ class BrnrdAuthError(RuntimeError):
     pass
 
 
+class CloudUnavailableError(RuntimeError):
+    """The account service could not be reached at the HTTP boundary."""
+
+
 _AUTH_HINT = "Re-run `brnrd account connect` to link this daemon to your brnrd repo."
 
 # A 401 is retried, not fatal — see `run_loop`. Slow cadence, because the one
@@ -99,7 +103,14 @@ def _request(base_url: str, method: str, path: str, *, token: str | None = None,
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     sleeps = _RETRY_SLEEPS_S if retry else ()
     for attempt, sleep_s in enumerate((*sleeps, None)):
-        resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+        try:
+            resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            raise CloudUnavailableError(
+                f"the account service at {base_url.rstrip('/')} is unreachable "
+                f"({exc}). Check the URL and network connection, then re-run "
+                "`brnrd account connect`."
+            ) from exc
         if resp.status_code in _RETRY_STATUSES and sleep_s is not None:
             print(f"[brnrd:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(sleeps)} in {sleep_s:.0f}s")
             time.sleep(sleep_s)
@@ -279,7 +290,10 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         if status.get("status") == "paired" and status.get("daemon_token"):
             break
         if time.monotonic() > deadline:
-            raise TimeoutError("pairing timed out — re-run `brnrd account connect`")
+            raise TimeoutError(
+                "account pairing was not approved before the timeout. Approve "
+                "the pairing link, then re-run `brnrd account connect`."
+            )
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
     capabilities = dict(state.get("capabilities") or {})

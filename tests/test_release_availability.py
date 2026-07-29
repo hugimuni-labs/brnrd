@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import release_availability
+from brr import __version__, release_availability
 
 
 def _repo(tmp_path: Path, monkeypatch) -> Path:
@@ -53,7 +53,7 @@ def test_fresh_cache_skips_request_and_stale_cache_refreshes(tmp_path, monkeypat
 
 def test_request_failure_preserves_last_good_observation(tmp_path, monkeypatch):
     repo = _repo(tmp_path, monkeypatch)
-    original = {"schema": 1, "checked_at": 1.0, "latest": "0.2.0"}
+    original = {"schema": 1, "checked_at": 1.0, "latest": "999.0.0"}
     path = release_availability.cache_path(repo)
     path.write_text(json.dumps(original), encoding="utf-8")
     monkeypatch.setattr(release_availability, "_fetch_latest", lambda **_kwargs: None)
@@ -68,7 +68,7 @@ def test_request_failure_preserves_last_good_observation(tmp_path, monkeypatch):
     assert saved["checked_at"] == original["checked_at"]
     assert saved["attempted_at"] == release_availability.DEFAULT_TTL_SECONDS + 2
     assert observed is not None
-    assert observed.render() == "update available: 0.1.0 → 0.2.0"
+    assert observed.render() == f"update available: {__version__} → 999.0.0"
 
     # The failed attempt is itself cached: a fast daemon tick cannot retry
     # until the daily TTL has elapsed.
