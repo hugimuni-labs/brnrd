@@ -528,8 +528,9 @@ class _Session:
         elif self._runner_result is not None:
             rc = getattr(self._runner_result, "returncode", 0)
             if rc not in (0, None):
+                detail = self._runner_result.error_detail()
                 self.result.error = self.result.error or (
-                    f"runner exited {rc}"
+                    detail or f"runner exited {rc} with no diagnostic output"
                 )
         elif not self.result.aborted and self.result.error is None:
             # Thread ended with no result and no exception, no outbox, no
