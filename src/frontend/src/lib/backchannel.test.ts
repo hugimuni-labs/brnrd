@@ -1,13 +1,45 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { backchannelCount, buildBackchannelItems } from './backchannel.ts';
+import type { ConfigChangeRequestItem } from './configRequests.ts';
+import type { PRReviewItem } from './prReviewQueue.ts';
 
 test('backchannel count spans both review and config queues', () => {
+	const prs: PRReviewItem[] = [
+		{
+			number: 1,
+			title: '',
+			url: '',
+			repo_label: '',
+			created_at: null,
+			draft: false,
+			author: ''
+		},
+		{
+			number: 2,
+			title: '',
+			url: '',
+			repo_label: '',
+			created_at: null,
+			draft: false,
+			author: ''
+		}
+	];
+	const requests: ConfigChangeRequestItem[] = [
+		{
+			id: 'cfg-1',
+			repo_label: '',
+			config_key: '',
+			current_value: '',
+			requested_value: '',
+			reason: '',
+			created_at: null,
+			expires_at: null,
+			approve_url: ''
+		}
+	];
 	assert.equal(backchannelCount([], []), 0);
-	assert.equal(
-		backchannelCount([{ number: 1 } as any, { number: 2 } as any], [{ id: 'cfg-1' } as any]),
-		3
-	);
+	assert.equal(backchannelCount(prs, requests), 3);
 });
 
 test('backchannel items merge the two queues oldest-first', () => {
