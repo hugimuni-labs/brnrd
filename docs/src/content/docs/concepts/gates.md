@@ -21,7 +21,7 @@ Slack still binds it to the configured channel.
 | Managed or self-hosted Telegram | The paired user plus explicitly allowlisted user ids. Other group members and unattributed senders are denied. |
 | Self-hosted Slack | Any member of the polled channel. |
 | GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
-| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Issue or pull-request assignment to the configured marker account is also a summon; GitHub restricts that action to repository triagers and above. |
+| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Assigning an issue or pull request to the configured marker account is also a summon, and so is requesting a review from it on a pull request; GitHub restricts assignment to repository triagers and above, and requesting a review to accounts with write access. |
 
 The operating rules follow from that boundary:
 
@@ -51,9 +51,23 @@ also appear as authored by it. Never write either token into the repository or
 brnrd config. The dedicated account needs Write access to create branches; a
 comment-only or Triage collaborator cannot publish the runner's work.
 
-Managed mode keeps the visible assignment marker separate from the acting
-identity. A human-owned `brnrd-bot` account can occupy the assignee slot with
-Read access after it accepts the repository invitation; the installed
-`brnrd-dev` GitHub App receives the signed event and posts replies, branches,
-and pull requests with its short-lived installation token. The marker account
-does not need a token in the brnrd backend.
+Managed mode keeps the visible summons marker separate from the acting
+identity. A human-owned `brnrd-bot` account occupies the marker slot after it
+accepts the repository invitation; the installed `brnrd-dev` GitHub App
+receives the signed event and posts replies, branches, and pull requests with
+its short-lived installation token. The marker account does not need a token
+in the brnrd backend.
+
+**The two summons verbs need different grants on the marker account**, and the
+difference is easy to get wrong:
+
+- **assignment** — the marker must have **Write** permission, or be an
+  organization member with Read. GitHub's assignable set is exactly that; a
+  Read-only outside collaborator never appears in the assignee picker, and the
+  refusal looks like a missing account rather than a missing grant.
+- **review request** — **Read** is enough. Anyone with read access to the
+  repository can be requested as a reviewer.
+
+So a review request is the cheaper summons: it lets the marker stay a
+read-only account. (An earlier revision of this page claimed Read sufficed for
+the assignee slot. It does not; corrected 2026-07-29.)

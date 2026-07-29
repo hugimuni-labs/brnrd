@@ -13,7 +13,7 @@ import anyio
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import ids
+from . import github_summons, ids
 from .models import Event
 
 
@@ -58,10 +58,13 @@ def make_default_forwarder(settings) -> Forwarder:
         if not url:
             return body
         author = str(reply_to.get("author") or "").strip()
-        if str(reply_to.get("kind") or "").endswith("-assignment"):
-            if author:
-                return f"> Work assigned by [@{author}]({url})\n\n" + body
-            return f"> Replying to [the assignment]({url})\n\n" + body
+        summons_prefix = github_summons.github_summons_reply_prefix(
+            str(reply_to.get("kind") or ""),
+            author,
+            url,
+        )
+        if summons_prefix is not None:
+            return summons_prefix + body
         if author:
             return f"> Replying to [@{author}'s comment]({url})\n\n" + body
         return f"> Replying to [the source comment]({url})\n\n" + body

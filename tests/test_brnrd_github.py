@@ -18,6 +18,7 @@ from brnrd import create_app, ids  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.platforms import github_app as github_app_platform  # noqa: E402
+from brnrd.routers import webhooks as webhook_routes  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "github-webhook-secret"
@@ -288,6 +289,22 @@ def _assignment_payload(
     return payload
 
 
+def _review_request_payload(
+    *,
+    reviewer="brr-bot",
+    action="review_requested",
+    team=False,
+):
+    payload = _assignment_payload(is_pr=True)
+    payload["action"] = action
+    payload.pop("assignee")
+    if team:
+        payload["requested_team"] = {"slug": "maintainers"}
+    else:
+        payload["requested_reviewer"] = {"login": reviewer}
+    return payload
+
+
 def test_repo_create_list_is_idempotent(env):
     _, client, _ = env
     acc = _account(client)
@@ -536,6 +553,159 @@ def test_app_pull_request_assignment_uses_pull_request_event(env, monkeypatch):
         "pr_number": 17,
         "branch_target": "feature-x",
     }
+
+
+def test_app_pull_request_review_request_summons_and_replies(env, monkeypatch):
+    _app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    response = _github_app_post(
+        client,
+        _review_request_payload(),
+        event="pull_request",
+    )
+    assert response.status_code == 200, response.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=dmn,
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"] == {
+        "platform": "github",
+        "repo": "owner/repo",
+        "issue_number": 17,
+        "kind": "pr-review-request",
+        "author": "alice",
+        "html_url": "https://github.com/owner/repo/pull/17",
+        "trigger": "reviewer",
+        "requested_reviewer": "brr-bot",
+        "installation_id": "42",
+        "pr_number": 17,
+        "branch_target": "feature-x",
+    }
+
+    posted = client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event["event_id"],
+            "body_markdown": "reviewed on the branch",
+            "status": "done",
+        },
+        headers=dmn,
+    )
+    assert posted.status_code == 200, posted.text
+    assert posts[0]["body"] == (
+        "> Review requested by [@alice]"
+        "(https://github.com/owner/repo/pull/17)\n\n"
+        "reviewed on the branch"
+    )
+
+
+@pytest.mark.parametrize(
+    ("x_github_event", "payload", "expected"),
+    [
+        pytest.param(
+            "issues",
+            _assignment_payload(),
+            True,
+            id="issue-assignment",
+        ),
+        pytest.param(
+            "pull_request",
+            _assignment_payload(is_pr=True),
+            True,
+            id="pull-request-assignment",
+        ),
+        pytest.param(
+            "pull_request",
+            _review_request_payload(),
+            True,
+            id="pull-request-review-request",
+        ),
+        pytest.param(
+            "pull_request",
+            _review_request_payload(reviewer="someone-else"),
+            False,
+            id="different-reviewer",
+        ),
+        pytest.param(
+            "pull_request",
+            _review_request_payload(action="review_request_removed"),
+            False,
+            id="review-request-removed",
+        ),
+        pytest.param(
+            "pull_request",
+            _review_request_payload(team=True),
+            False,
+            id="team-review-request",
+        ),
+    ],
+)
+def test_app_summons_gate_and_handler_agree(
+    env,
+    monkeypatch,
+    x_github_event,
+    payload,
+    expected,
+):
+    app, client, _posts = env
+    acc = _account(client)
+    _repo(client, acc)
+    monkeypatch.setattr(
+        github_app_platform,
+        "installation_access_credential",
+        lambda *_args, **_kwargs: {
+            "token": "ghs_installation",
+            "expires_at": "2099-01-01T00:00:00Z",
+        },
+    )
+
+    gate_calls = []
+    handler = webhook_routes._handle_github_summons
+    monkeypatch.setattr(
+        webhook_routes,
+        "_handle_github_summons",
+        lambda *args, **kwargs: gate_calls.append((args, kwargs)),
+    )
+    response = _github_app_post(
+        client,
+        payload,
+        event=x_github_event,
+    )
+    assert response.status_code == 200, response.text
+
+    monkeypatch.setattr(webhook_routes, "_handle_github_summons", handler)
+    enqueued = []
+    monkeypatch.setattr(
+        webhook_routes.inbox_service,
+        "enqueue",
+        lambda *args, **kwargs: enqueued.append((args, kwargs)),
+    )
+    with app.state.SessionLocal() as db:
+        handler(
+            db,
+            app.state.settings,
+            x_github_event,
+            payload,
+            token="ghs_installation",
+            installation_id="42",
+        )
+
+    assert bool(gate_calls) is expected
+    assert bool(enqueued) is expected
 
 
 def test_app_assignment_token_failure_asks_github_to_retry(env, monkeypatch):
