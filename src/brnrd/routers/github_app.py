@@ -153,12 +153,53 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
     # `::telegram_webhook`, `::stripe_webhook`), which all fail closed with 403.
     if not _signature_ok(settings.github_webhook_secret, body, x_hub_signature_256):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
     if x_github_event in {"installation", "installation_repositories"}:
         try:
-            payload = await request.json()
             installation_id = str(((payload or {}).get("installation") or {}).get("id") or "")
             if installation_id:
                 sync_installation(db, settings, installation_id)
         except Exception as e:
             print(f"[brnrd] github installation webhook sync failed: {e}")
+    elif (
+        x_github_event == "issues"
+        and payload.get("action") == "assigned"
+        and str(
+            ((payload.get("assignee") or {}).get("login") or "")
+        ).casefold() == settings.github_bot_login.casefold()
+    ):
+        installation_id = str(
+            ((payload or {}).get("installation") or {}).get("id") or ""
+        )
+        if installation_id:
+            try:
+                repository = (payload or {}).get("repository") or {}
+                repository_id = repository.get("id")
+                repo_name = str(repository.get("name") or "").strip()
+                credential = gh_app.installation_access_credential(
+                    settings,
+                    installation_id,
+                    repository_ids=(
+                        [int(repository_id)] if repository_id else None
+                    ),
+                    repositories=[repo_name] if not repository_id and repo_name else None,
+                )
+                token = credential["token"]
+                from . import webhooks
+
+                webhooks._handle_github_assignment(
+                    db,
+                    settings,
+                    payload,
+                    token=token,
+                    installation_id=installation_id,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="GitHub App event handling failed",
+                ) from e
     return {"status": "ok", "event": x_github_event}
