@@ -1,6 +1,6 @@
 {
   "name": "brnrd",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Launcher for brnrd — structured guardrails for AI agent work, managed from a chat. brnrd is a Python tool; this package only starts it.",
   "keywords": ["ai", "agent", "cli", "launcher", "brnrd"],
   "homepage": "https://github.com/hugimuni-labs/brnrd",

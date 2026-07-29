@@ -2364,7 +2364,10 @@ def cmd_brnrd_connect(args):
     brr_dir = _brr_dir()
     url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
-    cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
+    try:
+        cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
+    except (cloud.CloudUnavailableError, TimeoutError) as exc:
+        raise SystemExit(f"[brnrd] {exc}") from None
     print("[brnrd] Start the daemon with `brnrd up` to begin draining the brnrd inbox.")
 
 
