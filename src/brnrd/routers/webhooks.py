@@ -147,24 +147,38 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
-def _github_reply(settings, reply_to: dict[str, Any], text: str) -> None:
-    if not settings.github_bot_token:
+def _github_reply(
+    settings,
+    reply_to: dict[str, Any],
+    text: str,
+    *,
+    token: str | None = None,
+) -> None:
+    token = token or settings.github_bot_token
+    if not token:
         return
     repo = str(reply_to.get("repo") or "")
     issue_number = _coerce_int(reply_to.get("issue_number"))
     if not repo or issue_number is None:
         return
     try:
-        gh.post_issue_comment(settings.github_bot_token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, text)
+        gh.post_issue_comment(token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, text)
     except Exception as e:
         print(f"[brnrd] github reply failed: {e}")
 
 
-def _maybe_pr_branch(settings, repo: str, pr_number: int | None) -> str | None:
-    if pr_number is None or not settings.github_bot_token:
+def _maybe_pr_branch(
+    settings,
+    repo: str,
+    pr_number: int | None,
+    *,
+    token: str | None = None,
+) -> str | None:
+    token = token or settings.github_bot_token
+    if pr_number is None or not token:
         return None
     try:
-        return gh.fetch_pull_head_ref(settings.github_bot_token, settings.github_api_base_url, settings.github_api_version, repo, pr_number)
+        return gh.fetch_pull_head_ref(token, settings.github_api_base_url, settings.github_api_version, repo, pr_number)
     except Exception as e:
         print(f"[brnrd] github branch lookup failed: {e}")
         return None
@@ -235,6 +249,99 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
         if branch:
             reply_to["branch_target"] = branch
     inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
+
+
+def _handle_github_assignment(
+    db: Session,
+    settings,
+    payload: dict[str, Any],
+    *,
+    token: str | None = None,
+    installation_id: str | None = None,
+) -> None:
+    """Turn assignment to the marker account into a managed inbox event."""
+
+    if payload.get("action") != "assigned":
+        return
+    assignee = str(
+        ((payload.get("assignee") or {}).get("login") or "")
+    ).strip()
+    if assignee.casefold() != settings.github_bot_login.casefold():
+        return
+
+    repo_name = str(
+        ((payload.get("repository") or {}).get("full_name") or "")
+    ).strip()
+    issue = payload.get("issue") or {}
+    issue_number = _coerce_int(issue.get("number"))
+    if not repo_name or issue_number is None:
+        return
+
+    assigner = str(
+        ((payload.get("sender") or {}).get("login") or "")
+    ).strip()
+    # The signed assignment event is itself the authorization proof: GitHub
+    # only lets a triage-or-higher repo actor assign another user. Judge the
+    # assigner, not the issue author — a maintainer must be able to summon the
+    # resident on a drive-by report.
+    is_pr = bool(issue.get("pull_request"))
+    reply_to: dict[str, Any] = {
+        "platform": "github",
+        "repo": repo_name,
+        "issue_number": issue_number,
+        "kind": "pr-assignment" if is_pr else "issue-assignment",
+        "author": assigner,
+        "html_url": str(issue.get("html_url") or ""),
+        "trigger": "assignee",
+        "assignee": assignee,
+    }
+    if installation_id:
+        reply_to["installation_id"] = installation_id
+
+    repo = db.execute(
+        select(Repo).where(Repo.repo_full_name == repo_name)
+    ).scalar_one_or_none()
+    if repo is None:
+        _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT, token=token)
+        return
+
+    body = gh_parse._format_event_body(
+        str(issue.get("title") or "").strip(),
+        str(issue.get("body") or "").strip(),
+    )
+    decision = limits.check_event_admission(
+        db,
+        settings,
+        db.get(Account, repo.account_id),
+        body=body,
+    )
+    if not decision.allowed:
+        logger.warning(
+            "github limit reject repo=%s author=%s trigger=assignee reason=%s",
+            repo_name,
+            assigner,
+            decision.reason,
+        )
+        _github_reply(settings, reply_to, decision.message, token=token)
+        return
+
+    if is_pr:
+        reply_to["pr_number"] = issue_number
+        branch = _maybe_pr_branch(
+            settings,
+            repo_name,
+            issue_number,
+            token=token,
+        )
+        if branch:
+            reply_to["branch_target"] = branch
+    inbox_service.enqueue(
+        db,
+        repo_id=repo.id,
+        body=body,
+        source="github",
+        reply_to=reply_to,
+    )
 
 
 def _audit_reject(parsed: tg.ParsedMessage, *, reason: str) -> None:
