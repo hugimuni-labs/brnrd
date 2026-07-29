@@ -533,6 +533,73 @@ def test_account_connect_pairing_timeout_exits_with_approval_recovery(
     assert "re-run `brnrd account connect`" in message
 
 
+def test_account_connect_pairs_installs_and_starts_service(
+    monkeypatch, tmp_path, capsys,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    calls = []
+
+    monkeypatch.setattr(
+        "brr.gates.cloud.connect",
+        lambda brr_dir, **kwargs: calls.append(("connect", brr_dir, kwargs)),
+    )
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kwargs: calls.append(("install", kwargs)),
+    )
+
+    assert main([
+        "account",
+        "connect",
+        "https://brnrd.example",
+        "--daemon-name",
+        "wyrd-box",
+        "--yes-linger",
+    ]) is None
+
+    assert calls == [
+        (
+            "connect",
+            repo / ".brr",
+            {
+                "brnrd_url": "https://brnrd.example",
+                "daemon_name": "wyrd-box",
+            },
+        ),
+        (
+            "install",
+            {
+                "no_start": False,
+                "prompt_linger": True,
+                "assume_yes_linger": True,
+            },
+        ),
+    ]
+    assert "Connected and listening in the background" in capsys.readouterr().out
+
+
+def test_account_connect_no_service_keeps_foreground_escape(
+    monkeypatch, tmp_path, capsys,
+):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    installed = []
+
+    monkeypatch.setattr("brr.gates.cloud.connect", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        "brr.daemon_install.install",
+        lambda **kwargs: installed.append(kwargs),
+    )
+
+    assert main(["account", "connect", "--no-service"]) is None
+
+    assert installed == []
+    assert "brnrd up --foreground" in capsys.readouterr().out
+
+
 def test_home_link_yes_asks_nothing(monkeypatch, tmp_path, capsys):
     """``--yes`` is the whole non-interactive contract: no confirm, no stdin read."""
     repo = tmp_path / "repo"

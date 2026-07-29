@@ -89,9 +89,8 @@ Then pick your door.
 <td>
 
 ```bash
-brnrd account connect  # pair this machine with brnrd.dev
-brnrd account add .    # add the current repo
-brnrd daemon install   # keep the daemon alive (systemd/launchd)
+brnrd account connect  # pair + install + start (systemd/launchd)
+brnrd account add .    # add another repo later
 ```
 
 </td>
