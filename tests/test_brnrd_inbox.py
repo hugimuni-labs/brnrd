@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 
+import anyio
 import pytest
 
 pytest.importorskip("fastapi")
@@ -13,9 +15,11 @@ pytest.importorskip("sqlalchemy")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
+from brnrd import inbox as inbox_service  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brnrd.models import Event  # noqa: E402
+from brnrd.routers import daemons as daemon_routes  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -281,6 +285,53 @@ def test_long_poll_times_out_empty(env):
     assert result["cursor"] == 0
     # It actually waited rather than returning instantly.
     assert elapsed >= 0.25
+
+
+def test_long_poll_route_waits_async_and_offloads_each_db_read(monkeypatch):
+    """A connected daemon must not occupy one AnyIO worker for its wait."""
+
+    caller_thread = threading.get_ident()
+    db_threads = []
+
+    def fake_fetch(session_factory, repo_ids, since):
+        db_threads.append(threading.get_ident())
+        return []
+
+    monkeypatch.setattr(
+        inbox_service,
+        "_fetch_since_many_detached",
+        fake_fetch,
+    )
+
+    async def exercise():
+        ticks = 0
+        polling = True
+
+        async def ticker():
+            nonlocal ticks
+            while polling:
+                ticks += 1
+                await anyio.sleep(0.002)
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(ticker)
+            result = await inbox_service.long_poll_many(
+                object(),
+                {"repo-1"},
+                0,
+                max_wait_s=0.03,
+                interval_s=0.005,
+            )
+            polling = False
+        return result, ticks
+
+    result, ticks = anyio.run(exercise)
+
+    assert inspect.iscoroutinefunction(daemon_routes.inbox)
+    assert result == []
+    assert ticks >= 3, "the poll interval blocked the event loop"
+    assert db_threads
+    assert all(thread_id != caller_thread for thread_id in db_threads)
 
 
 def test_long_poll_wakes_on_enqueue(env):

@@ -7,6 +7,7 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
+import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
@@ -51,6 +52,27 @@ def _account_repos(db: Session, principal: Principal) -> list[Repo]:
             select(Repo).where(Repo.account_id == principal.account_id)
         ).scalars()
     )
+
+
+def _inbox_scope(
+    session_factory,
+    principal: Principal,
+    since_seq: int,
+) -> tuple[set[str], dict[str, str], int]:
+    """Resolve the account cursor in a short worker-thread DB visit."""
+
+    with session_factory() as db:
+        repos = _account_repos(db, principal)
+        repo_ids = {repo.id for repo in repos}
+        repo_labels = {repo.id: repo.repo_full_name for repo in repos}
+        if since_seq > 0:
+            since_seq = inbox_service.clamp_since_many(db, repo_ids, since_seq)
+    return repo_ids, repo_labels, since_seq
+
+
+def _touch_daemon_from_factory(session_factory, principal: Principal) -> None:
+    with session_factory() as db:
+        _touch_daemon(db, principal)
 
 
 def _account_event(
@@ -623,20 +645,29 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)
-def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
+async def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
     since_seq = since if since is not None else 0
-    with request.app.state.SessionLocal() as db:
-        repos = _account_repos(db, principal)
-        repo_ids = {repo.id for repo in repos}
-        repo_labels = {repo.id: repo.repo_full_name for repo in repos}
-        if since_seq > 0:
-            since_seq = inbox_service.clamp_since_many(db, repo_ids, since_seq)
+    repo_ids, repo_labels, since_seq = await anyio.to_thread.run_sync(
+        _inbox_scope,
+        request.app.state.SessionLocal,
+        principal,
+        since_seq,
+    )
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
-    events = inbox_service.long_poll_many(request.app.state.SessionLocal, repo_ids, since_seq, max_wait_s=max_wait, interval_s=settings.inbox_poll_interval_s)
+    events = await inbox_service.long_poll_many(
+        request.app.state.SessionLocal,
+        repo_ids,
+        since_seq,
+        max_wait_s=max_wait,
+        interval_s=settings.inbox_poll_interval_s,
+    )
     cursor = max((e.seq for e in events), default=since_seq)
-    with request.app.state.SessionLocal() as db:
-        _touch_daemon(db, principal)
+    await anyio.to_thread.run_sync(
+        _touch_daemon_from_factory,
+        request.app.state.SessionLocal,
+        principal,
+    )
     return schemas.InboxResponse(
         events=[
             schemas.EventOut(
