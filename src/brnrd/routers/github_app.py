@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
@@ -15,10 +18,23 @@ from sqlalchemy.orm import Session
 
 from .. import github_summons, ids
 from ..auth import account_id_from_session_cookie, get_db
-from ..models import GitHubInstallation, GitHubInstalledRepo
+from ..models import Account, GitHubInstallation, GitHubInstalledRepo
 from ..platforms import github_app as gh_app
 
 router = APIRouter(prefix="/api/github", tags=["github-app"])
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InstallationSyncResult:
+    synced: int = 0
+    skipped: int = 0
+
+
+def github_sync_notice(result: InstallationSyncResult) -> str:
+    if result.skipped:
+        return "github-sync-partial" if result.synced else "github-sync-refused"
+    return "github-synced" if result.synced else "github-sync-empty"
 
 
 def _signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
@@ -46,7 +62,12 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     elif account_id and not installation.account_id:
         installation.account_id = account_id
 
-    repos = gh_app.list_installation_repositories(settings, installation_id)
+    installation_token = gh_app.installation_access_token(
+        settings, installation_id
+    )
+    repos = gh_app.list_installation_repositories(
+        settings, installation_id, token=installation_token
+    )
     target_login = ""
     target_type = ""
     listed_names: set[str] = set()
@@ -63,6 +84,22 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
         if row is None:
             row = GitHubInstalledRepo(id=ids.github_installed_repo_id(), github_installation_id=installation.id, repo_full_name=full_name)
             db.add(row)
+        label = str(settings.github_trigger_label or "").strip()
+        if label:
+            try:
+                gh_app.ensure_repository_label(
+                    settings,
+                    installation_token,
+                    full_name,
+                    label,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "could not create GitHub summons label %r on %s: %s",
+                    label,
+                    full_name,
+                    exc,
+                )
         row.forge_repo_id = str(item.get("id") or "") or None
         row.is_private = bool(item.get("private"))
         row.default_branch = str(item.get("default_branch") or "") or None
@@ -85,23 +122,136 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     return installation
 
 
-def sync_app_installations_for_account(db: Session, settings, account_id: str) -> int:
-    """Sync installations visible to this GitHub App for the logged-in account.
-
-    GitHub does not always redirect an already-installed App through the setup
-    callback. This manual sync lets the dashboard recover by asking GitHub for
-    App installations directly. Pre-launch, discovered installations are attached
-    to the current brnrd account; org-membership-aware filtering can replace that
-    once multiple external users exist.
-    """
-    count = 0
-    for installation in gh_app.list_app_installations(settings):
+def _sync_verified_installations(
+    db: Session,
+    settings,
+    account: Account,
+    installations: list[dict],
+) -> InstallationSyncResult:
+    synced = 0
+    skipped = 0
+    for installation in installations:
         installation_id = str(installation.get("id") or "")
-        if not installation_id:
+        existing = (
+            db.execute(
+                select(GitHubInstallation).where(
+                    GitHubInstallation.installation_id == installation_id
+                )
+            ).scalar_one_or_none()
+            if installation_id
+            else None
+        )
+        if (
+            existing is not None
+            and existing.account_id is not None
+            and existing.account_id != account.id
+        ):
+            skipped += 1
+            logger.warning(
+                "refused GitHub App installation %s for account %s: "
+                "already bound to another brnrd account",
+                installation_id,
+                account.id,
+            )
             continue
-        sync_installation(db, settings, installation_id, account_id)
-        count += 1
-    return count
+        target = installation.get("account") or {}
+        target_login = (
+            str(target.get("login") or "") if isinstance(target, dict) else ""
+        )
+        target_type = (
+            str(target.get("type") or "") if isinstance(target, dict) else ""
+        )
+        verified = (
+            target_type.casefold() == "user"
+            and target_login.casefold() == account.github_login.casefold()
+        )
+        if (
+            target_type.casefold() == "organization"
+            and installation_id
+            and target_login
+        ):
+            membership = gh_app.organization_membership(
+                settings,
+                installation_id,
+                target_login,
+                account.github_login,
+            )
+            verified = bool(
+                membership
+                and str(membership.get("state") or "").casefold() == "active"
+                and str(membership.get("role") or "").casefold() == "admin"
+            )
+        if not installation_id or not verified:
+            skipped += 1
+            logger.warning(
+                "refused GitHub App installation %s for account %s: "
+                "target %s %r is not owned by authenticated GitHub user %r",
+                installation_id or "<missing>",
+                account.id,
+                target_type or "<missing>",
+                target_login or "<missing>",
+                account.github_login,
+            )
+            continue
+        sync_installation(db, settings, installation_id, account.id)
+        synced += 1
+    return InstallationSyncResult(synced=synced, skipped=skipped)
+
+
+def sync_app_installations_for_account(
+    db: Session,
+    settings,
+    account_id: str,
+    *,
+    user_access_token: str | None = None,
+) -> InstallationSyncResult:
+    """Sync personal installs owned by the user and org installs they own.
+
+    Login-time discovery uses GitHub's user-scoped installation view. Later
+    refreshes fetch only installations already bound to this account. Personal
+    target equality or active organization-owner membership is still the
+    proof before attachment; visibility alone is not ownership.
+    """
+    account = db.get(Account, account_id)
+    if account is None:
+        raise RuntimeError(f"GitHub installation sync account not found: {account_id}")
+    if user_access_token:
+        installations = gh_app.list_user_installations(
+            settings, user_access_token
+        )
+    else:
+        bound_ids = db.execute(
+            select(GitHubInstallation.installation_id).where(
+                GitHubInstallation.account_id == account_id
+            )
+        ).scalars()
+        installations = [
+            gh_app.get_app_installation(settings, installation_id)
+            for installation_id in bound_ids
+        ]
+    return _sync_verified_installations(db, settings, account, installations)
+
+
+def sync_app_installation_for_account(
+    db: Session, settings, account_id: str, installation_id: str
+) -> InstallationSyncResult:
+    """Sync one setup-callback installation after proving its target login."""
+    account = db.get(Account, account_id)
+    if account is None:
+        raise RuntimeError(f"GitHub installation sync account not found: {account_id}")
+    try:
+        installation = gh_app.get_app_installation(settings, installation_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 404:
+            raise
+        logger.warning(
+            "refused GitHub App installation %s for account %s: "
+            "installation is not visible to the configured App",
+            installation_id,
+            account_id,
+        )
+        return InstallationSyncResult(skipped=1)
+    return _sync_verified_installations(db, settings, account, [installation])
 
 
 @router.get("/callback")
@@ -117,8 +267,16 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
     notice = "github-installed"
     if installation_id:
         try:
-            sync_installation(db, request.app.state.settings, installation_id, account_id)
-            notice = "github-synced"
+            if account_id is None:
+                sync_installation(
+                    db, request.app.state.settings, installation_id, None
+                )
+                notice = "github-synced"
+            else:
+                result = sync_app_installation_for_account(
+                    db, request.app.state.settings, account_id, installation_id
+                )
+                notice = github_sync_notice(result)
         except Exception as e:
             print(f"[brnrd] github installation sync failed: {e}")
             notice = "github-sync-failed"
@@ -132,8 +290,10 @@ def github_installation_sync(request: Request, db: Session = Depends(get_db)) ->
     if account_id is None:
         return RedirectResponse(url="/login?next=/", status_code=303)
     try:
-        count = sync_app_installations_for_account(db, request.app.state.settings, account_id)
-        notice = "github-synced" if count else "github-sync-empty"
+        result = sync_app_installations_for_account(
+            db, request.app.state.settings, account_id
+        )
+        notice = github_sync_notice(result)
     except Exception as e:
         print(f"[brnrd] github manual installation sync failed: {e}")
         notice = "github-sync-failed"
@@ -164,11 +324,15 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                 sync_installation(db, settings, installation_id)
         except Exception as e:
             print(f"[brnrd] github installation webhook sync failed: {e}")
-    elif github_summons.resolve_github_summons(
-        x_github_event,
-        payload,
-        settings.github_bot_login,
-    ) is not None:
+    elif (
+        x_github_event == "issue_comment"
+        or github_summons.resolve_github_summons(
+            x_github_event,
+            payload,
+            settings.github_bot_login,
+            settings.github_trigger_label,
+        ) is not None
+    ):
         installation_id = str(
             ((payload or {}).get("installation") or {}).get("id") or ""
         )
@@ -188,14 +352,23 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
                 token = credential["token"]
                 from . import webhooks
 
-                webhooks._handle_github_summons(
-                    db,
-                    settings,
-                    x_github_event,
-                    payload,
-                    token=token,
-                    installation_id=installation_id,
-                )
+                if x_github_event == "issue_comment":
+                    webhooks._handle_github_issue_comment(
+                        db,
+                        settings,
+                        payload,
+                        token=token,
+                        installation_id=installation_id,
+                    )
+                else:
+                    webhooks._handle_github_summons(
+                        db,
+                        settings,
+                        x_github_event,
+                        payload,
+                        token=token,
+                        installation_id=installation_id,
+                    )
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
