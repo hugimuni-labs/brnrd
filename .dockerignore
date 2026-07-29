@@ -1,0 +1,15 @@
+.git
+.brr
+.brnrd-kb
+.venv
+.pytest_cache
+**/__pycache__
+**/*.py[cod]
+**/node_modules
+build
+dist
+docs/site
+screenshots
+.tmp
+*.db
+*.sqlite3
