@@ -401,7 +401,7 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     gitops.ensure_run_id_hook(home_knowledge)
 
     checkout = repo_root / CHECKOUT_DIRNAME
-    _exclude_from_project_git(repo_root, f"{CHECKOUT_DIRNAME}/")
+    gitops.exclude_from_git(repo_root, f"{CHECKOUT_DIRNAME}/")
     if checkout.exists():
         if _checkout_origin_matches(checkout, home_knowledge):
             _refresh_checkout(checkout)
@@ -1382,27 +1382,3 @@ def _init_git_repo(path: Path) -> bool:
         check=False,
     )
     return result.returncode == 0
-
-
-def _exclude_from_project_git(repo_root: Path, pattern: str) -> None:
-    result = subprocess.run(
-        ["git", "rev-parse", "--git-path", "info/exclude"],
-        cwd=repo_root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return
-    exclude = repo_root / result.stdout.strip()
-    if not exclude.is_absolute():
-        exclude = (repo_root / exclude).resolve()
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    if pattern in {line.strip() for line in current.splitlines()}:
-        return
-    with exclude.open("a", encoding="utf-8") as fh:
-        if current and not current.endswith("\n"):
-            fh.write("\n")
-        fh.write(f"{pattern}\n")
