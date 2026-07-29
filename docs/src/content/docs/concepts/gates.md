@@ -21,7 +21,7 @@ Slack still binds it to the configured channel.
 | Managed or self-hosted Telegram | The paired user plus explicitly allowlisted user ids. Other group members and unattributed senders are denied. |
 | Self-hosted Slack | Any member of the polled channel. |
 | GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
-| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Assigning an issue or pull request to the configured marker account is also a summon, and so is requesting a review from it on a pull request; GitHub restricts assignment to repository triagers and above, and requesting a review to accounts with write access. |
+| GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Applying the `brnrd` label is the universal assignment signal. Assigning an issue or pull request to the optional marker account is also a summon, and so is requesting a review from it on a pull request. |
 
 The operating rules follow from that boundary:
 
@@ -52,11 +52,19 @@ brnrd config. The dedicated account needs Write access to create branches; a
 comment-only or Triage collaborator cannot publish the runner's work.
 
 Managed mode keeps the visible summons marker separate from the acting
-identity. A human-owned `brnrd-bot` account occupies the marker slot after it
-accepts the repository invitation; the installed `brnrd-dev` GitHub App
-receives the signed event and posts replies, branches, and pull requests with
-its short-lived installation token. The marker account does not need a token
-in the brnrd backend.
+identity. The installed `brnrd-dev` GitHub App creates a `brnrd` label when it
+first discovers a repository; applying that label or mentioning `@brnrd-bot`
+summons the resident without granting a second account repository access. The
+App receives the signed event and posts replies, branches, and pull requests
+with its short-lived installation token.
+
+The `brnrd-bot` user account may additionally occupy GitHub's assignee or
+reviewer slots after a repository owner grants it access. That is an optional
+GitHub affordance, not the universal route: automating the collaborator
+invitation would require giving the App repository **Administration: write**
+solely to manage the marker account. brnrd deliberately keeps that broader
+permission out of the install contract; the App-native label carries the same
+repo-centered intent with the existing Issues permission.
 
 **The two summons verbs need different grants on the marker account**, and the
 difference is easy to get wrong:

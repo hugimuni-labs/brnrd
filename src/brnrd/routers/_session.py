@@ -32,7 +32,10 @@ from brnrd.models import (
     Token,
 )
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token  # noqa: F401
-from brnrd.routers.github_app import sync_app_installations_for_account
+from brnrd.routers.github_app import (
+    github_sync_notice,
+    sync_app_installations_for_account,
+)
 from brnrd.routers.pairing import approve_core, telegram_pair_core
 from brnrd.security import hash_token
 
@@ -231,11 +234,13 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
     if not needs_sync:
         return None
     try:
-        count = sync_app_installations_for_account(db, request.app.state.settings, account_id)
+        result = sync_app_installations_for_account(
+            db, request.app.state.settings, account_id
+        )
     except Exception as e:
         print(f"[brnrd] github dashboard auto-sync failed: {e}")
         return "github-sync-failed"
-    return "github-synced" if count else "github-sync-empty"
+    return github_sync_notice(result)
 
 
 def _notice_text(value: str | None) -> str | None:
@@ -246,6 +251,8 @@ def _notice_text(value: str | None) -> str | None:
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
         "github-sync-empty": "No GitHub App installations were found for this app.",
+        "github-sync-partial": "Owned GitHub installations synced; other installations were refused.",
+        "github-sync-refused": "No GitHub installations could be verified for this account.",
         "github-sync-failed": "GitHub installation sync failed. Check app id/private-key config and logs.",
     }.get(value or "", value)
 

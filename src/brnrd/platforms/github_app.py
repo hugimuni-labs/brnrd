@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import jwt
@@ -37,25 +38,34 @@ def _headers(settings, token: str) -> dict[str, str]:
     }
 
 
-def list_app_installations(settings) -> list[dict[str, Any]]:
-    """List installations visible to this GitHub App.
+def get_app_installation(settings, installation_id: str) -> dict[str, Any]:
+    """Fetch one installation by id without enumerating the App's estate."""
+    url = (
+        f"{settings.github_api_base_url.rstrip('/')}"
+        f"/app/installations/{installation_id}"
+    )
+    with httpx.Client(timeout=20) as client:
+        response = client.get(url, headers=_headers(settings, app_jwt(settings)))
+        response.raise_for_status()
+        return response.json()
 
-    This uses the App JWT, not a user OAuth token. It lets brnrd recover when
-    GitHub sends an already-installed user to the GitHub permissions page
-    instead of back through the setup callback.
-    """
-    jwt_token = app_jwt(settings)
+
+def list_user_installations(
+    settings, user_access_token: str
+) -> list[dict[str, Any]]:
+    """List App installations visible to the just-authenticated GitHub user."""
     installations: list[dict[str, Any]] = []
-    url = f"{settings.github_api_base_url.rstrip('/')}/app/installations"
+    url = f"{settings.github_api_base_url.rstrip('/')}/user/installations"
     with httpx.Client(timeout=20) as client:
         while url:
             response = client.get(
                 url,
-                headers=_headers(settings, jwt_token),
+                headers=_headers(settings, user_access_token),
                 params={"per_page": 100} if "?" not in url else None,
             )
             response.raise_for_status()
-            installations.extend(response.json() or [])
+            data = response.json()
+            installations.extend(data.get("installations") or [])
             url = response.links.get("next", {}).get("url")
     return installations
 
@@ -92,8 +102,13 @@ def installation_access_token(settings, installation_id: str) -> str:
     return installation_access_credential(settings, installation_id)["token"]
 
 
-def list_installation_repositories(settings, installation_id: str) -> list[dict[str, Any]]:
-    token = installation_access_token(settings, installation_id)
+def list_installation_repositories(
+    settings,
+    installation_id: str,
+    *,
+    token: str | None = None,
+) -> list[dict[str, Any]]:
+    token = token or installation_access_token(settings, installation_id)
     repos: list[dict[str, Any]] = []
     url = f"{settings.github_api_base_url.rstrip('/')}/installation/repositories"
     with httpx.Client(timeout=20) as client:
@@ -104,3 +119,67 @@ def list_installation_repositories(settings, installation_id: str) -> list[dict[
             repos.extend(data.get("repositories") or [])
             url = response.links.get("next", {}).get("url")
     return repos
+
+
+def ensure_repository_label(
+    settings,
+    token: str,
+    repo: str,
+    label: str,
+) -> None:
+    """Create the App-native summons label when a repo first appears.
+
+    Labels need only the App's existing Issues permission.  This is the
+    universal assignment affordance; making a separate user account an
+    assignee would require collaborator access and, to automate it, the much
+    broader repository Administration permission.
+    """
+    base = settings.github_api_base_url.rstrip("/")
+    encoded = quote(label, safe="")
+    headers = _headers(settings, token)
+    with httpx.Client(timeout=20) as client:
+        existing = client.get(
+            f"{base}/repos/{repo}/labels/{encoded}",
+            headers=headers,
+        )
+        if existing.status_code == 200:
+            return
+        if existing.status_code != 404:
+            existing.raise_for_status()
+        created = client.post(
+            f"{base}/repos/{repo}/labels",
+            headers=headers,
+            json={
+                "name": label,
+                "color": "6f42c1",
+                "description": "Summon the brnrd resident",
+            },
+        )
+        created.raise_for_status()
+
+
+def organization_membership(
+    settings,
+    installation_id: str,
+    organization: str,
+    username: str,
+) -> dict[str, Any] | None:
+    """The user's membership as seen by this organization installation.
+
+    ``Members: read`` is the narrow permission that makes organization
+    ownership provable. A 404 means no membership; other failures stay loud so
+    a missing grant cannot be misreported as a clean refusal.
+    """
+    token = installation_access_token(settings, installation_id)
+    base = settings.github_api_base_url.rstrip("/")
+    with httpx.Client(timeout=20) as client:
+        response = client.get(
+            f"{base}/orgs/{quote(organization, safe='')}/memberships/"
+            f"{quote(username, safe='')}",
+            headers=_headers(settings, token),
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        data = response.json()
+    return data if isinstance(data, dict) else None

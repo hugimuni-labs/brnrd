@@ -100,6 +100,9 @@ class Settings:
     )
     github_webhook_secret: str = _env_first("BRNRD_GITHUB_WEBHOOK_SECRET", "GITHUB_WEBHOOK_SECRET")
     github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brnrd-bot")
+    github_trigger_label: str = os.environ.get(
+        "BRNRD_GITHUB_TRIGGER_LABEL", "brnrd"
+    )
     github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
     # #408 — default-closed authorization gate: logins here bypass the

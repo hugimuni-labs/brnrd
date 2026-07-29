@@ -59,6 +59,11 @@
 	let produceParts = $derived.by(() => {
 		const parts: GaugePart[] = [];
 		if (summary.prs) parts.push({ value: String(summary.prs), label: labelFor(summary.prs, 'PR') });
+		if (summary.mergedPrs)
+			parts.push({
+				value: String(summary.mergedPrs),
+				label: labelFor(summary.mergedPrs, 'merged PR', 'merged PRs')
+			});
 		if (summary.commits)
 			parts.push({ value: String(summary.commits), label: labelFor(summary.commits, 'commit') });
 		if (summary.kbPages) parts.push({ value: String(summary.kbPages), label: 'kb' });

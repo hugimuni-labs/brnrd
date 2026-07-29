@@ -207,7 +207,14 @@ def _github_authorized(settings, association: str, login: str) -> tuple[bool, st
     return False, f"unauthorized: association={association or 'NONE'}"
 
 
-def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any]) -> None:
+def _handle_github_issue_comment(
+    db: Session,
+    settings,
+    payload: dict[str, Any],
+    *,
+    token: str | None = None,
+    installation_id: str | None = None,
+) -> None:
     if payload.get("action") != "created":
         return
     repo_name = ((payload.get("repository") or {}).get("full_name") or "").strip()
@@ -233,9 +240,11 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
         return
     is_pr = bool(issue.get("pull_request")) or "/pull/" in str(comment.get("html_url") or "")
     reply_to: dict[str, Any] = {"platform": "github", "repo": repo_name, "issue_number": issue_number, "comment_id": comment_id, "kind": "pr-comment" if is_pr else "issue-comment", "author": author, "html_url": str(comment.get("html_url") or ""), "trigger": trigger_kind, "mention": trigger_text}
+    if installation_id:
+        reply_to["installation_id"] = installation_id
     repo = db.execute(select(Repo).where(Repo.repo_full_name == repo_name)).scalar_one_or_none()
     if repo is None:
-        _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT)
+        _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT, token=token)
         return
     # Free-tier headroom throttle + abuse ceilings (limits.py): a webhook
     # can't 429 GitHub, so this is the platform-appropriate polite drop —
@@ -248,11 +257,13 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
             "github limit reject repo=%s author=%s reason=%s",
             repo_name, author, decision.reason,
         )
-        _github_reply(settings, reply_to, decision.message)
+        _github_reply(settings, reply_to, decision.message, token=token)
         return
     if is_pr:
         reply_to["pr_number"] = issue_number
-        branch = _maybe_pr_branch(settings, repo_name, issue_number)
+        branch = _maybe_pr_branch(
+            settings, repo_name, issue_number, token=token
+        )
         if branch:
             reply_to["branch_target"] = branch
     inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
@@ -273,6 +284,7 @@ def _handle_github_summons(
         x_github_event,
         payload,
         settings.github_bot_login,
+        settings.github_trigger_label,
     )
     if summons is None:
         return
@@ -561,4 +573,17 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     if x_github_event == "issue_comment":
         with request.app.state.SessionLocal() as db:
             _handle_github_issue_comment(db, settings, payload)
+    elif github_summons.resolve_github_summons(
+        x_github_event,
+        payload,
+        settings.github_bot_login,
+        settings.github_trigger_label,
+    ) is not None:
+        with request.app.state.SessionLocal() as db:
+            _handle_github_summons(
+                db,
+                settings,
+                x_github_event,
+                payload,
+            )
     return {"ok": True}

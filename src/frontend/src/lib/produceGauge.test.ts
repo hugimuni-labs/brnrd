@@ -25,6 +25,7 @@ test('rollup keeps the trailing 24h honest and groups spend by shell', () => {
 				usd_subscription_attributed: 0.1,
 				external_refs: [
 					{ kind: 'pr', number: 12 },
+					{ kind: 'merge', pr: 9 },
 					{ kind: 'commit', sha: 'aaa' },
 					{ kind: 'kb', path: 'subject-a.md' },
 					{ kind: 'reply' }
@@ -39,6 +40,7 @@ test('rollup keeps the trailing 24h honest and groups spend by shell', () => {
 				usd_subscription_attributed: 0.2,
 				external_refs: [
 					{ kind: 'pr', number: '12' },
+					{ kind: 'merge', pr: '9' },
 					{ kind: 'pr' },
 					{ kind: 'commit', sha: 'bbb' },
 					{ kind: 'kb_page', path: 'decision-b.md' },
@@ -73,11 +75,12 @@ test('rollup keeps the trailing 24h honest and groups spend by shell', () => {
 	deepEqual(
 		{
 			prs: summary.prs,
+			mergedPrs: summary.mergedPrs,
 			commits: summary.commits,
 			kbPages: summary.kbPages,
 			replies: summary.replies
 		},
-		{ prs: 2, commits: 2, kbPages: 2, replies: 1 }
+		{ prs: 2, mergedPrs: 1, commits: 2, kbPages: 2, replies: 1 }
 	);
 });
 
@@ -92,6 +95,7 @@ test('empty window omits nullable spend instead of inventing zeroes', () => {
 		weeklyQuota: [],
 		usdSubscriptionAttributed: null,
 		prs: 0,
+		mergedPrs: 0,
 		commits: 0,
 		kbPages: 0,
 		replies: 0
@@ -104,6 +108,7 @@ test('linked produce stays inside the window, counted vocabulary, and safe URL s
 			row({
 				external_refs: [
 					{ kind: 'pr', number: 12, url: 'https://example.test/pull/12' },
+					{ kind: 'merge', pr: 9, url: 'https://example.test/pull/9' },
 					{ kind: 'commit', sha: 'abcdef0123', subject: 'ship it', url: null },
 					{ kind: 'kb_page', path: 'subject-a.md', url: 'https://example.test/subject-a' },
 					{ kind: 'reply', excerpt: 'done — receipt', url: 'https://example.test/reply/1' },
@@ -125,6 +130,7 @@ test('linked produce stays inside the window, counted vocabulary, and safe URL s
 
 	deepEqual(links, [
 		{ kind: 'pr', label: 'PR #12', url: 'https://example.test/pull/12' },
+		{ kind: 'merge', label: 'merged PR #9', url: 'https://example.test/pull/9' },
 		{ kind: 'kb', label: 'subject-a.md', url: 'https://example.test/subject-a' },
 		{ kind: 'reply', label: 'done — receipt', url: 'https://example.test/reply/1' }
 	]);

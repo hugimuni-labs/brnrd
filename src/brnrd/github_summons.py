@@ -23,6 +23,8 @@ class _SummonsSpec:
     event: str
     action: str
     login_field: str
+    target_field: str
+    target_source: str
     item_field: str
     kind: str
     trigger: str
@@ -36,6 +38,8 @@ _SUMMONS_SPECS = (
         event="issues",
         action="assigned",
         login_field="assignee",
+        target_field="login",
+        target_source="bot",
         item_field="issue",
         kind="issue-assignment",
         trigger="assignee",
@@ -47,6 +51,8 @@ _SUMMONS_SPECS = (
         event="pull_request",
         action="assigned",
         login_field="assignee",
+        target_field="login",
+        target_source="bot",
         item_field="pull_request",
         kind="pr-assignment",
         trigger="assignee",
@@ -58,12 +64,40 @@ _SUMMONS_SPECS = (
         event="pull_request",
         action="review_requested",
         login_field="requested_reviewer",
+        target_field="login",
+        target_source="bot",
         item_field="pull_request",
         kind="pr-review-request",
         trigger="reviewer",
         is_pull_request=True,
         actor_reply="Review requested by",
         anonymous_reply="the review request",
+    ),
+    _SummonsSpec(
+        event="issues",
+        action="labeled",
+        login_field="label",
+        target_field="name",
+        target_source="label",
+        item_field="issue",
+        kind="issue-label",
+        trigger="label",
+        is_pull_request=False,
+        actor_reply="Work labeled by",
+        anonymous_reply="the label",
+    ),
+    _SummonsSpec(
+        event="pull_request",
+        action="labeled",
+        login_field="label",
+        target_field="name",
+        target_source="label",
+        item_field="pull_request",
+        kind="pr-label",
+        trigger="label",
+        is_pull_request=True,
+        actor_reply="Work labeled by",
+        anonymous_reply="the label",
     ),
 )
 
@@ -77,6 +111,7 @@ def resolve_github_summons(
     x_github_event: str | None,
     payload: object,
     bot_login: str,
+    trigger_label: str = "brnrd",
 ) -> GitHubSummons | None:
     """Resolve a webhook payload addressed to ``bot_login``, if any."""
 
@@ -91,8 +126,12 @@ def resolve_github_summons(
     target = payload.get(spec.login_field)
     if not isinstance(target, dict):
         return None
-    login = str(target.get("login") or "").strip()
-    wanted = str(bot_login or "").strip()
+    login = str(target.get(spec.target_field) or "").strip()
+    wanted = str(
+        trigger_label if spec.target_source == "label" else bot_login
+    ).strip()
+    if spec.target_source == "bot":
+        wanted = wanted.lstrip("@")
     if not login or not wanted or login.casefold() != wanted.casefold():
         return None
 
