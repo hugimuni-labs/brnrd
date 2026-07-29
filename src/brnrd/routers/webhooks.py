@@ -15,7 +15,14 @@ from sqlalchemy.orm import Session
 
 from brr.gates.github import parse as gh_parse
 
-from .. import billing, ids, inbox as inbox_service, limits, stripe_api
+from .. import (
+    billing,
+    github_summons,
+    ids,
+    inbox as inbox_service,
+    limits,
+    stripe_api,
+)
 from ..models import Account, ChannelRoute, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
@@ -251,51 +258,49 @@ def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any])
     inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
 
 
-def _handle_github_assignment(
+def _handle_github_summons(
     db: Session,
     settings,
+    x_github_event: str | None,
     payload: dict[str, Any],
     *,
     token: str | None = None,
     installation_id: str | None = None,
 ) -> None:
-    """Turn assignment to the marker account into a managed inbox event."""
+    """Turn a GitHub summons to the marker account into an inbox event."""
 
-    if payload.get("action") != "assigned":
-        return
-    assignee = str(
-        ((payload.get("assignee") or {}).get("login") or "")
-    ).strip()
-    if assignee.casefold() != settings.github_bot_login.casefold():
+    summons = github_summons.resolve_github_summons(
+        x_github_event,
+        payload,
+        settings.github_bot_login,
+    )
+    if summons is None:
         return
 
     repo_name = str(
         ((payload.get("repository") or {}).get("full_name") or "")
     ).strip()
-    is_pr = bool(payload.get("pull_request"))
-    item = (
-        payload.get("pull_request") if is_pr else payload.get("issue")
-    ) or {}
+    item = summons.item
     issue_number = _coerce_int(item.get("number") or payload.get("number"))
     if not repo_name or issue_number is None:
         return
 
-    assigner = str(
+    sender = str(
         ((payload.get("sender") or {}).get("login") or "")
     ).strip()
-    # The signed assignment event is itself the authorization proof: GitHub
-    # only lets a triage-or-higher repo actor assign another user. Judge the
-    # assigner, not the issue author — a maintainer must be able to summon the
-    # resident on a drive-by report.
+    # The signed summons event is itself the authorization proof: GitHub
+    # requires triage-or-higher to assign and write access to request a
+    # review. Judge the sender, not the issue/PR author — a maintainer must be
+    # able to summon the resident on a drive-by contribution.
     reply_to: dict[str, Any] = {
         "platform": "github",
         "repo": repo_name,
         "issue_number": issue_number,
-        "kind": "pr-assignment" if is_pr else "issue-assignment",
-        "author": assigner,
+        "kind": summons.kind,
+        "author": sender,
         "html_url": str(item.get("html_url") or ""),
-        "trigger": "assignee",
-        "assignee": assignee,
+        "trigger": summons.trigger,
+        summons.login_field: summons.login,
     }
     if installation_id:
         reply_to["installation_id"] = installation_id
@@ -319,15 +324,16 @@ def _handle_github_assignment(
     )
     if not decision.allowed:
         logger.warning(
-            "github limit reject repo=%s author=%s trigger=assignee reason=%s",
+            "github limit reject repo=%s author=%s trigger=%s reason=%s",
             repo_name,
-            assigner,
+            sender,
+            summons.trigger,
             decision.reason,
         )
         _github_reply(settings, reply_to, decision.message, token=token)
         return
 
-    if is_pr:
+    if summons.is_pull_request:
         reply_to["pr_number"] = issue_number
         branch = _maybe_pr_branch(
             settings,
