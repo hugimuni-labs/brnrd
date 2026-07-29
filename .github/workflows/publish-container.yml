@@ -1,0 +1,61 @@
+name: Publish backend container
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    env:
+      GHCR_IMAGE: ghcr.io/hugimuni-labs/brnrd
+      # Full target without a tag, for example:
+      # rg.<region>.scw.cloud/<namespace>/brnrd
+      SCW_REGISTRY_IMAGE: ${{ secrets.SCW_REGISTRY_IMAGE }}
+      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive immutable image tag
+        id: image
+        shell: bash
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push canonical image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.GHCR_IMAGE }}:${{ steps.image.outputs.tag }}
+          build-args: BRNRD_BUILD_COMMIT=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      # Missing secrets expand to empty strings. Keep every Scaleway operation
+      # inside this guarded step so main remains green before the account and
+      # registry namespace exist.
+      - name: Mirror image to Scaleway Container Registry
+        if: ${{ env.SCW_SECRET_KEY != '' && env.SCW_REGISTRY_IMAGE != '' }}
+        shell: bash
+        run: |
+          registry="${SCW_REGISTRY_IMAGE%%/*}"
+          printf '%s' "$SCW_SECRET_KEY" | docker login "$registry" --username nologin --password-stdin
+          docker pull "$GHCR_IMAGE:${{ steps.image.outputs.tag }}"
+          docker tag "$GHCR_IMAGE:${{ steps.image.outputs.tag }}" "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
+          docker push "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
