@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Collection
 
+import anyio
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -218,7 +219,21 @@ def fetch_since_many(
     )
 
 
-def long_poll_many(
+def _fetch_since_many_detached(
+    session_factory: sessionmaker,
+    repo_ids: Collection[str],
+    since: int,
+) -> list[Event]:
+    """Read one account-wide poll without leaking session-bound rows."""
+
+    with session_factory() as db:
+        events = fetch_since_many(db, repo_ids, since)
+        for event in events:
+            db.expunge(event)
+    return events
+
+
+async def long_poll_many(
     session_factory: sessionmaker,
     repo_ids: Collection[str],
     since: int,
@@ -226,15 +241,24 @@ def long_poll_many(
     max_wait_s: float,
     interval_s: float,
 ) -> list[Event]:
+    """Long-poll without occupying FastAPI's worker pool while waiting.
+
+    Only each short SQL read enters a worker thread. The interval itself is
+    asynchronous, so connected daemons no longer reserve one of AnyIO's
+    default 40 worker tokens for the full 25-second request.
+    """
+
     deadline = time.monotonic() + max(0.0, max_wait_s)
     while True:
-        with session_factory() as db:
-            events = fetch_since_many(db, repo_ids, since)
-            for event in events:
-                db.expunge(event)
+        events = await anyio.to_thread.run_sync(
+            _fetch_since_many_detached,
+            session_factory,
+            repo_ids,
+            since,
+        )
         if events or time.monotonic() >= deadline:
             return events
-        time.sleep(interval_s)
+        await anyio.sleep(interval_s)
 
 
 def _body_sha(body_markdown: str) -> str:
