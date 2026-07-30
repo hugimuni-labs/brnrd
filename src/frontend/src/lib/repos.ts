@@ -127,10 +127,11 @@ export interface RepoActionResponse {
 
 export class ReposAuthError extends Error {}
 
-// #885: a paired repo renders a quiet status plus a secondary re-pair
-// action. Keep "Telegram" in the action itself: on a narrow phone the status
-// sits on its own line above two equal-width actions, so "re-pair" alone no
-// longer has to borrow context from a neighbouring label.
+// #885: a paired repo renders a quiet status line; the re-pair action lives
+// *inside* it, behind the status disclosure, because re-pairing is an
+// exception (the chat moved, the route broke) and not a routine act. Keep
+// "Telegram" in the action itself: revealed on its own, the label has no
+// neighbouring control to borrow context from.
 export function telegramPairLabel(paired: boolean, busy: boolean): string {
 	if (paired) return busy ? 're-pairing Telegram' : 're-pair Telegram';
 	return busy ? 'pairing' : 'pair Telegram';
