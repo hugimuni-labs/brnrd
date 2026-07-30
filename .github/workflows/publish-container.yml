@@ -19,6 +19,10 @@ jobs:
       # rg.<region>.scw.cloud/<namespace>/brnrd
       SCW_REGISTRY_IMAGE: ${{ secrets.SCW_REGISTRY_IMAGE }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      # The Serverless Container to roll the mirrored image out to. Optional
+      # until the cutover target exists; when absent the deploy tail is
+      # skipped with a visible notice, never silently.
+      SCW_CONTAINER_ID: ${{ secrets.SCW_CONTAINER_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -67,3 +71,52 @@ jobs:
           docker pull "$GHCR_IMAGE:${{ steps.image.outputs.tag }}"
           docker tag "$GHCR_IMAGE:${{ steps.image.outputs.tag }}" "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
           docker push "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
+
+      # The deploy tail (#848: registry tags are the release mechanism, and a
+      # published image nobody rolls out is not a release). Region is derived
+      # from the registry host (rg.<region>.scw.cloud) so there is no second
+      # copy of that fact to drift.
+      - name: Deploy the mirrored image to the Serverless Container
+        if: ${{ env.SCW_SECRET_KEY != '' && env.SCW_REGISTRY_IMAGE != '' && env.SCW_CONTAINER_ID != '' }}
+        shell: bash
+        run: |
+          image="$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
+          region="${SCW_REGISTRY_IMAGE#rg.}"; region="${region%%.*}"
+          base="https://api.scaleway.com/containers/v1beta1/regions/${region}/containers/${SCW_CONTAINER_ID}"
+          echo "Rolling out ${image} (region ${region})"
+          curl --silent --show-error --fail -o /dev/null \
+            --request PATCH \
+            --header "X-Auth-Token: ${SCW_SECRET_KEY}" \
+            --header 'Content-Type: application/json' \
+            --data "{\"registry_image\": \"${image}\"}" \
+            "$base"
+          curl --silent --show-error --fail -o /dev/null \
+            --request POST \
+            --header "X-Auth-Token: ${SCW_SECRET_KEY}" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "${base}/deploy"
+          # A deploy that never goes ready is a failed publication, reported
+          # red here rather than discovered later on a dead origin (#892's
+          # rule: the step outcome is the receipt, not the run headline).
+          for _ in $(seq 1 60); do
+            body=$(curl --silent --fail --header "X-Auth-Token: ${SCW_SECRET_KEY}" "$base")
+            status=$(printf '%s' "$body" | python3 -c 'import json,sys; c=json.load(sys.stdin); print(c.get("status",""))')
+            echo "container status: ${status}"
+            if [ "$status" = "ready" ]; then
+              exit 0
+            fi
+            if [ "$status" = "error" ]; then
+              printf '%s' "$body" | python3 -c 'import json,sys; c=json.load(sys.stdin); print("::error::container deploy failed:", c.get("error_message") or "unknown")'
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::container did not reach ready within 300s"
+          exit 1
+
+      - name: Note the skipped deploy tail
+        if: ${{ env.SCW_SECRET_KEY != '' && env.SCW_REGISTRY_IMAGE != '' && env.SCW_CONTAINER_ID == '' }}
+        shell: bash
+        run: |
+          echo "::notice::Image mirrored but not deployed - SCW_CONTAINER_ID is not set, so no container was rolled out."

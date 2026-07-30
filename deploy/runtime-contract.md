@@ -42,7 +42,7 @@ Invalid numeric values use the defaults shown above.
 | `BRNRD_TELEGRAM_BOT_TOKEN` | **Yes** | Empty | Telegram webhook registration, message/card delivery, and attachment retrieval in `app`, `inbox`, and `routers.daemons`/`routers.webhooks`. |
 | `BRNRD_TELEGRAM_WEBHOOK_SECRET` | **Yes** | Empty | Telegram webhook signature check and automatic webhook registration. |
 | `BRNRD_TELEGRAM_BOT_USERNAME` | No | Empty | `routers.pairing` builds the Telegram deep link. |
-| `BRNRD_TELEGRAM_AUTO_WEBHOOK` | No | `true` | `app` decides whether startup registers the public Telegram webhook. |
+| `BRNRD_TELEGRAM_AUTO_WEBHOOK` | No | `true` | `app` decides whether startup registers the public Telegram webhook. **A bot has exactly one webhook: a second deployment sharing the bot token steals the registration on every instance start.** Shadow/staging deployments must set `0`. |
 | `BRNRD_TELEGRAM_AUTHZ_ALLOWLIST` | No | Empty | Comma-separated Telegram user IDs allowed by `routers.webhooks` in addition to the paired principal. |
 | `BRNRD_TELEGRAM_MEDIA_MAX_MB` | No | `10` | `routers.daemons` caps attachment proxy buffering. |
 
