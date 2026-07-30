@@ -24,21 +24,15 @@ ARG BRNRD_BUILD_COMMIT=""
 COPY pyproject.toml README.md LICENSE LICENSE-OVERVIEW.md ./
 COPY src/brr ./src/brr
 COPY src/brnrd ./src/brnrd
+COPY scripts/stamp_build_info.py ./scripts/stamp_build_info.py
 RUN python -m pip install --no-cache-dir ".[backend,postgres]" \
     && rm -rf /app/src
 
-RUN python - <<'PY'
-import datetime
-import os
-from pathlib import Path
-
-import brnrd
-
-commit = os.environ.get("BRNRD_BUILD_COMMIT", "")
-built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-path = Path(brnrd.__file__).with_name("build_info.txt")
-path.write_text(f"{commit}\n{built_at}\n", encoding="utf-8")
-PY
+# Stamp the installed package with the build identity (BRNRD_BUILD_COMMIT
+# build arg -> three-line build_info.txt) so /v1/stats/version can answer
+# "is my merge live?" honestly. scripts/stamp_build_info.py is the one
+# writer of that file, shared with the Upsun build hook.
+RUN python scripts/stamp_build_info.py && rm -rf /app/scripts
 
 COPY --from=frontend-builder /build/frontend/build /app/frontend
 
