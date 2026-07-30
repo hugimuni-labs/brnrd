@@ -34,6 +34,17 @@ export interface ConnectedRepo {
 	// `null` = no consent recorded — this repo connected before the setting
 	// existed, and nothing server-side is enforced for it.
 	publish_layers: string | null;
+	// #874 — brnrd-bot's own marker-collaborator state. `null` = unknown (no
+	// bot token configured, never checked yet, or the last check was
+	// ambiguous) — render that distinctly from a checked-and-false "not a
+	// collaborator"; never show it as though it were determined.
+	github_bot_collaborator: boolean | null;
+	github_bot_checked_at: string | null;
+	// Pre-rendered one-sentence absence line (server-owned wording), present
+	// only when `github_bot_collaborator === false`.
+	github_bot_marker_notice: string | null;
+	// Last acceptance/check *failure*, distinct from the absence line above.
+	github_bot_notice: string | null;
 }
 
 export interface EnvironmentOption {

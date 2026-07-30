@@ -78,6 +78,15 @@ def _build_env(monkeypatch, **extra_settings):
         "brnrd.platforms.github.fetch_pull_head_ref",
         lambda *a, **k: "feature-x",
     )
+    # #874 — every `_repo()` call in this module runs through `create_repo`,
+    # which now triggers `github_marker.sync_marker_for_repos`. `env`'s
+    # `github_bot_token` is truthy, so without this the whole suite would
+    # hit real network on every repo creation; default it to "no pending
+    # invitations, unknown collaborator state" like every other GitHub
+    # transport call this builder already fakes. Tests that care about the
+    # marker flow itself override these per-test.
+    monkeypatch.setattr("brnrd.platforms.github.list_repository_invitations", lambda *a, **k: [])
+    monkeypatch.setattr("brnrd.platforms.github.check_repository_collaborator", lambda *a, **k: None)
     settings = Settings(
         database_url="sqlite:///:memory:",
         inbox_long_poll_max_s=0.2,
@@ -460,6 +469,62 @@ def test_legacy_webhook_routes_assignment_through_the_same_ingress(env):
         headers=_daemon_headers(client, acc, rid),
     ).json()
     assert drained["events"][0]["reply_to"]["kind"] == "issue-assignment"
+
+
+def test_github_identity_candidates_dedupes_and_preserves_order():
+    from brnrd import github_summons
+    from brnrd.config import Settings
+
+    settings = Settings(github_bot_login="brnrd-bot", github_app_slug="brnrd-dev")
+    assert github_summons.github_identity_candidates(settings) == [
+        "brnrd-bot",
+        "brnrd-dev",
+        "brr-bot",
+    ]
+
+    # bot_login *is* the legacy alias here — no duplicate entry, and no
+    # behaviour change for every existing test in this module (`_build_env`
+    # pins `github_bot_login="brr-bot"`).
+    settings = Settings(github_bot_login="brr-bot", github_app_slug="brnrd-dev")
+    assert github_summons.github_identity_candidates(settings) == ["brr-bot", "brnrd-dev"]
+
+
+def test_legacy_alias_assignment_summons_even_when_the_configured_login_differs(monkeypatch):
+    """#874's unify ask: `resolve_github_summons` used to check only the
+    configured ``bot_login`` for assignee/reviewer matching, while mention
+    matching already honored {bot_login, app_slug, legacy ``brr-bot``} —
+    inconsistent by construction. An assignment to the legacy name silently
+    failed to summon whenever a repo's configured login had moved away from
+    ``brr-bot``; this reproduces that gap and pins the fix (one shared
+    candidate list, `github_summons.github_identity_candidates`)."""
+    monkeypatch.setattr("brnrd.platforms.github.list_repository_invitations", lambda *a, **k: [])
+    monkeypatch.setattr("brnrd.platforms.github.check_repository_collaborator", lambda *a, **k: None)
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        inbox_long_poll_max_s=0.2,
+        inbox_poll_interval_s=0.02,
+        github_webhook_secret=_SECRET,
+        github_bot_login="brnrd-bot",
+        github_bot_token="ghs_test",
+    )
+    client = TestClient(create_app(settings))
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    response = _github_post(
+        client,
+        _assignment_payload(assignee="brr-bot"),
+        event="issues",
+    )
+
+    assert response.status_code == 200, response.text
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    assert drained["events"][0]["reply_to"]["kind"] == "issue-assignment"
+    assert drained["events"][0]["reply_to"]["assignee"] == "brr-bot"
 
 
 def test_app_assignment_enqueues_and_replies_as_installation_bot(
@@ -1214,6 +1279,11 @@ def _app_env(monkeypatch, *, github_webhook_secret: str = _SECRET):
     Built directly rather than through `_build_env`, which pins the secret to
     `_SECRET` — the unset-secret case is exactly what these tests need to reach.
     """
+    # #874 — same defensive default as `_build_env`: a truthy `github_bot_token`
+    # below means any repo bind under this builder would otherwise reach real
+    # network through `github_marker.sync_marker_for_repos`.
+    monkeypatch.setattr("brnrd.platforms.github.list_repository_invitations", lambda *a, **k: [])
+    monkeypatch.setattr("brnrd.platforms.github.check_repository_collaborator", lambda *a, **k: None)
     settings = Settings(
         database_url="sqlite:///:memory:",
         github_webhook_secret=github_webhook_secret,

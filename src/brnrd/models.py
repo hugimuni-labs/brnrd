@@ -125,6 +125,19 @@ class Repo(Base):
     # enforced server-side at the `PUT /v1/daemons/*` publish seam, not only
     # hidden in the connect UI.
     publish_layers: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # brnrd-bot's own marker-collaborator state (#874, rescoped 2026-07-29).
+    # ``None`` = never determined — no bot token configured, never checked
+    # yet, or the last check was ambiguous (see
+    # ``github_marker.check_repository_collaborator``, which only ever
+    # returns True/False from GitHub's own documented 204/404 contract for
+    # this endpoint, raising on anything else so the caller can record
+    # "unknown" instead of guessing).
+    github_bot_collaborator: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+    # Last acceptance/check failure, human-readable, cleared on the next
+    # successful check — never silence (#868's marker-optional stance plus
+    # #874's "surface it, never drop it").
+    github_bot_notice: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_bot_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     account: Mapped["Account"] = relationship(back_populates="repos")
 
 

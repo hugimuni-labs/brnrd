@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .. import github_summons, ids
+from .. import github_marker, github_summons, ids
 from ..auth import account_id_from_session_cookie, get_db
 from ..models import Account, GitHubInstallation, GitHubInstalledRepo
 from ..platforms import github_app as gh_app
@@ -119,6 +119,20 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     installation.target_type = target_type or installation.target_type
     installation.last_synced_at = datetime.now(timezone.utc)
     db.commit()
+    if installation.account_id:
+        # #874 — the invite can arrive before or after bind; installation
+        # sync is the other side of that race (repo bind, in `_session.py`
+        # / `routers/accounts.py`, is the first). Best-effort: a marker
+        # failure here must never fail an installation sync.
+        try:
+            bound_repos = github_marker.account_repos(db, installation.account_id)
+            github_marker.sync_marker_for_repos(db, settings, bound_repos)
+        except Exception as exc:
+            logger.warning(
+                "brnrd-bot marker sync failed after installation %s sync: %s",
+                installation.installation_id,
+                exc,
+            )
     return installation
 
 
@@ -329,7 +343,7 @@ async def github_app_webhook(request: Request, x_hub_signature_256: Annotated[st
         or github_summons.resolve_github_summons(
             x_github_event,
             payload,
-            settings.github_bot_login,
+            github_summons.github_identity_candidates(settings),
             settings.github_trigger_label,
         ) is not None
     ):

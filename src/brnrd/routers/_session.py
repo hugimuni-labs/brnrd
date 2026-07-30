@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from brnrd import ids, limits, oauth, publish_scope, terms
+from brnrd import github_marker, ids, limits, oauth, publish_scope, terms
 from brnrd.auth import account_id_from_session_cookie, get_db  # noqa: F401  re-exported so callers can import from here
 from brnrd.models import (
     Account,
@@ -40,6 +40,11 @@ from brnrd.routers.pairing import approve_core, telegram_pair_core
 from brnrd.security import hash_token
 
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
+# #874 — the coarse re-check: no new scheduler, piggybacked on the same
+# staleness-gated recheck-on-dashboard-load pattern `_github_auto_sync_if_needed`
+# already uses, so an invite that arrives after both bind and installation
+# sync still gets caught within one dashboard visit's staleness window.
+_GITHUB_MARKER_RECHECK_AFTER = timedelta(minutes=15)
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
 # `_HOSTED_TERMS_VERSION` used to live here as a literal. It is gone (#735):
 # a version now belongs to its document in `brnrd.terms`, next to the pinned
@@ -59,6 +64,7 @@ __all__ = [
     "_dt",
     "_general_terms_accept_url",
     "_github_auto_sync_if_needed",
+    "_github_marker_sync_if_needed",
     "_github_oauth_ready",
     "_github_sync_configured",
     "_installations",
@@ -82,6 +88,7 @@ __all__ = [
     "_time_label",
     "_DAEMON_ONLINE_AFTER",
     "_GITHUB_AUTO_SYNC_AFTER",
+    "_GITHUB_MARKER_RECHECK_AFTER",
 ]
 
 
@@ -243,6 +250,35 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
     return github_sync_notice(result)
 
 
+def _github_marker_sync_if_needed(request: Request, db: Session, account_id: str) -> None:
+    """The coarse re-check (#874): catches an invitation that arrives after
+    both bind and installation sync, without a new scheduler — gated on
+    staleness exactly like ``_github_auto_sync_if_needed`` above, and called
+    from the same dashboard-load site. Produces no notice string of its own;
+    per-repo results land on ``Repo.github_bot_notice`` / `.github_bot_collaborator`
+    and are read back in ``dashboard._repo_view_out``.
+    """
+    settings = request.app.state.settings
+    if not settings.github_bot_token:
+        return
+    repos = _repos(db, account_id)
+    if not repos:
+        return
+    now = datetime.now(timezone.utc)
+    stale = [
+        r
+        for r in repos
+        if _dt(r.github_bot_checked_at) is None
+        or now - _dt(r.github_bot_checked_at) > _GITHUB_MARKER_RECHECK_AFTER
+    ]
+    if not stale:
+        return
+    try:
+        github_marker.sync_marker_for_repos(db, settings, stale)
+    except Exception as e:
+        print(f"[brnrd] github marker recheck failed: {e}")
+
+
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo enabled. Set up a local brnrd daemon to start draining work.",
@@ -359,6 +395,13 @@ def _connect_repo_core(
     repo.default_branch = default_branch or repo.default_branch
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
+    # #874 — bind is one of the two moments an invite can already be
+    # sitting pending (the other is installation sync, `github_app.py`).
+    # Best-effort: a marker failure must never fail the connect itself.
+    try:
+        github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
+    except Exception as exc:
+        print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
     return "repo-connected"
 
 

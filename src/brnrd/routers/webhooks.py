@@ -111,16 +111,7 @@ def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: s
 
 
 def _github_mention_candidates(settings) -> list[str]:
-    out, seen = [], set()
-    for handle in [settings.github_bot_login, getattr(settings, "github_app_slug", ""), "brr-bot"]:
-        login = str(handle or "").strip().lstrip("@")
-        if login:
-            mention = f"@{login}"
-            key = mention.casefold()
-            if key not in seen:
-                out.append(mention)
-                seen.add(key)
-    return out
+    return [f"@{login}" for login in github_summons.github_identity_candidates(settings)]
 
 
 def _github_command_candidates(settings) -> list[str]:
@@ -283,7 +274,7 @@ def _handle_github_summons(
     summons = github_summons.resolve_github_summons(
         x_github_event,
         payload,
-        settings.github_bot_login,
+        github_summons.github_identity_candidates(settings),
         settings.github_trigger_label,
     )
     if summons is None:
@@ -576,7 +567,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
     elif github_summons.resolve_github_summons(
         x_github_event,
         payload,
-        settings.github_bot_login,
+        github_summons.github_identity_candidates(settings),
         settings.github_trigger_label,
     ) is not None:
         with request.app.state.SessionLocal() as db:
