@@ -24,7 +24,10 @@
 	const TTL_RUN_MIRROR_DAYS = 14; // brr/gates/cloud.py :: _RUNS_WINDOW_DAYS_DEFAULT
 
 	const CONTACT = 'security@hugimuni.fr';
-	const LAST_UPDATED = '2026-07-24';
+	// 2026-07-30: §5 gained the hosting region and its transfer basis (the one
+	// sub-processor holding everything was the only one disclosing neither),
+	// §8 caught up with shipped self-service deletion, §1 with the written DPA.
+	const LAST_UPDATED = '2026-07-30';
 </script>
 
 <svelte:head><title>brnrd privacy notice</title></svelte:head>
@@ -81,8 +84,10 @@
 					</li>
 				</ul>
 				<p class="mt-2">
-					A data processing agreement covering the processor half is being prepared. Ask us for the
-					current draft if you need one now.
+					A data processing agreement covering the processor half is written — Article 28 terms,
+					Annex I/II, the sub-processor list and the transfer basis. It has not yet been reviewed by
+					external counsel, and we would rather say so than imply a clearance we do not have. Ask us
+					for it and we will send it.
 				</p>
 			</section>
 
@@ -313,8 +318,15 @@
 				</p>
 				<ul class="mt-2 list-disc space-y-2 pl-5">
 					<li>
-						<strong class="text-stone-200">Upsun (Platform.sh)</strong> — hosting and the PostgreSQL database.
-						This is where everything described above is stored, and it is the only place we store it.
+						<strong class="text-stone-200">Upsun (Platform.sh)</strong> — hosting and the PostgreSQL
+						database. This is where everything described above is stored, and it is the only place
+						we store it. The region is <code class="font-mono text-xs text-amber-200">ch-1</code>,
+						Switzerland: outside the EEA, and the transfer relies on the European Commission's
+						<a
+							class="text-sky-400 underline"
+							href="https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en"
+							rel="external">adequacy decision for Switzerland</a
+						>. The provider is a French company; the machines are not.
 					</li>
 					<li>
 						<strong class="text-stone-200">Stripe</strong> — payments, as merchant of record. Receives
@@ -398,13 +410,17 @@
 				<p class="mt-2">
 					<strong class="text-stone-200">Being straight about deletion.</strong> Disconnecting your
 					repositories does most of the work automatically — it removes the queued messages, task
-					rows, chat pairings, tokens and, on the last one, the mirror. What it does not remove is
-					your account record itself: your GitHub id, login, email and Stripe customer id survive
-					it. There is currently
-					<strong class="text-stone-200">no self-service button that erases an account</strong>, and
-					we would rather write that sentence than show you one that does not exist. Until we ship
-					it, email us and we will do it by hand within the statutory month. Building the endpoint
-					is tracked work, not an aspiration.
+					rows, chat pairings, tokens and, on the last one, the mirror. Erasing the account itself
+					is the
+					<strong class="text-stone-200">delete account</strong>
+					control in dashboard settings; it asks you to re-type your GitHub login, cancels any live subscription
+					immediately rather than at period end, and then clears every account-keyed store we hold. Two
+					things survive it deliberately, and you should know which: the append-only billing ledger, whose
+					statutory retention period we have not yet had confirmed by counsel, and the account row it
+					hangs off — that row's identifying columns (GitHub id, login, email, Stripe customer id) are
+					blanked and the row is left as a tombstone, because the ledger's reference to it has to stay
+					valid. Stripe keeps its own copy of your invoice history under its own retention, not ours.
+					If you would rather we did it by hand, email us and we will, within the statutory month.
 				</p>
 				<p class="mt-2">
 					You can also complain to the French supervisory authority, the
