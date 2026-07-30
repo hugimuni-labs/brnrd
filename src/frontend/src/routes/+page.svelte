@@ -55,6 +55,7 @@
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { backchannelCount } from '$lib/backchannel';
+	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
 	import { LENS_ALL, LENS_BACKCHANNEL, applyLens } from '$lib/loomLens';
@@ -218,10 +219,27 @@
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
-	let pendingBackchannelCount = $derived(backchannelCount(prReviewQueue, configRequests));
 
 	let surfaceData = $state<SurfaceResponse | null>(null);
 	let surfaceError = $state<string | null>(null);
+
+	// #875 v2: the backchannel's authored half lives in the same discovered
+	// corpus §3 already fetches — no second endpoint, just a second reader of
+	// `surfaceData`. `knownPaths` lets an item body's internal links resolve
+	// the same way the corpus browser's do (`WorkSurface.svelte`).
+	const BACKCHANNEL_SURFACE_PATH = 'surface/backchannel.md';
+	let backchannelFile = $derived(
+		surfaceData?.files.find((f) => f.path === BACKCHANNEL_SURFACE_PATH) ?? null
+	);
+	let authoredBackchannelItems = $derived(
+		backchannelFile ? parseBackchannelPage(backchannelFile.markdown) : []
+	);
+	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
+	// The lens badge and the "does anything wait" question now span three
+	// feeds, not two — authored items are the primary one.
+	let pendingBackchannelCount = $derived(
+		authoredBackchannelItems.length + backchannelCount(prReviewQueue, configRequests)
+	);
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
 	// band is the page's temporal spine and the only renderer of past/now/
@@ -771,6 +789,8 @@
 							<p class="text-sm text-ink-quiet">Loading…</p>
 						{:else}
 							<BackchannelQueue
+								authoredItems={authoredBackchannelItems}
+								knownPaths={surfaceKnownPaths}
 								prs={prReviewQueue ?? []}
 								requests={configRequests ?? []}
 								stale={prReviewQueueStale}
