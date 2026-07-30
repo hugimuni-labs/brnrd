@@ -61,7 +61,7 @@ test('telegramPairLabel: unpaired and busy reads "pairing"', () => {
 	assert.equal(telegramPairLabel(false, true), 'pairing');
 });
 
-test('telegramPairLabel: paired and idle reads the secondary "re-pair"', () => {
+test('telegramPairLabel: paired and idle reads the disclosed "re-pair"', () => {
 	assert.equal(telegramPairLabel(true, false), 're-pair Telegram');
 });
 
