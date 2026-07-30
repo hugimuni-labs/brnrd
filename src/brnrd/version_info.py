@@ -4,11 +4,21 @@
 stamp and inferring. This module gives the backend an honest answer instead:
 a ``build_info.txt`` dropped into the installed package by the Upsun build
 hook (commit sha when the build tree carries ``.git``, else
-``PLATFORM_TREE_ID``, plus a UTC build stamp), and the process start time.
+``PLATFORM_TREE_ID``, plus a UTC build stamp, plus which of the two the sha
+line actually is), and the process start time.
 
 Local/dev installs have no ``build_info.txt``; every field degrades to
 ``None`` rather than guessing — an absent answer is honest, a fabricated
 one is not.
+
+``build_info.txt``'s third line is the honesty fix (2026-07-30 incident):
+the build tree the Upsun hook runs in has no ``.git``, so the sha lookup
+always fell through to the tree id, and ``commit`` reported that tree id
+unconditionally — the field named "is my merge live?" could never actually
+answer it. A file stamped before this fix has no third line, and an absent
+source reads as unknown rather than as a guessed ``"tree"`` — a two-line
+``build_info.txt`` predates the distinction entirely, so guessing either way
+would just relocate the same dishonesty.
 """
 
 from __future__ import annotations
@@ -29,8 +39,15 @@ def build_info() -> dict[str, Any]:
     built_at: str | None = None
     try:
         lines = _BUILD_INFO_PATH.read_text(encoding="utf-8").splitlines()
-        commit = (lines[0].strip() or None) if lines else None
+        value = (lines[0].strip() or None) if lines else None
         built_at = (lines[1].strip() or None) if len(lines) > 1 else None
+        source = (lines[2].strip() or None) if len(lines) > 2 else None
+        # Only a build hook that recorded "this line is a real git sha" may
+        # populate ``commit`` — a source-less (pre-fix) or ``tree`` file
+        # means the first line is (or may be) the tree id, and reporting it
+        # as ``commit`` is exactly the bug this field exists to end.
+        if source == "git":
+            commit = value
     except OSError:
         pass
     return {
