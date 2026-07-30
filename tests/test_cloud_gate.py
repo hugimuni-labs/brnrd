@@ -415,6 +415,42 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert protocol.list_pending(inbox_dir) == []
 
 
+def test_loop_persists_the_server_fingerprint(tmp_path, monkeypatch):
+    """What prod is actually running rides the inbox long-poll the gate
+    already drains (2026-07-30 task) — no new request, and the daemon
+    persists it locally so a wake can render it network-free."""
+    from brnrd import version_info
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    stamped = tmp_path / "build_info.txt"
+    stamped.write_text(
+        "bebd5c1d\n2026-07-30T10:19:01+00:00\ngit\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
+    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
+
+    assert cloud.read_server_fingerprint(brr_dir) is None  # nothing fetched yet
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    fingerprint = cloud.read_server_fingerprint(brr_dir)
+    assert fingerprint["build"]["commit"] == "bebd5c1d"
+    assert fingerprint["build"]["tree_id"] == "bebd5c1d"
+    assert fingerprint["github"]["bot_login"] == "brnrd-bot"
+    assert fingerprint["github"]["webhook_secret_set"] is False
+    assert fingerprint["github"]["bot_token_set"] is False
+    assert fingerprint["fetched_at"]  # local stamp, not from the server
+
+
 def test_streaming_interims_and_terminal_all_reach_the_platform(tmp_path, monkeypatch):
     """Regression (2026-07-18): the gate posted every delivery as ``done``,
     so the server closed the event on the first interim and silently skipped

@@ -678,6 +678,33 @@ async def inbox(request: Request, since: int | None = Query(default=None), wait:
             for event in events
         ],
         cursor=cursor,
+        server=_server_fingerprint(settings),
+    )
+
+
+def _server_fingerprint(settings) -> schemas.ServerFingerprint:
+    """What prod is actually running, riding the inbox long-poll for free.
+
+    Booleans only for the two credential fields — see
+    ``schemas.ServerGithubOut``. Everything else is the *effective* config
+    already visible to anyone who reads an issue the bot commented on.
+    """
+    from .. import version_info
+
+    return schemas.ServerFingerprint(
+        build=schemas.ServerBuildOut(**version_info.build_info()),
+        github=schemas.ServerGithubOut(
+            bot_login=str(settings.github_bot_login or "").strip().lstrip("@"),
+            app_slug=str(settings.github_app_slug or ""),
+            trigger_label=str(settings.github_trigger_label or ""),
+            trigger_aliases=[
+                a.strip()
+                for a in str(settings.github_trigger_aliases or "").split(",")
+                if a.strip()
+            ],
+            webhook_secret_set=bool(settings.github_webhook_secret),
+            bot_token_set=bool(settings.github_bot_token),
+        ),
     )
 
 

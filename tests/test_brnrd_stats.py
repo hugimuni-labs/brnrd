@@ -80,14 +80,51 @@ def test_deployed_version_is_public_and_never_fabricates(tmp_path, monkeypatch):
     assert payload["tree_id"] is None
     assert payload["started_at"]  # process start is always known
 
+    # A genuine git-sourced sha, third line says so — the only case
+    # `commit` may carry a value.
     stamped = tmp_path / "build_info.txt"
-    stamped.write_text("abc1234\n2026-07-21T18:00:00+00:00\n", encoding="utf-8")
+    stamped.write_text(
+        "abc1234\n2026-07-21T18:00:00+00:00\ngit\n", encoding="utf-8",
+    )
     monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
     monkeypatch.setenv("PLATFORM_TREE_ID", "tree-xyz")
     payload = client.get("/v1/stats/version").json()
     assert payload["commit"] == "abc1234"
     assert payload["built_at"] == "2026-07-21T18:00:00+00:00"
     assert payload["tree_id"] == "tree-xyz"
+
+
+def test_deployed_version_reports_tree_source_as_no_commit(tmp_path, monkeypatch):
+    """The 2026-07-30 incident: a build tree with no .git falls through to
+    the Upsun tree id, and the writer says so on the third line — the
+    reader must never relabel that tree id as a commit sha."""
+    from brnrd import version_info
+
+    client = _client()
+    stamped = tmp_path / "build_info.txt"
+    stamped.write_text(
+        "bebd5c1d\n2026-07-30T10:19:01+00:00\ntree\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
+    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
+    payload = client.get("/v1/stats/version").json()
+    assert payload["commit"] is None
+    assert payload["tree_id"] == "bebd5c1d"
+    assert payload["built_at"] == "2026-07-30T10:19:01+00:00"
+
+
+def test_deployed_version_pre_fix_two_line_file_reads_as_unknown(tmp_path, monkeypatch):
+    """A build_info.txt stamped before this fix has no source line at all —
+    that ambiguity must resolve to unknown, never to a guessed source."""
+    from brnrd import version_info
+
+    client = _client()
+    stamped = tmp_path / "build_info.txt"
+    stamped.write_text("abc1234\n2026-07-21T18:00:00+00:00\n", encoding="utf-8")
+    monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
+    payload = client.get("/v1/stats/version").json()
+    assert payload["commit"] is None
+    assert payload["built_at"] == "2026-07-21T18:00:00+00:00"
 
 
 # --- Stripe-derived pricing (#831) -------------------------------------------

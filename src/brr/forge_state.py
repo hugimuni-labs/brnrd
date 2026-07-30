@@ -22,6 +22,7 @@ branch and the stale claim dies at read time.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,12 @@ from .run import Run
 # claiming as open. Older resolutions have aged out of the conversation and
 # would only bloat a block that rides in every wake.
 PR_RESOLVED_WINDOW_SECONDS = 24 * 3600
+
+# A prod fingerprint older than this reads as stale rather than current — the
+# same "a clean mirror reading as current is the recurring bug class in this
+# repo" instinct as the PR-state cache's own freshness verdict, applied to
+# the cloud gate's inbox-carried build/github fingerprint (2026-07-30).
+PROD_FINGERPRINT_STALE_AFTER_S = 300
 
 
 def _run_has_new_commit(repo_root: Path, run_id: str) -> bool:
@@ -544,6 +551,126 @@ def worktree_label(worktree_entry: dict[str, Any]) -> str:
     return run_id or str(worktree_entry.get("path") or "").strip()
 
 
+def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
+    """What prod last reported, read locally — never a network call.
+
+    Always returns a truthy dict: even "no cloud gate configured" is a fact
+    :func:`render_prod_line` must be able to say, and a caller that only adds
+    this facet when there is something to show is exactly the bug class this
+    task exists to fix (an absent fingerprint rendering as nothing, not as
+    "absent"). Any import or lookup failure collapses to the same
+    not-configured shape rather than raising out of a wake-build path.
+    """
+    try:
+        from .gates import import_gate
+
+        cloud = import_gate("cloud")
+        brr_dir = gitops.shared_brr_dir(repo_root)
+        if not cloud.is_configured(brr_dir):
+            return {"configured": False}
+        return {
+            "configured": True,
+            "fingerprint": cloud.read_server_fingerprint(brr_dir),
+        }
+    except Exception:
+        return {"configured": False}
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _short_stamp(value: Any) -> str:
+    """``2026-07-30T10:19:01+00:00`` -> ``2026-07-30T10:19Z``."""
+    dt = _parse_iso(value)
+    return f"{dt.strftime('%Y-%m-%dT%H:%M')}Z" if dt else ""
+
+
+def _short_time(value: Any) -> str:
+    """``2026-07-30T10:28:49+00:00`` -> ``10:28Z``."""
+    dt = _parse_iso(value)
+    return f"{dt.strftime('%H:%M')}Z" if dt else ""
+
+
+def _format_age(age_s: int) -> str:
+    minutes = age_s // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, rem = divmod(minutes, 60)
+    return f"{hours}h{rem:02d}m" if rem else f"{hours}h"
+
+
+def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
+    """The one-line prod fingerprint, its own absence or staleness included.
+
+    Shared by both renderers (see :func:`external_worktree_note`) so the
+    fresh / stale / absent rules live in exactly one place:
+
+    - not configured, or configured with no fingerprint fetched yet ⇒ say so,
+      never silence (the 2026-07-30 incident this whole facet answers).
+    - a fingerprint older than :data:`PROD_FINGERPRINT_STALE_AFTER_S` renders
+      ``stale`` with its age rather than passing as current.
+    - ``commit`` absent renders ``tree <id>``, never a guessed sha.
+    """
+    if not isinstance(prod, dict):
+        return "prod: unknown — no cloud fingerprint yet"
+    if not prod.get("configured"):
+        return "prod: unknown — no cloud gate configured"
+    fingerprint = prod.get("fingerprint")
+    if not isinstance(fingerprint, dict):
+        return "prod: unknown — no cloud fingerprint yet"
+    build = fingerprint.get("build")
+    build = build if isinstance(build, dict) else {}
+    github = fingerprint.get("github")
+    github = github if isinstance(github, dict) else {}
+
+    bits: list[str] = []
+    commit = str(build.get("commit") or "").strip()
+    tree_id = str(build.get("tree_id") or "").strip()
+    if commit:
+        bits.append(f"commit {commit[:8]}")
+    elif tree_id:
+        bits.append(f"tree {tree_id[:8]}")
+    built = _short_stamp(build.get("built_at"))
+    if built:
+        bits.append(f"built {built}")
+    up = _short_time(build.get("started_at"))
+    if up:
+        bits.append(f"up {up}")
+    bot_login = str(github.get("bot_login") or "").strip()
+    if bot_login:
+        bits.append(f"call sign {bot_login}")
+    trigger_label = str(github.get("trigger_label") or "").strip()
+    if trigger_label:
+        bits.append(f"label {trigger_label}")
+    if "webhook_secret_set" in github:
+        bits.append(
+            "webhook secret set" if github.get("webhook_secret_set")
+            else "webhook secret unset"
+        )
+    if "bot_token_set" in github:
+        bits.append(
+            "bot token set" if github.get("bot_token_set")
+            else "bot token unset"
+        )
+    body = " · ".join(bits) if bits else "no build identity recorded yet"
+
+    age_s: int | None = None
+    fetched_dt = _parse_iso(fingerprint.get("fetched_at"))
+    if fetched_dt is not None:
+        age_s = max(0, int(((now or datetime.now(timezone.utc)) - fetched_dt).total_seconds()))
+    if age_s is not None and age_s > PROD_FINGERPRINT_STALE_AFTER_S:
+        return f"prod: stale ({_format_age(age_s)} old) — {body}"
+    return f"prod: {body}"
+
+
 def build_forge_state(
     repo_root: Path,
     *,
@@ -554,7 +681,7 @@ def build_forge_state(
 ) -> dict[str, Any] | None:
     """Build the forge-state facet, or ``None`` when there is nothing to show.
 
-    Combines three network-free views:
+    Combines four network-free views:
 
     - ``worktrees`` — the resident's brr worktrees, each with its branch,
       unpushed-commit count, dirty flag, a forge branch URL, and (from the
@@ -563,13 +690,19 @@ def build_forge_state(
       sibling conversation threads, as clickable cross-references.
     - ``pr_state`` — the PR-state cache's own verdict (fresh / stale /
       absent / error) plus open PRs whose branch has no local worktree.
+    - ``prod`` — what prod last reported on the cloud gate's inbox long-poll
+      (build identity, effective GitHub-trigger config); always present so
+      the "prod:" line can say *why* it's absent rather than not appear.
 
     Every one of them is a **read**: the ``gh`` call that fills the PR cache
     belongs to the daemon tick (:mod:`brr.forge_pr_cache`), never to this
-    prompt-build path.
+    prompt-build path, and the cloud fingerprint is read from the local file
+    the cloud gate's own poll loop already persisted.
 
-    Returns ``None`` when all are empty so the snapshot can omit the
-    section entirely rather than render a hollow header.
+    Returns ``None`` only when all four are empty so the snapshot can omit
+    the section entirely rather than render a hollow header — ``prod`` is
+    deliberately never the reason for that, since it always has *something*
+    to say (even if that something is "not configured").
     """
     remote_url, overrides = _resolve_remote(repo_root)
     worktrees = _worktrees_facet(
@@ -586,7 +719,8 @@ def build_forge_state(
         current_event_meta=current_event_meta,
     )
     pr_state = _pr_state_facet(repo_root, worktrees)
-    if not worktrees and not threads:
+    prod = _prod_fingerprint_facet(repo_root)
+    if not worktrees and not threads and not prod:
         return None
     facet: dict[str, Any] = {}
     if worktrees:
@@ -594,4 +728,5 @@ def build_forge_state(
     if threads:
         facet["threads"] = threads
     facet["pr_state"] = pr_state
+    facet["prod"] = prod
     return facet
