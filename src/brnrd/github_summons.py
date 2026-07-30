@@ -2,8 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+
+
+def github_identity_candidates(settings) -> list[str]:
+    """The resident's GitHub faces: configured login, App slug, legacy alias.
+
+    Deduped case-insensitively, order preserved, ``@`` stripped. Shared by
+    mention matching (``routers.webhooks._github_mention_candidates``) and
+    assignee/reviewer summons matching (``resolve_github_summons`` below) —
+    #874's unify ask: an assignment to the legacy ``brr-bot`` name should
+    summon exactly like a mention of it does, not only a subset of the
+    faces mentions already honor.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for handle in (
+        getattr(settings, "github_bot_login", ""),
+        getattr(settings, "github_app_slug", ""),
+        "brr-bot",
+    ):
+        login = str(handle or "").strip().lstrip("@")
+        if login and login.casefold() not in seen:
+            out.append(login)
+            seen.add(login.casefold())
+    return out
 
 
 @dataclass(frozen=True)
@@ -110,10 +135,15 @@ _SUMMONS_BY_KIND = {spec.kind: spec for spec in _SUMMONS_SPECS}
 def resolve_github_summons(
     x_github_event: str | None,
     payload: object,
-    bot_login: str,
+    bot_logins: str | Sequence[str],
     trigger_label: str = "brnrd",
 ) -> GitHubSummons | None:
-    """Resolve a webhook payload addressed to ``bot_login``, if any."""
+    """Resolve a webhook payload addressed to one of ``bot_logins``, if any.
+
+    ``bot_logins`` is normally ``github_identity_candidates(settings)`` — a
+    single string still works (wrapped as a one-element list) for callers
+    that only care about the configured login.
+    """
 
     if not isinstance(payload, dict):
         return None
@@ -127,12 +157,21 @@ def resolve_github_summons(
     if not isinstance(target, dict):
         return None
     login = str(target.get(spec.target_field) or "").strip()
-    wanted = str(
-        trigger_label if spec.target_source == "label" else bot_login
-    ).strip()
-    if spec.target_source == "bot":
-        wanted = wanted.lstrip("@")
-    if not login or not wanted or login.casefold() != wanted.casefold():
+    if not login:
+        return None
+
+    if spec.target_source == "label":
+        wanted = str(trigger_label or "").strip()
+        matched = bool(wanted) and login.casefold() == wanted.casefold()
+    else:
+        candidates = [bot_logins] if isinstance(bot_logins, str) else list(bot_logins)
+        wanted_logins = {
+            str(c or "").strip().lstrip("@").casefold()
+            for c in candidates
+            if str(c or "").strip()
+        }
+        matched = login.casefold() in wanted_logins
+    if not matched:
         return None
 
     item = payload.get(spec.item_field)
