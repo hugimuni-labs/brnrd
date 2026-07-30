@@ -143,9 +143,47 @@ class EventOut(BaseModel):
     created_at: datetime
 
 
+class ServerBuildOut(BaseModel):
+    """``version_info.build_info()``, straight through — never fabricated."""
+
+    commit: str | None = None
+    tree_id: str | None = None
+    built_at: str | None = None
+    started_at: str | None = None
+
+
+class ServerGithubOut(BaseModel):
+    """Effective GitHub-trigger config off ``settings`` — booleans for secrets.
+
+    A leaked webhook secret or bot token is not a fingerprint, so those two
+    fields never carry the value, only whether one is configured. Everything
+    else here is already visible to anyone who reads an issue the bot
+    commented on.
+    """
+
+    bot_login: str
+    app_slug: str
+    trigger_label: str
+    trigger_aliases: list[str]
+    webhook_secret_set: bool
+    bot_token_set: bool
+
+
+class ServerFingerprint(BaseModel):
+    """What prod is actually running — carried on the channel the daemon
+    already polls (``GET /v1/daemons/inbox``) so the wake can answer "is my
+    merge live?" without a new request (2026-07-30 incident)."""
+
+    build: ServerBuildOut
+    github: ServerGithubOut
+
+
 class InboxResponse(BaseModel):
     events: list[EventOut]
     cursor: int
+    # Optional: older daemons ignore an unknown key; a daemon that reads it
+    # persists it locally (`brr.gates.cloud`) for the wake to render.
+    server: ServerFingerprint | None = None
 
 
 class ResponsePost(BaseModel):

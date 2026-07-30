@@ -371,6 +371,7 @@ def _render_forge_state(forge: Any) -> str:
     if not isinstance(forge, dict) or not forge:
         return ""
     lines: list[str] = ["Forge state (local, network-free):"]
+    lines.append(f"- {forge_state.render_prod_line(forge.get('prod'))}")
     worktrees = forge.get("worktrees")
     worktree_summary = forge_state.summarize_worktrees(worktrees)
     if worktree_summary["total"]:

@@ -210,6 +210,44 @@ def record_loop_health(
         print(f"[brnrd:{gate}] health record failed: {exc}")
 
 
+# ── Server fingerprint (.brr/gates/<gate>.server.json) ───────────────
+#
+# What prod is actually running, as last reported on the inbox long-poll
+# this gate already drains (``schemas.InboxResponse.server``, brnrd
+# 2026-07-30). Sibling to the ``.health.json`` file above: same directory,
+# same atomic tmp+replace write, no secret material (the payload is
+# pre-scrubbed to booleans server-side) so it carries no private mode bit.
+
+
+def server_fingerprint_path(brr_dir: Path, gate: str) -> Path:
+    return brr_dir / "gates" / f"{gate}.server.json"
+
+
+def load_server_fingerprint(brr_dir: Path, gate: str) -> dict | None:
+    """Return the last-persisted server fingerprint, or ``None`` when absent."""
+    path = server_fingerprint_path(brr_dir, gate)
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def save_server_fingerprint(brr_dir: Path, gate: str, server: dict) -> None:
+    """Persist one inbox response's ``server`` block, stamped with local
+    ``fetched_at`` — cheap and idempotent, no request of its own."""
+    path = server_fingerprint_path(brr_dir, gate)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {**server, "fetched_at": datetime.now(timezone.utc).isoformat()}
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(entry, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    tmp.replace(path)
+
+
 # ── Per-run progress-card state ──────────────────────────────────────
 
 
