@@ -20,9 +20,24 @@ from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  #
 from brnrd.platforms import github_app as github_app_platform  # noqa: E402
 from brnrd.routers import github_app as github_app_router  # noqa: E402
 from brnrd.routers import webhooks as webhook_routes  # noqa: E402
+from brr.gates.github import parse as gh_parse  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
+from _mention_vectors import MENTION, MENTION_VECTOR_IDS, MENTION_VECTORS  # noqa: E402
 
 _SECRET = "github-webhook-secret"
+
+
+# #879 member 5 — the cloud call site (``_github_trigger`` ->
+# ``find_mention``) against the same vector table the gate side checks in
+# ``test_github_gate.py``. One shared implementation, both wiring points
+# pinned.
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [(body, expected) for _label, body, expected in MENTION_VECTORS],
+    ids=MENTION_VECTOR_IDS,
+)
+def test_find_mention_vector_table_cloud_side(body, expected):
+    assert (gh_parse.find_mention(body, [MENTION]) is not None) == expected
 
 
 def test_installation_credential_request_is_restricted_to_repo(monkeypatch):
@@ -320,6 +335,80 @@ def _label_payload(*, label="brnrd", is_pr=False):
     payload["action"] = "labeled"
     payload.pop("assignee")
     payload["label"] = {"name": label}
+    return payload
+
+
+def _review_submitted_payload(
+    *,
+    repo="owner/repo",
+    number=17,
+    review_body="@brr-bot please double check this",
+    reviewer="alice",
+    association="COLLABORATOR",
+):
+    """#879 member 3 — a ``pull_request_review.submitted`` payload. The PR's
+    own body/title must never leak into the summoned event; only
+    ``review.body`` (the review summary text) should."""
+    return {
+        "action": "submitted",
+        "installation": {"id": 42},
+        "repository": {
+            "id": 8675309,
+            "name": repo.rsplit("/", 1)[-1],
+            "full_name": repo,
+        },
+        "pull_request": {
+            "number": number,
+            "title": "Fix the capacity cliff",
+            "body": "The long poll owns a worker.",
+            "html_url": f"https://github.com/{repo}/pull/{number}",
+        },
+        "review": {
+            "id": 555,
+            "body": review_body,
+            "user": {"login": reviewer},
+            "author_association": association,
+            "html_url": f"https://github.com/{repo}/pull/{number}#pullrequestreview-555",
+        },
+        "sender": {"login": reviewer, "type": "User"},
+    }
+
+
+def _opened_payload(
+    *,
+    repo="owner/repo",
+    number=17,
+    is_pr=False,
+    body="@brr-bot please take a look",
+    author="alice",
+    association="NONE",
+):
+    """#879 member 4 — a newly opened issue/PR. ``association`` defaults to
+    ``NONE`` (a drive-by stranger) since opening an issue/PR needs no
+    special GitHub permission, unlike assign/label/review-request."""
+    item = {
+        "number": number,
+        "title": "New thing",
+        "body": body,
+        "html_url": f"https://github.com/{repo}/{'pull' if is_pr else 'issues'}/{number}",
+        "user": {"login": author},
+        "author_association": association,
+    }
+    payload = {
+        "action": "opened",
+        "installation": {"id": 42},
+        "repository": {
+            "id": 8675309,
+            "name": repo.rsplit("/", 1)[-1],
+            "full_name": repo,
+        },
+        "sender": {"login": author, "type": "User"},
+    }
+    if is_pr:
+        payload["number"] = number
+        payload["pull_request"] = item
+    else:
+        payload["issue"] = item
     return payload
 
 
@@ -802,6 +891,208 @@ def test_app_pull_request_review_request_summons_and_replies(env, monkeypatch):
     )
 
 
+# ── pull_request_review.submitted summons (#879 member 3) ───────────
+
+
+def test_pull_request_review_summary_mention_summons_and_replies(env):
+    """A standalone review *summary* (no inline comment) mentioning the bot
+    reaches the resident — the gap issue #879 opened this to close. The
+    event body is the review's own text, not the PR's description."""
+    _app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(
+        client, _review_submitted_payload(), event="pull_request_review",
+    )
+    assert r.status_code == 200, r.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn,
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "pr-review-summary"
+    assert event["reply_to"]["trigger"] == "mention"
+    assert event["reply_to"]["mention"] == "@brr-bot"
+    assert event["reply_to"]["html_url"] == (
+        "https://github.com/owner/repo/pull/17#pullrequestreview-555"
+    )
+    assert "please double check this" in event["body"]
+    assert "long poll owns a worker" not in event["body"], (
+        "the PR's own description leaked into the review-summons event body"
+    )
+
+    posted = client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event["event_id"],
+            "body_markdown": "looks good",
+            "status": "done",
+        },
+        headers=dmn,
+    )
+    assert posted.status_code == 200, posted.text
+    assert posts[0]["body"].startswith("> Reviewed by [@alice]")
+
+
+def test_pull_request_review_without_mention_resolves_nothing(env):
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _review_submitted_payload(review_body="looks fine, approving"),
+        event="pull_request_review",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == []
+
+
+def test_pull_request_review_mention_from_unauthorized_reviewer_resolves_nothing(
+    env,
+):
+    """Unlike assign/label/review-request, submitting a review needs no
+    elevated GitHub permission — a drive-by account can leave one on a
+    public repo. This is the #408 gate the comment path already applies,
+    reused here rather than trusting the signed event alone (#879 judgment
+    call, see PR body)."""
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _review_submitted_payload(association="NONE"),
+        event="pull_request_review",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == [], "no reply to the commenter on an authz rejection"
+
+
+# ── issues.opened / pull_request.opened summons (#879 member 4) ─────
+
+
+def test_issue_opened_mention_summons_and_replies(env):
+    _app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(association="COLLABORATOR"),
+        event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn,
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "issue-opened"
+    assert event["reply_to"]["trigger"] == "mention"
+    assert event["reply_to"]["mention"] == "@brr-bot"
+    assert "please take a look" in event["body"]
+
+    posted = client.post(
+        "/v1/daemons/responses",
+        json={
+            "event_id": event["event_id"],
+            "body_markdown": "on it",
+            "status": "done",
+        },
+        headers=dmn,
+    )
+    assert posted.status_code == 200, posted.text
+    assert posts[0]["body"].startswith("> Opened by [@alice]")
+
+
+def test_pull_request_opened_mention_summons(env):
+    _app, client, _posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(is_pr=True, association="COLLABORATOR"),
+        event="pull_request",
+    )
+    assert r.status_code == 200, r.text
+
+    drained = client.get(
+        "/v1/daemons/inbox",
+        params={"since": 0, "wait": 0},
+        headers=_daemon_headers(client, acc, rid),
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "pr-opened"
+    assert event["reply_to"]["pr_number"] == 17
+
+
+def test_issue_opened_without_mention_resolves_nothing(env):
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client, _opened_payload(body="just a plain bug report"), event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == []
+
+
+def test_unauthorized_issue_opened_resolves_nothing(env):
+    """An issue opened by a drive-by stranger whose body mentions the bot
+    must not summon a run — #879 member 4's explicit authorization ask,
+    routed through the same #408 gate the comment path uses."""
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(association="NONE"),
+        event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == [], "no reply to the opener on an authz rejection"
+
+
+def test_bot_opening_its_own_issue_does_not_self_summon(env):
+    """Mirrors the gate's self-skip for the opened trigger (``polling.py``'s
+    ``author == bot_login`` check) — the automation account is also a repo
+    collaborator, so without this the #408 gate alone would *pass* a
+    self-authored, self-mentioning issue straight into a summon loop."""
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(author="brr-bot", association="COLLABORATOR"),
+        event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == []
+
+
 @pytest.mark.parametrize(
     ("x_github_event", "payload", "expected"),
     [
@@ -852,6 +1143,42 @@ def test_app_pull_request_review_request_summons_and_replies(env, monkeypatch):
             _review_request_payload(team=True),
             False,
             id="team-review-request",
+        ),
+        pytest.param(
+            "pull_request_review",
+            _review_submitted_payload(association="COLLABORATOR"),
+            True,
+            id="pull-request-review-summary-mention",
+        ),
+        pytest.param(
+            "pull_request_review",
+            _review_submitted_payload(review_body="looks good, approving"),
+            False,
+            id="pull-request-review-summary-no-mention",
+        ),
+        pytest.param(
+            "issues",
+            _opened_payload(association="COLLABORATOR"),
+            True,
+            id="issue-opened-mention",
+        ),
+        pytest.param(
+            "issues",
+            _opened_payload(body="just a plain bug report"),
+            False,
+            id="issue-opened-no-mention",
+        ),
+        pytest.param(
+            "pull_request",
+            _opened_payload(is_pr=True, association="COLLABORATOR"),
+            True,
+            id="pull-request-opened-mention",
+        ),
+        pytest.param(
+            "pull_request",
+            _opened_payload(is_pr=True, body="just a plain PR description"),
+            False,
+            id="pull-request-opened-no-mention",
         ),
     ],
 )

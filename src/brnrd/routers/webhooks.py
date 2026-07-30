@@ -119,10 +119,9 @@ def _github_command_candidates(settings) -> list[str]:
 
 
 def _github_trigger(settings, body: str) -> tuple[str, str] | None:
-    folded = (body or "").casefold()
-    for mention in _github_mention_candidates(settings):
-        if mention.casefold() in folded:
-            return "mention", mention
+    mention = gh_parse.find_mention(body, _github_mention_candidates(settings))
+    if mention is not None:
+        return "mention", mention
     stripped = (body or "").strip().casefold()
     for alias in _github_command_candidates(settings):
         a = alias.casefold()
@@ -283,6 +282,28 @@ def _handle_github_summons(
     repo_name = str(
         ((payload.get("repository") or {}).get("full_name") or "")
     ).strip()
+
+    # #879 members 3+4 — a mention-sourced summons (review body, or a newly
+    # opened issue/PR body) needs the #408 authorization gate the
+    # assign/label/review-request specs don't: those actions already require
+    # GitHub triage-or-higher, so the signed event is its own proof: a
+    # mention only requires the ability to comment/review/open, which any
+    # drive-by account has on a public repo.
+    if summons.requires_authz:
+        if gh_parse._skip_mention_comment_author(
+            summons.actor_login, summons.login, settings.github_bot_login
+        ):
+            return
+        authorized, reason = _github_authorized(
+            settings, summons.actor_association, summons.actor_login
+        )
+        if not authorized:
+            logger.warning(
+                "github authz reject repo=%s author=%s trigger=%s reason=%s",
+                repo_name, summons.actor_login, summons.kind, reason,
+            )
+            return
+
     item = summons.item
     issue_number = _coerce_int(item.get("number") or payload.get("number"))
     if not repo_name or issue_number is None:
@@ -301,9 +322,9 @@ def _handle_github_summons(
         "issue_number": issue_number,
         "kind": summons.kind,
         "author": sender,
-        "html_url": str(item.get("html_url") or ""),
+        "html_url": summons.html_url_override or str(item.get("html_url") or ""),
         "trigger": summons.trigger,
-        summons.login_field: summons.login,
+        summons.reply_key: summons.login,
     }
     if installation_id:
         reply_to["installation_id"] = installation_id
@@ -315,9 +336,13 @@ def _handle_github_summons(
         _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT, token=token)
         return
 
-    body = gh_parse._format_event_body(
-        str(item.get("title") or "").strip(),
-        str(item.get("body") or "").strip(),
+    body = (
+        gh_parse._format_event_body("", summons.content_override)
+        if summons.content_override is not None
+        else gh_parse._format_event_body(
+            str(item.get("title") or "").strip(),
+            str(item.get("body") or "").strip(),
+        )
     )
     decision = limits.check_event_admission(
         db,
