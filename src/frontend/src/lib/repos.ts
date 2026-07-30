@@ -27,7 +27,11 @@ export interface ConnectedRepo {
 	latest_daemon_name: string;
 	gates: GateHealth[];
 	setup_command: string;
-	telegram_pair_enabled: boolean;
+	// #885: whether a real `ChannelRoute` row pairs this repo to a Telegram
+	// chat — false for both "never paired" and "route exists but its
+	// principal is NULL" (authorizes nobody; see the backend's `models.py`
+	// `ChannelRoute.paired_user_id` doc).
+	telegram_paired: boolean;
 	environment_default: string | null;
 	environments: EnvironmentOption[];
 	// Explicit publish-scope consent (legal pack item 2, #417 follow-on).
@@ -122,6 +126,15 @@ export interface RepoActionResponse {
 }
 
 export class ReposAuthError extends Error {}
+
+// #885: "pair telegram button is always there no matter if it paired or
+// not" — a paired repo renders a quiet status plus a secondary "re-pair"
+// action instead of the primary "pair Telegram" call to action. Pure so the
+// four (paired × busy) combinations are testable without mounting the page.
+export function telegramPairLabel(paired: boolean, busy: boolean): string {
+	if (paired) return busy ? 're-pairing' : 're-pair';
+	return busy ? 'pairing' : 'pair Telegram';
+}
 
 async function parseJson(res: Response): Promise<Record<string, unknown>> {
 	try {
