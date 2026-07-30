@@ -59,8 +59,17 @@ def test_installation_credential_request_is_restricted_to_repo(monkeypatch):
     assert seen["json"] == {"repository_ids": [4242]}
 
 
+class _RecordedPosts(list):
+    """A plain list can't carry the sibling `reactions` recorder as an
+    attribute — subclassing is cheaper than a second fixture return value
+    every existing `app, client, posts = env` call site would need to
+    absorb."""
+
+
 def _build_env(monkeypatch, **extra_settings):
-    posts: list[dict] = []
+    posts: list[dict] = _RecordedPosts()
+    reactions: list[dict] = []
+    posts.reactions = reactions
 
     def fake_post(token, api_base_url, api_version, repo, issue_number, body, *,
                   timeout=30.0):
@@ -73,7 +82,24 @@ def _build_env(monkeypatch, **extra_settings):
             }
         )
 
+    def fake_react(token, api_base_url, api_version, repo, *, target,
+                    target_id, content="eyes", timeout=30.0):
+        reactions.append(
+            {
+                "token": token,
+                "repo": repo,
+                "target": target,
+                "target_id": target_id,
+                "content": content,
+            }
+        )
+        return True
+
     monkeypatch.setattr("brnrd.platforms.github.post_issue_comment", fake_post)
+    # Default no-network stub for the summons-acknowledgment reaction
+    # (records into `posts.reactions`); reaction-specific tests override
+    # this per-test to exercise failure/exception paths.
+    monkeypatch.setattr("brnrd.platforms.github.add_reaction", fake_react)
     monkeypatch.setattr(
         "brnrd.platforms.github.fetch_pull_head_ref",
         lambda *a, **k: "feature-x",
@@ -1007,6 +1033,99 @@ def test_github_webhook_ignores_edited_comment_action(env):
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
     assert posts == []
+
+
+# ── summons acknowledgment reaction ──────────────────────────────────
+#
+# The `:eyes:` reaction is feedback, not delivery: it must never appear for
+# a refused trigger, and it must never block or fail a dispatch that
+# already happened.
+
+
+def test_accepted_comment_mention_reacts_once_on_the_comment(env):
+    _app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(client, _payload(association="COLLABORATOR"))
+    assert r.status_code == 200
+
+    assert posts.reactions == [
+        {
+            "token": "ghs_test",
+            "repo": "owner/repo",
+            "target": "issue_comment",
+            "target_id": 100,
+            "content": "eyes",
+        }
+    ]
+
+
+def test_accepted_label_summons_reacts_on_the_issue(env):
+    _app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(client, _label_payload(), event="issues")
+    assert r.status_code == 200
+
+    assert posts.reactions == [
+        {
+            "token": "ghs_test",
+            "repo": "owner/repo",
+            "target": "issue",
+            "target_id": 17,
+            "content": "eyes",
+        }
+    ]
+
+
+def test_unauthorized_comment_reacts_never(env):
+    _app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(client, _payload(association="NONE"))
+    assert r.status_code == 200
+
+    assert posts.reactions == []
+
+
+def test_reaction_exception_does_not_block_the_enqueue(env, monkeypatch):
+    app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("network error")
+
+    monkeypatch.setattr("brnrd.platforms.github.add_reaction", boom)
+
+    r = _github_post(client, _payload(association="COLLABORATOR"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
+        assert event.repo_id == rid
+
+
+def test_reaction_failure_response_does_not_block_the_enqueue(env, monkeypatch):
+    """A False return (403/404/422) is not an exception, but the dispatch
+    still must not have depended on it succeeding."""
+    app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    monkeypatch.setattr(
+        "brnrd.platforms.github.add_reaction", lambda *a, **k: False
+    )
+
+    r = _github_post(client, _payload(association="COLLABORATOR"))
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
+        assert event.repo_id == rid
 
 
 # --- publishing-credential transfer survival (2026-07-22 incident) ---------

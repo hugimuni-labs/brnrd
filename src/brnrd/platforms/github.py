@@ -45,6 +45,50 @@ def post_issue_comment(
     resp.raise_for_status()
 
 
+_REACTION_PATHS = {
+    "issue_comment": "/repos/{repo}/issues/comments/{id}/reactions",
+    "issue": "/repos/{repo}/issues/{id}/reactions",
+    "review_comment": "/repos/{repo}/pulls/comments/{id}/reactions",
+}
+
+
+def add_reaction(
+    token: str,
+    api_base_url: str,
+    api_version: str,
+    repo: str,
+    *,
+    target: str,
+    target_id: int,
+    content: str = "eyes",
+    timeout: float = 30.0,
+) -> bool:
+    """React to the thing that summoned a run — the "I saw this" signal.
+
+    ``target`` selects the endpoint: ``issue_comment`` (a timeline comment),
+    ``issue`` (the issue or PR itself — a PR *is* an issue for this
+    endpoint), or ``review_comment`` (an inline PR review-line comment).
+
+    GitHub returns 200 when the reaction already exists and 201 when it is
+    newly created; both count as success, which makes this call naturally
+    idempotent — no bookkeeping needed on the caller's side. Any other
+    status (403/404/422/5xx) returns False rather than raising, so a bad
+    response never becomes an exception the caller has to catch. A
+    transport-level failure (network error, timeout) still propagates —
+    callers wrap this non-fatally, same as ``post_issue_comment``.
+    """
+    template = _REACTION_PATHS.get(target)
+    if template is None:
+        return False
+    resp = httpx.post(
+        _url(api_base_url, template.format(repo=repo, id=target_id)),
+        headers=_headers(token, api_version),
+        json={"content": content},
+        timeout=timeout,
+    )
+    return resp.status_code in (200, 201)
+
+
 def post_review_reply(
     token: str,
     api_base_url: str,

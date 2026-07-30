@@ -165,6 +165,46 @@ def _github_reply(
         print(f"[brnrd] github reply failed: {e}")
 
 
+def _github_react(
+    settings,
+    repo: str,
+    *,
+    target: str,
+    target_id: int,
+    token: str | None = None,
+) -> None:
+    """Post the ``:eyes:`` acknowledgment — feedback, never delivery.
+
+    Called only after a trigger is accepted and its event recorded, so a
+    reaction never appears for a refused (unauthorized) trigger. Never lets
+    an exception escape: a reaction failure must not block or fail the
+    dispatch that already happened.
+    """
+    token = token or settings.github_bot_token
+    if not token:
+        return
+    try:
+        ok = gh.add_reaction(
+            token,
+            settings.github_api_base_url,
+            settings.github_api_version,
+            repo,
+            target=target,
+            target_id=target_id,
+        )
+    except Exception as e:
+        logger.warning(
+            "github reaction failed repo=%s target=%s target_id=%s: %s",
+            repo, target, target_id, e,
+        )
+        return
+    if not ok:
+        logger.warning(
+            "github reaction rejected repo=%s target=%s target_id=%s",
+            repo, target, target_id,
+        )
+
+
 def _maybe_pr_branch(
     settings,
     repo: str,
@@ -258,6 +298,7 @@ def _handle_github_issue_comment(
         if branch:
             reply_to["branch_target"] = branch
     inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
+    _github_react(settings, repo_name, target="issue_comment", target_id=comment_id, token=token)
 
 
 def _handle_github_summons(
@@ -353,6 +394,7 @@ def _handle_github_summons(
         source="github",
         reply_to=reply_to,
     )
+    _github_react(settings, repo_name, target="issue", target_id=issue_number, token=token)
 
 
 def _audit_reject(parsed: tg.ParsedMessage, *, reason: str) -> None:
