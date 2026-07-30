@@ -528,6 +528,54 @@ def _lint_overlap(entries: list[ScheduleEntry]) -> list[ScheduleFinding]:
     return findings
 
 
+_ORPHAN_TRIGGER_RE = re.compile(
+    r"^\s*[-*+]\s+(at|every)\s*:\s*(.+?)\s*$", re.IGNORECASE,
+)
+
+
+def _lint_orphan_trigger(text: str | None) -> list[ScheduleFinding]:
+    """Trigger lines :func:`parse_schedule_text` never read as triggers.
+
+    ``_FIELD_RE`` anchors at the start of the line and tolerates leading
+    whitespace but not a list marker, so ``- at: <iso>`` falls through to
+    ``body_lines`` — the spec becomes prose inside whatever entry it sits
+    under, and nothing says so. Two of those accumulated in this account's
+    own schedule (one of them a maintainer mandate) before a maintenance
+    round found them by driving the parser.
+
+    The claim is narrow enough to be provably wrong: the line has to be
+    list-marked **and** carry a value the real trigger parsers accept.
+    Prose that merely mentions a cadence (``- every 5h is the cadence``,
+    ``- at: some point``) does not parse and does not fire this.
+    """
+    if not text:
+        return []
+    findings: list[ScheduleFinding] = []
+    current = ""
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = _slug(line[3:].strip())
+            continue
+        if not current:
+            continue  # header prose above the first entry is a comment
+        match = _ORPHAN_TRIGGER_RE.match(line)
+        if not match:
+            continue
+        key = match.group(1).lower()
+        value = match.group(2).strip()
+        parsed = parse_iso(value) if key == "at" else parse_duration(value)
+        if not parsed:
+            continue
+        findings.append(ScheduleFinding(
+            "orphan-trigger",
+            (current,),
+            f"`{key}: {value}` is list-indented, so it parsed as body prose "
+            f"of `{current}` and will never fire — an entry needs its own "
+            "`## ` heading.",
+        ))
+    return findings
+
+
 def _forge_pr_lookup(forge: Any) -> dict[int, str]:
     """``{pr number: state}`` from a network-free forge PR list, or ``{}``.
 
@@ -590,10 +638,11 @@ def lint_schedule(
     now: float,
     state: dict | None = None,
     forge: Any | None = None,
+    text: str | None = None,
 ) -> list[ScheduleFinding]:
     """Mechanical, deterministic findings about ``entries`` — no I/O, no model.
 
-    Three rules, each independent (an entry can trip more than one):
+    Four rules, each independent (an entry can trip more than one):
 
     - ``stale-at`` — an ``at:`` entry whose instant has passed. When *state*
       (the daemon's firing-state map, :func:`load_state`) shows it already
@@ -611,6 +660,13 @@ def lint_schedule(
       Skipped entirely when *forge* is ``None`` or carries no usable rows — this rule only ever reads a local cache, never a forge
       API, so an absent cache just means this rule finds nothing, not an
       error.
+    - ``orphan-trigger`` — a list-indented ``at:``/``every:`` line that the
+      parser read as body prose, so the spec it looks like will never fire.
+      This rule is the only one that reads *text* rather than *entries*,
+      because the failure it names happens **before** an entry exists:
+      every other rule here is blind to a spec that never parsed, and the
+      three of them together reported a clean schedule for three days while
+      two dead specs sat in it.
 
     Runs on any Core, including an economy one: every comparison here is
     string/arithmetic, nothing calls out and nothing judges — that
@@ -620,6 +676,7 @@ def lint_schedule(
     findings.extend(_lint_stale_at(entries, state or {}, now))
     findings.extend(_lint_overlap(entries))
     findings.extend(_lint_stale_reference(entries, forge))
+    findings.extend(_lint_orphan_trigger(text))
     return findings
 
 

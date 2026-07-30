@@ -1018,13 +1018,20 @@ def _schedule_lint_note(repo_root: Path, dominion_dir: Path) -> str:
     try:
         now = time.time()
         entries = schedule_mod.parse_schedule(dominion_dir)
-        if not entries:
+        try:
+            text = (dominion_dir / schedule_mod.SCHEDULE_FILE).read_text(
+                encoding="utf-8",
+            )
+        except OSError:
+            text = None
+        if not entries and not text:
             return ""
         findings = schedule_mod.lint_schedule(
             entries,
             now=now,
             state=schedule_mod.load_state(gitops.shared_brr_dir(repo_root)),
             forge=forge_pr_cache.read_state(repo_root, now=now),
+            text=text,
         )
         block = schedule_mod.render_lint_block(findings)
     except Exception:  # noqa: BLE001 - a lint pass never blocks a wake
