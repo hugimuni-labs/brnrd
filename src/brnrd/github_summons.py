@@ -77,6 +77,13 @@ class _SummonsSpec:
     reply_key: str
     requires_authz: bool = False
     content_field: str | None = None
+    # Match the *same* text the event body forwards. ``_format_event_body``
+    # hands downstream ``title + body`` for an issue/PR, so matching ``body``
+    # alone left a title-only mention unmatched — an issue titled
+    # "@bot have a look" with an empty body is a completely normal way to
+    # file something, and it reached nobody (#879 review of the first pass).
+    # Unset for the review spec: a review has no title.
+    match_title: bool = False
 
 
 _SUMMONS_SPECS = (
@@ -189,6 +196,7 @@ _SUMMONS_SPECS = (
         anonymous_reply="the new issue",
         reply_key="mention",
         requires_authz=True,
+        match_title=True,
     ),
     _SummonsSpec(
         event="pull_request",
@@ -204,6 +212,7 @@ _SUMMONS_SPECS = (
         anonymous_reply="the new PR",
         reply_key="mention",
         requires_authz=True,
+        match_title=True,
     ),
 )
 
@@ -246,6 +255,10 @@ def resolve_github_summons(
 
     if spec.target_source == "mention":
         body_text = str(target.get(spec.target_field) or "")
+        if spec.match_title:
+            # Match what we forward: ``_format_event_body`` carries the
+            # title too, so a title-only mention must summon.
+            body_text = f"{str(target.get('title') or '')}\n{body_text}"
         mentions = [
             f"@{str(c or '').strip().lstrip('@')}"
             for c in candidates

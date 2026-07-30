@@ -379,6 +379,7 @@ def _opened_payload(
     repo="owner/repo",
     number=17,
     is_pr=False,
+    title="New thing",
     body="@brr-bot please take a look",
     author="alice",
     association="NONE",
@@ -388,7 +389,7 @@ def _opened_payload(
     special GitHub permission, unlike assign/label/review-request."""
     item = {
         "number": number,
-        "title": "New thing",
+        "title": title,
         "body": body,
         "html_url": f"https://github.com/{repo}/{'pull' if is_pr else 'issues'}/{number}",
         "user": {"login": author},
@@ -1050,6 +1051,82 @@ def test_issue_opened_without_mention_resolves_nothing(env):
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
     assert posts == []
+
+
+def test_issue_opened_with_a_title_only_mention_summons(env):
+    """Match what we forward. ``_format_event_body`` carries title + body
+    downstream, so matching ``body`` alone left a title-only mention
+    unmatched — and an issue titled "@bot have a look" with an empty body is
+    a completely normal way to file one. (#879 review of the first pass.)"""
+    _app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(
+            title="@brr-bot have a look at this",
+            body="",
+            association="COLLABORATOR",
+        ),
+        event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn,
+    ).json()
+    event = drained["events"][0]
+    assert event["reply_to"]["kind"] == "issue-opened"
+    assert event["reply_to"]["trigger"] == "mention"
+    assert "have a look at this" in event["body"]
+
+
+def test_pull_request_opened_with_a_title_only_mention_summons(env):
+    _app, client, posts = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(
+            is_pr=True,
+            title="@brr-bot review this please",
+            body="",
+            association="COLLABORATOR",
+        ),
+        event="pull_request",
+    )
+    assert r.status_code == 200, r.text
+
+    dmn = _daemon_headers(client, acc, rid)
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn,
+    ).json()
+    assert drained["events"][0]["reply_to"]["kind"] == "pr-opened"
+
+
+def test_issue_opened_title_mention_inside_a_fence_stays_inert(env):
+    """The title is matched through the same fence-aware predicate, so a
+    handle quoted in a title is as inert as one quoted in a body."""
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(
+            title="why does `@brr-bot` fire from a code span?",
+            body="",
+            association="COLLABORATOR",
+        ),
+        event="issues",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
 
 
 def test_unauthorized_issue_opened_resolves_nothing(env):
