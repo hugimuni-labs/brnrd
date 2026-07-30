@@ -25,6 +25,7 @@
 		type PublishScopePreset
 	} from '$lib/publishScope';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
+	import MarkerNotice from '$lib/MarkerNotice.svelte';
 
 	let data = $state<ReposResponse | null>(null);
 	let error = $state<string | null>(null);
@@ -425,6 +426,10 @@
 											>
 										{/if}
 									</div>
+									<MarkerNotice
+										markerNotice={repo.github_bot_marker_notice}
+										failureNotice={repo.github_bot_notice}
+									/>
 									{#if repo.gates.length > 0}
 										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">
 											{#each repo.gates as gate (gate.gate)}

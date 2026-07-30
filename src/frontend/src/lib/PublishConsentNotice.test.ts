@@ -62,6 +62,10 @@ function repo(over: Partial<ConnectedRepo>): ConnectedRepo {
 		environment_default: null,
 		environments: [],
 		publish_layers: null,
+		github_bot_collaborator: null,
+		github_bot_checked_at: null,
+		github_bot_marker_notice: null,
+		github_bot_notice: null,
 		...over
 	};
 }
