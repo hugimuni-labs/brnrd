@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -196,6 +198,128 @@ def test_dashboard_repos_api_returns_latest_daemon_gate_health():
 
     assert response.status_code == 200
     assert response.json()["connected_repos"][0]["gates"] == gates
+
+
+def test_dashboard_repos_api_never_syncs_installations_inline(monkeypatch):
+    """#885: installation sync used to run inline on this GET — a paginated
+    App-API repo listing plus per-repo collaborator checks, the reported
+    ~minute page load. It must now happen on a background thread with its
+    own DB session, never blocking the response."""
+    client = _client(
+        github_app_id="123",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    token = _login(client, login="Gurio")
+    _create_repo(client, token)
+
+    calls: list[tuple[threading.Thread, str]] = []
+    started = threading.Event()
+
+    def fake_sync(db, settings, account_id):
+        calls.append((threading.current_thread(), account_id))
+        started.set()
+
+    monkeypatch.setattr(
+        "brnrd.routers._session.sync_app_installations_for_account", fake_sync
+    )
+
+    r = client.get("/v1/dashboard/repos")
+
+    assert r.status_code == 200
+    assert r.json()["notice"] is None
+    assert started.wait(timeout=2), "background sync never ran"
+    assert len(calls) == 1
+    thread, account_id = calls[0]
+    assert thread is not threading.current_thread()
+    assert account_id == _account_id(client)
+
+
+def test_dashboard_repos_api_background_sync_is_single_flight(monkeypatch):
+    """A second GET while a sync is already running for the account must not
+    start a second one (#885 single-flight)."""
+    client = _client(
+        github_app_id="123",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    token = _login(client, login="Gurio")
+    _create_repo(client, token)
+
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    lock = threading.Lock()
+
+    def fake_sync(db, settings, account_id):
+        nonlocal call_count
+        with lock:
+            call_count += 1
+        entered.set()
+        release.wait(timeout=2)
+
+    monkeypatch.setattr(
+        "brnrd.routers._session.sync_app_installations_for_account", fake_sync
+    )
+
+    r1 = client.get("/v1/dashboard/repos")
+    assert r1.status_code == 200
+    assert entered.wait(timeout=2), "first background sync never started"
+
+    r2 = client.get("/v1/dashboard/repos")
+    assert r2.status_code == 200
+
+    release.set()
+    # Give the in-flight thread a moment to clear the in-progress marker.
+    import time
+
+    time.sleep(0.05)
+    assert call_count == 1
+
+
+def test_dashboard_repos_api_reports_telegram_paired_state():
+    """#885: `telegram_paired` reflects a real `ChannelRoute` row with a
+    non-NULL `paired_user_id` — a route with a NULL principal authorizes
+    nobody (models.py ~line 339) and must read as unpaired, same as no route
+    at all."""
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    paired_repo_id = _create_repo(client, token, repo="Gurio/paired")
+    null_principal_repo_id = _create_repo(client, token, repo="Gurio/null-principal")
+    _create_repo(client, token, repo="Gurio/no-route")
+    account_id = _account_id(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-paired",
+                platform="telegram",
+                channel_id="chat-1",
+                account_id=account_id,
+                repo_id=paired_repo_id,
+                paired_user_id=555,
+            )
+        )
+        db.add(
+            ChannelRoute(
+                id="cr-null-principal",
+                platform="telegram",
+                channel_id="chat-2",
+                account_id=account_id,
+                repo_id=null_principal_repo_id,
+                paired_user_id=None,
+            )
+        )
+        db.commit()
+
+    r = client.get("/v1/dashboard/repos")
+
+    assert r.status_code == 200
+    by_name = {row["repo_full_name"]: row for row in r.json()["connected_repos"]}
+    assert by_name["Gurio/paired"]["telegram_paired"] is True
+    assert by_name["Gurio/null-principal"]["telegram_paired"] is False
+    assert by_name["Gurio/no-route"]["telegram_paired"] is False
+    assert "telegram_pair_enabled" not in by_name["Gurio/paired"]
 
 
 def test_dashboard_connect_repo_api_enables_repo():

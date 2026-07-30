@@ -58,7 +58,7 @@ function repo(over: Partial<ConnectedRepo>): ConnectedRepo {
 		latest_daemon_name: '',
 		gates: [],
 		setup_command: '',
-		telegram_pair_enabled: false,
+		telegram_paired: false,
 		environment_default: null,
 		environments: [],
 		publish_layers: null,

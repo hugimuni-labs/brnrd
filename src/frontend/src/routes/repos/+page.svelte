@@ -10,6 +10,7 @@
 		fetchRepos,
 		pairRepoTelegram,
 		setPublishLayers,
+		telegramPairLabel,
 		type ConnectedRepo,
 		type InstalledRepo,
 		type RepoActionResponse,
@@ -105,9 +106,6 @@
 			data = await fetchRepos();
 			error = null;
 			unauthenticated = false;
-			if (!actionResult && data.notice) {
-				actionResult = { ok: true, notice: data.notice };
-			}
 		} catch (e) {
 			if (e instanceof ReposAuthError) {
 				unauthenticated = true;
@@ -309,7 +307,12 @@
 			</div>
 			<div class="subpanel p-3">
 				<p class="font-mono text-[10px] tracking-wide text-ink-quiet uppercase">GitHub App</p>
-				<p class="mt-1 truncate font-mono text-sm text-amber-100">{data.github_app_slug}</p>
+				<a
+					class="mt-1 block truncate font-mono text-sm text-amber-100 underline hover:text-amber-200"
+					href={data.install_url}
+					rel="external noreferrer"
+					target="_blank">{data.github_app_slug}</a
+				>
 			</div>
 		</div>
 
@@ -429,6 +432,8 @@
 									<MarkerNotice
 										markerNotice={repo.github_bot_marker_notice}
 										failureNotice={repo.github_bot_notice}
+										botLogin={data.github_bot_login}
+										repoFullName={repo.repo_full_name}
 									/>
 									{#if repo.gates.length > 0}
 										<div class="mt-3 grid gap-1.5 sm:grid-cols-2">
@@ -476,14 +481,29 @@
 									{/if}
 								</div>
 
-								<div class="flex shrink-0 flex-wrap gap-2 md:justify-end">
-									<button
-										type="button"
-										class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-										disabled={pendingAction !== null}
-										onclick={() => pairTelegram(repo)}
-										>{actionBusy(`pair:${repo.id}`) ? 'pairing' : 'pair Telegram'}</button
-									>
+								<div class="flex shrink-0 flex-wrap items-start gap-2 md:justify-end">
+									{#if repo.telegram_paired}
+										<div class="flex flex-col items-end gap-0.5">
+											<span class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase"
+												>telegram paired</span
+											>
+											<button
+												type="button"
+												class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300 disabled:cursor-wait disabled:opacity-50"
+												disabled={pendingAction !== null}
+												onclick={() => pairTelegram(repo)}
+												>{telegramPairLabel(true, actionBusy(`pair:${repo.id}`))}</button
+											>
+										</div>
+									{:else}
+										<button
+											type="button"
+											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
+											disabled={pendingAction !== null}
+											onclick={() => pairTelegram(repo)}
+											>{telegramPairLabel(false, actionBusy(`pair:${repo.id}`))}</button
+										>
+									{/if}
 									{#if confirmingDisconnect === repo.id}
 										<button
 											type="button"
@@ -517,48 +537,6 @@
 		</section>
 
 		<section class="panel mt-6 p-4">
-			<p class="eyebrow">before you connect</p>
-			<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">publish scope</h2>
-			<p class="mt-2 max-w-2xl text-sm text-stone-400">
-				If you run <code class="font-mono text-amber-200">brnrd account connect</code>, a paired
-				daemon mirrors data to this dashboard every few seconds. The sharpest fact: the live
-				progress card (<code class="font-mono text-amber-200">.card</code>) mirrors here
-				<strong class="text-stone-200">unredacted, within seconds, while a run is live</strong> —
-				see <code class="font-mono text-amber-200">SECURITY.md</code> for the full per-lane table. Pick
-				what the next repo you connect may mirror; nothing you don't name here ships. You can revisit
-				this per repo below at any time.
-			</p>
-			<div class="mt-3 flex flex-wrap gap-2">
-				{#each CONNECT_SCOPE_PRESETS as option (option.value)}
-					<button
-						type="button"
-						class={`cursor-pointer border px-2 py-1 font-mono text-[11px] tracking-wide uppercase ${
-							connectScopePreset === option.value
-								? 'border-amber-700 bg-amber-950/40 text-amber-100'
-								: 'border-stone-800 text-stone-400 hover:text-stone-200'
-						}`}
-						onclick={() => (connectScopePreset = option.value)}>{option.label}</button
-					>
-				{/each}
-			</div>
-			{#if connectScopePreset === 'custom'}
-				<div class="subpanel mt-3 grid grid-cols-1 gap-1 p-3 sm:grid-cols-2">
-					{#each PUBLISH_LANES as lane (lane.value)}
-						<label class="flex items-start gap-2 text-[11px] text-stone-300">
-							<input
-								type="checkbox"
-								class="mt-0.5"
-								checked={connectScopeCustom.has(lane.value)}
-								onchange={() => toggleConnectScopeLane(lane.value)}
-							/>
-							<span>{lane.label}</span>
-						</label>
-					{/each}
-				</div>
-			{/if}
-		</section>
-
-		<section class="panel mt-6 p-4">
 			<div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 				<div>
 					<p class="eyebrow">available</p>
@@ -580,6 +558,50 @@
 					rel="external noreferrer"
 					target="_blank">{data.installations.length === 0 ? 'install app' : 'manage app'}</a
 				>
+			</div>
+
+			<div class="subpanel mb-4 p-3">
+				<p class="eyebrow">for the next repo you enable</p>
+				<h3 class="font-mono text-sm font-semibold tracking-tight text-amber-100">
+					publish scope at enable
+				</h3>
+				<p class="mt-2 max-w-2xl text-sm text-stone-400">
+					A paired daemon mirrors data here every few seconds, including the live progress card (<code
+						class="font-mono text-amber-200">.card</code
+					>)
+					<strong class="text-stone-200">unredacted, while a run is live</strong> — full per-lane
+					table in <code class="font-mono text-amber-200">SECURITY.md</code>. Pick what the next
+					repo you enable may mirror; nothing you don't name here ships. Revisit any connected
+					repo's scope above, any time.
+				</p>
+				<div class="mt-3 flex flex-wrap gap-2">
+					{#each CONNECT_SCOPE_PRESETS as option (option.value)}
+						<button
+							type="button"
+							class={`cursor-pointer border px-2 py-1 font-mono text-[11px] tracking-wide uppercase ${
+								connectScopePreset === option.value
+									? 'border-amber-700 bg-amber-950/40 text-amber-100'
+									: 'border-stone-800 text-stone-400 hover:text-stone-200'
+							}`}
+							onclick={() => (connectScopePreset = option.value)}>{option.label}</button
+						>
+					{/each}
+				</div>
+				{#if connectScopePreset === 'custom'}
+					<div class="subpanel mt-3 grid grid-cols-1 gap-1 p-3 sm:grid-cols-2">
+						{#each PUBLISH_LANES as lane (lane.value)}
+							<label class="flex items-start gap-2 text-[11px] text-stone-300">
+								<input
+									type="checkbox"
+									class="mt-0.5"
+									checked={connectScopeCustom.has(lane.value)}
+									onchange={() => toggleConnectScopeLane(lane.value)}
+								/>
+								<span>{lane.label}</span>
+							</label>
+						{/each}
+					</div>
+				{/if}
 			</div>
 
 			{#if data.installations.length === 0}
