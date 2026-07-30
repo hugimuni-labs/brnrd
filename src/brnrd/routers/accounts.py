@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import account_deletion, ids, limits, publish_scope, schemas, stripe_api
+from .. import account_deletion, github_marker, ids, limits, publish_scope, schemas, stripe_api
 from ..activity_records import dedupe_activity_records, fresh_activity_records
 from ..auth import Principal, get_db, require_account, require_account_or_session
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
@@ -142,6 +142,13 @@ def create_repo(payload: schemas.RepoCreate, request: Request, principal: Princi
     db.add(repo)
     db.commit()
     db.refresh(repo)
+    # #874 — this is the CLI/daemon-pairing repo-bind path (`brnrd account
+    # connect`), the other half of `_connect_repo_core`'s browser flow.
+    # Best-effort: a marker failure must never fail the connect itself.
+    try:
+        github_marker.sync_marker_for_repos(db, request.app.state.settings, [repo])
+    except Exception as exc:
+        print(f"[brnrd] github marker sync failed for {repo.repo_full_name}: {exc}")
     return repo_out(repo)
 
 
