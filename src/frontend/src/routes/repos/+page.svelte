@@ -20,9 +20,12 @@
 		PUBLISH_LANES,
 		PUBLISH_SCOPE_EVERYTHING,
 		PUBLISH_SCOPE_OFF,
+		connectPublishScopeStorageKey,
 		parsePublishLayers,
+		presetForValue,
 		publishScopeSummary,
 		serializePublishLayers,
+		storedPublishScopeValue,
 		type PublishScopePreset
 	} from '$lib/publishScope';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
@@ -54,6 +57,41 @@
 	function toggleConnectScopeLane(lane: string) {
 		if (connectScopeCustom.has(lane)) connectScopeCustom.delete(lane);
 		else connectScopeCustom.add(lane);
+		rememberConnectScope();
+	}
+
+	function selectConnectScopePreset(preset: PublishScopePreset) {
+		connectScopePreset = preset;
+		rememberConnectScope();
+	}
+
+	function rememberConnectScope() {
+		if (!data) return;
+		try {
+			localStorage.setItem(
+				connectPublishScopeStorageKey(data.account.id),
+				connectPublishLayersValue()
+			);
+		} catch {
+			// Storage can be unavailable in a private/restricted browser.
+			// The live choice still feeds the connect request; only reload
+			// persistence is lost.
+		}
+	}
+
+	function restoreConnectScope() {
+		if (!data) return;
+		let stored: string | null;
+		try {
+			stored = localStorage.getItem(connectPublishScopeStorageKey(data.account.id));
+		} catch {
+			return;
+		}
+		const remembered = storedPublishScopeValue(stored);
+		if (remembered === null) return;
+		connectScopePreset = presetForValue(remembered);
+		connectScopeCustom.clear();
+		for (const lane of parsePublishLayers(remembered)) connectScopeCustom.add(lane);
 	}
 
 	// Revisiting a connected repo's consent later (the ticket's "settings
@@ -213,6 +251,7 @@
 
 	onMount(async () => {
 		await refresh();
+		restoreConnectScope();
 		const targetId = page.url.searchParams.get('scope');
 		const target = connectedRepos.find((repo) => repo.id === targetId);
 		if (!target) return;
@@ -481,53 +520,55 @@
 									{/if}
 								</div>
 
-								<div class="flex shrink-0 flex-wrap items-start gap-2 md:justify-end">
+								<div class="flex w-full shrink-0 flex-col gap-2 md:w-auto md:items-end">
 									{#if repo.telegram_paired}
-										<div class="flex flex-col items-end gap-0.5">
-											<span class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase"
-												>telegram paired</span
-											>
+										<span class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase"
+											>telegram paired</span
+										>
+									{/if}
+									<div class="grid grid-cols-2 gap-2 md:flex md:justify-end">
+										{#if repo.telegram_paired}
 											<button
 												type="button"
-												class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase underline hover:text-stone-300 disabled:cursor-wait disabled:opacity-50"
+												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
 												disabled={pendingAction !== null}
 												onclick={() => pairTelegram(repo)}
 												>{telegramPairLabel(true, actionBusy(`pair:${repo.id}`))}</button
 											>
-										</div>
-									{:else}
-										<button
-											type="button"
-											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-											disabled={pendingAction !== null}
-											onclick={() => pairTelegram(repo)}
-											>{telegramPairLabel(false, actionBusy(`pair:${repo.id}`))}</button
-										>
-									{/if}
-									{#if confirmingDisconnect === repo.id}
-										<button
-											type="button"
-											class="cursor-pointer border border-stone-700 bg-stone-950/70 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-200 uppercase hover:text-amber-100 disabled:cursor-wait disabled:opacity-50"
-											disabled={pendingAction !== null}
-											onclick={() => confirmDisconnect(repo)}
-											>{actionBusy(`disconnect:${repo.id}`)
-												? 'disconnecting'
-												: 'confirm disconnect'}</button
-										>
-										<button
-											type="button"
-											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-											disabled={pendingAction !== null}
-											onclick={() => (confirmingDisconnect = null)}>cancel</button
-										>
-									{:else}
-										<button
-											type="button"
-											class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-											disabled={pendingAction !== null}
-											onclick={() => (confirmingDisconnect = repo.id)}>disconnect</button
-										>
-									{/if}
+										{:else}
+											<button
+												type="button"
+												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
+												disabled={pendingAction !== null}
+												onclick={() => pairTelegram(repo)}
+												>{telegramPairLabel(false, actionBusy(`pair:${repo.id}`))}</button
+											>
+										{/if}
+										{#if confirmingDisconnect === repo.id}
+											<button
+												type="button"
+												class="cursor-pointer border border-stone-700 bg-stone-950/70 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-200 uppercase hover:text-amber-100 disabled:cursor-wait disabled:opacity-50"
+												disabled={pendingAction !== null}
+												onclick={() => confirmDisconnect(repo)}
+												>{actionBusy(`disconnect:${repo.id}`)
+													? 'disconnecting'
+													: 'confirm disconnect'}</button
+											>
+											<button
+												type="button"
+												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+												disabled={pendingAction !== null}
+												onclick={() => (confirmingDisconnect = null)}>cancel</button
+											>
+										{:else}
+											<button
+												type="button"
+												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+												disabled={pendingAction !== null}
+												onclick={() => (confirmingDisconnect = repo.id)}>disconnect</button
+											>
+										{/if}
+									</div>
 								</div>
 							</div>
 						</div>
@@ -572,7 +613,8 @@
 					<strong class="text-stone-200">unredacted, while a run is live</strong> — full per-lane
 					table in <code class="font-mono text-amber-200">SECURITY.md</code>. Pick what the next
 					repo you enable may mirror; nothing you don't name here ships. Revisit any connected
-					repo's scope above, any time.
+					repo's scope above, any time. This browser remembers the choice below for future enables
+					on this account.
 				</p>
 				<div class="mt-3 flex flex-wrap gap-2">
 					{#each CONNECT_SCOPE_PRESETS as option (option.value)}
@@ -583,7 +625,7 @@
 									? 'border-amber-700 bg-amber-950/40 text-amber-100'
 									: 'border-stone-800 text-stone-400 hover:text-stone-200'
 							}`}
-							onclick={() => (connectScopePreset = option.value)}>{option.label}</button
+							onclick={() => selectConnectScopePreset(option.value)}>{option.label}</button
 						>
 					{/each}
 				</div>

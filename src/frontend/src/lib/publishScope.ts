@@ -23,6 +23,7 @@ export const PUBLISH_LANES: PublishLane[] = [
 ];
 
 export const PUBLISH_SCOPE_OFF = 'none';
+const CONNECT_PUBLISH_SCOPE_STORAGE_PREFIX = 'brnrd.repos.connect-publish-scope';
 
 // The pre-consent daemon-config default ("absent means everything") spelled
 // out as an explicit choice — offered as a preset so a user who genuinely
@@ -30,6 +31,20 @@ export const PUBLISH_SCOPE_OFF = 'none';
 export const PUBLISH_SCOPE_EVERYTHING = PUBLISH_LANES.map((lane) => lane.value).join(',');
 
 export type PublishScopePreset = 'none' | 'everything' | 'custom';
+
+export function connectPublishScopeStorageKey(accountId: string): string {
+	return `${CONNECT_PUBLISH_SCOPE_STORAGE_PREFIX}.${accountId}`;
+}
+
+export function storedPublishScopeValue(raw: string | null): string | null {
+	if (raw === null) return null;
+	const text = raw.trim().toLowerCase();
+	if (!text || text === PUBLISH_SCOPE_OFF) return PUBLISH_SCOPE_OFF;
+	const lanes = parsePublishLayers(text);
+	const known = new Set(PUBLISH_LANES.map((lane) => lane.value));
+	if (lanes.size === 0 || Array.from(lanes).some((lane) => !known.has(lane))) return null;
+	return serializePublishLayers(lanes);
+}
 
 export function presetForValue(value: string): PublishScopePreset {
 	const normalized = normalizePublishLayers(value);
