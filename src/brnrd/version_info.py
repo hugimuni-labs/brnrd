@@ -2,10 +2,11 @@
 
 "Is my merge live?" used to mean probing SvelteKit's ``version.json`` build
 stamp and inferring. This module gives the backend an honest answer instead:
-a ``build_info.txt`` dropped into the installed package by the Upsun build
-hook (commit sha when the build tree carries ``.git``, else
-``PLATFORM_TREE_ID``, plus a UTC build stamp, plus which of the two the sha
-line actually is), and the process start time.
+a ``build_info.txt`` dropped into the installed package at build time by
+``scripts/stamp_build_info.py`` — the one writer shared by the backend
+Dockerfile and the Upsun build hook (commit sha from the CI build arg or a
+real clone, else ``PLATFORM_TREE_ID``, plus a UTC build stamp, plus which of
+the two the sha line actually is) — and the process start time.
 
 Local/dev installs have no ``build_info.txt``; every field degrades to
 ``None`` rather than guessing — an absent answer is honest, a fabricated
