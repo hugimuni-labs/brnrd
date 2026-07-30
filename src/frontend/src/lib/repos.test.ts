@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { connectRepo, setPublishLayers } from './repos.ts';
+import { connectRepo, setPublishLayers, telegramPairLabel } from './repos.ts';
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
 	const calls: { url: string; init?: RequestInit }[] = [];
@@ -48,4 +48,23 @@ test('setPublishLayers escapes the repo id as a path segment', async () => {
 	const impl = fakeFetch(200, { ok: true, notice: 'Publish scope updated.' });
 	await setPublishLayers('repo/../x', 'none', impl);
 	assert.equal(calls(impl)[0].url, '/v1/repos/repo%2F..%2Fx/publish-layers');
+});
+
+// #885: "pair telegram button is always there no matter if it paired or
+// not" — the render decision (which button, which label) collapses to this
+// pure (paired, busy) -> label mapping.
+test('telegramPairLabel: unpaired and idle reads "pair Telegram"', () => {
+	assert.equal(telegramPairLabel(false, false), 'pair Telegram');
+});
+
+test('telegramPairLabel: unpaired and busy reads "pairing"', () => {
+	assert.equal(telegramPairLabel(false, true), 'pairing');
+});
+
+test('telegramPairLabel: paired and idle reads the secondary "re-pair"', () => {
+	assert.equal(telegramPairLabel(true, false), 're-pair');
+});
+
+test('telegramPairLabel: paired and busy reads "re-pairing"', () => {
+	assert.equal(telegramPairLabel(true, true), 're-pairing');
 });

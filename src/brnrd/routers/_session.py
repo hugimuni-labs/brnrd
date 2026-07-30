@@ -7,6 +7,7 @@ and repo-action cores are used by both ``dashboard.py`` and ``web_auth.py``.
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -41,8 +42,8 @@ from brnrd.security import hash_token
 
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
 # #874 — the coarse re-check: no new scheduler, piggybacked on the same
-# staleness-gated recheck-on-dashboard-load pattern `_github_auto_sync_if_needed`
-# already uses, so an invite that arrives after both bind and installation
+# staleness-gated recheck-on-dashboard-load pattern the installation sync
+# below uses, so an invite that arrives after both bind and installation
 # sync still gets caught within one dashboard visit's staleness window.
 _GITHUB_MARKER_RECHECK_AFTER = timedelta(minutes=15)
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
@@ -63,8 +64,7 @@ __all__ = [
     "_document_status",
     "_dt",
     "_general_terms_accept_url",
-    "_github_auto_sync_if_needed",
-    "_github_marker_sync_if_needed",
+    "_github_background_refresh_needed",
     "_github_oauth_ready",
     "_github_sync_configured",
     "_installations",
@@ -83,6 +83,7 @@ __all__ = [
     "_repos",
     "_safe_next",
     "_set_repo_publish_layers_core",
+    "_start_github_background_refresh",
     "_terms_accept_url",
     "_terms_status",
     "_time_label",
@@ -147,6 +148,26 @@ def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
     )
 
 
+def _telegram_paired_repo_ids(db: Session, repo_ids: list[str]) -> set[str]:
+    """Repos with a *real* paired Telegram route — one query, no N+1.
+
+    A ``ChannelRoute`` with a NULL ``paired_user_id`` authorizes nobody
+    (``models.py`` ~line 339: rows created before #409 shipped predate the
+    principal column) and must not count as paired (#885).
+    """
+    if not repo_ids:
+        return set()
+    return set(
+        db.execute(
+            select(ChannelRoute.repo_id).where(
+                ChannelRoute.repo_id.in_(repo_ids),
+                ChannelRoute.platform == "telegram",
+                ChannelRoute.paired_user_id.isnot(None),
+            )
+        ).scalars()
+    )
+
+
 def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
     import json
 
@@ -159,6 +180,8 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
         )
         for daemon in daemon_rows:
             daemons_by_repo.setdefault(daemon.repo_id, []).append(daemon)
+
+    telegram_paired_ids = _telegram_paired_repo_ids(db, repo_ids)
 
     reported_daemons = [daemon for daemon in daemon_rows if _dt(daemon.runners_updated_at)]
     dispatch_default_repo_id = (
@@ -203,6 +226,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
             {
                 "repo": repo,
                 "dispatch_default": repo.id == dispatch_default_repo_id,
+                "telegram_paired": repo.id in telegram_paired_ids,
                 "daemon_count": len(daemons),
                 "daemon_status": daemon_status,
                 "daemon_label": daemon_label,
@@ -229,54 +253,108 @@ def _github_oauth_ready(request: Request) -> bool:
     return bool(s.github_oauth_client_id and s.github_oauth_client_secret)
 
 
-def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) -> str | None:
-    if not _github_sync_configured(request):
-        return None
+# #885 — the repos GET used to run installation sync (paginated App-API repo
+# listing) and per-repo collaborator checks inline, whenever either was stale
+# by `_GITHUB_AUTO_SYNC_AFTER` / `_GITHUB_MARKER_RECHECK_AFTER`; on an account
+# with dozens of repos that is the reported ~minute page load, and it also
+# smuggled an unrelated "GitHub installations synced." notice onto a plain
+# load. The GET now only *decides* staleness (cheap reads on the request's
+# own session, below) and hands the actual sync work to a background thread
+# with its own DB session — the response carries current DB state and
+# never waits on GitHub.
+_GITHUB_BACKGROUND_SYNC_LOCK = threading.Lock()
+_GITHUB_BACKGROUND_SYNC_IN_PROGRESS: set[str] = set()
+
+
+def _github_installation_sync_stale(db: Session, account_id: str) -> bool:
     installations = _installations(db, account_id)
     installed_repos = _installed_repos(db, account_id)
+    if not installed_repos or not installations:
+        return True
     now = datetime.now(timezone.utc)
-    needs_sync = not installed_repos or not installations
-    if not needs_sync:
-        needs_sync = any(_dt(i.last_synced_at) is None or now - _dt(i.last_synced_at) > _GITHUB_AUTO_SYNC_AFTER for i in installations)
-    if not needs_sync:
-        return None
-    try:
-        result = sync_app_installations_for_account(
-            db, request.app.state.settings, account_id
-        )
-    except Exception as e:
-        print(f"[brnrd] github dashboard auto-sync failed: {e}")
-        return "github-sync-failed"
-    return github_sync_notice(result)
+    return any(
+        _dt(installation.last_synced_at) is None
+        or now - _dt(installation.last_synced_at) > _GITHUB_AUTO_SYNC_AFTER
+        for installation in installations
+    )
 
 
-def _github_marker_sync_if_needed(request: Request, db: Session, account_id: str) -> None:
-    """The coarse re-check (#874): catches an invitation that arrives after
-    both bind and installation sync, without a new scheduler — gated on
-    staleness exactly like ``_github_auto_sync_if_needed`` above, and called
-    from the same dashboard-load site. Produces no notice string of its own;
-    per-repo results land on ``Repo.github_bot_notice`` / `.github_bot_collaborator`
-    and are read back in ``dashboard._repo_view_out``.
-    """
-    settings = request.app.state.settings
-    if not settings.github_bot_token:
-        return
+def _github_marker_sync_stale(db: Session, account_id: str) -> bool:
     repos = _repos(db, account_id)
     if not repos:
-        return
+        return False
     now = datetime.now(timezone.utc)
-    stale = [
-        r
-        for r in repos
-        if _dt(r.github_bot_checked_at) is None
-        or now - _dt(r.github_bot_checked_at) > _GITHUB_MARKER_RECHECK_AFTER
-    ]
-    if not stale:
-        return
+    return any(
+        _dt(repo.github_bot_checked_at) is None
+        or now - _dt(repo.github_bot_checked_at) > _GITHUB_MARKER_RECHECK_AFTER
+        for repo in repos
+    )
+
+
+def _github_background_refresh_needed(request: Request, db: Session, account_id: str) -> bool:
+    """Whether the dashboard GET should kick a background refresh thread.
+
+    Reads only — the actual sync happens in `_run_github_background_refresh`,
+    off-thread, with its own session.
+    """
+    settings = request.app.state.settings
+    installation_stale = _github_sync_configured(request) and _github_installation_sync_stale(db, account_id)
+    marker_stale = bool(settings.github_bot_token) and _github_marker_sync_stale(db, account_id)
+    return installation_stale or marker_stale
+
+
+def _run_github_background_refresh(session_factory, settings, account_id: str) -> None:
+    """Daemon-thread body: installation sync + the #874 marker re-check.
+
+    Its own DB session from `session_factory` (`app.state.SessionLocal`) —
+    never the request's, which has already returned a response by the time
+    this runs. Failures log and stop; nothing is waiting on this thread to
+    surface them.
+    """
     try:
-        github_marker.sync_marker_for_repos(db, settings, stale)
-    except Exception as e:
-        print(f"[brnrd] github marker recheck failed: {e}")
+        with session_factory() as db:
+            if _github_installation_sync_stale(db, account_id):
+                try:
+                    sync_app_installations_for_account(db, settings, account_id)
+                except Exception as e:
+                    print(f"[brnrd] github dashboard background sync failed: {e}")
+            if settings.github_bot_token:
+                repos = _repos(db, account_id)
+                now = datetime.now(timezone.utc)
+                stale = [
+                    r
+                    for r in repos
+                    if _dt(r.github_bot_checked_at) is None
+                    or now - _dt(r.github_bot_checked_at) > _GITHUB_MARKER_RECHECK_AFTER
+                ]
+                if stale:
+                    try:
+                        github_marker.sync_marker_for_repos(db, settings, stale)
+                    except Exception as e:
+                        print(f"[brnrd] github marker background recheck failed: {e}")
+    finally:
+        with _GITHUB_BACKGROUND_SYNC_LOCK:
+            _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.discard(account_id)
+
+
+def _start_github_background_refresh(request: Request, account_id: str) -> None:
+    """Fire-and-forget refresh, single-flight per account.
+
+    A second GET for the same account while a sync is already in flight is a
+    no-op — the module-level set is the single-flight lock, checked and set
+    atomically so two concurrent requests can't both pass the gate.
+    """
+    with _GITHUB_BACKGROUND_SYNC_LOCK:
+        if account_id in _GITHUB_BACKGROUND_SYNC_IN_PROGRESS:
+            return
+        _GITHUB_BACKGROUND_SYNC_IN_PROGRESS.add(account_id)
+    thread = threading.Thread(
+        target=_run_github_background_refresh,
+        args=(request.app.state.SessionLocal, request.app.state.settings, account_id),
+        name=f"github-refresh-{account_id}",
+        daemon=True,
+    )
+    thread.start()
 
 
 def _notice_text(value: str | None) -> str | None:
