@@ -390,6 +390,72 @@ def test_cursor_is_idempotent_on_repoll(env):
     assert rest["events"] == []
 
 
+def test_inbox_carries_the_server_fingerprint(env, tmp_path, monkeypatch):
+    """The prod fingerprint rides the channel the daemon already polls
+    (2026-07-30 task): no new endpoint, no new poll — just an extra block
+    on the response the long-poll already returns."""
+    from brnrd import version_info
+
+    _, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    stamped = tmp_path / "build_info.txt"
+    stamped.write_text(
+        "bebd5c1d\n2026-07-30T10:19:01+00:00\ngit\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
+    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
+
+    resp = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    server = resp["server"]
+    assert server["build"] == {
+        "commit": "bebd5c1d",
+        "tree_id": "bebd5c1d",
+        "built_at": "2026-07-30T10:19:01+00:00",
+        "started_at": version_info._STARTED_AT,
+    }
+    github = server["github"]
+    assert github["bot_login"] == "brnrd-bot"
+    assert github["app_slug"] == "brnrd-dev"
+    assert github["trigger_label"] == "brnrd"
+    assert github["trigger_aliases"] == ["brnrd", "brr"]
+    # Never a credential value — booleans only.
+    assert github["webhook_secret_set"] is False
+    assert github["bot_token_set"] is False
+    assert set(github) == {
+        "bot_login", "app_slug", "trigger_label", "trigger_aliases",
+        "webhook_secret_set", "bot_token_set",
+    }
+
+
+def test_inbox_server_fingerprint_reports_credentials_set_as_booleans():
+    """Never a credential value — booleans only, for both secret fields."""
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        inbox_long_poll_max_s=3.0,
+        inbox_poll_interval_s=0.02,
+        github_webhook_secret="shh-do-not-leak",
+        github_bot_token="ghp_do-not-leak-either",
+    )
+    app = create_app(settings, forwarder=CapturingForwarder())
+    client = TestClient(app)
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    resp = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    body = resp["server"]["github"]
+    assert body["webhook_secret_set"] is True
+    assert body["bot_token_set"] is True
+    assert "shh-do-not-leak" not in str(resp)
+    assert "ghp_do-not-leak-either" not in str(resp)
+
+
 def test_account_daemons_receive_events_for_every_repo(env):
     _, client, _ = env
     acc = _account(client)
