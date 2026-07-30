@@ -307,7 +307,21 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
             )
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
-    capabilities = dict(state.get("capabilities") or {})
+    account_id = str(status.get("account_id") or "") or None
+    # Resolve — and *create* — the destination state dir before deciding the
+    # cursor. That resolution is what runs `account.migrate_cloud_gate_state`,
+    # which moves a legacy repo-local `cloud.json` into the account home; the
+    # read above used `create=False`, so it can miss the file that holds the
+    # only copy of `since`. Saving straight through then overwrote the
+    # just-rescued cursor with a zero — and a zero cursor asks the server for
+    # the account's entire event history (2026-07-30: 339 events, all already
+    # answered). Take the highest cursor either copy knows and never write a
+    # lower one: a cursor that is too high self-heals server-side
+    # (`inbox.clamp_since`), one that is too low replays history.
+    dest = _state_dir(brr_dir, account_id=account_id, create=True)
+    migrated = runtime.load_state(dest, "cloud")
+    since = max(int(state.get("since") or 0), int(migrated.get("since") or 0))
+    capabilities = dict(migrated.get("capabilities") or state.get("capabilities") or {})
     capabilities.update(_repo_capabilities(brr_dir))
     state.update({
         "brnrd_url": brnrd_url.rstrip("/"),
@@ -316,9 +330,9 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         "repo_id": status["repo_id"],
         "daemon_name": daemon_name,
         "capabilities": capabilities,
-        "since": state.get("since", 0),
+        "since": since,
     })
-    _save_state(brr_dir, state, account_id=str(status.get("account_id") or "") or None)
+    _save_state(brr_dir, state, account_id=account_id)
     # Pairing mints a daemon token, but the publish endpoints bind that token
     # to a concrete Daemon row created by /register.  Do this in the process
     # that owns the handshake instead of waiting for `brnrd up` to restart:
@@ -964,7 +978,22 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     if isinstance(server, dict):
         runtime.save_server_fingerprint(_state_dir(brr_dir), "cloud", server)
     events = result.get("events", [])
+    # Ingest on identity, not on position. ``since`` is the only thing that
+    # normally keeps an answered event off the wire, and it is one integer in
+    # one local file — ``connect`` writes ``since: 0`` whenever it cannot find
+    # the previous value, and the server has no delivery state of its own to
+    # correct it with. That happened on 2026-07-30 after the Scaleway cutover:
+    # 339 events replayed in a single poll, every one of them already
+    # answered, 120 of them still sitting in this very directory stamped
+    # ``delivered``. The daemon had the evidence and never looked at it.
+    seen = protocol.known_origin_ids(inbox_dir, "cloud_event_id") if events else set()
+    replayed = 0
     for ev in events:
+        if str(ev.get("event_id") or "") in seen:
+            # Already ingested under some earlier cursor — dropping it here is
+            # what makes a cursor reset cost nothing.
+            replayed += 1
+            continue
         # #525 — pointers become local files *now*, at ingestion time: the
         # server holds no bytes, telegram links expire, and the wake's Read
         # tool wants a plain local path (``attachment_files`` convention).
@@ -979,6 +1008,14 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
                 repo_label=ev.get("repo_label") or "",
                 **_origin_meta(ev.get("reply_to") or {}),
             )
+    if replayed:
+        # Loud, not silent: a dropped replay means the cursor and the server
+        # disagree about history, and that is worth an operator seeing once
+        # per poll rather than discovering as a queue that will not drain.
+        print(
+            f"[brnrd:cloud] dropped {replayed} already-ingested event(s) — "
+            f"the poll cursor ({since}) is behind what this inbox has answered"
+        )
     cursor = result.get("cursor", since)
     if cursor != since:
         # Trust the server's cursor in both directions: it moves up as

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -413,6 +414,128 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert cloud._load_state(brr_dir)["since"] == 2
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
     assert protocol.list_pending(inbox_dir) == []
+
+
+def test_a_reset_cursor_does_not_re_ingest_answered_events(tmp_path, monkeypatch, capsys):
+    """The cursor is a position; `cloud_event_id` is an identity.
+
+    Position lives in one local JSON file, so anything that loses or zeroes
+    it — a re-pair, a wiped home, a state-dir migration — asks the server for
+    history the daemon has already answered. Identity survives all three,
+    because the answered copies are still sitting in the inbox.
+
+    Live 2026-07-30: 339 events re-ingested in one poll after
+    `account connect` wrote `since: 0`, while 120 of their twins sat in that
+    same directory stamped `delivered`. The daemon held the evidence and
+    never read it.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={"repo_id": pid, "body": "the only message", "reply_to": {"chat": 1}},
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = protocol.list_pending(inbox_dir)
+    assert [ev["body"] for ev in pending] == ["the only message"]
+    ingested = pending[0]["cloud_event_id"]
+
+    # Close it locally *without* posting a response — the shape that made the
+    # live incident large. A run that folds a burst into one reply answers the
+    # lead event and leaves the rest queued server-side forever, so the
+    # backend's own "never redeliver an answered event" filter cannot help:
+    # from the server's side these are still unanswered. 158 of the 339 were
+    # exactly this. The local file is the only record that they were seen.
+    protocol.set_status(pending[0], "done")
+
+    # Now the failure this guards: the cursor goes back to zero.
+    state = cloud._load_state(brr_dir)
+    state["since"] = 0
+    cloud._save_state(brr_dir, state)
+    capsys.readouterr()
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    # Nothing re-queued, and the disagreement is said out loud rather than
+    # left as a queue that will not drain.
+    assert protocol.list_pending(inbox_dir) == []
+    assert "dropped 1 already-ingested event" in capsys.readouterr().out
+    # The record that made the drop possible is still on disk.
+    assert ingested in protocol.known_origin_ids(inbox_dir, "cloud_event_id")
+
+
+def test_connect_never_lowers_the_poll_cursor(tmp_path, monkeypatch):
+    """Re-pairing must not ask for the account's whole history back.
+
+    `connect` reads the existing state through a `create=False` resolution,
+    which skips the account-home migration — so on a repo whose cursor still
+    lives at the legacy path the read comes back empty, `since` defaults to
+    0, and the *save* (which does migrate) overwrites the rescued cursor with
+    that zero. Server-side there is no delivery state to correct it with, and
+    `clamp_since` is guarded on `since > 0`, so nothing downstream catches it.
+    """
+    init_git_repo(tmp_path)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    brr_dir = tmp_path / ".brr"
+    # The skew, built the way production builds it: an already-connected repo
+    # whose cursor is still at the *legacy* repo-local path. `account_id` +
+    # `token` + `brnrd_url` here are what make `account._connected_account_id`
+    # resolve this repo to an account home — so the read below looks in the
+    # account home (empty) while the only copy of `since` is right here.
+    legacy = brr_dir / "gates" / "cloud.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                "brnrd_url": "http://brnrd",
+                "token": "old",
+                "account_id": "acct_x",
+                "repo_id": "proj_x",
+                "since": 4211,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert cloud._load_state(brr_dir).get("since") is None, (
+        "fixture is inert: the read already sees the legacy cursor, so this "
+        "test could not fail"
+    )
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {
+                "status": "paired",
+                "account_id": "acct_x",
+                "repo_id": "proj_x",
+                "daemon_token": "bd_tok",
+            },
+            {},  # /v1/daemons/register
+        ]
+    )
+    monkeypatch.setattr(
+        cloud, "_request", lambda base_url, method, path, **kwargs: next(scripted)
+    )
+    state = cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd",
+        daemon_name="laptop",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda _message: None,
+    )
+    assert state["token"] == "bd_tok"
+    assert state["since"] == 4211
+    assert cloud._load_state(brr_dir)["since"] == 4211
 
 
 def test_loop_persists_the_server_fingerprint(tmp_path, monkeypatch):
