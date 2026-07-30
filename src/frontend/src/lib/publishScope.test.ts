@@ -5,12 +5,14 @@ import {
 	PUBLISH_LANES,
 	PUBLISH_SCOPE_EVERYTHING,
 	PUBLISH_SCOPE_OFF,
+	connectPublishScopeStorageKey,
 	joinRepoNames,
 	optedOutClause,
 	parsePublishLayers,
 	presetForValue,
 	publishScopeSummary,
 	serializePublishLayers,
+	storedPublishScopeValue,
 	unrecordedClause
 } from './publishScope.ts';
 
@@ -48,6 +50,24 @@ test('presetForValue recognizes the off and everything presets', () => {
 	assert.equal(presetForValue(PUBLISH_SCOPE_OFF), 'none');
 	assert.equal(presetForValue(PUBLISH_SCOPE_EVERYTHING), 'everything');
 	assert.equal(presetForValue('activity,quota'), 'custom');
+});
+
+test('the enable-scope storage key is stable and account-specific', () => {
+	assert.equal(connectPublishScopeStorageKey('acct_1'), 'brnrd.repos.connect-publish-scope.acct_1');
+	assert.notEqual(connectPublishScopeStorageKey('acct_1'), connectPublishScopeStorageKey('acct_2'));
+});
+
+test('storedPublishScopeValue restores a canonical remembered choice', () => {
+	assert.equal(storedPublishScopeValue(null), null);
+	assert.equal(storedPublishScopeValue(''), PUBLISH_SCOPE_OFF);
+	assert.equal(storedPublishScopeValue('none'), PUBLISH_SCOPE_OFF);
+	assert.equal(storedPublishScopeValue('quota, Activity'), 'activity,quota');
+	assert.equal(storedPublishScopeValue(PUBLISH_SCOPE_EVERYTHING), PUBLISH_SCOPE_EVERYTHING);
+});
+
+test('storedPublishScopeValue rejects a tampered or obsolete lane', () => {
+	assert.equal(storedPublishScopeValue('activity,not-a-lane'), null);
+	assert.equal(storedPublishScopeValue('not-a-lane'), null);
 });
 
 test('publishScopeSummary distinguishes no-consent-recorded from an explicit off', () => {
