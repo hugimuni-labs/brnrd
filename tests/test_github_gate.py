@@ -42,6 +42,7 @@ from brr.gates.github import (
     wizard,
 )
 from brr.run import Run
+from _mention_vectors import MENTION, MENTION_VECTOR_IDS, MENTION_VECTORS
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +74,28 @@ def _default_collaborator_permission(monkeypatch):
 ])
 def test_parse_origin_url(url, expected):
     assert github.parse_origin_url(url) == expected
+
+
+# ── find_mention (fence-aware mention matcher, #879 member 5) ─────────
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [(body, expected) for _label, body, expected in MENTION_VECTORS],
+    ids=MENTION_VECTOR_IDS,
+)
+def test_find_mention_vector_table(body, expected):
+    assert (parse.find_mention(body, [MENTION]) is not None) == expected
+
+
+def test_find_mention_returns_the_matched_candidate_not_the_body_text():
+    assert parse.find_mention("hey @brr-bot fix this", ["@brr-bot"]) == "@brr-bot"
+
+
+def test_find_mention_checks_candidates_in_order_and_returns_first_hit():
+    assert parse.find_mention(
+        "@brnrd-dev please look", ["@brr-bot", "@brnrd-dev"]
+    ) == "@brnrd-dev"
 
 
 # ── paths ─────────────────────────────────────────────────────────────
@@ -1314,6 +1337,36 @@ def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
             "user": {"login": "bob"},
             "issue_url": "https://api.github.com/repos/o/r/issues/5",
             "html_url": "https://github.com/o/r/issues/5#issuecomment-3",
+            "updated_at": "2026-05-15T12:00:00Z",
+        },
+    ])
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert protocol.list_pending(inbox) == []
+
+
+def test_mention_trigger_ignores_a_fenced_mention(tmp_path, monkeypatch):
+    """#879 member 5 — a handle written to *discuss* the trigger inside a
+    fenced code block must not itself re-trigger a summons (the bug this
+    reproduces: the old ``mention not in body`` check fired on the fence
+    contents same as a live mention)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "id": 4,
+            "body": "the bug:\n```\n@brr-bot fires on fenced text\n```",
+            "user": {"login": "bob"},
+            "issue_url": "https://api.github.com/repos/o/r/issues/5",
+            "html_url": "https://github.com/o/r/issues/5#issuecomment-4",
             "updated_at": "2026-05-15T12:00:00Z",
         },
     ])
