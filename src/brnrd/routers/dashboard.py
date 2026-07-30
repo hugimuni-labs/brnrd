@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import publish_scope, run_stop_requests, wake_requests
+from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
@@ -26,6 +26,7 @@ from ._session import (
     _age_label,
     _dt,
     _github_auto_sync_if_needed,
+    _github_marker_sync_if_needed,
     _github_oauth_ready,
     _github_sync_configured,
     _installations,
@@ -681,7 +682,7 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
-def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
+def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any]:
     repo: Repo = row["repo"]
     return {
         "id": repo.id,
@@ -711,6 +712,23 @@ def _repo_view_out(row: dict[str, Any]) -> dict[str, Any]:
         # publish-scope consent step shipped) — the settings UI renders that
         # distinctly from an explicit "none".
         "publish_layers": repo.publish_layers,
+        # #874 — brnrd-bot's own marker-collaborator state. `None` = unknown
+        # (no bot token configured, never checked, or the last check was
+        # ambiguous) — the frontend must render that distinctly from a
+        # checked-and-false "not a collaborator", never guess optimistic.
+        "github_bot_collaborator": repo.github_bot_collaborator,
+        "github_bot_checked_at": _iso(repo.github_bot_checked_at),
+        # The plain one-sentence absence line, pre-rendered server-side (one
+        # wording, not duplicated in the frontend) — present only when we
+        # positively know the marker isn't a collaborator.
+        "github_bot_marker_notice": (
+            github_marker.marker_absence_text(bot_login)
+            if repo.github_bot_collaborator is False
+            else None
+        ),
+        # Last acceptance/check *failure*, distinct from the absence line
+        # above — never silence (#874 ask 2).
+        "github_bot_notice": repo.github_bot_notice,
     }
 
 
@@ -759,6 +777,7 @@ def dashboard_repos_api(
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     notice = notice or _github_auto_sync_if_needed(request, db, account.id)
+    _github_marker_sync_if_needed(request, db, account.id)
     settings = request.app.state.settings
     repos = _repos(db, account.id)
     repo_views = _repo_views(db, repos)
@@ -769,7 +788,10 @@ def dashboard_repos_api(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "account": {"id": account.id, "github_login": account.github_login},
-            "connected_repos": [_repo_view_out(row) for row in repo_views],
+            "connected_repos": [
+                _repo_view_out(row, bot_login=settings.github_bot_login)
+                for row in repo_views
+            ],
             "connected_count": len(repos),
             "installations": [_installation_out(row) for row in installations],
             "installed_repos": [
