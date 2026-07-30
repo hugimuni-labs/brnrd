@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 
-	const LAST_UPDATED = '2026-07-24';
+	// 2026-07-30: the hosting row said "France (EU) / no transfer required" while
+	// the live project has always run in Upsun's `ch-1` (Switzerland) region —
+	// a published international-transfer claim that was wrong in the direction
+	// that flatters us. The region is a project-creation setting and appears in
+	// no config file in this repo, which is why the page could drift without a
+	// diff ever contradicting it. `docs/legal/dpa.md` §14 carries the same
+	// adequacy wording; keep the two in step.
+	const LAST_UPDATED = '2026-07-30';
 </script>
 
 <svelte:head><title>brnrd sub-processors</title></svelte:head>
@@ -61,7 +68,7 @@
 							<td class="border-r border-stone-700 px-3 py-3">
 								<strong class="text-stone-200">Upsun / Platform.sh</strong>
 								<br />
-								<span class="text-xs text-ink-quiet">France (EU)</span>
+								<span class="text-xs text-ink-quiet">Switzerland (region <code>ch-1</code>)</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Cloud hosting infrastructure; PostgreSQL database
@@ -70,7 +77,14 @@
 								Account identity (GitHub user ID, login), email, billing records, conversation and
 								event data, corpus mirror, run metadata
 							</td>
-							<td class="px-3 py-3">Data localised within EU; no transfer required.</td>
+							<td class="px-3 py-3">
+								Outside the EEA. The transfer relies on the European Commission's
+								<a
+									class="text-sky-400 underline"
+									href="https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en"
+									rel="external">adequacy decision for Switzerland</a
+								>.
+							</td>
 						</tr>
 
 						<tr>
