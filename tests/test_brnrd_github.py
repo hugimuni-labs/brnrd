@@ -383,6 +383,7 @@ def _opened_payload(
     body="@brr-bot please take a look",
     author="alice",
     association="NONE",
+    head_ref="feature-x",
 ):
     """#879 member 4 — a newly opened issue/PR. ``association`` defaults to
     ``NONE`` (a drive-by stranger) since opening an issue/PR needs no
@@ -395,6 +396,8 @@ def _opened_payload(
         "user": {"login": author},
         "author_association": association,
     }
+    if is_pr:
+        item["head"] = {"ref": head_ref}
     payload = {
         "action": "opened",
         "installation": {"id": 42},
@@ -1127,6 +1130,35 @@ def test_issue_opened_title_mention_inside_a_fence_stays_inert(env):
 
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
+
+
+def test_pull_request_opened_from_our_own_branch_namespace_resolves_nothing(env):
+    """A worker PR must not summon a run off its own description.
+
+    Worker branches live in brnrd's ``brr/`` namespace and worker commits
+    are pushed under the operator's identity, so the author-skip cannot see
+    them — a worker PR whose body @-mentions the bot would summon a run of
+    its own PR body, which may open another PR. The branch namespace is the
+    structural tell; the face is not.
+    """
+    app, client, posts = env
+    acc = _account(client)
+    _repo(client, acc)
+
+    r = _github_post(
+        client,
+        _opened_payload(
+            is_pr=True,
+            head_ref="brr/some-worker-slug",
+            association="COLLABORATOR",
+        ),
+        event="pull_request",
+    )
+    assert r.status_code == 200, r.text
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert posts == []
 
 
 def test_unauthorized_issue_opened_resolves_nothing(env):

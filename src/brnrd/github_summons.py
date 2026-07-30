@@ -222,6 +222,21 @@ _SUMMONS_BY_EVENT = {
 _SUMMONS_BY_KIND = {spec.kind: spec for spec in _SUMMONS_SPECS}
 
 
+_OWN_BRANCH_PREFIX = "brr/"
+
+
+def _is_own_machinery(payload: dict) -> bool:
+    """Is this a pull request the resident's own worker fleet opened?
+
+    Keyed on the head branch namespace (``brr/``), which brnrd owns and
+    generates — never on the author login, which is the operator's for a
+    worker push and therefore indistinguishable from a human's.
+    """
+    head = (payload.get("pull_request") or {}).get("head")
+    ref = str((head or {}).get("ref") or "")
+    return ref.startswith(_OWN_BRANCH_PREFIX)
+
+
 def resolve_github_summons(
     x_github_event: str | None,
     payload: object,
@@ -254,6 +269,16 @@ def resolve_github_summons(
     html_url_override: str | None = None
 
     if spec.target_source == "mention":
+        if spec.action == "opened" and _is_own_machinery(payload):
+            # A PR the resident's own fleet just opened. Worker branches live
+            # in brnrd's own ``brr/`` namespace and worker commits are pushed
+            # under the operator's identity, so the author-skip below cannot
+            # see them: a worker PR whose description @-mentions the bot
+            # would summon a run *of its own PR body*, and that run may open
+            # another PR. The loop is unlikely to be infinite and certain to
+            # be confusing; the branch namespace is the structural tell, so
+            # use it rather than trying to recognise a face.
+            return None
         body_text = str(target.get(spec.target_field) or "")
         if spec.match_title:
             # Match what we forward: ``_format_event_body`` carries the
