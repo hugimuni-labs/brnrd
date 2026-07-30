@@ -16,6 +16,8 @@ const generated = join(here, '.markerNotice.generated.mjs');
 async function renderNotice(props: {
 	markerNotice: string | null;
 	failureNotice: string | null;
+	botLogin?: string;
+	repoFullName?: string;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, {
@@ -77,4 +79,50 @@ test('both notices render together, marker line first', async () => {
 	const markerAt = html.indexOf('not a collaborator');
 	const failureAt = html.indexOf('invitation accept failed');
 	ok(markerAt !== -1 && failureAt !== -1 && markerAt < failureAt);
+});
+
+// #885 additions: click-to-copy bot handle + a link to the repo's GitHub
+// collaborators page, both gated on `markerNotice` firing.
+
+test('a determined absence with a bot login renders the copy-handle control', async () => {
+	const html = await renderNotice({
+		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
+		failureNotice: null,
+		botLogin: 'brnrd-bot',
+		repoFullName: ''
+	});
+	ok(html.includes('copy @brnrd-bot'));
+});
+
+test('a determined absence with a repo name renders the collaborators-page link', async () => {
+	const html = await renderNotice({
+		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
+		failureNotice: null,
+		botLogin: '',
+		repoFullName: 'Gurio/brr'
+	});
+	ok(html.includes('open collaborators page'));
+	ok(html.includes('https://github.com/Gurio/brr/settings/access'));
+});
+
+test('an empty botLogin/repoFullName renders neither addition, even with a firing markerNotice', async () => {
+	const html = await renderNotice({
+		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
+		failureNotice: null,
+		botLogin: '',
+		repoFullName: ''
+	});
+	ok(!html.includes('copy @'));
+	ok(!html.includes('open collaborators page'));
+});
+
+test('a null markerNotice renders neither addition, even when bot login and repo name are given', async () => {
+	const html = await renderNotice({
+		markerNotice: null,
+		failureNotice: null,
+		botLogin: 'brnrd-bot',
+		repoFullName: 'Gurio/brr'
+	});
+	ok(!html.includes('copy @'));
+	ok(!html.includes('open collaborators page'));
 });
