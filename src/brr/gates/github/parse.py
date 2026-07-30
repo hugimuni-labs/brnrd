@@ -7,7 +7,56 @@ keeping these parsers in one place keeps the two sides honest.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
+
 from .constants import _GITHUB_HOSTS, _HTTPS_RE, _ISSUE_URL_RE, _PR_URL_RE, _SSH_RE
+
+# #879 member 5 — one fence-aware mention predicate shared by both ingress
+# paths (the gate's polling loop and brnrd's webhook receiver), replacing
+# two hand-rolled, already-drifted copies: the gate's case-sensitive
+# ``mention not in body`` and the cloud's un-fenced
+# ``mention.casefold() in body.casefold()``.
+_FENCED_BLOCK_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_BOUNDARY_CHARS = "A-Za-z0-9_-"
+
+
+def _strip_quoted_and_code(body: str) -> str:
+    """Drop fenced code blocks, inline code spans, and ``>`` blockquote lines.
+
+    A handle written to *discuss* the trigger (inside a fence or inline code
+    span) or *quoted* from someone else's message (a blockquote line) must
+    not itself count as a live mention — see issue #879 member 5.
+    """
+    text = _FENCED_BLOCK_RE.sub("", body or "")
+    text = _INLINE_CODE_RE.sub("", text)
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith(">")
+    )
+
+
+def find_mention(body: str, candidates: Iterable[str]) -> str | None:
+    """Return the first *candidates* entry mentioned in *body*, or ``None``.
+
+    Fence/inline-code/blockquote-aware (``_strip_quoted_and_code``),
+    case-insensitive, and word-boundary matched so a search for
+    ``@brnrd-bot`` does not match text containing ``@brnrd-bot-2``.
+    *candidates* are matched exactly as given — callers format their own
+    leading ``@`` (or not: a configured gate trigger need not be
+    ``@``-shaped, see ``_login_to_skip_for_mention_trigger``).
+    """
+    folded = _strip_quoted_and_code(body).casefold()
+    for candidate in candidates:
+        needle = str(candidate or "").strip()
+        if not needle:
+            continue
+        pattern = re.compile(
+            rf"(?<![{_BOUNDARY_CHARS}]){re.escape(needle.casefold())}(?![{_BOUNDARY_CHARS}])"
+        )
+        if pattern.search(folded):
+            return candidate
+    return None
 
 
 def parse_origin_url(url: str) -> str | None:

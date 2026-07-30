@@ -501,7 +501,7 @@ def _poll_mention_trigger(
         if cid in seen:
             continue
         body = str(comment.get("body") or "")
-        if mention not in body:
+        if parse.find_mention(body, [mention]) is None:
             continue
         author = (comment.get("user") or {}).get("login") or ""
         if parse._skip_mention_comment_author(author, mention, token_login):
@@ -589,7 +589,7 @@ def _poll_mention_review_comments(
         if cid in seen:
             continue
         body = str(comment.get("body") or "")
-        if mention not in body:
+        if parse.find_mention(body, [mention]) is None:
             continue
         author = (comment.get("user") or {}).get("login") or ""
         if parse._skip_mention_comment_author(author, mention, token_login):
@@ -641,9 +641,13 @@ def _poll_mention_review_comments(
     # mentions in the review *summary body*. A review can carry a
     # summary plus zero or more line comments; we only see the summary
     # when /pulls/comments tells us a review exists. Standalone summary
-    # reviews (no line comments) are not discoverable this cheaply and
-    # fall through to the managed brnrd webhook path — see
-    # kb/design-github-gate-vs-brnrd-app.md.
+    # reviews (no line comments) stay undiscoverable to *this* poller —
+    # it only ever walks reviews it found via a line comment, and nothing
+    # here fetches reviews independently. On a repo connected to the
+    # managed brnrd backend, ``pull_request_review`` is its own webhook
+    # subscription now (`brnrd.github_summons`'s spec table, #879 member
+    # 3) and does not depend on this gate at all; a repo running only
+    # this local gate, with no managed backend, still has the gap.
     _poll_mention_review_summaries(
         token, repo, mention, token_login, cursor, inbox_dir,
         comments, pr_branch_cache,
@@ -722,7 +726,7 @@ def _emit_review_event_if_mentioned(
     if not isinstance(review, dict):
         return
     body = str(review.get("body") or "")
-    if not body or mention not in body:
+    if not body or parse.find_mention(body, [mention]) is None:
         return
     author = (review.get("user") or {}).get("login") or ""
     if parse._skip_mention_comment_author(author, mention, token_login):
