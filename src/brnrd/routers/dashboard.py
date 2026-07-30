@@ -25,8 +25,7 @@ from ._session import (
     _account_id,
     _age_label,
     _dt,
-    _github_auto_sync_if_needed,
-    _github_marker_sync_if_needed,
+    _github_background_refresh_needed,
     _github_oauth_ready,
     _github_sync_configured,
     _installations,
@@ -34,6 +33,7 @@ from ._session import (
     _notice_text,
     _repo_views,
     _repos,
+    _start_github_background_refresh,
     _time_label,
 )
 
@@ -707,7 +707,7 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         "environment_default": row.get("environment_default"),
         "environments": row.get("environments", []),
         "setup_command": row["setup_command"],
-        "telegram_pair_enabled": True,
+        "telegram_paired": bool(row.get("telegram_paired")),
         # None = no consent recorded (legacy repo, connected before the
         # publish-scope consent step shipped) — the settings UI renders that
         # distinctly from an explicit "none".
@@ -776,8 +776,14 @@ def dashboard_repos_api(
     account = db.get(Account, account_id)
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
-    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
-    _github_marker_sync_if_needed(request, db, account.id)
+    # #885 — never block this GET on GitHub: staleness is decided here, on
+    # the request's own session, and the actual sync (if any) runs on a
+    # background thread with its own session. The response below is
+    # whatever is already in the DB, and carries no auto-sync notice of its
+    # own — `notice` is only ever the query-param passthrough from the setup
+    # redirect flow.
+    if _github_background_refresh_needed(request, db, account.id):
+        _start_github_background_refresh(request, account.id)
     settings = request.app.state.settings
     repos = _repos(db, account.id)
     repo_views = _repo_views(db, repos)
