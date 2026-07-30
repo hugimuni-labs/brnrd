@@ -522,20 +522,27 @@
 
 								<div class="flex w-full shrink-0 flex-col gap-2 md:w-auto md:items-end">
 									{#if repo.telegram_paired}
-										<span class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase"
-											>telegram paired</span
-										>
-									{/if}
-									<div class="grid grid-cols-2 gap-2 md:flex md:justify-end">
-										{#if repo.telegram_paired}
+										<!-- #885 follow-up: re-pairing is an exception (the chat moved, the route
+										     broke), not a routine act, so it lives inside the status it changes —
+										     the same disclosure idiom this card already uses for `setup command`.
+										     An idle paired repo shows state and one destructive action, nothing
+										     else to press. -->
+										<details class="w-full md:w-auto md:text-right">
+											<summary
+												class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+												>telegram paired</summary
+											>
 											<button
 												type="button"
-												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
+												class="mt-2 cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
 												disabled={pendingAction !== null}
 												onclick={() => pairTelegram(repo)}
 												>{telegramPairLabel(true, actionBusy(`pair:${repo.id}`))}</button
 											>
-										{:else}
+										</details>
+									{/if}
+									<div class="grid grid-cols-2 gap-2 md:flex md:justify-end">
+										{#if !repo.telegram_paired && confirmingDisconnect !== repo.id}
 											<button
 												type="button"
 												class="cursor-pointer border border-stone-800 px-2 py-1 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
