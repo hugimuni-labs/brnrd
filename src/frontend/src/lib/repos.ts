@@ -127,12 +127,12 @@ export interface RepoActionResponse {
 
 export class ReposAuthError extends Error {}
 
-// #885: "pair telegram button is always there no matter if it paired or
-// not" — a paired repo renders a quiet status plus a secondary "re-pair"
-// action instead of the primary "pair Telegram" call to action. Pure so the
-// four (paired × busy) combinations are testable without mounting the page.
+// #885: a paired repo renders a quiet status plus a secondary re-pair
+// action. Keep "Telegram" in the action itself: on a narrow phone the status
+// sits on its own line above two equal-width actions, so "re-pair" alone no
+// longer has to borrow context from a neighbouring label.
 export function telegramPairLabel(paired: boolean, busy: boolean): string {
-	if (paired) return busy ? 're-pairing' : 're-pair';
+	if (paired) return busy ? 're-pairing Telegram' : 're-pair Telegram';
 	return busy ? 'pairing' : 'pair Telegram';
 }
 
