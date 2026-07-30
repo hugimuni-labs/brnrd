@@ -197,6 +197,17 @@ def is_configured(brr_dir: Path) -> bool:
     )
 
 
+def read_server_fingerprint(brr_dir: Path) -> dict | None:
+    """What prod last reported on the inbox long-poll, or ``None``.
+
+    Reads only the local file :func:`_loop_once` persists — never a network
+    call, so the wake-time renderer that calls this stays network-free.
+    ``None`` covers both "no cloud gate configured" and "configured, but no
+    fingerprint landed yet" — the caller names which in its own line.
+    """
+    return runtime.load_server_fingerprint(_state_dir(brr_dir), "cloud")
+
+
 def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | None:
     state = _load_state(brr_dir)
     if not (state.get("token") and state.get("brnrd_url")):
@@ -945,6 +956,13 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
     result = _request(state["brnrd_url"], "GET", "/v1/daemons/inbox", token=state["token"], params={"since": since, "wait": _POLL_WAIT_S})
+    # What prod is actually running, riding this same long-poll response
+    # (schemas.InboxResponse.server, brnrd 2026-07-30) — no new request, no
+    # new poll loop. Absent on an older brnrd that doesn't send the block
+    # yet; the wake renders that as "no cloud fingerprint yet", not a crash.
+    server = result.get("server")
+    if isinstance(server, dict):
+        runtime.save_server_fingerprint(_state_dir(brr_dir), "cloud", server)
     events = result.get("events", [])
     for ev in events:
         # #525 — pointers become local files *now*, at ingestion time: the

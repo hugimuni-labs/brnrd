@@ -271,9 +271,11 @@ def test_build_forge_state_enriches_current_from_event_meta(tmp_path):
     assert thread["url"] == "https://github.com/Gurio/brr/pull/113#issuecomment-5"
 
 
-def test_build_forge_state_none_when_empty(tmp_path):
-    # A repo with no brr worktrees and a non-forge current thread yields
-    # nothing to show.
+def test_build_forge_state_keeps_only_prod_when_otherwise_empty(tmp_path):
+    """A repo with no brr worktrees and a non-forge current thread has
+    nothing worktree/thread-shaped to show — but `prod` always has
+    *something* to say (2026-07-30 task), so the facet is never fully
+    empty and the "prod:" line is never silently dropped."""
     repo = _repo_with_remote(tmp_path)
     facet = forge_state.build_forge_state(
         repo,
@@ -281,7 +283,11 @@ def test_build_forge_state_none_when_empty(tmp_path):
         current_thread="telegram:123:",
         current_run_id="",
     )
-    assert facet is None
+    assert facet is not None
+    assert "worktrees" not in facet
+    assert "threads" not in facet
+    # No cloud gate configured in this bare test repo.
+    assert facet["prod"] == {"configured": False}
 
 
 # ── prompt rendering ─────────────────────────────────────────────────
@@ -384,10 +390,93 @@ def test_run_context_forge_state_collapses_clean_pushed_branches():
     assert "1 clean pushed branch omitted" in rendered
 
 
+# ── render_prod_line: fresh / stale / absent (2026-07-30 task) ───────
+
+
+def test_render_prod_line_absent_states():
+    assert forge_state.render_prod_line(None) == "prod: unknown — no cloud fingerprint yet"
+    assert (
+        forge_state.render_prod_line({"configured": False})
+        == "prod: unknown — no cloud gate configured"
+    )
+    assert (
+        forge_state.render_prod_line({"configured": True, "fingerprint": None})
+        == "prod: unknown — no cloud fingerprint yet"
+    )
+
+
+def _prod_fixture(fetched_at: str) -> dict:
+    return {
+        "configured": True,
+        "fingerprint": {
+            "build": {
+                "commit": None,
+                "tree_id": "bebd5c1d1c3a4f5b",
+                "built_at": "2026-07-30T10:19:01+00:00",
+                "started_at": "2026-07-30T10:28:49+00:00",
+            },
+            "github": {
+                "bot_login": "brnrd-bot",
+                "app_slug": "brnrd-dev",
+                "trigger_label": "brnrd",
+                "trigger_aliases": ["brnrd", "brr"],
+                "webhook_secret_set": True,
+                "bot_token_set": True,
+            },
+            "fetched_at": fetched_at,
+        },
+    }
+
+
+def test_render_prod_line_fresh_matches_the_spec_example_shape():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
+    prod = _prod_fixture("2026-07-30T10:29:00+00:00")
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert rendered == (
+        "prod: tree bebd5c1d · built 2026-07-30T10:19Z · up 10:28Z · "
+        "call sign brnrd-bot · label brnrd · webhook secret set · bot token set"
+    )
+
+
+def test_render_prod_line_commit_present_never_shows_tree():
+    from datetime import datetime, timezone
+
+    prod = _prod_fixture("2026-07-30T10:29:00+00:00")
+    prod["fingerprint"]["build"]["commit"] = "abc12345678"
+    rendered = forge_state.render_prod_line(
+        prod, now=datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
+    )
+    assert rendered.startswith("prod: commit abc12345")
+    assert "tree " not in rendered
+
+
+def test_render_prod_line_stale_names_its_own_age():
+    from datetime import datetime, timezone
+
+    prod = _prod_fixture("2026-07-30T10:19:00+00:00")
+    now = datetime(2026, 7, 30, 10, 40, 0, tzinfo=timezone.utc)  # 21 min old
+    rendered = forge_state.render_prod_line(prod, now=now)
+    assert rendered.startswith("prod: stale (21m old) — ")
+    assert "tree bebd5c1d" in rendered
+
+
 def test_format_forge_state_empty():
     assert prompts._format_forge_state(None) == ""
     assert prompts._format_forge_state({}) == ""
-    assert prompts._format_forge_state({"worktrees": [], "threads": []}) == ""
+
+
+def test_format_forge_state_renders_prod_line_even_with_nothing_else():
+    """No worktrees, no threads — the block still renders, for the one
+    line that always has something to say (2026-07-30 task)."""
+    rendered = prompts._format_forge_state(
+        {"worktrees": [], "threads": [], "prod": {"configured": False}}
+    )
+    assert rendered == (
+        "Forge state (local, network-free):\n"
+        "- prod: unknown — no cloud gate configured"
+    )
 
 
 # ── #721: worktrees of this repo outside .brr/worktrees/ ─────────────
@@ -547,3 +636,17 @@ def test_neither_renderer_mentions_outside_brr_when_there_is_none(render):
 
     assert "Worktrees / branches: 1 total" in rendered
     assert "outside .brr/worktrees" not in rendered
+
+
+@pytest.mark.parametrize(
+    "render",
+    [prompts._format_forge_state, run_context._render_forge_state],
+    ids=["wake-prompt", "run-context-file"],
+)
+def test_both_renderers_carry_the_prod_line(render):
+    """Same "one copy only re-creates the defect" pin as the worktree count
+    above, applied to the prod fingerprint (2026-07-30 task) — both
+    renderers call the one shared :func:`forge_state.render_prod_line`."""
+    facet = {"worktrees": [], "threads": [], "prod": {"configured": False}}
+    rendered = render(facet)
+    assert "prod: unknown — no cloud gate configured" in rendered

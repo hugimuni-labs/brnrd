@@ -144,6 +144,33 @@ def test_gate_health_keeps_error_newer_than_last_success(tmp_path):
     assert row["last_error"] == "upstream 502"
 
 
+def test_server_fingerprint_round_trips_and_stamps_fetched_at(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
+
+    server = {
+        "build": {"commit": None, "tree_id": "bebd5c1d", "built_at": "2026-07-30T10:19:01+00:00", "started_at": "2026-07-30T10:28:49+00:00"},
+        "github": {"bot_login": "brnrd-bot", "app_slug": "brnrd-dev", "trigger_label": "brnrd", "trigger_aliases": ["brnrd", "brr"], "webhook_secret_set": True, "bot_token_set": True},
+    }
+    runtime.save_server_fingerprint(brr_dir, "cloud", server)
+
+    loaded = runtime.load_server_fingerprint(brr_dir, "cloud")
+    assert loaded["build"]["tree_id"] == "bebd5c1d"
+    assert loaded["github"]["bot_login"] == "brnrd-bot"
+    assert loaded["fetched_at"]  # local stamp added at write time
+    assert not runtime.server_fingerprint_path(brr_dir, "cloud").with_suffix(
+        ".json.tmp"
+    ).exists()
+
+
+def test_server_fingerprint_corrupt_file_reads_as_absent(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    path = runtime.server_fingerprint_path(brr_dir, "cloud")
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
+
+
 @pytest.mark.parametrize(
     ("health", "expected"),
     [
