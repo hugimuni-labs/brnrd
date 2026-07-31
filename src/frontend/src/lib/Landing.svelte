@@ -11,7 +11,7 @@
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
-	import ConversationMock from '$lib/ConversationMock.svelte';
+	import HeroExchange from '$lib/HeroExchange.svelte';
 
 	// The landing (#509): what an anonymous visitor sees at brnrd.dev.
 	// Two doors, one truth — in both of them the agent executes on the
@@ -74,23 +74,33 @@
 	</header>
 
 	<section class="ignite mt-12" style="--ignite-delay: 160ms" aria-label="what brnrd is">
-		<div class="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
-			<div class="max-w-2xl">
-				<h1
-					class="font-mono text-xl font-semibold tracking-tight text-amber-100"
-					use:typeReveal={{ text: 'a resident, not a chatbot', delay: 200 }}
-				>
-					a resident, not a chatbot
-				</h1>
-				<!-- The bodies belong on the fold, not in paragraph two (2026-07-29):
-				     "does it drive the thing I already pay for" is a one-glance
-				     question, and making a visitor read for it loses the ones who
-				     don't. Named CLIs only — "more to come" is a roadmap, not a
-				     claim, so it must never read as a list of what works today. -->
-				<p class="mt-2 font-mono text-[13px] leading-relaxed text-amber-200/80">
-					runs on Claude Code and Codex — more to come
-				</p>
-				<p class="mt-4 text-sm leading-relaxed text-stone-400">
+		<!-- The headline and the bodies sit above the split so that on a phone —
+		     where the two columns stack — the exchange lands directly under them
+		     instead of under four paragraphs of prose. Seen live 2026-07-31 on
+		     the maintainer's phone: the first screen of brnrd.dev was all telling
+		     and no showing, and the one thing the genre research says makes a
+		     peer landing "hit home immediately" is that it *shows* how it is
+		     used. So: headline, what it drives, the exchange — then the argument,
+		     for whoever is still reading. -->
+		<div class="max-w-2xl">
+			<h1
+				class="font-mono text-xl font-semibold tracking-tight text-amber-100"
+				use:typeReveal={{ text: 'a resident, not a chatbot', delay: 200 }}
+			>
+				a resident, not a chatbot
+			</h1>
+			<!-- The bodies belong on the fold, not in paragraph two (2026-07-29):
+			     "does it drive the thing I already pay for" is a one-glance
+			     question, and making a visitor read for it loses the ones who
+			     don't. Named CLIs only — "more to come" is a roadmap, not a
+			     claim, so it must never read as a list of what works today. -->
+			<p class="mt-2 font-mono text-[13px] leading-relaxed text-amber-200/80">
+				runs on Claude Code and Codex — more to come
+			</p>
+		</div>
+		<div class="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+			<div class="order-2 max-w-2xl lg:order-1">
+				<p class="text-sm leading-relaxed text-stone-400">
 					brnrd runs resident coding agents that live with your repositories. Work arrives from
 					GitHub issues, review requests, and Telegram messages; a daemon on your own machine turns
 					it into runs; the results come back as commits, pull requests, and replies on the thread
@@ -112,7 +122,9 @@
 					project notes to brnrd.dev, never your source tree.
 				</p>
 			</div>
-			<ConversationMock />
+			<div class="order-1 lg:order-2">
+				<HeroExchange />
+			</div>
 		</div>
 	</section>
 
