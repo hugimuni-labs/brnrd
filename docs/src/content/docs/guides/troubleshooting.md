@@ -48,7 +48,7 @@ uv tool upgrade brnrd
 # or: pipx upgrade brnrd
 ```
 
-If you used the npm-shaped bootstrapper, rerun `npx brnrd init -i`.
+If you used the npm-shaped bootstrapper, rerun `npx brnrd init`.
 
 ## Stop or uninstall the service
 
