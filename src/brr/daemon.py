@@ -5163,6 +5163,58 @@ def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
     return None
 
 
+def _short_id_tail(target: str) -> str:
+    """Strip an ``event:`` value down to its short-id tail, if it has one.
+
+    The letter chrome (hooks.py's ``_short_event_id``) renders a full
+    ``evt-<ts>-<tail>`` id as ``evt-…<tail>`` for the resident to read; when
+    it addresses a reply it naturally reconstructs that same shortened
+    form. Strips a leading ``evt-`` and any run of ``.``/``…`` so
+    ``evt-…8jwi``, ``...8jwi``, and bare ``8jwi`` all yield ``8jwi``.
+    """
+    raw = target.strip()
+    if raw.startswith("evt-"):
+        raw = raw[len("evt-"):]
+    return raw.lstrip(".…")
+
+
+def _resolve_event_short_id(
+    inbox_dir: Path | None, target: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Resolve *target* against pending/processing events, short-id aware.
+
+    An exact full-id match wins outright. Otherwise *target* is tried as a
+    shortened id — matched against the tail of every pending event's full
+    id (the segment after the last ``-``, which is exactly what the letter
+    chrome renders and a reconstructed short-id reply reproduces). Returns:
+
+    - ``(full_id, [])`` — the target resolved unambiguously (full match,
+      or exactly one short-id match).
+    - ``(None, [])`` — nothing matches at all; the caller's existing
+      "unknown target" handling applies unchanged.
+    - ``(None, candidates)`` — more than one pending event shares the same
+      short tail; never guess, the caller must refuse and name them.
+    """
+    if not inbox_dir:
+        return None, []
+    pending = protocol.list_pending(inbox_dir)
+    for ev in pending:
+        if str(ev.get("id") or "") == target:
+            return target, []
+    tail = _short_id_tail(target)
+    if not tail:
+        return None, []
+    matches = [
+        ev for ev in pending
+        if str(ev.get("id") or "").rsplit("-", 1)[-1] == tail
+    ]
+    if len(matches) == 1:
+        return str(matches[0].get("id") or ""), []
+    if len(matches) > 1:
+        return None, matches
+    return None, []
+
+
 def _truthy(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -6146,8 +6198,40 @@ def _drain_outbox(
                     stats["delivered"] = stats.get("delivered", 0) + 1
             _retire_outbox_staging(fpath)
             continue
-        target = str(fm.get("event") or "").strip()
-        target = target or event_id
+        raw_target = str(fm.get("event") or "").strip()
+        raw_target = raw_target or event_id
+        # Short-id addressing (#906 fast-follow): the letter chrome renders
+        # a shortened id (``evt-…8jwi``), and the resident's reply naturally
+        # reconstructs that same short form — including for a self-reply,
+        # where the mismatch used to misfire ``cross`` and bounce the reply
+        # as "not pending". Resolve before computing ``cross`` so a short
+        # form of *this* event or another pending one both land correctly.
+        # An ambiguous short id (shared tail across pending events) is
+        # refused, never guessed.
+        resolved, ambiguous = _resolve_event_short_id(inbox_dir, raw_target)
+        if ambiguous:
+            candidates = ", ".join(
+                hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
+            )
+            _record_outbox_notice(
+                outbox_dir,
+                f"reply dropped: event {raw_target} is ambiguous — matches "
+                f"{len(ambiguous)} pending events ({candidates}); address "
+                "the full id — the message was NOT delivered",
+            )
+            _stage_outbound(
+                task,
+                account_context,
+                body=body,
+                kind="interim",
+                target_event=raw_target,
+                source_ref=str(fpath),
+                status=message_store.UNDELIVERABLE,
+                reason=f"event {raw_target} is ambiguous ({candidates})",
+            )
+            _retire_outbox_staging(fpath)
+            continue
+        target = resolved or raw_target
         cross = target != event_id
         target_event = _find_pending_event(inbox_dir, target) if cross else None
         if cross and target_event is None:
