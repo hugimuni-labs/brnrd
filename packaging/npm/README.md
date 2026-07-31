@@ -16,7 +16,9 @@ was written for.
 
 The install is **durable, not ephemeral** (`~/.local/share/brnrd/venv`, or
 `$BRNRD_HOME`), so `npx brnrd daemon install` works: the service unit points at
-a directory that will still be there tomorrow.
+a directory that will still be there tomorrow. That also makes
+`npx brnrd account connect` a full one-command cold start: bootstrap, pair
+with brnrd, and start the native service, all in one line.
 
 It never pipes a script into a shell, modifies your system Python, or changes
 your PATH. An existing Python remains the fast path; an existing `uv` is used as
@@ -30,6 +32,11 @@ Equivalent, if you'd rather not go through npm at all:
 pip install brnrd
 uvx brnrd            # zero-install run, if you have uv
 ```
+
+Skip `uvx brnrd` (or `pipx run brnrd`) before `daemon install`, though: both
+run from a disposable, per-invocation environment, and the systemd/launchd
+service would end up pinned to a binary path that vanishes with it. `pip
+install brnrd` or this launcher gives the service a stable target.
 
 The launcher's version *is* the payload's version: a version-pinned
 `npx brnrd@<version>` installs that same brnrd version.
