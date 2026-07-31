@@ -97,6 +97,68 @@ def test_scan_flags_broken_links_in_other_pages(tmp_path):
     assert any("missing-page.md" in f.target for f in broken), findings
 
 
+def test_scan_ignores_a_link_written_inside_backticks(tmp_path):
+    """A page documenting link syntax is not a page with a broken link.
+
+    Found live: `design-backchannel.md` explains its own item grammar with
+    "``[label](href)`` refs only", and the preflight reported a broken link
+    to a file named `href` on every wake for as long as that sentence
+    existed. Nobody could fix it, because the prose was correct.
+    """
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Foo](decision-foo.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "decision-foo.md", (
+        "Write `[label](href)` refs only.\n\n"
+        "```markdown\n"
+        "[example](also-not-a-real-page.md)\n"
+        "```\n"
+    ))
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "broken-link" for f in findings), findings
+
+
+def test_scan_still_flags_a_real_link_beside_a_code_span(tmp_path):
+    """Blanking code must not blank the sentence around it."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Foo](decision-foo.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "decision-foo.md", (
+        "Write `[label](href)` refs, e.g. [gone](missing-page.md).\n"
+    ))
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    broken = [f for f in findings if f.type == "broken-link"]
+    assert any("missing-page.md" in f.target for f in broken), findings
+    assert all("href" not in f.target for f in broken), findings
+
+
+def test_index_sections_ignore_a_fenced_example_heading(tmp_path):
+    """A fenced block is not allowed to mint an index section or a link."""
+    kb = tmp_path / "kb"
+    _write(kb / "index.md", (
+        "# Index\n\n"
+        "## Real section\n\n"
+        "- [Foo](decision-foo.md) — desc\n\n"
+        "```markdown\n"
+        "## Example section\n"
+        "- [Bar](never-existed.md) — how to write an entry\n"
+        "```\n"
+    ))
+    _write(kb / "decision-foo.md", "# Foo\n")
+    _write(kb / "log.md", "# Log\n")
+
+    sections = dict(kb_preflight._index_sections(kb / "index.md", kb))
+
+    assert list(sections) == ["Real section"]
+    assert sections["Real section"] == ["decision-foo.md"]
+
+
 def test_scan_skips_broken_links_inside_log(tmp_path):
     _write(tmp_path / "kb" / "index.md", "# Index\n")
     _write(tmp_path / "kb" / "log.md", (
