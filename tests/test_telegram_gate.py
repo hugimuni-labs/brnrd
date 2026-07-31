@@ -491,7 +491,7 @@ def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
     sent = []
 
     def fake_send_with_overflow(
-        token, chat_id, topic_id, text, *, reply_to_message_id=None,
+        token, chat_id, topic_id, text, *, reply_to_message_id=None, **_kw,
     ):
         sent.append((token, chat_id, topic_id, text, reply_to_message_id))
 
@@ -533,7 +533,7 @@ def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
     sent = []
 
     def fake_send_with_overflow(
-        token, chat_id, topic_id, text, *, reply_to_message_id=None,
+        token, chat_id, topic_id, text, *, reply_to_message_id=None, **_kw,
     ):
         sent.append((token, chat_id, topic_id, text, reply_to_message_id))
 
@@ -574,7 +574,7 @@ def test_replies_skip_reply_to_when_event_has_no_message_id(tmp_path, monkeypatc
     sent = []
 
     def fake_send_with_overflow(
-        token, chat_id, topic_id, text, *, reply_to_message_id=None,
+        token, chat_id, topic_id, text, *, reply_to_message_id=None, **_kw,
     ):
         sent.append((token, chat_id, topic_id, text, reply_to_message_id))
 
