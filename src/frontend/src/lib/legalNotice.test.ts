@@ -56,10 +56,13 @@ test('the /legal-notice route renders the publisher and the host it is served fr
 	ok(html.includes('Mentions légales'));
 	ok(html.includes('HugiMuni SAS'));
 	ok(html.includes('Éditeur du site'));
-	// Sourced from Upsun's own impressum + the government register, not guessed.
-	ok(html.includes('Platform.sh SAS (Upsun)'));
-	ok(html.includes('22 rue de Palestro, 75002 Paris, France'));
-	ok(html.includes('+33 (0)1 40 09 30 00'));
+	// Sourced from Scaleway's own legal notice + the government register, not guessed.
+	ok(html.includes('Scaleway SAS'));
+	ok(html.includes("8 rue de la Ville l'Évêque, 75008 Paris, France"));
+	// Scaleway's own legal notice publishes no telephone number (unlike Upsun's
+	// impressum), so host.phone is deliberately still `null` and renders as the
+	// pending placeholder rather than a guessed number.
+	ok(html.includes(PENDING));
 });
 
 test('the /legal-notice route links to /terms', async () => {

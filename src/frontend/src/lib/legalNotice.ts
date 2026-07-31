@@ -152,8 +152,9 @@ const PUBLISHER: readonly LegalField[] = [
 
 /**
  * Host block. Every value here is public and sourced; none of it is guessed.
- * brnrd.dev is deployed to Upsun (`.upsun/config.yaml`), which is the commercial
- * brand of Platform.sh SAS.
+ * brnrd.dev is deployed to a Scaleway Serverless Container (region `fr-par`,
+ * France), operated by Scaleway SAS. Moved off Upsun (Platform.sh SAS,
+ * `ch-1`, Switzerland) on 2026-07-30/31 — see `deploy/scaleway.md`.
  */
 const HOST: readonly LegalField[] = [
 	{
@@ -161,41 +162,41 @@ const HOST: readonly LegalField[] = [
 		fr: 'Dénomination sociale',
 		en: 'Hosting provider — registered name',
 		block: 'host',
-		value: 'Platform.sh SAS (Upsun)',
-		source:
-			'upsun.com/trust-center/legal/impressum/; annuaire-entreprises.data.gouv.fr (SIREN 521 496 059)'
+		value: 'Scaleway SAS',
+		source: 'scaleway.com/en/legal-notice/; annuaire-entreprises.data.gouv.fr (SIREN 433 115 904)'
 	},
 	{
 		key: 'host.registration',
 		fr: 'Immatriculation',
 		en: 'Hosting provider — registration',
 		block: 'host',
-		value: 'RCS Paris B 521 496 059',
-		source: 'upsun.com/trust-center/legal/impressum/'
+		value: 'RCS Paris 433 115 904',
+		source: 'scaleway.com/en/legal-notice/'
 	},
 	{
 		key: 'host.registeredOffice',
 		fr: 'Siège social',
 		en: 'Hosting provider — registered address',
 		block: 'host',
-		value: '22 rue de Palestro, 75002 Paris, France',
-		source: 'upsun.com/trust-center/legal/impressum/; annuaire-entreprises.data.gouv.fr'
+		value: "8 rue de la Ville l'Évêque, 75008 Paris, France",
+		source: 'scaleway.com/en/legal-notice/; annuaire-entreprises.data.gouv.fr'
 	},
 	{
 		key: 'host.phone',
 		fr: 'Téléphone',
 		en: 'Hosting provider — telephone',
 		block: 'host',
-		value: '+33 (0)1 40 09 30 00',
-		source: 'upsun.com/trust-center/legal/impressum/'
+		whereToFind:
+			"Scaleway's published legal notice (scaleway.com/en/legal-notice/) does not list a telephone number, unlike Upsun's impressum; the maintainer should confirm a number to publish before removing this placeholder, rather than have it guessed from third-party directories.",
+		value: null
 	},
 	{
 		key: 'host.website',
 		fr: 'Site',
 		en: 'Hosting provider — website',
 		block: 'host',
-		value: 'https://upsun.com',
-		source: 'upsun.com/trust-center/legal/impressum/'
+		value: 'https://www.scaleway.com',
+		source: 'scaleway.com/en/legal-notice/'
 	}
 ];
 
