@@ -1704,6 +1704,31 @@ def test_gate_silent_on_a_receipt_too_old_to_carry_the_field(tmp_path):
     assert out.get("decision") != "block"
 
 
+def test_gate_names_a_file_removed_while_the_gate_was_running(tmp_path):
+    """The pair is diffed *both* ways. A file created during the gate appears
+    only in the after capture; one removed during the gate appears only in the
+    before capture, and looking one way named the first while silently missing
+    the second — falling through to a sentence about "a file that was already
+    dirty", which a deletion is not."""
+    from brr import gate_receipt
+
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    (repo / "scratch.py").write_text("deleted before the gate ended\n", encoding="utf-8")
+    before = gate_receipt.tree_referents(repo)
+    (repo / "scratch.py").unlink()
+    tree = gate_receipt.tree_fields(repo, before)
+    assert tree["tree_moved_during_gate"] is True
+
+    _gate_receipt(tmp_path, repo, **tree)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "scratch.py" in out["reason"]
+    assert "already dirty" not in out["reason"]
+
+
 def test_gate_moved_tree_message_falls_back_to_the_referent_it_cannot_name(tmp_path):
     """A *second* edit to a file that was already ` M` when the gate started
     leaves its `status --porcelain` line byte-identical, so no filename is

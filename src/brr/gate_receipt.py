@@ -169,12 +169,18 @@ def gated_run(repo_root: Path, run: Callable[[], _R]) -> tuple[_R, dict[str, Any
 def moved_summary(receipt: dict[str, Any]) -> str:
     """Name what moved between a receipt's two captures — files first.
 
-    Recording the pair buys this: most in-gate writes are a brand-new file or
-    a newly-dirty one, so a line in ``status --porcelain`` that is in the
-    after block and not the before block *is* the filename, no guessing. When
-    only a digest moved — an edit to a file that was already dirty, where the
-    porcelain line never changes — the referent name is the honest answer and
-    the sentence says so rather than inventing a path.
+    Recording the pair buys this: a ``status --porcelain`` line present in one
+    capture and absent from the other *is* the filename, no guessing. The
+    difference is taken **both ways** on purpose — a file created during the
+    gate shows up only in the after block, and one deleted during the gate
+    shows up only in the before block. Looking one way named the first and
+    silently missed the second.
+
+    What survives both directions is the case where a path's porcelain line is
+    byte-identical across the pair and only a digest moved: a second edit to a
+    file that was already dirty when the gate started. No filename is
+    derivable there, so the sentence names the referent rather than inventing
+    a path.
     """
     # Hardened against a hand-edited or truncated receipt: every reader in
     # this neighbourhood degrades to "unassertable" rather than crashing, and
@@ -184,16 +190,19 @@ def moved_summary(receipt: dict[str, Any]) -> str:
     before = before if isinstance(before, dict) else {}
     before_lines = set(str(before.get("status") or "").splitlines())
     after_lines = set(str(receipt.get("status") or "").splitlines())
-    paths = []
-    for line in after_lines - before_lines:
+    # A set, because one path can contribute a line to *both* sides: a file
+    # that goes ` M` -> `MM` during the gate differs in each capture and would
+    # otherwise be named twice in one sentence.
+    named = set()
+    for line in after_lines ^ before_lines:
         path = line[3:] if len(line) > 3 else line
         path = path.strip()
         if "->" in path:  # a rename: the destination is the interesting half
             path = path.split("->")[-1].strip()
         if path:
-            paths.append(path)
-    if paths:
-        paths.sort()
+            named.add(path)
+    if named:
+        paths = sorted(named)
         shown = ", ".join(paths[:3])
         if len(paths) > 3:
             shown += f" (+{len(paths) - 3} more)"
@@ -202,8 +211,9 @@ def moved_summary(receipt: dict[str, Any]) -> str:
     moved = [str(key) for key in raw_moved] if isinstance(raw_moved, list) else []
     if moved:
         return (
-            f"no new path in `git status`, but {', '.join(moved)} moved — an "
-            f"edit to a file that was already dirty when the gate started"
+            f"no path in `git status` changed, but {', '.join(moved)} did — "
+            f"content moved under a path that was already dirty when the gate "
+            f"started"
         )
     return "the tree referents moved"
 
