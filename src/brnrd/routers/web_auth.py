@@ -1,14 +1,9 @@
 """Browser-session auth and HTML-flow routes for the brnrd dashboard.
 
-Migrated from ``src/brnrd_web/routes.py`` when ``brnrd_web`` was folded
-into ``src/brnrd/routers/``. Route paths, response shapes, and cookie
-semantics are byte-compatible with the previous module.
-
-``message.html`` (Jinja) is replaced by the inline ``_message_response``
-helper below — no Jinja dependency for error/outcome pages.  The
-The final Jinja content page, ``config_approve.html``, is ported to the
-SvelteKit ``/config-approve/[request_id]`` route (#327), following the
-earlier ``/connect/[code]`` port.
+These pages render inline HTML from ``_message_response`` below — there is
+no Jinja dependency and no template directory. The last Jinja content page,
+``config_approve.html``, became the SvelteKit ``/config-approve/[request_id]``
+route (#327), following the earlier ``/connect/[code]`` port.
 """
 
 from __future__ import annotations
@@ -53,18 +48,22 @@ _STATIC_DIR = Path(__file__).parent.parent / "static"
 
 
 def _compute_asset_version() -> str:
-    """Content hash for cache-busting static asset URLs.
+    """Content hash for cache-busting the one stylesheet these pages link.
 
-    Same contract as the original ``brnrd_web/routes.py::_compute_asset_version``:
-    a real content change mints a new URL/cache key; an empty ``v=`` would let
+    A real content change mints a new URL/cache key; an empty ``v=`` would let
     Cloudflare keep serving stale bytes across deployments.
+
+    The hash covers exactly the files the URL it stamps can serve — one, today.
+    It used to also fold in ``dashboard.css``, a Jinja-era sheet no page had
+    linked since the templates were removed, so editing a file nobody loaded
+    invalidated the cache key of the file everyone did (#850). If a second
+    stylesheet is ever linked from here, add it to both places at once.
     """
     h = hashlib.sha256()
-    for name in sorted(("app.css", "dashboard.css")):
-        try:
-            h.update((_STATIC_DIR / name).read_bytes())
-        except OSError:
-            pass
+    try:
+        h.update((_STATIC_DIR / "app.css").read_bytes())
+    except OSError:
+        pass
     return h.hexdigest()[:12]
 
 
@@ -89,11 +88,12 @@ def _message_response(
 ) -> HTMLResponse:
     """Inline HTML response replacing ``message.html`` Jinja renders.
 
-    Preserves: status codes, CSS cache-busting, no ``dashboard.css`` on
-    non-dashboard pages (the live cascade bug ``test_non_dashboard_pages``
-    guards against).
+    Preserves: status codes and CSS cache-busting. These pages link exactly
+    one stylesheet — the cascade bug ``test_non_dashboard_pages`` guarded
+    against needed a second sheet to leak onto them, and there is no longer a
+    second sheet to leak (#850).
     """
-    css_url = f"/static/brnrd_web/app.css?v={_ASSET_VERSION}"
+    css_url = f"/static/app.css?v={_ASSET_VERSION}"
     eyebrow_html = f'<p class="eyebrow">{_esc(eyebrow)}</p>' if eyebrow else ""
     action_html = ""
     if action_url and action_label:

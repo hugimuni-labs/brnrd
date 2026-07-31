@@ -1,9 +1,4 @@
-"""Dashboard activity aggregation for the brnrd web control deck.
-
-Migrated from ``src/brnrd_web/activity_dashboard.py`` when ``brnrd_web``
-was folded into ``src/brnrd/routers/``. Route paths and JSON response
-shapes are byte-compatible with the previous module.
-"""
+"""Dashboard activity aggregation for the brnrd web control deck."""
 
 from __future__ import annotations
 
