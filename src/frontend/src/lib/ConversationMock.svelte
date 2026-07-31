@@ -1,48 +1,87 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { GITHUB_REPO } from '$lib/publicStats';
 
-	// The landing's hero mock (kb/design-brand-visual-language.md's "receipts,
-	// not screenshots" instinct, applied to the one thing every competitor's
-	// landing page fakes with a GUI recording): a short, *real-shaped*
-	// exchange — not lorem, not a stock chat widget. Every line here is a
-	// product shape that exists today: a plain-language task, a mid-run
-	// progress line, and a close that is the same receipt vocabulary
-	// `RunLedgerReceipt.svelte` renders from live data (🔨 commit, 🔀 PR,
-	// a green gate line). The one thing a competitor's DOM mock never shows —
-	// named directly in the genre research — is continuity: this resident
-	// remembers the previous exchange before it does anything else.
+	// The landing's hero exchange. It is not a mock, and this file used to lie
+	// about that (2026-07-31): the first version rendered an *invented*
+	// conversation under the eyebrow "an actual exchange, not a screenshot" —
+	// a claim meant to say "live DOM, not an image" that every visitor reads
+	// as "this happened". It hadn't. The maintainer felt it as "slightly
+	// artificial" within ten minutes of the deploy, and his own brief that
+	// afternoon had already asked for the opposite: *"the whole conversation
+	// mock should be real"*.
+	//
+	// So every line below is verbatim from this repository's own Telegram
+	// thread on 2026-07-31 at 21:54 CEST — the maintainer's message as he
+	// typed it, the resident's reply as it was sent, trimmed at sentence
+	// boundaries and never rewritten. Every number resolves: #908, #909 and
+	// #903 are real pull requests and issues in the repository this page
+	// links to, and `c05699d7` is the commit that merged #908. The invented
+	// version used `a3f9c1e`, `PR #142` and "4/5 green" — smaller, rounder
+	// and less impressive than the truth they replaced, which is the whole
+	// argument for never inventing here again.
+	//
+	// The one thing no competitor's landing shows (genre research,
+	// `research-peer-landing-and-identity-2026-07-31.md`) is continuity: the
+	// resident's second line recognises a test and remembers filing the issue
+	// for it earlier that same day, unprompted. That beat is the product, so
+	// it is not a footnote.
+	const REPO_URL = `https://github.com/${GITHUB_REPO}`;
+
+	interface Chip {
+		icon: string;
+		label: string;
+		href: string;
+		title: string;
+	}
+
 	interface Bubble {
 		from: 'you' | 'resident';
-		kind: 'text' | 'progress' | 'receipt';
+		kind: 'text' | 'receipt';
 		text?: string;
+		/** Milliseconds after the previous bubble. Deliberately uneven: a fixed
+		 *  metronome is the tell that a reveal was scripted, and the real gap
+		 *  before a receipt is the length of the work. */
+		gap: number;
 	}
 
 	const BUBBLES: Bubble[] = [
 		{
 			from: 'you',
 			kind: 'text',
-			text: 'same repo as tuesday — the login redirect loop is back on staging'
+			text: 'merged 908, the other 2 have red ci 🤔',
+			gap: 350
 		},
 		{
 			from: 'resident',
 			kind: 'text',
-			// The memory beat: continuity is the differentiator, so it is the
-			// resident's *first* line, not a footnote.
-			text: "remembered — last time it was the cookie's SameSite flag, not the redirect. checking that first."
+			text: 'Both reds decoded, neither is the diffs — and 🙌 for #908, the hero ships.',
+			gap: 1100
 		},
 		{
 			from: 'resident',
-			kind: 'progress',
-			text: 'gate suite running — 4/5 green, patching the cookie flag'
+			kind: 'text',
+			// The memory beat, verbatim.
+			text: '#909 (docs): backend red = test_dashboard_coarse_recheck_only_touches_stale_repos — that’s #903, the flaky thread-race filed this afternoon. A docs-only diff has zero .py changes; it cannot reach that code path. Retriggered.',
+			gap: 1900
 		},
-		{ from: 'resident', kind: 'receipt' },
-		{ from: 'you', kind: 'text', text: '🙌 merging — nice catch' }
+		{ from: 'resident', kind: 'receipt', gap: 1500 }
 	];
 
-	// Reveal one bubble at a time so the mock reads as a conversation
-	// happening, not a screenshot. `prefers-reduced-motion` gets the whole
-	// exchange at once — same contract as `.ignite` and `typeReveal`
-	// elsewhere on this dashboard (transitions.ts).
+	// The receipts are links, not decorations: every chip opens the thing it
+	// names. A receipt you cannot click is the same genre of claim as the
+	// exchange this file used to invent.
+	const CHIPS: Chip[] = [
+		{
+			icon: '🔨',
+			label: 'c05699d7',
+			href: `${REPO_URL}/commit/c05699d75f9f27352f06da31c3dad340acb6f60f`,
+			title: 'commit'
+		},
+		{ icon: '🔀', label: '#908 merged', href: `${REPO_URL}/pull/908`, title: 'pull request' },
+		{ icon: '🐛', label: '#903 filed', href: `${REPO_URL}/issues/903`, title: 'issue' }
+	];
+
 	let visibleCount = $state(0);
 
 	onMount(() => {
@@ -56,11 +95,10 @@
 		function reveal(i: number) {
 			if (cancelled) return;
 			visibleCount = i + 1;
-			if (i + 1 < BUBBLES.length) {
-				timers.push(setTimeout(() => reveal(i + 1), 850));
-			}
+			const next = BUBBLES[i + 1];
+			if (next) timers.push(setTimeout(() => reveal(i + 1), next.gap));
 		}
-		timers.push(setTimeout(() => reveal(0), 350));
+		timers.push(setTimeout(() => reveal(0), BUBBLES[0].gap));
 		return () => {
 			cancelled = true;
 			for (const t of timers) clearTimeout(t);
@@ -68,13 +106,16 @@
 	});
 </script>
 
-<div class="panel p-4" aria-label="an example exchange with the resident">
-	<p class="eyebrow">an actual exchange, not a screenshot</p>
+<div class="panel p-4" aria-label="a real exchange with the resident">
+	<p class="eyebrow">a real exchange · 31 july 2026 · this repository's own thread</p>
 	<div class="mt-3 flex flex-col gap-2">
 		{#each BUBBLES as bubble, i (i)}
 			{#if i < visibleCount}
 				<div class="ignite flex {bubble.from === 'you' ? 'justify-end' : 'justify-start'}">
-					<div class="max-w-[85%] sm:max-w-[75%]">
+					<!-- `min-w-0` + `break-words`: real work carries unbroken tokens a
+					     copywriter never types — a 52-character test name here — and
+					     without these it escapes the panel on every width. -->
+					<div class="max-w-[85%] min-w-0 sm:max-w-[75%]">
 						<p
 							class="mb-0.5 font-mono text-[10px] tracking-wide uppercase {bubble.from === 'you'
 								? 'text-right text-amber-200/70'
@@ -87,16 +128,28 @@
 								class="subpanel border-l-2 border-l-emerald-700/60 px-3 py-2 text-xs leading-relaxed"
 							>
 								<div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-stone-300">
-									<span title="commit">🔨 a3f9c1e · SameSite=Lax on session cookie</span>
-									<span title="pull request">🔀 PR #142 opened</span>
+									{#each CHIPS as chip (chip.href)}
+										<a
+											class="underline decoration-stone-600 underline-offset-2 hover:text-amber-200"
+											href={chip.href}
+											rel="external"
+											title={chip.title}>{chip.icon} {chip.label}</a
+										>
+									{/each}
 								</div>
-								<p class="mt-1.5 font-mono text-emerald-400">✓ gates green — safe to merge</p>
+								<!-- No test count here on purpose. The number that would go in
+							     this slot grows every week, so a figure baked into the
+							     markup is a slow lie; the two facts below do not move. -->
+								<p class="mt-1.5 font-mono text-emerald-400">
+									✓ gate green — merged, deployed 21:51 CEST
+								</p>
 							</div>
 						{:else}
 							<div
-								class="subpanel px-3 py-2 text-xs leading-relaxed {bubble.from === 'you'
+								class="subpanel px-3 py-2 text-xs leading-relaxed break-words text-stone-200 {bubble.from ===
+								'you'
 									? 'border-r-2 border-r-amber-700/50'
-									: ''} {bubble.kind === 'progress' ? 'text-stone-400 italic' : 'text-stone-200'}"
+									: ''}"
 							>
 								{bubble.text}
 							</div>
@@ -106,11 +159,13 @@
 			{/if}
 		{/each}
 	</div>
-	<!-- The cherry, not the lead: the hosted convenience layer shows up as one
-	     small annotation on the exchange it just carried, never as the
-	     reason the exchange happened. The reply itself runs the same way
-	     with or without it. -->
+	<!-- Two facts the page can back. The provenance line is load-bearing: it
+	     is what lets the eyebrow above say "real" without overclaiming, and it
+	     names the trim honestly. The cherry is the hosted layer showing up as
+	     one annotation on an exchange it merely carried — never as the reason
+	     the exchange happened. -->
 	<p class="mt-3 border-t border-stone-800/70 pt-2 font-mono text-[10px] text-ink-mute">
-		sent from a phone over Telegram · the resident ran on the sender's own machine
+		verbatim, trimmed for length, never rewritten · sent from a phone over Telegram · the resident
+		ran on the sender's own machine
 	</p>
 </div>
