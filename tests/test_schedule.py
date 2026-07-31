@@ -430,6 +430,78 @@ def test_render_lint_block_empty_findings_renders_nothing():
     assert schedule.render_lint_block([]) == ""
 
 
+# ── orphan-trigger (a spec the parser never read as one) ─────────────
+
+_ORPHAN_SCHEDULE = """\
+# header prose, above every entry
+
+## upkeep
+every: 7d
+The standing round.
+
+- at: 2026-07-31T09:30:00+02:00
+  task: >
+    The sweep the maintainer asked for.
+"""
+
+
+def test_parse_drops_a_list_indented_trigger_silently():
+    """The defect this lint exists for, pinned as behaviour."""
+    entries = schedule.parse_schedule_text(_ORPHAN_SCHEDULE)
+
+    assert [e.id for e in entries] == ["upkeep"]
+    assert "at: 2026-07-31" in entries[0].body  # absorbed as prose
+
+
+def test_lint_flags_a_list_indented_trigger_as_orphan():
+    entries = schedule.parse_schedule_text(_ORPHAN_SCHEDULE)
+
+    (finding,) = schedule.lint_schedule(
+        entries, now=0.0, text=_ORPHAN_SCHEDULE,
+    )
+
+    assert finding.rule == "orphan-trigger"
+    assert finding.entry_ids == ("upkeep",)
+    assert "never fire" in finding.message
+    assert "`## ` heading" in finding.message
+
+
+def test_lint_orphan_trigger_needs_the_text_not_just_the_entries():
+    """Every other rule reads parsed entries, and a spec that never parsed
+    is invisible to all of them — which is why two dead ones sat unreported
+    in this account's own schedule for days."""
+    entries = schedule.parse_schedule_text(_ORPHAN_SCHEDULE)
+
+    assert schedule.lint_schedule(entries, now=0.0) == []
+
+
+def test_lint_orphan_trigger_ignores_prose_that_merely_mentions_a_cadence():
+    text = (
+        "## upkeep\nevery: 7d\n"
+        "Cadence notes:\n"
+        "- every: whenever it feels right\n"
+        "- at: some point after the cutover\n"
+    )
+    entries = schedule.parse_schedule_text(text)
+
+    assert schedule.lint_schedule(entries, now=0.0, text=text) == []
+
+
+def test_lint_orphan_trigger_ignores_the_file_header():
+    """Format documentation above the first heading is a comment, not a spec."""
+    text = (
+        "# Schedule\n"
+        "# Format:\n"
+        "- at: 2026-06-10T09:00:00Z   one-shot\n"
+        "- every: 24h                 recurring\n\n"
+        "## upkeep\nevery: 7d\nBody.\n"
+    )
+
+    assert schedule.lint_schedule(
+        schedule.parse_schedule_text(text), now=0.0, text=text,
+    ) == []
+
+
 def test_render_lint_block_renders_each_finding():
     findings = [
         schedule.ScheduleFinding("stale-at", ("y",), "passed 1h ago."),

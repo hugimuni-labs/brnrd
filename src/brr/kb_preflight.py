@@ -158,6 +158,31 @@ _SECTION_DECORATION_RE = re.compile(r"\s*\*\([^)]*\)\*\s*$")
 _INLINE_LINK_RE = re.compile(r"\[(?:[^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _REFERENCE_LINK_RE = re.compile(r"^\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 
+# Code, fenced and inline. A kb page that *documents* link syntax writes
+# ``[label](href)`` in backticks; a link matcher blind to code spans reads
+# that as a link to a file named ``href`` and reports a broken link forever,
+# because the prose it is matching is correct and nobody will ever "fix" it.
+# That is a guard firing for a non-reason, which is how a guard stops being
+# read. Both patterns are applied length-preservingly (see ``_blank_code``)
+# so any offset computed over the stripped text still indexes the original.
+_FENCED_CODE_RE = re.compile(
+    r"(?ms)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)",
+)
+_INLINE_CODE_RE = re.compile(r"(`+)(?:(?!\1)[^\n])+\1")
+
+
+def _blank_code(text: str) -> str:
+    """Replace code spans/blocks with spaces, preserving length and newlines.
+
+    Length preservation is deliberate: callers slice this text by offsets
+    taken from headings in the *same* string, so a substitution that
+    shortened it would silently misalign every section boundary.
+    """
+    def _blank(match: re.Match[str]) -> str:
+        return "".join("\n" if ch == "\n" else " " for ch in match.group(0))
+
+    return _INLINE_CODE_RE.sub(_blank, _FENCED_CODE_RE.sub(_blank, text))
+
 _LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
 
 # Match the dated form of a log heading — ``## [YYYY-MM-DD] ...`` — used
@@ -688,10 +713,16 @@ def _index_sections(
     H2 is omitted because the index's prelude is editorial, not a
     section.
     """
-    text = index_path.read_text(encoding="utf-8")
+    raw_text = index_path.read_text(encoding="utf-8")
+    # Headings and link bodies are read off the code-blanked copy so a
+    # fenced example never mints a section or a link; the *title* is read
+    # back off the original at the same offsets, because ``_blank_code``
+    # preserves length and a heading may legitimately contain code.
+    text = _blank_code(raw_text)
     headings = list(_H2_HEADING_RE.finditer(text))
     for i, match in enumerate(headings):
-        title = _SECTION_DECORATION_RE.sub("", match.group("title")).strip()
+        raw_title = raw_text[match.start("title"):match.end("title")]
+        title = _SECTION_DECORATION_RE.sub("", raw_title).strip()
         if not title:
             continue
         start = match.end()
@@ -767,8 +798,12 @@ def _kb_targets_linked_from(page: Path, kb_dir: Path) -> set[str]:
 
 
 def _markdown_link_targets(page: Path) -> Iterable[str]:
-    """Yield raw URL/path components from inline and reference links."""
-    text = page.read_text(encoding="utf-8")
+    """Yield raw URL/path components from inline and reference links.
+
+    Code spans are blanked first — a link written inside backticks is an
+    example of link syntax, not a link (see :func:`_blank_code`).
+    """
+    text = _blank_code(page.read_text(encoding="utf-8"))
     for match in _INLINE_LINK_RE.finditer(text):
         yield match.group(1)
     for match in _REFERENCE_LINK_RE.finditer(text):
