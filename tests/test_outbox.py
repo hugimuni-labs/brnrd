@@ -269,6 +269,131 @@ class TestDrainOutbox:
         assert ev["id"] in receipt
         assert "brr/feat-x" in receipt
 
+    def test_forge_pr_body_with_a_close_keyword_tail_is_refused(
+        self, tmp_path, monkeypatch,
+    ):
+        """#749's own death, replayed on the channel that had no guard (#839).
+
+        PR #838's body carried `Closes #749 move 5 (the ticket stays open for
+        moves 1-4).` GitHub matched the head of the line, discarded the clause
+        written to prevent the close, and shut three unshipped moves off the
+        open list. The commit-msg hook would have refused that exact line; it
+        never saw it, because a PR body passes through no hook. Now the drain
+        refuses it, the PR is not queued, and the run finds out via `notices`
+        while it is still alive to fix the file.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "pr.md").write_text(
+            "---\ngate: forge\nhead: brr/feat-x\nbase: main\n"
+            "title: Review feat-x\n---\n"
+            "Ships move 5 of the schedule rework.\n"
+            "\n"
+            "Closes #749 move 5 (the ticket stays open for moves 1-4).\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 0
+        assert protocol.list_done(inbox, "github") == []
+        assert protocol.list_pending(inbox) == []
+        # No acceptance receipt: nothing was handed off.
+        assert not (outbox / hooks.FORGE_HANDOFF_NAME).exists()
+        notices = daemon._read_outbox_notices(outbox)
+        assert len(notices) == 1
+        text = notices[0]["text"]
+        assert "was NOT created" in text
+        assert "Closes #749 move 5" in text
+        # The diagnosis has to carry a way out, or the guard is unsatisfiable.
+        assert "Part of #NNN" in text
+        assert "Mask the digits" in text
+
+    def test_forge_pr_body_with_a_bare_close_is_queued(
+        self, tmp_path, monkeypatch,
+    ):
+        """The guard must not fire on the shape a PR legitimately wants.
+
+        A bare `Closes #NNN.` is the intended close and the whole point of the
+        handoff; a guard that refused it would be refusing the feature.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "pr.md").write_text(
+            "---\ngate: forge\nhead: brr/feat-x\nbase: main\n"
+            "title: Review feat-x\n---\n"
+            "Ships the whole thing.\n\nCloses #839.\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        assert len(protocol.list_done(inbox, "github")) == 1
+        assert daemon._read_outbox_notices(outbox) == []
+
+    def test_non_pr_gate_body_is_not_close_checked(self, tmp_path, monkeypatch):
+        """A chat message is not a channel GitHub closes from.
+
+        Widening the check to every gate would make the guard fire where it
+        has no authority — the class error #839 is about, run in reverse.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "---\ngate: telegram\n---\n"
+            "Closes #749 move 5 (the ticket stays open for moves 1-4).\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        assert daemon._read_outbox_notices(outbox) == []
+
+    def test_github_gate_pr_action_is_close_checked_too(
+        self, tmp_path, monkeypatch,
+    ):
+        """`gate: forge` is an alias, not the only spelling of the PR path."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "pr.md").write_text(
+            "---\ngate: github\ngithub_action: pull_request\n"
+            "head: brr/feat-x\nbase: main\ntitle: t\n---\n"
+            "Fix #533: split config and closes #534\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 0
+        notices = daemon._read_outbox_notices(outbox)
+        assert "rides the subject after the colon" in notices[0]["text"]
+
     def test_gate_addressed_unknown_gate_dropped(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"
