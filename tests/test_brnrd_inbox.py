@@ -161,11 +161,15 @@ def test_response_records_metadata_only(env):
         # The inbound + response bodies are both gone from storage.
         assert row.body is None
 
-    # And a re-drain shows the dropped body.
+    # And a re-drain does not hand the answered event back at all. This used
+    # to assert `again["events"][0]["body"] is None` — pinning the husk's
+    # *shape* on redelivery, which read as coverage of a behaviour that was
+    # in fact the 2026-07-30 replay: 181 body-less husks became 181 pending
+    # events on a daemon whose cursor had been reset to zero.
     again = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
     ).json()
-    assert again["events"][0]["body"] is None
+    assert again["events"] == []
 
 
 def test_interim_responses_forward_without_closing_the_event(env):
@@ -643,6 +647,52 @@ def test_stale_cursor_from_older_epoch_redelivers_queued_backlog(env):
         "/v1/daemons/inbox", params={"since": 999, "wait": 0}, headers=dmn
     ).json()
     assert [e["body"] for e in again["events"]] == ["hola"]
+
+
+def test_a_reset_cursor_replays_only_what_is_still_unanswered(env):
+    """The husk guard has to hold for *any* arrangement, and at ``since=0``.
+
+    `test_stale_cursor_from_older_epoch_redelivers_queued_backlog` asserts
+    husks are not redelivered — but only proves it for the arrangement where
+    the answered event is the *oldest*, which is exactly where
+    `clamp_since`'s ``oldest_queued - 1`` floor happens to exclude it. Flip
+    the order and the floor stops covering it; and a cursor of 0 skips the
+    clamp entirely (`routers/daemons.py` guards on ``since > 0``), so no
+    floor is computed at all.
+
+    Live 2026-07-30: `account connect` wrote ``since: 0`` after the Scaleway
+    cutover and the daemon was handed the whole event table — 181 of the 339
+    were answered husks with no body, each one an empty run.
+    """
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    # Never answered, and *first* — in production this is the never-closed
+    # event that pins `clamp_since`'s floor at the beginning of history.
+    client.post("/v1/_dev/enqueue", json={"repo_id": rid, "body": "still open"}, headers=acc)
+    answered = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "handled"}, headers=acc
+    ).json()["event_id"]
+    client.post(
+        "/v1/daemons/responses",
+        json={"event_id": answered, "body_markdown": "done", "status": "done"},
+        headers=dmn,
+    )
+
+    # A cursor of zero: the shape a re-pair writes. The answered event stays
+    # off the wire on identity, not on position.
+    from_scratch = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    assert [e["body"] for e in from_scratch["events"]] == ["still open"]
+
+    # And above the clamp's floor, where the old fixture's ordering hid it.
+    healed = client.get(
+        "/v1/daemons/inbox", params={"since": 999, "wait": 0}, headers=dmn
+    ).json()
+    assert [e["body"] for e in healed["events"]] == ["still open"]
 
 
 def test_stale_cursor_with_no_backlog_heals_to_max_seq(env):

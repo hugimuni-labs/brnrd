@@ -439,6 +439,32 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
+def known_origin_ids(inbox_dir: Path, meta_key: str) -> set[str]:
+    """Every value of *meta_key* already present in *inbox_dir*, any status.
+
+    An upstream event id is an *identity*; a poll cursor is a *position*.
+    Position is the cheaper index and the one the daemon keeps, but it lives
+    in a single local JSON file — lose it, or have a re-pair write a zero
+    over it, and the server replays history the daemon has already answered.
+    Identity survives that, because the answered copies are still on disk.
+
+    Read whole rather than incrementally on purpose: this is called only when
+    a poll actually returned events, and the set it builds is the one thing
+    that can say "seen this" after the cursor has forgotten.
+    """
+    seen: set[str] = set()
+    if not inbox_dir.exists():
+        return seen
+    for entry in os.scandir(inbox_dir):
+        if not entry.name.endswith(".md"):
+            continue
+        ev = _read_event(Path(entry.path))
+        value = str((ev or {}).get(meta_key) or "").strip()
+        if value:
+            seen.add(value)
+    return seen
+
+
 def _parse_iso_epoch(value: object) -> float | None:
     """Parse the event ``defer_until`` timestamp, returning epoch seconds."""
     if value is None:
