@@ -11,6 +11,7 @@
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
+	import ConversationMock from '$lib/ConversationMock.svelte';
 
 	// The landing (#509): what an anonymous visitor sees at brnrd.dev.
 	// Two doors, one truth — in both of them the agent executes on the
@@ -72,32 +73,47 @@
 		</nav>
 	</header>
 
-	<section class="ignite mt-12 max-w-2xl" style="--ignite-delay: 160ms" aria-label="what brnrd is">
-		<h1
-			class="font-mono text-xl font-semibold tracking-tight text-amber-100"
-			use:typeReveal={{ text: 'a resident, not a chatbot', delay: 200 }}
-		>
-			a resident, not a chatbot
-		</h1>
-		<!-- The bodies belong on the fold, not in paragraph two (2026-07-29):
-		     "does it drive the thing I already pay for" is a one-glance
-		     question, and making a visitor read for it loses the ones who
-		     don't. Named CLIs only — "more to come" is a roadmap, not a
-		     claim, so it must never read as a list of what works today. -->
-		<p class="mt-2 font-mono text-[13px] leading-relaxed text-amber-200/80">
-			runs on Claude Code and Codex — more to come
-		</p>
-		<p class="mt-4 text-sm leading-relaxed text-stone-400">
-			brnrd runs resident coding agents that live with your repositories. Work arrives from GitHub
-			issues, review requests, and Telegram messages; a daemon on your own machine turns it into
-			runs; the results come back as commits, pull requests, and replies on the thread that asked.
-			The resident keeps memory between runs — decisions, pitfalls, a knowledge base — so it gets
-			better at your project instead of starting over.
-		</p>
-		<p class="mt-3 text-sm leading-relaxed text-stone-400">
-			Your models, your keys, your hardware. brnrd drives the coding CLIs you already subscribe to,
-			and paces itself against your quotas.
-		</p>
+	<section class="ignite mt-12" style="--ignite-delay: 160ms" aria-label="what brnrd is">
+		<div class="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+			<div class="max-w-2xl">
+				<h1
+					class="font-mono text-xl font-semibold tracking-tight text-amber-100"
+					use:typeReveal={{ text: 'a resident, not a chatbot', delay: 200 }}
+				>
+					a resident, not a chatbot
+				</h1>
+				<!-- The bodies belong on the fold, not in paragraph two (2026-07-29):
+				     "does it drive the thing I already pay for" is a one-glance
+				     question, and making a visitor read for it loses the ones who
+				     don't. Named CLIs only — "more to come" is a roadmap, not a
+				     claim, so it must never read as a list of what works today. -->
+				<p class="mt-2 font-mono text-[13px] leading-relaxed text-amber-200/80">
+					runs on Claude Code and Codex — more to come
+				</p>
+				<p class="mt-4 text-sm leading-relaxed text-stone-400">
+					brnrd runs resident coding agents that live with your repositories. Work arrives from
+					GitHub issues, review requests, and Telegram messages; a daemon on your own machine turns
+					it into runs; the results come back as commits, pull requests, and replies on the thread
+					that asked. The resident keeps memory between runs — decisions, pitfalls, a knowledge base
+					— so it gets better at your project instead of starting over.
+				</p>
+				<!-- Monetization survey corrective, reiterated at the hero (2026-07-20):
+				     self-hosted is the base product, not a trial of the managed one. No
+				     GUI to open, no account to make first — the trigger is the CLI
+				     already on your machine and the message you send it. -->
+				<p class="mt-3 text-sm leading-relaxed text-stone-400">
+					Your models, your keys, your hardware, your agent CLI — that's the whole product,
+					self-hosted and free. No account, no payment, no feature gate. Sign in only for
+					brnrd.dev's convenience layer on top: hosted gates so you can message it from anywhere,
+					and this dashboard.
+				</p>
+				<p class="mt-3 text-xs leading-relaxed text-ink-quiet">
+					It runs on your machine. Your repo never leaves it — connecting an account mirrors derived
+					project notes to brnrd.dev, never your source tree.
+				</p>
+			</div>
+			<ConversationMock />
+		</div>
 	</section>
 
 	<section class="ignite mt-10" style="--ignite-delay: 300ms" aria-label="two ways to run brnrd">
