@@ -1644,6 +1644,136 @@ def test_gate_blocks_when_a_commit_landed_after_the_receipt(tmp_path):
     assert "a different tree" in out["reason"]
 
 
+def test_gate_blocks_when_the_tree_moved_while_the_gate_was_running(tmp_path):
+    """#917, the third state: the receipt describes exactly the tree you are
+    ending on — so every check above it is satisfied — and it still does not
+    certify that tree, because a file landed *during* the legs. Before this,
+    the guard was silent here: both writers sampled only after the last leg,
+    and this clause recomputed that same end state and found it matching."""
+    from brr import gate_receipt
+
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    before = gate_receipt.tree_referents(repo)          # the gate starts
+    (repo / "written-mid-gate.py").write_text("no leg saw this\n", encoding="utf-8")
+    tree = gate_receipt.tree_fields(repo, before)       # the gate finishes
+    assert tree["tree_moved_during_gate"] is True
+
+    _gate_receipt(tmp_path, repo, **tree)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    # It names the actual cause and the actual file. A remedy aimed at the
+    # wrong cause is worse than none, so the two older sentences must not
+    # appear — neither is true here.
+    assert "written-mid-gate.py" in out["reason"]
+    assert "the gate never ran" not in out["reason"]
+    assert "a different tree than the one you are ending on" not in out["reason"]
+    # Composition, not just content: the clause is placed as a whole sentence
+    # and the next one starts cleanly after it.
+    assert (
+        "written-mid-gate.py changed during `python scripts/gate.py`, so no "
+        "leg ever saw it. The receipt's GREEN is about the tree"
+    ) in out["reason"]
+
+
+def test_gate_silent_on_a_receipt_that_records_a_still_tree(tmp_path):
+    """The honest path with the new field present: the writer checked, the
+    tree held, nothing owed."""
+    from brr import gate_receipt
+
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    tree = gate_receipt.tree_fields(repo, gate_receipt.tree_referents(repo))
+    assert tree["tree_moved_during_gate"] is False
+
+    _gate_receipt(tmp_path, repo, **tree)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_gate_silent_on_a_receipt_too_old_to_carry_the_field(tmp_path):
+    """Absence is unassertable, not guilty. Every receipt written before this
+    shape existed lacks the field, and a guard that read absence as a moved
+    tree would fire on all of them — which is how a guard stops being read."""
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    payload = _gate_receipt(tmp_path, repo)
+    assert "tree_moved_during_gate" not in payload
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
+
+
+def test_gate_names_a_file_removed_while_the_gate_was_running(tmp_path):
+    """The pair is diffed *both* ways. A file created during the gate appears
+    only in the after capture; one removed during the gate appears only in the
+    before capture, and looking one way named the first while silently missing
+    the second — falling through to a sentence about "a file that was already
+    dirty", which a deletion is not."""
+    from brr import gate_receipt
+
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    (repo / "scratch.py").write_text("deleted before the gate ended\n", encoding="utf-8")
+    before = gate_receipt.tree_referents(repo)
+    (repo / "scratch.py").unlink()
+    tree = gate_receipt.tree_fields(repo, before)
+    assert tree["tree_moved_during_gate"] is True
+
+    _gate_receipt(tmp_path, repo, **tree)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "scratch.py" in out["reason"]
+    assert "already dirty" not in out["reason"]
+
+
+def test_gate_moved_tree_message_falls_back_to_the_referent_it_cannot_name(tmp_path):
+    """A *second* edit to a file that was already ` M` when the gate started
+    leaves its `status --porcelain` line byte-identical, so no filename is
+    derivable from the pair. The sentence names the referent that moved
+    rather than inventing a path.
+
+    This branch is pinned **through the hook**, not just against the helper,
+    because the defect it caught lived in neither half: `moved_sentence`'s
+    ancestor returned a bare noun when it could name files and a whole clause
+    when it could not, and the hook interpolated it mid-sentence as though it
+    were always a noun. The filename branch read fine and this one produced
+    word salad. A helper tested alone would have passed."""
+    from brr import gate_receipt
+
+    repo = _seeded_repo(tmp_path)
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "feature")
+    (repo / "feature.py").write_text("x\ndirty before the gate\n", encoding="utf-8")
+    before = gate_receipt.tree_referents(repo)
+    (repo / "feature.py").write_text("x\nand again, under the gate\n", encoding="utf-8")
+    tree = gate_receipt.tree_fields(repo, before)
+    assert tree["tree_moved_during_gate"] is True
+
+    _gate_receipt(tmp_path, repo, **tree)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "diff_digest" in out["reason"]
+    assert (
+        "no path in `git status` changed during `python scripts/gate.py`, but "
+        "diff_digest did — content moved under a path that was already dirty "
+        "when the gate started. The receipt's GREEN is about the tree"
+    ) in out["reason"]
+    # The garble this shape exists to prevent, spelled out so a future edit
+    # that reintroduces noun-vs-clause has to walk past it.
+    assert "started changed" not in out["reason"]
+
+
 def test_gate_silent_when_nothing_changed(tmp_path):
     """Nothing for CI to run on ⇒ nothing owed. A guard that fires on a
     read-only run is a guard that stops being read."""

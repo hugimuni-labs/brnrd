@@ -1740,3 +1740,48 @@ def test_gate_run_satisfies_the_stop_hook_obligation_end_to_end(tmp_path, monkey
         "BRR_GATE_COMMAND": "exit 0",
     })
     assert hooks._gate_closeout_clause(ctx) is None
+
+
+def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkeypatch):
+    """#917 through the writer that actually ships, end to end.
+
+    The command writes a repo file *while it is running* — the shape of a
+    four-minute gate and a resident who keeps working through it. That file
+    was never gated, and before this the receipt certified it anyway, because
+    both the writer's sample and the hook's recomputation happened after the
+    last leg and therefore agreed.
+
+    This is the guard that was driven red on purpose: making the pre-capture
+    equal the post-capture (sampling `before` after `run()` in
+    `gate_receipt.gated_run`) turns `tree_moved_during_gate` false, the hook
+    goes silent, and both halves of this test fail.
+    """
+    from brr import hooks
+
+    repo = _gate_run_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run", "--override-command",
+              "printf 'no leg ever saw this\\n' > written-mid-gate.py"])
+    assert exc.value.code == 0  # the command itself succeeded
+
+    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    assert payload["verdict"] == "GREEN"
+    assert payload["tree_moved_during_gate"] is True
+    assert "written-mid-gate.py" in payload["status"]
+    assert "written-mid-gate.py" not in payload["gated_from"]["status"]
+
+    # ...and a GREEN receipt for that tree does not end the run.
+    ctx = hooks.HookContext({
+        "BRR_OUTBOX_DIR": str(outbox),
+        "BRR_REPO_DIR": str(repo),
+        "BRR_SEED_REF": "main",
+        "BRR_GATE_COMMAND": "make test",
+    })
+    reason = hooks._gate_closeout_clause(ctx)
+    assert reason is not None
+    assert "written-mid-gate.py" in reason
+    assert "the gate never ran" not in reason
