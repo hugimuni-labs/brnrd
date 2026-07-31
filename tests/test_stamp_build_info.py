@@ -112,13 +112,27 @@ def test_publish_workflow_still_passes_the_build_commit():
 
 
 def test_publish_workflow_deploy_tail_is_guarded_and_loud():
-    """The deploy tail rolls out only with a target, and never skips silently."""
+    """The deploy tail rolls out only with a target, and never skips silently.
+
+    This assertion used to read ``assert "/deploy" in workflow`` — and that
+    string was the bug. Chaining ``POST /deploy`` after ``PATCH`` is the
+    documented cause of the ``409 transient_state`` that failed both of
+    #894's live runs, so the guard was pinning the defect as expected and
+    going green over it. Matching source text cannot tell a call that is
+    required from one that must not exist; what this test actually cares
+    about is that a rollout *happens*, that its failure is red, and that an
+    absent target is visible. The rollout itself is behaviour-tested in
+    ``tests/test_scw_rollout.py``.
+    """
     workflow = (
         REPO_ROOT / ".github" / "workflows" / "publish-container.yml"
     ).read_text(encoding="utf-8")
     assert "SCW_CONTAINER_ID" in workflow
-    assert "/deploy" in workflow
+    # a rollout is attempted at all, and by the one script that owns it
+    assert "scripts/scw_rollout.py" in workflow
     # rollout failure is a red step, not a green headline (#892's rule)
-    assert "::error::container deploy failed" in workflow
+    assert "::error::container deploy failed" in (
+        REPO_ROOT / "scripts" / "scw_rollout.py"
+    ).read_text(encoding="utf-8")
     # and an absent target is a visible notice, not a silent skip (#891's rule)
     assert "::notice::Image mirrored but not deployed" in workflow
