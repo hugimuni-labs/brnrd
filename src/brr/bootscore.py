@@ -141,7 +141,7 @@ class ContractEntry:
     source_newest: str | None = None
     """ISO date of the newest dated entry in the **source** file, whether or
     not it survived the trim.  The gap between this and :attr:`newest_item`
-    is the whole point: ``_tail_trim_entries`` always knew what it dropped
+    is the whole point: ``_trim_sectioned_page`` always knew what it dropped
     and, before this field existed, threw that fact away.  That discard was
     the ledger-tail-inversion bug (2026-07-23): an out-of-order source let
     the trim keep an *older* entry as "newest" while a genuinely newer one

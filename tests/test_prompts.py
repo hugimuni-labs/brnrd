@@ -22,7 +22,7 @@ from brr.prompts import (
     _read_recent_log,
     _MAX_ACCRETING_BLOCK_BYTES,
     _page_is_chronological,
-    _tail_trim_entries,
+    _trim_sectioned_page,
     _worst_trim,
     build_daemon_prompt,
     build_run_prompt,
@@ -185,7 +185,7 @@ class TestContextInjection:
 
 # ── P1 — per-block content attestation ──────────────────────────────────
 #
-# review-boot-prompts-2026-07.md §P1: `_tail_trim_entries` already knows
+# review-boot-prompts-2026-07.md §P1: `_trim_sectioned_page` already knows
 # which dated entry it kept as "newest" and which it dropped; it used to
 # throw both facts away. These pin the TrimResult it now returns and the
 # in-text provenance stamp (§P1 move 4b) built from it.
@@ -227,7 +227,7 @@ class TestBlockAttestation:
         every wake, since almost every injected block never needs trimming.
         """
         content = "# Page\n\n## [2026-07-01] note | small\n\nfits fine.\n"
-        result = _tail_trim_entries(content, max_bytes=10_000, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=10_000, source_hint="`x`")
         assert result.text == content
         assert result.newest_item is None
         assert result.oldest_item is None
@@ -251,7 +251,7 @@ class TestBlockAttestation:
         content = "\n\n".join([e1, e2, e3]) + "\n"
         budget = len(e3.encode("utf-8")) + 10  # admits only the bottom entry
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
 
         assert result.newest_item == "2026-07-22"
         # Time rendered on the source side because the entry that *is* the
@@ -279,7 +279,7 @@ class TestBlockAttestation:
             len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + _MARKER_HEADROOM
         )
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`surface/ledger/decisions.md`")
 
         # Every entry carries a corroborated run-id time, so the comparison
         # ran at full precision and the rendered stamp says so.
@@ -312,7 +312,7 @@ class TestBlockAttestation:
         content = "\n\n".join([e1, newer, older]) + "\n"
         budget = len(older.encode("utf-8")) + 10
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
 
         assert result.stale is True, "the same-day inversion must be caught"
         assert result.precise is True
@@ -337,7 +337,7 @@ class TestBlockAttestation:
         e3 = "## C (2026-07-23)\n\n" + ("z" * 200)
         content = "\n\n".join([e1, e2, e3]) + "\n"
 
-        result = _tail_trim_entries(content, max_bytes=len(e3.encode()) + 10, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=len(e3.encode()) + 10, source_hint="`x`")
 
         assert result.stale is False
         assert result.precise is False
@@ -399,7 +399,7 @@ class TestBlockAttestation:
             + _MARKER_HEADROOM
         )
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
 
         assert result.precise is True
         assert result.stale is False
@@ -423,7 +423,7 @@ class TestBlockAttestation:
         content = "\n\n".join([newer, older]) + "\n"
         budget = len(older.encode("utf-8")) + 10  # admits only the bottom entry
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
 
         assert result.precise is True
         assert result.stale is True, "an ordering the run-ids decide must be decided"
@@ -446,7 +446,7 @@ class TestBlockAttestation:
         timed = _ledger_entry("2026-07-24", "run-260724-1220-vzco", 200)
         content = "\n\n".join([legacy, timed]) + "\n"
 
-        result = _tail_trim_entries(
+        result = _trim_sectioned_page(
             content, max_bytes=len(timed.encode("utf-8")) + 10, source_hint="`x`"
         )
 
@@ -477,7 +477,7 @@ class TestBlockAttestation:
         older = "## A (2026-07-23, run-260723-1131-aaaa)\n\n" + ("z" * 200)
         content = "\n\n".join([legacy, newer, older]) + "\n"
 
-        result = _tail_trim_entries(
+        result = _trim_sectioned_page(
             content, max_bytes=len(older.encode("utf-8")) + 10, source_hint="`x`"
         )
 
@@ -498,7 +498,7 @@ class TestBlockAttestation:
         content = e1 + "\n\n" + e2 + "\n"
         budget = len(e2.encode("utf-8")) + 10
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
 
         assert result.newest_item is None
         assert result.oldest_item is None
@@ -549,7 +549,7 @@ class TestBlockAttestation:
         content = "# Workflow\n\n" + "\n\n".join(
             f"## {title}\n\n" + ("w" * bulk) for title, bulk in sections
         )
-        result = _tail_trim_entries(content, max_bytes=8192, source_hint="`surface/workflow.md`")
+        result = _trim_sectioned_page(content, max_bytes=8192, source_hint="`surface/workflow.md`")
 
         assert "## Autonomy" in result.text, "the head is what leads"
         assert "## Gating and merges" in result.text, (
@@ -585,7 +585,7 @@ class TestBlockAttestation:
             len(e2.encode("utf-8")) + len(e3.encode("utf-8")) + _MARKER_HEADROOM
         )
 
-        result = _tail_trim_entries(content, max_bytes=budget, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=budget, source_hint="`x`")
 
         assert "2026-07-21" not in result.text, "the oldest entry is what goes"
         assert "run-260723-1100-cccc" in result.text, "the newest is what stays"
@@ -618,7 +618,7 @@ class TestBlockAttestation:
         assert _page_is_chronological("\n\n".join([dated, undated, newest])) is False
 
         content = "\n\n".join([dated, undated, newest]) + "\n"
-        result = _tail_trim_entries(content, max_bytes=600, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=600, source_hint="`x`")
 
         assert "run-260721-0900-aaaa" in result.text, "structural ⇒ head kept"
         assert "sections cut" in result.text, "and the noun says so"
@@ -648,7 +648,7 @@ class TestBlockAttestation:
         )
         content = f"{preamble}\n\n{entries}\n"
         for allowance in (1200, 2400, 4096, 8192, 16384):
-            result = _tail_trim_entries(content, allowance, "`surface/plan.md`")
+            result = _trim_sectioned_page(content, allowance, "`surface/plan.md`")
             assert len(result.text.encode("utf-8")) <= allowance, (
                 f"rendered past the {allowance} B allowance it was given"
             )
@@ -668,7 +668,7 @@ class TestBlockAttestation:
             _ledger_entry(f"2026-07-{i:02d}", f"run-2607{i:02d}-1000-aaaa", 300)
             for i in range(11, 21)
         )
-        result = _tail_trim_entries(f"{preamble}\n\n{entries}\n", 600, "`surface/plan.md`")
+        result = _trim_sectioned_page(f"{preamble}\n\n{entries}\n", 600, "`surface/plan.md`")
 
         rendered = len(result.text.encode("utf-8"))
         assert rendered > 600, "this is the floor case, by construction"
@@ -690,7 +690,7 @@ class TestBlockAttestation:
         entry = _ledger_entry("2026-07-21", "run-260721-0900-aaaa", 200)
         content = f"{preamble}\n\n{entry}\n"
 
-        result = _tail_trim_entries(content, 2000, "`surface/plan.md`")
+        result = _trim_sectioned_page(content, 2000, "`surface/plan.md`")
 
         assert len(result.text.encode("utf-8")) <= 2000
         assert "of this page's opening cut" in result.text
@@ -709,7 +709,7 @@ class TestBlockAttestation:
         falls back to the pre-existing flat tail cut, untouched by P1.
         """
         content = "just prose, no headings, " * 200
-        result = _tail_trim_entries(content, max_bytes=100, source_hint="`x`")
+        result = _trim_sectioned_page(content, max_bytes=100, source_hint="`x`")
         assert result.dropped is None
         assert result.newest_item is None
         assert result.stale is False
@@ -718,7 +718,7 @@ class TestBlockAttestation:
         """``_read_recent_log`` computes the same facts, but by construction
         never flags stale: it always walks newest-first off file *and*
         picks the true tail, so a healthy ascending log never drifts. (The
-        residual risk this class guards is `_tail_trim_entries`'s pages —
+        residual risk this class guards is `_trim_sectioned_page`'s pages —
         see ``review-boot-prompts-2026-07.md`` §P1.)
         """
         kb = tmp_path / "kb"
