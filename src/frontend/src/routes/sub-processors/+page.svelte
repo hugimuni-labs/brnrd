@@ -2,13 +2,16 @@
 	import { resolve } from '$app/paths';
 
 	// 2026-07-30: the hosting row said "France (EU) / no transfer required" while
-	// the live project has always run in Upsun's `ch-1` (Switzerland) region —
+	// the live project had always run in Upsun's `ch-1` (Switzerland) region —
 	// a published international-transfer claim that was wrong in the direction
-	// that flatters us. The region is a project-creation setting and appears in
-	// no config file in this repo, which is why the page could drift without a
-	// diff ever contradicting it. `docs/legal/dpa.md` §14 carries the same
-	// adequacy wording; keep the two in step.
-	const LAST_UPDATED = '2026-07-30';
+	// that flatters us. Corrected that day to say Switzerland accurately.
+	//
+	// 2026-07-31: production actually moved off Upsun/Platform.sh entirely, to
+	// Scaleway SAS, region `fr-par`, France. The hosting row now says France
+	// again — this time because it is true, not because it was never checked.
+	// `docs/legal/dpa.md` §14 and Annex III carry the same fact; keep the two
+	// in step.
+	const LAST_UPDATED = '2026-07-31';
 </script>
 
 <svelte:head><title>brnrd sub-processors</title></svelte:head>
@@ -66,9 +69,9 @@
 					<tbody class="divide-y divide-stone-700">
 						<tr>
 							<td class="border-r border-stone-700 px-3 py-3">
-								<strong class="text-stone-200">Upsun / Platform.sh</strong>
+								<strong class="text-stone-200">Scaleway</strong>
 								<br />
-								<span class="text-xs text-ink-quiet">Switzerland (region <code>ch-1</code>)</span>
+								<span class="text-xs text-ink-quiet">France (region <code>fr-par</code>)</span>
 							</td>
 							<td class="border-r border-stone-700 px-3 py-3">
 								Cloud hosting infrastructure; PostgreSQL database
@@ -78,12 +81,8 @@
 								event data, corpus mirror, run metadata
 							</td>
 							<td class="px-3 py-3">
-								Outside the EEA. The transfer relies on the European Commission's
-								<a
-									class="text-sky-400 underline"
-									href="https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en"
-									rel="external">adequacy decision for Switzerland</a
-								>.
+								Not applicable. Scaleway SAS is a French company and processing occurs within the
+								EU/EEA — this is not an international transfer.
 							</td>
 						</tr>
 

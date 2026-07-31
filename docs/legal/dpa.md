@@ -14,9 +14,11 @@ by the maintainer 2026-07-24.
 Claims from research-legal-review-hosted-vs-oss-2026-07-24.md that this
 draft could NOT independently confirm in the code, and therefore does not
 assert as fact:
-  - Upsun/Platform.sh hosting region. The repository cannot prove it, but a
-    live operational read on 2026-07-28 identified `ch-1`, Switzerland.
-    §14 and Annex III state that observed fact and the EU adequacy basis.
+  - Hosting sub-processor and region. The repository cannot prove it, but a
+    live operational read on 2026-07-30/31 identified Scaleway SAS,
+    `fr-par`, France, superseding the Upsun/Platform.sh, `ch-1`, Switzerland
+    reading from 2026-07-28. §14 and Annex III state that observed fact and
+    the intra-EU basis it now rests on.
   - GitHub App installation-token lifetime of "1 hour". The code mints the
     token (`src/brnrd/platforms/github_app.py:72`) but the expiry is set by
     GitHub's API, not brnrd's code, so it is a platform fact, not a repo
@@ -349,7 +351,9 @@ bears the reasonable cost of that audit.
 ## 14. International transfers
 
 Sub-processor transfers outside the European Economic Area, and their
-stated basis, are listed in Annex III. In summary:
+stated basis, are listed in Annex III. In summary (including, for
+completeness, the one sub-processor that is no longer an international
+transfer at all):
 
 - **Stripe** and **GitHub** (United States) — transfers rely on the EU-US
   Data Privacy Framework and/or Standard Contractual Clauses.
@@ -361,12 +365,11 @@ stated basis, are listed in Annex III. In summary:
   reaches HugiMuni. HugiMuni flags this to Customer's counsel as the
   least tidy transfer in this list, worth an explicit sentence rather
   than folding it into the general clause above.
-- **HugiMuni's own infrastructure** — hosted on Upsun/Platform.sh in
-  `ch-1`, Switzerland (live project read 2026-07-28). Switzerland is
-  outside the EEA; the transfer relies on the European Commission's
-  [adequacy decision](https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en).
-  The region is a project-creation-time operational setting and does not
-  appear in `.upsun/config.yaml`.
+- **HugiMuni's own infrastructure** — hosted on Scaleway SAS, region
+  `fr-par` (France) as of 2026-07-30/31, superseding the Upsun/Platform.sh
+  `ch-1`, Switzerland reading from 2026-07-28. France is within the EEA, so
+  this is intra-EU processing, not an international transfer, and does not
+  rely on an adequacy decision.
 
 ## 15. Precedence
 
@@ -425,7 +428,7 @@ avoid.
   itself enforces.
 - **No application-level encryption at rest.** brnrd applies no
   additional encryption layer of its own over what its hosting platform
-  (Upsun/Platform.sh, PostgreSQL 15) provides natively. A search of
+  (Scaleway, PostgreSQL 15) provides natively. A search of
   `src/brnrd/` for encryption/cipher primitives (Fernet, AES, etc.)
   outside the SHA-256 token-hashing above found none. Stated as fact, not
   omitted.
@@ -499,7 +502,7 @@ actually touches, so the boundary in §0 stays intact through this table too
 
 | Sub-processor | Role | Location | Transfer basis | Processes |
 |---|---|---|---|---|
-| **Upsun** (Platform.sh SAS) | Hosting and the managed PostgreSQL database — the sole datastore for everything in Annex I | Switzerland (`ch-1`; provider registered office in France) | [European Commission adequacy decision for Switzerland](https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en) | All Customer Content described in Annex I, and all HugiMuni controller-role data |
+| **Scaleway** (Scaleway SAS) | Hosting and the managed PostgreSQL database — the sole datastore for everything in Annex I | France (`fr-par`; provider registered office in France) | Not applicable — intra-EU processing, no international transfer | All Customer Content described in Annex I, and all HugiMuni controller-role data |
 | **GitHub** | (a) OAuth sign-in identity; (b) delivery of relayed replies to Customer's own issues/PRs, and the webhook source of inbound Customer Content | United States | EU-US Data Privacy Framework / Standard Contractual Clauses | (a) is controller-role account data, out of this Agreement's scope; (b) is Customer Content, in scope |
 | **Telegram** | Message transport for Customers who elect a Telegram gate — both inbound and outbound | Outside the EEA / outside an adequacy decision | None stated; transport inherent to Customer's choice of gate (see §14) | Customer Content — applicable only if Customer connects a Telegram gate |
 | **Stripe** | Payments, as merchant of record | United States | EU-US Data Privacy Framework / Standard Contractual Clauses | Controller-role billing data only (Customer's email address and brnrd account id); Stripe does not receive Customer Content under this Agreement |
