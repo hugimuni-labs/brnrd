@@ -44,7 +44,7 @@ So each product body that entered verbatim is replaced by a
 match against the file on disk, which makes **the marker itself the
 assertion**: it can only appear if that block reached the prompt
 untransformed.  Let a trim or a collapse touch that block
-(``prompts._tail_trim_entries``, ``dominion._collapse_markdown_to_budget`` —
+(``prompts._trim_sectioned_page``, ``dominion._collapse_markdown_to_budget`` —
 both live, both applied to other blocks today) and the match fails, the raw
 text lands back in the snapshot, and the diff is enormous and unmissable.
 
@@ -487,7 +487,7 @@ class TestBootReplay:
         The whole safety argument rests on the substitution being a literal
         match against the file, so it is asserted directly: one character of
         drift and the raw text survives into the snapshot, where the diff is
-        impossible to miss.  ``prompts._tail_trim_entries`` and
+        impossible to miss.  ``prompts._trim_sectioned_page`` and
         ``dominion._collapse_markdown_to_budget`` are both live and both
         rewrite block bodies today; this is the alarm for the day one of them
         starts reaching a product prompt.
