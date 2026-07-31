@@ -31,7 +31,9 @@ RUN python -m pip install --no-cache-dir ".[backend,postgres]" \
 # Stamp the installed package with the build identity (BRNRD_BUILD_COMMIT
 # build arg -> three-line build_info.txt) so /v1/stats/version can answer
 # "is my merge live?" honestly. scripts/stamp_build_info.py is the one
-# writer of that file, shared with the Upsun build hook.
+# writer of that file: this image is the only caller left since the PaaS
+# build hook that was the second one went away (2026-07-31), and an image
+# built without this step reports `commit: null`.
 RUN python scripts/stamp_build_info.py && rm -rf /app/scripts
 
 COPY --from=frontend-builder /build/frontend/build /app/frontend

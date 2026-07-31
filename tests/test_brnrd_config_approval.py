@@ -132,8 +132,9 @@ def test_config_approve_context_requires_login_and_spa_handoff_is_compatible():
 def test_config_approve_deep_link_is_spa_owned():
     """An emailed approval link must reach SvelteKit, not a backend route.
 
-    This used to read `.upsun/config.yaml`'s passthru regex, which made the
-    test one more reader of a hand-maintained copy of the route list. #847
+    This used to read the passthru regex out of a PaaS route config, which
+    made the test one more reader of a hand-maintained copy of the route
+    list — a copy that has since been deleted along with that host. #847
     moved the boundary into `create_app`, and the 308 bare-uvicorn shim that
     sat at this path went with it — with the app serving the SPA, a backend
     route here would beat the page it was standing in for.
