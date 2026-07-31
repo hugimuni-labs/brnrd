@@ -51,6 +51,15 @@ Invalid numeric values use the defaults shown above.
 The unprefixed `GITHUB_*` names below are compatibility aliases. When both are
 set, the `BRNRD_*` name wins.
 
+**The `Secret` column is not a required column.** `BRNRD_GITHUB_APP_ID` and
+`BRNRD_GITHUB_APP_PRIVATE_KEY_B64` are jointly load-bearing: `platforms.github_app.app_jwt`
+raises on either one, so a deployment missing *either* cannot mint a single
+installation token — no managed runner can push, and no managed reply reaches
+an issue. The App id is not a secret, which is exactly why a migration that
+copies the **Yes** rows carries the key and drops the id. Verify both after
+any host move: `GET /v1/daemons/inbox` returns `server.github.app_id_set` and
+`app_key_set` (2026-07-31, the Scaleway cutover).
+
 | Variable | Secret | Default | Consumer |
 | --- | --- | --- | --- |
 | `BRNRD_SESSION_COOKIE` | No | `brnrd_session` | Cookie name used by `auth` and `routers.web_auth`; this is a name, not a cookie value. |
