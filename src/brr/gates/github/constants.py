@@ -54,6 +54,14 @@ _RENDERABLE_PACKETS = {
     "conflict",
 }
 
+# Frontmatter `github_action` / `forge_action` / `action` values that mean
+# "deliver this as a pull request", i.e. the values for which the outbox body
+# *is* a PR body. Lives here rather than in `delivery.py` because the outbox
+# drain has to answer the same question one layer earlier — a PR body must be
+# checked for close keywords before it is queued (#839) — and `constants` is
+# the dependency-free module both layers can import.
+_PR_ACTIONS = {"pull_request", "pull-request", "pr", "open_pr", "open-pr"}
+
 # Event kinds that originate from a comment (issue/PR timeline or
 # inline review-line) or a PR review summary body. Replies to these
 # include a quote pointer back at the source; replies to label-triggered
