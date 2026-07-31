@@ -16,6 +16,8 @@ import argparse
 import os
 from pathlib import Path
 
+from . import closekeyword
+
 #: Every gate brnrd knows how to auth/bind/configure. Single source of truth
 #: for ``_load_gate``, ``brnrd gate list``, and the gate argument help.
 GATES = ("telegram", "slack", "github", "cloud")
@@ -58,9 +60,16 @@ PUBLIC_COMMANDS = (
 # and ``daemon-substrate.md`` / ``brnrd docs portals`` point a resident at
 # the spelling directly. It also could not be public without evicting
 # something from the 18-verb ceiling.
+#
+# ``close-check`` is hidden on the same reasoning: it is the resident's half
+# of #839. ``gate: forge`` PR bodies are checked in the daemon whether anyone
+# calls this or not; the verb exists for the hand-``gh pr create`` path, where
+# a run gates on it deliberately and ``brnrd docs portals`` carries the
+# spelling. An operator browsing ``--help`` has no use for it, and the public
+# list is at its ceiling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic", "gate-run",
+    "relic", "gate-run", "close-check",
 )
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
@@ -157,6 +166,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
     p.set_defaults(func=cmd_review)
+
+    # The opt-in half of #839. `gate: forge` PR bodies are checked at the
+    # outbox drain, where refusal is enforced; a PR opened by hand with
+    # `gh pr create` passes through no brnrd code at all, so the honest
+    # coverage there is a verb a run can call on the body file before it
+    # shells out — not a wrapper pretending to be a chokepoint.
+    p = sub.add_parser("close-check")
+    p.add_argument(
+        "path", nargs="?", default="-",
+        help="file to check; '-' or omitted reads stdin",
+    )
+    p.add_argument(
+        "--channel", default="pr-body", choices=sorted(closekeyword.CHANNELS),
+        help="which surface this text is headed for (default: pr-body)",
+    )
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_close_check)
 
     gate_help = f"gate name ({', '.join(GATES)})"
 
@@ -1702,6 +1729,55 @@ def cmd_statusline(args):
     from . import statusline
 
     return statusline.main()
+
+
+def cmd_close_check(args):
+    """Report close keywords GitHub would act on. Exit 1 when any fire.
+
+    The exit code is the point: a run about to `gh pr create --body-file x.md`
+    can gate on `brnrd close-check x.md` in the same command line. Coverage
+    here is opt-in — nothing forces a hand-`gh` path through it — which is
+    stated plainly rather than dressed up as enforcement (#839).
+    """
+    import json as _json
+    import sys as _sys
+
+    if args.path in ("-", ""):
+        text = _sys.stdin.read()
+        label = "<stdin>"
+    else:
+        path = Path(args.path)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"[brnrd close-check] {e}")
+            return 2
+        label = str(path)
+
+    findings = closekeyword.check(text, channel=args.channel)
+    if args.json:
+        print(_json.dumps({
+            "ok": not findings,
+            "source": label,
+            "channel": args.channel,
+            "findings": [
+                {
+                    "rule": f.rule,
+                    "line_number": f.line_number,
+                    "line": f.line,
+                    "headline": f.headline,
+                    "remedies": list(f.remedies),
+                }
+                for f in findings
+            ],
+        }))
+        return 1 if findings else 0
+
+    if not findings:
+        print(f"[brnrd close-check] {label}: clean ({args.channel})")
+        return 0
+    print(closekeyword.render(findings, channel=args.channel))
+    return 1
 
 
 def cmd_review(args):

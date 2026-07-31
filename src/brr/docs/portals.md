@@ -44,7 +44,7 @@ other so they don't drift.
 | --- | --- | --- |
 | `<name>.md` | outbound ▸ append-log | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
 | `<name>.md` with `event: <id>` frontmatter | outbound ▸ another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
-| `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` is the explicit PR handoff (`head`, `base`, `title` frontmatter; body is the PR body) and opens or refreshes the PR for that head branch when the GitHub gate can deliver. Diffense may generate the title/body when a checked review pack exists, but PR delivery is not diffense-owned. An unconfigured gate is dropped. |
+| `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` is the explicit PR handoff (`head`, `base`, `title` frontmatter; body is the PR body) and opens or refreshes the PR for that head branch when the GitHub gate can deliver. Diffense may generate the title/body when a checked review pack exists, but PR delivery is not diffense-owned. An unconfigured gate is dropped. The body is close-keyword checked before the PR is queued — see **Close keywords close on two channels** below. |
 | `<name>.md` with `respawn: true` frontmatter | parked ⏸ runner handoff | Queue a fresh event for the same conversation and mark the current run satisfied by handoff. Use `shell:` / `core:` for an explicit target, or `quality: escalate` / `quality: strong` to let brnrd choose the stronger local Core exposed in `portal-state.json` (`resources.runner.quality_escalation`). Optional `reason:`, `at:`, `defer_until:`, and body/carry-forward text ride into the queued event. Paid relay is not selected here. |
 | `<name>.md` with `spawn: true` frontmatter | concurrent ↗ worker dispatch | Queue a bounded worker-stack child in the configured concurrent pool (sized by `spawn.max_concurrent`); read live headroom from `portal-state.json` → `resources.coexisting_runs.spawn_pool` (`max_concurrent` / `active` / `available`) rather than assuming a cap. Name `shell:` / `core:`; optional `environment:` may opt the child *down* the isolation ladder (`docker` / `solitary` — both keep the child's own worktree, so the parent-collision guard holds); `worktree` is the default and the floor, and anything less isolated (`host`) is refused with a notice. The completion returns to the parent as a pending event. Use this for independent pending work when capacity and quota are healthy. The parent retains ownership of any original external event and answers it with `event: <id>` after reviewing the child; the spawn request alone does not clear that event. |
 | `<name>.md` with `stop: <run-or-event-id>` frontmatter | concurrent ✕ worker stop | Stop a concurrent child **this run** dispatched, addressed by its spawn event id or child run id (wyrd §3: a run controls only its own dispatchees — the daemon enforces the ownership check and does the kill; nothing depends on the child reading anything). A child still queued is cancelled before it ever starts; a running child's runner process is killed, its partial branch work is salvaged, and it finalizes as `stopped` — the completion note (`status=stopped`) returns to this run as a pending event. Optional `reason:` (or the body) is recorded on the child. A refused stop (unknown id, not your dispatchee, already finished) lands in `portal-state.json` → `notices`. |
@@ -204,6 +204,43 @@ delivery acknowledgements — not the basic ability to ask the forge for a
 PR. Keep this as a portal/gate handoff rather than a broad public `brnrd`
 subcommand; diffense is optional review enrichment, not a requirement for
 publishing a branch.
+
+### Close keywords close on two channels
+
+A forge closes an issue on a closing keyword (`Closes` / `Fixes` /
+`Resolves` + `#NNN`) in a **commit message** *and* in a **pull-request
+body**, with equal authority. The rule is the same on both: the keyword only
+means *close* at the start of a line, and after the ref only more refs may
+follow — `, #MMM`, then end of line or `: subject`. Anything else is prose,
+GitHub discards it, and the issue closes anyway. That is how #749 was shut by
+the very clause written to keep it open (`Closes #749 move 5 (the ticket
+stays open for moves 1–4).`, PR #838's body).
+
+Where the check runs:
+
+| channel | enforced by | when |
+| --- | --- | --- |
+| commit message | the `commit-msg` hook brnrd installs (`$BRR_RUN_ID` set ⇒ run commits only) | at `git commit` |
+| PR body via `gate: forge` / `gate: github` + a PR action | the outbox drain — a failing body is refused to `notices` and the PR is **not** created | when the file is drained |
+| PR body via a hand `gh pr create` | nothing — no brnrd code is on that path | **opt-in:** `brnrd close-check <body-file>` (exit 1 ⇒ findings; `--channel commit-msg`, `--json`) |
+
+One predicate, one source: `src/brr/closekeyword.py`. The hook script is
+rendered from it, so the two channels cannot drift apart.
+
+**Quoting a line the rule refuses** — the case that bites hardest in a PR
+body, because a PR body is where you would naturally show the example. Two
+forms are quotable and neither needs a bypass:
+
+- **mask the digits** — `Closes #NNN …` is not `#<digits>`, so nothing
+  matches and nothing closes. This is why every remedy above is written with
+  `#NNN`.
+- **split the keyword from the ref** — the predicate only fires when the two
+  are adjacent, so `#749 — closed by a keyword with a tail on line 30` is
+  free to name the real issue.
+
+There is no code-fence exemption. GitHub does not document ignoring closing
+keywords inside fenced blocks, and #839 is a ticket about what assuming a
+channel's behaviour costs.
 
 ## The PLAN message — the parked portal's shape
 
