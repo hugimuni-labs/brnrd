@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import type { RelicRecord, RunLedgerRow } from './runLedger.ts';
 import {
 	LENS_ALL,
-	LENS_BACKCHANNEL,
 	applyLens,
 	availableLenses,
 	lensMatches,
@@ -100,20 +99,11 @@ test('a lens matching nothing is not offered', () => {
 	assert.ok(!ids.includes('stack:worker'));
 });
 
-test('the backchannel lens appears only when something is actually waiting', () => {
-	assert.ok(!availableLenses([row()], 0).some((lens) => lens.id === LENS_BACKCHANNEL));
-	const lens = availableLenses([row()], 3).find((candidate) => candidate.id === LENS_BACKCHANNEL);
-	assert.equal(lens?.count, 3);
-	assert.equal(lens?.facet, 'artifact');
-	assert.equal(lens?.label, 'backchannel');
-});
-
-test('the backchannel lens leaves the shelf whole', () => {
-	// It is a lens over artifact edges, not over runs: a PR review or settings
-	// approval outlives the run that opened it, so narrowing the spine would
-	// hide the board to answer a question nobody asked.
-	const rows = [row(), row({ external_refs: [relic('pr')] })];
-	assert.equal(applyLens(rows, LENS_BACKCHANNEL).length, 2);
+test('no backchannel lens: the queue is a standing section, not a filter (#875)', () => {
+	// The lens rail derives only from run rows now; "what waits on me" moved
+	// to §1 of the page. An id that no longer exists must not match wide open.
+	assert.ok(!availableLenses([row()]).some((lens) => lens.id === 'backchannel'));
+	assert.equal(applyLens([row()], 'backchannel').length, 0);
 });
 
 test('chip counts and the filtered shelf are computed by one function', () => {
