@@ -1377,6 +1377,41 @@ def _commit_event_seen(
     state[EVENTS_SEEN_KEY] = out
 
 
+def _render_armed_rows(armed: list[Any] | None) -> list[str]:
+    """The armed dated-letters block (#904): one line per pending ``at:`` entry.
+
+    An ``every:`` entry self-heals — it re-derives its own condition fresh
+    at every firing. A one-shot ``at:`` cannot: it was armed against a
+    premise that can stop holding at any point before its clock goes off,
+    and nothing else re-checks it in between. So every boundary that shows
+    pending events also shows the still-armed set, verbatim off the
+    daemon's own schedule projection (``schedule.armed_letters``) — a run
+    sweeps its own changes against them by *reading*, not remembering.
+
+    Facts, not obligations (same status as *finished_spawns*): always
+    rendered when non-empty, never gated behind "address this", and never
+    seen-suppressed — the whole point is that it re-shows every boundary.
+    """
+    if not armed:
+        return []
+    count = len(armed)
+    rows = [
+        f"⏲ {count} armed dated letter(s) — pending `at:` schedule "
+        "entries, swept fresh each boundary:"
+    ]
+    for entry in armed:
+        if not isinstance(entry, dict):
+            continue
+        when = str(entry.get("when") or entry.get("at") or "-").strip() or "-"
+        heading = str(entry.get("heading") or entry.get("id") or "-").strip() or "-"
+        premise = str(entry.get("premise") or "").strip()
+        line = f"- ⏲ {when} · {heading}"
+        if premise:
+            line += f" · premise: {premise}"
+        rows.append(line)
+    return rows
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -1398,6 +1433,7 @@ def _render_bar(
     finished_spawns: list[dict[str, Any]] | None = None,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
+    armed: list[Any] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -1412,7 +1448,8 @@ def _render_bar(
     *notices* drives the ``!N`` segment: non-zero refusal count only.
     *finished_spawns* are the ``spawn_completed`` events the parent already
     observed; they are facts, not obligations, and are reported separately
-    rather than counted against *pending*.
+    rather than counted against *pending*. *armed* is the #904 armed
+    dated-letters projection — see :func:`_render_armed_rows`.
     """
     segments: list[str] = []
     id_chip = _run_id_chip(run)
@@ -1484,6 +1521,7 @@ def _render_bar(
         # distinct line so the run body can name them without any "address each"
         # pressure.
         details.append(_finished_spawns_line(finished_spawns))
+    details.extend(_render_armed_rows(armed))
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -1522,7 +1560,7 @@ def _render_bar(
     if (
         pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
-        and not notices_chip and not finished_spawns
+        and not notices_chip and not finished_spawns and not armed
     ):
         return None
     bar = " │ ".join(segments)
@@ -1654,6 +1692,13 @@ def format_delta(
     ``Read`` can open for a body too large to refeed inline. ``None`` for
     both keeps this a pure function of the snapshot — everything renders as
     a first appearance, and elided bodies point at ``inbox.json`` by name.
+
+    The armed dated-letters block (#904, :func:`_render_armed_rows`) reads
+    straight off ``payload["schedule"]["armed"]`` — the daemon's own
+    projection of still-pending ``at:`` entries — with no caller-owned
+    state at all: unlike the letter chrome it is never seen-suppressed, so
+    it re-shows at every boundary that shows anything else, which is the
+    entire point (sweep by reading, not remembering).
     """
     if not payload:
         return None
@@ -1684,6 +1729,13 @@ def format_delta(
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
     events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     notices = payload.get("notices") if isinstance(payload.get("notices"), list) else []
+    schedule_facet = (
+        payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
+    )
+    armed = (
+        schedule_facet.get("armed")
+        if isinstance(schedule_facet.get("armed"), list) else []
+    )
 
     # Partition pending events into obligations vs finished-spawn facts.
     # spawn_completed events whose spawn_parent_run_id matches this run are
@@ -1710,6 +1762,7 @@ def format_delta(
             mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
+            armed=armed,
         )
 
     lines: list[str] = []
@@ -1743,6 +1796,7 @@ def format_delta(
             lines.append(
                 f"  · {ev.get('id') or '-'}: {summary[:200]}"
             )
+    lines.extend(_render_armed_rows(armed))
     elapsed = budget.get("elapsed_seconds")
     limit = budget.get("budget_seconds")
     if elapsed is not None and limit is not None:

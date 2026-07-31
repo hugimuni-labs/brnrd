@@ -515,6 +515,144 @@ class TestDrainOutbox:
         assert not (outbox / "reply.md").exists()
         assert protocol.list_partials(responses, "evt-ghost") == []
 
+    def test_short_id_reply_resolves_cross_event(self, tmp_path, monkeypatch):
+        """#906 fast-follow: the letter chrome renders a shortened id
+        (``evt-…8jwi``) in the pending list, not the full nanosecond-stamped
+        id. Addressing a reply with that reconstructed short form must
+        resolve to the full id and route exactly as a full-id reply would.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="telegram", body="quick q")
+        evB = protocol.list_pending(inbox)[0]
+        bid = evB["id"]
+        short = hooks._short_event_id(bid)
+        assert short != bid  # sanity: the chrome form really is shortened
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {short}\n---\nhere's the answer\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, bid)] == ["here's the answer"]
+        assert [e["id"] for e in protocol.list_done(inbox, "telegram")] == [bid]
+
+    def test_short_id_reply_bare_tail_resolves(self, tmp_path, monkeypatch):
+        """The resolution rule also accepts the bare tail (no ``evt-``
+        prefix, no ellipsis) — whatever fragment the resident reconstructs,
+        as long as it is unambiguous."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="telegram", body="quick q")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        tail = bid.rsplit("-", 1)[-1]
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {tail}\n---\nhere's the answer\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, bid)] == ["here's the answer"]
+
+    def test_self_reply_via_reconstructed_short_id_does_not_bounce(
+        self, tmp_path, monkeypatch,
+    ):
+        """Reproduces the live defect the thread-of-record fast-follow names:
+        a reply addressed at the run's *own* lead event, via that event's
+        reconstructed short id, used to fail the exact-string match, read
+        as a cross-event target to an unknown event, and bounce as
+        'not pending' — even though the event was this run's own. It must
+        resolve, stay in-thread (``cross`` false), and land on the current
+        event's own partials queue.
+        """
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox_root = brr_dir / "outbox"
+        protocol.create_event(inbox, source="telegram", body="lead question")
+        own = protocol.list_pending(inbox)[0]
+        own_id = own["id"]
+        outbox = outbox_root / own_id
+        outbox.mkdir(parents=True)
+        short = hooks._short_event_id(own_id)
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {short}\n---\nhere's the self-reply\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id=own_id)
+        task = types.SimpleNamespace(id="task-A", source="telegram")
+        n = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
+
+        assert n == 1
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, own_id)] == [
+            "here's the self-reply"
+        ]
+        # It must not have been misrouted onto a synthesized "done" event —
+        # the own event stays pending, this was an in-thread interim.
+        assert [e["id"] for e in protocol.list_pending(inbox)] == [own_id]
+
+    def test_ambiguous_short_id_reply_is_refused_naming_candidates(
+        self, tmp_path, monkeypatch,
+    ):
+        """Never guess-match: when a short id's tail matches more than one
+        pending event, the reply is refused (dropped, undeliverable) and the
+        notice names every candidate — not delivered to either thread."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="telegram", body="first")
+        protocol.create_event(inbox, source="telegram", body="second")
+        evs = protocol.list_pending(inbox)
+        b1, b2 = evs[0]["id"], evs[1]["id"]
+        # Force a shared tail — real ids are random 4-char suffixes and
+        # collisions are exceedingly rare in practice, but the router must
+        # still refuse rather than guess when they do collide.
+        shared_tail = "z9z9"
+        (inbox / f"{b1}.md").write_text(
+            (inbox / f"{b1}.md").read_text().replace(b1, f"evt-1000000000000000000-{shared_tail}")
+        )
+        (inbox / f"{b1}.md").rename(inbox / f"evt-1000000000000000000-{shared_tail}.md")
+        (inbox / f"{b2}.md").write_text(
+            (inbox / f"{b2}.md").read_text().replace(b2, f"evt-2000000000000000000-{shared_tail}")
+        )
+        (inbox / f"{b2}.md").rename(inbox / f"evt-2000000000000000000-{shared_tail}.md")
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {shared_tail}\n---\nwhich one?\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A", source="telegram")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 0
+        assert not (outbox / "reply.md").exists()
+        notices = (outbox / daemon.NOTICES_FILE).read_text(encoding="utf-8")
+        assert "ambiguous" in notices
+        assert f"evt-…{shared_tail}" in notices
+        assert protocol.list_partials(
+            responses, f"evt-1000000000000000000-{shared_tail}"
+        ) == []
+        assert protocol.list_partials(
+            responses, f"evt-2000000000000000000-{shared_tail}"
+        ) == []
+
 
 class TestCrossGateReplyRouting:
     """The three-branch acceptance contract for #578.

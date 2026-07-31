@@ -2627,6 +2627,101 @@ def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     assert "boom" in note["body"]
 
 
+def test_dispatch_records_user_run_signal_for_non_schedule_event(tmp_path, monkeypatch):
+    """#904 option 1: the daemon records a `user-run` signal when it
+    dispatches a resident lead run for any event that isn't itself a
+    schedule firing — the "the user is already talking to the resident"
+    case an opted-in `every:` entry's `reset_on: user-run` treats as a
+    cooldown push (see ``schedule.apply_reset_signals``). Drives the real
+    dispatch loop (``daemon.start``), not a hand-called helper, so this is
+    the actual trigger point rather than a claim about it.
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    protocol.create_event(
+        inbox, "telegram", "hello", conversation_key="telegram:1:",
+    )
+
+    cfg: dict = {}
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        task = Run.from_event(event, cfg)
+        task.status = "done"
+        return task
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        if schedule_mod.load_signals(brr_dir).get("user-run") or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "publish_default_branch", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert ticks["n"] <= 200, "resident dispatch never recorded user-run within the tick budget"
+    assert "user-run" in schedule_mod.load_signals(brr_dir)
+
+
+def test_dispatch_does_not_record_user_run_signal_for_schedule_event(
+    tmp_path, monkeypatch,
+):
+    """The converse: a schedule-sourced event's own dispatch must not
+    record `user-run` — that would let a schedule entry's firing reset its
+    own (or another entry's) `reset_on: user-run` cooldown, which is not
+    what the signal means."""
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    protocol.create_event(
+        inbox, "schedule", "director tick body", schedule_id="director-tick",
+    )
+
+    cfg: dict = {}
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        task = Run.from_event(event, cfg)
+        task.status = "done"
+        return task
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        if ticks["n"] > 30:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "publish_default_branch", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert "user-run" not in schedule_mod.load_signals(brr_dir)
+
+
 def _stuck_spawn_dispatch(tmp_path, conv_key="telegram:88:", parent_run="run-parent-orphan"):
     """Stage a real spawn dispatch frozen at the moment a daemon died.
 
@@ -5218,6 +5313,48 @@ def test_write_live_portal_state_filters_host_run_by_identity(tmp_path, monkeypa
     )
 
     assert seen["commit_run_id"] == "run-host-1"
+
+
+def test_write_live_portal_state_projects_armed_letters(tmp_path):
+    """#904: the armed dated-letters snapshot ``schedule.save_armed_letters``
+    writes (once per scheduling tick, see test_schedule_daemon.py) is
+    projected into the per-run portal-state payload verbatim — hooks.py
+    renders it straight off ``payload["schedule"]["armed"]``."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    rows = [{
+        "id": "ship-the-thing", "when": "2026-08-01T09:00:00Z", "at": 1234.0,
+        "heading": "Ship the thing",
+        "premise": "the release branch is still green",
+    }]
+    schedule_mod.save_armed_letters(brr_dir, rows)
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schedule"]["armed"] == rows
+
+
+def test_write_live_portal_state_armed_letters_empty_without_brr_dir(tmp_path):
+    """Ad-hoc callers that omit ``brr_dir`` (no daemon-owned schedule
+    snapshot to read) get an empty projection, not a crash."""
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schedule"]["armed"] == []
 
 
 # ── _resources_facet (portal-state work-status posture) ──────────────

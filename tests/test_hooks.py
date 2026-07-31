@@ -15,7 +15,7 @@ from brr import card, hooks
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
             resources=None, budget=None, outbound=None, card=None,
             name=None, current_event="evt-1", current_event_replyable=True,
-            notices=None):
+            notices=None, schedule=None):
     # ``current_event`` mirrors production: the daemon always writes the key,
     # set for an addressed run and None for an unaddressed one (a scheduled
     # wake). Pass ``current_event=None`` to model the unaddressed shape — the
@@ -57,6 +57,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=N
         payload["notices"] = notices
     if name is not None:
         payload["name"] = name
+    if schedule is not None:
+        payload["schedule"] = schedule
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -1847,6 +1849,133 @@ def test_post_tool_bar_never_renders_a_pending_count_as_a_segment():
     rendered = hooks.format_delta(payload)
     bar = rendered.splitlines()[0]
     assert "pending" not in bar
+
+
+# ── Armed dated-letters block (#904) ──────────────────────────────────
+
+
+def test_render_armed_rows_shape():
+    rows = hooks._render_armed_rows([
+        {"id": "a", "when": "T1", "heading": "H1", "premise": "P1"},
+        {"id": "b", "when": "T2", "heading": "H2"},
+    ])
+    assert rows == [
+        "⏲ 2 armed dated letter(s) — pending `at:` schedule entries, "
+        "swept fresh each boundary:",
+        "- ⏲ T1 · H1 · premise: P1",
+        "- ⏲ T2 · H2",
+    ]
+
+
+def test_render_armed_rows_empty_input():
+    assert hooks._render_armed_rows([]) == []
+    assert hooks._render_armed_rows(None) == []
+
+
+def test_post_tool_bar_renders_armed_dated_letters():
+    payload = _bar_payload(schedule={"armed": [
+        {
+            "id": "ship-the-thing", "when": "2026-08-01T09:00:00Z",
+            "heading": "Ship the thing",
+            "premise": "the release branch is still green",
+        },
+    ]})
+    rendered = hooks.format_delta(payload, mood="smug_")
+    assert "⏲ 1 armed dated letter(s)" in rendered
+    assert (
+        "- ⏲ 2026-08-01T09:00:00Z · Ship the thing · "
+        "premise: the release branch is still green"
+    ) in rendered
+
+
+def test_post_tool_bar_armed_letter_without_premise_omits_the_clause():
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+        schedule={"armed": [
+            {"id": "followup", "when": "2026-08-01T09:00:00Z", "heading": "Followup"},
+        ]},
+    )
+    rendered = hooks.format_delta(payload)
+    assert rendered is not None
+    assert "- ⏲ 2026-08-01T09:00:00Z · Followup" in rendered
+    assert "premise:" not in rendered
+
+
+def test_post_tool_bar_opens_on_armed_letters_alone():
+    # Otherwise-quiet boundary (the exact fixture that returns None in
+    # test_post_tool_bar_is_quiet_when_nothing_is_laden) must still open
+    # the bar when there is an armed dated letter — a run must see it even
+    # when nothing else earned a turn.
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+        resources={},
+        schedule={"armed": [{"id": "x", "when": "-", "heading": "X"}]},
+    )
+    assert hooks.format_delta(payload) is not None
+
+
+def test_no_armed_letters_renders_no_block():
+    payload = _bar_payload()
+    rendered = hooks.format_delta(payload, seed=True)
+    assert "armed dated letter" not in rendered
+
+
+def test_seed_and_closeout_render_armed_dated_letters():
+    payload = _bar_payload(schedule={"armed": [
+        {
+            "id": "ship-the-thing", "when": "2026-08-01T09:00:00Z",
+            "heading": "Ship the thing", "premise": "green branch",
+        },
+    ]})
+    seed = hooks.format_delta(payload, seed=True)
+    stop = hooks.format_delta(payload, stop=True)
+    expected = (
+        "- ⏲ 2026-08-01T09:00:00Z · Ship the thing · premise: green branch"
+    )
+    assert expected in seed
+    assert expected in stop
+
+
+def test_armed_dated_letters_are_never_seen_suppressed():
+    # Unlike the pending-event letter chrome (which drops to a one-line
+    # "seen ×N" form after its first render), the armed block is a pure
+    # projection of the current payload with no caller-owned ledger — it
+    # must render identically on a second call against the same snapshot,
+    # not collapse the way an already-shown pending event does.
+    payload = _bar_payload(schedule={"armed": [
+        {"id": "x", "when": "T", "heading": "X"},
+    ]})
+    first = hooks.format_delta(payload, mood="smug_")
+    second = hooks.format_delta(payload, mood="smug_")
+    assert "- ⏲ T · X" in first
+    assert "- ⏲ T · X" in second
+
+
+def test_post_tool_surfaces_armed_dated_letters_end_to_end(tmp_path):
+    """Through the real hook CLI entry point, off a real portal-state.json
+    the way the daemon writes it — not just the pure ``format_delta`` call."""
+    _portal(tmp_path, token="t1", pending=0, schedule={"armed": [
+        {
+            "id": "ship-the-thing", "when": "2026-08-01T09:00:00Z",
+            "heading": "Ship the thing",
+            "premise": "the release branch is still green",
+        },
+    ]})
+    out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert code == 0
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "armed dated letter" in ctx
+    assert (
+        "⏲ 2026-08-01T09:00:00Z · Ship the thing · "
+        "premise: the release branch is still green"
+    ) in ctx
 
 
 # ── The `.mood` control channel (#566 layer 2) ───────────────────────────
