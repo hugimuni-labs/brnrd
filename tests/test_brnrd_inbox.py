@@ -426,10 +426,63 @@ def test_inbox_carries_the_server_fingerprint(env, tmp_path, monkeypatch):
     # Never a credential value — booleans only.
     assert github["webhook_secret_set"] is False
     assert github["bot_token_set"] is False
+    assert github["app_id_set"] is False
+    assert github["app_key_set"] is False
     assert set(github) == {
         "bot_login", "app_slug", "trigger_label", "trigger_aliases",
-        "webhook_secret_set", "bot_token_set",
+        "webhook_secret_set", "bot_token_set", "app_id_set", "app_key_set",
     }
+
+
+def test_inbox_fingerprint_reports_the_app_identity_that_publishing_needs():
+    """The credential a managed runner *pushes* with was the one this
+    surface did not carry (2026-07-31, the Scaleway cutover).
+
+    Prod read ``webhook secret set · bot token set`` — both true, both
+    irrelevant to publishing — while every mint of an installation token had
+    been failing for six hours. The App id is not a secret and the key is;
+    they are reported the same way here because they answer one question.
+    """
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        inbox_long_poll_max_s=3.0,
+        inbox_poll_interval_s=0.02,
+        github_app_id="1234567",
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    client = TestClient(create_app(settings, forwarder=CapturingForwarder()))
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    resp = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()
+    body = resp["server"]["github"]
+    assert body["app_id_set"] is True
+    assert body["app_key_set"] is True
+    # The key is a secret; the boolean is the whole report.
+    assert "cHJpdmF0ZSBrZXk=" not in str(resp)
+
+
+def test_inbox_fingerprint_separates_a_carried_key_from_a_dropped_id():
+    """The exact cutover shape: the migration copied the rows marked
+    **Secret** and dropped the plain App id, so the deployment held half an
+    App identity — and ``app_jwt`` raises on either half."""
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        inbox_long_poll_max_s=3.0,
+        inbox_poll_interval_s=0.02,
+        github_app_private_key_b64="cHJpdmF0ZSBrZXk=",
+    )
+    client = TestClient(create_app(settings, forwarder=CapturingForwarder()))
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    body = client.get(
+        "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
+    ).json()["server"]["github"]
+    assert body["app_key_set"] is True
+    assert body["app_id_set"] is False
 
 
 def test_inbox_server_fingerprint_reports_credentials_set_as_booleans():
