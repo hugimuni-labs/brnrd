@@ -96,6 +96,42 @@ def test_parse_reset_on_optional(tmp_path: Path):
     assert e.reset_on is None
 
 
+def test_parse_reads_reset_on_comma_list(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## director tick\nevery: 5h\nreset_on: spawn, user-run\nRe-derive the plan\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.reset_on == "spawn, user-run"
+    assert schedule.reset_on_names(e) == ["spawn", "user-run"]
+
+
+def test_parse_reads_optional_premise(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## Ship the thing\nat: 2026-06-10T09:00:00Z\n"
+        "premise: the release branch is still green\ndeploy it\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.premise == "the release branch is still green"
+    assert e.body == "deploy it"
+
+
+def test_parse_premise_optional(tmp_path: Path):
+    dom = _write(tmp_path / "dom", "## Followup\nat: 2026-06-10T09:00:00Z\ncheck CI\n")
+    (e,) = schedule.parse_schedule(dom)
+    assert e.premise is None
+
+
+def test_parse_preserves_raw_heading(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom", "## Ship The Thing!\nat: 2026-06-10T09:00:00Z\ndeploy\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.id == "ship-the-thing"
+    assert e.heading == "Ship The Thing!"
+
+
 def test_parse_reads_optional_runner_fields(tmp_path: Path):
     dom = _write(
         tmp_path / "dom",
@@ -203,6 +239,76 @@ def test_state_prunes_removed_entries():
     assert "keep" in new_state
 
 
+# ── armed dated-letters projection (#904) ────────────────────────────
+
+
+def test_armed_at_entries_includes_unfired_at_excludes_every_and_fired():
+    unfired = schedule.ScheduleEntry("y", "at", "check CI", at=5000.0)
+    fired = schedule.ScheduleEntry("z", "at", "already done", at=1000.0)
+    recurring = schedule.ScheduleEntry("w", "every", "upkeep", interval=60)
+    state = {"z": {"kind": "at", "last_fired": 1000.0, "fired": True}}
+
+    armed = schedule.armed_at_entries([unfired, fired, recurring], state)
+
+    assert [e.id for e in armed] == ["y"]
+
+
+def test_armed_letters_projects_when_heading_and_premise():
+    e = schedule.ScheduleEntry(
+        "ship-the-thing", "at", "deploy it", at=5000.0,
+        raw_when="2026-06-10T09:00:00Z", heading="Ship the thing",
+        premise="the release branch is still green",
+    )
+    rows = schedule.armed_letters([e], {})
+    assert rows == [{
+        "id": "ship-the-thing",
+        "when": "2026-06-10T09:00:00Z",
+        "at": 5000.0,
+        "heading": "Ship the thing",
+        "premise": "the release branch is still green",
+    }]
+
+
+def test_armed_letters_premise_none_when_not_stated():
+    e = schedule.ScheduleEntry(
+        "followup", "at", "check CI", at=5000.0, raw_when="2026-06-10T09:00:00Z",
+        heading="Followup",
+    )
+    (row,) = schedule.armed_letters([e], {})
+    assert row["premise"] is None
+
+
+def test_armed_letters_falls_back_to_id_when_heading_missing():
+    e = schedule.ScheduleEntry("followup", "at", "check CI", at=5000.0)
+    (row,) = schedule.armed_letters([e], {})
+    assert row["heading"] == "followup"
+
+
+def test_armed_letters_excludes_fired_entries():
+    e = schedule.ScheduleEntry("followup", "at", "check CI", at=1000.0)
+    state = {"followup": {"kind": "at", "last_fired": 1000.0, "fired": True}}
+    assert schedule.armed_letters([e], state) == []
+
+
+def test_armed_letters_round_trips_through_disk(tmp_path: Path):
+    brr = tmp_path / ".brr"
+    brr.mkdir()
+    assert schedule.load_armed_letters(brr) == []
+    rows = [{
+        "id": "followup", "when": "2026-06-10T09:00:00Z", "at": 5000.0,
+        "heading": "Followup", "premise": None,
+    }]
+    schedule.save_armed_letters(brr, rows)
+    assert schedule.load_armed_letters(brr) == rows
+
+
+def test_load_armed_letters_tolerates_corrupt_file(tmp_path: Path):
+    brr = tmp_path / ".brr" / "schedule"
+    brr.mkdir(parents=True)
+    (brr / schedule.ARMED_FILE).write_text("not json", encoding="utf-8")
+    assert schedule.load_armed_letters(tmp_path / ".brr") == []
+
+
 # ── state persistence ────────────────────────────────────────────────
 
 
@@ -268,6 +374,75 @@ def test_apply_reset_signals_no_signals_is_a_noop():
     )
     state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
     assert schedule.apply_reset_signals([e], state, {}, now=5000.0) == state
+
+
+# ── reset_on comma list / user-run signal (#904 option 1) ────────────
+
+
+def test_reset_on_names_splits_comma_list():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=3600, reset_on="spawn, user-run",
+    )
+    assert schedule.reset_on_names(e) == ["spawn", "user-run"]
+
+
+def test_reset_on_names_single_value():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=3600, reset_on="spawn",
+    )
+    assert schedule.reset_on_names(e) == ["spawn"]
+
+
+def test_reset_on_names_empty_when_unset():
+    e = schedule.ScheduleEntry("director-tick", "every", "", interval=3600)
+    assert schedule.reset_on_names(e) == []
+
+
+def test_apply_reset_signals_comma_list_either_signal_resets():
+    """A user ping (no concurrent spawn) still resets an entry whose
+    `reset_on: spawn, user-run` opts into both signals."""
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600,
+        reset_on="spawn, user-run",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    signals = {"user-run": 4000.0}
+    new_state = schedule.apply_reset_signals([e], state, signals, now=4000.0)
+    assert new_state["director-tick"]["last_fired"] == 4000.0
+
+
+def test_apply_reset_signals_comma_list_takes_most_recent_qualifying_signal():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600,
+        reset_on="spawn, user-run",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    signals = {"spawn": 3000.0, "user-run": 4000.0}
+    new_state = schedule.apply_reset_signals([e], state, signals, now=5000.0)
+    assert new_state["director-tick"]["last_fired"] == 4000.0
+
+
+def test_apply_reset_signals_comma_list_ignores_future_signal_of_either_name():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600,
+        reset_on="spawn, user-run",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    signals = {"spawn": 1500.0, "user-run": 9999.0}  # user-run is in the future
+    new_state = schedule.apply_reset_signals([e], state, signals, now=5000.0)
+    assert new_state["director-tick"]["last_fired"] == 1500.0
+
+
+def test_apply_reset_signals_default_behavior_unchanged_single_name():
+    """Opt-in per entry, no default-behavior change: an entry that still
+    names only `spawn` is unaffected by a `user-run` signal."""
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600, reset_on="spawn",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    signals = {"user-run": 4000.0}
+    new_state = schedule.apply_reset_signals([e], state, signals, now=4000.0)
+    assert new_state == state
 
 
 # ── lint_schedule (issue #579, mechanical half) ───────────────────────

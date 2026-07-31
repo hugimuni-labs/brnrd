@@ -5078,6 +5078,18 @@ def _write_live_portal_state(
             },
             "scm": scm_facet,
             "produce": produce_facet,
+            # #904's armed dated-letters projection: the still-armed `at:`
+            # schedule entries, read from the snapshot `_fire_due_schedules`
+            # writes each scheduling tick (`schedule.save_armed_letters`) —
+            # projection only, never re-parsed from the dominion here, so a
+            # per-run heartbeat stays cheap. `[]` when there is no brr_dir
+            # (ad-hoc callers) or nothing armed.
+            "schedule": {
+                "armed": (
+                    schedule_mod.load_armed_letters(brr_dir)
+                    if brr_dir is not None else []
+                ),
+            },
             "knowledge": {"kb_base_url": task.meta.get("kb_base_url")},
             "name": {"written": bool(run_ledger.read_run_name_control(outbox_dir))},
             "resources": _resources_facet(
@@ -7454,6 +7466,17 @@ def _fire_due_schedules(
             print(f"[brnrd] schedule: fired {entry.id}")
         if new_state != loaded_state:
             schedule_mod.save_state(brr_dir, new_state)
+        # #904's armed-letters projection: snapshot the still-armed `at:`
+        # entries every tick (cheap — `entries` is already parsed, `new_state`
+        # already computed) so the per-run portal-state writer can project
+        # them into the boundary surface without re-parsing the dominion on
+        # every run heartbeat. Written unconditionally — a `premise:` edit
+        # to schedule.md changes `entries` without necessarily changing
+        # `new_state`, and the snapshot must stay a live reflection of the
+        # dominion text, not just of firing state.
+        schedule_mod.save_armed_letters(
+            brr_dir, schedule_mod.armed_letters(entries, new_state),
+        )
     except Exception as exc:  # noqa: BLE001 - scheduling must never wedge the loop
         print(f"[brnrd] schedule: skipped tick ({exc})")
 
@@ -10655,6 +10678,19 @@ def start(
                             defer_reason=None,
                         )
                         protocol.set_status(event, "processing")
+                        # #904 option 1: a user-woken resident lead run —
+                        # anything except a schedule's own firing — records
+                        # the `user-run` signal, so an `every:` entry that
+                        # opts in with `reset_on: user-run` (or `reset_on:
+                        # spawn, user-run`) treats "the user is already
+                        # talking to the resident" as if the entry had just
+                        # fired, instead of firing redundantly right after
+                        # (see schedule.apply_reset_signals). Blunt by
+                        # design — any ping counts, however trivial — and
+                        # opt-in per entry: an entry with no `reset_on`
+                        # naming it is unaffected.
+                        if str(event.get("source") or "") != "schedule":
+                            schedule_mod.record_signal(brr_dir, "user-run")
                         # Register the resident thought's stop control before
                         # it is airborne (#476). `parent_run_id=None`: no run
                         # dispatched this, so no run may stop it — only the
