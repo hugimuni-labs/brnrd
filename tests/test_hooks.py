@@ -889,6 +889,171 @@ def test_stop_folds_pending_body_verbatim(tmp_path):
     assert "folded-in follow-up" in out["reason"]
 
 
+# ── Pending-event letter chrome ──────────────────────────────────────────
+#
+# The boundary-injected pending list, reworked after run-260731-1802-j6ke
+# measured three live defects: truncation without accounting, verbatim
+# refeed of huge bodies at every boundary, and a Stop fold-in that called a
+# schedule firing "from the user".
+
+
+def _aged_iso(seconds_ago: int) -> str:
+    stamp = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(
+        seconds=seconds_ago
+    )
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_SHORT_BODY = (
+    "every word of a short message survives the boundary intact. " * 9
+).strip() + " THE-LAST-WORD"
+
+_HUGE_BODY = "## the only tick\n" + (
+    "spec line about the tick cadence and its merged director duties\n" * 160
+) + "DEEP-TAIL-MARKER"
+
+
+def test_pending_short_body_renders_inline_with_letter_chrome(tmp_path):
+    # Defect 1 was a 600-byte maintainer message cut mid-sentence at ~200
+    # chars with no sender, age, or size. A body under the inline ceiling now
+    # renders whole, under one chrome row naming all three.
+    assert len(_SHORT_BODY.encode()) <= hooks._EVENT_INLINE_BODY_MAX
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-1785520000000000000-8jwi", "source": "telegram",
+        "summary": "short", "body": _SHORT_BODY,
+        "created": _aged_iso(180),
+        "telegram_user": "Arseni", "telegram_username": "lapunov",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert (
+        f"- ✉ evt-…8jwi · telegram · Arseni (@lapunov) · 3m · "
+        f"{len(_SHORT_BODY.encode())} B" in ctx
+    )
+    # The whole body, never cut — the last word is the proof.
+    assert "THE-LAST-WORD" in ctx
+
+
+def test_pending_long_body_renders_first_line_plus_accounting(tmp_path):
+    # Defect 2 was a ~10 KB schedule spec refed whole at every boundary.
+    # Over the ceiling: first line + an explicit size + where the full body
+    # lives — elision that accounts for itself.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-1785520000000000001-tick", "source": "schedule",
+        "summary": "tick", "body": _HUGE_BODY,
+        "schedule_id": "the-only-tick",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "⏰ evt-…tick · schedule · the-only-tick" in ctx
+    assert "## the only tick" in ctx
+    assert "KB total · full body: " in ctx
+    assert str(tmp_path / "inbox.json") in ctx
+    assert "DEEP-TAIL-MARKER" not in ctx
+
+
+def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
+    # Hooks are fresh subprocesses; the seen ledger persists in the run's
+    # hook state. First appearance renders in full, each later boundary with
+    # the unchanged body costs one honest line, counting how often.
+    ev = {
+        "id": "evt-1785520000000000001-tick", "source": "schedule",
+        "summary": "tick", "body": _HUGE_BODY,
+    }
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "KB total" in first["hookSpecificOutput"]["additionalContext"]
+
+    _portal(tmp_path, token="t2", pending=1, events=[ev])
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx2 = second["hookSpecificOutput"]["additionalContext"]
+    assert "- ⏰ evt-…tick · schedule · seen ×1 · unchanged" in ctx2
+    assert "## the only tick" not in ctx2
+
+    _portal(tmp_path, token="t3", pending=1, events=[ev])
+    third, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert (
+        "seen ×2 · unchanged" in third["hookSpecificOutput"]["additionalContext"]
+    )
+
+
+def test_changed_body_rerenders_in_full_with_a_delta_mark(tmp_path):
+    # Suppression is keyed on the body's digest, not the id — an event whose
+    # body moved re-renders in full under an explicit Δ mark.
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "body": "first wording",
+    }])
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    _portal(tmp_path, token="t2", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "body": "second wording, edited",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Δ changed" in ctx
+    assert "second wording, edited" in ctx
+    assert "unchanged" not in ctx
+
+
+def test_stop_fold_in_of_a_schedule_firing_is_labelled_honestly(tmp_path):
+    # Defect 3: a schedule firing is the entry's own spec, not the user
+    # speaking — the fold-in label must not claim otherwise. The letter
+    # policy applies here too: a huge spec folds in as first line +
+    # accounting, not a refeed.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-1785520000000000001-tick", "source": "schedule",
+        "summary": "tick", "body": _HUGE_BODY,
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert out["decision"] == "block"
+    reason = out["reason"]
+    assert "schedule firing folded in" in reason
+    assert "not a user message" in reason
+    assert "from the user" not in reason
+    assert "KB total · full body: " in reason
+    assert "DEEP-TAIL-MARKER" not in reason
+
+
+def test_stop_fold_in_of_an_already_shown_body_is_one_line(tmp_path):
+    # A post-tool boundary already showed the body in full; the Stop fold-in
+    # of the same unchanged body renders the one-line seen form, not a
+    # second copy.
+    ev = {"id": "evt-2", "source": "telegram", "body": "please rename the widget"}
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1, events=[ev])
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "please rename the widget" in first["hookSpecificOutput"]["additionalContext"]
+
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert out["decision"] == "block"
+    assert "✉ evt-2 · telegram · seen ×1 · unchanged" in out["reason"]
+    assert "please rename the widget" not in out["reason"]
+
+
+def test_source_glyphs_cover_the_channel_vocabulary():
+    assert hooks._event_glyph("telegram") == "✉"
+    assert hooks._event_glyph("schedule") == "⏰"
+    assert hooks._event_glyph("github") == "⎇"
+    assert hooks._event_glyph("forge") == "⎇"
+    assert hooks._event_glyph("spawn_message") == "⚙"
+    assert hooks._event_glyph("worker") == "⚙"
+    assert hooks._event_glyph("carrier-pigeon") == "✉"
+
+
+def test_every_pending_event_always_gets_at_least_one_line(tmp_path):
+    # Never lossy about what exists: even a bodyless event renders its
+    # chrome row and an explicit "(no body)" — silence is not an option.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-9", "source": "telegram",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "- ✉ evt-9 · telegram · 0 B" in ctx
+    assert "(no body)" in ctx
+
+
 def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brnrd")
     assert hooks.codex_hook_capability() is True
@@ -1665,7 +1830,10 @@ def test_post_tool_bar_pending_events_always_get_a_detail_line():
     assert "▷" not in lines[0] and "⚒" not in lines[0]
     assert "1 pending event(s)" in rendered
     assert "Address each below" in rendered
-    assert "- pending evt-9 (telegram): ping" in rendered
+    # Letter chrome: one header row (glyph · id · source · size) + the body
+    # inline in full — a short message is never cut.
+    assert "- ✉ evt-9 · telegram · 4 B" in rendered
+    assert "ping" in rendered
 
 
 def test_post_tool_bar_never_renders_a_pending_count_as_a_segment():
