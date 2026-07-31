@@ -45,6 +45,7 @@ from typing import Any
 
 from . import card as card_rule
 from . import facets
+from . import portals
 from . import relics
 
 PHASE_POST_TOOL = "post-tool"
@@ -1087,6 +1088,295 @@ def _tool_surprise(payload: dict[str, Any]) -> str | None:
     return None
 
 
+# ── Pending-event letter chrome ──────────────────────────────────────────
+#
+# The boundary-injected pending list used to be a flat, lossy block — three
+# measured defects, observed live (run-260731-1802-j6ke):
+#
+# 1. Truncation without accounting: a 600-byte maintainer message rendered
+#    as a ~200-char preview cut mid-sentence — no sender, no age, no size,
+#    no pointer to the rest.
+# 2. Verbatim refeed of huge bodies: a schedule tick whose body is a ~10 KB
+#    entry spec was re-injected whole at every boundary — ten-plus copies a
+#    run, drowning the real messages.
+# 3. A dishonest label: the Stop fold-in called a schedule firing "from the
+#    user", which it is not.
+#
+# So each pending event now gets letter chrome — one compact header row
+# (glyph · id · source · correspondent · age · size) — a body policy that
+# never cuts a short message and never refeeds a huge one, and per-run
+# seen-suppression so an unchanged body renders once in full and one honest
+# line thereafter. Never lossy about what *exists*: every event always gets
+# at least one line, and every elision states its size and where the full
+# body lives.
+
+# Inline-in-full ceiling, in bytes of body. Below it a message renders whole
+# (never cut a short message mid-sentence); above it the first line renders
+# plus an explicit accounting line (total size + path to the full body).
+_EVENT_INLINE_BODY_MAX = 700
+
+# Cap on the *first line* excerpt of an over-ceiling body — a 10 KB body can
+# legally be one single line, and the excerpt must not become the refeed it
+# exists to prevent.
+_EVENT_FIRST_LINE_MAX = 160
+
+# Hook-state key: per-event ``{"digest": sha256[:16], "shown": N}``, pruned
+# to events still pending. Lives in `.hook-state.json` beside the other
+# run-scoped hook memory (tokens, latches) — hooks are fresh subprocesses,
+# so "already shown" must be persisted, not remembered.
+EVENTS_SEEN_KEY = "events_seen"
+
+# Source → glyph, first substring match wins. `schedule` before the default
+# so a compound source stays honest; anything unknown reads as a letter.
+_EVENT_GLYPHS = (
+    ("schedule", "⏰"),
+    ("github", "⎇"),
+    ("forge", "⎇"),
+    ("spawn", "⚙"),
+    ("worker", "⚙"),
+)
+_EVENT_GLYPH_DEFAULT = "✉"
+
+
+def _event_glyph(source: str) -> str:
+    src = source.lower()
+    for key, glyph in _EVENT_GLYPHS:
+        if key in src:
+            return glyph
+    return _EVENT_GLYPH_DEFAULT
+
+
+def _short_event_id(eid: object) -> str:
+    """`evt-1785520992817014311-8jwi` → `evt-…8jwi`; short ids stay whole.
+
+    The full id is machine-length (a nanosecond stamp); the 4-char tail is
+    what disambiguates within a run. The full form stays one Read away in
+    the live `inbox.json` the size line points at.
+    """
+    raw = str(eid or "").strip()
+    if not raw:
+        return "-"
+    match = re.fullmatch(r"(evt-)\d{6,}-(\w+)", raw)
+    if match:
+        return f"{match.group(1)}…{match.group(2)}"
+    return raw
+
+
+def _event_body(ev: dict[str, Any]) -> str:
+    """The event's body, falling back to its summary when no body rode along."""
+    body = str(ev.get("body") or "").strip()
+    if body:
+        return body
+    return str(ev.get("summary") or "").strip()
+
+
+def _fmt_body_size(size: int) -> str:
+    """`612 B` under a KB, else `_fmt_kb`'s `9.8 KB`."""
+    if size < 1024:
+        return f"{size} B"
+    return _fmt_kb(size)
+
+
+def _event_age_seconds(created: object) -> float | None:
+    text = str(created or "").strip()
+    if not text:
+        return None
+    try:
+        stamp = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(tz=datetime.timezone.utc)
+    return max(0.0, (now - stamp).total_seconds())
+
+
+def _fmt_age(seconds: float | None) -> str | None:
+    """Humanized age: `42s` / `3m` / `2h` / `5d`. ``None`` stays silent."""
+    if seconds is None:
+        return None
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _event_correspondent(ev: dict[str, Any]) -> str | None:
+    """Who (or what) is speaking, from the event's own frontmatter meta.
+
+    Telegram carries the sender's display name and handle, GitHub its login,
+    the cloud relay its own user fields, and a schedule firing names the
+    entry that fired — the honest analogue of a sender for a timer.
+    """
+    name = str(ev.get("telegram_user") or "").strip()
+    handle = str(ev.get("telegram_username") or "").strip()
+    if not name and not handle:
+        name = str(ev.get("github_author") or ev.get("cloud_user") or "").strip()
+        handle = str(ev.get("cloud_username") or "").strip()
+    if handle and not handle.startswith("@"):
+        handle = f"@{handle}"
+    if name and handle:
+        return f"{name} ({handle})"
+    if name or handle:
+        return name or handle
+    schedule_id = str(ev.get("schedule_id") or "").strip()
+    if schedule_id:
+        return schedule_id
+    return None
+
+
+def _event_header(
+    ev: dict[str, Any], *, size: int, changed: bool = False
+) -> str:
+    """The one letter-chrome row: glyph · id · source · who · age · size."""
+    source = str(ev.get("source") or "-").strip() or "-"
+    parts = [f"{_event_glyph(source)} {_short_event_id(ev.get('id'))}", source]
+    correspondent = _event_correspondent(ev)
+    if correspondent and correspondent != source:
+        parts.append(correspondent)
+    age = _fmt_age(_event_age_seconds(ev.get("created")))
+    if age:
+        parts.append(age)
+    parts.append(_fmt_body_size(size))
+    if changed:
+        parts.append("Δ changed")
+    return " · ".join(parts)
+
+
+def _event_body_block(
+    body: str, size: int, inbox_pointer: str | None, *, indent: str = "  "
+) -> list[str]:
+    """Render *body* per the letter policy — whole, or excerpt + accounting.
+
+    ≤ :data:`_EVENT_INLINE_BODY_MAX` bytes renders verbatim (a short message
+    is never cut); above it, the first line plus an explicit `… N KB total ·
+    full body: <path>` line, so nothing is elided without saying how much
+    and where it lives.
+    """
+    if not body:
+        return [f"{indent}(no body)"]
+    if size <= _EVENT_INLINE_BODY_MAX:
+        return [indent + line for line in body.splitlines()]
+    first = body.splitlines()[0].strip()
+    if len(first) > _EVENT_FIRST_LINE_MAX:
+        first = first[: _EVENT_FIRST_LINE_MAX - 1].rstrip() + "…"
+    pointer = inbox_pointer or "inbox.json (this run's outbox)"
+    return [
+        indent + first,
+        f"{indent}… {_fmt_body_size(size)} total · full body: {pointer}",
+    ]
+
+
+def _event_seen_line(ev: dict[str, Any], shown: int) -> str:
+    """`⏰ evt-…8jwi · schedule · seen ×3 · unchanged` — one honest line."""
+    source = str(ev.get("source") or "-").strip() or "-"
+    return (
+        f"{_event_glyph(source)} {_short_event_id(ev.get('id'))} · {source} "
+        f"· seen ×{shown} · unchanged"
+    )
+
+
+def _render_event_rows(
+    events: list[Any],
+    event_seen: dict[str, dict[str, Any]] | None,
+    inbox_pointer: str | None,
+) -> list[str]:
+    """One letter per pending event: chrome row + body per policy.
+
+    *event_seen* is the boundary's per-event decision map from
+    :func:`_event_seen_decisions` (``None`` ⇒ everything renders as new —
+    the shape ad-hoc callers and replay get). An unchanged already-shown
+    body collapses to the one-line seen form; a changed one re-renders in
+    full under a ``Δ changed`` mark.
+    """
+    rows: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        decision = (event_seen or {}).get(str(ev.get("id") or ""))
+        status = (decision or {}).get("status") or "new"
+        shown = int((decision or {}).get("shown") or 0)
+        if status == "seen":
+            rows.append(f"- {_event_seen_line(ev, shown)}")
+            continue
+        body = _event_body(ev)
+        size = len(body.encode("utf-8", "replace"))
+        rows.append(f"- {_event_header(ev, size=size, changed=status == 'changed')}")
+        rows.extend(_event_body_block(body, size, inbox_pointer))
+    return rows
+
+
+def _event_digest(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _event_seen_decisions(
+    state: dict[str, Any], events: list[Any]
+) -> dict[str, dict[str, Any]]:
+    """Decide, once per boundary, how each pending event renders.
+
+    Pure read of the persisted ledger — committing (increment + prune) is
+    :func:`_commit_event_seen`'s, and only for events a render actually
+    carried: a boundary that injected nothing must not age the ledger, or
+    the first *rendered* appearance would already claim "seen".
+    """
+    seen = state.get(EVENTS_SEEN_KEY)
+    if not isinstance(seen, dict):
+        seen = {}
+    decisions: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        eid = str(ev.get("id") or "")
+        if not eid:
+            continue
+        digest = _event_digest(_event_body(ev))
+        entry = seen.get(eid)
+        if isinstance(entry, dict) and entry.get("digest") == digest:
+            status = "seen"
+        elif isinstance(entry, dict):
+            status = "changed"
+        else:
+            status = "new"
+        decisions[eid] = {
+            "status": status,
+            "shown": int(entry.get("shown") or 0) if isinstance(entry, dict) else 0,
+            "digest": digest,
+        }
+    return decisions
+
+
+def _commit_event_seen(
+    state: dict[str, Any],
+    decisions: dict[str, dict[str, Any]],
+    shown_ids: set[str],
+) -> None:
+    """Persist the boundary's showings; prune events no longer pending.
+
+    Only *shown_ids* — events an actual injection or fold-in carried — get
+    their digest stamped and count bumped; an event the gates kept silent
+    keeps its old entry so its next real render is still honest about what
+    was last shown.
+    """
+    seen = state.get(EVENTS_SEEN_KEY)
+    if not isinstance(seen, dict):
+        seen = {}
+    out: dict[str, Any] = {}
+    for eid, decision in decisions.items():
+        prev = seen.get(eid) if isinstance(seen.get(eid), dict) else None
+        if eid in shown_ids:
+            out[eid] = {
+                "digest": decision["digest"],
+                "shown": (int(prev.get("shown") or 0) if prev else 0) + 1,
+            }
+        elif prev is not None:
+            out[eid] = prev
+    state[EVENTS_SEEN_KEY] = out
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -1106,6 +1396,8 @@ def _render_bar(
     census: str | None = None,
     notices: list[Any] | None = None,
     finished_spawns: list[dict[str, Any]] | None = None,
+    event_seen: dict[str, dict[str, Any]] | None = None,
+    inbox_pointer: str | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -1185,14 +1477,7 @@ def _render_bar(
             "file(s). Address each below — fold in, or say on .card why it "
             "stays queued — before your next plan boundary or closeout."
         )
-        for ev in events:
-            if not isinstance(ev, dict):
-                continue
-            summary = str(ev.get("summary") or "").strip()
-            details.append(
-                f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
-                f"{summary[:200]}"
-            )
+        details.extend(_render_event_rows(events, event_seen, inbox_pointer))
     if finished_spawns:
         # Finished spawns are facts, not obligations — the parent already
         # observed them; they will self-retire at run end. Reported as a
@@ -1314,6 +1599,8 @@ def format_delta(
     orient: tuple[int, int] | None = None,
     census: str | None = None,
     note_routing: bool = False,
+    event_seen: dict[str, dict[str, Any]] | None = None,
+    inbox_pointer: str | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -1360,6 +1647,13 @@ def format_delta(
     snapshot, and "has this already been said" is run state, not snapshot
     state. See the delivery block below for why that fact is latched rather
     than gated.
+
+    ``event_seen`` / ``inbox_pointer`` belong to the pending-event letter
+    chrome (see that section above): the caller-owned per-boundary decision
+    map (again run state, not snapshot state) and the path a resident's
+    ``Read`` can open for a body too large to refeed inline. ``None`` for
+    both keeps this a pure function of the snapshot — everything renders as
+    a first appearance, and elided bodies point at ``inbox.json`` by name.
     """
     if not payload:
         return None
@@ -1415,6 +1709,7 @@ def format_delta(
             card_stale=card_stale, resources=resources, run_name=run_name,
             mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
+            event_seen=event_seen, inbox_pointer=inbox_pointer,
         )
 
     lines: list[str] = []
@@ -1439,14 +1734,7 @@ def format_delta(
             "queued — before your next plan boundary or closeout."
         )
     lines.append(header_line)
-    for ev in action_events:
-        if not isinstance(ev, dict):
-            continue
-        summary = str(ev.get("summary") or "").strip()
-        lines.append(
-            f"- pending {ev.get('id') or '-'} ({ev.get('source') or '-'}): "
-            f"{summary[:200]}"
-        )
+    lines.extend(_render_event_rows(action_events, event_seen, inbox_pointer))
     if finished_spawns:
         # Distinct fact line: not obligations, but visible to the parent.
         lines.append(_finished_spawns_line(finished_spawns))
@@ -2240,18 +2528,47 @@ def _first_pending_event(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _fold_in_message(event: dict[str, Any]) -> str:
-    """Frame a newly-arrived event as the user's own relayed words.
+def _fold_in_message(
+    event: dict[str, Any],
+    decision: dict[str, Any] | None = None,
+    inbox_pointer: str | None = None,
+) -> str:
+    """Frame a newly-arrived event under an honest relay label.
 
     The 2026-06-26 spike found framing is load-bearing: a coercive daemon
-    interrupt is perceived but *refused* (correct injection defense), while the
-    same content relayed as the user's genuine words is acted on. So the Stop
-    block carries the event **body verbatim** under a neutral, non-imperative
-    relay header — not an operational summary.
+    interrupt is perceived but *refused* (correct injection defense), while
+    the same content relayed as the user's genuine words is acted on. So the
+    Stop block carries the event body under a neutral, non-imperative relay
+    header — not an operational summary. Honest per source, though: a
+    schedule firing is the entry's own spec, not the user speaking, and
+    labelling it "from the user" was defect 3 of the letter-chrome rework
+    (see that section above) — the user-follow-up framing stays only for
+    sources where a human actually wrote the words.
+
+    Same letter policy and seen-suppression as the pending list: a short
+    body still lands verbatim, a huge one lands as first line + accounting
+    (defect 2 was this very path refeeding a ~10 KB spec every Stop), and an
+    already-shown unchanged body collapses to the one-line seen form.
     """
     source = str(event.get("source") or "user").strip() or "user"
+    status = (decision or {}).get("status") or "new"
+    shown = int((decision or {}).get("shown") or 0)
+    if status == "seen":
+        return (
+            f"{_event_seen_line(event, shown)} — still pending: fold it in, "
+            "or say on .card why it stays queued."
+        )
+    if source == "schedule":
+        label = "(schedule firing folded in — the entry's spec, not a user message:)"
+    else:
+        label = f"(folded-in follow-up from the user via {source}:)"
     body = str(event.get("body") or "").strip()
-    return f"(folded-in follow-up from the user via {source}:)\n\n{body}"
+    size = len(body.encode("utf-8", "replace"))
+    header = _event_header(event, size=size, changed=status == "changed")
+    body_block = "\n".join(
+        _event_body_block(body, size, inbox_pointer, indent="")
+    )
+    return f"{label}\n\n{header}\n\n{body_block}"
 
 
 # ── Phase logic (neutral result) ─────────────────────────────────────────
@@ -2281,6 +2598,27 @@ def compute_neutral(
     inject: str | None = None
     block = False
     block_reason: str | None = None
+    # The pending-event seen ledger (letter chrome, see that section): decide
+    # once per boundary how each event renders, off the persisted per-run
+    # state — hooks are fresh subprocesses, so this is the only memory the
+    # suppression has. Decisions here, commit at the bottom, and only for
+    # events a render actually carried.
+    portal_inbound = (
+        portal.get("inbound") if isinstance(portal.get("inbound"), dict) else {}
+    )
+    portal_events = (
+        portal_inbound.get("events")
+        if isinstance(portal_inbound.get("events"), list) else []
+    )
+    event_decisions = _event_seen_decisions(state, portal_events)
+    folded_event_id: str | None = None
+    # Where a resident's Read can open a body too large to refeed inline:
+    # the daemon-maintained live inbox view beside the outbox — always
+    # mounted into the run environment, unlike the inbox event file itself.
+    inbox_pointer = (
+        str(ctx.outbox_dir / portals.LIVE_INBOX_NAME)
+        if ctx.outbox_dir is not None else None
+    )
     # Read fresh at every boundary (#566 layer 2), same "artifact, not a
     # cached copy" doctrine as `.card` — the resident may rewrite `.mood`
     # between hook fires, and the whole point is that the face rendered here
@@ -2288,7 +2626,10 @@ def compute_neutral(
     mood = _read_mood(ctx)
 
     if phase == PHASE_SESSION_START:
-        inject = format_delta(portal, seed=True, mood=mood)
+        inject = format_delta(
+            portal, seed=True, mood=mood,
+            event_seen=event_decisions, inbox_pointer=inbox_pointer,
+        )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
         # The closeout boundary renders unconditionally *once per distinct
@@ -2317,6 +2658,7 @@ def compute_neutral(
             inject = format_delta(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
+                event_seen=event_decisions, inbox_pointer=inbox_pointer,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -2360,6 +2702,7 @@ def compute_neutral(
         if token is not None and (token != state.get("last_token") or edge):
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
+                event_seen=event_decisions, inbox_pointer=inbox_pointer,
             )
             state["last_token"] = token
 
@@ -2384,9 +2727,16 @@ def compute_neutral(
             block = True
             event = _first_pending_event(portal)
             if event is not None:
-                # Fold the waiting follow-up in verbatim, as the user's words —
-                # the resident addresses it in this same thought.
-                block_reason = _fold_in_message(event)
+                # Fold the waiting follow-up in — the resident addresses it
+                # in this same thought. Honest label and letter policy per
+                # `_fold_in_message`; the seen ledger applies here too, so an
+                # already-shown unchanged body costs one line, not a refeed.
+                folded_event_id = str(event.get("id") or "") or None
+                block_reason = _fold_in_message(
+                    event,
+                    event_decisions.get(folded_event_id or ""),
+                    inbox_pointer,
+                )
             else:
                 block_reason = (
                     f"{pending} pending event(s) are still waiting — fold the "
@@ -2404,6 +2754,18 @@ def compute_neutral(
             if reason is not None:
                 block = True
                 block_reason = reason
+
+    # Commit the seen ledger for exactly what this boundary rendered: every
+    # rendered delta (bar, seed, closeout) carries the whole pending list, so
+    # a non-None inject shows all of them; a fold-in shows its one event even
+    # on a boundary whose delta gate stayed shut. An unreadable/absent portal
+    # commits nothing — wiping the ledger on a bad read would re-arm a full
+    # refeed of every body the resident has already seen.
+    if portal:
+        shown_ids: set[str] = set(event_decisions) if inject is not None else set()
+        if folded_event_id:
+            shown_ids.add(folded_event_id)
+        _commit_event_seen(state, event_decisions, shown_ids)
 
     _write_hook_state(ctx, state)
     return {"inject": inject, "block": block, "block_reason": block_reason}
