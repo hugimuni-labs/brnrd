@@ -253,7 +253,7 @@ def _page_is_chronological(content: str) -> bool:
     A page with **no ``## `` headings at all** answers ``True`` — not
     because it is a log, but because it is unclassifiable, and the accreting
     cap is the backstop for that case (it takes the flat byte-cut path in
-    :func:`_tail_trim_entries`, which has no entry structure to reason
+    :func:`_trim_sectioned_page`, which has no entry structure to reason
     about).
     """
     entries = _split_h2_entries(content)
@@ -383,7 +383,7 @@ class TrimResult:
 
     ``text`` is the rendered page — the whole return value of every caller
     before this class existed. The four attestation fields are the facts
-    ``_tail_trim_entries`` and ``_read_recent_log`` already computed while
+    ``_trim_sectioned_page`` and ``_read_recent_log`` already computed while
     deciding what to cut, and used to throw away
     (``review-boot-prompts-2026-07.md`` §P1): which dated entry survived as
     "newest," how many entries the budget cut, and what the *source's* true
@@ -479,7 +479,7 @@ def _head_cut_at_line_boundary(text: str, limit: int) -> str:
     """*text* truncated to at most *limit* UTF-8 bytes, preferring a line break.
 
     Shared by every head-keeping cut in this module (:func:`_cap_turn_body`,
-    the preamble charge in :func:`_tail_trim_entries`) so the boundary rule
+    the preamble charge in :func:`_trim_sectioned_page`) so the boundary rule
     is written once: prefer the last newline inside the budget so the kept
     head stays valid markdown rather than ending mid-sentence; a single
     over-long first line still gets a hard byte cut, decoded with
@@ -549,7 +549,7 @@ def _preamble_cut_marker(cut_bytes: int, source_hint: str) -> str:
     )
 
 
-def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimResult:
+def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> TrimResult:
     """Trim a ``## ``-sectioned page to fit *max_bytes*, keeping the right half.
 
     **Which half is right is derived, never declared** (#688). The page's
@@ -575,7 +575,11 @@ def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> TrimRe
     dispatcher tick instructed to *"follow workflow.md exactly"* ran with
     ``## Gating and merges`` cut out of its context and ``## Signatures``
     — the tail — still present, so it held attestations for three sections
-    whose text it never received.
+    whose text it never received. It was called ``_tail_trim_entries`` until
+    2026-07-31 (#765): #688 made direction a derived property and left the
+    name asserting one of the two branches, so the identifier every reader
+    met first contradicted the paragraph above it. Both nouns were wrong by
+    then — a structural page's parts are sections, not entries.
 
     Either way **at least one entry always survives**, even if it alone
     exceeds the budget: the newest decision, or the leading section, never
@@ -740,7 +744,7 @@ def _read_recent_log(
     never silently disappears — which also means this trim can never itself
     go stale-by-trim (``newest_item`` always equals ``source_newest`` when
     attestable): the residual risk P1 guards is the *other* trim,
-    ``_tail_trim_entries``, whose "newest" is a positional assumption this
+    ``_trim_sectioned_page``, whose "newest" is a positional assumption this
     function's explicit newest-first walk doesn't share.
 
     Returns a :class:`TrimResult` whose ``text`` is the raw markdown of the
@@ -1117,7 +1121,7 @@ def _build_work_surface_block_scored(
     trim and no budget skip (see ``_build_orientation_set``'s
     ``injected_whole``: a page handed over whole here must not also be
     billed as a walk entry there; #628). A page's content compares
-    byte-identical to ``trimmed.text`` exactly when ``_tail_trim_entries``
+    byte-identical to ``trimmed.text`` exactly when ``_trim_sectioned_page``
     took its own early-return ("already fits") — the one condition true
     regardless of whether the page has dated ``## `` headings to attest
     (a headingless page that got tail-cut has no ``dropped`` count to key
@@ -1173,7 +1177,7 @@ def _build_work_surface_block_scored(
             allowance = min(remaining, _MAX_ACCRETING_BLOCK_BYTES)
         else:
             allowance = remaining
-        trimmed = _tail_trim_entries(content, allowance, f"`surface/{relative}`")
+        trimmed = _trim_sectioned_page(content, allowance, f"`surface/{relative}`")
         block = f"### {relative}\n\n{trimmed.text}"
         size = len(block.encode("utf-8"))
         if size > remaining:
@@ -4342,7 +4346,7 @@ def _cap_turn_body(
     rationale. Note for the next reader: this repo's two other trimmers
     each chose a *different* direction for their own reasons —
     `dominion._collapse_markdown_to_budget` drops bottom-up, and
-    `prompts._tail_trim_entries` picks its direction per page from the
+    `prompts._trim_sectioned_page` picks its direction per page from the
     page's own headings (`_page_is_chronological`: dated ⇒ keep the tail,
     undated ⇒ keep the head). Neither governs here; a conversation turn has
     no `## ` structure to classify, so this is a third call made on this
