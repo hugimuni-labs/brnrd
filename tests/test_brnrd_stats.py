@@ -71,13 +71,11 @@ def test_deployed_version_is_public_and_never_fabricates(tmp_path, monkeypatch):
     monkeypatch.setattr(
         version_info, "_BUILD_INFO_PATH", tmp_path / "absent.txt",
     )
-    monkeypatch.delenv("PLATFORM_TREE_ID", raising=False)
     resp = client.get("/v1/stats/version")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["commit"] is None
     assert payload["built_at"] is None
-    assert payload["tree_id"] is None
     assert payload["started_at"]  # process start is always known
 
     # A genuine git-sourced sha, third line says so — the only case
@@ -87,17 +85,22 @@ def test_deployed_version_is_public_and_never_fabricates(tmp_path, monkeypatch):
         "abc1234\n2026-07-21T18:00:00+00:00\ngit\n", encoding="utf-8",
     )
     monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
-    monkeypatch.setenv("PLATFORM_TREE_ID", "tree-xyz")
     payload = client.get("/v1/stats/version").json()
     assert payload["commit"] == "abc1234"
     assert payload["built_at"] == "2026-07-21T18:00:00+00:00"
-    assert payload["tree_id"] == "tree-xyz"
 
 
-def test_deployed_version_reports_tree_source_as_no_commit(tmp_path, monkeypatch):
-    """The 2026-07-30 incident: a build tree with no .git falls through to
-    the Upsun tree id, and the writer says so on the third line — the
-    reader must never relabel that tree id as a commit sha."""
+def test_deployed_version_never_reports_a_commit_from_a_non_git_source(
+    tmp_path, monkeypatch
+):
+    """The 2026-07-30 incident: a build stamped without a real git sha must
+    never report a ``commit``. The stamp below is a surviving image from the
+    retired PaaS build hook — a git-less build tree whose identity was the
+    platform's exported tree id, marked ``tree`` on the third line. Nothing
+    writes that source any more (2026-07-31), but the reader's rule is the
+    point and it is stated positively: ``commit`` is carried only when the
+    source line says ``git``, so any other value — old, new, or garbage —
+    answers ``None`` rather than being relabelled a sha."""
     from brnrd import version_info
 
     client = _client()
@@ -106,10 +109,8 @@ def test_deployed_version_reports_tree_source_as_no_commit(tmp_path, monkeypatch
         "bebd5c1d\n2026-07-30T10:19:01+00:00\ntree\n", encoding="utf-8",
     )
     monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
-    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
     payload = client.get("/v1/stats/version").json()
     assert payload["commit"] is None
-    assert payload["tree_id"] == "bebd5c1d"
     assert payload["built_at"] == "2026-07-30T10:19:01+00:00"
 
 

@@ -410,7 +410,6 @@ def test_inbox_carries_the_server_fingerprint(env, tmp_path, monkeypatch):
         "bebd5c1d\n2026-07-30T10:19:01+00:00\ngit\n", encoding="utf-8",
     )
     monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
-    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
 
     resp = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
@@ -418,7 +417,6 @@ def test_inbox_carries_the_server_fingerprint(env, tmp_path, monkeypatch):
     server = resp["server"]
     assert server["build"] == {
         "commit": "bebd5c1d",
-        "tree_id": "bebd5c1d",
         "built_at": "2026-07-30T10:19:01+00:00",
         "started_at": version_info._STARTED_AT,
     }

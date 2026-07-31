@@ -2,9 +2,9 @@
 
 ``src/brnrd/version_info.py`` reads a three-line stamp (identity, UTC build
 time, identity *source*) and reports ``commit`` only when the third line says
-``git``. There used to be two inline writers — the Upsun build hook and the
+``git``. There used to be two inline writers — a PaaS build hook and the
 backend ``Dockerfile`` — and when the three-line honesty fix landed
-(2026-07-30) only the Upsun copy was updated: every container image wrote a
+(2026-07-30) only one copy was updated: every container image wrote a
 two-line stamp and could never report its commit, discovered live on the
 first Scaleway shadow deploy (``/v1/stats/version`` → ``commit: null``).
 A fact stored twice is repaired once; now it is stored once.
@@ -14,10 +14,13 @@ Identity resolution, in order:
 1. ``BRNRD_BUILD_COMMIT`` env — CI passes the exact sha as a build arg;
    the most reliable source and the only one a docker build has.
 2. ``git rev-parse HEAD`` — a build tree that is a real clone.
-3. ``PLATFORM_TREE_ID`` env — Upsun's exported (git-less) build tree;
-   recorded as ``tree`` so the reader never mistakes it for a sha.
-4. Nothing — both lines empty; an absent answer is honest, a fabricated
+3. Nothing — both lines empty; an absent answer is honest, a fabricated
    one is not.
+
+The third line survives the removal of the PaaS tree-id rung (2026-07-31,
+with ``.upsun/``) because it still separates *stamped with a real sha* from
+*stamped with nothing*, and because images built before that removal are
+still readable: an absent source reads as unknown, never as a guess.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ import subprocess
 
 
 def resolve_identity() -> tuple[str, str]:
-    """``(value, source)`` — source is ``git``, ``tree``, or ``""``."""
+    """``(value, source)`` — source is ``git`` or ``""``."""
     commit = os.environ.get("BRNRD_BUILD_COMMIT", "").strip()
     if commit:
         return commit, "git"
@@ -42,9 +45,6 @@ def resolve_identity() -> tuple[str, str]:
         sha = ""
     if sha:
         return sha, "git"
-    tree = os.environ.get("PLATFORM_TREE_ID", "").strip()
-    if tree:
-        return tree, "tree"
     return "", ""
 
 

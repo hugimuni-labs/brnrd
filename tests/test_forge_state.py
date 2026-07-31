@@ -410,8 +410,7 @@ def _prod_fixture(fetched_at: str) -> dict:
         "configured": True,
         "fingerprint": {
             "build": {
-                "commit": None,
-                "tree_id": "bebd5c1d1c3a4f5b",
+                "commit": "bebd5c1d1c3a4f5b",
                 "built_at": "2026-07-30T10:19:01+00:00",
                 "started_at": "2026-07-30T10:28:49+00:00",
             },
@@ -435,21 +434,33 @@ def test_render_prod_line_fresh_matches_the_spec_example_shape():
     prod = _prod_fixture("2026-07-30T10:29:00+00:00")
     rendered = forge_state.render_prod_line(prod, now=now)
     assert rendered == (
-        "prod: tree bebd5c1d · built 2026-07-30T10:19Z · up 10:28Z · "
+        "prod: commit bebd5c1d · built 2026-07-30T10:19Z · up 10:28Z · "
         "call sign brnrd-bot · label brnrd · webhook secret set · bot token set"
     )
 
 
-def test_render_prod_line_commit_present_never_shows_tree():
+def test_render_prod_line_without_a_commit_omits_it():
+    """An unidentified build says nothing where the sha would go.
+
+    Until 2026-07-31 this case rendered ``tree <id>`` from the build-tree id
+    the retired PaaS exported; that field is gone with the host, and an older
+    backend still sending it is ignored rather than rendered. What must not
+    happen either way is a *guessed* sha, so the rest of the line still has to
+    arrive: the absence is visible, not a blank line.
+    """
     from datetime import datetime, timezone
 
     prod = _prod_fixture("2026-07-30T10:29:00+00:00")
-    prod["fingerprint"]["build"]["commit"] = "abc12345678"
+    prod["fingerprint"]["build"]["commit"] = None
+    prod["fingerprint"]["build"]["tree_id"] = "bebd5c1d1c3a4f5b"
     rendered = forge_state.render_prod_line(
         prod, now=datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
     )
-    assert rendered.startswith("prod: commit abc12345")
-    assert "tree " not in rendered
+    assert rendered == (
+        "prod: built 2026-07-30T10:19Z · up 10:28Z · "
+        "call sign brnrd-bot · label brnrd · webhook secret set · bot token set"
+    )
+    assert "bebd5c1d" not in rendered
 
 
 def test_render_prod_line_stale_names_its_own_age():
@@ -459,7 +470,7 @@ def test_render_prod_line_stale_names_its_own_age():
     now = datetime(2026, 7, 30, 10, 40, 0, tzinfo=timezone.utc)  # 21 min old
     rendered = forge_state.render_prod_line(prod, now=now)
     assert rendered.startswith("prod: stale (21m old) — ")
-    assert "tree bebd5c1d" in rendered
+    assert "commit bebd5c1d" in rendered
 
 
 def test_format_forge_state_empty():

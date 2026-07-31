@@ -1,9 +1,10 @@
 """Serving the SvelteKit single-page app from the FastAPI process itself.
 
-Until #847 the SPA was served entirely by Upsun's ``web.locations`` router:
-the platform held the static root and the ``index.html`` fallback, and
-``.upsun/config.yaml`` carried a hand-maintained regex naming every backend
-prefix so those requests reached FastAPI instead of the shell. That regex was
+Until #847 the SPA was served entirely by the router of the PaaS this backend
+then ran on (Upsun, left behind on 2026-07-31): the platform held the static
+root and the ``index.html`` fallback, and its route config carried a
+hand-maintained regex naming every backend prefix so those requests reached
+FastAPI instead of the shell. That regex was
 a second copy of ``app.py``'s ``include_router`` list — its own comment said
 "keep this list in sync" — and it had grown a third copy: a set of 308
 redirects in the routers, shimming the SPA-owned paths for bare ``uvicorn``,
@@ -40,12 +41,12 @@ def resolve_frontend_dir(configured: str = "") -> Path | None:
     """The directory holding the built SPA, or ``None`` when there is none.
 
     ``configured`` (``BRNRD_FRONTEND_DIR``) wins so a container image can put
-    the build wherever it likes. The fallback is the source-checkout layout,
-    which covers editable installs, the test suite, and Upsun — where the app
-    root *is* the repo. A missing directory is not an error: a backend-only
+    the build wherever it likes — the deployed image does exactly that, since
+    an installed package cannot discover a source-checkout-relative path. The
+    fallback is that source-checkout layout, which covers editable installs and
+    the test suite. A missing directory is not an error: a backend-only
     deployment (or a checkout where ``npm run build`` has not run) serves the
-    API and lets ``/`` 404, which is honest and was already true of every
-    non-Upsun host.
+    API and lets ``/`` 404, which is honest.
     """
     if configured:
         path = Path(configured).expanduser()

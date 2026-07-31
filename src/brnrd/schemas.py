@@ -147,7 +147,6 @@ class ServerBuildOut(BaseModel):
     """``version_info.build_info()``, straight through — never fabricated."""
 
     commit: str | None = None
-    tree_id: str | None = None
     built_at: str | None = None
     started_at: str | None = None
 

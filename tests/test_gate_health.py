@@ -148,14 +148,17 @@ def test_server_fingerprint_round_trips_and_stamps_fetched_at(tmp_path):
     brr_dir = tmp_path / ".brr"
     assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
 
+    # Stored verbatim: the daemon is a courier for whatever the server sent,
+    # so the payload is the server's current shape and not a copy of it kept
+    # in sync here.
     server = {
-        "build": {"commit": None, "tree_id": "bebd5c1d", "built_at": "2026-07-30T10:19:01+00:00", "started_at": "2026-07-30T10:28:49+00:00"},
+        "build": {"commit": "bebd5c1d", "built_at": "2026-07-30T10:19:01+00:00", "started_at": "2026-07-30T10:28:49+00:00"},
         "github": {"bot_login": "brnrd-bot", "app_slug": "brnrd-dev", "trigger_label": "brnrd", "trigger_aliases": ["brnrd", "brr"], "webhook_secret_set": True, "bot_token_set": True},
     }
     runtime.save_server_fingerprint(brr_dir, "cloud", server)
 
     loaded = runtime.load_server_fingerprint(brr_dir, "cloud")
-    assert loaded["build"]["tree_id"] == "bebd5c1d"
+    assert loaded["build"]["commit"] == "bebd5c1d"
     assert loaded["github"]["bot_login"] == "brnrd-bot"
     assert loaded["fetched_at"]  # local stamp added at write time
     assert not runtime.server_fingerprint_path(brr_dir, "cloud").with_suffix(

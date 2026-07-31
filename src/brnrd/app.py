@@ -18,6 +18,7 @@ from .routers import accounts, billing, config_approval, daemons, dev, github_ap
 from .routers import dashboard as dashboard_router
 from .routers import repo_actions as repo_actions_router
 from .routers import web_auth as web_auth_router
+from .security_headers import HSTSMiddleware
 from .spa import backend_namespaces, declared_paths, mount_frontend, resolve_frontend_dir
 
 _STATIC_DIR = Path(__file__).with_name("static")
@@ -61,6 +62,10 @@ def create_app(
     # (#674): this one is published in the OpenAPI schema, so a literal here
     # is a hand-maintained copy that goes stale in public.
     app = FastAPI(title="brnrd", version=__version__, lifespan=lifespan)
+
+    # Transport security travels with the image, not with a host's route
+    # table — the 2026-07-31 finding is written up in `security_headers.py`.
+    app.add_middleware(HSTSMiddleware, max_age=settings.hsts_max_age)
 
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)

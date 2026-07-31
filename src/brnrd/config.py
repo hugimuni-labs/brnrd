@@ -67,6 +67,12 @@ class Settings:
     # No directory at all is a legal backend-only deployment.
     frontend_dir: str = os.environ.get("BRNRD_FRONTEND_DIR", "")
 
+    # `Strict-Transport-Security: max-age=<n>` on HTTPS responses; `0` disables
+    # the header for an operator whose own edge already sets it. Default one
+    # year. See `security_headers.py` for why the app owns this rather than the
+    # host's route table.
+    hsts_max_age: int = _env_int("BRNRD_HSTS_MAX_AGE", 31536000)
+
     telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
     telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")

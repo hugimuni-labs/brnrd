@@ -18,7 +18,7 @@ export default defineConfig({
 			// static assets behind it, not served by its own Node process. See
 			// frontend/README.md for the integration plan.
 			//
-			// Mounted at domain root ("/", see .upsun/config.yaml) — briefly
+			// Mounted at domain root ("/") — briefly
 			// previewed under "/app/" first (2026-07-06), which needed an
 			// explicit `paths.base` override since every emitted asset URL
 			// is absolute; root needs no override (default base is '').
@@ -36,10 +36,11 @@ export default defineConfig({
 		// fetches to the FastAPI backend (`/v1/dashboard/quota` etc.) need a
 		// proxy to a locally-running `brnrd` instance.
 		//
-		// This list used to claim it mirrored `.upsun/config.yaml`'s passthru
-		// rule; it had already drifted from it (no `logout`, no
-		// `terms/accept`) and nothing noticed, because nothing checked. There
-		// is no production copy to mirror any more (#847) — the boundary is
+		// This list used to claim it mirrored the passthru rule in the route
+		// config of the PaaS this backend then ran on; it had already drifted
+		// from it (no `logout`, no `terms/accept`) and nothing noticed,
+		// because nothing checked. There is no production copy to mirror any
+		// more (#847, and that config went with its host) — the boundary is
 		// derived from the route table in `src/brnrd/spa.py`, and
 		// `tests/test_spa_serving.py` asserts this pattern reaches every
 		// namespace the backend declares and steals none of the SPA's own.

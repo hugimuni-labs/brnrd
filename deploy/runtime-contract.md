@@ -1,9 +1,11 @@
 # Backend runtime contract
 
 This is the environment contract of the `brnrd` FastAPI process. It is an
-inventory of `src/brnrd/config.py`, the two direct environment reads in the
-runtime entrypoints, and the Upsun adapter in `.environment`. Values belong in
-the deployment platform, never in this repository.
+inventory of `src/brnrd/config.py` and the two direct environment reads in the
+runtime entrypoints. Values belong in the deployment platform, never in this
+repository. How the running deployment is wired — image, registry, rollout,
+and what the platform does and does not do on its own — is
+[`scaleway.md`](scaleway.md).
 
 ## Container process
 
@@ -31,7 +33,7 @@ the deployment platform, never in this repository.
 | `BRNRD_PACK_RELAY_TTL_S` | No | `3600` | `app.create_app` default lifetime of the in-memory diffense pack relay. |
 | `BRNRD_ENABLE_DEV` | No | `1` | `app.create_app` registers development enqueue endpoints unless the value is exactly `0`. The image sets `0`. |
 | `BRNRD_FRONTEND_DIR` | No | Source-layout discovery | `spa.resolve_frontend_dir` locates the built SvelteKit shell and assets. The image sets `/app/frontend`. |
-| `PLATFORM_TREE_ID` | No | Empty | `version_info.build_info` exposes the legacy Upsun tree identity when present. It is not required on Scaleway. |
+| `BRNRD_HSTS_MAX_AGE` | No | `31536000` | `security_headers.HSTSMiddleware` emits `Strict-Transport-Security: max-age=<n>` on HTTPS responses. `0` suppresses the header for an operator whose own edge sets it; an edge-set header is never overwritten. |
 
 Invalid numeric values use the defaults shown above.
 
@@ -116,22 +118,20 @@ All values are non-secret integers consumed by `limits.py`.
 | `BRNRD_LIMIT_MAX_EVENT_BODY_BYTES` | `100000` | Maximum inbound event body size. |
 | `BRNRD_LIMIT_MAX_EVENT_ATTACHMENTS` | `10` | Maximum attachments on one inbound event. |
 
-## Upsun adapter inputs
+## Platform adapters
 
-`.environment` converts the following Upsun-provided variables into the
-portable `BRNRD_*` variables above. They are inventory only: do not recreate
-them on Scaleway.
+None. Every variable above is read directly from the process environment, so
+the contract is the same on a container host, a VM, and a laptop.
 
-| Variable | Secret | Consumer in `.environment` |
-| --- | --- | --- |
-| `POSTGRESQL_HOST` | No | Presence enables construction of `BRNRD_DATABASE_URL`. |
-| `POSTGRESQL_USERNAME` | No | PostgreSQL URL username. |
-| `POSTGRESQL_PASSWORD` | **Yes** | PostgreSQL URL password. |
-| `POSTGRESQL_PORT` | No | PostgreSQL URL port. |
-| `POSTGRESQL_PATH` | No | PostgreSQL URL database name/path. |
-| `PLATFORM_ROUTES` | No | Base64-encoded route table used to derive `BRNRD_PUBLIC_BASE_URL`. |
-| `PLATFORM_APP_DIR` | No | Root used to derive `BRNRD_FRONTEND_DIR`; falls back to `/app`. |
-| `PORT` | No | `.upsun/config.yaml` passes the platform port to uvicorn. The container image uses the same variable directly. |
+This section used to list the Upsun-provided `POSTGRESQL_*` / `PLATFORM_*`
+variables that a repo-root `.environment` shell script translated into the
+portable `BRNRD_*` names. That adapter, `.upsun/config.yaml`, and the
+`PLATFORM_TREE_ID` build-identity fallback were deleted on 2026-07-31 with the
+move to a Scaleway Serverless Container. Keeping a translation layer for a host
+nobody deploys to is how a contract acquires a second, unchecked copy of itself
+— the failure `spa.py` already carries a comment about.
 
-The Upsun build hook also reads `PLATFORM_TREE_ID` as a fallback build
-identity; the running app exposes it through `version_info` when present.
+The *knowledge* was kept: [`scaleway.md`](scaleway.md) → "Running it on a PaaS
+instead" carries the shape that worked and the four things that bit. A future
+PaaS gets its own adapter written against the table above, from that page —
+not this one revived from git.

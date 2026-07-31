@@ -144,8 +144,8 @@ def login_context_api(request: Request, next: str = "/", db: Session = Depends(g
 
 
 # `/login` used to 308 to "/" here (bare-uvicorn shim, dead in production
-# where Upsun's router owned the path). Removed with #847 — the app serves the
-# SPA now, and `src/frontend/src/routes/login/` is the real page.
+# where the then-PaaS router owned the path). Removed with #847 — the app
+# serves the SPA now, and `src/frontend/src/routes/login/` is the real page.
 
 
 @router.get("/logout")

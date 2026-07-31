@@ -617,7 +617,10 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
       never silence (the 2026-07-30 incident this whole facet answers).
     - a fingerprint older than :data:`PROD_FINGERPRINT_STALE_AFTER_S` renders
       ``stale`` with its age rather than passing as current.
-    - ``commit`` absent renders ``tree <id>``, never a guessed sha.
+    - ``commit`` absent is simply omitted, never a guessed sha. (It used to
+      fall back to ``tree <id>``, the exported build-tree id of the PaaS this
+      backend ran on before 2026-07-31; that field is gone with the host, and
+      an older backend still sending it is ignored rather than rendered.)
     """
     if not isinstance(prod, dict):
         return "prod: unknown — no cloud fingerprint yet"
@@ -633,11 +636,8 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
 
     bits: list[str] = []
     commit = str(build.get("commit") or "").strip()
-    tree_id = str(build.get("tree_id") or "").strip()
     if commit:
         bits.append(f"commit {commit[:8]}")
-    elif tree_id:
-        bits.append(f"tree {tree_id[:8]}")
     built = _short_stamp(build.get("built_at"))
     if built:
         bits.append(f"built {built}")
