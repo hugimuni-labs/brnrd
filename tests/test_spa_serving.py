@@ -1,15 +1,18 @@
 """The app serves the SPA, and the backend/SPA boundary is derived, not listed.
 
-#847: before this, the SvelteKit build was served entirely by Upsun's
-``web.locations`` router, and the boundary between "backend route" and "SPA
-deep link" lived in a hand-maintained regex in ``.upsun/config.yaml`` whose own
+#847: before this, the SvelteKit build was served entirely by the PaaS router
+the backend then ran behind, and the boundary between "backend route" and "SPA
+deep link" lived in a hand-maintained regex in that platform's config whose own
 comment asked the next author to keep it in sync with ``app.py``. CI could
-never catch a drift, because CI never ran the router.
+never catch a drift, because CI never ran the router. The config file itself
+went away with the host on 2026-07-31; the duplication it caused is the reason
+these tests are shaped the way they are.
 
 These tests are the replacement for that regex. The first two are the ones
 that make the duplicate impossible to reintroduce: they check the *property*
 (backend namespaces and SPA routes are disjoint; the dev proxy covers every
-backend namespace) rather than any copy of the list.
+backend namespace) rather than any copy of the list — a property that belongs
+to the app, so it outlived the platform whose config prompted it.
 """
 
 from __future__ import annotations
@@ -52,12 +55,6 @@ def _vite_proxy_pattern() -> str:
     match = re.search(r"proxy:\s*\{\s*'([^']+)'", text)
     assert match, "vite.config.ts no longer declares a single quoted proxy key"
     return match.group(1)
-
-
-def _upsun_locations() -> dict:
-    yaml = pytest.importorskip("yaml")
-    config = yaml.safe_load((REPO_ROOT / ".upsun" / "config.yaml").read_text(encoding="utf-8"))
-    return config["applications"]["brnrd"]["web"]["locations"]
 
 
 def _app_namespaces() -> set[str]:
@@ -186,41 +183,31 @@ def test_missing_build_directory_is_not_an_error(tmp_path):
         assert client.get("/repos").status_code == 404
 
 
-def test_upsun_config_no_longer_duplicates_the_route_list():
-    """The regex this suite replaces must not come back.
+def test_the_image_tells_the_app_where_the_built_spa_is():
+    """The deploy surface serves deep links from the app, so it must point at
+    the build — two halves of one decision, in one file.
 
-    Named explicitly rather than left to review: the duplicate survived three
-    refactors because every reader saw a config file, not a copy of app.py.
+    Every path with no file behind it (i.e. every SPA deep link) is answered by
+    the app itself now, which is only correct while the app can *find* the
+    build. It cannot find it by default in production: the image `pip install`s
+    brnrd into site-packages and deletes `/app/src`, so the package-relative
+    guess in `resolve_frontend_dir` resolves next to the installed package and
+    misses. `BRNRD_FRONTEND_DIR` therefore has to name the directory the image
+    actually copies the SvelteKit build into, and nothing but this test ties
+    the two lines together.
+
+    This assertion outlived its first subject: it used to pair the PaaS route
+    config's `passthru: true` against the repo-root `.environment` adapter that
+    exported the variable. Both files went away on 2026-07-31; the coupling
+    they encoded did not.
     """
-    locations = _upsun_locations()
-    # Parsed, not grepped: the first draft of this test string-matched
-    # "rules:" and failed on the comment explaining the removal.
-    for path, block in locations.items():
-        assert "rules" not in block, (
-            f"`.upsun/config.yaml` location {path!r} declares rules again — the "
-            "backend/SPA boundary belongs in src/brnrd/spa.py, where a test "
-            "can reach it."
-        )
-
-
-def test_upsun_passes_fileless_paths_to_an_app_that_can_answer_them():
-    """The deploy config and the runtime env are one decision, in two files.
-
-    `passthru: true` hands every path with no file behind it — i.e. every SPA
-    deep link — to uvicorn. That is only correct while the app can find the
-    build, and it *cannot* find it by default in production: the build hook
-    `pip install`s brnrd into site-packages, so the package-relative guess in
-    `resolve_frontend_dir` resolves next to the installed package and misses.
-    `.environment` therefore has to export `BRNRD_FRONTEND_DIR`, and nothing
-    but this test ties the two halves together. Caught in review, not by a
-    failing test — which is why the test exists now.
-    """
-    root = _upsun_locations()["/"]
-    if root.get("passthru") is not True:
-        pytest.skip("the root location no longer passes fileless paths to the app")
-    environment = (REPO_ROOT / ".environment").read_text(encoding="utf-8")
-    assert "BRNRD_FRONTEND_DIR" in environment, (
-        "`.upsun/config.yaml` sends SPA deep links to the app, but "
-        "`.environment` does not tell the app where the build is — every deep "
-        "link would 404 in production."
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    declared = re.search(r"BRNRD_FRONTEND_DIR=(\S+)", dockerfile)
+    assert declared, "the image no longer declares BRNRD_FRONTEND_DIR"
+    copied = re.search(r"COPY --from=frontend-builder \S+ (\S+)", dockerfile)
+    assert copied, "the image no longer copies a built SPA out of the frontend stage"
+    assert declared.group(1) == copied.group(1), (
+        f"the image serves SPA deep links from the app but points "
+        f"BRNRD_FRONTEND_DIR at {declared.group(1)} while copying the build to "
+        f"{copied.group(1)} — every deep link would 404 in production."
     )
