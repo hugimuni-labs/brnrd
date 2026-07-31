@@ -247,10 +247,13 @@ def main(argv: list[str] | None = None) -> int:
     verdict = "RED" if failed else "GREEN"
     print(f"gate: {verdict}")
     if (tree or {}).get("tree_moved_during_gate"):
+        # No command string to quote — this runner *is* the gate, and it runs a
+        # leg list rather than one command. `moved_sentence` says "while the
+        # gate was running" when it is given nothing to name.
         print(
             f"gate: the tree moved while the gate ran — "
-            f"{gate_receipt.moved_summary(tree)}. {verdict} does not cover it; "
-            f"re-run on a still tree."
+            f"{gate_receipt.moved_sentence(tree)}. {verdict} does not cover "
+            f"it; re-run on a still tree."
         )
     receipt = write_receipt(verdict, results, tree)
     if receipt is not None:

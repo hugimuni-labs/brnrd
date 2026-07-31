@@ -119,7 +119,7 @@ def tree_fields(repo_root: Path, before: dict[str, str] | None) -> dict[str, Any
     - ``gated_from`` — the referents sampled **before** the first leg. The
       pair, not a boolean, because a reader holding both can diff the two
       ``status --porcelain`` blocks and name the *file* the gate never saw
-      (:func:`moved_summary` does exactly that).
+      (:func:`moved_paths` does exactly that).
     - ``tree_moved_during_gate`` — the state itself, so *ran on a tree that
       then moved under it* is distinguishable from *never ran*. Different
       facts, different remedies, and a diagnostic aimed at the wrong cause
@@ -166,26 +166,25 @@ def gated_run(repo_root: Path, run: Callable[[], _R]) -> tuple[_R, dict[str, Any
     return result, tree_fields(repo_root, before)
 
 
-def moved_summary(receipt: dict[str, Any]) -> str:
-    """Name what moved between a receipt's two captures — files first.
+def moved_paths(receipt: dict[str, Any]) -> list[str]:
+    """The files named by a receipt's two ``status --porcelain`` captures.
 
-    Recording the pair buys this: a ``status --porcelain`` line present in one
-    capture and absent from the other *is* the filename, no guessing. The
-    difference is taken **both ways** on purpose — a file created during the
-    gate shows up only in the after block, and one deleted during the gate
-    shows up only in the before block. Looking one way named the first and
-    silently missed the second.
+    A porcelain line present in one capture and absent from the other *is* the
+    filename, no guessing. The difference is taken **both ways** on purpose —
+    a file created during the gate shows up only in the after block, one
+    deleted during the gate only in the before block. Looking one way named
+    the first and silently missed the second.
 
-    What survives both directions is the case where a path's porcelain line is
-    byte-identical across the pair and only a digest moved: a second edit to a
-    file that was already dirty when the gate started. No filename is
-    derivable there, so the sentence names the referent rather than inventing
-    a path.
+    Empty when no filename is derivable: a path whose porcelain line is
+    byte-identical across the pair, where only a digest moved. That is a real
+    case (a second edit to a file that was already dirty when the gate
+    started) and the caller must have a sentence for it rather than a guess.
+
+    Hardened against a hand-edited or truncated receipt: every reader in this
+    neighbourhood degrades to "unassertable" rather than crashing, and this
+    one runs inside a Stop hook where a raised exception would turn a green
+    run red for the crime of a malformed JSON file.
     """
-    # Hardened against a hand-edited or truncated receipt: every reader in
-    # this neighbourhood degrades to "unassertable" rather than crashing, and
-    # this one runs inside a Stop hook where a raised exception would turn a
-    # green run red for the crime of having a malformed JSON file.
     before = receipt.get("gated_from")
     before = before if isinstance(before, dict) else {}
     before_lines = set(str(before.get("status") or "").splitlines())
@@ -201,21 +200,50 @@ def moved_summary(receipt: dict[str, Any]) -> str:
             path = path.split("->")[-1].strip()
         if path:
             named.add(path)
-    if named:
-        paths = sorted(named)
+    return sorted(named)
+
+
+def moved_sentence(receipt: dict[str, Any], command: str = "") -> str:
+    """One **complete clause** saying what moved and why it matters.
+
+    Every branch returns the same grammatical shape, and that is the whole
+    contract: a caller places this as a standalone sentence and adds a period.
+
+    The shape is load-bearing because getting it wrong already happened here.
+    The first version of this returned a bare *noun* when it could name files
+    (``written-mid-gate.py``) and a *whole clause* when it could not, and
+    ``hooks._gate_closeout_clause`` interpolated the result mid-sentence as
+    though it were always a noun. The filename branch read fine; the fallback
+    branch produced ``…already dirty when the gate started changed *during*
+    `make test`, so no leg ever saw it``. Word salad in the one message a
+    resident reads while deciding whether to trust a green — the same class of
+    defect as the one this module exists to fix, one layer up: a sentence
+    whose grammar is aimed at the wrong shape. So the sentence is assembled
+    exactly once, here, and the callers own only where it sits.
+
+    *command* names the gate when the caller knows it (``hooks.gate_command``,
+    ``brnrd gate-run``'s command). ``scripts/gate.py`` runs a leg list rather
+    than one command and passes nothing; the clause says "while the gate was
+    running" instead of quoting a command it does not have.
+    """
+    during = f"during `{command}`" if command else "while the gate was running"
+    paths = moved_paths(receipt)
+    if paths:
         shown = ", ".join(paths[:3])
         if len(paths) > 3:
+            # Named, never silently dropped: a truncated list reads as "that
+            # was all of them" to every reader who does not count.
             shown += f" (+{len(paths) - 3} more)"
-        return shown
+        return f"{shown} changed {during}, so no leg ever saw it"
     raw_moved = receipt.get("moved_referents")
     moved = [str(key) for key in raw_moved] if isinstance(raw_moved, list) else []
     if moved:
         return (
-            f"no path in `git status` changed, but {', '.join(moved)} did — "
-            f"content moved under a path that was already dirty when the gate "
-            f"started"
+            f"no path in `git status` changed {during}, but "
+            f"{', '.join(moved)} did — content moved under a path that was "
+            f"already dirty when the gate started"
         )
-    return "the tree referents moved"
+    return f"the tree referents moved {during}"
 
 
 def write_receipt(
@@ -301,8 +329,8 @@ def run_and_write_receipt(
         if (tree or {}).get("tree_moved_during_gate"):
             print(
                 "[brnrd] gate-run: the tree moved while the gate ran — "
-                f"{moved_summary(tree or {})}. {verdict} does not cover it; "
-                "re-run on a still tree."
+                f"{moved_sentence(tree or {}, command)}. {verdict} does not "
+                "cover it; re-run on a still tree."
             )
     else:
         print(

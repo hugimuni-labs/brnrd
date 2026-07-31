@@ -270,7 +270,11 @@ def test_a_file_written_while_the_legs_run_is_recorded_as_a_moved_tree(
     assert "written-mid-gate.py" not in payload["gated_from"]["status"]
     assert "written-mid-gate.py" in payload["status"]
     assert "status" in payload["moved_referents"]
-    assert "written-mid-gate.py" in gate_receipt.moved_summary(payload)
+    assert gate_receipt.moved_paths(payload) == ["written-mid-gate.py"]
+    assert gate_receipt.moved_sentence(payload) == (
+        "written-mid-gate.py changed while the gate was running, so no leg "
+        "ever saw it"
+    )
 
 
 def test_a_still_tree_records_that_it_held_still(tmp_path, monkeypatch):

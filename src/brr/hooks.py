@@ -2490,11 +2490,10 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
     if receipt.get("tree_moved_during_gate"):
         return (
             f"the gate ran, and the tree moved under it while it ran — "
-            f"{gate_receipt.moved_summary(receipt)} changed *during* "
-            f"`{ctx.gate_command}`, so no leg ever saw it. The receipt's "
-            f"{str(receipt.get('verdict') or '?')} is about the tree as it "
-            f"was before that change. Re-run `brnrd gate-run` now that the "
-            f"tree is still"
+            f"{gate_receipt.moved_sentence(receipt, ctx.gate_command)}. The "
+            f"receipt's {str(receipt.get('verdict') or '?')} is about the tree "
+            f"as it was before that change. Re-run `brnrd gate-run` now that "
+            f"the tree is still"
         )
     return None
 

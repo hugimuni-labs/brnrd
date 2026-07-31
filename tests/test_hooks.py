@@ -1668,9 +1668,14 @@ def test_gate_blocks_when_the_tree_moved_while_the_gate_was_running(tmp_path):
     # wrong cause is worse than none, so the two older sentences must not
     # appear — neither is true here.
     assert "written-mid-gate.py" in out["reason"]
-    assert "while" in out["reason"]
     assert "the gate never ran" not in out["reason"]
     assert "a different tree than the one you are ending on" not in out["reason"]
+    # Composition, not just content: the clause is placed as a whole sentence
+    # and the next one starts cleanly after it.
+    assert (
+        "written-mid-gate.py changed during `python scripts/gate.py`, so no "
+        "leg ever saw it. The receipt's GREEN is about the tree"
+    ) in out["reason"]
 
 
 def test_gate_silent_on_a_receipt_that_records_a_still_tree(tmp_path):
@@ -1733,7 +1738,14 @@ def test_gate_moved_tree_message_falls_back_to_the_referent_it_cannot_name(tmp_p
     """A *second* edit to a file that was already ` M` when the gate started
     leaves its `status --porcelain` line byte-identical, so no filename is
     derivable from the pair. The sentence names the referent that moved
-    rather than inventing a path."""
+    rather than inventing a path.
+
+    This branch is pinned **through the hook**, not just against the helper,
+    because the defect it caught lived in neither half: `moved_sentence`'s
+    ancestor returned a bare noun when it could name files and a whole clause
+    when it could not, and the hook interpolated it mid-sentence as though it
+    were always a noun. The filename branch read fine and this one produced
+    word salad. A helper tested alone would have passed."""
     from brr import gate_receipt
 
     repo = _seeded_repo(tmp_path)
@@ -1752,6 +1764,14 @@ def test_gate_moved_tree_message_falls_back_to_the_referent_it_cannot_name(tmp_p
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
     assert "diff_digest" in out["reason"]
+    assert (
+        "no path in `git status` changed during `python scripts/gate.py`, but "
+        "diff_digest did — content moved under a path that was already dirty "
+        "when the gate started. The receipt's GREEN is about the tree"
+    ) in out["reason"]
+    # The garble this shape exists to prevent, spelled out so a future edit
+    # that reintroduces noun-vs-clause has to walk past it.
+    assert "started changed" not in out["reason"]
 
 
 def test_gate_silent_when_nothing_changed(tmp_path):
