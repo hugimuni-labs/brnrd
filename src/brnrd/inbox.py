@@ -191,7 +191,16 @@ def clamp_since(db: Session, repo_id: str, since: int) -> int:
 def fetch_since(db: Session, repo_id: str, since: int) -> list[Event]:
     return list(
         db.execute(
-            select(Event).where(Event.repo_id == repo_id, Event.seq > since).order_by(Event.seq)
+            select(Event)
+            .where(
+                Event.repo_id == repo_id,
+                Event.seq > since,
+                # A responded event is answered; its body was nulled at close
+                # (`record_response`). Redelivering it produces an empty run.
+                # See `_QUEUED_ONLY_RATIONALE`.
+                Event.status == Event.STATUS_QUEUED,
+            )
+            .order_by(Event.seq)
         ).scalars()
     )
 
@@ -229,6 +238,32 @@ def clamp_since_many(db: Session, repo_ids: Collection[str], since: int) -> int:
     return int(oldest_queued) - 1 if oldest_queued is not None else ceiling
 
 
+_QUEUED_ONLY_RATIONALE = """Why the fetch filters on status, not just on the cursor.
+
+The cursor is the *only* thing that used to keep an answered event off the
+wire — there is no server-side delivery state, no per-daemon ack: "pending"
+means `seq > since`, and `since` is an integer the daemon sends up from a
+local JSON file. So the cursor is a claim about the past held by the one
+party that can lose it.
+
+Lost live on 2026-07-30: `brnrd account connect` after the Scaleway cutover
+wrote `since: 0` (`brr/gates/cloud.py`), and the daemon was handed the
+account's entire event table back — 339 events in one 163 ms burst, 181 of
+them responded husks with `body = None`. The daemon cannot tell a replay
+from a new message, so each one became a pending event, and the queue
+re-dispatched a run for the burst on every tick.
+
+`clamp_since` was written for this shape and could not help twice over:
+`routers/daemons.py` only calls it when `since > 0`, and its floor is
+`oldest_queued - 1` — one never-closed event low in history pins that floor
+at the beginning of time.
+
+The filter is what makes the guarantee structural: an event is delivered
+while it is queued and never after it is answered, whatever the cursor says.
+It is a no-op on the healthy path (the cursor is already past every
+responded event) and the whole fix on the broken one."""
+
+
 def fetch_since_many(
     db: Session, repo_ids: Collection[str], since: int,
 ) -> list[Event]:
@@ -238,7 +273,13 @@ def fetch_since_many(
     return list(
         db.execute(
             select(Event)
-            .where(Event.repo_id.in_(ids_set), Event.seq > since)
+            .where(
+                Event.repo_id.in_(ids_set),
+                Event.seq > since,
+                # See `_QUEUED_ONLY_RATIONALE` — answered events never
+                # redeliver, cursor or no cursor.
+                Event.status == Event.STATUS_QUEUED,
+            )
             .order_by(Event.seq)
         ).scalars()
     )

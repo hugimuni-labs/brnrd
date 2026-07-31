@@ -114,6 +114,8 @@ them before they are believed or resold:
   often does X happen?", check the disk: message stores, run nodes, ledgers
   usually reconstruct the past already — a measured baseline beats a counter
   that starts at zero today.
+- **A cursor is a claim about the past, held by the party that can lose it.**
+  Position is the cheap index; status, deduped on identity, is the fact.
 - **A fix is finished when it reaches the surface that speaks.** Teaching
   something to distinguish cases is half the repair — find who *renders* its
   output before you call it done. A reader that re-derives the class from
