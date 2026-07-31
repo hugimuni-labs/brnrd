@@ -64,6 +64,7 @@ from . import facets
 from . import forge_pr_cache
 from . import forge_state
 from . import forges
+from .gates import BUILTIN_GATES as _BUILTIN_GATES
 from . import claude_status
 from . import claude_usage
 from . import gitops
@@ -115,7 +116,6 @@ class _RunnerRuntime(NamedTuple):
 
 
 _SCAN_INTERVAL = 3
-_BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # Burst coalescing. When a burst is already queued (≥2 pending events) and
 # the slot is idle, hold dispatch briefly so the whole burst lands in one
 # wake instead of spawning a fresh thought per fragment. A lone pending

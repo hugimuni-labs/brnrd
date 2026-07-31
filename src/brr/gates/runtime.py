@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .. import message_store, protocol
+from . import BUILTIN_GATES as _BUILTIN_GATES
 
 _BACKOFF_MAX = 120
 _PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 GATE_HEALTH_DEGRADED_AFTER_S = 300
-_BUILTIN_GATES = ("telegram", "slack", "github", "cloud")
 _PRIVATE_STATE_MODE = 0o600
 
 
@@ -530,20 +530,3 @@ def deliver_stream(
             )
             continue
 
-
-def deliver_responses(
-    inbox_dir: Path,
-    responses_dir: Path,
-    source: str,
-    deliver: Callable[[dict, str], object],
-    *,
-    brr_dir: Path | None = None,
-) -> None:
-    """Deliver responses for *source* (interim + terminal), then close status.
-
-    Thin wrapper over :func:`deliver_stream` for gates whose interim and
-    terminal messages are delivered the same way (telegram, slack,
-    cloud). A plain single-response run delivers exactly one message and
-    transitions to ``delivered`` on ``done``.
-    """
-    deliver_stream(inbox_dir, responses_dir, source, deliver, brr_dir=brr_dir)
