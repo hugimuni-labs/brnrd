@@ -11,7 +11,7 @@
 	import { isComplete as legalNoticeIsComplete } from '$lib/legalNotice';
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
-	import ConversationMock from '$lib/ConversationMock.svelte';
+	import HeroExchange from '$lib/HeroExchange.svelte';
 
 	// The landing (#509): what an anonymous visitor sees at brnrd.dev.
 	// Two doors, one truth — in both of them the agent executes on the
@@ -123,7 +123,7 @@
 				</p>
 			</div>
 			<div class="order-1 lg:order-2">
-				<ConversationMock />
+				<HeroExchange />
 			</div>
 		</div>
 	</section>
