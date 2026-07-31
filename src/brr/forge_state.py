@@ -660,6 +660,24 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
             "bot token set" if github.get("bot_token_set")
             else "bot token unset"
         )
+    # The App identity — the only credential a managed runner can *push* with.
+    # Named per-variable when one half is missing, because that is the whole
+    # remedy: the operator sets that name in the container environment. The
+    # two fields ship together, so "both keys absent" means an older server
+    # and renders as nothing rather than as `unset` (2026-07-31).
+    if "app_id_set" in github and "app_key_set" in github:
+        missing = [
+            name
+            for key, name in (
+                ("app_id_set", "BRNRD_GITHUB_APP_ID"),
+                ("app_key_set", "BRNRD_GITHUB_APP_PRIVATE_KEY_B64"),
+            )
+            if not github.get(key)
+        ]
+        bits.append(
+            "app auth set" if not missing
+            else f"app auth unset — no {' or '.join(missing)}"
+        )
     body = " · ".join(bits) if bits else "no build identity recorded yet"
 
     age_s: int | None = None
