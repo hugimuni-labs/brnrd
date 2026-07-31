@@ -206,6 +206,23 @@ def publishing_credential(
             repository_ids=[repository_id] if repository_id is not None else None,
             repositories=None if repository_id is not None else [repo.repo_name],
         )
+    except github_app_client.GitHubAppConfigError as exc:
+        # The App identity is missing from this deployment's environment.
+        # Every *other* failure in this handler is typed (404 / 409 / 502);
+        # this one was not, so it surfaced as a bare 500 with an empty body
+        # and the daemon logged `publishing credential unavailable:
+        # ... -> 500: Internal Server Error` — true, unactionable, and
+        # indistinguishable from a database fault. `GitHubAppConfigError`
+        # already carries the variable name; it just had no reader.
+        # (2026-07-31: six hours of a dead publishing lane after the Scaleway
+        # cutover, diagnosed by elimination because this arm did not exist.)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"this deployment cannot mint App credentials: {exc}. "
+                "Set it in the container environment and redeploy."
+            ),
+        ) from exc
     except httpx.HTTPStatusError as exc:
         gh_status = exc.response.status_code
         hint = (
@@ -704,6 +721,8 @@ def _server_fingerprint(settings) -> schemas.ServerFingerprint:
             ],
             webhook_secret_set=bool(settings.github_webhook_secret),
             bot_token_set=bool(settings.github_bot_token),
+            app_id_set=bool(str(settings.github_app_id or "").strip()),
+            app_key_set=bool(str(settings.github_app_private_key_b64 or "").strip()),
         ),
     )
 

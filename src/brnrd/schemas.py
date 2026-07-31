@@ -159,6 +159,16 @@ class ServerGithubOut(BaseModel):
     fields never carry the value, only whether one is configured. Everything
     else here is already visible to anyone who reads an issue the bot
     commented on.
+
+    ``app_id_set`` / ``app_key_set`` are the *publishing* credential, added
+    2026-07-31 after a whole night was spent inferring them. This surface
+    answered "what GitHub config is prod running" with the webhook secret and
+    the fallback bot PAT — and stayed silent about the App identity, which is
+    the only credential a managed runner can push with. Prod read
+    ``webhook secret set · bot token set`` while
+    ``POST /v1/daemons/publishing-credential`` had been 500ing for six hours.
+    Booleans, same policy as the two above: the id is not a secret but pairing
+    it with the key here keeps one clause answering one question.
     """
 
     bot_login: str
@@ -167,6 +177,8 @@ class ServerGithubOut(BaseModel):
     trigger_aliases: list[str]
     webhook_secret_set: bool
     bot_token_set: bool
+    app_id_set: bool = False
+    app_key_set: bool = False
 
 
 class ServerFingerprint(BaseModel):
