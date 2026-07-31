@@ -158,9 +158,9 @@ def _render_console(packet: UpdatePacket) -> None:
 
 
 def _dispatch_to_gates(brr_dir: Path, packet: UpdatePacket) -> None:
-    from .gates import import_gate
+    from .gates import BUILTIN_GATES, import_gate
 
-    for name in ("telegram", "slack", "github", "cloud"):
+    for name in BUILTIN_GATES:
         try:
             mod = import_gate(name)
         except ImportError:

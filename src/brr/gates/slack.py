@@ -233,7 +233,7 @@ def _deliver_responses(
             params["thread_ts"] = thread_ts
         return _slack_api(token, "chat.postMessage", params)
 
-    runtime.deliver_responses(inbox_dir, responses_dir, "slack", deliver)
+    runtime.deliver_stream(inbox_dir, responses_dir, "slack", deliver)
 
 
 # ── Live progress card ──────────────────────────────────────────────

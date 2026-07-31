@@ -388,13 +388,19 @@ def _plan_messages(
             ))
 
 
-def _plan_inbox(
-    ctx: account.HomeContext, window: float, now: float, actions: list[Action],
+def _plan_inbox_dir(
+    inbox_dir: Path, responses_dir: Path, window: float, now: float,
+    actions: list[Action],
 ) -> None:
-    """Done events + their attachments, responses, and partials; plus
-    orphaned response artifacts whose event file is already gone."""
-    inbox_dir = ctx.dispatch_inbox
-    responses_dir = ctx.responses_dir
+    """Terminal events + their attachments, responses, and partials; plus
+    orphaned response artifacts whose event file is already gone.
+
+    "Terminal" is ``protocol.TERMINAL_EVENT_STATUSES`` — every status a run
+    outcome or a completed delivery can leave an event in, not just
+    ``"done"``. Before this, a successful delivery (``"delivered"``, the
+    large majority of events on disk) made a file immortal: retention could
+    only ever collect the ones brnrd *failed* to deliver.
+    """
     cutoff = now - window
     handled_ids: set[str] = set()
 
@@ -408,7 +414,7 @@ def _plan_inbox(
             except OSError:
                 continue
             meta = protocol.parse_frontmatter(text)
-            if meta.get("status") != "done":
+            if meta.get("status") not in protocol.TERMINAL_EVENT_STATUSES:
                 continue  # pending/processing stay; unparseable stays
             event_id = path.stem
             handled_ids.add(event_id)
@@ -449,6 +455,26 @@ def _plan_inbox(
                 actions.append(Action(
                     store="inbox", kind=FILE, path=path, bytes=_size(path),
                 ))
+
+
+def _plan_inbox(
+    ctx: account.HomeContext, window: float, now: float, actions: list[Action],
+) -> None:
+    """The account dispatch inbox — ``dispatch/inbox`` + ``dispatch/responses``."""
+    _plan_inbox_dir(ctx.dispatch_inbox, ctx.responses_dir, window, now, actions)
+
+
+def _plan_repo_inbox(
+    brr_dir: Path, window: float, now: float, actions: list[Action],
+) -> None:
+    """The repo's own inbox — ``.brr/inbox`` + ``.brr/responses``.
+
+    Self-hosted gates land events here, and nothing swept this directory
+    before: ``_plan_inbox`` only ever walked the account's dispatch inbox,
+    so a self-hosted-gate repo's ``.brr/inbox`` grew forever regardless of
+    any configured window.
+    """
+    _plan_inbox_dir(brr_dir / "inbox", brr_dir / "responses", window, now, actions)
 
 
 def _plan_run_state(
@@ -536,6 +562,12 @@ def build_plan(
         _plan_worktrees(brr_dir, windows.worktrees, now, live, actions)
     if windows.ledger is not None:
         _plan_ledger(brr_dir, windows.ledger, now, actions)
+    if windows.inbox is not None:
+        # Repo-owned, independent of any account context — this is the
+        # inbox self-hosted gates write to (kb/design-io-layer-trim.md,
+        # THE FIELD TWO MACHINES WRITE: this directory was never swept
+        # before).
+        _plan_repo_inbox(brr_dir, windows.inbox, now, actions)
     if ctx is not None:
         if windows.messages is not None:
             _plan_messages(ctx, windows.messages, now, live, actions)

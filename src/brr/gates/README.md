@@ -44,8 +44,10 @@ shape) and `protocol.event_attachment_paths` (resolves it back to real
 paths) — both gates that support attachments (`telegram.py`,
 `gates/github/attachments.py`) converge on this one mechanism so the
 resident's `Read` tool opens an inbound image the same way regardless of
-which channel it arrived on. `protocol.cleanup` removes the directory
-alongside the event and response files.
+which channel it arrived on. The attachments directory is collected by
+`retention._plan_inbox_dir` alongside the event and response files, once
+the event reaches a terminal status and ages past the configured window
+— not immediately on delivery.
 
 Interactive menus converge on a second structured event shape. The daemon
 validates the resident's outbox `menu.json`; a gate renders that stored
@@ -80,16 +82,24 @@ The daemon captures the runner's final stdout and writes a response file:
 
 The daemon sets the event status to `done` as soon as the response is
 validated.  The gate reads the response and delivers it through its
-channel, then cleans up both files.  Daemon housekeeping such as kb
-maintenance, environment finalization, and branch push can continue
-after the response is already deliverable.
+channel, transitioning the event to `delivered`.  Neither file is
+deleted at that point — retention (`brnrd gc`, or the daemon's periodic
+sweep) collects terminal events (`done`/`delivered`/`error`/`conflict`/
+`stopped`/`cancelled`) and their response/partials once they age past
+the configured `retention.inbox_days` window, not on delivery itself.
+Daemon housekeeping such as kb maintenance, environment finalization,
+and branch push can continue after the response is already deliverable.
 
 ## Writing a gate
 
 A gate is anything that:
 1. Creates event files in `.brr/inbox/`
 2. Reads response files from `.brr/responses/`
-3. Cleans up after delivery
+3. Leaves both in place after delivery — a self-hosted gate does not need
+   to delete them itself; retention collects terminal events on its own
+   schedule (see above). A one-shot foreign gate with nothing else
+   watching its own directory (the bash example below) may still clean up
+   synchronously; built-in gates rely on retention instead.
 
 It can be a Python module, a bash script, a Go binary — anything.
 

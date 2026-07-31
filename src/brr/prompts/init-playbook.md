@@ -64,10 +64,15 @@ one exchange unless the user opens it up.
 1. **The project, in their words.** What is this repo, and what does
    "checked before merging" mean here (tests? lints? build? nothing yet?).
    The answer lands config-first, prose-second: a runnable answer becomes
-   `hooks.gate_command` in `.brr/config` — the Stop hook reads the receipt
-   that command leaves and catches a run that changed the tree without
+   `hooks.gate_command` in `.brr/config` — the Stop hook reads
+   `.gate-receipt.json` and catches a run that changed the tree without
    gating it — and *then* feeds the Project / Build-and-run / Constraints
    prose. An answer recorded only as prose ships the enforcement disarmed.
+   Say plainly in the contract you write (`AGENTS.md`'s Build-and-run
+   section) that satisfying this obligation means running `brnrd gate-run`
+   at closeout, not the bare command: `hooks.gate_command` only names what
+   to run, it never runs anything by itself, and `brnrd gate-run` is what
+   actually runs it and writes the receipt the Stop hook checks for.
 2. **Where memory lives.** One combined question: knowledge in a committed
    `kb/` in the repo (portable, public to the repo's readers) or in their
    private brnrd account home — and, if `gh` is available, whether to back

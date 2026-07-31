@@ -305,8 +305,8 @@ def attachments_dir_for_event(inbox_dir: Path, event_id: str) -> Path:
     Sibling to the event file itself (``<inbox_dir>/<event_id>.attachments/``
     next to ``<inbox_dir>/<event_id>.md``) rather than nested under a
     daemon-owned state dir — attachments live and die with the event that
-    named them, so ``cleanup()`` finds and removes them from the event
-    path alone with no extra bookkeeping.
+    named them, so retention (``retention._plan_inbox_dir``) finds and
+    collects them from the event path alone with no extra bookkeeping.
     """
     return inbox_dir / f"{event_id}.attachments"
 
@@ -423,6 +423,34 @@ def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
     except OSError:
         mtime = 0
     return (mtime, entry.name)
+
+
+#: Statuses under which an event's lifecycle is over — a run outcome or a
+#: completed delivery — so it is safe to collect once it also ages past a
+#: retention window. Derived from every site that writes an event's
+#: ``status:`` field (there is no enum; this is that vocabulary, gathered):
+#:
+#: * ``"done"`` — the daemon's own closeout, and the birth-state a gate uses
+#:   for an outbound-only event (``create_event(..., status="done")``,
+#:   ``daemon.py``'s ``_set_event_status_if_present`` at closeout).
+#: * ``"delivered"`` — a gate, after a successful send
+#:   (``gates/runtime.py``'s poll loop, ``protocol.set_status(event,
+#:   "delivered")``).
+#: * ``"error"`` / ``"conflict"`` / ``"stopped"`` — the *run's* own outcome
+#:   (``run.py``'s ``STATUSES`` plus the ``stopped`` outcome
+#:   ``update_status`` writes), copied onto the waking event by
+#:   ``_set_event_status_if_present(event, task.status)``.
+#: * ``"cancelled"`` — a parent- or dashboard-initiated stop
+#:   (``_set_event_status_if_present(event, "cancelled")`` in the
+#:   stopped-run finalizer).
+#:
+#: ``"pending"`` and ``"processing"`` are excluded on purpose — they are
+#: exactly the two statuses ``list_pending`` (above) and every
+#: still-eligible-work check still treat as unhandled. A status-less or
+#: unparseable event is likewise never assumed terminal.
+TERMINAL_EVENT_STATUSES = frozenset({
+    "done", "delivered", "error", "conflict", "stopped", "cancelled",
+})
 
 
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
@@ -734,27 +762,3 @@ def read_partial(path: Path) -> str | None:
     except OSError:
         return None
     return frontmatter_body(text).strip()
-
-
-def cleanup(
-    event_path: Path,
-    response_path: Path | None = None,
-    partials: Path | None = None,
-) -> None:
-    """Delete event, optional terminal response, partials queue, and any
-    downloaded image attachments (see ``attachments_dir_for_event``)."""
-    event_path.unlink(missing_ok=True)
-    if response_path:
-        response_path.unlink(missing_ok=True)
-    if partials and partials.exists():
-        for p in partials.iterdir():
-            p.unlink(missing_ok=True)
-        partials.rmdir()
-    adir = attachments_dir_for_event(event_path.parent, event_path.stem)
-    if adir.exists():
-        for p in adir.iterdir():
-            p.unlink(missing_ok=True)
-        try:
-            adir.rmdir()
-        except OSError:
-            pass

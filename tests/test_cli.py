@@ -1635,3 +1635,108 @@ def test_the_default_run_is_my_own_run_not_the_newest_directory(tmp_path, monkey
     # A stale id naming a directory that no longer exists must not win.
     monkeypatch.setenv("BRR_RUN_ID", "run-gone")
     assert _default_wake_run(runs_dir) == child
+
+
+# ── brnrd gate-run: the shipped `hooks.gate_command` writer ──────────
+#
+# hooks.gate_command arms a Stop-hook obligation that reads
+# .gate-receipt.json, but only this repo's own unshipped scripts/gate.py
+# ever wrote one — any other adopter got a permanent "the gate never ran"
+# (kb/design-io-layer-trim.md, THE OBLIGATION NOTHING CAN SATISFY). These
+# drive the real `brnrd gate-run` entry point end to end.
+
+
+def _gate_run_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "seed"], cwd=repo, check=True, capture_output=True,
+    )
+    return repo
+
+
+def test_gate_run_requires_outbox_dir(tmp_path, monkeypatch):
+    """Only writes anything from inside a run — a bare shell invocation with
+    no Stop-hook obligation watching it has nothing to satisfy."""
+    repo = _gate_run_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run", "--override-command", "true"])
+    assert "BRR_OUTBOX_DIR" in str(exc.value)
+
+
+def test_gate_run_requires_a_command(tmp_path, monkeypatch):
+    repo = _gate_run_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path / "outbox"))
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run"])
+    assert "hooks.gate_command" in str(exc.value)
+
+
+def test_gate_run_reads_hooks_gate_command_from_config(tmp_path, monkeypatch):
+    """The ordinary path: no override flag, just the repo's own configured
+    gate command — the same value the resident set via the init playbook."""
+    from brr import config as conf
+
+    repo = _gate_run_repo(tmp_path)
+    # Not "true"/"false" — the flat `key=value` config format coerces those
+    # to Python bools (`_parse_value`), which is a separate footgun this
+    # test must not trip over.
+    conf.write_config(repo, {"hooks.gate_command": "exit 0"})
+    outbox = tmp_path / "outbox"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+    monkeypatch.setenv("BRR_RUN_ID", "run-abc")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run"])
+    assert exc.value.code == 0
+
+    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    assert payload["verdict"] == "GREEN"
+    assert payload["gate_command"] == "exit 0"
+    assert payload["run_id"] == "run-abc"
+
+
+def test_gate_run_forwards_a_failing_commands_exit_code(tmp_path, monkeypatch):
+    repo = _gate_run_repo(tmp_path)
+    outbox = tmp_path / "outbox"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run", "--override-command", "exit 1"])
+    assert exc.value.code == 1
+    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    assert payload["verdict"] == "RED"
+
+
+def test_gate_run_satisfies_the_stop_hook_obligation_end_to_end(tmp_path, monkeypatch):
+    """The whole point, proven through both real callers: `brnrd gate-run`
+    writes the receipt, and `hooks._gate_closeout_clause` — the guard that
+    used to fire forever for any adopter — reads it and goes silent."""
+    from brr import config as conf
+    from brr import hooks
+
+    repo = _gate_run_repo(tmp_path)
+    conf.write_config(repo, {"hooks.gate_command": "exit 0"})
+    (repo / "feature.py").write_text("new work\n", encoding="utf-8")
+    outbox = tmp_path / "outbox"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run"])
+    assert exc.value.code == 0
+
+    ctx = hooks.HookContext({
+        "BRR_OUTBOX_DIR": str(outbox),
+        "BRR_REPO_DIR": str(repo),
+        "BRR_SEED_REF": "main",
+        "BRR_GATE_COMMAND": "exit 0",
+    })
+    assert hooks._gate_closeout_clause(ctx) is None

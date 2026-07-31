@@ -134,9 +134,9 @@ def test_two_delivery_attempts_of_one_overlong_reply_post_identical_bodies(tmp_p
         posted.append(body)
         raise RuntimeError("500 Internal Server Error")  # forwarded, then failed
 
-    runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     runtime._delivery_retry.clear()  # ignore backoff; this test is about bytes
-    runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
 
     assert len(posted) == 2
     assert posted[0] == posted[1]
@@ -153,12 +153,12 @@ def test_an_unaddressable_event_is_closed_not_retried(tmp_path):
         calls.append(1)
         raise runtime.PermanentDeliveryError("no cloud_event_id")
 
-    runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     assert len(calls) == 1
     assert protocol._read_event(event["_path"])["status"] == "error"
 
     # And a second pass finds nothing to do — the loop is over, not paused.
-    runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     assert len(calls) == 1
 
 
@@ -171,7 +171,7 @@ def test_a_transient_failure_backs_off_instead_of_retrying_every_poll(tmp_path):
         raise RuntimeError("500 Internal Server Error")
 
     for _ in range(5):  # five poll ticks in quick succession
-        runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+        runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     assert len(calls) == 1, "the poll cadence is not the retry cadence"
 
     # The event is still open: backing off is not giving up.
@@ -189,7 +189,7 @@ def test_the_backoff_grows_and_is_capped():
 def test_a_success_clears_the_backoff(tmp_path):
     inbox, responses, _ = _event(tmp_path, "short reply", cloud_event_id="ev_1")
     runtime._delivery_failed("cloud", "evt-x", now=0.0)
-    runtime.deliver_responses(
+    runtime.deliver_stream(
         inbox, responses, "cloud", lambda _e, _b: {"ok": True}, brr_dir=tmp_path
     )
     assert ("cloud", "evt-x") in runtime._delivery_retry  # untouched, different event
@@ -207,7 +207,7 @@ def test_a_delivery_failure_reaches_the_gate_health_file(tmp_path):
     def deliver(_event, _body):
         raise RuntimeError("brnrd POST /v1/daemons/responses -> 500")
 
-    runtime.deliver_responses(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
+    runtime.deliver_stream(inbox, responses, "cloud", deliver, brr_dir=tmp_path)
     health = runtime.load_health(tmp_path, "cloud")
     assert "500" in health["delivery_error"]
     assert health["delivery_error_event"] == event["id"]

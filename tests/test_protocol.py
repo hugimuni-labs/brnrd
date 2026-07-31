@@ -316,22 +316,6 @@ class TestAttachments:
 
         assert protocol.event_attachment_paths(ev) == []
 
-    def test_cleanup_removes_attachments_dir(self, tmp_path):
-        inbox = tmp_path / "inbox"
-        responses = tmp_path / "responses"
-        src = tmp_path / "src.png"
-        src.write_bytes(b"data")
-        path = protocol.create_event(
-            inbox, source="test", body="x", attachment_files=[src],
-        )
-        eid = protocol.list_pending(inbox)[0]["id"]
-        adir = protocol.attachments_dir_for_event(inbox, eid)
-        assert adir.exists()
-
-        protocol.cleanup(path, protocol.response_path(responses, eid))
-
-        assert not adir.exists()
-
 
 class TestResponses:
     def test_write_and_read(self, tmp_path):
@@ -344,15 +328,6 @@ class TestResponses:
         responses = tmp_path / "responses"
         responses.mkdir()
         assert protocol.read_response(responses, "evt-nope") is None
-
-    def test_cleanup(self, tmp_path):
-        inbox = tmp_path / "inbox"
-        responses = tmp_path / "responses"
-        path = protocol.create_event(inbox, source="x", body="y")
-        rpath = protocol.write_response(responses, "evt-1", "ok")
-        protocol.cleanup(path, rpath)
-        assert not path.exists()
-        assert not rpath.exists()
 
 
 class TestListActive:
@@ -404,18 +379,6 @@ class TestPartials:
     def test_no_partials_is_empty(self, tmp_path):
         responses = tmp_path / "responses"
         assert protocol.list_partials(responses, "evt-nope") == []
-
-    def test_cleanup_removes_partials_dir(self, tmp_path):
-        inbox = tmp_path / "inbox"
-        responses = tmp_path / "responses"
-        path = protocol.create_event(inbox, source="x", body="y")
-        rpath = protocol.write_response(responses, "evt-1", "ok")
-        protocol.write_partial(responses, "evt-1", "interim")
-        pdir = protocol.partials_dir(responses, "evt-1")
-        assert pdir.exists()
-        protocol.cleanup(path, rpath, pdir)
-        assert not pdir.exists()
-        assert not rpath.exists()
 
 
 class TestInboxWake:
