@@ -183,9 +183,11 @@ def _send_with_overflow(
     text: str,
     *,
     reply_to_message_id: int | None = None,
+    overflow_cache: delivery.OverflowCache | None = None,
 ) -> dict:
     body = delivery.resolve_overflow(
-        text, limit=_MAX_TG_LEN, gist_fn=delivery.post_gist
+        text, limit=_MAX_TG_LEN, gist_fn=delivery.post_gist,
+        cache=overflow_cache,
     )
     return _send_message(
         token, chat_id, body, topic_id,
@@ -703,17 +705,26 @@ def _deliver_responses(
     default_chat_id: int | None = None,
     default_topic_id: int | None = None,
 ) -> None:
+    overflow_cache = delivery.OverflowCache(brr_dir, "telegram")
+
     def deliver(event: dict, body: str) -> dict:
         chat_id = _event_int(event, "telegram_chat_id", default_chat_id)
         if chat_id is None:
-            raise RuntimeError("missing chat id")
+            # There is no chat to send to and no later poll will invent one.
+            raise runtime.PermanentDeliveryError(
+                "the event carries no telegram chat id and this gate has no "
+                "default chat configured"
+            )
         topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
         reply_to = _event_int(event, "telegram_message_id")
         return _send_with_overflow(
             token, chat_id, topic_id, body, reply_to_message_id=reply_to,
+            overflow_cache=overflow_cache,
         )
 
-    runtime.deliver_responses(inbox_dir, responses_dir, "telegram", deliver)
+    runtime.deliver_responses(
+        inbox_dir, responses_dir, "telegram", deliver, brr_dir=brr_dir,
+    )
 
 
 def _event_int(event: dict, key: str, default: int | None = None) -> int | None:
