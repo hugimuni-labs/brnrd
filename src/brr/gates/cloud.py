@@ -998,13 +998,25 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
     # consume the event's single delivery slot and the terminal reply vanished
     # while the daemon cleaned it up as delivered (found live 2026-07-18, the
     # overnight fleet closeout that never reached the maintainer).
+    overflow_cache = delivery.OverflowCache(_state_dir(brr_dir), "cloud")
+
     def post(event: dict, body: str, status: str) -> dict:
         cloud_event_id = event.get("cloud_event_id")
         if not cloud_event_id:
-            raise RuntimeError("missing cloud_event_id")
+            # No address, no future in which this posts. Retrying it at the
+            # poll cadence is what kept one such event alive for 36 hours.
+            raise runtime.PermanentDeliveryError(
+                "the event carries no cloud_event_id, so there is nothing to "
+                "post it against"
+            )
         limit = _RESPONSE_LIMITS.get(event.get("cloud_platform") or "")
         if limit is not None:
-            body = delivery.resolve_overflow(body, limit=limit, gist_fn=delivery.post_gist)
+            body = delivery.resolve_overflow(
+                body,
+                limit=limit,
+                gist_fn=delivery.post_gist,
+                cache=overflow_cache,
+            )
         payload = {"event_id": cloud_event_id, "body_markdown": body, "status": status}
         # Conversation identity for brnrd's metadata-only conversation graph
         # (kb/plan-conversation-id-propagation.md): the existing
@@ -1020,6 +1032,7 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
         "cloud",
         deliver_partial=lambda event, body: post(event, body, "processing"),
         deliver_terminal=lambda event, body: post(event, body, "done"),
+        brr_dir=_state_dir(brr_dir),
     )
 
 
