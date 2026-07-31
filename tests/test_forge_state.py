@@ -650,3 +650,57 @@ def test_both_renderers_carry_the_prod_line(render):
     facet = {"worktrees": [], "threads": [], "prod": {"configured": False}}
     rendered = render(facet)
     assert "prod: unknown — no cloud gate configured" in rendered
+
+
+# ── the App identity on the prod line (2026-07-31, the Scaleway cutover) ──
+#
+# The line reported `webhook secret set · bot token set` — two credentials,
+# both true, neither one the credential a managed runner pushes with. The
+# publishing lane had been dead for six hours behind that sentence.
+
+
+def _prod_with_github(**github) -> dict:
+    prod = _prod_fixture("2026-07-30T10:29:00+00:00")
+    prod["fingerprint"]["github"].update(github)
+    return prod
+
+
+def test_render_prod_line_reports_app_auth_when_both_halves_are_set():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
+    rendered = forge_state.render_prod_line(
+        _prod_with_github(app_id_set=True, app_key_set=True), now=now
+    )
+    assert rendered.endswith("bot token set · app auth set")
+
+
+def test_render_prod_line_names_the_missing_app_variable():
+    """The remedy is the variable name — the operator sets exactly that."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
+    rendered = forge_state.render_prod_line(
+        _prod_with_github(app_id_set=False, app_key_set=True), now=now
+    )
+    assert rendered.endswith("app auth unset — no BRNRD_GITHUB_APP_ID")
+
+    rendered = forge_state.render_prod_line(
+        _prod_with_github(app_id_set=False, app_key_set=False), now=now
+    )
+    assert rendered.endswith(
+        "app auth unset — no BRNRD_GITHUB_APP_ID or "
+        "BRNRD_GITHUB_APP_PRIVATE_KEY_B64"
+    )
+
+
+def test_render_prod_line_omits_app_auth_when_the_server_predates_it():
+    """Absent is not `unset`: an older backend simply does not answer this
+    question, and a `False` default would render a healthy prod as broken."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 7, 30, 10, 29, 30, tzinfo=timezone.utc)
+    rendered = forge_state.render_prod_line(
+        _prod_fixture("2026-07-30T10:29:00+00:00"), now=now
+    )
+    assert "app auth" not in rendered

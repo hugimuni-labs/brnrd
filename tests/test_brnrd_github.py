@@ -1733,6 +1733,62 @@ def test_publishing_credential_maps_github_error_to_502(env, monkeypatch):
     assert "422" in response.json()["detail"]
 
 
+# --- the App identity missing from the deployment (2026-07-31 cutover) ------
+#
+# Every other failure in this handler is typed. This one was not: `app_jwt`
+# raises `GitHubAppConfigError`, nothing caught it, and FastAPI answered a
+# bare `500 Internal Server Error` with an empty body. The daemon's retry
+# loop logged that verbatim every five minutes into block-buffered stdout —
+# true, unactionable, and indistinguishable from a database fault. Six hours
+# of a dead publishing lane were spent proving by elimination what the
+# exception had said in words all along.
+#
+# Both tests deliberately do NOT monkeypatch `installation_access_credential`:
+# the defect is reached through the real mint, and a stub raising the error
+# would prove the `except` arm without proving the caller ever gets there.
+
+
+def _publishing_env(env, *, app_id="", app_key=""):
+    import dataclasses
+
+    app, client, _ = env
+    acc = _account(client)
+    repo_id = _repo(client, acc)
+    daemon_headers = _daemon_headers(client, acc, repo_id)
+    _mint_env(app, repo_id=repo_id, forge_repo_id="4242")
+    app.state.settings = dataclasses.replace(
+        app.state.settings,
+        github_app_id=app_id,
+        github_app_private_key_b64=app_key,
+    )
+    return client, daemon_headers
+
+
+def test_publishing_credential_names_the_missing_app_id(env):
+    client, daemon_headers = _publishing_env(env, app_key="cHJpdmF0ZSBrZXk=")
+
+    response = client.post(
+        "/v1/daemons/publishing-credential", headers=daemon_headers,
+    )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "BRNRD_GITHUB_APP_ID" in detail
+    # A remedy is part of a diagnostic's truth claim.
+    assert "redeploy" in detail
+
+
+def test_publishing_credential_names_the_missing_app_key(env):
+    client, daemon_headers = _publishing_env(env, app_id="1234567")
+
+    response = client.post(
+        "/v1/daemons/publishing-credential", headers=daemon_headers,
+    )
+
+    assert response.status_code == 503
+    assert "BRNRD_GITHUB_APP_PRIVATE_KEY_B64" in response.json()["detail"]
+
+
 def test_sync_installation_prunes_rows_dropped_from_listing(env, monkeypatch):
     from brnrd.routers import github_app as github_app_router
 
