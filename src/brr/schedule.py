@@ -51,10 +51,11 @@ SCHEDULE_FILE = "schedule.md"  # in the dominion
 STATE_DIRNAME = "schedule"  # under the .brr runtime dir
 STATE_FILE = "state.json"
 SIGNAL_FILE = "signals.json"  # also under STATE_DIRNAME
+ARMED_FILE = "armed.json"  # also under STATE_DIRNAME — see armed_letters()
 DEFAULT_STALE_GRACE_S = 7 * 24 * 3600  # an `at:` older than this won't surprise-fire
 
 _FIELD_RE = re.compile(
-    r"^\s*(at|every|conversation_key|reset_on|shell|core|runner)\s*:\s*(.+?)\s*$",
+    r"^\s*(at|every|conversation_key|reset_on|premise|shell|core|runner)\s*:\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 _DURATION_TOKEN_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
@@ -72,15 +73,27 @@ class ScheduleEntry:
     at: float | None = None  # epoch seconds, for kind == "at"
     interval: float | None = None  # seconds, for kind == "every"
     raw_when: str = ""  # original trigger string, for messages
+    # The entry's raw ``## `` heading, before slugification (``id`` is the
+    # slug — stable and filesystem/JSON-key safe; ``heading`` is what a
+    # human reads, used by the armed-letters projection below).
+    heading: str = ""
     # Optional conversation this entry's firings thread into. Defaults
     # (at fire time) to ``schedule:<id>`` so a recurring entry's wakes
     # share a readable history; set explicitly to thread into an existing
     # gate conversation (e.g. ``telegram:12345:``).
     conversation_key: str | None = None
-    # Optional named signal (e.g. ``spawn``) that resets this entry's
-    # cooldown as if it had just fired, without actually firing it. Only
-    # meaningful for ``every`` entries — see ``apply_reset_signals``.
+    # Optional named signal, or comma list of signals (e.g. ``spawn`` or
+    # ``spawn, user-run``), that resets this entry's cooldown as if it had
+    # just fired, without actually firing it. Only meaningful for ``every``
+    # entries — see ``apply_reset_signals``.
     reset_on: str | None = None
+    # One sentence naming what must still hold for an armed ``at:`` firing
+    # to be worth its wake (#904). Optional; ``None`` when the entry never
+    # stated one. Unlike ``every``, a one-shot ``at:`` cannot re-check its
+    # own condition at fire time, so nothing else re-verifies this — see
+    # ``armed_letters``, the boundary-portal projection that lets a live
+    # run sweep its own changes against it by reading, not remembering.
+    premise: str | None = None
     shell: str | None = None
     core: str | None = None
     runner: str | None = None
@@ -137,6 +150,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
     body = "\n".join(body_lines).strip()
     conv = (fields.get("conversation_key") or "").strip() or None
     reset_on = (fields.get("reset_on") or "").strip() or None
+    premise = (fields.get("premise") or "").strip() or None
     runner_fields = {
         key: (fields.get(key) or "").strip() or None
         for key in ("shell", "core", "runner")
@@ -148,7 +162,8 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
             return None
         return ScheduleEntry(
             eid, "every", body, interval=interval,
-            raw_when=fields["every"], conversation_key=conv, reset_on=reset_on,
+            raw_when=fields["every"], heading=title, conversation_key=conv,
+            reset_on=reset_on, premise=premise,
             **runner_fields,
         )
     if "at" in fields:
@@ -156,7 +171,8 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
         if at is None:
             return None
         return ScheduleEntry(
-            eid, "at", body, at=at, raw_when=fields["at"], conversation_key=conv,
+            eid, "at", body, at=at, raw_when=fields["at"], heading=title,
+            conversation_key=conv, premise=premise,
             **runner_fields,
         )
     return None  # no trigger → inert, skipped
@@ -165,17 +181,21 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
 def parse_schedule(dominion_dir: Path) -> list[ScheduleEntry]:
     """Parse the dominion's ``schedule.md`` into :class:`ScheduleEntry` records.
 
-    Format: a ``## `` heading per entry (its id is the slugified heading),
-    an ``at:`` or ``every:`` line, an optional ``conversation_key:`` line
+    Format: a ``## `` heading per entry (its id is the slugified heading,
+    the heading itself preserved verbatim as ``ScheduleEntry.heading``), an
+    ``at:`` or ``every:`` line, an optional ``conversation_key:`` line
     (threads the firings; defaults to ``schedule:<id>`` at fire time), an
-    optional ``reset_on:`` line for ``every`` entries (a named signal —
-    currently only ``spawn`` — that pushes this entry's cooldown out as if
-    it had just fired, so it doesn't redundantly fire right after other,
-    more specific work already covered similar ground; see
-    ``apply_reset_signals``), optional ``shell:``, ``core:``, and legacy
-    ``runner:`` Runner pins, then optional body prose (the thought to run).
-    Text before the first heading is a comment/header and ignored. An entry
-    with no/invalid trigger is dropped; Runner names are not validated here.
+    optional ``reset_on:`` line for ``every`` entries (one signal name, or
+    a comma list — ``spawn``, ``user-run`` — that pushes this entry's
+    cooldown out as if it had just fired, so it doesn't redundantly fire
+    right after other, more specific work already covered similar ground;
+    see ``apply_reset_signals``), an optional ``premise:`` line for ``at:``
+    entries (one sentence naming what must still hold for the firing to be
+    worth its wake — see ``armed_letters``), optional ``shell:``,
+    ``core:``, and legacy ``runner:`` Runner pins, then optional body prose
+    (the thought to run). Text before the first heading is a comment/header
+    and ignored. An entry with no/invalid trigger is dropped; Runner names
+    are not validated here.
     """
     path = dominion_dir / SCHEDULE_FILE
     try:
@@ -320,6 +340,17 @@ def record_signal(brr_dir: Path, name: str, now: float | None = None) -> None:
         pass
 
 
+def reset_on_names(entry: ScheduleEntry) -> list[str]:
+    """Split an entry's ``reset_on:`` value into its signal names.
+
+    ``reset_on: spawn`` and ``reset_on: spawn, user-run`` both parse — a
+    comma-separated list of signal names, any one of which resets the
+    entry's cooldown. Blank/whitespace-only names are dropped.
+    """
+    raw = entry.reset_on or ""
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
 def apply_reset_signals(
     entries: list[ScheduleEntry],
     state: dict,
@@ -328,28 +359,37 @@ def apply_reset_signals(
 ) -> dict:
     """Push a matching ``reset_on`` entry's cooldown out to a recent signal.
 
-    Pure (no I/O): for each ``every`` entry naming a ``reset_on`` signal
-    that fired more recently than the entry's own ``last_fired``, record
-    the signal's timestamp as the new ``last_fired`` — exactly as if the
-    entry had itself fired then, without actually emitting an event for
-    it. Never moves ``last_fired`` backwards, and never touches an entry
-    with no ``reset_on`` or a signal that hasn't happened. Feed the result
-    into ``due_entries`` so the interval math sees the reset.
+    Pure (no I/O): for each ``every`` entry naming one or more
+    ``reset_on`` signals (a comma list, e.g. ``spawn, user-run``) that
+    fired more recently than the entry's own ``last_fired``, record the
+    *most recent* qualifying signal's timestamp as the new ``last_fired``
+    — exactly as if the entry had itself fired then, without actually
+    emitting an event for it. Never moves ``last_fired`` backwards, and
+    never touches an entry with no ``reset_on`` or no signal that has
+    happened. Feed the result into ``due_entries`` so the interval math
+    sees the reset.
     """
     if not signals:
         return state
     new_state = dict(state)
     for e in entries:
-        if e.kind != "every" or not e.reset_on:
+        if e.kind != "every":
             continue
-        signal_ts = signals.get(e.reset_on)
-        if signal_ts is None or signal_ts > now:
+        names = reset_on_names(e)
+        if not names:
+            continue
+        candidate_ts = max(
+            (signals[name] for name in names
+             if name in signals and signals[name] <= now),
+            default=None,
+        )
+        if candidate_ts is None:
             continue
         rec = new_state.get(e.id)
         last = rec.get("last_fired") if isinstance(rec, dict) else None
-        if last is not None and last >= signal_ts:
+        if last is not None and last >= candidate_ts:
             continue
-        new_state[e.id] = {"kind": "every", "last_fired": signal_ts}
+        new_state[e.id] = {"kind": "every", "last_fired": candidate_ts}
     return new_state
 
 
@@ -403,6 +443,105 @@ def due_entries(
     present = {e.id for e in entries}
     new_state = {k: v for k, v in new_state.items() if k in present}
     return due, new_state
+
+
+# ── Armed dated-letters projection (#904) ────────────────────────────
+#
+# A ``every:`` entry self-heals: it re-derives its own condition fresh
+# every time it fires, so a stale premise just produces a stale-but-
+# harmless firing that says so. An ``at:`` entry cannot — it was armed
+# against a premise that may stop holding at any point before its clock
+# goes off, and nothing re-checks it in between. So the boundary portal
+# projects the still-armed set (unfired ``at:`` entries, with their
+# optional ``premise:`` line) into every run's own context — a run sweeps
+# its own changes against pending dated letters by *reading* the surface,
+# not by remembering what it armed. Projection only: this section reads
+# ``entries``/``state``, it never writes ``schedule.md`` or decides
+# anything about a firing.
+
+
+def armed_at_entries(
+    entries: list[ScheduleEntry], state: dict,
+) -> list[ScheduleEntry]:
+    """Return ``at:`` entries that have not yet fired.
+
+    ``due_entries`` stamps a fired ``at:`` entry's state record
+    ``fired: True`` (whether it actually emitted, or was anchored-away as
+    stale) — anything without that stamp is still armed and waiting.
+    """
+    armed = []
+    for e in entries:
+        if e.kind != "at":
+            continue
+        rec = state.get(e.id)
+        if isinstance(rec, dict) and rec.get("fired"):
+            continue
+        armed.append(e)
+    return armed
+
+
+def armed_letters(
+    entries: list[ScheduleEntry], state: dict,
+) -> list[dict[str, Any]]:
+    """Serializable rows for the boundary-portal "armed dated letters" block.
+
+    Pure projection (no I/O): one row per still-armed ``at:`` entry, in the
+    shape the boundary surface renders — see hooks.py's
+    ``_render_armed_rows`` for the ``⏲ <when> · <heading> · premise:
+    <line>`` line it becomes. ``premise`` is ``None`` when the entry never
+    stated one; the renderer treats that as "no premise given", never
+    manufactures one.
+    """
+    return [
+        {
+            "id": e.id,
+            "when": e.raw_when,
+            "at": e.at,
+            "heading": e.heading or e.id,
+            "premise": e.premise,
+        }
+        for e in armed_at_entries(entries, state)
+    ]
+
+
+def _armed_path(brr_dir: Path) -> Path:
+    return brr_dir / STATE_DIRNAME / ARMED_FILE
+
+
+def save_armed_letters(brr_dir: Path, rows: list[dict[str, Any]]) -> None:
+    """Persist the current armed-letters projection atomically (temp + rename).
+
+    Written once per scheduling tick (``daemon._fire_due_schedules``, which
+    already has ``entries`` + firing ``state`` in hand) and read back by the
+    per-run portal-state writer — the projection rides the schedule beat's
+    own cadence instead of every run heartbeat re-parsing the dominion.
+    """
+    path = _armed_path(brr_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        os.write(fd, json.dumps(rows, indent=2).encode("utf-8"))
+        os.close(fd)
+        os.rename(tmp, path)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def load_armed_letters(brr_dir: Path) -> list[dict[str, Any]]:
+    """Load the persisted armed-letters snapshot. ``[]`` on absence/corruption."""
+    try:
+        raw = json.loads(_armed_path(brr_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return raw if isinstance(raw, list) else []
 
 
 # ── Mechanical lint (pure, no I/O, no model) ─────────────────────────
