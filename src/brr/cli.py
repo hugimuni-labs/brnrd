@@ -60,7 +60,7 @@ PUBLIC_COMMANDS = (
 # something from the 18-verb ceiling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic",
+    "relic", "gate-run",
 )
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
@@ -120,6 +120,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="print what would be deleted (counts + bytes per store) without deleting")
     p.set_defaults(func=cmd_gc)
+
+    # Hidden: the resident's spelling for satisfying the `hooks.gate_command`
+    # Stop-hook obligation, not a verb a human browsing `--help` picks —
+    # same shape as `hook`/`worktree-hygiene` (parses, documented directly
+    # at the point of use, no --help line spent).
+    p = sub.add_parser("gate-run")
+    p.add_argument(
+        "--override-command", default=None,
+        help="run this instead of the configured hooks.gate_command",
+    )
+    p.set_defaults(func=cmd_gate_run)
 
     # Omitting `help=` is what hides a subparser: argparse only adds it to the
     # help listing when the kwarg is present (`help=argparse.SUPPRESS` renders a
@@ -687,6 +698,44 @@ def cmd_gc(args):
     _plan, reports = retention.gc(
         repo_root, ctx, windows, dry_run=bool(args.dry_run))
     print(retention.render_report(reports, windows, dry_run=bool(args.dry_run)))
+
+
+def cmd_gate_run(args):
+    """``brnrd gate-run`` — run this repo's declared ``hooks.gate_command``
+    and write the receipt ``hooks._gate_closeout_clause`` checks for (the
+    obligation nothing could satisfy: only this repo's own unshipped
+    ``scripts/gate.py`` ever wrote one; every other adopter's
+    ``hooks.gate_command`` was first-run poison).
+
+    Only writes anything from inside a brnrd run — ``BRR_OUTBOX_DIR`` is the
+    daemon's own signal for "there is a Stop-hook obligation watching this",
+    the same env var ``scripts/gate.py`` keys off. A bare shell invocation
+    with nothing watching writes no receipt, on purpose: there is nothing for
+    one to satisfy.
+    """
+    from . import config as conf
+    from . import gate_receipt
+
+    repo_root = _repo_root()
+    command = args.override_command or conf.load_config(repo_root).get("hooks.gate_command")
+    if not command:
+        raise SystemExit(
+            "[brnrd] gate-run: no command to run — set hooks.gate_command in "
+            ".brr/config, or pass one: brnrd gate-run --override-command '<cmd>'"
+        )
+    command = str(command)
+
+    outbox = os.environ.get("BRR_OUTBOX_DIR")
+    if not outbox:
+        raise SystemExit(
+            "[brnrd] gate-run: BRR_OUTBOX_DIR is unset — this only writes a "
+            "receipt from inside a brnrd run (the Stop-hook obligation reads "
+            "one per run, never a standing global fact)"
+        )
+    run_id = os.environ.get("BRR_RUN_ID", "")
+    rc = gate_receipt.run_and_write_receipt(
+        repo_root, Path(outbox), command, run_id=run_id)
+    raise SystemExit(rc)
 
 
 def cmd_run(args):
