@@ -185,6 +185,79 @@ def test_fire_due_every_anchors_then_fires(tmp_path):
     assert [e["schedule_id"] for e in pending] == ["upkeep"]
 
 
+# ── armed dated-letters snapshot (#904) ───────────────────────────────
+
+
+def test_fire_due_snapshots_armed_letter_with_premise(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    future = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+    _write_schedule(
+        path,
+        f"## Ship the thing\nat: {future}\n"
+        "premise: the release branch is still green\ndeploy it\n",
+    )
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    # Not due yet — no event fired, but it's armed and projected.
+    assert protocol.list_pending(inbox) == []
+    armed = schedule.load_armed_letters(brr_dir)
+    assert len(armed) == 1
+    row = armed[0]
+    assert row["id"] == "ship-the-thing"
+    assert row["heading"] == "Ship the thing"
+    assert row["when"] == future
+    assert row["premise"] == "the release branch is still green"
+
+
+def test_fire_due_snapshots_armed_letter_without_premise(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    future = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 3600))
+    _write_schedule(path, f"## Followup\nat: {future}\ncheck the CI run\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    (row,) = schedule.load_armed_letters(brr_dir)
+    assert row["id"] == "followup"
+    assert row["premise"] is None
+
+
+def test_fire_due_armed_letters_drop_once_fired(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(path, f"## Followup\nat: {past}\ncheck the CI run\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    # Fired this very tick — no longer armed, and its own firing was
+    # projected as pending only up to (not through) the moment it went off.
+    assert len(protocol.list_pending(inbox)) == 1
+    assert schedule.load_armed_letters(brr_dir) == []
+
+
+def test_fire_due_armed_letters_excludes_every_entries(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    assert schedule.load_armed_letters(brr_dir) == []
+
+
 def test_fire_due_respects_disabled(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
