@@ -27,7 +27,10 @@
 	// 2026-07-30: §5 gained the hosting region and its transfer basis (the one
 	// sub-processor holding everything was the only one disclosing neither),
 	// §8 caught up with shipped self-service deletion, §1 with the written DPA.
-	const LAST_UPDATED = '2026-07-30';
+	// 2026-07-31: hosting moved off Upsun/Platform.sh (`ch-1`, Switzerland) to
+	// Scaleway SAS (`fr-par`, France); §5 updated to name the new sub-processor
+	// and the intra-EU basis that replaces the Switzerland adequacy decision.
+	const LAST_UPDATED = '2026-07-31';
 </script>
 
 <svelte:head><title>brnrd privacy notice</title></svelte:head>
@@ -318,15 +321,11 @@
 				</p>
 				<ul class="mt-2 list-disc space-y-2 pl-5">
 					<li>
-						<strong class="text-stone-200">Upsun (Platform.sh)</strong> — hosting and the PostgreSQL
-						database. This is where everything described above is stored, and it is the only place
-						we store it. The region is <code class="font-mono text-xs text-amber-200">ch-1</code>,
-						Switzerland: outside the EEA, and the transfer relies on the European Commission's
-						<a
-							class="text-sky-400 underline"
-							href="https://commission.europa.eu/law/law-topic/data-protection/international-dimension-data-protection/adequacy-decisions_en"
-							rel="external">adequacy decision for Switzerland</a
-						>. The provider is a French company; the machines are not.
+						<strong class="text-stone-200">Scaleway</strong> — hosting and the PostgreSQL database.
+						This is where everything described above is stored, and it is the only place we store
+						it. The region is <code class="font-mono text-xs text-amber-200">fr-par</code>, France:
+						Scaleway SAS is a French company and the machines are too, so this is intra-EU
+						processing, not an international transfer.
 					</li>
 					<li>
 						<strong class="text-stone-200">Stripe</strong> — payments, as merchant of record. Receives

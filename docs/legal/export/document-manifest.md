@@ -9,9 +9,9 @@ without changing its version label.
 
 Hash snapshot:
 
-- Date: 2026-07-30
+- Date: 2026-07-31
 - Source revision (parent of this export-only change):
-  `0ae93fe2d8cee8186b0288f5ceae355745671681`
+  `b02e58fed42036e0c4d64e3f174eba3a754f57a8`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -39,12 +39,12 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Terms of Service — exact current acceptance pin | [`src/brnrd/legal/tos-2026-07-24-r2.txt`](../../../src/brnrd/legal/tos-2026-07-24-r2.txt) | `f45b8fb473d3f5f8808b653acf7cb1563ca3ad0d8e640fc928049363421cd5d1` |
 | Hosted-Execution Beta Terms — rendered source | [`src/frontend/src/routes/beta-hosted-execution/+page.svelte`](../../../src/frontend/src/routes/beta-hosted-execution/+page.svelte) | `c86191bde58adb66cea09c90f0632e899a1bd9ff9f484954f70a3fda4b79a9f1` |
 | Hosted-Execution Beta Terms — exact current acceptance pin | [`src/brnrd/legal/hosted-execution-2026-07-08.txt`](../../../src/brnrd/legal/hosted-execution-2026-07-08.txt) | `4c6b86ba299b9f37b5b1ec5eabe1632919f8a359fea7b6e83408bad70260d94e` |
-| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `1f7f3f6589c996862e8bc699c3ac77e23033dc733dbad638c4f637af24d4540c` |
+| Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `5f32045b90ecdc6b674af82a9f268c172613caafb66b6492be577b7970c7f87b` |
 | Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `cbbfae6ecb231148d5fa63828c592cc81d005d1472ff2ec795667b5c899c28c6` |
-| K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `e37706f6a5d06de289260bdbf01c3a583cc08abfb59b254193a55264948b41c6` |
-| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `9e26f5e30b3d680683791b01061c56c884f9a9396f8db4e7ab9bfbd12e873346` |
-| Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ba266aafde55e1079d2c2dd929c30e8a3d34968d0434677f8b863bdee6fa1239` |
-| Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `94940a12e3bdc0fa372cd45f67a2548ec10ee29c25eba78b4700901856d39ec5` |
+| K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `1a18739e0188ee07922760c84844156167dae775c0c0e89f7aafe3ba0818bd3d` |
+| Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `22108856edeec8982213147926d678b6237bc5073257cfce0b86e4813436930e` |
+| Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
+| Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `3d23e2289ce10bbb59f9fa1c235dc6f207bfd5b2c6e596c99b1f6ae0768d88b3` |
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
 | Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `49d76c4c45cd5c4e1440ca8bd8353eec6f71de7e1adaad60f6cf3abfbabb81a3` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
