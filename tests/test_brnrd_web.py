@@ -1,7 +1,8 @@
-"""Tests for the brnrd_web dashboard (GitHub login + approve page)."""
+"""Tests for the server-rendered web surface (GitHub login + approve page)."""
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -169,20 +170,25 @@ def _message_page(client, monkeypatch):
     return r
 
 
-def test_non_dashboard_pages_do_not_load_the_legacy_dashboard_stylesheet(client, monkeypatch):
+def test_these_pages_link_exactly_one_stylesheet(client, monkeypatch):
     """Live-caught 2026-07-09 (screenshot from the user): the then-Jinja
     /login and /terms pages rendered a green GitHub-identity card and button
     against the amber brand palette PR #301 (2026-07-08) shipped in app.css.
-    Root cause was not a caching regression (the cache-busting fix below
-    already covers that) but a cascade bug: base.html loaded dashboard.css
-    unconditionally on every page, and dashboard.css — the legacy mint/teal
-    control-deck sheet for the plans/activity dashboards — defines unscoped
-    `.eyebrow`/`.button`/`.button-primary` rules that, loaded after app.css
-    with identical specificity, always won the cascade and clobbered the
-    amber values on every non-dashboard page. Fixed by only linking
-    dashboard.css when body_class is 'dashboard-page'."""
+    Root cause was a cascade bug — base.html loaded `dashboard.css` on every
+    page, and that sheet's unscoped `.eyebrow`/`.button` rules, loaded after
+    app.css at identical specificity, always won.
+
+    `dashboard.css` was deleted with the Jinja templates that linked it
+    (#850), which would make an `assert "dashboard.css" not in r.text` guard
+    pass forever regardless of what the code does. The property that
+    outlives the file is the one asserted here: **one stylesheet reaches
+    these pages**, so no second sheet can be appended after app.css and win
+    the cascade again. Deleting the file removed today's instance; this keeps
+    the class checkable."""
     r = _message_page(client, monkeypatch)
-    assert "dashboard.css" not in r.text
+    links = re.findall(r'<link rel="stylesheet" href="([^"]+)"', r.text)
+    assert len(links) == 1, links
+    assert links[0].startswith("/static/app.css?v=")
 
 
 def test_static_asset_urls_carry_a_real_cache_busting_version(client, monkeypatch):
@@ -195,7 +201,6 @@ def test_static_asset_urls_carry_a_real_cache_busting_version(client, monkeypatc
     r = _message_page(client, monkeypatch)
     assert "app.css?v=" in r.text
     assert "app.css?v=\"" not in r.text
-    assert "dashboard.css?v=\"" not in r.text
 
 
 def test_logout_clears_session_cookie_and_redirects_to_login(client, monkeypatch):
@@ -212,7 +217,7 @@ def test_logout_clears_session_cookie_and_redirects_to_login(client, monkeypatch
 
 
 def test_web_static_assets_are_served(client):
-    r = client.get("/static/brnrd_web/app.css")
+    r = client.get("/static/app.css")
     assert r.status_code == 200
     assert "text/css" in r.headers["content-type"]
     assert ".state-shell" in r.text

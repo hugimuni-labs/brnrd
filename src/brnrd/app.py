@@ -93,16 +93,17 @@ def create_app(
     ]
     if settings.enable_dev_endpoints:
         routers.append(dev.router)
-    # Dashboard routers (migrated from src/brnrd_web into src/brnrd/routers/).
     routers += [dashboard_router.router, repo_actions_router.router, web_auth_router.router]
     for router in routers:
         app.include_router(router)
 
-    # Static assets (app.css, dashboard.css) are served from src/brnrd/static/
-    # under the same URL prefix (/static/brnrd_web/) so deployed CDN cache keys
-    # and existing client references remain byte-compatible.
+    # Static assets for the server-rendered auth/approve pages. The prefix was
+    # `/static/brnrd_web/` while a `src/brnrd_web` package existed; that package
+    # is gone and the only producer of these URLs is web_auth.py, so the name no
+    # longer refers to anything (#850). `/static` is disjoint from the SvelteKit
+    # route tree, which test_spa_serving.py asserts rather than assumes.
     app.mount(
-        "/static/brnrd_web",
+        "/static",
         StaticFiles(directory=_STATIC_DIR),
         name="brnrd_static",
     )

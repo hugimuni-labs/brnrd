@@ -1,9 +1,4 @@
-"""Repo-management JSON actions for the brnrd dashboard (``/v1/repos/*``).
-
-Migrated from ``src/brnrd_web/routes.py`` when ``brnrd_web`` was folded
-into ``src/brnrd/routers/``. Route paths and response shapes are
-byte-compatible with the previous module.
-"""
+"""Repo-management JSON actions for the brnrd dashboard (``/v1/repos/*``)."""
 
 from __future__ import annotations
 
