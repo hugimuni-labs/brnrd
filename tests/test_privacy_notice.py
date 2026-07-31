@@ -266,9 +266,10 @@ def test_the_privacy_route_exists_and_the_spa_serves_it():
     """`/privacy` has no file of its own in the static build — it is a
     client-side route, reachable only while the backend does not claim it.
 
-    This used to read the passthru regex out of `.upsun/config.yaml`, which
+    This used to read the passthru regex out of a PaaS route config, which
     made a *test* one more consumer of the duplicated route list. #847 moved
-    the boundary into the app, so the question is now asked of the app.
+    the boundary into the app, so the question is now asked of the app —
+    which is why this test survived the deletion of that config with its host.
     """
     from brnrd.app import create_app
     from brnrd.config import Settings

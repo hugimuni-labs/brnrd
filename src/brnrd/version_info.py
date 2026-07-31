@@ -3,28 +3,26 @@
 "Is my merge live?" used to mean probing SvelteKit's ``version.json`` build
 stamp and inferring. This module gives the backend an honest answer instead:
 a ``build_info.txt`` dropped into the installed package at build time by
-``scripts/stamp_build_info.py`` — the one writer shared by the backend
-Dockerfile and the Upsun build hook (commit sha from the CI build arg or a
-real clone, else ``PLATFORM_TREE_ID``, plus a UTC build stamp, plus which of
-the two the sha line actually is) — and the process start time.
+``scripts/stamp_build_info.py`` — the one writer every deploy surface calls
+(commit sha from the CI build arg or a real clone, plus a UTC build stamp,
+plus whether that first line is a real sha) — and the process start time.
 
 Local/dev installs have no ``build_info.txt``; every field degrades to
 ``None`` rather than guessing — an absent answer is honest, a fabricated
 one is not.
 
 ``build_info.txt``'s third line is the honesty fix (2026-07-30 incident):
-the build tree the Upsun hook runs in has no ``.git``, so the sha lookup
-always fell through to the tree id, and ``commit`` reported that tree id
-unconditionally — the field named "is my merge live?" could never actually
-answer it. A file stamped before this fix has no third line, and an absent
-source reads as unknown rather than as a guessed ``"tree"`` — a two-line
-``build_info.txt`` predates the distinction entirely, so guessing either way
-would just relocate the same dishonesty.
+the git-less build tree of the PaaS this backend used to run on made the sha
+lookup fall through to an exported tree id, and ``commit`` reported that tree
+id unconditionally — the field named "is my merge live?" could never actually
+answer it. The tree-id rung is gone with that host (2026-07-31), but the third
+line stays: it still separates *stamped with a real sha* from *stamped with
+nothing*, and a file stamped before the fix has no third line at all, which
+reads as unknown rather than as a guess.
 """
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -54,6 +52,5 @@ def build_info() -> dict[str, Any]:
     return {
         "commit": commit,
         "built_at": built_at,
-        "tree_id": os.environ.get("PLATFORM_TREE_ID") or None,
         "started_at": _STARTED_AT,
     }

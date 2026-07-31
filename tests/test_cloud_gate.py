@@ -561,13 +561,11 @@ def test_loop_persists_the_server_fingerprint(tmp_path, monkeypatch):
         "bebd5c1d\n2026-07-30T10:19:01+00:00\ngit\n", encoding="utf-8",
     )
     monkeypatch.setattr(version_info, "_BUILD_INFO_PATH", stamped)
-    monkeypatch.setenv("PLATFORM_TREE_ID", "bebd5c1d")
 
     assert cloud.read_server_fingerprint(brr_dir) is None  # nothing fetched yet
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
     fingerprint = cloud.read_server_fingerprint(brr_dir)
     assert fingerprint["build"]["commit"] == "bebd5c1d"
-    assert fingerprint["build"]["tree_id"] == "bebd5c1d"
     assert fingerprint["github"]["bot_login"] == "brnrd-bot"
     assert fingerprint["github"]["webhook_secret_set"] is False
     assert fingerprint["github"]["bot_token_set"] is False

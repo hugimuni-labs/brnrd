@@ -110,7 +110,7 @@ export interface QuotaResponse {
 export class QuotaAuthError extends Error {}
 
 /** How long the auth-gate fetch may hang before the page must decide without
- * it. During an upsun deploy cutover, `/v1/*` requests hang ~30s+ before the
+ * it. During a deploy cutover, `/v1/*` requests hang ~30s+ before the
  * edge gives up with a 502 — and this fetch is the dashboard's entry gate:
  * the page renders *nothing* until it settles. Unbounded, a mid-deploy visit
  * was a permanent black screen (2026-07-21 incident). A healthy endpoint

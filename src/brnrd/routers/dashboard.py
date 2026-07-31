@@ -1153,6 +1153,7 @@ def dashboard_activity_api(
 
 # `/repos` and `/activity` used to 308 to "/" here — shims that existed only
 # because a bare `uvicorn` could not serve the SPA, and that never fired in
-# production because Upsun's router claimed those paths first. Removed with
-# #847: the app now serves the shell itself, so a backend route on an
-# SPA-owned path would *break* the deep link it used to stand in for.
+# production because the router of the PaaS this backend then ran on claimed
+# those paths first. Removed with #847: the app now serves the shell itself,
+# so a backend route on an SPA-owned path would *break* the deep link it used
+# to stand in for.

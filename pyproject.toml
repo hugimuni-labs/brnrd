@@ -70,7 +70,7 @@ backend = [
   "python-multipart>=0.0.9",
   "PyJWT[crypto]>=2.8,<3",
 ]
-# Postgres driver for deployment (Upsun/managed). psycopg3 ships
+# Postgres driver for deployment (managed database). psycopg3 ships
 # manylinux wheels, so no native build step. SQLite (stdlib) covers
 # local dev, so this stays out of the default `backend` set.
 postgres = [
