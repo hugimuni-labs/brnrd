@@ -40,6 +40,12 @@ project knowledge—including any code quoted there—to brnrd.dev, but it does
 not read your source tree. Read [Security & privacy](./security/) before
 opening a gate.
 
+**Self-hosted gates and local execution are free, with no brnrd account
+required.** `brnrd account connect` layers a managed account on top — one
+account across repos, continuity, and the live dashboard — without moving
+where runs execute. See [Connect](./getting-started/connect/) to compare the
+two doors.
+
 ## Start here
 
 1. [Install brnrd](./getting-started/install/).

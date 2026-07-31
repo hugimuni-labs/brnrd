@@ -10,7 +10,7 @@ This page reflects the public command tree printed by the installed CLI on
 
 | Command | Purpose |
 |---|---|
-| `brnrd init [url]` | Set up a repo; `-i` runs interactive setup. |
+| `brnrd init [url]` | Set up a repo; the interview runs by default on a TTY. |
 | `brnrd run "<instruction>"` | Run one task through the configured Runner. |
 | `brnrd review <pack>` | Validate or project a diffense review pack; supports `--check`, `--pr-body`, `--pr-title`, `--relay`, and `--json`. |
 | `brnrd up [--foreground] [--dev-reload]` | Start the daemon; shortcut for `daemon up`. |

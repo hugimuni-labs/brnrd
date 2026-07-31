@@ -3,7 +3,8 @@ title: Connect
 description: Connect a managed account or self-host a gate to your local daemon.
 ---
 
-Pick one door. Both routes run the agent on your machine.
+Pick one door. Both routes run the agent on your machine. Self-hosted needs no
+brnrd account and no payment; managed layers a connected account on top.
 
 ## Managed: one account across repos
 
@@ -12,6 +13,10 @@ From the repository you want the resident to know:
 ```bash
 brnrd account connect       # pair, install, and start
 ```
+
+Installed through the npm bootstrapper? `npx brnrd account connect` does the
+same thing in one line — it bootstraps a durable install first, then runs the
+command.
 
 The managed connection relays messages and status between brnrd.dev and your
 daemon. It does not move run execution to hosted compute. See

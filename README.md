@@ -75,9 +75,10 @@ Install the command:
 ```bash
 uv tool install brnrd        # recommended when uv is already present
 # or: pipx install brnrd
-# or: npx brnrd init -i      # bootstraps the Python package; leaves your system Python alone
+# or: npx brnrd init         # bootstraps the Python package; leaves your system Python alone
 ```
 
+Self-hosted gates and local execution are free — no brnrd account is needed.
 Then pick your door.
 
 <table>
@@ -90,6 +91,7 @@ Then pick your door.
 
 ```bash
 brnrd account connect  # pair + install + start (systemd/launchd)
+# via npx: npx brnrd account connect — bootstraps too, in one line
 brnrd account add .    # add another repo later
 ```
 

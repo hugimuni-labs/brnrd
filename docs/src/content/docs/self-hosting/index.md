@@ -5,7 +5,8 @@ description: Operate the daemon, coding-agent CLIs, gates, and credentials on a 
 
 Self-hosting means keeping the brnrd daemon and coding-agent CLIs on a machine
 you control. That can be your workstation or an always-on host with access to
-the repositories and credentials the resident needs.
+the repositories and credentials the resident needs. It requires no brnrd
+account and no payment.
 
 Start with the normal [Install](../getting-started/install/), then configure a
 self-hosted gate:

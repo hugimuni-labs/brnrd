@@ -12,11 +12,21 @@ Install brnrd with the tool manager you already use:
 ```bash
 uv tool install brnrd        # recommended when uv is already present
 # or: pipx install brnrd
-# or: npx brnrd init -i
+# or: npx brnrd init
 ```
 
 `npx brnrd` is a bootstrapper for the Python package, not a JavaScript port. It
-keeps its own environment and leaves your system Python alone.
+keeps its own environment and leaves your system Python alone. Going the
+managed route? `npx brnrd account connect` alone bootstraps, pairs, and starts
+the daemon — no separate install step.
+
+Avoid `uvx brnrd` or `pipx run brnrd` here: both run from a disposable,
+per-invocation environment, and `brnrd daemon install` would pin the
+background service to a binary path that disappears with it. Use one of the
+persistent installs above, then install the service.
+
+Self-hosted gates and local execution are free — no brnrd account is needed to
+use them.
 
 Check the installation:
 
