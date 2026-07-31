@@ -21,11 +21,8 @@ from ... import protocol
 from ...run import Run
 from .. import runtime
 from . import client, prs
-from .constants import _COMMENT_KINDS
+from .constants import _COMMENT_KINDS, _PR_ACTIONS
 from .paths import issue_comments, pull_comment_replies
-
-
-_PR_ACTIONS = {"pull_request", "pull-request", "pr", "open_pr", "open-pr"}
 
 
 def _coerce_int(value: object) -> int | None:

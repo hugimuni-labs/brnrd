@@ -1,5 +1,6 @@
 """Tests for CLI dispatch."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -1785,3 +1786,55 @@ def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkey
     assert reason is not None
     assert "written-mid-gate.py" in reason
     assert "the gate never ran" not in reason
+
+def test_close_check_refuses_a_pr_body_and_exits_nonzero(tmp_path, capsys):
+    """The opt-in half of #839.
+
+    A PR opened by hand with `gh pr create` passes through no brnrd code, so
+    the only honest coverage there is a verb the run calls itself — and the
+    exit code is the whole product: `brnrd close-check body.md && gh pr create
+    --body-file body.md` is one command line.
+    """
+    body = tmp_path / "body.md"
+    body.write_text(
+        "Ships move 5.\n\nCloses #749 move 5 (the ticket stays open for 1-4).\n"
+    )
+
+    assert main(["close-check", str(body)]) == 1
+    out = capsys.readouterr().out
+    assert "pr-body:3: close keyword with a tail" in out
+    assert "Mask the digits" in out
+
+
+def test_close_check_passes_a_clean_body(tmp_path, capsys):
+    body = tmp_path / "body.md"
+    body.write_text("Ships the whole thing.\n\nCloses #839.\n")
+
+    assert main(["close-check", str(body)]) == 0
+    assert "clean (pr-body)" in capsys.readouterr().out
+
+
+def test_close_check_json_carries_the_rule_and_line(tmp_path, capsys):
+    body = tmp_path / "body.md"
+    body.write_text("Fix #533: split config and closes #534\n")
+
+    assert main(["close-check", str(body), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["findings"][0]["rule"] == "colon-close"
+    assert payload["findings"][0]["line_number"] == 1
+
+
+def test_close_check_reads_stdin_and_honours_the_channel(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO("This does not close #477.\n"),
+    )
+    assert main(["close-check", "--channel", "commit-msg"]) == 1
+    out = capsys.readouterr().out
+    assert "commit-msg:1: close keyword not at the start of a line" in out
+    assert "Bypass: git commit --no-verify" in out
+
+
+def test_close_check_missing_file_is_a_clean_error(tmp_path, capsys):
+    assert main(["close-check", str(tmp_path / "nope.md")]) == 2
+    assert "[brnrd close-check]" in capsys.readouterr().out

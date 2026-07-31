@@ -54,6 +54,7 @@ from typing import NamedTuple
 
 from . import account
 from . import branching
+from . import closekeyword
 from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
@@ -6601,6 +6602,53 @@ def _delivery_source_for_gate(gate: str) -> str:
     return "github" if gate == "forge" else gate
 
 
+def _is_pr_body_delivery(gate: str, fm: dict) -> bool:
+    """True when this outbox file's body will become a **pull-request body**.
+
+    `gate: forge` is the explicit PR handoff and always is; a bare
+    `gate: github` is one only when its action says so, which is the same
+    question `gates.github.delivery._is_pull_request_delivery` asks one layer
+    later, off the same constant.
+    """
+    if gate == "forge":
+        return True
+    if gate != "github":
+        return False
+    from .gates.github.constants import _PR_ACTIONS
+
+    action = str(
+        fm.get("github_action") or fm.get("forge_action") or fm.get("action") or ""
+    ).strip().lower()
+    return action in _PR_ACTIONS
+
+
+def _pr_body_close_keyword_refusal(gate: str, fm: dict, body: str) -> str:
+    """Diagnosis for close keywords GitHub would act on, or ``""``.
+
+    #839: the close-keyword predicate was complete, correct, argued from four
+    real prior closures — and installed on commit messages only. GitHub closes
+    from a PR body with equal authority, and #749 died exactly there, of the
+    scope disclaimer written to prevent the close (`Closes #749 move 5 (the
+    ticket stays open for moves 1-4).`). Same predicate, second channel.
+
+    **Why the drain and not the REST call.** `prs.open_or_refresh_pr` is the
+    tighter chokepoint — it is the one function both PR create *and* PR body
+    update pass through. But it runs inside the gate's own delivery loop,
+    asynchronously, after the thought that wrote the body has ended: a refusal
+    there reaches a log and nobody re-runs a thought to extract a sentence
+    from one. Here the run is still alive, `notices` is the channel it is
+    already pinned to check after every gate write, and the remedy is a
+    one-line edit of a file it still owns. A guard aimed at a branch nothing
+    reads is the failure mode this repo names in its own playbook.
+    """
+    if not _is_pr_body_delivery(gate, fm):
+        return ""
+    findings = closekeyword.check(body, channel=closekeyword.PR_BODY.label)
+    if not findings:
+        return ""
+    return closekeyword.render(findings, channel=closekeyword.PR_BODY.label)
+
+
 def _deliver_out_of_bound(
     emit: _WorkerEmit,
     task: Run,
@@ -6650,6 +6698,21 @@ def _deliver_out_of_bound(
                 f"{', '.join(configured) if configured else 'none'}); the "
                 f"message was NOT delivered",
             )
+        return False
+    refusal = _pr_body_close_keyword_refusal(gate, fm, body)
+    if refusal:
+        if message_path is not None:
+            message_store.transition(
+                message_path,
+                message_store.UNDELIVERABLE,
+                reason="pr body carries a close keyword GitHub would act on",
+            )
+        _record_outbox_notice(
+            outbox_dir,
+            f"gate message dropped: the {gate!r} PR body carries a close "
+            f"keyword GitHub would act on; the pull request was NOT created. "
+            f"Fix the line and re-stage the file.\n{refusal}",
+        )
         return False
     # Never let agent-written frontmatter override the reserved event keys
     # (a stray `status:` would resurrect the event as pending and spawn a
