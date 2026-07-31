@@ -10,6 +10,7 @@ from pathlib import Path
 from brr import account
 from brr import gitops
 from brr import presence
+from brr import protocol
 from brr import retention
 
 from _helpers import init_git_repo
@@ -303,6 +304,87 @@ def test_inbox_done_events_and_artifacts_deleted_pending_kept(tmp_path):
     assert pending.exists()      # unhandled events survive any age
     assert fresh_done.exists()
     assert reports["inbox"].items >= 4
+
+
+def _real_event(inbox_dir: Path, status: str, age_days: float) -> Path:
+    """A production-realistic event: written by ``protocol.create_event``
+    and transitioned by ``protocol.set_status`` — the same two calls
+    ``gates/runtime.py`` and ``daemon.py``'s ``_set_event_status_if_present``
+    make on a live event — then backdated for the retention window."""
+    path = protocol.create_event(inbox_dir, "telegram", "hello", status="pending")
+    protocol.set_status({"_path": path}, status)
+    stamp = NOW - age_days * DAY
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_inbox_collects_every_terminal_status_not_just_done(tmp_path):
+    """kb/design-the-post.md's THE FIELD TWO MACHINES WRITE: a successful
+    delivery (``delivered``) and every run outcome (``error``/``conflict``/
+    ``stopped``/``cancelled``) must be collectible too, or 75% of the
+    inbox is permanently immortal."""
+    repo = _repo(tmp_path)
+    ctx = _ctx(tmp_path)
+    inbox = ctx.dispatch_inbox
+
+    terminal_paths = {
+        status: _real_event(inbox, status, 120)
+        for status in sorted(protocol.TERMINAL_EVENT_STATUSES)
+    }
+    pending = _real_event(inbox, "pending", 120)
+    processing = _real_event(inbox, "processing", 120)
+
+    _plan, reports = retention.gc(
+        repo, ctx, _windows(inbox=90), dry_run=False, now=NOW)
+
+    for status, path in terminal_paths.items():
+        assert not path.exists(), f"status={status} should have been collected"
+    assert pending.exists()      # still unhandled work
+    assert processing.exists()   # crash-recovery treats this as still-eligible
+    assert reports["inbox"].items == len(terminal_paths)
+
+
+# ── repo inbox (self-hosted gates, never swept before) ──────────────
+
+
+def test_repo_inbox_swept_independent_of_account_context(tmp_path):
+    """``.brr/inbox``/``.brr/responses`` — the self-hosted-gate inbox —
+    was never walked by retention at all; only the account dispatch
+    inbox was. It must sweep even with no account context (``ctx=None``,
+    e.g. a bare ``brnrd gc`` on a repo with only self-hosted gates)."""
+    repo = _repo(tmp_path)
+    brr_dir = gitops.shared_brr_dir(repo)
+    repo_inbox = brr_dir / "inbox"
+    repo_responses = brr_dir / "responses"
+
+    done = _real_event(repo_inbox, "delivered", 120)
+    pending = _real_event(repo_inbox, "pending", 120)
+    fresh = _real_event(repo_inbox, "done", 5)
+    orphan_response = _write_aged(
+        repo_responses / "evt-orphan.md", "orphan reply", 120)
+
+    _plan, reports = retention.gc(
+        repo, None, _windows(inbox=90), dry_run=False, now=NOW)
+
+    assert not done.exists()
+    assert pending.exists()
+    assert fresh.exists()
+    assert not orphan_response.exists()
+    assert reports["inbox"].items == 2
+
+
+def test_repo_inbox_and_account_inbox_both_swept_in_one_pass(tmp_path):
+    repo = _repo(tmp_path)
+    ctx = _ctx(tmp_path)
+    repo_done = _real_event(gitops.shared_brr_dir(repo) / "inbox", "done", 120)
+    account_done = _real_event(ctx.dispatch_inbox, "done", 120)
+
+    _plan, reports = retention.gc(
+        repo, ctx, _windows(inbox=90), dry_run=False, now=NOW)
+
+    assert not repo_done.exists()
+    assert not account_done.exists()
+    assert reports["inbox"].items == 2
 
 
 # ── account-home run state (#320) ──────────────────────────────────

@@ -45,6 +45,7 @@ from typing import Any
 
 from . import card as card_rule
 from . import facets
+from . import gate_receipt
 from . import portals
 from . import relics
 
@@ -94,10 +95,12 @@ GATELESS_ROUTING_KEY = "gateless_routing_noted"
 CARD_NAME = ".card"
 FORGE_HANDOFF_NAME = ".forge-handoff"
 # The local CI-gate receipt: written by whatever command the repo declares as
-# its gate (`hooks.gate_command`), read by `_gate_closeout_clause`. brr never
-# names or runs that command — the repo does — so this file is the entire
-# interface between a project's gate and the guard that checks it ran.
-GATE_RECEIPT_NAME = ".gate-receipt.json"
+# its gate (`hooks.gate_command`), read by `_gate_closeout_clause`. Either the
+# repo writes its own (this repo's `scripts/gate.py`) or `brnrd gate-run`
+# (`brr.gate_receipt`) wraps `hooks.gate_command` and writes it generically —
+# brr still owns no opinion about what the command *is*, only that a run of
+# it leaves this file. Single source of truth: `brr.gate_receipt.RECEIPT_NAME`.
+GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 # Resident-authored mood glyph/name (#566 layer 2 — the daemon-derived mood
 # is computed elsewhere; this is the resident's own meta-channel). A control
 # dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
@@ -2312,24 +2315,14 @@ def _scm_closeout_clause(ctx: "HookContext") -> str | None:
 def _untracked_digest(repo: Path) -> str:
     """Content digest of every untracked, non-ignored file in `repo`.
 
-    The one piece of shared *composition* between this guard and whatever
-    writes the receipt — everything else compares git's raw output against
-    git's raw output. Two implementations of one rule is the shape where
-    copies agree and are wrong together (#722), so it is pinned by a test that
-    drives both sides against the same repository rather than by care.
+    Delegates to :func:`brr.gate_receipt.untracked_digest` — the writer's own
+    implementation — rather than keeping a second copy here. Two
+    implementations of one rule is the shape where copies agree and are wrong
+    together (#722); this guard and the receipt writer now share the one
+    computation, pinned by a test that drives both sides against the same
+    repository.
     """
-    listing = _git_out(repo, ["ls-files", "--others", "--exclude-standard"])
-    if not listing:
-        return ""
-    paths = [line for line in listing.splitlines() if line]
-    if not paths:
-        return ""
-    hashes = _git_out(repo, ["hash-object", "--", *paths]) or ""
-    return hashlib.sha256(
-        "\n".join(
-            f"{path}\t{blob}" for path, blob in zip(paths, hashes.splitlines())
-        ).encode("utf-8", "replace")
-    ).hexdigest()
+    return gate_receipt.untracked_digest(repo)
 
 
 def _gate_closeout_clause(ctx: "HookContext") -> str | None:
@@ -2405,8 +2398,8 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
         return (
             f"the gate never ran — {changed} commit(s) and a changed tree, no "
             f"`{ctx.gate_command}` receipt. The test command you remember is "
-            f"one leg of what CI runs; run `{ctx.gate_command}` before "
-            f"claiming green"
+            f"one leg of what CI runs; run `brnrd gate-run` (it runs "
+            f"`{ctx.gate_command}` and writes this receipt) before claiming green"
         )
     stale = (
         receipt.get("head") != head.strip()
@@ -2419,9 +2412,9 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
         return (
             f"the gate ran on a different tree than the one you are ending on "
             f"(receipt: {str(receipt.get('verdict') or '?')} at "
-            f"{str(receipt.get('head') or '?')[:8]}). Re-run "
-            f"`{ctx.gate_command}` — a green verdict for a tree you have since "
-            f"edited is a claim about code nobody ran"
+            f"{str(receipt.get('head') or '?')[:8]}). Re-run `brnrd gate-run` "
+            f"(runs `{ctx.gate_command}`) — a green verdict for a tree you "
+            f"have since edited is a claim about code nobody ran"
         )
     return None
 

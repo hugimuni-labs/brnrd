@@ -722,7 +722,7 @@ def _deliver_responses(
             overflow_cache=overflow_cache,
         )
 
-    runtime.deliver_responses(
+    runtime.deliver_stream(
         inbox_dir, responses_dir, "telegram", deliver, brr_dir=brr_dir,
     )
 
