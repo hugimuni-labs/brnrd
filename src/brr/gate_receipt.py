@@ -29,12 +29,21 @@ import hashlib
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TypeVar
 
 #: Written beside the run's other control dotfiles; same idiom as ``.card``,
 #: matching ``hooks.GATE_RECEIPT_NAME`` and ``scripts/gate.py``'s own.
 RECEIPT_NAME = ".gate-receipt.json"
+
+#: The referents :func:`tree_referents` returns, in the order a reader should
+#: hear about them: the coarse ones first. Named once so the writer, the
+#: comparison and the reader cannot drift on the vocabulary.
+REFERENT_KEYS = ("head", "status", "diff_digest", "untracked_digest")
+
+_R = TypeVar("_R")
 
 
 def git_out(repo_root: Path, args: list[str], timeout: int = 30) -> str | None:
@@ -98,6 +107,107 @@ def tree_referents(repo_root: Path) -> dict[str, str] | None:
     }
 
 
+def tree_fields(repo_root: Path, before: dict[str, str] | None) -> dict[str, Any] | None:
+    """The receipt's tree block: the end state, plus whether it held still.
+
+    The top-level referents stay the *end* state, unchanged — that is what
+    ``hooks._gate_closeout_clause`` compares its own fresh ``git`` output
+    against, and moving them would break the one question the receipt already
+    answers correctly (*is the tree you are ending on the tree in the
+    receipt*). What is new sits beside them:
+
+    - ``gated_from`` — the referents sampled **before** the first leg. The
+      pair, not a boolean, because a reader holding both can diff the two
+      ``status --porcelain`` blocks and name the *file* the gate never saw
+      (:func:`moved_summary` does exactly that).
+    - ``tree_moved_during_gate`` — the state itself, so *ran on a tree that
+      then moved under it* is distinguishable from *never ran*. Different
+      facts, different remedies, and a diagnostic aimed at the wrong cause
+      is worse than none.
+    - ``moved_referents`` — which of :data:`REFERENT_KEYS` disagree; present
+      only when something did.
+
+    Both new keys are **omitted** when the before-sample is unassertable (git
+    unreadable at t0). Absent therefore means *this writer did not check* —
+    which is also what every receipt written before this shape existed looks
+    like, so the reader can treat absence as silence rather than firing on
+    every legacy receipt.
+    """
+    after = tree_referents(repo_root)
+    if after is None:
+        return None
+    fields: dict[str, Any] = dict(after)
+    if before is None:
+        return fields
+    moved = [key for key in REFERENT_KEYS if before.get(key) != after.get(key)]
+    fields["gated_from"] = dict(before)
+    fields["tree_moved_during_gate"] = bool(moved)
+    if moved:
+        fields["moved_referents"] = moved
+    return fields
+
+
+def gated_run(repo_root: Path, run: Callable[[], _R]) -> tuple[_R, dict[str, Any] | None]:
+    """Sample the tree, call *run*, sample again. The whole shape, once.
+
+    *run* is the caller's own work — one shell command for ``brnrd
+    gate-run``, a loop over CI's own legs for ``scripts/gate.py`` — and this
+    function owns nothing but the two captures around it. That split is the
+    point: the second writer gets the pre/post capture by *calling* this,
+    never by growing a copy of it. Two implementations of one fingerprint
+    agree with each other and are wrong together (#722), which is the exact
+    bug class the receipt exists to foreclose.
+
+    Returns *run*'s own return value untouched, plus the tree block for
+    :func:`write_receipt` (``None`` when the end state is unassertable).
+    """
+    before = tree_referents(repo_root)
+    result = run()
+    return result, tree_fields(repo_root, before)
+
+
+def moved_summary(receipt: dict[str, Any]) -> str:
+    """Name what moved between a receipt's two captures — files first.
+
+    Recording the pair buys this: most in-gate writes are a brand-new file or
+    a newly-dirty one, so a line in ``status --porcelain`` that is in the
+    after block and not the before block *is* the filename, no guessing. When
+    only a digest moved — an edit to a file that was already dirty, where the
+    porcelain line never changes — the referent name is the honest answer and
+    the sentence says so rather than inventing a path.
+    """
+    # Hardened against a hand-edited or truncated receipt: every reader in
+    # this neighbourhood degrades to "unassertable" rather than crashing, and
+    # this one runs inside a Stop hook where a raised exception would turn a
+    # green run red for the crime of having a malformed JSON file.
+    before = receipt.get("gated_from")
+    before = before if isinstance(before, dict) else {}
+    before_lines = set(str(before.get("status") or "").splitlines())
+    after_lines = set(str(receipt.get("status") or "").splitlines())
+    paths = []
+    for line in after_lines - before_lines:
+        path = line[3:] if len(line) > 3 else line
+        path = path.strip()
+        if "->" in path:  # a rename: the destination is the interesting half
+            path = path.split("->")[-1].strip()
+        if path:
+            paths.append(path)
+    if paths:
+        paths.sort()
+        shown = ", ".join(paths[:3])
+        if len(paths) > 3:
+            shown += f" (+{len(paths) - 3} more)"
+        return shown
+    raw_moved = receipt.get("moved_referents")
+    moved = [str(key) for key in raw_moved] if isinstance(raw_moved, list) else []
+    if moved:
+        return (
+            f"no new path in `git status`, but {', '.join(moved)} moved — an "
+            f"edit to a file that was already dirty when the gate started"
+        )
+    return "the tree referents moved"
+
+
 def write_receipt(
     outbox_dir: Path,
     repo_root: Path,
@@ -106,14 +216,20 @@ def write_receipt(
     command: str,
     run_id: str = "",
     seconds: float | None = None,
+    tree: dict[str, Any] | None = None,
 ) -> Path | None:
     """Record *verdict* and the tree it was reached on. Best-effort.
 
     Written for RED as well as GREEN: the obligation the Stop hook checks is
     *the gate ran on this tree*, never *the gate was green*. A run may end
     red and report it; a run that never looked is the failure.
+
+    *tree* is :func:`gated_run`'s second return value — the end referents
+    plus the stillness record. Omitted, this samples the end state alone, the
+    way it always did: honest about *which* tree, silent about *when*, and
+    that silence is what the reader keys off.
     """
-    referents = tree_referents(repo_root)
+    referents = tree if tree is not None else tree_referents(repo_root)
     if referents is None:
         return None
     payload: dict[str, object] = {
@@ -149,21 +265,39 @@ def run_and_write_receipt(
     ``npm test``, anything a shell can run — becomes checkable the same way
     this repo's own ``scripts/gate.py`` already is, without every adopter
     needing to write their own receipt writer.
+
+    The referents are sampled *around* the command by :func:`gated_run`, not
+    after it. A command that takes four minutes ran against the tree as it
+    was when each of its legs started; sampling only at the end certifies
+    every file the run wrote while it was working (#917).
     """
-    started = time.monotonic()
-    completed = subprocess.run(command, shell=True, cwd=repo_root)
-    elapsed = time.monotonic() - started
-    verdict = "GREEN" if completed.returncode == 0 else "RED"
+    def _run() -> tuple[int, float]:
+        started = time.monotonic()
+        completed = subprocess.run(command, shell=True, cwd=repo_root)
+        return completed.returncode, time.monotonic() - started
+
+    (returncode, elapsed), tree = gated_run(repo_root, _run)
+    verdict = "GREEN" if returncode == 0 else "RED"
     receipt = write_receipt(
         outbox_dir, repo_root,
         verdict=verdict, command=command, run_id=run_id, seconds=elapsed,
+        tree=tree,
     )
     if receipt is not None:
         print(f"[brnrd] gate-run: {verdict} — receipt {receipt}")
+        # Said here as well as in the Stop hook: the person watching this
+        # scroll by is the one who can still fix it cheaply, and a verdict
+        # printed without this line reads as a clean gate.
+        if (tree or {}).get("tree_moved_during_gate"):
+            print(
+                "[brnrd] gate-run: the tree moved while the gate ran — "
+                f"{moved_summary(tree or {})}. {verdict} does not cover it; "
+                "re-run on a still tree."
+            )
     else:
         print(
             "[brnrd] gate-run: "
             f"{verdict} — no receipt written (not a git checkout, or the "
             "outbox directory could not be created)"
         )
-    return completed.returncode
+    return returncode

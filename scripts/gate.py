@@ -38,6 +38,13 @@ thing a resident has to remember into a fact on disk — which is what
 `brr.hooks._gate_closeout_clause` reads before letting a run end. A script
 nobody is reminded to call gets called when forgetting it is *checkable*.
 
+The receipt's shape is **not defined here**. `brr.gate_receipt` owns the
+referents, the pre/post capture around the leg loop, and the comparison; this
+file calls `gated_run` and hands the result to its own `write_receipt`. It used
+to carry its own copy of `tree_referents`/`untracked_digest`, and that copy is
+the reason #917 had to be fixed in two places: two implementations of one
+fingerprint agree with each other and are wrong together (#722).
+
 Usage:  python scripts/gate.py [--list] [--job backend]
 Exit:   0 iff every executed leg exited 0.
 """
@@ -46,7 +53,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import hashlib
 import json
 import os
 import subprocess
@@ -56,9 +62,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+# The gate must read *this* tree's receipt module, not whichever copy of `brr`
+# happens to be installed in the shared venv. A bare `import brr` from a
+# worktree resolves to the host checkout (AGENTS.md -> Build and run), which
+# would have this script gating one tree with another tree's rules.
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+from brr import gate_receipt  # noqa: E402
+
 # Written beside the run's other control dotfiles; the daemon's outbox drain
 # skips dotfiles, so it is never delivered to chat. Same idiom as `.card`.
-RECEIPT_NAME = ".gate-receipt.json"
+# One name, defined by the module the hook also reads.
+RECEIPT_NAME = gate_receipt.RECEIPT_NAME
+untracked_digest = gate_receipt.untracked_digest
+tree_referents = gate_receipt.tree_referents
 
 # Commands this runner deliberately does not execute, each with the reason a
 # reader needs in order to judge whether it is still the right call.
@@ -114,72 +132,6 @@ def refusal(command: str) -> str | None:
     return None
 
 
-def _git(*args: str) -> str | None:
-    """Raw stdout of a read-only git command in this checkout, or None."""
-    try:
-        done = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), *args],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout if done.returncode == 0 else None
-
-
-def tree_referents() -> dict[str, str] | None:
-    """The three raw git outputs that identify *which tree* was gated.
-
-    Deliberately not a fingerprint *algorithm*. Two implementations of one
-    hash — this writer and the hook that reads it — is the shape where copies
-    agree with each other and are wrong together (#722). So the receipt stores
-    git's own output verbatim and the reader compares git against git; the
-    only computation is a sha256 over a diff, which is arithmetic, not a
-    judgement.
-
-    Untracked files need the fourth referent, and finding that out cost a
-    failing test rather than a thought: `status --porcelain` *names* them and
-    `diff HEAD` does not *read* them, so a receipt taken before editing a
-    brand-new file would still validate after — which is the most common shape
-    of a work-in-progress tree there is. `hash-object` closes it.
-    """
-    head = _git("rev-parse", "HEAD")
-    status = _git("status", "--porcelain")
-    diff = _git("diff", "HEAD")
-    if head is None or status is None or diff is None:
-        return None
-    return {
-        "head": head.strip(),
-        "status": status,
-        "diff_digest": hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest(),
-        "untracked_digest": untracked_digest(_git),
-    }
-
-
-def untracked_digest(git) -> str:
-    """A digest over the *content* of every untracked, non-ignored file.
-
-    Takes the git callable so `brr.hooks` can compute the identical value from
-    its own checkout without importing this script — the same output of the
-    same two git commands on both sides, which is the point of the whole
-    referent design.
-    """
-    listing = git("ls-files", "--others", "--exclude-standard")
-    if not listing:
-        return ""
-    paths = [line for line in listing.splitlines() if line]
-    if not paths:
-        return ""
-    hashes = git("hash-object", "--", *paths) or ""
-    return hashlib.sha256(
-        "\n".join(
-            f"{path}\t{blob}"
-            for path, blob in zip(paths, hashes.splitlines())
-        ).encode("utf-8", "replace")
-    ).hexdigest()
-
-
 def receipt_path() -> Path | None:
     """Where this invocation's receipt goes, or None when nothing reads one.
 
@@ -193,17 +145,27 @@ def receipt_path() -> Path | None:
     return directory / RECEIPT_NAME if directory.is_dir() else None
 
 
-def write_receipt(verdict: str, results: list[tuple[str, str, float]]) -> Path | None:
+def write_receipt(
+    verdict: str,
+    results: list[tuple[str, str, float]],
+    tree: dict | None = None,
+) -> Path | None:
     """Record the verdict and the tree it was reached on. Best-effort.
 
     Written for RED as well as GREEN: the obligation a reader checks is *the
     gate ran on this tree*, never *the gate was green*. A run may legitimately
     end red and report it; a run that never looked is the failure.
+
+    *tree* is `gate_receipt.gated_run`'s second return value: the end-state
+    referents plus the record of whether the tree held still across the legs.
+    Omitted (a caller that never captured a "before"), this samples the end
+    state alone and the receipt stays silent about stillness rather than
+    claiming it.
     """
     path = receipt_path()
     if path is None:
         return None
-    referents = tree_referents()
+    referents = tree if tree is not None else tree_referents(REPO_ROOT)
     if referents is None:
         return None
     payload = {
@@ -249,22 +211,34 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [{mark:>7}] {leg['job']}: {leg['name']}  (cwd {leg['cwd']})")
         return 0
 
-    results: list[tuple[str, str, float]] = []
-    failed = False
-    for leg in runnable:
-        label = f"{leg['job']}: {leg['name']}"
-        reason = refusal(leg["command"])
-        if reason:
-            print(f"\n=== SKIP  {label}\n    {reason}")
-            results.append((label, "SKIPPED", 0.0))
-            continue
-        print(f"\n=== RUN   {label}  (cwd {leg['cwd']})", flush=True)
-        started = time.monotonic()
-        completed = subprocess.run(leg["command"], shell=True, cwd=REPO_ROOT / leg["cwd"])
-        elapsed = time.monotonic() - started
-        ok = completed.returncode == 0
-        failed = failed or not ok
-        results.append((label, "PASS" if ok else f"FAIL rc={completed.returncode}", elapsed))
+    def run_legs() -> list[tuple[str, str, float]]:
+        results: list[tuple[str, str, float]] = []
+        for leg in runnable:
+            label = f"{leg['job']}: {leg['name']}"
+            reason = refusal(leg["command"])
+            if reason:
+                print(f"\n=== SKIP  {label}\n    {reason}")
+                results.append((label, "SKIPPED", 0.0))
+                continue
+            print(f"\n=== RUN   {label}  (cwd {leg['cwd']})", flush=True)
+            started = time.monotonic()
+            completed = subprocess.run(
+                leg["command"], shell=True, cwd=REPO_ROOT / leg["cwd"]
+            )
+            elapsed = time.monotonic() - started
+            ok = completed.returncode == 0
+            results.append(
+                (label, "PASS" if ok else f"FAIL rc={completed.returncode}", elapsed)
+            )
+        return results
+
+    # The captures bracket *the legs*, not the process: `--list` returned
+    # above, so it stays the no-op that writes nothing and samples nothing.
+    # Sampling only after the last leg is what let a file written *during* the
+    # gate be certified as gated (#917) — the first leg's tree is the one the
+    # receipt has to be about.
+    results, tree = gate_receipt.gated_run(REPO_ROOT, run_legs)
+    failed = any(verdict.startswith("FAIL") for _, verdict, _ in results)
 
     print("\n" + "=" * 66)
     for label, verdict, elapsed in results:
@@ -272,7 +246,13 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 66)
     verdict = "RED" if failed else "GREEN"
     print(f"gate: {verdict}")
-    receipt = write_receipt(verdict, results)
+    if (tree or {}).get("tree_moved_during_gate"):
+        print(
+            f"gate: the tree moved while the gate ran — "
+            f"{gate_receipt.moved_summary(tree)}. {verdict} does not cover it; "
+            f"re-run on a still tree."
+        )
+    receipt = write_receipt(verdict, results, tree)
     if receipt is not None:
         print(f"gate: receipt {receipt}")
     return 1 if failed else 0

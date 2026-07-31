@@ -2407,6 +2407,16 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
     - **receipt present and matching** ⇒ silent, *including when it is RED*.
       The obligation is that the gate ran on this tree, never that it passed:
       a run may end red and report it. A run that never looked is the defect.
+    - **receipt matching but `tree_moved_during_gate`** ⇒ block, with its own
+      sentence. Three states, not two: *never ran* · *ran, then you edited* ·
+      *ran, and you edited while it ran*. The third used to read as the
+      honest path, because both writers sampled the tree only after the last
+      leg and the comparison here recomputed that same end state (#917). A
+      remedy aimed at the wrong cause is worse than none, so each state says
+      what actually happened.
+    - **receipt without the field** ⇒ unassertable on stillness, silent.
+      Written by a writer too old to sample a "before"; absence is not
+      evidence of a moved tree.
     """
     if not ctx.gate_command:
         return None
@@ -2469,6 +2479,22 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
             f"{str(receipt.get('head') or '?')[:8]}). Re-run `brnrd gate-run` "
             f"(runs `{ctx.gate_command}`) — a green verdict for a tree you "
             f"have since edited is a claim about code nobody ran"
+        )
+    # Third state, and the reason it is checked *after* `stale`: the tree the
+    # receipt describes is the tree you are ending on, so everything above is
+    # satisfied — and the receipt still does not certify it, because it moved
+    # under the gate while the gate was running (#917). This case used to be
+    # silent. Absent field ⇒ still silent: a receipt from a writer that never
+    # sampled a "before" is unassertable, not guilty, and every receipt
+    # written before that field existed looks exactly like one.
+    if receipt.get("tree_moved_during_gate"):
+        return (
+            f"the gate ran, and then the tree moved under it — this run wrote "
+            f"{gate_receipt.moved_summary(receipt)} *while* "
+            f"`{ctx.gate_command}` was still running, so no leg ever saw it. "
+            f"The receipt's {str(receipt.get('verdict') or '?')} is about the "
+            f"tree as it was before that write. Re-run `brnrd gate-run` now "
+            f"that the tree is still"
         )
     return None
 
