@@ -20,6 +20,8 @@ shape this implements.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 from pathlib import Path
 from typing import Callable, Protocol
@@ -28,6 +30,77 @@ from . import runtime
 
 
 # ── Overflow (final-answer offload) ──────────────────────────────────
+#
+# The offload is the one step in the delivery path with a *side effect on
+# another service*, and it used to run once per delivery attempt. On
+# 2026-07-31 that cost 1,230 secret gists in nine hours: one over-long reply,
+# a server answering 500 after it had already forwarded, and a retry loop with
+# no memory. Two separate harms, and the second is the worse one:
+#
+# 1. every attempt minted a fresh gist, so a permanent failure billed the
+#    user's GitHub account per poll;
+# 2. every attempt therefore produced a *different body* — the gist URL is in
+#    it — which silently defeated the server's own retry dedupe. brnrd's
+#    ``inbox.record_response`` recognises a retried terminal post by
+#    ``sha256(body)`` and quietly ACKs it; a body that changes every time can
+#    never match, so a guard built after two prior delivery incidents was
+#    unreachable for every reply that overflowed.
+#
+# The cache below is what makes the retry idempotent: the same input text
+# resolves to the same gist URL, so attempt two is byte-identical to attempt
+# one and the server's dedupe can do its job. It is keyed on the *pre-offload*
+# text, which is the only stable identity the body has.
+
+
+class OverflowCache:
+    """Remember which gist an over-long body was already offloaded to.
+
+    A tiny JSON map, ``sha256(text) -> url``, beside the gate's other state.
+    Bounded to :attr:`LIMIT` newest entries because it is a retry aid, not an
+    archive — the durable copy of a reply is the run's message store.
+
+    Every operation is best-effort: a cache that cannot be read or written
+    degrades to "mint a new gist", which is exactly the old behaviour and
+    never blocks a delivery.
+    """
+
+    LIMIT = 64
+
+    def __init__(self, brr_dir: Path, gate: str) -> None:
+        self.path = brr_dir / "gates" / f"{gate}.overflow.json"
+
+    @staticmethod
+    def key(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _load(self) -> dict:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def get(self, text: str) -> str | None:
+        url = self._load().get(self.key(text))
+        return url if isinstance(url, str) and url else None
+
+    def put(self, text: str, url: str) -> None:
+        entries = self._load()
+        entries[self.key(text)] = url
+        if len(entries) > self.LIMIT:
+            # dict preserves insertion order; drop the oldest surplus
+            for stale in list(entries)[: len(entries) - self.LIMIT]:
+                entries.pop(stale, None)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps(entries, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            tmp.replace(self.path)
+        except OSError:
+            return
 
 
 def resolve_overflow(
@@ -35,6 +108,7 @@ def resolve_overflow(
     *,
     limit: int,
     gist_fn: Callable[[str], str | None],
+    cache: OverflowCache | None = None,
 ) -> str:
     """Return platform-ready text that fits within *limit* characters.
 
@@ -42,11 +116,21 @@ def resolve_overflow(
     (``gist_fn`` returns a URL or None) and return a short link; if the
     gist can't be created, return a hard-truncated body with a marker.
     The offload keeps large content on the user's own GitHub.
+
+    With a *cache*, a repeat call for the same text reuses the gist minted
+    the first time — so a retried delivery posts an identical body instead of
+    minting a gist and defeating the receiver's dedupe (see the module note).
     """
     if len(text) <= limit:
         return text
+    if cache is not None:
+        known = cache.get(text)
+        if known:
+            return f"Result: {known}"
     url = gist_fn(text)
     if url:
+        if cache is not None:
+            cache.put(text, url)
         return f"Result: {url}"
     return text[:limit] + "\n\n[truncated]"
 

@@ -183,16 +183,73 @@ def gate_health_rows(
                     status = "degraded"
             except ValueError:
                 pass
+        # A delivery failure is not healed by a successful poll — see
+        # ``record_delivery_health``. It gets its own field and its own say
+        # over the gate's status.
+        delivery_error = health.get("delivery_error")
+        if isinstance(delivery_error, str) and delivery_error:
+            status = "degraded"
+        else:
+            delivery_error = None
         rows.append(
             {
                 "gate": gate,
                 "last_poll_ok": last_poll_ok,
                 "age_seconds": age_seconds,
                 "last_error": last_error if isinstance(last_error, str) else None,
+                "delivery_error": delivery_error,
+                "delivery_attempts": health.get("delivery_attempts") or 0,
                 "status": status,
             }
         )
     return rows
+
+
+def record_delivery_health(
+    brr_dir: Path | None,
+    gate: str | None,
+    *,
+    event_id: str,
+    error: str | None,
+    attempts: int = 0,
+) -> None:
+    """Record a delivery outcome in the gate's health file, separately.
+
+    Why not ``last_error``: :func:`gate_health_rows` treats an error older
+    than the last successful poll as healed, which is right for an *ingestion*
+    error and wrong for a delivery one. The cloud gate polls every 25 s and
+    those polls succeed — so a delivery failure written to ``last_error`` is
+    erased from every reader's view within half a minute of being recorded.
+    On 2026-07-31 a delivery failed 1,230 consecutive times over nine hours
+    and no wake surface carried it; the only record was a ``print`` into
+    block-buffered stdout. A delivery failure is healed by a delivery, and by
+    nothing else.
+    """
+    if brr_dir is None or gate is None:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        health = load_health(brr_dir, gate)
+        if error is None:
+            health.pop("delivery_error", None)
+            health.pop("delivery_error_at", None)
+            health.pop("delivery_error_event", None)
+            health.pop("delivery_attempts", None)
+            health["last_delivery_ok"] = now
+        else:
+            health["delivery_error"] = error
+            health["delivery_error_at"] = now
+            health["delivery_error_event"] = event_id
+            health["delivery_attempts"] = attempts
+        path = health_path(brr_dir, gate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(health, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        tmp.replace(path)
+    except OSError as exc:
+        print(f"[brnrd:{gate}] delivery health record failed: {exc}")
 
 
 def record_loop_health(
@@ -319,6 +376,54 @@ def run_loop(
 
 
 # ── Response delivery skeleton ───────────────────────────────────────
+#
+# Retry discipline, added 2026-07-31 after a delivery failed 1,230 times in
+# nine hours at the poll cadence (25 s) with no backoff, no ceiling, and no
+# surface. Two distinct kinds of failure were being treated as one:
+#
+# - **permanent** — the delivery cannot succeed on any future attempt (a cloud
+#   event with no ``cloud_event_id`` has nothing to post *to*). One such event
+#   was retried every 25 s for 36 hours. These close as ``error`` on the first
+#   attempt; a retry is not caution, it is a loop.
+# - **transient** — the transport or receiver failed this time. These back off
+#   exponentially to a ceiling, so an outage that lasts overnight costs a
+#   handful of attempts an hour instead of 133.
+#
+# The backoff clock is per-process on purpose: a daemon restart is a
+# legitimate reason to try again immediately, and the durable record of the
+# failure lives in the gate health file, which a wake reads.
+
+DELIVERY_BACKOFF_BASE_S = 60.0
+DELIVERY_BACKOFF_CAP_S = 900.0
+
+# (gate, event id) -> (consecutive failures, monotonic time of next attempt)
+_delivery_retry: dict[tuple[str, str], tuple[int, float]] = {}
+
+
+class PermanentDeliveryError(Exception):
+    """A delivery that no future attempt can complete.
+
+    Raised by a gate's own delivery callable when the event lacks something
+    structurally required to address the message. :func:`deliver_stream`
+    closes the event ``error`` instead of retrying it forever.
+    """
+
+
+def _delivery_due(gate: str, eid: str, *, now: float) -> bool:
+    state = _delivery_retry.get((gate, eid))
+    return state is None or now >= state[1]
+
+
+def _delivery_failed(gate: str, eid: str, *, now: float) -> int:
+    """Record one failure; return the consecutive-failure count."""
+    attempts = _delivery_retry.get((gate, eid), (0, 0.0))[0] + 1
+    delay = min(DELIVERY_BACKOFF_BASE_S * (2 ** (attempts - 1)), DELIVERY_BACKOFF_CAP_S)
+    _delivery_retry[(gate, eid)] = (attempts, now + delay)
+    return attempts
+
+
+def _delivery_settled(gate: str, eid: str) -> None:
+    _delivery_retry.pop((gate, eid), None)
 
 
 def deliver_stream(
@@ -327,6 +432,8 @@ def deliver_stream(
     source: str,
     deliver_partial: Callable[[dict, str], object],
     deliver_terminal: Callable[[dict, str], object] | None = None,
+    *,
+    brr_dir: Path | None = None,
 ) -> None:
     """Stream pending durable messages, then close the event in place.
 
@@ -346,11 +453,20 @@ def deliver_stream(
     a gate decorate the terminal differently (e.g. the GitHub gate's
     branch footer rides only the terminal). A raised exception stops
     that one event and is logged; other events still flow.
+
+    A failure also costs the event its next few turns: transient failures back
+    off exponentially (see the module note above), and a
+    :class:`PermanentDeliveryError` closes the event ``error`` rather than
+    being retried at the poll cadence forever. Pass *brr_dir* to have the
+    outcome recorded in the gate's health file, where a wake can read it.
     """
     if deliver_terminal is None:
         deliver_terminal = deliver_partial
+    now = time.monotonic()
     for event in protocol.list_active(inbox_dir, source):
         eid = event["id"]
+        if not _delivery_due(source, eid, now=now):
+            continue
         try:
             for ppath in protocol.list_partials(responses_dir, eid):
                 body = protocol.read_partial(ppath)
@@ -389,8 +505,29 @@ def deliver_stream(
                             platform_message_id=message_store.receipt_id(receipt),
                         )
                 protocol.set_status(event, "delivered")
+            _delivery_settled(source, eid)
+            record_delivery_health(brr_dir, source, event_id=eid, error=None)
+        except PermanentDeliveryError as e:
+            # Nothing about a future attempt would differ. Close it, say why.
+            print(f"[brnrd:{source}] delivery impossible for {eid}: {e}")
+            _delivery_settled(source, eid)
+            record_delivery_health(
+                brr_dir, source, event_id=eid, error=f"undeliverable: {e}"
+            )
+            try:
+                protocol.set_status(event, "error")
+            except OSError as exc:
+                print(f"[brnrd:{source}] could not close {eid}: {exc}")
+            continue
         except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
-            print(f"[brnrd:{source}] delivery error for {eid}: {e}")
+            attempts = _delivery_failed(source, eid, now=now)
+            print(
+                f"[brnrd:{source}] delivery error for {eid} "
+                f"(attempt {attempts}): {e}"
+            )
+            record_delivery_health(
+                brr_dir, source, event_id=eid, error=str(e), attempts=attempts
+            )
             continue
 
 
@@ -399,6 +536,8 @@ def deliver_responses(
     responses_dir: Path,
     source: str,
     deliver: Callable[[dict, str], object],
+    *,
+    brr_dir: Path | None = None,
 ) -> None:
     """Deliver responses for *source* (interim + terminal), then close status.
 
@@ -407,4 +546,4 @@ def deliver_responses(
     cloud). A plain single-response run delivers exactly one message and
     transitions to ``delivered`` on ``done``.
     """
-    deliver_stream(inbox_dir, responses_dir, source, deliver)
+    deliver_stream(inbox_dir, responses_dir, source, deliver, brr_dir=brr_dir)
