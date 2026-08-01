@@ -98,4 +98,53 @@ export function emberCount(layers: WarpLayer[]): number {
 	return layers.reduce((sum, layer) => sum + layer.counts.ember, 0);
 }
 
+// ── multi-repo: repos are derived, never declared ──────────────────────────
+//
+// The multi-repo ground state (design-work-layers.md §Open forks 2): a layer
+// is account-global by construction, an item names its repo(s) in `refs:`,
+// and a repo view is a heddle, never a directory. So there is no `repo:` row
+// to parse — an item's repo set is a *structural property* of the refs it
+// already carries: the qualified forge shorthand (`owner/repo#N`) and
+// explicit forge hrefs both name one. An item whose refs name no repo
+// belongs to every view (surface work, cross-cutting decisions) rather than
+// to a guessed one.
+
+/** Forge object hrefs that name a repo: issues, PRs, commits, trees, blobs.
+ * Conservative on purpose — `github.com/orgs/...` and friends are not repo
+ * coordinates and must not parse as one. */
+const FORGE_HREF_RE =
+	/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull|commit|tree|blob)\//;
+
+const FORGE_LABEL_RE = /^([\w.-]+\/[\w.-]+)#\d+$/;
+
+/** The repos an item's refs name, deduplicated, in first-mention order. */
+export function itemRepos(item: AuthoredBackchannelItem): string[] {
+	const repos: string[] = [];
+	const add = (repo: string) => {
+		if (!repos.includes(repo)) repos.push(repo);
+	};
+	for (const ref of item.refs) {
+		const label = FORGE_LABEL_RE.exec(ref.label.trim());
+		if (label) add(label[1]);
+		if (ref.href) {
+			const href = FORGE_HREF_RE.exec(ref.href);
+			if (href) add(href[1]);
+		}
+	}
+	return repos;
+}
+
+/** Every repo the warp's items touch — the option set a repo heddle offers. */
+export function warpRepos(layers: WarpLayer[]): string[] {
+	const repos: string[] = [];
+	for (const layer of layers) {
+		for (const item of layer.items) {
+			for (const repo of itemRepos(item)) {
+				if (!repos.includes(repo)) repos.push(repo);
+			}
+		}
+	}
+	return repos;
+}
+
 export type { WarpHeat };

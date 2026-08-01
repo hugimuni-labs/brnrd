@@ -78,18 +78,32 @@ const HEADING_RE = /^##[ \t]+(.*)$/;
  * shape and stays plain text, same as any other unrecognized construct here. */
 const REF_LINK_RE = /^\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)$/;
 
+/** The forge's own qualified shorthand, `owner/repo#N` — the multi-repo
+ * ground state's ref grammar (design-work-layers.md §Storage cosmology).
+ * Deterministically resolvable, so it earns an href; `/issues/N` is safe for
+ * PRs too (the forge redirects). A *bare* `#N` is deliberately not this
+ * shape: on an account-global surface it names no repo, and an ambiguity
+ * must render as one — plain text — never as a confidently guessed link. */
+const FORGE_REF_RE = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
+
 /** Split a `refs:` value on its `·` separator into individual refs, each
- * either an explicit link or a bare label. Never fabricates an `href` for a
- * bare kb-page name — the module has no reliable way to resolve one without
- * guessing, and a guessed link that 404s is worse than a label with none. */
+ * either an explicit link, a qualified forge shorthand, or a bare label.
+ * Never fabricates an `href` for a bare kb-page name or a bare `#N` — the
+ * module has no reliable way to resolve either without guessing, and a
+ * guessed link that 404s is worse than a label with none. */
 export function parseRefs(raw: string): BackchannelRef[] {
 	return raw
 		.split('·')
 		.map((segment) => segment.trim())
 		.filter((segment) => segment.length > 0)
 		.map((segment) => {
-			const match = REF_LINK_RE.exec(segment);
-			return match ? { label: match[1], href: match[2] } : { label: segment, href: null };
+			const link = REF_LINK_RE.exec(segment);
+			if (link) return { label: link[1], href: link[2] };
+			const forge = FORGE_REF_RE.exec(segment);
+			if (forge) {
+				return { label: segment, href: `https://github.com/${forge[1]}/issues/${forge[2]}` };
+			}
+			return { label: segment, href: null };
 		});
 }
 
