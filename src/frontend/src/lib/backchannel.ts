@@ -27,6 +27,32 @@ export function backchannelCount(
 	return (prs?.length ?? 0) + (requests?.length ?? 0);
 }
 
+// Loading is a state, not an answer (#918's UI sibling, measured 2026-08-01:
+// three loads of the same page rendered the §1 counter as 20 · "clear" · 4,
+// because every intermediate feed arrival rendered as a finished verdict).
+// The clear verdict and the final count may only render once every feed the
+// sum spans has resolved — loaded or errored, but not still in flight.
+
+/** The §1 "queue is clear" collapse is only true once all feeds resolved,
+ * the sum is zero, and nothing is withheld. Before that, an empty count is
+ * an unmeasured absence, not a zero. */
+export function backchannelShowClear(
+	feedsResolved: boolean,
+	count: number,
+	withheld: boolean
+): boolean {
+	return feedsResolved && count === 0 && !withheld;
+}
+
+/** Counter chip text: never presents an in-flight sum as a verdict. */
+export function backchannelChip(feedsResolved: boolean, count: number): string {
+	if (!feedsResolved) {
+		return count === 0 ? 'counting…' : `${count} so far…`;
+	}
+	if (count === 0) return 'nothing waiting';
+	return `${count} item${count === 1 ? '' : 's'} waiting`;
+}
+
 export function buildBackchannelItems(
 	prs: PRReviewItem[],
 	requests: ConfigChangeRequestItem[]

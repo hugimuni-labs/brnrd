@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { backchannelCount, buildBackchannelItems } from './backchannel.ts';
+import {
+	backchannelChip,
+	backchannelCount,
+	backchannelShowClear,
+	buildBackchannelItems
+} from './backchannel.ts';
 import type { ConfigChangeRequestItem } from './configRequests.ts';
 import type { PRReviewItem } from './prReviewQueue.ts';
 
@@ -78,4 +83,26 @@ test('backchannel items merge the two queues oldest-first', () => {
 	);
 	assert.equal(items[0].headline, 'runner.shell: claude → codex');
 	assert.equal(items[1].headline, '#42 Ship the thing');
+});
+
+test('the clear verdict waits for every feed — a mid-load zero is counting, not clear', () => {
+	// The measured 2026-08-01 flicker: derived feeds arrive as [] while the
+	// authored surface file is still in flight → count 0, feeds unresolved.
+	assert.equal(backchannelShowClear(false, 0, false), false);
+	assert.equal(backchannelChip(false, 0), 'counting…');
+});
+
+test('a genuinely empty resolved queue is clear', () => {
+	assert.equal(backchannelShowClear(true, 0, false), true);
+	assert.equal(backchannelChip(true, 0), 'nothing waiting');
+});
+
+test('withheld is never rendered as clear', () => {
+	assert.equal(backchannelShowClear(true, 0, true), false);
+});
+
+test('a partial sum is labeled as partial, a resolved sum as the verdict', () => {
+	assert.equal(backchannelChip(false, 4), '4 so far…');
+	assert.equal(backchannelChip(true, 4), '4 items waiting');
+	assert.equal(backchannelChip(true, 1), '1 item waiting');
 });
