@@ -11,13 +11,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'BackchannelQueue.svelte');
 const generated = join(here, '.backchannelQueue.generated.mjs');
 
-// The briefing fold (design-dashboard-briefing §3): an authored item is one
-// row — headline · kind chip · refs · the prompt as the tap-action — and the
-// full markdown body folds behind it, one open at a time. These tests render
-// the real component server-side (same dance as workSurfaceHeader.test.ts:
-// compile with stubbed child components, since neither `MarkdownContent` nor
-// `WithheldNotice` compiles standalone outside a bundler's `.svelte`
-// resolution) and assert the fold's contract on the produced markup.
+// The briefing fold, compacted one level further (design-dashboard-briefing
+// §3, then the 2026-08-01 list-itself compaction): a folded authored item's
+// row carries only its disclosure, headline, and kind chip. Refs and the
+// `prompt:` copy-chip move inside the fold body, above the prose, and render
+// only once that one row is open. These tests render the real component
+// server-side (same dance as workSurfaceHeader.test.ts: compile with stubbed
+// child components, since neither `MarkdownContent` nor `WithheldNotice`
+// compiles standalone outside a bundler's `.svelte` resolution) and assert
+// the fold's contract on the produced markup.
 async function renderQueue(props: {
 	authoredItems?: AuthoredBackchannelItem[];
 	initialOpenKey?: string | null;
@@ -91,20 +93,40 @@ const readTheLedger = item({
 	bodyMarkdown: 'The ledger prose.'
 });
 
-test('a row renders headline, kind chip, refs and the prompt tap-action', async () => {
+test('a folded row renders only the headline and kind chip — no refs, no prompt chip', async () => {
 	const html = await renderQueue({ authoredItems: [decideTheSplit] });
 	ok(html.includes('decide the split'));
 	ok(html.includes('>decide<'), 'kind chip renders its label');
-	ok(html.includes('design-wyrd'), 'bare ref renders as a label');
-	ok(html.includes('https://example.test/pr/915'), 'link ref renders as a link');
-	ok(html.includes('answer the split question in one line'), 'the prompt line is on the row');
+	ok(!html.includes('design-wyrd'), 'refs stay folded behind the row');
+	ok(!html.includes('https://example.test/pr/915'), 'link refs stay folded behind the row');
+	ok(
+		!html.includes('answer the split question in one line'),
+		'the prompt chip stays folded behind the row'
+	);
 });
 
-test('the body folds behind the row by default — closed rows render no body container', async () => {
+test('opening a row surfaces its refs, its prompt chip, and its prose', async () => {
+	const html = await renderQueue({
+		authoredItems: [decideTheSplit],
+		initialOpenKey: '0:decide-the-split'
+	});
+	ok(html.includes('decide the split'));
+	ok(html.includes('design-wyrd'), 'bare ref renders as a label once open');
+	ok(html.includes('https://example.test/pr/915'), 'link ref renders as a link once open');
+	ok(html.includes('answer the split question in one line'), 'the prompt chip renders once open');
+	ok(
+		html.includes('id="backchannel-fold-0:decide-the-split"'),
+		'the fold body (refs, prompt chip, and — via MarkdownContent, stubbed here — the prose) is mounted once open'
+	);
+});
+
+test('the body folds behind the row by default — closed rows render no body container, no refs, no prompt chip', async () => {
 	const html = await renderQueue({ authoredItems: [decideTheSplit, readTheLedger] });
 	ok(!html.includes('aria-expanded="true"'));
 	ok(html.includes('aria-expanded="false"'), 'a folded row still declares the fold');
 	ok(!html.includes('id="backchannel-fold-'), 'no fold body is mounted while closed');
+	ok(!html.includes('design-wyrd'), 'refs stay folded');
+	ok(!html.includes('answer the split question in one line'), 'the prompt chip stays folded');
 });
 
 test('exactly one row unfolds — the open key mounts that body and only that body', async () => {
@@ -123,4 +145,21 @@ test('an item with no body offers no fold affordance', async () => {
 	});
 	ok(html.includes('no body here'));
 	ok(!html.includes('aria-expanded'), 'nothing to unfold, so no expand control');
+});
+
+test('an item with no body has nowhere to fold refs and the prompt chip into, so they stay on the row', async () => {
+	const html = await renderQueue({
+		authoredItems: [
+			item({
+				key: '0:no-body',
+				headline: 'no body here',
+				kind: 'act',
+				refs: [{ label: 'design-wyrd', href: null }],
+				prompt: 'do the thing'
+			})
+		]
+	});
+	ok(html.includes('no body here'));
+	ok(html.includes('design-wyrd'), 'refs render on an un-foldable row');
+	ok(html.includes('do the thing'), 'the prompt chip renders on an un-foldable row');
 });
