@@ -54,7 +54,7 @@
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
-	import { backchannelCount } from '$lib/backchannel';
+	import { backchannelChip, backchannelCount, backchannelShowClear } from '$lib/backchannel';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
@@ -239,6 +239,16 @@
 	// not two — authored items are the primary one.
 	let pendingBackchannelCount = $derived(
 		authoredBackchannelItems.length + backchannelCount(prReviewQueue, configRequests)
+	);
+	// All three feeds resolved (loaded or errored) — until then the sum is a
+	// partial read, and rendering it as a verdict is the measured 20 → "clear"
+	// → 4 flicker. `authoredBackchannelItems.length === 0` alone cannot tell
+	// "surface not yet fetched" from "no authored items"; only the feed
+	// handles can.
+	let backchannelFeedsResolved = $derived(
+		(surfaceData !== null || surfaceError !== null) &&
+			(prReviewQueue !== null || prReviewQueueError !== null) &&
+			(configRequests !== null || configRequestsError !== null)
 	);
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
@@ -685,9 +695,7 @@
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] text-ink-quiet">
-					{pendingBackchannelCount === 0
-						? 'nothing waiting'
-						: `${pendingBackchannelCount} item${pendingBackchannelCount === 1 ? '' : 's'} waiting`}
+					{backchannelChip(backchannelFeedsResolved, pendingBackchannelCount)}
 				</p>
 			</div>
 			<div class="mt-2">
@@ -697,11 +705,13 @@
 				{#if configRequestsError}
 					<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
 				{/if}
-				{#if pendingBackchannelCount === 0 && !prReviewQueueWithheld}
-					<!-- The collapse that makes a standing section affordable. -->
+				{#if backchannelShowClear(backchannelFeedsResolved, pendingBackchannelCount, prReviewQueueWithheld !== null)}
+					<!-- The collapse that makes a standing section affordable — only
+					     once every feed has answered; before that, an empty sum is
+					     an unmeasured absence, not a clear queue. -->
 					<p class="text-sm text-ink-quiet">nothing waits on you — the queue is clear.</p>
-				{:else if prReviewQueue === null && configRequests === null && authoredBackchannelItems.length === 0}
-					<p class="text-sm text-ink-quiet">Loading…</p>
+				{:else if pendingBackchannelCount === 0 && !backchannelFeedsResolved}
+					<p class="text-sm text-ink-quiet">counting…</p>
 				{:else}
 					<BackchannelQueue
 						authoredItems={authoredBackchannelItems}
