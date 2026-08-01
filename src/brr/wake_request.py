@@ -17,6 +17,11 @@ is deliberately almost nothing:
   the surface a human reads (and `facets.py` renders as
   ``resources.runner.wake_request``) to see that a tap existed and did not
   apply.
+- ``.brr/wake-request-sticky.json`` — #932's conversation-sticky record:
+  the profile a claimed tap applied, bound to the claiming lead event's
+  correspondent/conversation key with a TTL. Daemon-owned outright (the
+  server's row is already retired by the time this exists), so the #733
+  don't-replicate-server-facts rule does not apply to it.
 
 #733: this file used to hold a second opinion — a 900 s mirror TTL and a
 120 s claim window, judged against a ``parked_at`` stamp — while the
@@ -43,6 +48,16 @@ from typing import Any
 
 _PENDING_NAME = "wake-request.json"
 _RECEIPT_NAME = "wake-request-receipt.json"
+_STICKY_NAME = "wake-request-sticky.json"
+
+# #932: how long a claimed tap stays bound to the conversation that claimed
+# it. The maintainer priced this fork explicitly: the one-shot semantics are
+# a cost-protection measure, and a plain sticky tap would inherit the
+# forget-to-downgrade problem — so the expiry is load-bearing, not
+# decoration. Two hours covers a photo album or a burst of follow-ups; the
+# cheap config default returns on its own tomorrow. Override per repo with
+# ``wake_request.sticky_ttl_seconds`` in ``.brr/config``.
+STICKY_TTL_SECONDS = 2 * 60 * 60
 
 
 def _pending_path(brr_dir: Path) -> Path:
@@ -51,6 +66,10 @@ def _pending_path(brr_dir: Path) -> Path:
 
 def _receipt_path(brr_dir: Path) -> Path:
     return brr_dir / _RECEIPT_NAME
+
+
+def _sticky_path(brr_dir: Path) -> Path:
+    return brr_dir / _STICKY_NAME
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -173,3 +192,64 @@ def last_receipt(brr_dir: Path) -> dict[str, Any] | None:
     """The most recent claim receipt, or None."""
     data = _read_json(_receipt_path(brr_dir))
     return data if isinstance(data, dict) else None
+
+
+def store_sticky(
+    brr_dir: Path,
+    *,
+    request_id: str,
+    profile: str,
+    correspondent_key: str | None = None,
+    conversation_key: str | None = None,
+    claimed_at: str | None = None,
+) -> None:
+    """#932: bind a just-claimed tap to the conversation that claimed it.
+
+    Written at the one claim point (`daemon._apply_dashboard_wake_request`)
+    when the server applies a tap, and consulted only by later dispatches
+    with *no* pending tap. Unlike the pending mirror this is not a replica
+    of a server fact — the server retires the row at claim time; what the
+    conversation inherits afterwards is a daemon-local promise, so the
+    daemon owns this record outright, TTL included.
+
+    ``correspondent_key`` is the preferred binding: it collapses
+    ``cloud:telegram:…`` and ``telegram:…`` to one human (#930 is what raw
+    thread keys did to menus). ``conversation_key`` is the fallback for
+    events that carry no correspondent identity. A tap claimed by an event
+    that yields *neither* cannot be inherited by anything, so it clears any
+    previous record instead of leaving a stale promise behind — a new tap
+    always replaces the record, even with nothing to bind to.
+
+    Each call overwrites the last: one requester parks at most one tap at a
+    time, and the newest tap owns the conversation.
+    """
+    profile = str(profile or "").strip()
+    correspondent_key = str(correspondent_key or "").strip() or None
+    conversation_key = str(conversation_key or "").strip() or None
+    if not profile or not (correspondent_key or conversation_key):
+        drop_sticky(brr_dir)
+        return
+    payload: dict[str, Any] = {
+        "request_id": str(request_id or "").strip() or None,
+        "profile": profile,
+        "claimed_at": (
+            str(claimed_at or "").strip()
+            or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        ),
+    }
+    if correspondent_key:
+        payload["correspondent_key"] = correspondent_key
+    if conversation_key:
+        payload["conversation_key"] = conversation_key
+    _write_json(_sticky_path(brr_dir), payload)
+
+
+def sticky_record(brr_dir: Path) -> dict[str, Any] | None:
+    """The live conversation-sticky record, or None."""
+    data = _read_json(_sticky_path(brr_dir))
+    return data if isinstance(data, dict) else None
+
+
+def drop_sticky(brr_dir: Path) -> None:
+    """Forget the sticky record (expiry, or an unbindable replacement)."""
+    _sticky_path(brr_dir).unlink(missing_ok=True)
