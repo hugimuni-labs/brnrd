@@ -431,9 +431,24 @@ export function headingAnchor(text: string): string {
 }
 
 export class SurfaceAuthError extends Error {}
+
+// The dashboard polls this endpoint every couple of seconds (`+page.svelte`
+// POLL_MS), and the corpus it carries runs to ~2,841 pages of full markdown.
+// The server now answers a matching `If-None-Match` with an empty 304
+// (#946) — module-scope state here is what actually sends that header, so
+// the 304 path has a caller instead of sitting dead on the server.
+let lastEtag: string | null = null;
+let lastResponse: SurfaceResponse | null = null;
+
 export async function fetchSurface(fetchImpl: typeof fetch = fetch): Promise<SurfaceResponse> {
-	const res = await fetchImpl('/v1/dashboard/surface', { headers: { accept: 'application/json' } });
+	const headers: Record<string, string> = { accept: 'application/json' };
+	if (lastEtag && lastResponse) headers['if-none-match'] = lastEtag;
+	const res = await fetchImpl('/v1/dashboard/surface', { headers });
 	if (res.status === 401) throw new SurfaceAuthError('unauthenticated');
+	if (res.status === 304 && lastResponse) return lastResponse;
 	if (!res.ok) throw new Error(`surface fetch failed: ${res.status}`);
-	return (await res.json()) as SurfaceResponse;
+	const data = (await res.json()) as SurfaceResponse;
+	lastEtag = res.headers.get('etag');
+	lastResponse = data;
+	return data;
 }
