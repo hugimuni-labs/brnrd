@@ -63,7 +63,8 @@ the process documented instead of run. The default is the other loop:
   the forks, and anything irreversible.
 - converge ⇒ read each worker's diff whole — never its summary, least of
   all a good one — then move: finish it yourself | re-dispatch sharper |
-  merge under the standing rules | hand it over, saying which.
+  hand it over, saying which. Merging is the operator's, unless their own
+  standing rules have explicitly granted it — no grant, no lane.
 - verify where the reader lives ⇒ a shipped feature is driven where its
   user meets it — the UI opened, the message rendered, the command run.
   A green suite proves the code; only the surface proves the product.
