@@ -2015,6 +2015,78 @@ def test_recent_conversation_renders_dedup_provenance():
     assert "also-on=cloud:telegram:10:" in block
 
 
+def test_recent_conversation_renders_photo_marker_for_blank_body():
+    """#943 — a captionless photo turn used to render as a bare, empty
+    ``user (telegram):`` line, structurally indistinguishable from a user
+    sending nothing at all. The record this reads (``kind: event``,
+    ``body: ""``, ``attachments: [{"kind": "photo", "filename": ...}]``)
+    is exactly what ``conversations.append_event`` now writes for such a
+    message (see ``test_conversations.test_append_event_records_photo_attachment_fact``) —
+    the render half consuming the record half's fact.
+    """
+    recent = [
+        {
+            "ts": "2026-07-31T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "body": "",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent)
+    assert "[photo ×1]" in block
+    assert block.strip().endswith("[photo ×1]")
+
+
+def test_recent_conversation_photo_marker_follows_caption():
+    """A photo *with* a caption keeps the caption text and appends the
+    marker after it, rather than the marker replacing real content."""
+    recent = [
+        {
+            "ts": "2026-07-31T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "body": "check this out",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent)
+    assert "check this out [photo ×1]" in block
+
+
+def test_recent_conversation_multiple_attachment_kinds_group_and_count():
+    recent = [
+        {
+            "ts": "2026-07-31T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "body": "",
+            "attachments": [
+                {"kind": "photo", "filename": "00-photo.jpg"},
+                {"kind": "photo", "filename": "01-photo.jpg"},
+                {"kind": "document", "filename": "02-report.png"},
+            ],
+        },
+    ]
+    block = _format_recent_conversation(recent)
+    assert "[photo ×2]" in block
+    assert "[document ×1]" in block
+
+
+def test_recent_conversation_no_marker_without_attachments():
+    """The ordinary text-only case gets no bracket noise at all."""
+    recent = [
+        {
+            "ts": "2026-07-31T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "body": "hello",
+        },
+    ]
+    block = _format_recent_conversation(recent)
+    assert "[" not in block
+
+
 def _read_bundled_agents_md() -> str:
     from pathlib import Path
 

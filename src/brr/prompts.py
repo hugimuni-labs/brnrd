@@ -4185,6 +4185,9 @@ def _format_recent_conversation(
             summary = _cap_turn_body(
                 summary, record, limit=turn_max_bytes, brr_dir=brr_dir
             )
+            marker = _attachment_marker(record)
+            if marker:
+                summary = f"{summary} {marker}".strip() if summary else marker
             line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "run":
             tid = record.get("run_id", "")
@@ -4417,6 +4420,30 @@ def _cap_turn_body(
 def _conversation_body(record: dict[str, Any]) -> str:
     body = record.get("body")
     return body.strip() if isinstance(body, str) else ""
+
+
+def _attachment_marker(record: dict[str, Any]) -> str:
+    """``[photo ×2]``-style marker for a woven turn carrying attachments.
+
+    Issue #943: a captionless inbound photo/document used to render as a
+    blank turn in "Recent turns" — the fact of the attachment existed
+    nowhere the weave looked. ``conversations.append_event`` mints the fact
+    (``record["attachments"]``, a list of ``{"kind", "filename"}`` dicts);
+    this is the cheap render half — a marker cheap enough to always include
+    rather than a full describe-the-image pass. One bracket group per kind,
+    in first-appearance order, so ``[photo ×2] [document ×1]`` reads left
+    to right in the order the kinds arrived on the message.
+    """
+    attachments = record.get("attachments")
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    counts: dict[str, int] = {}
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "attachment").strip() or "attachment"
+        counts[kind] = counts.get(kind, 0) + 1
+    return " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
 
 
 def _conversation_source_label(record: dict[str, Any]) -> str:
