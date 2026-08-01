@@ -10915,7 +10915,12 @@ def start(
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
-            if reload_requested and current is None:
+            # A resident slot is quiescent only when its worker-stack is too.
+            # ``pool.shutdown(wait=True)`` joins every worker, so re-execing
+            # while spawned children remain would turn their whole runtime
+            # into latency for a new correspondent despite the executor's
+            # deliberately reserved resident thread.
+            if reload_requested and current is None and not active_spawns:
                 # Emit a deliberate breadcrumb *before* exec so an operator
                 # watching the terminal can tell this restart was intentional
                 # (not a crash) and see what changed.
@@ -10954,12 +10959,12 @@ def start(
             # (and a second round of ``list_pending`` I/O) every tick.
             # Scanning is gated on an open slot existing at all, not on
             # ``reload_requested`` — a pending package-file reload no
-            # longer holds the spawn slot shut (see below); it still holds
-            # the *resident* slot shut, so a scan purely for a fresh
-            # resident dispatch would be wasted while reload is pending.
+            # longer holds the spawn slot shut (see below).  Active spawn
+            # workers also keep the reserved resident thread admissible for
+            # a fresh correspondent, until the process can re-exec safely.
             scanned: list[_DispatchTarget] | None = None
             if len(active_spawns) < max_spawns or (
-                current is None and not reload_requested
+                current is None and (not reload_requested or active_spawns)
             ):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
@@ -11101,13 +11106,14 @@ def start(
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
             # picks them up at a plan boundary (multi-response), or the
-            # next spawn handles them. Reload holds *this* (resident)
-            # dispatch so the slot can drain and re-exec can proceed — a
-            # fresh resident thought must not start on soon-to-be-stale
-            # code. The concurrent-spawn slot above is no longer gated the
-            # same way; see its own comment.
+            # next spawn handles them. Reload ordinarily holds this resident
+            # dispatch so the slot can drain and re-exec can proceed. An
+            # active worker stack is the exception: re-exec cannot happen
+            # until those threads finish anyway, while a correspondent can
+            # use the reserved resident thread now.  Keep background
+            # follow-ups parked, but do not make a person wait on workers.
             burst_hold = 0.0
-            if current is None and not reload_requested:
+            if current is None and (not reload_requested or active_spawns):
                 pending = [
                     t for t in (scanned or [])
                     if not t.event.get("spawn_immediate")
@@ -11115,6 +11121,12 @@ def start(
                     # child's views, never dispatched as its own thought.
                     and not t.event.get("spawn_message_for_event")
                 ]
+                if reload_requested:
+                    pending = [
+                        t for t in pending
+                        if _event_requires_thread_delivery(t.event)
+                        and not t.event.get("spawned_by_run")
+                    ]
                 if pending:
                     pending = _handle_daemon_control_events(
                         pending,
