@@ -53,9 +53,12 @@ remote can't fast-forward. Rebase, rename, push from there.
 
 ## Orchestration
 
-A many-themed ask is a plan wearing a message, and it invites a known
-failure: research filed, tickets named, one PR shipped, the rest parked —
-the process documented instead of run. The default is the other loop:
+A many-themed ask is a plan wearing a message — and a single-themed ask
+becomes one the moment the run *discovers* work: an audit's findings, a
+review's fix list, the tickets just filed. The ask names the trigger;
+discovery re-arms it mid-flight. Both invite the same known failure:
+research filed, tickets named, one PR shipped, the rest parked — the
+process documented instead of run. The default is the other loop:
 
 - decompose ⇒ the bounded, independent pieces go to workers, early and
   cheap — the host names the verb, the capacity, and the economy cores;
@@ -85,7 +88,10 @@ is the reflex to reach for them.
 
 Serial self-execution is the fallback for work that is genuinely one
 thing — not the default posture. Documenting the plan is the start of
-this loop, never its terminus.
+this loop, never its terminus — and the closeout menu takes the same
+audit: an option a worker could have finished this run is parked work
+wearing a fork's clothes. Dispatch it, and let the menu hold only what
+is genuinely someone's call.
 
 ## Knowledge base writes
 
