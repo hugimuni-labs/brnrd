@@ -29,6 +29,18 @@ def make_engine(url: str) -> Engine:
             # A single shared in-memory connection, so every session
             # sees the same database (otherwise each connection gets a
             # fresh empty one).
+            #
+            # The cost, and it only ever bites tests: *one* connection means
+            # one SQLite transaction for every session alive at once. Two
+            # concurrent sessions are then not isolated from each other at
+            # all — one session's `close()` ROLLBACKs another's uncommitted
+            # INSERT, and the writer sees its own just-committed row vanish
+            # (`Could not refresh instance '<Event ...>'`, 2026-08-01 CI, the
+            # inbox long-poll wake test). No pooled backend behaves this way:
+            # Postgres and file-backed SQLite both give each session its own
+            # connection. So `:memory:` is only honest for a test that issues
+            # one request at a time; anything modelling concurrent callers
+            # must use a file (see `tests/test_brnrd_inbox.py::env`).
             kwargs["poolclass"] = StaticPool
     return create_engine(url, **kwargs)
 
