@@ -25,10 +25,30 @@ from _helpers import brnrd_account_headers  # noqa: E402
 
 
 @pytest.fixture()
-def env():
+def env(tmp_path):
     forwarder = CapturingForwarder()
     settings = Settings(
-        database_url="sqlite:///:memory:",
+        # A *file*, not `sqlite:///:memory:` — this file is the one place in
+        # the suite where two requests are in flight at once (the wake test
+        # POSTs `/v1/_dev/enqueue` from a thread while a long-poll is
+        # running), and an in-memory URL cannot model that. `db.make_engine`
+        # pins `:memory:` to a `StaticPool`, which hands *every* session the
+        # same DBAPI connection, so concurrent sessions share one SQLite
+        # transaction: the poll loop's `with session_factory() as db:`
+        # (`inbox._fetch_since_many_detached`) closes every 20 ms, and that
+        # close ROLLBACKs the enqueue's not-yet-committed INSERT out from
+        # under it. `inbox.enqueue`'s `db.refresh(event)` then finds no row
+        # and raises `InvalidRequestError: Could not refresh instance
+        # '<Event ...>'` (2026-08-01 CI). It is purely an artifact of the
+        # shared connection — production is Postgres, and even file-backed
+        # SQLite gives each session its own connection, so no session can
+        # roll back another's work. A file keeps the pool honest while every
+        # test here still drives the real endpoints through the real client —
+        # nothing about what this file covers changes, only whether the
+        # engine under it can model two callers at once. Measured on the
+        # 200-run replica of the wake test: `:memory:` fails ~1%, all of them
+        # this exception; a file, 0/200.
+        database_url=f"sqlite:///{tmp_path / 'brnrd-test.db'}",
         # This cap must stay *above* the largest `wait=` any test here asks
         # for, because the endpoint clamps to `min(wait, cap)` silently: at
         # 0.4 the wake test below declared a 2s budget and got 0.4s, so on a
