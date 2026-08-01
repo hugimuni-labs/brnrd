@@ -44,13 +44,28 @@ export function backchannelShowClear(
 	return feedsResolved && count === 0 && !withheld;
 }
 
-/** Counter chip text: never presents an in-flight sum as a verdict. */
-export function backchannelChip(feedsResolved: boolean, count: number): string {
+/** Counter chip text: never presents an in-flight sum as a verdict, and
+ * never a bare sum — the count spans two populations with different owners
+ * (resident-authored surface items vs. rows derived from forge/config
+ * feeds), so the chip always attributes: "N authored · M derived". */
+export function backchannelChip(
+	feedsResolved: boolean,
+	authoredCount: number,
+	derivedCount: number
+): string {
+	const attributed = `${authoredCount} authored · ${derivedCount} derived`;
 	if (!feedsResolved) {
-		return count === 0 ? 'counting…' : `${count} so far…`;
+		return authoredCount + derivedCount === 0 ? 'counting…' : `${attributed} · counting…`;
 	}
-	if (count === 0) return 'nothing waiting';
-	return `${count} item${count === 1 ? '' : 's'} waiting`;
+	if (authoredCount + derivedCount === 0) return 'nothing waiting';
+	return attributed;
+}
+
+/** The briefing fold's whole state is one key (design-dashboard-briefing §3:
+ * the full-prose render is the *open* state of exactly one row). Opening a
+ * row closes whichever was open; tapping the open row closes it. */
+export function toggleFold(open: string | null, key: string): string | null {
+	return open === key ? null : key;
 }
 
 export function buildBackchannelItems(
