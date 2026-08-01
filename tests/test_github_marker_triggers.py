@@ -20,6 +20,8 @@ from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Account, GitHubInstallation, Repo  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.platforms import github as gh  # noqa: E402
+from brnrd.routers import _session as session_router  # noqa: E402
+from brnrd.routers import dashboard as dashboard_router  # noqa: E402
 from brnrd.routers import github_app as github_app_router  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
@@ -152,6 +154,22 @@ def test_installation_sync_without_a_bound_account_never_calls_marker_sync(monke
 def test_dashboard_coarse_recheck_only_touches_stale_repos(monkeypatch):
     calls: list = []
     _spy_sync(monkeypatch, calls)
+
+    # This test owns the refresh lifetime: it is about which stale repos the
+    # worker selects, not whether a fire-and-forget thread wins a race with
+    # the assertions (or with teardown of the in-memory SQLite engine).
+    def run_refresh_synchronously(request, account_id):
+        session_router._run_github_background_refresh(
+            request.app.state.SessionLocal,
+            request.app.state.settings,
+            account_id,
+        )
+
+    monkeypatch.setattr(
+        dashboard_router,
+        "_start_github_background_refresh",
+        run_refresh_synchronously,
+    )
     client = _client()
     _token, account_id = _login(client)
 
