@@ -4757,6 +4757,103 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
     assert order.index("resident-done") < order.index("reexec")
 
 
+def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
+    tmp_path, monkeypatch,
+):
+    """A reload waits for spawned workers without making a user wait too.
+
+    A parent can edit Python, finish, and leave concurrent ``spawn:``
+    children running.  The next loop sees ``current is None`` and a pending
+    reload.  Before this regression, it called ``pool.shutdown(wait=True)``
+    immediately, so a fresh user event could not use the deliberately
+    reserved resident executor thread until every worker ended.  That turns
+    background worker duration into correspondent latency.
+    """
+    write_repo_scaffold(tmp_path)
+    inbox = tmp_path / ".brr" / "inbox"
+    release_spawns = threading.Event()
+    spawns_ready = threading.Event()
+    resident_started = threading.Event()
+    spawn_count = 0
+    spawn_lock = threading.Lock()
+    order: list[str] = []
+
+    class ReloadRequested:
+        last_changed = ["src/brr/daemon.py"]
+
+        def changed(self):
+            return spawns_ready.is_set()
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        nonlocal spawn_count
+        if event.get("spawn_immediate"):
+            with spawn_lock:
+                spawn_count += 1
+                if spawn_count == 2:
+                    protocol.create_event(inbox, "telegram", "new user message")
+                    spawns_ready.set()
+            release_spawns.wait(timeout=2)
+            order.append(f"spawn-{event['id']}-done")
+            return Run(
+                id=f"run-{event['id']}", event_id=event["id"], body="worker",
+                status="done", meta={"worker": True},
+            )
+        resident_started.set()
+        order.append("resident-started")
+        release_spawns.set()
+        return Run(
+            id="run-resident", event_id=event["id"], body="new user message",
+            status="done",
+        )
+
+    def stop_after_reload():
+        order.append("reexec")
+        raise StopIteration
+
+    # The unfixed shutdown path otherwise waits for intentionally blocked
+    # workers.  The timer makes it fail deterministically rather than hang;
+    # the healthy path starts the resident before this escape hatch matters.
+    timer = threading.Timer(0.3, release_spawns.set)
+    timer.start()
+    monkeypatch.setattr(
+        daemon.reload_mod.DevReloadWatcher,
+        "for_repo",
+        classmethod(lambda cls, _repo_root: ReloadRequested()),
+    )
+    monkeypatch.setattr(daemon.reload_mod, "reexec", stop_after_reload)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 7},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    for i in range(2):
+        protocol.create_event(
+            inbox, "spawn", f"worker {i}", spawn_immediate=True,
+            worker=True, environment="worktree",
+        )
+
+    try:
+        with pytest.raises(StopIteration):
+            daemon.start(tmp_path, dev_reload=True)
+    finally:
+        timer.cancel()
+        release_spawns.set()
+
+    assert resident_started.is_set(), (
+        "a pending reload must not hold the free resident seat behind workers"
+    )
+    assert order.index("resident-started") < order.index("reexec")
+
+
 def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     """The publish kernel reads ``publish_branch`` + ``expected_remote_oid``
     directly from ``task.meta`` (no extra threading from the worker)."""
