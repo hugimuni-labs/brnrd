@@ -58,7 +58,7 @@
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
-	import { LENS_ALL, LENS_BACKCHANNEL, applyLens } from '$lib/loomLens';
+	import { LENS_ALL, applyLens } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
@@ -235,8 +235,8 @@
 		backchannelFile ? parseBackchannelPage(backchannelFile.markdown) : []
 	);
 	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
-	// The lens badge and the "does anything wait" question now span three
-	// feeds, not two — authored items are the primary one.
+	// The §1 counter and the "does anything wait" question span three feeds,
+	// not two — authored items are the primary one.
 	let pendingBackchannelCount = $derived(
 		authoredBackchannelItems.length + backchannelCount(prReviewQueue, configRequests)
 	);
@@ -661,10 +661,65 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<section class="ignite mt-4" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
+		<!-- §1 · backchannel (#875, 2026-08-01): the resident's ask queue owns
+		     the fold. It began as a lens on the loom's filter rail; the
+		     maintainer's live read — "still kinda bolted on … it should be one
+		     of the center elements" — overruled the lens-not-section argument
+		     that used to live in loomLens.ts. That argument's real concern
+		     (a panel squatting the board while the answer is nothing) is
+		     answered here instead: with nothing waiting, the section is one
+		     quiet line. A queue is not a filter — every other chip on the rail
+		     answers "which past runs am I looking at?"; this surface answers
+		     "what does the resident need from me?", and a returning reader
+		     asks that question first. -->
+		<section
+			class="ignite mt-4"
+			style="--ignite-delay: 120ms"
+			aria-labelledby="backchannel-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§1 · capacity + dispatch</p>
+					<p class="eyebrow">§1 · backchannel</p>
+					<h2 id="backchannel-heading" class="font-mono text-sm font-semibold text-amber-100">
+						what waits on you
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] text-ink-quiet">
+					{pendingBackchannelCount === 0
+						? 'nothing waiting'
+						: `${pendingBackchannelCount} item${pendingBackchannelCount === 1 ? '' : 's'} waiting`}
+				</p>
+			</div>
+			<div class="mt-2">
+				{#if prReviewQueueError}
+					<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
+				{/if}
+				{#if configRequestsError}
+					<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
+				{/if}
+				{#if pendingBackchannelCount === 0 && !prReviewQueueWithheld}
+					<!-- The collapse that makes a standing section affordable. -->
+					<p class="text-sm text-ink-quiet">nothing waits on you — the queue is clear.</p>
+				{:else if prReviewQueue === null && configRequests === null && authoredBackchannelItems.length === 0}
+					<p class="text-sm text-ink-quiet">Loading…</p>
+				{:else}
+					<BackchannelQueue
+						authoredItems={authoredBackchannelItems}
+						knownPaths={surfaceKnownPaths}
+						prs={prReviewQueue ?? []}
+						requests={configRequests ?? []}
+						stale={prReviewQueueStale}
+						{now}
+						withheld={prReviewQueueWithheld}
+					/>
+				{/if}
+			</div>
+		</section>
+
+		<section class="ignite mt-8" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§2 · capacity + dispatch</p>
 					<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">
 						next wake · fuel
 					</h2>
@@ -698,7 +753,7 @@
 		<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§2 · loom</p>
+					<p class="eyebrow">§3 · loom</p>
 					<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">
 						{liveRuns === null
 							? 'reading the run field'
@@ -724,7 +779,6 @@
 					onSelect={selectFromLoom}
 					onPastWindowChange={changeLoomPastWindow}
 					selectedId={loomSelection?.id ?? null}
-					backchannelCount={pendingBackchannelCount}
 					lens={loomLens}
 					onLensChange={changeLoomLens}
 					{daemonMood}
@@ -746,21 +800,19 @@
 				     "· receipt" for any closed run, which stopped being true the
 				     moment the node became the single answer. -->
 					<p class="eyebrow">
-						§2a · {loomLens === LENS_BACKCHANNEL
-							? 'backchannel'
-							: loomSelection === null
-								? focusRunId === null
-									? 'now'
-									: selectedNode && selectedNodeAnswers
-										? 'now · node'
-										: 'now'
-								: loomSelection.kind === 'wake'
-									? 'selected wake'
-									: selectedNode && selectedNodeAnswers
-										? 'selected run · node'
-										: selectedLiveRuns.length > 0
-											? 'selected run · live'
-											: 'selected run · receipt'}
+						§3a · {loomSelection === null
+							? focusRunId === null
+								? 'now'
+								: selectedNode && selectedNodeAnswers
+									? 'now · node'
+									: 'now'
+							: loomSelection.kind === 'wake'
+								? 'selected wake'
+								: selectedNode && selectedNodeAnswers
+									? 'selected run · node'
+									: selectedLiveRuns.length > 0
+										? 'selected run · live'
+										: 'selected run · receipt'}
 					</p>
 					{#if loomSelection !== null}
 						<div class="flex shrink-0 items-baseline gap-3">
@@ -775,30 +827,7 @@
 					{/if}
 				</div>
 				<div class="mt-2">
-					{#if loomLens === LENS_BACKCHANNEL}
-						<!-- The resident's ask queue lives here now: review + approval in
-					     one surface, instead of one PR-shaped lens and one separate
-					     settings panel claiming the same job. -->
-						{#if prReviewQueueError}
-							<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
-						{/if}
-						{#if configRequestsError}
-							<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
-						{/if}
-						{#if prReviewQueue === null && configRequests === null}
-							<p class="text-sm text-ink-quiet">Loading…</p>
-						{:else}
-							<BackchannelQueue
-								authoredItems={authoredBackchannelItems}
-								knownPaths={surfaceKnownPaths}
-								prs={prReviewQueue ?? []}
-								requests={configRequests ?? []}
-								stale={prReviewQueueStale}
-								{now}
-								withheld={prReviewQueueWithheld}
-							/>
-						{/if}
-					{:else if loomSelection?.kind === 'wake'}
+					{#if loomSelection?.kind === 'wake'}
 						{#if scheduledWakesError}
 							<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
 						{/if}
@@ -860,7 +889,7 @@
 			</div>
 
 			<div class="ignite" style="--ignite-delay: 1000ms">
-				<p class="eyebrow mt-6">§2b · instruments</p>
+				<p class="eyebrow mt-6">§3b · instruments</p>
 				<!-- The instruments read the loom's dial, not a constant of their own
 			     (2026-07-19: "the 24h block is too static/limiting"). One time
 			     scope for the section: step the past label above, and this
@@ -870,7 +899,7 @@
 			     it becomes an instrument holding its own constant under a band
 			     that has already moved, which is precisely the defect #486 fixed
 			     for the time axis. -->
-				{#if loomLens !== LENS_ALL && loomLens !== LENS_BACKCHANNEL}
+				{#if loomLens !== LENS_ALL}
 					<p class="mt-1 font-mono text-[10px] text-ink-mute">
 						lensed — counting only runs matching the selected lens
 					</p>
