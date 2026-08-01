@@ -13,7 +13,13 @@ import { headingAnchor } from './surface.ts';
 //
 //   <free markdown body>
 //
-// Only these three rows are recognized, and only as a contiguous block
+// The warp (design-work-layers.md) extends the same grammar with two rows
+// for layer pages (`surface/layers/*.md`) — one item space, one grammar:
+//
+//   state: ember | banked | cold            (optional; heat, not status)
+//   needs: <the named missing thing>         (optional)
+//
+// Only these rows are recognized, and only as a contiguous block
 // immediately after the heading — the grammar is deliberately open below
 // that: any other line (an unrecognized row, a stray label) ends the
 // recognized block and everything from there on is the item's plain
@@ -21,12 +27,22 @@ import { headingAnchor } from './surface.ts';
 
 export type BackchannelItemKind = 'decide' | 'review' | 'read' | 'act';
 
+/** Item heat (design-work-layers.md §The concept): ember = clarified,
+ * dispatchable now · banked = clarified, deliberately held (`needs:` names
+ * by whom/what) · cold = undefined. An item with no `state:` row is
+ * *unstated* — cold by the design's own semantics (cold IS "undefined"),
+ * but callers get `null` so a renderer can tell authored-cold from
+ * never-stated and show the second as such. */
+export type WarpHeat = 'ember' | 'banked' | 'cold';
+
 const KNOWN_KINDS: ReadonlySet<string> = new Set<BackchannelItemKind>([
 	'decide',
 	'review',
 	'read',
 	'act'
 ]);
+
+const KNOWN_HEATS: ReadonlySet<string> = new Set<WarpHeat>(['ember', 'banked', 'cold']);
 
 export interface BackchannelRef {
 	label: string;
@@ -43,12 +59,18 @@ export interface AuthoredBackchannelItem {
 	key: string;
 	headline: string;
 	kind: BackchannelItemKind | null;
+	/** Warp heat (`state:` row). Null = the row was absent or unparseable —
+	 *  never-stated, distinct from an authored `cold`. */
+	state: WarpHeat | null;
+	/** The named missing thing (`needs:` row): a decision, a user act, a
+	 *  dependency, a deploy. Free text; the row's value verbatim. */
+	needs: string | null;
 	refs: BackchannelRef[];
 	prompt: string | null;
 	bodyMarkdown: string;
 }
 
-const ROW_RE = /^(kind|refs|prompt):[ \t]*(.*)$/;
+const ROW_RE = /^(kind|state|needs|refs|prompt):[ \t]*(.*)$/;
 const HEADING_RE = /^##[ \t]+(.*)$/;
 
 /** A single markdown-link ref (`[label](url)`), anchored to the whole
@@ -97,6 +119,8 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 		if (i < lines.length && lines[i].trim() === '') i += 1;
 
 		let kind: BackchannelItemKind | null = null;
+		let state: WarpHeat | null = null;
+		let needs: string | null = null;
 		let refs: BackchannelRef[] = [];
 		let prompt: string | null = null;
 		while (i < lines.length) {
@@ -106,6 +130,11 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 			if (key === 'kind' && kind === null) {
 				const candidate = value.trim().toLowerCase();
 				if (KNOWN_KINDS.has(candidate)) kind = candidate as BackchannelItemKind;
+			} else if (key === 'state' && state === null) {
+				const candidate = value.trim().toLowerCase();
+				if (KNOWN_HEATS.has(candidate)) state = candidate as WarpHeat;
+			} else if (key === 'needs' && needs === null) {
+				needs = value.trim() || null;
 			} else if (key === 'refs' && refs.length === 0) {
 				refs = parseRefs(value);
 			} else if (key === 'prompt' && prompt === null) {
@@ -130,6 +159,8 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 			key: `${index}:${headingAnchor(headline)}`,
 			headline,
 			kind,
+			state,
+			needs,
 			refs,
 			prompt,
 			bodyMarkdown: bodyLines.join('\n')
