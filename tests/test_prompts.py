@@ -3114,6 +3114,60 @@ class TestWorkSurfaceInjection:
         assert "page omitted" in result.text
         assert "wwww" not in result.text, "and its content really was skipped"
 
+    def test_a_mandatory_section_overflow_renders_its_floor_and_names_it(self, tmp_path):
+        """#918 — the renderer must not void the trimmer's one-section floor.
+
+        The leading section alone exceeds the whole shared remainder.  The
+        trimmer therefore returns over budget deliberately; the renderer used
+        to conflate that case with ordinary no-room and replace the section
+        with a placeholder.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        opening = "the plan's actual agenda " * 70
+        (surface / "plan.md").write_text(
+            f"# Active plan\n\n## Open, ranked\n\n{opening}\n\n"
+            "## Later work\n\nThis section may be cut.\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Delivery\n\nLater page content.\n", encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "the plan's actual agenda" in result.text
+        assert "_(page omitted —" not in result.text
+        assert "overflowing section: `Open, ranked`" in result.text
+        assert f"budget: {budget:,} B" in result.text
+        assert re.search(r"trimmed page: [\d,]+ B", result.text)
+        assert "1 further surface page omitted" in result.text
+
+    def test_headingless_no_room_still_uses_the_page_placeholder(self, tmp_path):
+        """#918 — an over-budget result without a section floor is no-room."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            "dominion.surface_inject_budget_bytes=900\n",
+            encoding="utf-8",
+        )
+        (surface / "plain.md").write_text("unsectioned " * 500, encoding="utf-8")
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### plain.md" in result.text
+        assert "page omitted" in result.text
+        assert "unsectioned unsectioned" not in result.text
+
     def test_stale_page_flows_through_to_the_contract_entry(self, tmp_path):
         """End-to-end: a stale surface page's attestation reaches the
         ``ContractEntry`` the kernel alarm (P1 move 4a) reads.
