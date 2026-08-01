@@ -3164,7 +3164,17 @@ def _run_worker(
         # The next boundary reads the same validated generation gates render.
         # Expired menus are filtered here; ingestion remains authoritative for
         # taps on controls a transport may still display from an older message.
-        live_menu = menus.load_live_menu(brr_dir, conv_key)
+        related_menu_threads = conversations.conversation_keys_for_correspondent(
+            brr_dir,
+            correspondent_key,
+            include_key=conv_key,
+        )
+        live_menu = menus.load_live_menu(
+            brr_dir,
+            conv_key,
+            correspondent_key=correspondent_key,
+            legacy_threads=related_menu_threads,
+        )
         if live_menu is not None:
             communication_snapshot["live_menu"] = live_menu
     recent_conversation = (
@@ -7290,6 +7300,14 @@ def _drain_live_menu(
         )
         return False
     try:
+        correspondent_key = str(
+            task.meta.get("correspondent_key") or ""
+        ).strip()
+        legacy_threads = conversations.conversation_keys_for_correspondent(
+            emit.brr_dir,
+            correspondent_key,
+            include_key=thread,
+        )
         menu, _read_digest = menus.read_outbox_menu(
             outbox_dir,
             expected_thread=thread,
@@ -7298,6 +7316,8 @@ def _drain_live_menu(
             emit.brr_dir,
             menu,
             run_id=task.id,
+            correspondent_key=correspondent_key,
+            legacy_threads=legacy_threads,
         )
     except menus.MenuValidationError as exc:
         _record_outbox_notice(
