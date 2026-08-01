@@ -56,6 +56,8 @@
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 	import { backchannelChip, backchannelCount, backchannelShowClear } from '$lib/backchannel';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
+	import { buildWarpLayers, emberCount } from '$lib/warp';
+	import WarpStack from '$lib/WarpStack.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
 	import { LENS_ALL, applyLens } from '$lib/loomLens';
@@ -240,6 +242,17 @@
 	// two populations ("N authored · M derived") rather than baring the sum
 	// (design-dashboard-briefing §3).
 	let derivedBackchannelCount = $derived(backchannelCount(prReviewQueue, configRequests));
+
+	// The warp (design-work-layers.md, #972 step 2): the standing intent
+	// surface, discovered from `surface/layers/*.md` in the same corpus feed
+	// the backchannel and corpus browser already read — no new endpoint, a
+	// third reader of one fetch. Layers are authored, never derived: an
+	// empty array here means nothing is strung, and the section renders as
+	// one quiet line rather than not at all — the warp is a standing part of
+	// the board once this ships, and absence-of-files is a fact worth a line,
+	// not a hidden section (the §1 empty-queue precedent).
+	let warpLayers = $derived(surfaceData ? buildWarpLayers(surfaceData.files) : []);
+	let warpEmberCount = $derived(emberCount(warpLayers));
 	let pendingBackchannelCount = $derived(authoredBackchannelItems.length + derivedBackchannelCount);
 	// All three feeds resolved (loaded or errored) — until then the sum is a
 	// partial read, and rendering it as a verdict is the measured 20 → "clear"
@@ -727,6 +740,41 @@
 						{now}
 						withheld={prReviewQueueWithheld}
 					/>
+				{/if}
+			</div>
+		</section>
+
+		<!-- §1b · the warp (design-work-layers.md, taken 2026-08-01; #972):
+		     the standing intent surface — account-global layers whose items
+		     ripen into runs. Rendered here additively for now; the full
+		     loom-page restructure (#972) makes this the future band, with
+		     the backchannel above becoming its needs-you heddle. -->
+		<section class="ignite mt-8" style="--ignite-delay: 140ms" aria-labelledby="warp-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">§1b · the warp</p>
+					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
+						standing intent
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] text-ink-quiet">
+					{surfaceData === null
+						? 'stringing…'
+						: warpLayers.length === 0
+							? 'nothing strung'
+							: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
+				</p>
+			</div>
+			<div class="mt-2">
+				{#if surfaceData === null}
+					<p class="text-sm text-ink-quiet">stringing…</p>
+				{:else if warpLayers.length === 0}
+					<p class="text-sm text-ink-quiet">
+						the warp is bare — layers are authored under
+						<span class="font-mono">surface/layers/</span>.
+					</p>
+				{:else}
+					<WarpStack layers={warpLayers} knownPaths={surfaceKnownPaths} />
 				{/if}
 			</div>
 		</section>

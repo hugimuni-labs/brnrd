@@ -78,6 +78,22 @@ test('refs mix bracketed issue/PR links and bare kb-page-name labels', () => {
 	]);
 });
 
+test('the qualified forge shorthand owner/repo#N resolves; a bare #N never does', () => {
+	// The multi-repo ref grammar: qualified is deterministic, so it links.
+	assert.deepEqual(parseRefs('hugimuni-labs/brnrd#928 · other-org/site#3'), [
+		{ label: 'hugimuni-labs/brnrd#928', href: 'https://github.com/hugimuni-labs/brnrd/issues/928' },
+		{ label: 'other-org/site#3', href: 'https://github.com/other-org/site/issues/3' }
+	]);
+	// A bare #N names no repo on an account-global surface: ambiguity renders
+	// as ambiguity — plain text — never as a guessed link.
+	assert.deepEqual(parseRefs('#928'), [{ label: '#928', href: null }]);
+	// Near-misses stay labels: no number, path-ish slashes, stray spaces.
+	assert.deepEqual(parseRefs('hugimuni-labs/brnrd#'), [
+		{ label: 'hugimuni-labs/brnrd#', href: null }
+	]);
+	assert.deepEqual(parseRefs('a/b/c#1'), [{ label: 'a/b/c#1', href: null }]);
+});
+
 test('a full item carries kind, refs, prompt, and body together', () => {
 	const markdown = `## #853 — the MCP direction: inherit or isolate
 

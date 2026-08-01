@@ -66,6 +66,8 @@ function item(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchannelI
 		key: '0:untitled',
 		headline: 'untitled',
 		kind: null,
+		state: null,
+		needs: null,
 		refs: [],
 		prompt: null,
 		bodyMarkdown: '',
