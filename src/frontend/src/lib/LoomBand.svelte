@@ -36,12 +36,6 @@
 		onSelect?: (kind: 'run' | 'wake', id: string) => void;
 		onPastWindowChange?: (windowMs: number) => void;
 		selectedId?: string | null;
-		/**
-		 * User-action items waiting in the resident's backchannel. The one lens
-		 * whose subject is an artifact rather than a run, so its count comes
-		 * from other feeds (see `loomLens.ts` → `LENS_BACKCHANNEL`).
-		 */
-		backchannelCount?: number;
 		/** The page owns lens state, same as selection: the band reports. */
 		lens?: string;
 		onLensChange?: (lens: string) => void;
@@ -62,7 +56,6 @@
 		onSelect,
 		onPastWindowChange,
 		selectedId = null,
-		backchannelCount = 0,
 		lens = LENS_ALL,
 		onLensChange,
 		daemonMood = null
@@ -206,7 +199,7 @@
 	let windowRows = $derived(
 		(ledgerRows ?? []).filter((row) => inPastWindow(row, now, pastWindowMs))
 	);
-	let lenses = $derived(availableLenses(windowRows, backchannelCount));
+	let lenses = $derived(availableLenses(windowRows));
 	// A selection can outlive its lens (the window narrowed, the rows aged out).
 	// Reconciling here rather than trusting the prop keeps the shelf and the
 	// chip row from disagreeing for a poll.

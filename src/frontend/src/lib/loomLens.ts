@@ -54,15 +54,10 @@ export interface Lens {
 /** The default lens: everything in the window, no slice. */
 export const LENS_ALL = 'all';
 
-/**
- * The artifact lens (wyrd §4 band 2, "what is waiting on me?"). Alone among
- * the lenses it does not filter runs — a PR review or config approval
- * outlives the run that opened it, so its edge is to the artifact, not to a
- * row on the shelf. It is a lens rather than a standing section because
- * "what is waiting on me" is a question you *ask* of the board, not a panel
- * that should occupy it while the answer is nothing.
- */
-export const LENS_BACKCHANNEL = 'backchannel';
+// The backchannel used to be a lens here ("what is waiting on me?" as a
+// question you ask of the board). It is a standing page section now — §1,
+// above the loom (#875): a queue is not a filter, and the empty case
+// collapses to one line, which was this rail's whole objection to a section.
 
 function isKb(relic: RelicRecord): boolean {
 	return relic.kind === 'kb' || relic.kind === 'kb_page';
@@ -105,12 +100,6 @@ function originLabel(source: string): string {
  */
 export function lensMatches(row: RunLedgerRow, lensId: string): boolean {
 	if (lensId === LENS_ALL) return true;
-	// The artifact lens does not narrow the shelf. An open PR outlives the run
-	// that opened it — often by days — so filtering the past shelf down to
-	// "runs that produced a PR still awaiting review" would answer a question
-	// nobody asked and hide the rest of the board while doing it. It changes
-	// what the *detail frame* renders instead; the spine stays whole.
-	if (lensId === LENS_BACKCHANNEL) return true;
 	if (lensId === 'stack:worker') return row.is_subspawn === true;
 	if (lensId.startsWith('origin:')) {
 		return (row.source_system ?? '') === lensId.slice('origin:'.length);
@@ -136,12 +125,8 @@ export function applyLens(rows: RunLedgerRow[], lensId: string): RunLedgerRow[] 
  * Nothing here is a fixed list except the ordering of the facets themselves.
  * Origins come from the data; shapes come from the manifests; a lens matching
  * zero rows is not offered at all.
- *
- * `backchannelCount` is passed in rather than derived because this lens counts
- * user-action items from two other feeds (PR review + config requests) — the
- * one lens whose subject is an artifact rather than a run.
  */
-export function availableLenses(rows: RunLedgerRow[], backchannelCount = 0): Lens[] {
+export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 	const lenses: Lens[] = [{ id: LENS_ALL, label: 'all', facet: 'all', count: rows.length }];
 
 	const origins = new Map<string, number>();
@@ -175,15 +160,6 @@ export function availableLenses(rows: RunLedgerRow[], backchannelCount = 0): Len
 
 	if (workers > 0) {
 		lenses.push({ id: 'stack:worker', label: '↳ workers', facet: 'stack', count: workers });
-	}
-
-	if (backchannelCount > 0) {
-		lenses.push({
-			id: LENS_BACKCHANNEL,
-			label: 'backchannel',
-			facet: 'artifact',
-			count: backchannelCount
-		});
 	}
 
 	return lenses;
