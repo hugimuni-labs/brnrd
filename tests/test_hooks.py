@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 
-from brr import card, hooks
+from brr import card, hooks, portals
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None, produce=None,
@@ -1825,6 +1825,267 @@ def test_gate_treats_a_malformed_receipt_as_no_receipt(tmp_path):
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
     assert "the gate never ran" in out["reason"]
+
+
+# ── The `vigil` closeout obligation (#947: a claimed vigil must be armed) ─
+#
+# Two live instances on 2026-08-01: a run ended on `Holding for the integration
+# gate.` and another on `continuing — … vigil armed (keepalive live…)` with no
+# `.keepalive` on disk. Both then exited, and both times the maintainer waited
+# on a run that was already `done`.
+
+
+def _coexisting(*, status="absent", siblings=None):
+    """The presence projection the daemon writes into portal-state.
+
+    Three states, all reachable in production: `known` (siblings live),
+    `absent` (registry read, nobody there), `unimplemented` (no presence
+    collector wired at that call site — a read that never happened).
+    """
+    facet = {"status": status, "kind": "state", "required": False}
+    if siblings is not None:
+        facet["siblings"] = siblings
+    return {"coexisting_runs": facet}
+
+
+def _armed_vigil(tmp_path, *, resources=None, **portal_kw):
+    """Arm only the `vigil` obligation — deliberately *without*
+    `BRR_NEXT_MOVE_GUARD`, exactly as the daemon arms it, so a block here can
+    have come from nowhere but this clause."""
+    _portal(
+        tmp_path, token="t1", pending=0,
+        resources=_coexisting() if resources is None else resources,
+        **portal_kw,
+    )
+    env = _env(tmp_path)
+    env["BRR_CLOSEOUT_OBLIGATIONS"] = "vigil"
+    return env
+
+
+def _keepalive(tmp_path, text):
+    (tmp_path / portals.KEEPALIVE_NAME).write_text(text, encoding="utf-8")
+
+
+_HOLDING = "Merged #948 and #950.\n\nHolding for the integration gate."
+_CONTINUING = (
+    "Pushed the branch.\n\n"
+    "continuing — combined gate (bp4w3plg6) still running; vigil armed"
+)
+
+
+def test_vigil_blocks_a_holding_claim_with_nothing_armed(tmp_path):
+    """The live defect, verbatim: a polite lie the maintainer waited on."""
+    env = _armed_vigil(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_HOLDING), env)
+    assert out["decision"] == "block"
+    assert "holding" in out["reason"]
+
+
+def test_vigil_block_names_which_arming_was_missing(tmp_path):
+    """"Block" is not the product — knowing what to write next is."""
+    env = _armed_vigil(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    reason = out["reason"]
+    assert portals.KEEPALIVE_NAME in reason
+    assert "spawn:" in reason
+    assert "background shell command is not a continuation" in reason
+
+
+def test_vigil_accepts_a_live_keepalive(tmp_path):
+    """Arming #1. The in-thought vigil the substrate documents."""
+    env = _armed_vigil(tmp_path)
+    _keepalive(tmp_path, "+30m\n")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_accepts_an_iso_keepalive_deadline(tmp_path):
+    env = _armed_vigil(tmp_path)
+    later = datetime.datetime.now(
+        tz=datetime.timezone.utc
+    ) + datetime.timedelta(minutes=20)
+    _keepalive(tmp_path, later.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_refuses_a_lapsed_keepalive(tmp_path):
+    """Present is not armed. A deadline that has passed is a vigil the daemon
+    itself has stopped honouring — `_keepalive_state` calls it `expired`."""
+    env = _armed_vigil(tmp_path)
+    _keepalive(tmp_path, "2020-01-01T00:00:00Z")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out["decision"] == "block"
+
+
+def test_vigil_refuses_an_unparseable_keepalive(tmp_path):
+    """The file the run *named* is not the file the daemon can *read*."""
+    env = _armed_vigil(tmp_path)
+    _keepalive(tmp_path, "soon-ish\n")
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out["decision"] == "block"
+
+
+def test_vigil_accepts_a_running_spawn_child(tmp_path):
+    """Arming #2. A `spawn:` child survives the parent's terminal reply and
+    returns as a fresh event, so a vigil resting on one is real — it is the other
+    mechanism the substrate names."""
+    env = _armed_vigil(tmp_path, resources=_coexisting(
+        status="known",
+        siblings=[{"run_id": "run-2", "parent_run_id": "run-1",
+                   "is_subspawn": True}],
+    ))
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_does_not_accept_someone_elses_child(tmp_path):
+    """Ownership, not headcount: a sibling spawn belonging to another run will
+    never send this run's promised follow-up."""
+    env = _armed_vigil(tmp_path, resources=_coexisting(
+        status="known",
+        siblings=[{"run_id": "run-9", "parent_run_id": "run-8",
+                   "is_subspawn": True}],
+    ))
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out["decision"] == "block"
+
+
+def test_vigil_silent_when_presence_was_never_read(tmp_path):
+    """`unimplemented` is a read that did not happen, not an empty registry.
+    Absence of evidence is not evidence of absence, so the guard says nothing —
+    it cannot prove this run has no child."""
+    env = _armed_vigil(tmp_path, resources=_coexisting(status="unimplemented"))
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_silent_without_a_run_id_to_match_on(tmp_path):
+    """No run id ⇒ ownership is unassertable, same reason."""
+    env = _armed_vigil(tmp_path)
+    del env["BRR_RUN_ID"]
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_CONTINUING), env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_silent_without_the_reply(tmp_path):
+    """The claim lives in the reply; a Shell that hands over none (codex today)
+    leaves nothing to assert from."""
+    env = _armed_vigil(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert out.get("decision") != "block"
+
+
+def test_vigil_is_off_unless_armed(tmp_path):
+    _portal(tmp_path, token="t1", pending=0, resources=_coexisting())
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_HOLDING), _env(tmp_path))
+    assert out.get("decision") != "block"
+
+
+def test_vigil_blocks_once_by_construction(tmp_path):
+    """#779's anti-pattern is a boundary that re-asserts forever. This one
+    shares the closeout latch: one block, then the run is allowed to end."""
+    env = _armed_vigil(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_HOLDING), env)
+    assert first["decision"] == "block"
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_HOLDING), env)
+    assert second.get("decision") != "block"
+
+
+def test_vigil_leaves_the_honest_closes_alone(tmp_path):
+    """`done — receipt` and `blocked — whose move` are always legal, and stay
+    legal even when the sentence around them says "waiting"."""
+    for reply in (
+        "...\n\n**done** — merged #948, #950; receipts on both",
+        "...\n\nblocked — needs the API token; waiting on you",
+        "...\n\ndone — shipped. The gate is still running, I'll not wait.",
+        "Which way?\n\n1. cut it\n2. keep the flag\n\nI'd take (1).",
+    ):
+        env = _armed_vigil(tmp_path)
+        (tmp_path / hooks.HOOK_STATE_NAME).unlink(missing_ok=True)
+        out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(reply), env)
+        assert out.get("decision") != "block", reply
+
+
+def test_vigil_is_blind_to_a_claim_inside_a_code_fence(tmp_path):
+    """A run that *documents* this guard writes the claim into a fence. A
+    matcher blind to code spans reads the example as the thing (#562)."""
+    reply = (
+        "Added the guard.\n\n"
+        "```\n"
+        "continuing — gate still running\n"
+        "```\n\n"
+        "It also catches `holding` and `standing by`.\n\n"
+        "done — hooks.py + tests, receipt in the card"
+    )
+    env = _armed_vigil(tmp_path)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(reply), env)
+    assert out.get("decision") != "block"
+
+
+class TestVigilMatcher:
+    """The matcher's shape, unit-level — and what it deliberately declines."""
+
+    def test_the_bare_state_line_is_the_strong_signal(self):
+        assert hooks.vigil_claim("x\n\ncontinuing — the gate runs") == "continuing"
+        assert hooks.vigil_claim("x\n\n**continuing** — the gate runs") == "continuing"
+
+    def test_the_observed_prose_vocabulary(self):
+        for line, word in (
+            ("Holding for the integration gate.", "holding for"),
+            ("Vigil armed on the combined tree.", "vigil armed"),
+            ("Vigil live until the gate returns.", "vigil live"),
+            ("Waiting on the gate to come back.", "waiting on"),
+            ("I will report back when it lands.", "will report back"),
+            ("Standing by for the merge.", "standing by for"),
+        ):
+            assert hooks.vigil_claim(f"body\n\n{line}") == word, line
+
+    def test_done_and_blocked_are_never_a_claim(self):
+        assert hooks.vigil_claim("x\n\ndone — merged, holding nothing") is None
+        assert hooks.vigil_claim("x\n\nblocked — your move; standing by") is None
+
+    def test_the_final_line_outranks_the_body(self):
+        """A `continuing` paragraph *above* an honest close is not a vigil —
+        preferring the final line is what keeps the guard off a reply that
+        narrates its own history before closing."""
+        reply = (
+            "continuing — that was the plan at 14:30\n\n"
+            "…then the gate came back.\n\n"
+            "done — green, merged"
+        )
+        assert hooks.vigil_claim(reply) is None
+
+    def test_an_earlier_state_cannot_classify_a_different_final_line(self):
+        reply = (
+            "continuing — that was the plan at 14:30\n\n"
+            "The gate completed and the branch is ready."
+        )
+        assert hooks.vigil_claim(reply) is None
+
+    def test_a_final_claim_survives_an_earlier_honest_state(self):
+        reply = "done — first batch landed\n\nHolding for the integration gate."
+        assert hooks.vigil_claim(reply) == "holding for"
+
+    def test_topic_words_are_not_continuation_claims(self):
+        for line in (
+            "Holding the worker count constant proved the race.",
+            "The vigil design belongs in issue 959.",
+        ):
+            assert hooks.vigil_claim(f"body\n\n{line}") is None
+
+    def test_a_claim_in_an_inline_code_span_is_not_a_claim(self):
+        assert hooks.vigil_claim("x\n\nThe matcher catches `holding` too.") is None
+
+    def test_a_reply_that_ends_on_nothing_is_not_automatically_a_claim(self):
+        """This guard asserts one thing only. "Ends on no state at all" is the
+        next-move clause's business, and pretending otherwise would double a
+        single defect into two block sentences."""
+        assert hooks.vigil_claim("I refactored the module and the tests pass.") is None
+
+    def test_an_empty_reply_claims_nothing(self):
+        assert hooks.vigil_claim("") is None
+        assert hooks.vigil_claim("\n\n   \n") is None
 
 
 class TestStopRunBody:
