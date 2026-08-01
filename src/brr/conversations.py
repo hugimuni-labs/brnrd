@@ -1366,6 +1366,45 @@ def read_event_records(
 # ── Specialised appenders ────────────────────────────────────────────
 
 
+# #943 — a Telegram *photo* attachment is always saved as ``photo.jpg``
+# (index-prefixed only when several land on one event: Telegram transcodes
+# every photo to JPEG and gives it no filename of its own — see
+# ``protocol.create_event`` and ``gates/telegram.py::_pick_image_file_id``).
+# Every other attachment this pipeline downloads — a Telegram image
+# *document* (keeps its own name) or a GitHub inline image
+# (``image-NN.ext``, see ``gates/github/attachments.py``) — keeps a real
+# filename, so anything that doesn't match this convention is classified
+# generically as a document.
+_PHOTO_ATTACHMENT_RE = re.compile(r"^(?:\d+-)?photo\.jpg$", re.IGNORECASE)
+
+
+def _attachment_kind(filename: str) -> str:
+    """Classify one attachment filename for the conversation record (#943).
+
+    A display classification for the recent-turns weave, not a content
+    sniff — see ``_PHOTO_ATTACHMENT_RE`` for the naming convention this
+    reads.
+    """
+    return "photo" if _PHOTO_ATTACHMENT_RE.match(filename.strip()) else "document"
+
+
+def _attachment_facts(event: dict[str, Any]) -> list[dict[str, str]]:
+    """Structured attachment facts for one local event — #943.
+
+    ``protocol.create_event`` writes a downloaded attachment's filenames as
+    one comma-joined ``attachments:`` frontmatter field (resolved back to
+    local paths for the *live* run's Read tool by
+    ``protocol.event_attachment_paths``); until this fix that fact never
+    crossed into the conversation record, so a captionless photo message
+    recorded ``body: ''`` with nothing to show it was ever more than
+    silence (the record half of #943 — the render half is
+    ``prompts._attachment_marker``). Each entry is ``{"kind", "filename"}``.
+    """
+    raw = event.get("attachments")
+    names = [n.strip() for n in str(raw or "").split(",") if n.strip()]
+    return [{"kind": _attachment_kind(name), "filename": name} for name in names]
+
+
 def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
     """Record an event arrival on the conversation log.
 
@@ -1382,6 +1421,11 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
         "summary": _summary_for_body(body),
         "body": body,
     }
+    attachments = _attachment_facts(event)
+    if attachments:
+        # #943 — the fact an inbound message carried a photo/document must
+        # exist before any weave can render it; see ``_attachment_facts``.
+        record["attachments"] = attachments
     correspondent_key = correspondent_key_for_event(event)
     if correspondent_key:
         record["correspondent_key"] = correspondent_key
