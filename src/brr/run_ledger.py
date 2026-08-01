@@ -93,6 +93,7 @@ def mark_run_started(
         outbox_dir,
         work_dir,
         force_claude_refresh=False,
+        quota_read=_str_or_none(task.meta.get("runner_quota_read")),
     )
     weekly, five_hour = quota_used_percentages(levels)
     if weekly is not None:
@@ -153,6 +154,7 @@ def build_closed_run_row(
             outbox_dir,
             work_dir,
             force_claude_refresh=True,
+            quota_read=_str_or_none(task.meta.get("runner_quota_read")),
         )
 
     # Prefer the model id(s) actually observed in this run's own result JSON
@@ -301,12 +303,17 @@ def load_quota_levels(
     work_dir: Path | None,
     *,
     force_claude_refresh: bool,
+    quota_read: str | None = None,
 ) -> dict[str, Any] | None:
     """Read the current Shell quota levels without raising."""
     try:
-        if codex_status.supported(runner_name):
+        if quota_read == "session-rollout" or (
+            quota_read is None and codex_status.supported(runner_name)
+        ):
             return codex_status.load_levels()
-        if claude_status.supported(runner_name):
+        if quota_read == "cached-tui" or (
+            quota_read is None and claude_status.supported(runner_name)
+        ):
             usage = claude_usage.load_or_refresh_snapshot(
                 outbox_dir,
                 cwd=work_dir,

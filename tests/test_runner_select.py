@@ -14,6 +14,38 @@ def _profile(name, **kw):
     return rs.runner_from_profile(name, kw)
 
 
+def test_capability_matrix_drives_hooks_without_profile_name():
+    profile = rs.runner_from_profile(
+        "unfamiliar-shell",
+        {
+            "hooks": "legacy-would-be-wrong",
+            "capabilities": {
+                "boundary_injection": "native:codex",
+                "quota_read": "degraded:unreported",
+            },
+        },
+    )
+
+    assert profile.hooks == "codex"
+    assert profile.capability("quota-read") == rs.RunnerCapability(
+        mode="degraded", mapping="unreported",
+    )
+
+
+def test_explicit_boundary_degradation_suppresses_legacy_hook_inference():
+    profile = rs.runner_from_profile(
+        "claude-looking-alias",
+        {
+            "hooks": "claude",
+            "capabilities": {
+                "boundary_injection": "degraded:heartbeat",
+            },
+        },
+    )
+
+    assert profile.hooks is None
+
+
 def test_implicit_runner_is_uncosted_local():
     r = rs.implicit_runner("codex")
     assert r.name == "codex"

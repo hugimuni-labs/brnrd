@@ -56,6 +56,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Models & quota', slug: 'guides/models' },
+            { label: 'Runner profiles', slug: 'guides/runner-profiles' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },
           ],
         },
