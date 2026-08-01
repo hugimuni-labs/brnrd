@@ -298,6 +298,6 @@ def test_dashboard_repo_view_renders_403_class_without_raw_httpx_copy(monkeypatc
     row = next(row for row in body["connected_repos"] if row["repo_full_name"] == "Gurio/brr")
     rendered_payload = json.dumps(row)
     assert row["github_bot_status"] == "permission-missing"
-    assert "Metadata: read" in row["github_bot_notice"]
+    assert "Administration: read" in row["github_bot_notice"]
     assert raw not in rendered_payload
     assert "developer.mozilla.org" not in rendered_payload

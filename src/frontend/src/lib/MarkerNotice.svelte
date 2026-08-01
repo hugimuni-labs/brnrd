@@ -20,7 +20,7 @@
 			case 'not-a-collaborator':
 				return `${login} not a collaborator — assigns / review-requests / comment-tags addressed to it won't reach the resident; invite it in Settings → Collaborators.`;
 			case 'permission-missing':
-				return 'permission missing — the GitHub credential cannot read repository metadata; grant Metadata: read permission.';
+				return "permission missing — the GitHub App lacks the grant for the collaborators endpoint; grant Administration: read in the App's repository permissions.";
 			case 'check-unavailable':
 				return 'collaborator check unavailable — GitHub could not be reached; try again later.';
 			case 'unknown':

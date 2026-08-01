@@ -59,7 +59,7 @@ test('unknown renders as unknown rather than guessing yes or no', async () => {
 test('permission-missing renders the named remedy and never transport copy', async () => {
 	const html = await renderNotice({ status: 'permission-missing' });
 	ok(html.includes('permission missing'));
-	ok(html.includes('Metadata: read'));
+	ok(html.includes('Administration: read'));
 	ok(!html.includes('403 Forbidden'));
 	ok(!html.includes('developer.mozilla.org'));
 });

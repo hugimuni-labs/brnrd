@@ -163,25 +163,30 @@ def check_repository_collaborator(
     *,
     timeout: float = 20.0,
 ) -> bool:
-    """Ask GitHub for ``username``'s effective repository permission.
+    """``GET /repos/{repo}/collaborators/{username}`` — is ``username`` a
+    collaborator on ``repo``, from GitHub's own documented contract for this
+    endpoint: 204 = yes, 404 = no.
 
-    The superficially narrower ``GET /collaborators/{username}`` endpoint
-    also requires the caller to have push access.  That makes it unsuitable
-    for the bot/App credentials this check is meant to verify.  GitHub's
-    ``/permission`` endpoint answers the same membership question with the
-    App's baseline ``Metadata: read`` permission: 200 = some effective
-    collaborator role, 404 = none.  Anything else is a genuine "couldn't
-    tell" and remains an exception for the caller to classify.
+    The ``…/permission`` endpoint is NOT a substitute, driven live 2026-08-01
+    (#976 review): it reports *effective* permission, so on a public repo a
+    complete stranger answers 200 with ``permission: read`` — under a
+    200-means-member reading, everyone becomes a collaborator. Membership and
+    effective access are different questions, and this check exists for
+    membership (will assigns / review-requests / comment-tags reach the
+    resident). A 403 here means the *calling credential* lacks the grant for
+    the collaborators endpoints; that is a classifiable, remediable state
+    (``MarkerCheckState.PERMISSION_MISSING``), not a reason to switch to an
+    endpoint that answers a different question. Anything else (5xx, network)
+    is a genuine "couldn't tell" and is raised rather than folded into either
+    answer — the caller records that as unknown, not a guess (see
+    ``github_marker.sync_marker_for_repos``).
     """
     resp = httpx.get(
-        _url(
-            api_base_url,
-            f"/repos/{repo}/collaborators/{quote(username, safe='')}/permission",
-        ),
+        _url(api_base_url, f"/repos/{repo}/collaborators/{quote(username, safe='')}"),
         headers=_headers(token, api_version),
         timeout=timeout,
     )
-    if resp.status_code == 200:
+    if resp.status_code == 204:
         return True
     if resp.status_code == 404:
         return False

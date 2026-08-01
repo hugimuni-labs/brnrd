@@ -235,8 +235,15 @@ def test_marker_check_network_failure_is_unavailable():
     )
 
 
-@pytest.mark.parametrize(("status", "expected"), [(200, True), (404, False)])
-def test_collaborator_check_uses_metadata_read_permission_endpoint(monkeypatch, status, expected):
+@pytest.mark.parametrize(("status", "expected"), [(204, True), (404, False)])
+def test_collaborator_check_uses_the_membership_endpoint(monkeypatch, status, expected):
+    """The bare collaborators endpoint (204/404) answers *membership*.
+
+    The tempting `.../permission` endpoint answers *effective access* and
+    200s with `permission: read` for a complete stranger on a public repo
+    (driven live, #976 review) — a 200-means-member reading makes everyone
+    a collaborator. Pin the endpoint and its documented contract.
+    """
     seen = []
 
     def get(url, **_kwargs):
@@ -250,9 +257,22 @@ def test_collaborator_check_uses_metadata_read_permission_endpoint(monkeypatch, 
         )
         is expected
     )
-    assert seen == [
-        "https://api.github.test/repos/owner/repo/collaborators/brnrd-bot/permission"
-    ]
+    assert seen == ["https://api.github.test/repos/owner/repo/collaborators/brnrd-bot"]
+
+
+def test_collaborator_check_refuses_an_unexpected_200(monkeypatch):
+    """A 200 from the membership endpoint is contract drift, never a yes —
+    the guard that keeps a future endpoint swap from silently flipping the
+    check optimistic (#800's direction rule)."""
+
+    def get(url, **_kwargs):
+        return httpx.Response(200, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", get)
+    with pytest.raises(RuntimeError, match="unexpected collaborator-check status 200"):
+        gh.check_repository_collaborator(
+            "token", "https://api.github.test", "2026-03-10", "owner/repo", "brnrd-bot"
+        )
 
 
 def test_marker_absence_text_names_the_effective_configured_login():
