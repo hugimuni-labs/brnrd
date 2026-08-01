@@ -39,9 +39,28 @@ class Account(Base):
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
     # The discovered user/resident-authored work surface. The JSON is a read
     # replica of home/surface, not a second authoring store.
+    #
+    # ``deferred`` because this is the one column on ``Account`` that is
+    # unbounded by construction — 10 MB in production (#956) — and every
+    # authenticated dashboard handler opens with ``db.get(Account, id)``. Left
+    # undeferred, ``SELECT accounts.*`` dragged the whole corpus out of
+    # Postgres to answer a 65-byte response, which is the shared ~3 s the
+    # dashboard was paying on every endpoint including the zero-byte 304.
+    # Deferring is the structural fix: one writer (``PUT /v1/daemons/surface``)
+    # and one reader (``GET /v1/dashboard/surface``) pay for it, nobody else
+    # does, and a new handler cannot reintroduce the cost by forgetting.
+    #
+    # Deferring changes the loading strategy only. The column stays in
+    # ``mapper.columns``/``__table__.columns``, so ``publish_scope._purge_targets``
+    # still discovers its ``publish_lane``/``publish_purge`` marker and Art-17
+    # erasure still clears it by name; both are pinned by tests. The one new
+    # failure mode is reading it off a *detached* instance
+    # (``DetachedInstanceError``) — every reader in the tree is inside a live
+    # session (``dashboard.py`` handler, ``publish_scope.purge_removed_scope``).
     surface_json: Mapped[str] = mapped_column(
         Text,
         default="[]",
+        deferred=True,
         info=_publish_store("corpus", "slice"),
     )
     surface_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
