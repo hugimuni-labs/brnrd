@@ -125,10 +125,13 @@
 						out:fade={{ duration: 150 }}
 						animate:flip={{ duration: 220 }}
 					>
-						<!-- One row: headline · kind chip · refs · the prompt as the
-						     tap-action. The full prose is the open state of exactly
-						     one row (§3). The grammar carries no date, so authored
-						     rows have no age — only the derived rows below do. -->
+						<!-- Folded row: disclosure · headline · kind chip only — nothing
+						     else. Refs and the `prompt:` copy-chip are queue-list weight
+						     the list itself shouldn't carry; they move inside the fold
+						     body, above the prose, once a row is open (one item list
+						     compaction further than §3's original shape). An item with
+						     no body has no fold to hold them, so its refs/prompt stay on
+						     the row — there's nowhere else for them to go. -->
 						{#if item.bodyMarkdown}
 							<button
 								type="button"
@@ -148,6 +151,51 @@
 									>
 								{/if}
 							</button>
+							{#if open}
+								<div class="mt-1.5" id={bodyId} transition:fade={{ duration: 150 }}>
+									{#if item.refs.length > 0}
+										<div class="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]">
+											{#each item.refs as ref, i (i)}
+												{#if ref.href}
+													<a
+														class="text-sky-400 underline hover:text-sky-300"
+														href={ref.href}
+														target="_blank"
+														rel="external noreferrer">{ref.label}</a
+													>
+												{:else}
+													<span class="text-ink-quiet">{ref.label}</span>
+												{/if}
+											{/each}
+										</div>
+									{/if}
+									{#if item.prompt}
+										<!-- The prompt line *is* the tap-action: tapping it copies
+										     the dispatch mandate (the honest collapse of "pre-fill
+										     and send" — see copyPrompt above). Now inside the fold,
+										     above the prose, alongside the refs it keeps company with. -->
+										<button
+											type="button"
+											class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
+											title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
+											onclick={() => copyPrompt(item.key, item.prompt!)}
+										>
+											<span
+												class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
+												>{copiedKey === item.key ? 'copied ✓' : 'copy'}</span
+											>
+											<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span>
+										</button>
+									{/if}
+									<div class={item.refs.length > 0 || item.prompt ? 'mt-1.5' : ''}>
+										<MarkdownContent
+											markdown={item.bodyMarkdown}
+											sourcePath={SOURCE_PATH}
+											{knownPaths}
+										/>
+									</div>
+								</div>
+							{/if}
 						{:else}
 							<div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
 								<span class="min-w-0 flex-1 font-medium text-amber-100">{item.headline}</span>
@@ -158,48 +206,38 @@
 									>
 								{/if}
 							</div>
-						{/if}
-						{#if item.refs.length > 0}
-							<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]">
-								{#each item.refs as ref, i (i)}
-									{#if ref.href}
-										<a
-											class="text-sky-400 underline hover:text-sky-300"
-											href={ref.href}
-											target="_blank"
-											rel="external noreferrer">{ref.label}</a
-										>
-									{:else}
-										<span class="text-ink-quiet">{ref.label}</span>
-									{/if}
-								{/each}
-							</div>
-						{/if}
-						{#if item.prompt}
-							<!-- The prompt line *is* the tap-action: tapping it copies
-							     the dispatch mandate (the honest collapse of "pre-fill
-							     and send" — see copyPrompt above). Surfaced on the
-							     closed row, not behind the fold. -->
-							<button
-								type="button"
-								class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
-								title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
-								onclick={() => copyPrompt(item.key, item.prompt!)}
-							>
-								<span class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
-									>{copiedKey === item.key ? 'copied ✓' : 'copy'}</span
+							{#if item.refs.length > 0}
+								<div
+									class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]"
 								>
-								<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span>
-							</button>
-						{/if}
-						{#if open && item.bodyMarkdown}
-							<div class="mt-1.5" id={bodyId} transition:fade={{ duration: 150 }}>
-								<MarkdownContent
-									markdown={item.bodyMarkdown}
-									sourcePath={SOURCE_PATH}
-									{knownPaths}
-								/>
-							</div>
+									{#each item.refs as ref, i (i)}
+										{#if ref.href}
+											<a
+												class="text-sky-400 underline hover:text-sky-300"
+												href={ref.href}
+												target="_blank"
+												rel="external noreferrer">{ref.label}</a
+											>
+										{:else}
+											<span class="text-ink-quiet">{ref.label}</span>
+										{/if}
+									{/each}
+								</div>
+							{/if}
+							{#if item.prompt}
+								<button
+									type="button"
+									class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
+									title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
+									onclick={() => copyPrompt(item.key, item.prompt!)}
+								>
+									<span
+										class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
+										>{copiedKey === item.key ? 'copied ✓' : 'copy'}</span
+									>
+									<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span>
+								</button>
+							{/if}
 						{/if}
 					</li>
 				{/each}
