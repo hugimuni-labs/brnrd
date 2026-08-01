@@ -57,17 +57,6 @@ from typing import Any
 
 from . import runner_capabilities, runner_select
 
-# Shells brnrd ships first-class knowledge for. No single prior definition
-# existed in code (closest anchors: the `_BUNDLED_CORES` shells below, the
-# hook flavours `hooks.render_native` knows, and `runner_quota._provider_key`'s
-# prefix list — all agree on these two, and all must move in lockstep with
-# this set). Model probing / Core fabrication (`_probed_core_entries`) is
-# restricted to these shells: splicing a probed `--model X` into a *custom*
-# declared cmd fabricates `<name>-<model>` variants that auto-selection then
-# prefers over the profile the user actually declared. Custom profiles opt in
-# per-profile with `probe_models: true`.
-BUNDLED_SHELLS: frozenset[str] = frozenset({"claude", "codex"})
-
 _PROBE_TIMEOUT_S = 2.0
 _MODEL_TOKEN_RE = re.compile(
     r"\b(?:claude|gpt|o\d|llama|mistral|qwen|deepseek|devstral|grok)"
@@ -370,9 +359,9 @@ def generated_profile_entries(
     Shells it chose not to declare.
 
     CLI-help model probing (and the ``<name>-<model>`` profiles it
-    fabricates) runs only for bundled Shells (:data:`BUNDLED_SHELLS`) and
-    for custom declared profiles that set ``probe_models: true`` — see
-    :func:`_probe_eligible_shells`.
+    fabricates) follows the declared native ``model_pin`` capability.
+    Legacy custom profiles may still opt in with ``probe_models: true`` —
+    see :func:`_probe_eligible_shells`.
     """
     declared = declared_profiles or {}
     registry = dict(_BUNDLED_CORES)
@@ -396,7 +385,12 @@ def generated_profile_entries(
             name = _generated_profile_name(core_name, shell, base_name)
             if name in out:
                 continue
-            cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model_flag)
+            model_pin = runner_select.runner_from_profile(
+                base_name, base,
+            ).capability("model_pin")
+            cmd = _cmd_with_model(
+                shell, _str(base.get("cmd")) or shell, model_flag, model_pin,
+            )
             generated: dict[str, Any] = {
                 "binary": _str(base.get("binary")) or shell,
                 "cmd": cmd,
@@ -412,8 +406,13 @@ def generated_profile_entries(
             }
             if pin:
                 generated["pin"] = pin
+            capabilities = base.get("capabilities")
+            if isinstance(capabilities, dict):
+                generated["capabilities"] = dict(capabilities)
             generated.update(runner_capabilities.metadata_for_model(model))
-            hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
+            hooks = _str(entry.get("hooks")) or runner_select.runner_from_profile(
+                base_name, base,
+            ).hooks
             if hooks:
                 generated["hooks"] = hooks
             quota_source = _str(entry.get("quota_source")) or _str(
@@ -484,19 +483,25 @@ def _probe_eligible_shells(
 ) -> set[str]:
     """Declared shells that model probing may fabricate Core variants for.
 
-    Bundled shells (:data:`BUNDLED_SHELLS`) are always eligible — brnrd owns
-    their probe semantics. A custom/declared shell is eligible only when at
-    least one of its profiles sets ``probe_models: true``; without that
-    opt-in, a declared profile is exactly what the user wrote — no
-    fabricated ``<name>-<model>`` siblings for auto-selection to prefer.
+    A native ``model_pin`` capability is the primary opt-in. Legacy custom
+    profiles retain ``probe_models: true`` so an account catalog does not
+    silently lose generated Core variants while it adopts capability rows.
     """
     shells: set[str] = set()
+    legacy_bundled_shells = set(_registry_shells(_BUNDLED_CORES))
     for name, profile in declared_profiles.items():
         profile = profile if isinstance(profile, dict) else {}
         shell = _str(profile.get("shell")) or _str(profile.get("binary")) or name
         if not shell:
             continue
-        if shell in BUNDLED_SHELLS or _flag(profile.get("probe_models")):
+        model_pin = runner_select.runner_from_profile(
+            name, profile,
+        ).capability("model_pin")
+        if (
+            (model_pin is not None and model_pin.mode == "native")
+            or (model_pin is None and shell in legacy_bundled_shells)
+            or _flag(profile.get("probe_models"))
+        ):
             shells.add(shell)
     return shells
 
@@ -664,7 +669,12 @@ def _generated_profile_name(core_name: str, shell: str, base_name: str) -> str:
     return f"{base_name}-{suffix}"
 
 
-def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
+def _cmd_with_model(
+    shell: str,
+    base_cmd: str,
+    model: str,
+    model_pin: runner_select.RunnerCapability | None = None,
+) -> str:
     parts = shlex.split(base_cmd) if base_cmd else [shell]
     if not parts:
         parts = [shell]
@@ -679,7 +689,18 @@ def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
             parts.append(model)
         return shlex.join(parts)
 
+    # Capability declarations own the active path. The Shell-name branch is a
+    # compatibility shim for account catalogs written before capability rows.
+    mapping = (
+        model_pin.mapping
+        if model_pin is not None and model_pin.mode == "native"
+        else "--model@exec" if shell == "codex"
+        else "--model@binary"
+    )
+    flag, separator, anchor = mapping.partition("@")
+    flag = flag.strip() or "--model"
+    anchor = anchor.strip() if separator else "binary"
     insert_at = 1
-    if shell == "codex" and len(parts) > 1 and parts[1] == "exec":
-        insert_at = 2
-    return shlex.join([*parts[:insert_at], "--model", model, *parts[insert_at:]])
+    if anchor and anchor != "binary" and anchor in parts:
+        insert_at = parts.index(anchor) + 1
+    return shlex.join([*parts[:insert_at], flag, model, *parts[insert_at:]])

@@ -1055,8 +1055,10 @@ class DockerEnv(WorktreeEnv):
             if proc is not None:
                 runner._clear_active_proc(proc_key, proc)
 
+        selected = invocation.selected_runner or runner_name
+        selected_name = getattr(selected, "name", runner_name)
         stdout, observed_core = runner._process_runner_stdout(
-            runner_name, stdout, invocation.env
+            selected, selected_name, stdout, invocation.env,
         )
         from .. import runner_select
         mismatch = runner_select.core_mismatch(

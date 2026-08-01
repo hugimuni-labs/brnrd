@@ -885,19 +885,21 @@ def profile_hooks_flavour(
     """Return the runner's declared hook *flavour*, or None.
 
     Tier 2 of the runner interface (``kb/design-runner-back-channel.md``):
-    a profile opts into the hooks back channel with a ``hooks: <flavour>``
-    field naming the bundled runner family (``claude`` / ``codex``)
-    whose native hook config brr generates. This reads the *declared*
+    a profile opts into the hooks back channel with a native
+    ``boundary_injection`` capability naming the adapter whose hook config
+    brr generates. Pre-matrix profiles may still carry ``hooks:``. This reads the *declared*
     intent from the profile; whether the runner is actually hooks-capable
     is a separate runtime precheck (settings location writable, native
     config present), so a caller wires hooks only after confirming the
     flavour here *and* passing that precheck.
     """
     profile = _selection_profiles(repo_root).get(name) or {}
-    flavour = profile.get("hooks")
+    from . import runner_select
+
+    flavour = runner_select.runner_from_profile(name, profile).hooks
     if not flavour:
         return None
-    flavour = str(flavour).strip().lower()
+    flavour = flavour.strip().lower()
     return flavour or None
 
 
@@ -1805,7 +1807,7 @@ def _strip_prompt_echo(stderr: str, prompt: str) -> str:
 
 
 def _uses_codex_shell(selected: object, selected_name: str, cmd: list[str]) -> bool:
-    """Whether an invocation uses Codex's prompt-echoing shell.
+    """Whether an invocation declares Codex's JSONL stdout adapter.
 
     Resolution must stay IO-free: this runs inside every invocation, after
     the runner has already exited, purely to decide a display scrub. The
@@ -1816,6 +1818,16 @@ def _uses_codex_shell(selected: object, selected_name: str, cmd: list[str]) -> b
     shared ``.brr``. The selected profile's own ``shell`` field and the argv
     actually executed answer the same question for free.
     """
+    capability = getattr(selected, "capability", None)
+    if callable(capability):
+        stdout_reply = capability("stdout_reply")
+        if stdout_reply is not None:
+            return (
+                stdout_reply.mode == "native"
+                and stdout_reply.mapping == "codex-jsonl"
+            )
+
+    # Compatibility for pre-matrix account catalogs and implicit profiles.
     shell = getattr(selected, "shell", None)
     if shell is None and cmd:
         shell = Path(cmd[0]).name
@@ -1929,6 +1941,7 @@ def _write_response_file(response_path: str, stdout: str) -> None:
 
 
 def _process_runner_stdout(
+    selected: object,
     runner_name: str,
     stdout: str,
     env: dict[str, str] | None = None,
@@ -1942,6 +1955,17 @@ def _process_runner_stdout(
     """
     from . import claude_status
 
+    capability = getattr(selected, "capability", None)
+    stdout_reply = capability("stdout_reply") if callable(capability) else None
+    if (
+        stdout_reply is not None
+        and stdout_reply.mode == "native"
+        and stdout_reply.mapping == "claude-json"
+    ):
+        return claude_status.capture_stdout_with_model(stdout, env)
+    if stdout_reply is not None:
+        return stdout, None
+    # Compatibility for pre-matrix account catalogs and implicit profiles.
     if claude_status.supported(runner_name):
         return claude_status.capture_stdout_with_model(stdout, env)
     return stdout, None
@@ -2191,7 +2215,7 @@ def invoke_runner(
     _retire_capture_dir(capture_dir, returncode)
 
     stdout, observed_core = _process_runner_stdout(
-        selected_name, stdout, invocation.env,
+        selected, selected_name, stdout, invocation.env,
     )
     from . import runner_select
 

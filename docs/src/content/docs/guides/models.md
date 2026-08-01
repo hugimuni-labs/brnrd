@@ -30,7 +30,8 @@ runner_policy=fixed
 
 Leave `shell` and `core` unset with `runner_policy=cost-aware` to let brnrd
 choose the cheapest adequate available local Runner. Project-specific profiles
-can live in `.brr/runners.md`.
+live in the daemon-owned account home's `runners.md`, never in the
+repo-writable `.brr/` directory. See [Runner profiles](../runner-profiles/).
 
 ## Escalate and downshift
 

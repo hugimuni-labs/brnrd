@@ -2,8 +2,130 @@
 
 import pytest
 
-from brr import runner_cores
+from brr import runner, runner_cores, runner_select
 from brr.runner_select import RunnerProfile
+
+
+def test_bundled_profile_resolution_is_behavior_compatible(monkeypatch):
+    """Pin every pre-#907 selectable profile and its invocation-critical fields."""
+    monkeypatch.setattr(runner, "_profiles_cache", None)
+    monkeypatch.setattr(runner, "_profiles_cache_key", None)
+
+    claude_prompt = (
+        "You are a brnrd runner. Follow the supplied prompt and operate on "
+        "the files available in the working directory."
+    )
+    claude_base = (
+        "claude --print --output-format json --dangerously-skip-permissions "
+        "--setting-sources local --system-prompt \"" + claude_prompt + "\""
+    )
+    claude_bare = (
+        "claude --print --output-format json --dangerously-skip-permissions "
+        "--bare --system-prompt \"" + claude_prompt + "\""
+    )
+    codex_base = (
+        "codex exec --dangerously-bypass-approvals-and-sandbox "
+        "--dangerously-bypass-hook-trust -c base_instructions=\"" + claude_prompt
+        + "\" -c include_permissions_instructions=false "
+        "-c include_apps_instructions=false "
+        "-c include_collaboration_mode_instructions=false "
+        "-c include_skill_instructions=false"
+    )
+    expected = {
+        "claude": (None, 30, "claude-local", "claude", claude_base),
+        "claude-bare-api-only": (None, 30, None, None, claude_bare),
+        "codex": (None, 25, "codex-local", "codex", codex_base),
+    }
+    for model, rank in (
+        ("haiku", 10), ("sonnet", 30), ("opus", 50), ("fable", 55),
+    ):
+        quoted_prompt = f"'{claude_prompt}'"
+        expected[f"claude-{model}"] = (
+            model,
+            rank,
+            "claude-local",
+            "claude",
+            f"claude --model {model} --print --output-format json "
+            "--dangerously-skip-permissions --setting-sources local "
+            f"--system-prompt {quoted_prompt}",
+        )
+        expected[f"claude-bare-api-only-{model}"] = (
+            model,
+            rank,
+            None,
+            None,
+            f"claude --model {model} --print --output-format json "
+            "--dangerously-skip-permissions --bare "
+            f"--system-prompt {quoted_prompt}",
+        )
+    for name, model, rank in (
+        ("codex-mini", "gpt-5.6-luna", 20),
+        ("codex-terra", "gpt-5.6-terra", 30),
+        ("codex-full", "gpt-5.6-sol", 45),
+    ):
+        expected[name] = (
+            model,
+            rank,
+            "codex-local",
+            "codex",
+            f"codex exec --model {model} "
+            "--dangerously-bypass-approvals-and-sandbox "
+            "--dangerously-bypass-hook-trust "
+            f"-c 'base_instructions={claude_prompt}' "
+            "-c include_permissions_instructions=false "
+            "-c include_apps_instructions=false "
+            "-c include_collaboration_mode_instructions=false "
+            "-c include_skill_instructions=false",
+        )
+
+    resolved = runner._selection_profiles(probe=False)
+    actual = {}
+    for name, profile in resolved.items():
+        typed = runner_select.runner_from_profile(name, profile)
+        actual[name] = (
+            profile.get("model"),
+            profile.get("cost_rank"),
+            profile.get("quota_source"),
+            typed.hooks,
+            profile.get("cmd"),
+        )
+
+    assert actual == expected
+
+
+def test_bundled_capability_matrix_is_complete_and_explicit(monkeypatch):
+    monkeypatch.setattr(runner, "_profiles_cache", None)
+    monkeypatch.setattr(runner, "_profiles_cache_key", None)
+
+    expected = {
+        "claude": {
+            "headless": "native:--print",
+            "stdout_reply": "native:claude-json",
+            "boundary_injection": "native:claude",
+            "model_pin": "native:--model@binary",
+            "quota_read": "degraded:cached-tui",
+        },
+        "claude-bare-api-only": {
+            "headless": "native:--print",
+            "stdout_reply": "native:claude-json",
+            "boundary_injection": "degraded:heartbeat",
+            "model_pin": "native:--model@binary",
+            "quota_read": "degraded:cached-tui",
+        },
+        "codex": {
+            "headless": "native:exec",
+            "stdout_reply": "native:codex-jsonl",
+            "boundary_injection": "native:codex",
+            "model_pin": "native:--model@exec",
+            "quota_read": "native:session-rollout",
+        },
+    }
+
+    declared = runner._load_profiles()
+    assert set(declared) == set(expected)
+    assert {name: profile["capabilities"] for name, profile in declared.items()} == (
+        expected
+    )
 
 
 def test_all_cores_returns_non_empty_dict():
@@ -409,11 +531,24 @@ def test_stale_entries_uses_today_by_default():
     assert "new" not in result
 
 
-# ── #503: probe fabrication is bundled-shells-only ─────────────────────────
+# ── #503/#907: probe fabrication is declaration-led ───────────────────────
 
 
-def test_bundled_shells_set():
-    assert runner_cores.BUNDLED_SHELLS == frozenset({"claude", "codex"})
+def test_native_model_pin_capability_enables_custom_shell_probing(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores, "probe_shell_models", lambda shell: ("mymodel-9",)
+    )
+
+    profiles = runner_cores.generated_profile_entries({
+        "mycli": {
+            "cmd": "mycli --go",
+            "capabilities": {"model_pin": "native:--model@binary"},
+        }
+    })
+
+    assert profiles["mycli-mymodel-9"]["cmd"] == (
+        "mycli --model mymodel-9 --go"
+    )
 
 
 def test_probe_fabrication_skipped_for_declared_custom_shell(monkeypatch):
