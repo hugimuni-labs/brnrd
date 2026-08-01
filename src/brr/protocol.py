@@ -43,7 +43,7 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
     """Parse YAML-like frontmatter (``---`` delimited) into a flat dict.
 
     Handles the restricted subset used by brr: simple ``key: value``
-    pairs and one level of nesting (for runners.md profiles).
+    pairs and indentation-based mappings (including runner capabilities).
     No dependency on pyyaml.
     """
     m = re.match(r"^---\n(.*?\n)---", text, re.DOTALL)

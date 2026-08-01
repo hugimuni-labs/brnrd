@@ -7097,6 +7097,28 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["source"] == "claude /usage PTY + claude result JSON"
 
 
+def test_collect_levels_uses_declared_quota_adapter_for_unknown_profile(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(
+        daemon.claude_usage,
+        "load_snapshot",
+        lambda outbox: {"quota": {"summary": "week 55% left"}},
+    )
+    monkeypatch.setattr(daemon.claude_status, "load_snapshot", lambda outbox: None)
+
+    levels, slots = daemon._collect_levels(
+        "unfamiliar-shell",
+        tmp_path,
+        tmp_path,
+        refresh=False,
+        quota_read="cached-tui",
+    )
+
+    assert levels["quota"]["summary"] == "week 55% left"
+    assert slots == {"quota", "spend", "context_window"}
+
+
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     conv = "telegram:chat:42"
