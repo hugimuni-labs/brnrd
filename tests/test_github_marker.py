@@ -8,6 +8,7 @@ just the backend auto-accept + honest collaborator-state reporting half.
 from __future__ import annotations
 
 import pytest
+import httpx
 
 pytest.importorskip("fastapi")
 pytest.importorskip("sqlalchemy")
@@ -126,8 +127,7 @@ def test_accept_failure_records_a_specific_notice_and_skips_the_recheck(monkeypa
         result = github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
         db.refresh(repo)
         assert repo.github_bot_collaborator is None, "an accept failure proves nothing about collaborator state"
-        assert "invitation accept failed" in repo.github_bot_notice
-        assert "422" in repo.github_bot_notice
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.UNKNOWN.value
     assert result.accepted == 0
     assert result.failed == 1
 
@@ -157,7 +157,7 @@ def test_collaborator_check_covers_true_false_and_unknown(monkeypatch):
         assert no.github_bot_collaborator is False
         assert no.github_bot_notice is None
         assert error.github_bot_collaborator is None, "an ambiguous check must render unknown, never a guess"
-        assert "collaborator check failed" in error.github_bot_notice
+        assert error.github_bot_notice == github_marker.MarkerCheckState.UNKNOWN.value
     assert result.checked == 3
     assert result.failed == 1
 
@@ -179,7 +179,80 @@ def test_empty_bot_login_never_queries_collaborators_and_says_why(monkeypatch):
         github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
         db.refresh(repo)
         assert repo.github_bot_collaborator is None
-        assert repo.github_bot_notice == "github_bot_login is not configured"
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.UNKNOWN.value
+
+
+def test_403_collaborator_check_is_classified_without_persisting_transport_copy(monkeypatch):
+    app = _app(github_bot_token="ghs_bot", github_bot_login="brnrd-bot")
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    request = httpx.Request(
+        "GET", "https://api.github.com/repos/owner/repo/collaborators/brnrd-bot/permission"
+    )
+    response = httpx.Response(403, request=request)
+    raw = (
+        "Client error '403 Forbidden' for url "
+        "'https://api.github.com/repos/owner/repo/collaborators/brnrd-bot' "
+        "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403"
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(raw, request=request, response=response)
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", forbidden)
+    with app.state.SessionLocal() as db:
+        repo = _make_repo(db)
+        github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
+        db.refresh(repo)
+        assert repo.github_bot_collaborator is None
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.PERMISSION_MISSING.value
+        assert raw not in repo.github_bot_notice
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (401, github_marker.MarkerCheckState.PERMISSION_MISSING),
+        (403, github_marker.MarkerCheckState.PERMISSION_MISSING),
+        (408, github_marker.MarkerCheckState.CHECK_UNAVAILABLE),
+        (429, github_marker.MarkerCheckState.CHECK_UNAVAILABLE),
+        (500, github_marker.MarkerCheckState.CHECK_UNAVAILABLE),
+        (422, github_marker.MarkerCheckState.UNKNOWN),
+    ],
+)
+def test_marker_check_http_failure_map(status, expected):
+    request = httpx.Request("GET", "https://api.github.test/check")
+    response = httpx.Response(status, request=request)
+    exc = httpx.HTTPStatusError("transport copy", request=request, response=response)
+    assert github_marker.classify_marker_check_failure(exc) is expected
+
+
+def test_marker_check_network_failure_is_unavailable():
+    request = httpx.Request("GET", "https://api.github.test/check")
+    exc = httpx.ConnectError("transport copy", request=request)
+    assert (
+        github_marker.classify_marker_check_failure(exc)
+        is github_marker.MarkerCheckState.CHECK_UNAVAILABLE
+    )
+
+
+@pytest.mark.parametrize(("status", "expected"), [(200, True), (404, False)])
+def test_collaborator_check_uses_metadata_read_permission_endpoint(monkeypatch, status, expected):
+    seen = []
+
+    def get(url, **_kwargs):
+        seen.append(url)
+        return httpx.Response(status, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", get)
+    assert (
+        gh.check_repository_collaborator(
+            "token", "https://api.github.test", "2026-03-10", "owner/repo", "brnrd-bot"
+        )
+        is expected
+    )
+    assert seen == [
+        "https://api.github.test/repos/owner/repo/collaborators/brnrd-bot/permission"
+    ]
 
 
 def test_marker_absence_text_names_the_effective_configured_login():

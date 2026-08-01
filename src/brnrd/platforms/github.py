@@ -163,19 +163,25 @@ def check_repository_collaborator(
     *,
     timeout: float = 20.0,
 ) -> bool:
-    """``GET /repos/{repo}/collaborators/{username}`` — is ``username`` a
-    collaborator on ``repo``, from GitHub's own documented contract for this
-    endpoint: 204 = yes, 404 = no. Anything else (403 lacking push access,
-    5xx, a network error) is a genuine "couldn't tell" and is raised rather
-    than folded into either answer — the caller records that as unknown, not
-    a guess (see ``github_marker.sync_marker_for_repos``).
+    """Ask GitHub for ``username``'s effective repository permission.
+
+    The superficially narrower ``GET /collaborators/{username}`` endpoint
+    also requires the caller to have push access.  That makes it unsuitable
+    for the bot/App credentials this check is meant to verify.  GitHub's
+    ``/permission`` endpoint answers the same membership question with the
+    App's baseline ``Metadata: read`` permission: 200 = some effective
+    collaborator role, 404 = none.  Anything else is a genuine "couldn't
+    tell" and remains an exception for the caller to classify.
     """
     resp = httpx.get(
-        _url(api_base_url, f"/repos/{repo}/collaborators/{quote(username, safe='')}"),
+        _url(
+            api_base_url,
+            f"/repos/{repo}/collaborators/{quote(username, safe='')}/permission",
+        ),
         headers=_headers(token, api_version),
         timeout=timeout,
     )
-    if resp.status_code == 204:
+    if resp.status_code == 200:
         return True
     if resp.status_code == 404:
         return False

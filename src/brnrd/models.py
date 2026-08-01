@@ -152,9 +152,10 @@ class Repo(Base):
     # this endpoint, raising on anything else so the caller can record
     # "unknown" instead of guessing).
     github_bot_collaborator: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
-    # Last acceptance/check failure, human-readable, cleared on the next
-    # successful check — never silence (#868's marker-optional stance plus
-    # #874's "surface it, never drop it").
+    # Last acceptance/check failure class (a ``MarkerCheckState`` value),
+    # cleared on the next successful check.  Older rows may contain prose;
+    # ``github_marker.marker_check_state`` safely maps those to ``unknown``
+    # instead of forwarding transport text to the UI (#969).
     github_bot_notice: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_bot_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     account: Mapped["Account"] = relationship(back_populates="repos")

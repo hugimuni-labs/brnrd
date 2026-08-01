@@ -44,10 +44,14 @@ export interface ConnectedRepo {
 	// collaborator"; never show it as though it were determined.
 	github_bot_collaborator: boolean | null;
 	github_bot_checked_at: string | null;
+	// Machine-readable state rendered by MarkerNotice. `null` means either a
+	// successful collaborator check or that no check has run yet.
+	github_bot_status:
+		'permission-missing' | 'not-a-collaborator' | 'check-unavailable' | 'unknown' | null;
 	// Pre-rendered one-sentence absence line (server-owned wording), present
 	// only when `github_bot_collaborator === false`.
 	github_bot_marker_notice: string | null;
-	// Last acceptance/check *failure*, distinct from the absence line above.
+	// Safe compatibility copy for clients predating github_bot_status.
 	github_bot_notice: string | null;
 }
 

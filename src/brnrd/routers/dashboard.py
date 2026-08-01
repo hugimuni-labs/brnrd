@@ -679,6 +679,10 @@ def _iso(value: datetime | None) -> str | None:
 
 def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any]:
     repo: Repo = row["repo"]
+    marker_state = github_marker.marker_check_state(repo)
+    marker_text = (
+        github_marker.marker_state_text(marker_state, bot_login) if marker_state else None
+    )
     return {
         "id": repo.id,
         "dispatch_default": bool(row.get("dispatch_default")),
@@ -713,17 +717,25 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         # checked-and-false "not a collaborator", never guess optimistic.
         "github_bot_collaborator": repo.github_bot_collaborator,
         "github_bot_checked_at": _iso(repo.github_bot_checked_at),
+        # The renderer consumes the class, never the stored sentence.  The
+        # two notice fields below stay as safe compatibility copy for clients
+        # deployed before #969; neither can expose a legacy/raw exception.
+        "github_bot_status": marker_state.value if marker_state else None,
         # The plain one-sentence absence line, pre-rendered server-side (one
         # wording, not duplicated in the frontend) — present only when we
         # positively know the marker isn't a collaborator.
         "github_bot_marker_notice": (
-            github_marker.marker_absence_text(bot_login)
-            if repo.github_bot_collaborator is False
+            marker_text
+            if marker_state is github_marker.MarkerCheckState.NOT_A_COLLABORATOR
             else None
         ),
         # Last acceptance/check *failure*, distinct from the absence line
         # above — never silence (#874 ask 2).
-        "github_bot_notice": repo.github_bot_notice,
+        "github_bot_notice": (
+            marker_text
+            if marker_state is not github_marker.MarkerCheckState.NOT_A_COLLABORATOR
+            else None
+        ),
     }
 
 
