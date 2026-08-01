@@ -424,6 +424,16 @@
 			     detail frame below rather than navigating: the loom is the spine
 			     and the reader keeps their place (see `selectFromCell`). Rows
 			     with no durable run id are select-only; identical geometry. -->
+			<!-- `|global` on both `in:` directives below is the whole of the
+			     #970 regression fix. Transitions are local by default, and a
+			     local intro only plays when its *own nearest block* toggles.
+			     The link/select `{#if run.href}` split put a fresh block
+			     between each shelf row and its `in:`, so a row added to the
+			     keyed each created that block mid-birth and the glitch never
+			     fired — every row, grouped or not, silently bypassed both
+			     directives from then on (noticed when runs grouped into the
+			     dispatch tree). Global restores the band grammar: a past row
+			     *appearing* is the state change, wherever creation started. -->
 			{#each runs as run, index (run.id)}
 				{#if run.href}
 					<a
@@ -432,7 +442,7 @@
 						style={shelfRowStyle(run)}
 						title={`${shelfRowTitle(run)} — click to open below, ctrl/⌘-click for the full node`}
 						onclick={(event) => selectFromCell(event, run.id)}
-						in:glitchReveal={{ duration: 240, delay: index * 24 }}
+						in:glitchReveal|global={{ duration: 240, delay: index * 24 }}
 					>
 						{@render shelfRow(run)}
 					</a>
@@ -443,7 +453,7 @@
 						style={shelfRowStyle(run)}
 						title={shelfRowTitle(run)}
 						onclick={() => select('run', run.id)}
-						in:glitchReveal={{ duration: 240, delay: index * 24 }}
+						in:glitchReveal|global={{ duration: 240, delay: index * 24 }}
 					>
 						{@render shelfRow(run)}
 					</button>
@@ -501,9 +511,13 @@
 						     state belongs to the panel that issued the stop, not to a
 						     band that merely reports position. -->
 						{@const stopping = run.stop_requested}
+						<!-- `|global` for the same reason as the past shelf (#970): the
+						     0→1 case creates this whole `{:else}` branch, and a local
+						     intro inside the freshly-born each block never fires — the
+						     seam's most common ignition was the one that didn't play. -->
 						<div
 							class="flex min-w-0 items-stretch gap-px"
-							in:glitchReveal={{ duration: 260, delay: 35 + index * 38 }}
+							in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
 						>
 							<button
 								type="button"
