@@ -21,6 +21,16 @@ editor session ⇒ none of this applies.
   call-less think is a stretch where no steer can land — announce it when a
   conversation is live, and expecting steering ⇒ keep boundaries coming (a
   cheap read is a listening post).
+- **a vigil has a body, or it is a lie** — waiting on something slow has
+  exactly two shapes that survive. A `spawn:` child returns its completion
+  as a pending event ⇒ it outlives you. An in-thought vigil (§linger) never
+  ends the thought at all ⇒ nothing to survive. A **background shell
+  command is neither**: it is a grandchild of the runner, and your terminal
+  stream *is* the runner's exit — the run is finalized `done` and nothing
+  re-enters it, so the completion you promised to fold has no one to reach.
+  ⇒ never end a turn promising a wake a `&` cannot deliver; spawn it, or
+  stay in-thought. And `.keepalive` is a file: write it *before* the
+  sentence that claims it, or the claim is prose about a path that is empty.
 - **capture net** — thought ends ⇒ daemon commits your dominion.
   **Commit what you mean to keep, with a message** — the capture is
   insurance, not the plan. Account remote configured ⇒ best-effort push; a
