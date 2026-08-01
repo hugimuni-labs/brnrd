@@ -19,6 +19,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
+
+import httpx
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,6 +30,20 @@ from .models import Repo
 from .platforms import github as gh
 
 logger = logging.getLogger(__name__)
+
+
+class MarkerCheckState(str, Enum):
+    """Machine-readable outcomes that may need user action.
+
+    These values, rather than exception sentences, cross the repo-view API
+    boundary.  ``None`` remains the successful-collaborator / never-checked
+    shape; the latter is distinguishable by ``github_bot_checked_at``.
+    """
+
+    PERMISSION_MISSING = "permission-missing"
+    NOT_A_COLLABORATOR = "not-a-collaborator"
+    CHECK_UNAVAILABLE = "check-unavailable"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -48,6 +65,52 @@ def marker_absence_text(bot_login: str) -> str:
         "comment-tags addressed to it won't reach the resident; invite it "
         "in Settings → Collaborators."
     )
+
+
+def classify_marker_check_failure(exc: Exception) -> MarkerCheckState:
+    """Collapse transport failures at the catch site, while details are typed.
+
+    Authentication/authorization failures have a permission remedy.  Retryable
+    HTTP and network failures mean the check is unavailable.  Everything else
+    is explicitly unknown; no classifier matches exception prose.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            return MarkerCheckState.PERMISSION_MISSING
+        if status in (408, 429) or status >= 500:
+            return MarkerCheckState.CHECK_UNAVAILABLE
+    elif isinstance(exc, httpx.RequestError):
+        return MarkerCheckState.CHECK_UNAVAILABLE
+    return MarkerCheckState.UNKNOWN
+
+
+def marker_check_state(repo: Repo) -> MarkerCheckState | None:
+    """Read the persisted class, including safe handling of legacy notices."""
+    if repo.github_bot_collaborator is False:
+        return MarkerCheckState.NOT_A_COLLABORATOR
+    if repo.github_bot_collaborator is True or not repo.github_bot_notice:
+        return None
+    try:
+        return MarkerCheckState(repo.github_bot_notice)
+    except ValueError:
+        # Rows written before #969 contain raw exception sentences.  They are
+        # never copied outward; their only honest class is unknown.
+        return MarkerCheckState.UNKNOWN
+
+
+def marker_state_text(state: MarkerCheckState, bot_login: str) -> str:
+    """Compatibility copy for API consumers that have not moved to the enum."""
+    if state is MarkerCheckState.NOT_A_COLLABORATOR:
+        return marker_absence_text(bot_login)
+    if state is MarkerCheckState.PERMISSION_MISSING:
+        return (
+            "collaborator status unavailable — the GitHub credential cannot "
+            "read repository metadata; grant Metadata: read permission."
+        )
+    if state is MarkerCheckState.CHECK_UNAVAILABLE:
+        return "collaborator status unavailable — GitHub could not be reached; try again later."
+    return "collaborator status unknown — the check failed for an unclassified reason."
 
 
 def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyncResult:
@@ -102,7 +165,8 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
                 logger.warning(
                     "brnrd-bot invitation accept failed for %s: %s", repo.repo_full_name, exc
                 )
-                repo.github_bot_notice = f"brnrd-bot invitation accept failed: {exc}"
+                repo.github_bot_notice = classify_marker_check_failure(exc).value
+                repo.github_bot_collaborator = None
                 failed += 1
             repo.github_bot_checked_at = now
 
@@ -117,7 +181,7 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
             # collaborator" for what is actually a config gap, not an absent
             # marker. Say the real reason instead of guessing.
             repo.github_bot_collaborator = None
-            repo.github_bot_notice = "github_bot_login is not configured"
+            repo.github_bot_notice = MarkerCheckState.UNKNOWN.value
             repo.github_bot_checked_at = now
             continue
         try:
@@ -133,7 +197,7 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
             logger.warning(
                 "brnrd-bot collaborator check failed for %s: %s", repo.repo_full_name, exc
             )
-            repo.github_bot_notice = f"brnrd-bot collaborator check failed: {exc}"
+            repo.github_bot_notice = classify_marker_check_failure(exc).value
             repo.github_bot_collaborator = None
             failed += 1
         repo.github_bot_checked_at = now

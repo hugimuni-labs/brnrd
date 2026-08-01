@@ -14,8 +14,7 @@ const generated = join(here, '.markerNotice.generated.mjs');
 // compile the real component to a server target and render it with props,
 // rather than string-matching the source.
 async function renderNotice(props: {
-	markerNotice: string | null;
-	failureNotice: string | null;
+	status: 'permission-missing' | 'not-a-collaborator' | 'check-unavailable' | 'unknown' | null;
 	botLogin?: string;
 	repoFullName?: string;
 }): Promise<string> {
@@ -37,57 +36,46 @@ async function renderNotice(props: {
 after(() => rmSync(generated, { force: true }));
 
 test('neither notice renders nothing visible', async () => {
-	const html = await renderNotice({ markerNotice: null, failureNotice: null });
+	const html = await renderNotice({ status: null });
 	ok(!html.includes('marker'));
 	ok(!html.includes('not a collaborator'));
 });
 
-test('a determined absence renders the server-owned sentence, naming the effective login', async () => {
+test('a determined absence renders the class-owned remedy, naming the effective login', async () => {
 	const html = await renderNotice({
-		markerNotice:
-			'brnrd-bot not a collaborator — assigns / review-requests / comment-tags addressed to it ' +
-			"won't reach the resident; invite it in Settings → Collaborators.",
-		failureNotice: null
+		status: 'not-a-collaborator',
+		botLogin: 'brnrd-bot'
 	});
 	ok(html.includes('brnrd-bot not a collaborator'));
 	ok(html.includes('Settings → Collaborators'));
 });
 
-test('an unknown state (null) never renders the absence line — no guessed yes or no', async () => {
-	// `markerNotice` is only ever non-null when the server positively proved
-	// "not a collaborator" (see github_marker.marker_absence_text) — a
-	// collaborator==true or ==None (unknown) repo passes null here, and both
-	// must render nothing, not a downgraded warning.
-	const html = await renderNotice({ markerNotice: null, failureNotice: null });
+test('unknown renders as unknown rather than guessing yes or no', async () => {
+	const html = await renderNotice({ status: 'unknown' });
+	ok(html.includes('collaborator status unknown'));
 	ok(!html.includes('not a collaborator'));
 });
 
-test('a failure notice renders independently of the absence line', async () => {
-	const html = await renderNotice({
-		markerNotice: null,
-		failureNotice: 'brnrd-bot collaborator check failed: 500 Server Error'
-	});
-	ok(html.includes('brnrd-bot collaborator check failed'));
-	ok(!html.includes('not a collaborator'), 'a check failure is not a proven absence');
+test('permission-missing renders the named remedy and never transport copy', async () => {
+	const html = await renderNotice({ status: 'permission-missing' });
+	ok(html.includes('permission missing'));
+	ok(html.includes('Metadata: read'));
+	ok(!html.includes('403 Forbidden'));
+	ok(!html.includes('developer.mozilla.org'));
 });
 
-test('both notices render together, marker line first', async () => {
-	const html = await renderNotice({
-		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
-		failureNotice: 'brnrd-bot invitation accept failed: 422 Unprocessable Entity'
-	});
-	const markerAt = html.indexOf('not a collaborator');
-	const failureAt = html.indexOf('invitation accept failed');
-	ok(markerAt !== -1 && failureAt !== -1 && markerAt < failureAt);
+test('check-unavailable renders a retry remedy', async () => {
+	const html = await renderNotice({ status: 'check-unavailable' });
+	ok(html.includes('collaborator check unavailable'));
+	ok(html.includes('try again later'));
 });
 
 // #885 additions: click-to-copy bot handle + a link to the repo's GitHub
-// collaborators page, both gated on `markerNotice` firing.
+// collaborators page, both gated on the `not-a-collaborator` class.
 
 test('a determined absence with a bot login renders the copy-handle control', async () => {
 	const html = await renderNotice({
-		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
-		failureNotice: null,
+		status: 'not-a-collaborator',
 		botLogin: 'brnrd-bot',
 		repoFullName: ''
 	});
@@ -96,8 +84,7 @@ test('a determined absence with a bot login renders the copy-handle control', as
 
 test('a determined absence with a repo name renders the collaborators-page link', async () => {
 	const html = await renderNotice({
-		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
-		failureNotice: null,
+		status: 'not-a-collaborator',
 		botLogin: '',
 		repoFullName: 'Gurio/brr'
 	});
@@ -105,10 +92,9 @@ test('a determined absence with a repo name renders the collaborators-page link'
 	ok(html.includes('https://github.com/Gurio/brr/settings/access'));
 });
 
-test('an empty botLogin/repoFullName renders neither addition, even with a firing markerNotice', async () => {
+test('an empty botLogin/repoFullName renders neither addition, even with a firing status', async () => {
 	const html = await renderNotice({
-		markerNotice: 'brnrd-bot not a collaborator — invite it in Settings → Collaborators.',
-		failureNotice: null,
+		status: 'not-a-collaborator',
 		botLogin: '',
 		repoFullName: ''
 	});
@@ -116,10 +102,9 @@ test('an empty botLogin/repoFullName renders neither addition, even with a firin
 	ok(!html.includes('open collaborators page'));
 });
 
-test('a null markerNotice renders neither addition, even when bot login and repo name are given', async () => {
+test('a null status renders neither addition, even when bot login and repo name are given', async () => {
 	const html = await renderNotice({
-		markerNotice: null,
-		failureNotice: null,
+		status: null,
 		botLogin: 'brnrd-bot',
 		repoFullName: 'Gurio/brr'
 	});

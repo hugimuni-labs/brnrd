@@ -7,7 +7,9 @@ exposes. Unit behavior of the sync itself lives in test_github_marker.py.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
+import httpx
 import pytest
 
 pytest.importorskip("fastapi")
@@ -246,6 +248,7 @@ def test_dashboard_repo_view_exposes_marker_state_and_the_absence_line(monkeypat
     body = client.get("/v1/dashboard/repos").json()
     row = next(row for row in body["connected_repos"] if row["repo_full_name"] == "Gurio/brr")
     assert row["github_bot_collaborator"] is False
+    assert row["github_bot_status"] == "not-a-collaborator"
     assert row["github_bot_marker_notice"] == (
         "brnrd-bot not a collaborator — assigns / review-requests / "
         "comment-tags addressed to it won't reach the resident; invite it "
@@ -267,4 +270,34 @@ def test_dashboard_repo_view_never_renders_the_absence_line_for_unknown_state(mo
     body = client.get("/v1/dashboard/repos").json()
     row = next(row for row in body["connected_repos"] if row["repo_full_name"] == "Gurio/brr")
     assert row["github_bot_collaborator"] is None
+    assert row["github_bot_status"] is None
     assert row["github_bot_marker_notice"] is None
+
+
+def test_dashboard_repo_view_renders_403_class_without_raw_httpx_copy(monkeypatch):
+    client = _client(github_bot_login="brnrd-bot")
+    _login(client)
+    monkeypatch.setattr(gh, "list_repository_invitations", lambda *a, **k: [])
+    request = httpx.Request(
+        "GET", "https://api.github.com/repos/Gurio/brr/collaborators/brnrd-bot/permission"
+    )
+    response = httpx.Response(403, request=request)
+    raw = (
+        "Client error '403 Forbidden' for url "
+        "'https://api.github.com/repos/Gurio/brr/collaborators/brnrd-bot' "
+        "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403"
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise httpx.HTTPStatusError(raw, request=request, response=response)
+
+    monkeypatch.setattr(gh, "check_repository_collaborator", forbidden)
+    assert client.post("/v1/repos/connect", json={"repo_full_name": "Gurio/brr"}).status_code == 200
+
+    body = client.get("/v1/dashboard/repos").json()
+    row = next(row for row in body["connected_repos"] if row["repo_full_name"] == "Gurio/brr")
+    rendered_payload = json.dumps(row)
+    assert row["github_bot_status"] == "permission-missing"
+    assert "Metadata: read" in row["github_bot_notice"]
+    assert raw not in rendered_payload
+    assert "developer.mozilla.org" not in rendered_payload
