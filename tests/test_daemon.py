@@ -6329,6 +6329,365 @@ def test_refusal_reason_cannot_break_the_event_frontmatter(tmp_path, monkeypatch
     assert reread["status"] != "done"
 
 
+# ── #932 conversation-sticky: the tap that holds ─────────────────────────
+#
+# The maintainer priced this fork: the one-shot is a cost-protection
+# measure, plain sticky inherits the forget-to-downgrade problem, so the
+# expiry is load-bearing. Sticky within the conversation, auto-reverting,
+# never carried to schedule ticks.
+
+
+def _give_identity(event, *, user_id="777", chat_id="555"):
+    """Stamp a Telegram identity so the event yields both key kinds."""
+    updates = {"telegram_user_id": user_id, "telegram_chat_id": chat_id}
+    protocol.update_event_meta(event, **updates)
+    event.update(updates)
+
+
+def _second_target(ctx, repo_root, tmp_path, *, exclude_id, source="telegram",
+                   body="a photo, 39 seconds later"):
+    protocol.create_event(ctx.dispatch_inbox, source, body)
+    cfg = {"repo.label": "Gurio/a", "home.path": str(tmp_path / "account-home")}
+    targets = daemon._dispatchable_targets(ctx, repo_root, cfg)
+    return next(t for t in targets if t.event["id"] != exclude_id)
+
+
+def _never_claims(monkeypatch):
+    from brr.gates import cloud
+
+    def _never(*args, **kwargs):
+        raise AssertionError("sticky inheritance must not touch the network")
+
+    monkeypatch.setattr(cloud, "claim_wake_request", _never)
+    monkeypatch.setattr(cloud, "_request", _never)
+
+
+def test_applied_tap_binds_the_conversation_sticky_record(
+    tmp_path, monkeypatch,
+):
+    """The claim that applies a tap now also writes the sticky record, bound
+    to the claiming lead event's correspondent (preferred) and conversation
+    keys — the newest tap owns the conversation."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_hold"})
+    _stub_claim(monkeypatch, {
+        "apply": True, "reason": None, "request_id": "wake_hold",
+        "status": "consumed", "profile": "claude-fable",
+    })
+
+    daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    record = wake_request_mod.sticky_record(repo_a / ".brr")
+    assert record["request_id"] == "wake_hold"
+    assert record["profile"] == "claude-fable"
+    assert record["correspondent_key"] == "telegram:user-id:777"
+    assert record["conversation_key"] == "telegram:555:"
+    assert record["claimed_at"]
+
+
+def test_burst_event_within_ttl_inherits_the_tap_profile(tmp_path, monkeypatch):
+    """#932's live incident: the photo that lands 39 seconds after a fable
+    tap and dispatches with no tap parked must inherit fable, not fall
+    through to the config default — with the sticky stamps the run context
+    bundle renders, and without an HTTP call."""
+    from datetime import datetime, timedelta
+
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_hold"})
+    _stub_claim(monkeypatch, {
+        "apply": True, "reason": None, "request_id": "wake_hold",
+        "status": "consumed", "profile": "claude-fable",
+    })
+    daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+    assert wake_request_mod.pending_id(repo_a / ".brr") is None
+
+    burst = _second_target(ctx, repo_a, tmp_path, exclude_id=target.event["id"])
+    _give_identity(burst.event)
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(burst, ctx, repo_a)
+
+    assert applied.event["runner"] == "claude-fable"
+    assert applied.event["dashboard_wake_sticky_profile"] == "claude-fable"
+    # The stamps carry the record's own clock: expiry is claimed_at + TTL.
+    record = wake_request_mod.sticky_record(repo_a / ".brr")
+    claimed = datetime.fromisoformat(record["claimed_at"])
+    assert applied.event["dashboard_wake_sticky_claimed_at"] == (
+        claimed.isoformat(timespec="seconds")
+    )
+    assert applied.event["dashboard_wake_sticky_expires_at"] == (
+        (claimed + timedelta(hours=2)).isoformat(timespec="seconds")
+    )
+    # Inherited, not claimed fresh — no request id, and the record survives
+    # for the rest of the conversation instead of being retired.
+    assert "dashboard_wake_request_id" not in applied.event
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
+
+
+def test_sticky_matches_the_correspondent_across_gates(tmp_path, monkeypatch):
+    """The record binds the *human*, not the raw thread string: a tap
+    claimed on the local Telegram gate covers the same person arriving via
+    the brnrd relay (`cloud:telegram:…`), whose conversation key differs.
+    #930 is what raw thread keys did to menus."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+    )
+    relayed = _second_target(
+        ctx, repo_a, tmp_path, exclude_id=target.event["id"], source="cloud",
+    )
+    updates = {
+        "cloud_platform": "telegram", "cloud_user_id": "777",
+        "cloud_chat_id": "900",
+    }
+    protocol.update_event_meta(relayed.event, **updates)
+    relayed.event.update(updates)
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(relayed, ctx, repo_a)
+
+    assert applied.event["runner"] == "claude-fable"
+
+
+def test_sticky_does_not_leak_to_another_human_in_the_same_thread(
+    tmp_path, monkeypatch,
+):
+    """A thread key is an *address*, not an identity — two people in one
+    group chat share it. So a correspondent mismatch must end the match, not
+    fall through to the thread: otherwise anyone in the chat inherits
+    whoever last tapped a strong Core, which is the exact spend the TTL
+    exists to bound. The conversation key stays the fallback for events
+    carrying no human identity at all."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="cloud:telegram:900:",
+    )
+    # Same chat, different person.
+    other = _second_target(
+        ctx, repo_a, tmp_path, exclude_id=target.event["id"], source="cloud",
+    )
+    updates = {
+        "cloud_platform": "telegram", "cloud_user_id": "888",
+        "cloud_chat_id": "900",
+    }
+    protocol.update_event_meta(other.event, **updates)
+    other.event.update(updates)
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(other, ctx, repo_a)
+
+    assert "dashboard_wake_sticky_profile" not in applied.event
+    assert applied.event.get("runner") != "claude-fable"
+    # The record survives — it is still 777's, and 777's next message in the
+    # same thread must still inherit it.
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
+
+
+def test_schedule_and_self_woken_events_never_consult_the_sticky_record(
+    tmp_path, monkeypatch,
+):
+    """The maintainer's price for sticky existing at all: never carried to
+    schedule ticks. The guard is on the source, not on the accident that a
+    schedule tick usually has no correspondent — so even a schedule event
+    that somehow carries the identity stays on the config default. Same for
+    a respawn-origin event: the daemon woke itself; nobody tapped."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path, source="schedule")
+    _give_identity(target.event)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+    )
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert "runner" not in applied.event
+    assert "dashboard_wake_sticky_profile" not in applied.event
+    # The record is not spent on the refusal — the conversation keeps it.
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
+
+    respawn = _second_target(ctx, repo_a, tmp_path, exclude_id=target.event["id"])
+    _give_identity(respawn.event)
+    updates = {"respawned_by_run": "run-123"}
+    protocol.update_event_meta(respawn.event, **updates)
+    respawn.event.update(updates)
+
+    applied = daemon._apply_dashboard_wake_request(respawn, ctx, repo_a)
+
+    assert "runner" not in applied.event
+
+
+def test_expired_sticky_record_falls_through_to_config(tmp_path, monkeypatch):
+    """Expiry is the load-bearing half of the design: past the TTL the
+    record is dropped and resolution falls through to `.brr/config` — the
+    cheap default returns on its own, nobody has to remember to downgrade."""
+    from datetime import datetime, timedelta, timezone
+
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    stale = datetime.now(timezone.utc) - timedelta(hours=3)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+        claimed_at=stale.isoformat(timespec="seconds"),
+    )
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert "runner" not in applied.event
+    assert "dashboard_wake_sticky_profile" not in applied.event
+    # Dropped, so the next dispatch doesn't re-read a dead promise.
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is None
+
+
+def test_sticky_ttl_is_config_overridable(tmp_path, monkeypatch):
+    """`wake_request.sticky_ttl_seconds` in `.brr/config` overrides the 2 h
+    default — as a string, because that is what the flat config file
+    yields."""
+    from datetime import datetime, timedelta, timezone
+
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+        claimed_at=ten_minutes_ago.isoformat(timespec="seconds"),
+    )
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(
+        target, ctx, repo_a, {"wake_request.sticky_ttl_seconds": "300"},
+    )
+
+    assert "runner" not in applied.event
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is None
+
+
+def test_a_new_tap_replaces_the_sticky_record(tmp_path, monkeypatch):
+    """One requester parks at most one tap at a time; the newest applied tap
+    owns the conversation — profile, binding, and clock."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event, user_id="888", chat_id="666")
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_old",
+        profile="codex-mini",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+    )
+    wake_request_mod.store_pending(repo_a / ".brr", {"request_id": "wake_new"})
+    _stub_claim(monkeypatch, {
+        "apply": True, "reason": None, "request_id": "wake_new",
+        "status": "consumed", "profile": "claude-fable",
+    })
+
+    daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    record = wake_request_mod.sticky_record(repo_a / ".brr")
+    assert record["request_id"] == "wake_new"
+    assert record["profile"] == "claude-fable"
+    assert record["correspondent_key"] == "telegram:user-id:888"
+    assert record["conversation_key"] == "telegram:666:"
+
+
+def test_event_pin_outranks_the_sticky_record(tmp_path, monkeypatch):
+    """An event-level pin (respawn shell:/core:, quality: escalate) is a
+    deliberate per-run choice — it short-circuits before the record is even
+    read, and leaves it live for the next unpinned wake in the thread."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    _give_identity(target.event)
+    protocol.update_event_meta(target.event, core="claude-opus-4-8")
+    target.event["core"] = "claude-opus-4-8"
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="telegram:555:",
+    )
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(target, ctx, repo_a)
+
+    assert "runner" not in applied.event
+    assert "dashboard_wake_sticky_profile" not in applied.event
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
+
+
+def test_run_worker_notes_a_sticky_inherited_profile(tmp_path, monkeypatch):
+    """The run context bundle's "Requested Runner" line says when a profile
+    came from the sticky record — so a wake can tell tap-fresh from
+    tap-inherited, and see when the inheritance lapses."""
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-sticky-wake")
+    event["runner"] = "claude-fable"
+    event["dashboard_wake_sticky_profile"] = "claude-fable"
+    event["dashboard_wake_sticky_claimed_at"] = "2026-08-01T11:27:00+00:00"
+    event["dashboard_wake_sticky_expires_at"] = "2026-08-01T13:27:00+00:00"
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+
+    seen_overrides: list[dict | None] = []
+    prompt_kwargs: dict = {}
+
+    def fake_prompt(task, eid, rp, root, **kw):
+        prompt_kwargs.update(kw)
+        return f"PROMPT {eid}"
+
+    _stub_wake_runner(monkeypatch, seen_overrides)
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
+
+    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert seen_overrides and seen_overrides[0] == {"runner": "claude-fable"}
+    assert prompt_kwargs["runner_medium"] == (
+        "claude-fable (conversation-sticky from tap at 11:27Z, "
+        "expires 13:27Z)"
+    )
+    # Inherited is not a fresh claim: no tap was in play *for this wake*.
+    assert "wake_request" not in task.meta
+
+
 def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
