@@ -186,9 +186,9 @@ const HOST: readonly LegalField[] = [
 		fr: 'Téléphone',
 		en: 'Hosting provider — telephone',
 		block: 'host',
-		whereToFind:
-			"Scaleway's published legal notice (scaleway.com/en/legal-notice/) does not list a telephone number, unlike Upsun's impressum; the maintainer should confirm a number to publish before removing this placeholder, rather than have it guessed from third-party directories.",
-		value: null
+		value: '+33 1 84 13 00 00',
+		source:
+			"confirmed by the maintainer by calling it, 2026-07-31 ('I called the scaleway number - it is scaleway'); Scaleway's own legal notice lists no phone, so the directory-sourced number needed exactly this check before publication"
 	},
 	{
 		key: 'host.website',
