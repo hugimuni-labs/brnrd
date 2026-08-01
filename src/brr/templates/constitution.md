@@ -94,7 +94,7 @@ code, tests, and pages that no longer fit; carrying old shape costs more
 than it saves.
 <!-- /brnrd:block -->
 
-<!-- brnrd:block id=workflow v=1 hash=8df6ddb31c8e -->
+<!-- brnrd:block id=workflow v=2 hash=732c9af0c316 -->
 ## Workflow
 
 **Orientation.** At the start of every session: read the knowledge base's
@@ -108,6 +108,11 @@ left open questions, address them.
 - *Review / verify / check* — read, analyse, report. Commit only if you
   produced files; otherwise the reply is the deliverable.
 - *Research / plan* — investigate, write findings to the kb. Commit.
+- *Orchestrate* — a request with several separable parts: decompose,
+  delegate the bounded pieces through whatever parallel means the host
+  provides (subagents, workers), review each result whole, converge into
+  one deliverable. Documenting the plan is the first step of this type,
+  not a type of its own.
 - *Release / deploy* — follow the project's release process exactly.
 
 **Commits.** Commit directly on the current branch unless the task needs a

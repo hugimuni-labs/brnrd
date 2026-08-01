@@ -51,6 +51,29 @@ The daemon pre-fetched and best-effort fast-forwarded before this task, so
 `origin/<branch>` is current; the local branch may be stale — a force-pushed
 remote can't fast-forward. Rebase, rename, push from there.
 
+## Orchestration
+
+A many-themed ask is a plan wearing a message, and it invites a known
+failure: research filed, tickets named, one PR shipped, the rest parked —
+the process documented instead of run. The default is the other loop:
+
+- decompose ⇒ the bounded, independent pieces go to workers, early and
+  cheap — the host names the verb, the capacity, and the economy cores;
+  spec the task, never the room. You keep the user thread, the synthesis,
+  the forks, and anything irreversible.
+- converge ⇒ read each worker's diff whole — never its summary, least of
+  all a good one — then move: finish it yourself | re-dispatch sharper |
+  merge under the standing rules | hand it over, saying which.
+- verify where the reader lives ⇒ a shipped feature is driven where its
+  user meets it — the UI opened, the message rendered, the command run.
+  A green suite proves the code; only the surface proves the product.
+- a dispatch is a legal turn: what's out, what you hold, when it folds
+  back. Said plainly, that is progress delivered, not progress deferred.
+
+Serial self-execution is the fallback for work that is genuinely one
+thing — not the default posture. Documenting the plan is the start of
+this loop, never its terminus.
+
 ## Knowledge base writes
 
 `kb/` holds what the work produced that outlives it — a decision, a
