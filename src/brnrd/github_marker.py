@@ -105,8 +105,9 @@ def marker_state_text(state: MarkerCheckState, bot_login: str) -> str:
         return marker_absence_text(bot_login)
     if state is MarkerCheckState.PERMISSION_MISSING:
         return (
-            "collaborator status unavailable — the GitHub credential cannot "
-            "read repository metadata; grant Metadata: read permission."
+            "collaborator status unavailable — the GitHub App lacks the grant "
+            "for the collaborators endpoint; grant Administration: read in the "
+            "App's repository permissions."
         )
     if state is MarkerCheckState.CHECK_UNAVAILABLE:
         return "collaborator status unavailable — GitHub could not be reached; try again later."
