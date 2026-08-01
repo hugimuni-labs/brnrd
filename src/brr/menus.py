@@ -4,11 +4,13 @@ The resident authors one ``menu.json`` control file in its run outbox.
 The daemon validates that file, promotes it into this runtime store, and
 renders the stored generation at gates and at the next resident boundary.
 
-Each conversation thread has one ``live.json`` pointer plus a bounded archive
-of generations. Superseded generations stay resolvable for honest stale-tap
-answers without leaving their controls live. The archive retains the newest
-128 generations per thread; an older tap still becomes an ``unknown`` answer
-event rather than disappearing.
+Each correspondent has one ``live.json`` pointer plus a bounded archive of
+generations. The originating conversation thread remains on the generation as
+rendering provenance, but does not split one person's controls by ingress
+lane. Superseded generations stay resolvable for honest stale-tap answers
+without leaving their controls live. The archive retains the newest 128
+generations per correspondent; an older tap still becomes an ``unknown``
+answer event rather than disappearing.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from . import protocol
 
@@ -194,17 +196,48 @@ def read_outbox_menu(
     return validate_menu(payload, expected_thread=expected_thread), digest
 
 
-def _thread_dir(brr_dir: Path, thread: str) -> Path:
-    digest = hashlib.sha256(thread.encode("utf-8")).hexdigest()[:24]
+def menu_store_key(thread: str, correspondent_key: str | None = None) -> str:
+    """Return the identity that owns one live-menu generation stream.
+
+    Correspondent keys deliberately carry a namespace prefix so they cannot
+    collide with a legacy raw thread string. Threads remain the fallback for
+    sources that do not expose a stable correspondent identity.
+    """
+    correspondent = str(correspondent_key or "").strip()
+    if correspondent:
+        return f"correspondent:{correspondent}"
+    return thread
+
+
+def _store_dir(
+    brr_dir: Path,
+    thread: str,
+    correspondent_key: str | None = None,
+) -> Path:
+    key = menu_store_key(thread, correspondent_key)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
     return Path(brr_dir) / STORE_NAME / digest
 
 
-def _generation_path(brr_dir: Path, thread: str, menu_id: str) -> Path:
-    return _thread_dir(brr_dir, thread) / "generations" / f"{menu_id}.json"
+def _generation_path(
+    brr_dir: Path,
+    thread: str,
+    menu_id: str,
+    correspondent_key: str | None = None,
+) -> Path:
+    return (
+        _store_dir(brr_dir, thread, correspondent_key)
+        / "generations"
+        / f"{menu_id}.json"
+    )
 
 
-def _live_path(brr_dir: Path, thread: str) -> Path:
-    return _thread_dir(brr_dir, thread) / "live.json"
+def _live_path(
+    brr_dir: Path,
+    thread: str,
+    correspondent_key: str | None = None,
+) -> Path:
+    return _store_dir(brr_dir, thread, correspondent_key) / "live.json"
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -231,8 +264,12 @@ def _canonical_part(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _prune_generations(brr_dir: Path, thread: str) -> None:
-    root = _thread_dir(brr_dir, thread) / "generations"
+def _prune_generations(
+    brr_dir: Path,
+    thread: str,
+    correspondent_key: str | None = None,
+) -> None:
+    root = _store_dir(brr_dir, thread, correspondent_key) / "generations"
     try:
         entries = sorted(
             (path for path in root.glob("*.json") if path.is_file()),
@@ -248,14 +285,142 @@ def _prune_generations(brr_dir: Path, thread: str) -> None:
             continue
 
 
+def _generation_order(menu: dict[str, Any], path: Path) -> tuple[float, int, str]:
+    try:
+        modified_ns = path.stat().st_mtime_ns
+    except OSError:
+        modified_ns = 0
+    written = _parse_iso(menu.get("written_at"))
+    if written is None:
+        written = modified_ns / 1_000_000_000
+    return written, modified_ns, str(
+        menu.get("menu_id") or ""
+    )
+
+
+def _reconcile_legacy_threads(
+    brr_dir: Path,
+    thread: str,
+    correspondent_key: str | None,
+    legacy_threads: Iterable[str],
+) -> None:
+    """Merge legacy per-thread live pointers into the correspondent store.
+
+    This is intentionally lazy: the first read or write that knows both the
+    correspondent and their related thread keys performs the migration. The
+    newest generation becomes the correspondent's live pointer and every
+    older live generation is archived as superseded. Legacy live pointers are
+    then removed so a later process cannot resurrect the split-brain state.
+    """
+    correspondent = str(correspondent_key or "").strip()
+    if not correspondent:
+        return
+
+    canonical_live_path = _live_path(brr_dir, thread, correspondent)
+    candidates: list[tuple[dict[str, Any], Path, bool]] = []
+    canonical = _read_json(canonical_live_path)
+    if canonical and canonical.get("menu_id"):
+        candidates.append((canonical, canonical_live_path, True))
+
+    seen_threads: set[str] = set()
+    for raw_thread in (thread, *legacy_threads):
+        legacy_thread = str(raw_thread or "").strip()
+        if not legacy_thread or legacy_thread in seen_threads:
+            continue
+        seen_threads.add(legacy_thread)
+        legacy_path = _live_path(brr_dir, legacy_thread)
+        legacy = _read_json(legacy_path)
+        if legacy and legacy.get("menu_id"):
+            candidates.append((legacy, legacy_path, False))
+
+    if not candidates:
+        return
+    if len(candidates) == 1 and candidates[0][2]:
+        return
+
+    winner, _winner_path, _winner_is_canonical = max(
+        candidates,
+        key=lambda item: _generation_order(item[0], item[1]),
+    )
+    menu_id = str(winner["menu_id"])
+    migrated_at = _utc_now()
+    winner = {
+        **winner,
+        "state": "live",
+        "correspondent_key": correspondent,
+    }
+
+    # Copy older archived generations too, so a tap on a superseded legacy
+    # keyboard remains an honest stale answer after the live pointer migrates.
+    live_candidate_ids = {
+        str(candidate["menu_id"]) for candidate, _path, _canonical in candidates
+    }
+    for legacy_thread in seen_threads:
+        generations = _store_dir(brr_dir, legacy_thread) / "generations"
+        for legacy_generation_path in generations.glob("*.json"):
+            legacy_generation = _read_json(legacy_generation_path)
+            if not legacy_generation or not legacy_generation.get("menu_id"):
+                continue
+            legacy_id = str(legacy_generation["menu_id"])
+            if legacy_id in live_candidate_ids:
+                continue
+            _write_json(
+                _generation_path(brr_dir, thread, legacy_id, correspondent),
+                {**legacy_generation, "correspondent_key": correspondent},
+            )
+
+    # Write every legacy live generation into the unified archive before the
+    # pointer moves. Same-id collisions are inherently ambiguous in the old
+    # split store; the newest content wins because callback data cannot name
+    # the lane that authored it.
+    ordered = sorted(
+        candidates,
+        key=lambda item: _generation_order(item[0], item[1]),
+    )
+    for candidate, path, _is_canonical in ordered:
+        candidate_id = str(candidate["menu_id"])
+        migrated = {**candidate, "correspondent_key": correspondent}
+        if candidate_id != menu_id:
+            migrated.update(
+                state="superseded",
+                superseded_by=menu_id,
+                superseded_at=migrated_at,
+            )
+        else:
+            migrated["state"] = "live"
+        _write_json(
+            _generation_path(brr_dir, thread, candidate_id, correspondent),
+            migrated,
+        )
+        if path != canonical_live_path:
+            legacy_thread = str(candidate.get("thread") or "").strip()
+            if legacy_thread:
+                _write_json(
+                    _generation_path(brr_dir, legacy_thread, candidate_id),
+                    migrated,
+                )
+            path.unlink(missing_ok=True)
+
+    # A same-id collision may have let an older candidate overwrite the
+    # unified archive in the loop; pin the selected newest generation last.
+    _write_json(
+        _generation_path(brr_dir, thread, menu_id, correspondent),
+        winner,
+    )
+    _write_json(canonical_live_path, winner)
+    _prune_generations(brr_dir, thread, correspondent)
+
+
 def promote_menu(
     brr_dir: Path,
     menu: dict[str, Any],
     *,
     run_id: str = "",
     now: float | None = None,
+    correspondent_key: str | None = None,
+    legacy_threads: Iterable[str] = (),
 ) -> tuple[dict[str, Any], str | None]:
-    """Make *menu* the one live generation for its thread.
+    """Make *menu* the one live generation for its correspondent.
 
     Returns ``(stored_generation, superseded_menu_id)``. Reusing a generation
     id with changed content is rejected: ``menu_id`` names an immutable
@@ -264,15 +429,18 @@ def promote_menu(
     canonical = validate_menu(menu)
     thread = canonical["thread"]
     menu_id = canonical["menu_id"]
+    _reconcile_legacy_threads(
+        brr_dir, thread, correspondent_key, legacy_threads,
+    )
     existing_generation = _read_json(
-        _generation_path(brr_dir, thread, menu_id)
+        _generation_path(brr_dir, thread, menu_id, correspondent_key)
     )
     if existing_generation is not None:
         if _canonical_part(existing_generation) != canonical:
             raise MenuValidationError(
                 f"menu_id {menu_id!r} was already used for different content"
             )
-        current = _read_json(_live_path(brr_dir, thread))
+        current = _read_json(_live_path(brr_dir, thread, correspondent_key))
         if current and current.get("menu_id") == menu_id:
             return current, None
         raise MenuValidationError(
@@ -281,7 +449,7 @@ def promote_menu(
         )
 
     written_at = _utc_now(now)
-    current = _read_json(_live_path(brr_dir, thread))
+    current = _read_json(_live_path(brr_dir, thread, correspondent_key))
     superseded_id: str | None = None
     if current and current.get("menu_id") != menu_id:
         superseded_id = str(current.get("menu_id") or "") or None
@@ -289,7 +457,12 @@ def promote_menu(
         current["superseded_by"] = menu_id
         current["superseded_at"] = written_at
         _write_json(
-            _generation_path(brr_dir, thread, str(current["menu_id"])),
+            _generation_path(
+                brr_dir,
+                thread,
+                str(current["menu_id"]),
+                correspondent_key,
+            ),
             current,
         )
 
@@ -300,11 +473,15 @@ def promote_menu(
     }
     if run_id:
         stored["run_id"] = run_id
+    if correspondent_key:
+        stored["correspondent_key"] = correspondent_key
     # Archive first, pointer last: readers either see the previous complete
     # generation or the new complete one, never a live pointer with no record.
-    _write_json(_generation_path(brr_dir, thread, menu_id), stored)
-    _write_json(_live_path(brr_dir, thread), stored)
-    _prune_generations(brr_dir, thread)
+    _write_json(
+        _generation_path(brr_dir, thread, menu_id, correspondent_key), stored,
+    )
+    _write_json(_live_path(brr_dir, thread, correspondent_key), stored)
+    _prune_generations(brr_dir, thread, correspondent_key)
     return stored, superseded_id
 
 
@@ -318,9 +495,14 @@ def load_live_menu(
     thread: str,
     *,
     now: float | None = None,
+    correspondent_key: str | None = None,
+    legacy_threads: Iterable[str] = (),
 ) -> dict[str, Any] | None:
-    """Return the current unexpired menu for *thread*, if one exists."""
-    menu = _read_json(_live_path(brr_dir, thread))
+    """Return the current unexpired menu for the resolved identity."""
+    _reconcile_legacy_threads(
+        brr_dir, thread, correspondent_key, legacy_threads,
+    )
+    menu = _read_json(_live_path(brr_dir, thread, correspondent_key))
     if not menu or menu.get("state") != "live" or is_expired(menu, now=now):
         return None
     return menu
@@ -330,8 +512,16 @@ def load_generation(
     brr_dir: Path,
     thread: str,
     menu_id: str,
+    *,
+    correspondent_key: str | None = None,
+    legacy_threads: Iterable[str] = (),
 ) -> dict[str, Any] | None:
-    return _read_json(_generation_path(brr_dir, thread, menu_id))
+    _reconcile_legacy_threads(
+        brr_dir, thread, correspondent_key, legacy_threads,
+    )
+    return _read_json(
+        _generation_path(brr_dir, thread, menu_id, correspondent_key)
+    )
 
 
 def resolve_answer(
@@ -342,9 +532,17 @@ def resolve_answer(
     option: str,
     text: str | None = None,
     now: float | None = None,
+    correspondent_key: str | None = None,
+    legacy_threads: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Resolve one tap without discarding stale, expired, or unknown input."""
-    generation = load_generation(brr_dir, thread, menu_id)
+    generation = load_generation(
+        brr_dir,
+        thread,
+        menu_id,
+        correspondent_key=correspondent_key,
+        legacy_threads=legacy_threads,
+    )
     result: dict[str, Any] = {
         "menu_id": menu_id,
         "option": option,
@@ -356,7 +554,7 @@ def resolve_answer(
     if generation is None:
         return result
 
-    current = _read_json(_live_path(brr_dir, thread))
+    current = _read_json(_live_path(brr_dir, thread, correspondent_key))
     if is_expired(generation, now=now):
         result["status"] = "expired"
     elif not current or current.get("menu_id") != menu_id:
@@ -395,6 +593,8 @@ def create_answer_event(
     option: str,
     text: str | None = None,
     now: float | None = None,
+    correspondent_key: str | None = None,
+    legacy_threads: Iterable[str] = (),
     **meta: object,
 ) -> Path:
     """Create the structured ``menu_answer`` event for a gate interaction."""
@@ -405,6 +605,8 @@ def create_answer_event(
         option=option,
         text=text,
         now=now,
+        correspondent_key=correspondent_key,
+        legacy_threads=legacy_threads,
     )
     return protocol.create_event(
         inbox_dir,

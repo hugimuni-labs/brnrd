@@ -11,7 +11,11 @@ from brr.gates import telegram
 from brr.run import Run
 
 
-def _task(thread: str = "telegram:555:") -> Run:
+def _task(
+    thread: str = "telegram:555:",
+    *,
+    correspondent: str = "",
+) -> Run:
     return Run(
         id="run-menu",
         event_id="evt-lead",
@@ -20,7 +24,7 @@ def _task(thread: str = "telegram:555:") -> Run:
         status="running",
         source="telegram",
         conversation_key=thread,
-        meta={},
+        meta={"correspondent_key": correspondent} if correspondent else {},
     )
 
 
@@ -109,6 +113,55 @@ def test_cloud_wrapped_telegram_live_menu_sends_reply_markup(
         "text": "★ Ship it",
         "callback_data": "m:cloud-deploy:ship",
     }
+
+
+def test_cross_spelling_update_reuses_the_telegram_render_receipt(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    outbox = brr_dir / "outbox" / "evt-lead"
+    outbox.mkdir(parents=True)
+    telegram._save_state(
+        brr_dir,
+        {"token": "secret", "paired_user_id": 41},
+    )
+    calls: list[tuple[str, dict]] = []
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        calls.append((method, params or {}))
+        if method == "sendMessage":
+            return {"result": {"message_id": 700}}
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    correspondent = "telegram:user-id:41"
+    state: dict[str, object] = {}
+    cloud = "cloud:telegram:555:"
+    _write_menu(outbox, _menu("cloud-menu", thread=cloud))
+    assert daemon._drain_live_menu(
+        _emit(brr_dir, cloud),
+        _task(cloud, correspondent=correspondent),
+        outbox / menus.MENU_NAME,
+        state,
+        outbox_dir=outbox,
+    )
+
+    native = "telegram:555:"
+    _write_menu(outbox, _menu("native-menu", thread=native))
+    assert daemon._drain_live_menu(
+        _emit(brr_dir, native),
+        _task(native, correspondent=correspondent),
+        outbox / menus.MENU_NAME,
+        state,
+        outbox_dir=outbox,
+    )
+
+    assert [method for method, _params in calls].count("sendMessage") == 1
+    edits = [params for method, params in calls if method == "editMessageText"]
+    assert edits[-1]["message_id"] == 700
+    assert edits[-1]["reply_markup"]["inline_keyboard"][0][0][
+        "callback_data"
+    ] == "m:native-menu:ship"
 
 
 def test_menu_written_rendered_tapped_arrives_as_pending_event(
@@ -314,6 +367,101 @@ def test_next_boot_renders_the_same_validated_live_generation(tmp_path):
     assert "Live menu — the same validated generation rendered at the gate" in prompt
     assert "1) `ship` — Ship it — recommended" in prompt
     assert "2) `hold` — Hold" in prompt
+
+
+@pytest.mark.parametrize(
+    ("written_thread", "read_thread"),
+    [
+        ("cloud:telegram:555:", "telegram:555:"),
+        ("telegram:555:", "cloud:telegram:555:"),
+    ],
+)
+def test_correspondent_menu_renders_across_thread_spellings(
+    tmp_path,
+    written_thread,
+    read_thread,
+):
+    brr_dir = tmp_path / ".brr"
+    correspondent = "telegram:user-id:41"
+    stored, _ = menus.promote_menu(
+        brr_dir,
+        _menu("shared-menu", thread=written_thread),
+        correspondent_key=correspondent,
+    )
+
+    assert menus.menu_store_key(read_thread, correspondent) == (
+        "correspondent:telegram:user-id:41"
+    )
+    assert menus.load_live_menu(
+        brr_dir,
+        read_thread,
+        correspondent_key=correspondent,
+    ) == stored
+
+
+def test_legacy_thread_menus_migrate_newest_and_retire_stale(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    native = "telegram:555:"
+    cloud = "cloud:telegram:555:"
+    correspondent = "telegram:user-id:41"
+    menus.promote_menu(
+        brr_dir,
+        _menu("native-old", thread=native),
+        now=1_700_000_000,
+    )
+    menus.promote_menu(
+        brr_dir,
+        _menu("cloud-new", thread=cloud),
+        now=1_700_000_100,
+    )
+
+    live = menus.load_live_menu(
+        brr_dir,
+        native,
+        correspondent_key=correspondent,
+        legacy_threads=[native, cloud],
+    )
+
+    assert live is not None
+    assert live["menu_id"] == "cloud-new"
+    assert live["thread"] == cloud
+    assert not menus._live_path(brr_dir, native).exists()
+    assert not menus._live_path(brr_dir, cloud).exists()
+    stale = menus.load_generation(
+        brr_dir,
+        cloud,
+        "native-old",
+        correspondent_key=correspondent,
+    )
+    assert stale is not None
+    assert stale["state"] == "superseded"
+    assert stale["superseded_by"] == "cloud-new"
+
+
+def test_distinct_correspondents_never_share_a_menu(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    thread = "telegram:-100123:"
+    ada = "telegram:user-id:41"
+    grace = "telegram:user-id:42"
+    menus.promote_menu(
+        brr_dir,
+        _menu("ada-menu", thread=thread),
+        correspondent_key=ada,
+    )
+    menus.promote_menu(
+        brr_dir,
+        _menu("grace-menu", thread=thread),
+        correspondent_key=grace,
+    )
+
+    ada_live = menus.load_live_menu(
+        brr_dir, thread, correspondent_key=ada,
+    )
+    grace_live = menus.load_live_menu(
+        brr_dir, thread, correspondent_key=grace,
+    )
+    assert ada_live is not None and ada_live["menu_id"] == "ada-menu"
+    assert grace_live is not None and grace_live["menu_id"] == "grace-menu"
 
 
 def test_expired_and_unknown_menu_answers_remain_pending_events(tmp_path):
