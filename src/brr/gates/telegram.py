@@ -528,6 +528,19 @@ def _handle_menu_callback(
 
     menu_id, option = parsed
     thread = f"telegram:{chat_id}:{topic_id or ''}"
+    correspondent_key = conversations.correspondent_key_for_event(
+        {
+            "source": "telegram",
+            "telegram_user": sender.get("first_name") or "?",
+            "telegram_user_id": user_id,
+            "telegram_username": sender.get("username") or "",
+        }
+    )
+    legacy_threads = conversations.conversation_keys_for_correspondent(
+        brr_dir,
+        correspondent_key,
+        include_key=thread,
+    )
     state["last_chat_id"] = chat_id
     path = menus.create_answer_event(
         brr_dir,
@@ -536,6 +549,8 @@ def _handle_menu_callback(
         thread=thread,
         menu_id=menu_id,
         option=option,
+        correspondent_key=correspondent_key,
+        legacy_threads=legacy_threads,
         telegram_chat_id=chat_id,
         telegram_topic_id=topic_id or "",
         telegram_user=_sanitize_meta_str(str(sender.get("first_name") or "?")),
@@ -925,6 +940,11 @@ def _render_live_menu(brr_dir: Path, token: str, packet: Any) -> None:
     if target is None:
         return
     chat_id, topic_id = target
+    # Render receipts belong to the actual Telegram destination. This keeps
+    # the existing native-thread receipt reusable when a cloud-wrapped run
+    # promotes the next correspondent-keyed generation, avoiding a duplicate
+    # keyboard during migration.
+    render_thread = f"telegram:{chat_id}:{topic_id or ''}"
     markup = (
         {"inline_keyboard": []}
         if menus.is_expired(menu)
@@ -935,7 +955,7 @@ def _render_live_menu(brr_dir: Path, token: str, packet: Any) -> None:
         if menus.is_expired(menu)
         else _menu_message_text(menu)
     )
-    state = _load_menu_render_state(brr_dir, thread)
+    state = _load_menu_render_state(brr_dir, render_thread)
     message_id = _coerce_optional_int(state.get("message_id"))
     if message_id is not None:
         try:
@@ -962,7 +982,7 @@ def _render_live_menu(brr_dir: Path, token: str, packet: Any) -> None:
     if message_id is not None:
         _save_menu_render_state(
             brr_dir,
-            thread,
+            render_thread,
             {
                 "thread": thread,
                 "menu_id": menu.get("menu_id"),
