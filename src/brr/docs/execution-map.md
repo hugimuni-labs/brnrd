@@ -109,6 +109,12 @@ outbox file whose frontmatter names another pending event
 (`event: <id>`) is delivered to *that* event's thread and marks it
 handled, so a quick request can be folded in without its own spawn; the
 conversation artifact is recorded on the target event's thread.
+An outbox file with `fetch: issue|pr` plus `number:` asks the daemon for a
+fixed, read-only GitHub projection in the run's own repository. The host uses
+the gate credential; the run receives the capped response as non-dispatchable
+edge traffic in its next `inbox.json` refresh. The running environment never
+receives the credential or forge egress, and cannot name an endpoint, query,
+method, or another repository.
 An outbox file with `gate: <name>` is an out-of-bound send. The shipped
 `gate: forge` is the explicit PR handoff: it uses the GitHub gate to
 open or refresh a PR from the file's `head`, `base`, and `title`

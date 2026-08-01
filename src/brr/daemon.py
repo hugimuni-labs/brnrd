@@ -64,6 +64,7 @@ from . import dominion
 from . import envs
 from . import facets
 from . import forge_pr_cache
+from . import forge_fetch
 from . import forge_state
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
@@ -5941,18 +5942,170 @@ def _retire_run_control(spawn_event_id: str) -> None:
 
 
 def _retire_child_messages(inbox_dir: Path | None, spawn_event_id: str) -> None:
-    """Retire unconsumed parent→child messages once the child is over.
+    """Retire unconsumed run-edge messages once the addressed run is over.
 
-    A ``to:`` message exists only for the addressed child's lifetime — it
-    is edge traffic, not a dispatchable event. Whatever the child did not
-    fold in dies with it; leaving it pending would leak a permanently
-    invisible event (every view filters it to a run that no longer exists).
+    A ``to:`` message and a host-side ``fetch:`` response exist only for the
+    addressed run's lifetime — they are edge traffic, not dispatchable
+    events. Whatever the run did not fold in dies with it; leaving it pending
+    would leak a permanently invisible event (every view filters it to a run
+    that no longer exists).
     """
     if inbox_dir is None or not spawn_event_id:
         return
     for ev in protocol.list_pending(inbox_dir):
         if str(ev.get("spawn_message_for_event") or "") == spawn_event_id:
             protocol.set_status(ev, "done")
+
+
+_FORGE_FETCH_KEYS = frozenset({"fetch", "number", "repo"})
+
+
+def _queue_forge_fetch(
+    emit: _WorkerEmit,
+    task: Run,
+    inbox_dir: Path | None,
+    event_id: str,
+    fm: dict,
+    body: str,
+    outbox_dir: Path | None,
+    account_context: account.AccountContext | None,
+    source_ref: str,
+) -> bool:
+    """Answer one structurally allowlisted forge read as run-edge traffic."""
+    kind = str(fm.get("fetch") or "").strip().casefold()
+    repo = str(task.meta.get("repo_label") or "").strip()
+    requested_repo = str(fm.get("repo") or "").strip()
+
+    count = int(getattr(task, "_forge_fetch_count", 0)) + 1
+    setattr(task, "_forge_fetch_count", count)
+
+    refusal = ""
+    unexpected = sorted(str(key) for key in set(fm) - _FORGE_FETCH_KEYS)
+    if count > forge_fetch.MAX_REQUESTS_PER_RUN:
+        refusal = (
+            f"run limit reached ({forge_fetch.MAX_REQUESTS_PER_RUN} forge reads)"
+        )
+    elif unexpected:
+        refusal = (
+            "only fetch, number, and an optional same-repo assertion are "
+            f"accepted; refused fields: {', '.join(unexpected)}"
+        )
+    elif body.strip():
+        refusal = "request bodies are not accepted"
+    elif kind not in forge_fetch.ALLOWED_KINDS:
+        refusal = (
+            f"{kind or 'empty'} is not a read view; allowed: issue, pr"
+        )
+    elif not forge_fetch.valid_repo(repo):
+        refusal = "the run has no unambiguous GitHub owner/repo"
+    elif requested_repo and requested_repo.casefold() != repo.casefold():
+        refusal = (
+            f"cross-repository read refused: this run is bound to {repo}, "
+            f"not {requested_repo}"
+        )
+
+    raw_number = str(fm.get("number") or "").strip()
+    number = 0
+    if not refusal:
+        # GraphQL Int is signed 32-bit. Check length before int() so an
+        # injected 10,000-digit value cannot trip Python's conversion guard
+        # and escape the portal's visible-refusal path.
+        if not raw_number.isdecimal() or len(raw_number) > 10:
+            refusal = "number must be a positive 32-bit decimal integer"
+        else:
+            number = int(raw_number)
+            if number <= 0 or number > 2_147_483_647:
+                refusal = "number must be a positive 32-bit decimal integer"
+    number_label = str(number) if number else (raw_number[:32] or "unknown")
+    if not number and len(raw_number) > 32:
+        number_label += "..."
+
+    status = "refused" if refusal else "ok"
+    result: forge_fetch.FetchResult | None = None
+    if not refusal:
+        try:
+            result = forge_fetch.fetch_view(emit.brr_dir, repo, kind, number)
+        except Exception as exc:  # noqa: BLE001 - a portal failure must be visible
+            status = "error"
+            refusal = str(exc).strip() or type(exc).__name__
+
+    response_body = (
+        result.body
+        if result is not None
+        else f"Forge fetch {status}: {refusal}"
+    )
+    if status != "ok":
+        _record_outbox_notice(outbox_dir, f"fetch {status}: {refusal}")
+    if inbox_dir is None:
+        if status == "ok":
+            _record_outbox_notice(
+                outbox_dir, "fetch error: no inbox exists for the response",
+            )
+        return False
+
+    try:
+        response_path = protocol.create_event(
+            inbox_dir,
+            "forge_fetch",
+            response_body,
+            spawn_message_for_event=event_id,
+            forge_fetch_status=status,
+            forge_fetch_kind=kind or "unknown",
+            forge_fetch_repo=repo,
+            forge_fetch_number=number_label,
+            forge_fetch_by_run=task.id,
+        )
+    except Exception as exc:  # noqa: BLE001 - refusal must not disappear
+        _record_outbox_notice(
+            outbox_dir, f"fetch response could not be queued: {exc}",
+        )
+        return False
+
+    message_path = _stage_outbound(
+        task,
+        account_context,
+        body=response_body,
+        kind="forge_fetch",
+        target_event=event_id,
+        target_gate="dispatch",
+        source_ref=source_ref,
+    )
+    if message_path:
+        message_store.transition(
+            message_path,
+            message_store.DELIVERED,
+            gate="dispatch",
+            platform_message_id=response_path.stem,
+        )
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir,
+            emit.conversation_key,
+            kind="forge_fetch",
+            path=str(response_path),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"{repo or '-'}:{kind or '-'}:{number_label}:{status}",
+            body=response_body,
+        )
+    print(
+        f"[brnrd] forge-fetch run={task.id} event={event_id} repo={repo or '-'} "
+        f"kind={kind or '-'} number={number_label} status={status} "
+        f"bytes={len(response_body.encode('utf-8'))} "
+        f"truncated={bool(result and result.truncated)}"
+    )
+    emit(
+        "forge_fetch_response",
+        run_id=task.id,
+        event_id=event_id,
+        response_event_id=response_path.stem,
+        repo=repo or None,
+        kind=kind or None,
+        number=number or None,
+        status=status,
+        truncated=bool(result and result.truncated),
+    )
+    return True
 
 
 def _queue_child_message(
@@ -6458,6 +6611,24 @@ def _drain_outbox(
                 if stats is not None:
                     stats["current"] = stats.get("current", 0) + 1
                     stats["config_change"] = stats.get("config_change", 0) + 1
+            _retire_outbox_staging(fpath)
+            continue
+        if str(fm.get("fetch") or "").strip():
+            handled = _queue_forge_fetch(
+                emit,
+                task,
+                inbox_dir,
+                event_id,
+                fm,
+                body,
+                outbox_dir,
+                account_context,
+                str(fpath),
+            )
+            if handled:
+                promoted += 1
+                if stats is not None:
+                    stats["forge_fetch"] = stats.get("forge_fetch", 0) + 1
             _retire_outbox_staging(fpath)
             continue
         if _truthy(fm.get("respawn")):
@@ -10427,6 +10598,10 @@ def _run_worker_and_finalize(
         )
         return task
     finally:
+        if task is not None:
+            # Host replies and parent steers are scoped to this run. Retire
+            # anything it did not fold in before the run edge disappears.
+            _retire_child_messages(inbox_dir, task.event_id)
         # #413 §7 S8: attribute the schedule entries this run authored or
         # edited, before anything else in teardown.  In `finally:` on
         # purpose — the whole stretch above (knowledge capture, ledger,

@@ -65,7 +65,7 @@ def frontmatter_body(text: str) -> str:
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
-    "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
+    "event", "gate", "fetch", "respawn", "spawn", "stop", "to", "runner_policy",
 )
 
 
@@ -99,7 +99,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
     To avoid mistaking a plain message for routing, the lenient path
     engages **only** when the first non-empty line is a recognised
     routing selector (``event:`` / ``gate:`` / ``respawn:`` /
-    ``spawn:`` / ``stop:`` / ``to:`` / ``runner_policy:``) *and* its
+    ``fetch:`` / ``spawn:`` / ``stop:`` / ``to:`` / ``runner_policy:``) *and* its
     value is a single bare token (``evt-…``, ``true``, a gate name).
     Prose that happens to open with ``event: the meeting is moved``
     fails the token test and stays a plain body; a normal message that
