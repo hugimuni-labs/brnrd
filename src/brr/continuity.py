@@ -193,6 +193,20 @@ _DAEMON_OWNED_RUN_STATE = re.compile(
     r"^runs/[^/]+/[^/]+/(?:state\.md|messages/[^/]+)$"
 )
 
+#: Whole roots of the account home repo that hold daemon machinery, never
+#: resident memory: gate live-state (``account/gates/*.json`` mutates on the
+#: heartbeat, *after* every capture commit), the dispatch queues, and config
+#: journals.  Exempted **by root**, deliberately: the daemon-owned family is
+#: the open class here — a new bookkeeping file inside these roots joins the
+#: exempt set with no edit — while resident memory (``repos/*/dominion``,
+#: ``surface/``, a legacy dominion's root-level pages) keeps firing the drift
+#: line.  Enumerating individual daemon *files* was tried and is exactly how
+#: ``account/gates/cloud.health.json`` became a permanent every-wake false
+#: alarm the third time this lesson was paid for (#942; the two prior
+#: instalments are documented on :func:`_is_resident_memory`).
+_DAEMON_OWNED_ROOTS = ("account/", "dispatch/", "config-changes/")
+_DAEMON_OWNED_FILES = frozenset({"security.config", "knowledge.capture.lock"})
+
 
 def _is_resident_memory(porcelain_line: str) -> bool:
     """Is this ``git status --porcelain`` line resident memory that went uncommitted?
@@ -210,6 +224,13 @@ def _is_resident_memory(porcelain_line: str) -> bool:
     The value of this whole facet is that it is *rare and true*; a false positive
     in the hottest slot of the boot doesn't just waste bytes, it trains the
     resident to stop reading the line that was supposed to save it.
+
+    Paid a second time for ``messages/*`` (delivery bookkeeping mutated after
+    the capture commit), and a third for ``account/gates/*.json`` (heartbeat
+    gate state, #942) — which is when per-file enumeration stopped being the
+    model: daemon machinery is now exempted by whole root
+    (``_DAEMON_OWNED_ROOTS``), so the next bookkeeping file the daemon grows
+    inside them never rejoins this list.
     """
     line = porcelain_line.strip()
     if not line:
@@ -217,6 +238,11 @@ def _is_resident_memory(porcelain_line: str) -> bool:
     # Porcelain: two status chars, a space, then the path.
     path = porcelain_line[3:].strip() if len(porcelain_line) > 3 else ""
     if not path:
+        return False
+    # A rename line names two paths; the destination is where memory would be.
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    if path.startswith(_DAEMON_OWNED_ROOTS) or path in _DAEMON_OWNED_FILES:
         return False
     return _DAEMON_OWNED_RUN_STATE.fullmatch(path) is None
 
