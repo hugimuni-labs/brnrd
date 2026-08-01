@@ -5,8 +5,10 @@ import {
 	buildWarpLayers,
 	emberCount,
 	isLayerFile,
+	itemRepos,
 	layerCallSign,
-	layerDefinition
+	layerDefinition,
+	warpRepos
 } from './warp.ts';
 import type { SurfaceFile } from './surface.ts';
 
@@ -156,4 +158,43 @@ test('emberCount sums the dispatchable draw across the warp', () => {
 
 test('a bare warp is an empty array, not an error', () => {
 	assert.deepEqual(buildWarpLayers([file('surface/index.md', '# hi')]), []);
+});
+
+// ── multi-repo: repos derived from refs, never declared ────────────────────
+
+test('itemRepos derives the repo set from qualified shorthands and forge hrefs', () => {
+	const [item] = parseBackchannelPage(
+		`## Cross-repo item
+
+state: ember
+refs: hugimuni-labs/brnrd#928 · [#12](https://github.com/other-org/site/pull/12) · subject-daemon.md · hugimuni-labs/brnrd#929
+
+Body.
+`
+	);
+	// Deduplicated, first-mention order; the kb-page ref names no repo.
+	assert.deepEqual(itemRepos(item), ['hugimuni-labs/brnrd', 'other-org/site']);
+});
+
+test('itemRepos names no repo for kb pages, bare #N, and non-repo forge urls', () => {
+	const [item] = parseBackchannelPage(
+		`## Surface-only item
+
+refs: #928 · workflow.md §Gating · [orgs](https://github.com/orgs/hugimuni-labs/people)
+
+Body.
+`
+	);
+	assert.deepEqual(itemRepos(item), []);
+});
+
+test('warpRepos is the deduplicated union across layers — the repo heddle option set', () => {
+	const layers = buildWarpLayers([
+		file('surface/layers/a.md', '# a\n\nD.\n\n## One\n\nrefs: hugimuni-labs/brnrd#1\n\nB.\n'),
+		file(
+			'surface/layers/b.md',
+			'# b\n\nD.\n\n## Two\n\nrefs: other-org/site#2 · hugimuni-labs/brnrd#3\n\nB.\n'
+		)
+	]);
+	assert.deepEqual(warpRepos(layers), ['hugimuni-labs/brnrd', 'other-org/site']);
 });
