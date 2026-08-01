@@ -61,6 +61,15 @@ the worker pool is `resources.coexisting_runs.spawn_pool` in
 `portal-state.json`; subagents are bounded only by the shell's own
 limits and the Core's quota.
 
+In the loom register a dispatched worker is a **strand** (settled
+2026-08-01): the resident's own weft yarn divided — the same thread
+crossing a different stretch of warp — not staff at arm's length.
+"Throw a strand" = spawn a worker; the Runner is the shuttle any strand
+rides. The name is deliberate orientation, not decoration: a strand's
+diff is still read whole, and *being the resident's own* is exactly why.
+Mundane register keeps `worker`, `spawn:`, and the pool key in code and
+config.
+
 The runner contract is deliberately abstract: a runner is a process that
 can intelligently operate files in its working directory. brnrd pipes the
 assembled prompt to the runner on **stdin** (written whole, then closed —
