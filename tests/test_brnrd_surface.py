@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -9,6 +11,7 @@ pytest.importorskip("sqlalchemy")
 pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
@@ -159,6 +162,140 @@ def test_dashboard_surface_stale_conditional_gets_200_after_republish():
     assert third.status_code == 200
     assert third.headers["etag"] != stale_etag
     assert third.json()["files"][0]["markdown"] == "# Work, revised"
+
+
+@contextmanager
+def _captured_sql(client: TestClient):
+    """Every statement the app's engine actually emits, in order.
+
+    Asserting on the SQL is the only honest way to pin #956: the bug is a
+    column being *read*, and a timing assertion would measure the test
+    machine rather than the query. ``before_cursor_execute`` sees the final
+    text handed to the DBAPI, after the ORM has chosen its column list.
+    """
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = client.app.state.engine
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+
+_NON_SURFACE_DASHBOARD_ENDPOINTS = (
+    "/v1/dashboard/config-requests",
+    "/v1/dashboard/quota",
+    "/v1/dashboard/live-runs",
+    "/v1/dashboard/runners",
+    "/v1/dashboard/activity",
+)
+
+
+@pytest.mark.parametrize("path", _NON_SURFACE_DASHBOARD_ENDPOINTS)
+def test_dashboard_handlers_that_never_render_the_corpus_do_not_read_it(path: str):
+    """#956: ``surface_json`` is deferred, so ``db.get(Account, id)`` stops
+    dragging the corpus out of the database for handlers that never look at it.
+
+    In production that column held 10 MB, and every authenticated dashboard
+    handler opens with the same ``db.get`` — which is why a 65-byte
+    ``/config-requests`` response cost 3.0 s against a 73 ms ``/healthz``
+    floor. The account row must still be loaded (these handlers need it); it
+    is the corpus column that must be absent from the SELECT.
+    """
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    client.put(
+        "/v1/daemons/surface",
+        json={"files": [{"path": "index.md", "markdown": "# Work"}]},
+        headers=daemon_headers,
+    )
+    _login_cookie(client)
+
+    with _captured_sql(client) as statements:
+        response = client.get(path)
+
+    assert response.status_code == 200, response.text
+    # Without this the assertion below would pass vacuously if the handler
+    # stopped loading the account at all.
+    assert [s for s in statements if "FROM accounts" in s], f"{path} loaded no account row"
+    leaked = [s for s in statements if "surface_json" in s]
+    assert leaked == [], f"{path} read the corpus column:\n" + "\n".join(leaked)
+
+
+def test_dashboard_surface_still_reads_the_whole_corpus():
+    """The one reader keeps working: deferring is lazy, not lost."""
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    files = [
+        {"path": "index.md", "markdown": "# Work surface"},
+        {"path": "knowledge/repos/Gurio__brr/log.md", "markdown": "x" * 4096, "layer": "knowledge"},
+    ]
+    client.put("/v1/daemons/surface", json={"files": files}, headers=daemon_headers)
+    _login_cookie(client)
+
+    with _captured_sql(client) as statements:
+        response = client.get("/v1/dashboard/surface")
+
+    assert response.status_code == 200, response.text
+    got = [{"path": item["path"], "markdown": item["markdown"]} for item in response.json()["files"]]
+    assert got == [{"path": item["path"], "markdown": item["markdown"]} for item in files]
+    # The deferred load is emitted on access, as its own statement.
+    assert [s for s in statements if "surface_json" in s], "the corpus was never loaded"
+
+
+def test_dashboard_surface_304_does_not_read_the_corpus():
+    """#951 stopped re-*shipping* the corpus; #956 stops re-*reading* it.
+
+    The zero-byte 304 measured at 3.36 s in production is the proof the cost
+    was never the payload — the validator is ``surface_updated_at``, and the
+    conditional path must not touch the 10 MB column at all.
+    """
+    client = _client()
+    _, daemon_headers = _repo_and_daemon(client)
+    client.put(
+        "/v1/daemons/surface",
+        json={"files": [{"path": "index.md", "markdown": "# Work"}]},
+        headers=daemon_headers,
+    )
+    _login_cookie(client)
+    etag = client.get("/v1/dashboard/surface").headers["etag"]
+
+    with _captured_sql(client) as statements:
+        second = client.get("/v1/dashboard/surface", headers={"If-None-Match": etag})
+
+    assert second.status_code == 304
+    assert second.content == b""
+    assert second.headers.get("etag") == etag
+    assert [s for s in statements if "FROM accounts" in s], "the 304 loaded no account row"
+    leaked = [s for s in statements if "surface_json" in s]
+    assert leaked == [], "the 304 path read the corpus:\n" + "\n".join(leaked)
+
+
+def test_deferring_the_corpus_keeps_it_in_the_publish_purge_inventory():
+    """Privacy guard for the fix itself (#956).
+
+    ``publish_scope`` discovers withdrawal targets by reflecting over mapper
+    columns and reading their ``info`` markers. Deferring changes the loading
+    strategy only — but a column that quietly stopped being enumerated by the
+    erasure machinery would be a far worse bug than the latency it fixes, so
+    the enumeration is asserted directly rather than assumed.
+    """
+    from brnrd import publish_scope
+    from brnrd.models import Account
+
+    targets = publish_scope._purge_targets()
+    assert (
+        "corpus",
+        "slice",
+        Account,
+        "surface_json",
+    ) in targets
+    assert "corpus" in publish_scope.purge_storage_lanes()
+    assert "surface_json" in Account.__table__.columns
 
 
 def test_surface_rejects_a_traversal_path_even_in_an_unconsented_layer():
