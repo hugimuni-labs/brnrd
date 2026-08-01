@@ -64,6 +64,16 @@ _FLUSH_ACK_TIMEOUT_SECONDS = 5.0
 # premature stop was already blocked once (so the nudge fires once, not in
 # a loop). Daemon-independent; the hook owns this file.
 HOOK_STATE_NAME = ".hook-state.json"
+# The last context block the runner proved it received. The change token is a
+# broad portal-snapshot key; heartbeat-only fields can move it while the
+# rendered context stays byte-identical. Keep a content-derived fingerprint
+# *and* the exact text: the digest makes the key explicit, while the text
+# comparison keeps the suppression pessimistic even under a collision. No
+# block-name allowlist exists here, so a future renderer gets the same rule.
+LAST_INJECT_KEY = "last_inject"
+# A render is not yet proof the runner saw it: a crash can land between the
+# state write and stdout. The next lifecycle hook is the acknowledgement.
+PENDING_INJECT_KEY = "pending_inject"
 # The boundary transcript: one JSON line per hook fire, appended beside the
 # wake's own `prompt.md` in the run directory. The wake is captured and the
 # boundaries were not — but they are the *same channel*: a run's context is
@@ -338,6 +348,48 @@ def _write_hook_state(ctx: HookContext, state: dict[str, Any]) -> None:
         )
     except OSError:
         pass
+
+
+def _ack_previous_inject(state: dict[str, Any], phase: str) -> None:
+    """Promote the prior render only when this boundary proves delivery."""
+    pending = state.pop(PENDING_INJECT_KEY, None)
+    if phase == PHASE_SESSION_START:
+        # A fresh runner did not necessarily see the prior process's stdout.
+        # Reseed and relearn instead of suppressing across that uncertainty.
+        state.pop(LAST_INJECT_KEY, None)
+        return
+    if (
+        isinstance(pending, dict)
+        and isinstance(pending.get("sha256"), str)
+        and isinstance(pending.get("text"), str)
+    ):
+        state[LAST_INJECT_KEY] = pending
+
+
+def _suppress_unchanged_inject(
+    state: dict[str, Any], inject: str | None,
+) -> str | None:
+    """Return only context whose exact rendered content moved.
+
+    Absence, malformed prior state, or any byte of change sends the complete
+    block. A new render stays pending until the next hook proves the runner
+    continued after receiving it. State-write failure therefore fails open:
+    the next subprocess sees no receipt and resends. Dropping useful context
+    is worse than paying for one uncertain repeat.
+    """
+    if inject is None:
+        return None
+    digest = hashlib.sha256(inject.encode("utf-8")).hexdigest()
+    previous = state.get(LAST_INJECT_KEY)
+    unchanged = (
+        isinstance(previous, dict)
+        and previous.get("sha256") == digest
+        and previous.get("text") == inject
+    )
+    if unchanged:
+        return None
+    state[PENDING_INJECT_KEY] = {"sha256": digest, "text": inject}
+    return inject
 
 
 def _touch_flush(ctx: HookContext) -> None:
@@ -2892,6 +2944,7 @@ def compute_neutral(
         _touch_flush(ctx)
     portal = _read_json(ctx.portal_state_path)
     state = _read_hook_state(ctx)
+    _ack_previous_inject(state, phase)
     _record_fired(state, phase)
     inject: str | None = None
     block = False
@@ -3003,6 +3056,12 @@ def compute_neutral(
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
             )
             state["last_token"] = token
+
+    # The portal token decides whether rendering is worth attempting; exact
+    # rendered content decides whether the runner has anything new to see.
+    # Apply this after every phase has built its complete block, and before
+    # the seen ledger records what was actually delivered.
+    inject = _suppress_unchanged_inject(state, inject)
 
     if phase == PHASE_STOP:
         attention = (
