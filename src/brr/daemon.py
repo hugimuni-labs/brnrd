@@ -2154,10 +2154,17 @@ def _apply_sticky_wake_profile(
     conversation = conversations.conversation_key_for_event(event) or ""
     record_correspondent = str(record.get("correspondent_key") or "").strip()
     record_conversation = str(record.get("conversation_key") or "").strip()
-    matched = bool(
-        (correspondent and correspondent == record_correspondent)
-        or (conversation and conversation == record_conversation)
-    )
+    # When both sides name a human, that comparison is the whole answer:
+    # the conversation key is a *thread* address, and two people in one
+    # group thread share it. Falling through to it on a correspondent
+    # mismatch would let anyone in the chat inherit whoever last tapped a
+    # strong Core — which is the exact spend the TTL exists to bound. The
+    # thread key is the fallback for events that carry no human identity,
+    # not a second chance for events whose human did not match.
+    if correspondent and record_correspondent:
+        matched = correspondent == record_correspondent
+    else:
+        matched = bool(conversation and conversation == record_conversation)
     if not matched:
         return target
 

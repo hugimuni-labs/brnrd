@@ -6461,6 +6461,46 @@ def test_sticky_matches_the_correspondent_across_gates(tmp_path, monkeypatch):
     assert applied.event["runner"] == "claude-fable"
 
 
+def test_sticky_does_not_leak_to_another_human_in_the_same_thread(
+    tmp_path, monkeypatch,
+):
+    """A thread key is an *address*, not an identity — two people in one
+    group chat share it. So a correspondent mismatch must end the match, not
+    fall through to the thread: otherwise anyone in the chat inherits
+    whoever last tapped a strong Core, which is the exact spend the TTL
+    exists to bound. The conversation key stays the fallback for events
+    carrying no human identity at all."""
+    from brr import wake_request as wake_request_mod
+
+    repo_a, ctx, target = _wake_ctx(tmp_path)
+    wake_request_mod.store_sticky(
+        repo_a / ".brr",
+        request_id="wake_hold",
+        profile="claude-fable",
+        correspondent_key="telegram:user-id:777",
+        conversation_key="cloud:telegram:900:",
+    )
+    # Same chat, different person.
+    other = _second_target(
+        ctx, repo_a, tmp_path, exclude_id=target.event["id"], source="cloud",
+    )
+    updates = {
+        "cloud_platform": "telegram", "cloud_user_id": "888",
+        "cloud_chat_id": "900",
+    }
+    protocol.update_event_meta(other.event, **updates)
+    other.event.update(updates)
+    _never_claims(monkeypatch)
+
+    applied = daemon._apply_dashboard_wake_request(other, ctx, repo_a)
+
+    assert "dashboard_wake_sticky_profile" not in applied.event
+    assert applied.event.get("runner") != "claude-fable"
+    # The record survives — it is still 777's, and 777's next message in the
+    # same thread must still inherit it.
+    assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
+
+
 def test_schedule_and_self_woken_events_never_consult_the_sticky_record(
     tmp_path, monkeypatch,
 ):
