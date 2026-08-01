@@ -2221,6 +2221,196 @@ def closeout_state(reply: str) -> str | None:
     return None
 
 
+# ── The vigil claim (#947): "Holding…" from a run that then exits ────────
+#
+# run-260801-1247-mivp ended on `Holding for the integration gate.` and then
+# finished cleanly; run-260801-1430-1sur ended on `continuing — … vigil armed
+# (keepalive live…)` with no `.keepalive` on disk at all. Both times the
+# maintainer read a live vigil and waited on a run that was already `done`. The
+# prose contract exists (`weave`: the last line is a bare state that must be
+# true) and a runner reliably drops it, so it goes down the escalation ladder to
+# the Stop boundary like every other obligation here.
+#
+# The matcher is prose over a resident-authored surface, so it obeys the
+# playbook rule a matcher on this kind of surface has to: **blank the code
+# first**. A run that *documents* this guard writes ``continuing — …`` inside a
+# fence, and a matcher blind to code spans reads the example as the thing —
+# the #562 false-positive shape, one module over (`_orientation_set_paths`).
+_CODE_FENCE_RE = re.compile(r"(?:```|~~~)")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+# The bare-state line, anchored at the *start* of the final line. `run.md` /
+# `weave.md` define that line as one of done / continuing / blocked, so
+# `continuing` there is the strong signal — and `done` / `blocked` there are the
+# honest closes this guard must never touch.
+_VIGIL_STATE_RE = re.compile(
+    r"^(?:[-*>]\s*|#{1,6}\s*)*(?:\*\*|__)?(done|continuing|blocked)\b",
+    re.IGNORECASE,
+)
+# The prose claims, matched only on a final line that ends on *no* recognised
+# state — where the phrase is the only evidence there is. Deliberately narrow:
+# these five are the observed vocabulary, and each of them promises a *later*
+# message from this run.
+_VIGIL_PHRASE_RE = re.compile(
+    r"\b(holding|vigil|waiting on|will report back|standing by)\b",
+    re.IGNORECASE,
+)
+
+
+def _blank_code(reply: str) -> str:
+    """*reply* with fenced blocks dropped and inline code spans blanked.
+
+    Same fence-toggle idiom as :mod:`brr.card`'s section reader. Blanking rather
+    than deleting the span keeps the surrounding words apart, so `` `continuing`
+    `` in prose cannot fuse two words into a phrase that was never written.
+    """
+    kept: list[str] = []
+    fenced = False
+    for line in reply.replace("\r\n", "\n").split("\n"):
+        if _CODE_FENCE_RE.match(line.strip()):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        kept.append(_INLINE_CODE_RE.sub(" ", line))
+    return "\n".join(kept)
+
+
+def vigil_claim(reply: str) -> str | None:
+    """The continuation *reply* claims — ``continuing`` or the phrase used — or
+    ``None`` when it claims none.
+
+    Conservative by construction, in three steps:
+
+    1. **Code is blanked** (see above), so an example is never the thing.
+    2. **The final line decides.** Its bare state wins outright; only when the
+       final line carries no state at all does this fall back to the shared
+       :func:`closeout_state` grammar over the closeout tail. Preferring the
+       final line is what keeps a `continuing —` paragraph *above* an honest
+       `done —` close from reading as a live vigil.
+    3. **`done` / `blocked` / a fork are never a claim**, whatever else the line
+       says. Those are the complementary honest closes the ticket names as
+       always legal, and a guard that second-guesses them would be arguing with
+       the contract rather than enforcing it.
+    """
+    text = _blank_code(reply)
+    line = ""
+    for candidate in reversed(text.split("\n")):
+        if candidate.strip():
+            line = candidate.strip()
+            break
+    if not line:
+        return None
+    match = _VIGIL_STATE_RE.match(line)
+    state = match.group(1).lower() if match else closeout_state(text)
+    if state == "continuing":
+        return "continuing"
+    if state is not None:
+        return None  # done / blocked / fork — an honest close
+    phrase = _VIGIL_PHRASE_RE.search(line)
+    return phrase.group(1).lower() if phrase else None
+
+
+def _keepalive_armed(ctx: "HookContext") -> bool:
+    """True when a **live** ``.keepalive`` sits in this run's outbox.
+
+    Read fresh from disk at Stop, not from the heartbeat portal snapshot: the
+    keepalive that arms a vigil is written in the run's final actions, which is
+    exactly the window the snapshot cannot see (the same reason
+    :func:`_closeout_artifact_written` reads files rather than the portal).
+
+    Present is not enough — a keepalive whose deadline has passed is a lapsed
+    vigil, and the daemon already stops honouring it (``_keepalive_state``
+    calls that ``expired``). Same parse as the budget extension, from the one
+    shared reader, so the guard can never accept a file the daemon would not.
+    """
+    if ctx.outbox_dir is None:
+        return False
+    until = portals.keepalive_until(ctx.outbox_dir / portals.KEEPALIVE_NAME)
+    return until is not None and until > time.time()
+
+
+def _spawn_child_armed(portal: dict[str, Any], run_id: str | None) -> bool | None:
+    """Whether a ``spawn:`` child owned by *run_id* is still running.
+
+    ``True`` / ``False`` / ``None`` — and the third state is load-bearing. The
+    fact comes from the presence registry, which the daemon projects into
+    portal-state as the ``coexisting_runs`` facet: every live participant, minus
+    this run, each carrying the ``parent_run_id`` it was registered with
+    (``daemon`` → ``presence.register``). A concurrent spawn child is precisely a
+    live entry whose parent is this run.
+
+    The facet's own three-state honesty is why ``None`` exists. ``known`` and
+    ``absent`` are both *reads* of the registry, so their silence is evidence;
+    ``unimplemented`` means no presence collector was wired at that call site,
+    and absence of evidence there is not evidence of absence. Nor is it, when
+    the hook was handed no run id to match on. In both cases the caller must
+    stay silent rather than block a run whose child it simply could not see.
+    """
+    resources = portal.get("resources") if isinstance(portal, dict) else None
+    facet = (resources or {}).get("coexisting_runs")
+    facet = facet if isinstance(facet, dict) else None
+    if facet is None or facet.get("status") not in ("known", "absent"):
+        return None
+    if not run_id:
+        return None
+    siblings = facet.get("siblings")
+    for entry in siblings if isinstance(siblings, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("parent_run_id") or "").strip() == run_id:
+            return True
+    return False
+
+
+def _vigil_closeout_clause(
+    ctx: "HookContext", payload: dict[str, Any], portal: dict[str, Any]
+) -> str | None:
+    """The `vigil` closeout obligation: a continuation claim with nothing armed.
+
+    Assertable only from artifacts, and silent whenever one of them cannot be
+    read — the doctrine every clause in this module keeps:
+
+    - **no reply handed over** (codex today) ⇒ silent. The claim is *in the
+      reply*; there is nothing else to read it from.
+    - **no continuation claim** ⇒ silent. `done — receipt` and `blocked — whose
+      move` are always legal and are the whole complementary half of this rule.
+    - **either arming present** ⇒ silent. One live continuation is all the
+      claim promised.
+    - **spawn ownership unreadable** ⇒ silent (see :func:`_spawn_child_armed`).
+
+    What is left is the defect: the reply promises a later message, and no
+    mechanism exists that could send one. The block names both armings it
+    looked for, because when it fires both were missing and "which one" is the
+    first thing the resident needs in order to fix it.
+    """
+    reply = payload.get("last_assistant_message")
+    if not isinstance(reply, str) or not reply.strip():
+        return None
+    claim = vigil_claim(reply)
+    if claim is None:
+        return None
+    if _keepalive_armed(ctx):
+        return None
+    spawned = _spawn_child_armed(portal, ctx.run_id)
+    if spawned is None or spawned:
+        return None
+    where = (
+        f"`{ctx.outbox_dir / portals.KEEPALIVE_NAME}`" if ctx.outbox_dir
+        else f"`{portals.KEEPALIVE_NAME}`"
+    )
+    return (
+        f"your last line claims an ongoing state ({claim!r}) and nothing is "
+        f"armed to keep it — no live {where} (absent, or its deadline already "
+        f"passed) and no running `spawn:` child of this run. A background shell "
+        f"command is not a continuation: its completion cannot re-enter a run "
+        f"that has already emitted its terminal stream. So either arm one now "
+        f"(write the keepalive — one line, `+30m` or an ISO deadline — and "
+        f"spend the wait in-thought) or end on a state that is true as you "
+        f"exit: `done — <receipt>` or `blocked — <whose move + what's needed>`"
+    )
+
+
 def _closeout_artifact_written(ctx: "HookContext", filename: str) -> bool:
     """True if control file *filename* exists with non-whitespace content.
 
@@ -2532,7 +2722,10 @@ def _render_closeout_capsule(unmet: list[str]) -> str:
 
 
 def _armed_closeout_block(
-    ctx: "HookContext", payload: dict[str, Any], state: dict[str, Any]
+    ctx: "HookContext",
+    payload: dict[str, Any],
+    state: dict[str, Any],
+    portal: dict[str, Any] | None = None,
 ) -> str | None:
     """The closeout guard: block once when Stop is reached with a named
     obligation still unmet, listing every unmet one in a single capsule.
@@ -2549,10 +2742,15 @@ def _armed_closeout_block(
     imperative delivered the instant a miss is checkable.
 
     **Every obligation obeys the guard doctrine: assert only what an artifact
-    proves.** next-move reads the reply (``last_assistant_message``); the file
-    obligations read their control file fresh. An obligation whose artifact
-    cannot be read is silent — never a nag on a proxy, the bug class this repo
-    spent the week killing.
+    proves.** next-move reads the reply (``last_assistant_message``); vigil
+    reads the same reply against the run's own ``.keepalive`` and the presence
+    projection; the file obligations read their control file fresh. An
+    obligation whose artifact cannot be read is silent — never a nag on a
+    proxy, the bug class this repo spent the week killing.
+
+    *portal* is the snapshot ``compute_neutral`` already read this boundary,
+    passed in rather than re-read: the Stop flush handshake refreshes it just
+    before, so it is this boundary's view of who is alive, not a stale one.
 
     Fires at most once per run (``closeout_blocked``): a second block on a run
     already asked to fix its closeout is the #282 loop. So the unmet set is
@@ -2576,6 +2774,14 @@ def _armed_closeout_block(
                 "(`done — <receipt>`, `continuing — <next>`, `blocked — "
                 "<needed>`, or a 2-4 option fork + your recommendation, last)"
             )
+
+    # Second, and beside it deliberately: next-move asks whether the reply ends
+    # on a state at all, this asks whether the state it ends on is *true*. Both
+    # read the same artifact, so they belong in the same breath.
+    if "vigil" in ctx.closeout_obligations:
+        vigil_clause = _vigil_closeout_clause(ctx, payload, portal or {})
+        if vigil_clause:
+            unmet.append(vigil_clause)
 
     for name in _CLOSEOUT_ARTIFACT_ORDER:
         if name in ctx.closeout_obligations:
@@ -2841,7 +3047,7 @@ def compute_neutral(
         # anyway. Only when nothing is pending does "how does this reply end"
         # become the last question of the run.
         if not block:
-            reason = _armed_closeout_block(ctx, payload, state)
+            reason = _armed_closeout_block(ctx, payload, state, portal)
             if reason is not None:
                 block = True
                 block_reason = reason
