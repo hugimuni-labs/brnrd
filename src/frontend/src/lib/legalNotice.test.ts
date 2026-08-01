@@ -59,10 +59,12 @@ test('the /legal-notice route renders the publisher and the host it is served fr
 	// Sourced from Scaleway's own legal notice + the government register, not guessed.
 	ok(html.includes('Scaleway SAS'));
 	ok(html.includes("8 rue de la Ville l'Évêque, 75008 Paris, France"));
-	// Scaleway's own legal notice publishes no telephone number (unlike Upsun's
-	// impressum), so host.phone is deliberately still `null` and renders as the
-	// pending placeholder rather than a guessed number.
-	ok(html.includes(PENDING));
+	// host.phone was the last held-out field: Scaleway's own legal notice
+	// publishes no number, so the directory-sourced one stayed a placeholder
+	// until the maintainer verified it by calling it (2026-07-31). No
+	// placeholder remains — the notice is complete.
+	ok(html.includes('+33 1 84 13 00 00'));
+	ok(!html.includes(PENDING));
 });
 
 test('the /legal-notice route links to /terms', async () => {
