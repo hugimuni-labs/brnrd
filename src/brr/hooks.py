@@ -1152,9 +1152,12 @@ def _event_glyph(source: str) -> str:
 def _short_event_id(eid: object) -> str:
     """`evt-1785520992817014311-8jwi` → `evt-…8jwi`; short ids stay whole.
 
-    The full id is machine-length (a nanosecond stamp); the 4-char tail is
-    what disambiguates within a run. The full form stays one Read away in
-    the live `inbox.json` the size line points at.
+    Chrome-stub form only — mirror-card stubs and the daemon's ambiguous-id
+    notices. The surfaces that *announce* a pending event (boundary rows,
+    Stop fold-in) print the full id via :func:`_full_event_id` instead: an
+    `event:` reply needs the id verbatim, and #934 showed a reconstructed
+    prefix guessed wrong drops the reply. #906's short-id resolution stays
+    as the safety net, not the interface.
     """
     raw = str(eid or "").strip()
     if not raw:
@@ -1163,6 +1166,18 @@ def _short_event_id(eid: object) -> str:
     if match:
         return f"{match.group(1)}…{match.group(2)}"
     return raw
+
+
+def _full_event_id(eid: object) -> str:
+    """The id verbatim — the announcing surface must be copy-able (#934).
+
+    `evt-…i10p` is a description of an id, not an id: an `event:`-addressed
+    reply requires the full form, so the one line that announces an event
+    carries it whole (~30 chars; the chrome row has no length budget — the
+    excerpt caps bound only the body block).
+    """
+    raw = str(eid or "").strip()
+    return raw or "-"
 
 
 def _event_body(ev: dict[str, Any]) -> str:
@@ -1236,7 +1251,7 @@ def _event_header(
 ) -> str:
     """The one letter-chrome row: glyph · id · source · who · age · size."""
     source = str(ev.get("source") or "-").strip() or "-"
-    parts = [f"{_event_glyph(source)} {_short_event_id(ev.get('id'))}", source]
+    parts = [f"{_event_glyph(source)} {_full_event_id(ev.get('id'))}", source]
     correspondent = _event_correspondent(ev)
     if correspondent and correspondent != source:
         parts.append(correspondent)
@@ -1274,10 +1289,14 @@ def _event_body_block(
 
 
 def _event_seen_line(ev: dict[str, Any], shown: int) -> str:
-    """`⏰ evt-…8jwi · schedule · seen ×3 · unchanged` — one honest line."""
+    """`⏰ evt-1785520992817014311-8jwi · schedule · seen ×3 · unchanged`.
+
+    One honest line — full id, because even the collapsed form is the
+    surface a reply gets addressed from (#934).
+    """
     source = str(ev.get("source") or "-").strip() or "-"
     return (
-        f"{_event_glyph(source)} {_short_event_id(ev.get('id'))} · {source} "
+        f"{_event_glyph(source)} {_full_event_id(ev.get('id'))} · {source} "
         f"· seen ×{shown} · unchanged"
     )
 
