@@ -43,6 +43,7 @@ class MarkerCheckState(str, Enum):
     PERMISSION_MISSING = "permission-missing"
     NOT_A_COLLABORATOR = "not-a-collaborator"
     CHECK_UNAVAILABLE = "check-unavailable"
+    NOT_CONFIGURED = "not-configured"
     UNKNOWN = "unknown"
 
 
@@ -111,6 +112,11 @@ def marker_state_text(state: MarkerCheckState, bot_login: str) -> str:
         )
     if state is MarkerCheckState.CHECK_UNAVAILABLE:
         return "collaborator status unavailable — GitHub could not be reached; try again later."
+    if state is MarkerCheckState.NOT_CONFIGURED:
+        return (
+            "collaborator check not run — github_bot_login is not configured; "
+            "set it in the server settings."
+        )
     return "collaborator status unknown — the check failed for an unclassified reason."
 
 
@@ -180,9 +186,10 @@ def sync_marker_for_repos(db: Session, settings, repos: list[Repo]) -> MarkerSyn
             # Nothing valid to check against — an empty login would query
             # `/collaborators/` and could read GitHub's 404 as a false "not a
             # collaborator" for what is actually a config gap, not an absent
-            # marker. Say the real reason instead of guessing.
+            # marker. Say the real reason instead of guessing — the gap is a
+            # classifiable state with a named remedy, never "unknown".
             repo.github_bot_collaborator = None
-            repo.github_bot_notice = MarkerCheckState.UNKNOWN.value
+            repo.github_bot_notice = MarkerCheckState.NOT_CONFIGURED.value
             repo.github_bot_checked_at = now
             continue
         try:

@@ -179,7 +179,9 @@ def test_empty_bot_login_never_queries_collaborators_and_says_why(monkeypatch):
         github_marker.sync_marker_for_repos(db, app.state.settings, [repo])
         db.refresh(repo)
         assert repo.github_bot_collaborator is None
-        assert repo.github_bot_notice == github_marker.MarkerCheckState.UNKNOWN.value
+        # "and says why": the config gap is a classifiable state with a named
+        # remedy — labeling it unknown would bury the one fact we do know.
+        assert repo.github_bot_notice == github_marker.MarkerCheckState.NOT_CONFIGURED.value
 
 
 def test_403_collaborator_check_is_classified_without_persisting_transport_copy(monkeypatch):

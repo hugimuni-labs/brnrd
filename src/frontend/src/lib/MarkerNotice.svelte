@@ -2,7 +2,13 @@
 	interface Props {
 		// The catch site owns classification; this component owns copy. Never
 		// accept an exception sentence as input (#969 / #786 precedent).
-		status: 'permission-missing' | 'not-a-collaborator' | 'check-unavailable' | 'unknown' | null;
+		status:
+			| 'permission-missing'
+			| 'not-a-collaborator'
+			| 'check-unavailable'
+			| 'not-configured'
+			| 'unknown'
+			| null;
 		// #885: the bot's own login, to copy, and the repo to link the GitHub
 		// collaborators settings page for. Both only render alongside the
 		// `not-a-collaborator` state — an unknown or already-collaborator state
@@ -23,6 +29,8 @@
 				return "permission missing — the GitHub App lacks the grant for the collaborators endpoint; grant Administration: read in the App's repository permissions.";
 			case 'check-unavailable':
 				return 'collaborator check unavailable — GitHub could not be reached; try again later.';
+			case 'not-configured':
+				return 'collaborator check not run — github_bot_login is not configured; set it in the server settings.';
 			case 'unknown':
 				return 'collaborator status unknown — the check failed for an unclassified reason.';
 			default:
