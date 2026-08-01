@@ -49,6 +49,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1973,8 +1974,11 @@ def _apply_dashboard_wake_request(
     request_id = wake_request_mod.pending_id(brr_dir)
     if request_id is None:
         # The overwhelmingly common dispatch, and every local-only account:
-        # no mirrored tap ⇒ no HTTP call at all.
-        return target
+        # no mirrored tap ⇒ no HTTP call at all. #932: this is also the only
+        # path that consults the conversation-sticky record — a *pending* tap
+        # always speaks for itself, and a fresh claim replaces the record
+        # below anyway.
+        return _apply_sticky_wake_profile(target, brr_dir, cfg)
 
     from .gates import cloud as _cloud
 
@@ -2048,7 +2052,158 @@ def _apply_dashboard_wake_request(
     wake_request_mod.record_receipt(
         brr_dir, claimed_id, source=source, event_id=event_id, profile=profile,
     )
+    # #932 conversation-sticky: a user who picks a core is expressing a
+    # preference, not blessing a single wake — the 39-seconds-later photo
+    # that dispatched on the config default read as a bug. Bind the applied
+    # profile to the claiming lead event's conversation so later unpinned
+    # dispatches in the same thread inherit it, until a new tap replaces the
+    # record or the TTL returns the cheap default on its own (the maintainer
+    # rejected plain sticky precisely because he'd forget to downgrade).
+    wake_request_mod.store_sticky(
+        brr_dir,
+        request_id=claimed_id,
+        profile=profile,
+        correspondent_key=conversations.correspondent_key_for_event(event),
+        conversation_key=conversations.conversation_key_for_event(event),
+    )
     return target
+
+
+def _sticky_ttl_seconds(cfg: dict | None) -> float:
+    """#932: the sticky record's lifetime, config-overridable per repo."""
+    try:
+        return float(
+            (cfg or {}).get(
+                "wake_request.sticky_ttl_seconds",
+                wake_request_mod.STICKY_TTL_SECONDS,
+            )
+        )
+    except (TypeError, ValueError):
+        return float(wake_request_mod.STICKY_TTL_SECONDS)
+
+
+def _parse_utc_stamp(raw: object) -> datetime | None:
+    """Parse an ISO 8601 stamp to an aware UTC datetime, or None."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _apply_sticky_wake_profile(
+    target: _DispatchTarget,
+    brr_dir: Path,
+    cfg: dict | None = None,
+) -> _DispatchTarget:
+    """#932 conversation-sticky: inherit a claimed tap's profile in-thread.
+
+    Reached only from `_apply_dashboard_wake_request`, only when no tap is
+    pending, and only for an event that carries no runner pin of its own —
+    so the precedence ladder is unchanged: event-level pin → pending tap →
+    this record → `.brr/config`. Everything here is local by design: the
+    server retired the tap's row at claim time, and what a conversation
+    inherits afterwards is the daemon's own promise.
+
+    The load-bearing rungs, in order:
+
+    - schedule-sourced and self-woken (respawn-origin) events NEVER consult
+      the record — the maintainer priced the fork on exactly this: sticky
+      within the conversation, auto-reverting, never carried to schedule
+      ticks. A schedule tick has no correspondent, but the guard must not
+      lean on that accident.
+    - expiry means fall through to config, and the record is dropped so the
+      next dispatch doesn't re-read a dead promise. The TTL is the whole
+      reason plain sticky was rejected ("I would forget to downgrade a
+      shell too"): the cheap default returns on its own tomorrow.
+    - the match prefers the correspondent key — the per-human identity that
+      collapses `cloud:telegram:…` and `telegram:…` into one person (#930
+      is what raw thread keys did to menus) — and falls back to the
+      conversation key only for events that carry no correspondent
+      identity.
+
+    A match applies the profile exactly as a claimed tap would (the same
+    ``runner`` slot `_run_worker` reads as an override) plus the
+    ``dashboard_wake_sticky_*`` stamps the run context bundle renders, so a
+    wake can tell tap-fresh from tap-inherited.
+    """
+    event = target.event
+    if str(event.get("source") or "") == "schedule":
+        return target
+    if event.get("respawned_from_event") or event.get("respawned_by_run"):
+        return target
+    record = wake_request_mod.sticky_record(brr_dir)
+    if record is None:
+        return target
+    profile = str(record.get("profile") or "").strip()
+    claimed_at = _parse_utc_stamp(record.get("claimed_at"))
+    if not profile or claimed_at is None:
+        wake_request_mod.drop_sticky(brr_dir)
+        return target
+    expires_at = claimed_at + timedelta(seconds=_sticky_ttl_seconds(cfg))
+    if datetime.now(timezone.utc) >= expires_at:
+        wake_request_mod.drop_sticky(brr_dir)
+        return target
+
+    correspondent = conversations.correspondent_key_for_event(event) or ""
+    conversation = conversations.conversation_key_for_event(event) or ""
+    record_correspondent = str(record.get("correspondent_key") or "").strip()
+    record_conversation = str(record.get("conversation_key") or "").strip()
+    # When both sides name a human, that comparison is the whole answer:
+    # the conversation key is a *thread* address, and two people in one
+    # group thread share it. Falling through to it on a correspondent
+    # mismatch would let anyone in the chat inherit whoever last tapped a
+    # strong Core — which is the exact spend the TTL exists to bound. The
+    # thread key is the fallback for events that carry no human identity,
+    # not a second chance for events whose human did not match.
+    if correspondent and record_correspondent:
+        matched = correspondent == record_correspondent
+    else:
+        matched = bool(conversation and conversation == record_conversation)
+    if not matched:
+        return target
+
+    claimed_iso = claimed_at.isoformat(timespec="seconds")
+    expires_iso = expires_at.isoformat(timespec="seconds")
+    updates: dict[str, object] = {
+        "runner": profile,
+        "dashboard_wake_sticky_profile": profile,
+        "dashboard_wake_sticky_claimed_at": claimed_iso,
+        "dashboard_wake_sticky_expires_at": expires_iso,
+    }
+    protocol.update_event_meta(event, **updates)
+    event.update(updates)
+    record_id = str(record.get("request_id") or "").strip() or "unknown"
+    print(
+        f"[brnrd] wake request {record_id} conversation-sticky: "
+        f"{event.get('id') or 'an unnamed event'} inherits profile "
+        f"{profile} (claimed {claimed_iso}, expires {expires_iso})"
+    )
+    return target
+
+
+def _sticky_wake_note(event: dict) -> str:
+    """#932: the Requested Runner parenthetical for a sticky-inherited run.
+
+    Rendered into the run context bundle's "Requested Runner" line so a wake
+    can tell tap-fresh ("requested from the dashboard dispatch header") from
+    tap-inherited — and see when the inheritance lapses.
+    """
+
+    def _hhmm(raw: object) -> str | None:
+        parsed = _parse_utc_stamp(raw)
+        return parsed.strftime("%H:%M") if parsed else None
+
+    claimed = _hhmm(event.get("dashboard_wake_sticky_claimed_at"))
+    expires = _hhmm(event.get("dashboard_wake_sticky_expires_at"))
+    if claimed and expires:
+        return f"conversation-sticky from tap at {claimed}Z, expires {expires}Z"
+    return "conversation-sticky from an earlier dashboard tap"
 
 
 def _start_account_gates(
@@ -2431,6 +2586,13 @@ def _run_worker(
             "applied": wake_reason is None,
             "reason": wake_reason,
         }
+    elif event.get("dashboard_wake_sticky_profile"):
+        # #932: the profile was inherited from the conversation-sticky
+        # record, not claimed fresh. The note is what lets a wake (and the
+        # human reading its bundle) tell tap-fresh from tap-inherited — and
+        # names the expiry, because the auto-revert is the maintainer's
+        # whole price for sticky existing at all.
+        runner_wake_note = _sticky_wake_note(event)
     runner_choice = runner.resolve_runner_profile(
         repo_root, runner_overrides or None,
     )
