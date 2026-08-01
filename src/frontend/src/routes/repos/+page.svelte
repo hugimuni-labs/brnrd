@@ -469,8 +469,7 @@
 										{/if}
 									</div>
 									<MarkerNotice
-										markerNotice={repo.github_bot_marker_notice}
-										failureNotice={repo.github_bot_notice}
+										status={repo.github_bot_status}
 										botLogin={data.github_bot_login}
 										repoFullName={repo.repo_full_name}
 									/>
