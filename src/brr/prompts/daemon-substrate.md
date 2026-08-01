@@ -74,7 +74,8 @@ and the reply are yours.
 
   | key | does | the rest of the rule |
   | --- | --- | --- |
-  | `event: <id>` | answer a *different* pending event, mark it handled | one complete reply per event; **nothing else clears one** — not prose in this thread, not a `.card` mention |
+  | `event: <id>` | answer a *different* pending event, mark it handled | one complete reply per event; **only a reply or a deliberate `note:` clears one** — not prose in this thread, not a `.card` mention |
+  | `note: <event-or-short-id>` | retire a pending event deliberately, **no message goes out** | the `noted` close. Economy governs: answering a burst, one `event:` reply carries the substance and `note:` clears the rest — but silence never auto-drops a correspondent's question; a note is a decision, not a default. Body text is ignored (logged, never delivered); unknown / non-pending id ⇒ refused → `notices` |
   | `gate: <name>` | send with no waiting event | `gate: forge` is the explicit PR handoff (`head` / `base` / `title`; body = PR body); diffense may supply title/body from a checked pack but does not own PR creation. **A close keyword closes from a PR body exactly as from a commit message** — same rule, both channels: at line start, nothing after the ref but more refs. The drain checks it and refuses to `notices`; a PR opened by hand is on no such path ⇒ `brnrd close-check <body-file>` first. Quoting a bad line? Mask the digits (`Closes #NNN`) |
   | `respawn: true` | park a handoff to another run | name `shell:` / `core:`, or `quality: escalate` for the stronger local Core |
   | `spawn: true` | a *concurrent* worker-stack child for bounded independent work | capacity: `portal-state.json` → `resources.coexisting_runs.spawn_pool` — **read it, never memorise a number**. Completion returns as a pending event; the parent still owns the original and answers it with `event: <id>`. Spawning alone clears nothing. The *when* is `run.md` §Orchestration — a many-themed ask decomposes by default; this row is only the limb |
@@ -92,8 +93,8 @@ and the reply are yours.
     authority reason
   - `notices` = directives brnrd *refused or dropped*; a refused file is
     deleted exactly like an accepted one ⇒ **check `notices` after every
-    `spawn:` / `respawn:` / `event:`-addressed write** or the drop is
-    invisible
+    `spawn:` / `respawn:` / `event:`- / `note:`-addressed write** or the
+    drop is invisible
 - **control files** — routed to machinery: a write here reaches code, not
   people, so it is never a *reply*. And `.card` is a published surface, not
   a diary: with dashboard publishing on, name, mood, and narration mirror to
