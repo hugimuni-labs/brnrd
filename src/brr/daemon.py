@@ -3202,6 +3202,20 @@ def _run_worker(
             if env_ctx.branch_plan is not None:
                 env.setdefault("BRR_SEED_REF", env_ctx.branch_plan.seed_ref)
 
+        # The vigil obligation (#947): a terminal reply may claim a continuation
+        # only if one is armed. Needs no repo declaration and no extra env — its
+        # two artifacts are the run's own `.keepalive` and the presence
+        # projection already in portal-state — so, like `gate`, it is not behind
+        # the `hooks.next_move` control arm: this is not an unmeasured
+        # reply-*shape* nudge, it is a claim that was false twice in one day,
+        # each time costing the maintainer a wait on a run already `done`.
+        #
+        # Not for workers, for the #779 reason: `worker.md` grants no chat seam,
+        # so a worker owes no closeout and its terminal text is a return value,
+        # not a promise to a reader.
+        if not task.meta.get("worker"):
+            obligations.append("vigil")
+
         if obligations:
             env["BRR_CLOSEOUT_OBLIGATIONS"] = ",".join(obligations)
 
@@ -4190,33 +4204,13 @@ def _run_worker(
 
 
 def _keepalive_until(keepalive_path: Path | None) -> float | None:
-    """Read an agent-written keepalive into an absolute epoch deadline.
+    """The run's keepalive deadline — see :func:`portals.keepalive_until`.
 
-    The file is a control dotfile in the run outbox carrying one line:
-    an ISO-8601 timestamp ("busy until T"), or ``+<duration>`` (e.g.
-    ``+30m``) interpreted from the file's mtime ("busy for N from when I
-    wrote this", so re-reads don't slide). Returns epoch seconds, or
-    ``None`` when the file is absent, empty, or unparseable.
+    Delegates rather than keeps a copy: ``hooks`` reads the same file at Stop
+    to decide whether a claimed vigil is armed (#947), and a budget extension
+    the daemon honours must be the same fact the guard accepts.
     """
-    if keepalive_path is None or not keepalive_path.exists():
-        return None
-    try:
-        raw = keepalive_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not raw:
-        return None
-    first = raw.splitlines()[0].strip()
-    if first.startswith("+"):
-        secs = schedule_mod.parse_duration(first[1:].strip())
-        if secs is None:
-            return None
-        try:
-            mtime = keepalive_path.stat().st_mtime
-        except OSError:
-            return None
-        return mtime + secs
-    return schedule_mod.parse_iso(first)
+    return portals.keepalive_until(keepalive_path)
 
 
 def _budget_exceeded(
