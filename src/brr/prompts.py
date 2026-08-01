@@ -429,6 +429,17 @@ class TrimResult:
     ``attest_blocks`` respects by staying silent rather than reassuring.
     """
 
+    floor_overflow_section: str | None = None
+    """The mandatory section that made this result exceed its byte budget.
+
+    ``_trim_sectioned_page`` owns this fact because it alone knows that the
+    overrun came from its documented one-section floor rather than from a
+    caller's heading overhead or another rendering layer.  The title also
+    lets callers explain which section needs attention without re-parsing
+    the rendered markdown.  ``None`` means the trimmer did not invoke its
+    floor past the supplied budget.
+    """
+
 
 def _trim_marker(
     omitted: int, oldest_item: str | None, newest_item: str | None,
@@ -727,6 +738,11 @@ def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> Trim
         source_newest=source_newest,
         stale=stale,
         precise=precise,
+        floor_overflow_section=(
+            _heading_title(_picked(1)[0])
+            if len(text.encode("utf-8")) > max_bytes
+            else None
+        ),
     )
 
 
@@ -1188,6 +1204,27 @@ def _build_work_surface_block_scored(
         block = f"### {relative}\n\n{trimmed.text}"
         size = len(block.encode("utf-8"))
         if size > remaining:
+            if trimmed.floor_overflow_section is not None:
+                # The trimmer deliberately exceeded its allowance to honour
+                # the one-section floor.  That stored fact distinguishes this
+                # from heading overhead or a headingless flat cut without
+                # making the renderer reverse-engineer the trimmed markdown.
+                trimmed_bytes = len(trimmed.text.encode("utf-8"))
+                notice = (
+                    "_(mandatory section floor exceeded this page's budget — "
+                    f"trimmed page: {trimmed_bytes:,} B · budget: {allowance:,} B "
+                    f"· overflowing section: `{trimmed.floor_overflow_section}` "
+                    f"· full page: `surface/{relative}`)_"
+                )
+                block = f"{block}\n\n{notice}"
+                blocks.append(block)
+                trims.append(trimmed)
+                # A floor overflow may crowd out later pages, but the shared
+                # arithmetic remains total and deterministic.  Those pages
+                # flow through `unannounced_skips` below because not even a
+                # placeholder can fit in a zero remainder.
+                remaining = 0
+                continue
             # Heading overhead can push a budget-trimmed page just past the
             # remainder. Skip *this* page, not every page after it — the next
             # (smaller) file may still fit. **Say so**: a page dropped from a
