@@ -8,7 +8,7 @@
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import Limits from '$lib/Limits.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
-	import ProduceGauge from '$lib/ProduceGauge.svelte';
+	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
@@ -59,8 +59,9 @@
 	import { buildWarpLayers, emberCount } from '$lib/warp';
 	import WarpStack from '$lib/WarpStack.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
-	import { LOOM_PAST_WINDOW_MS, loomPastWindowLabel } from '$lib/loomBand';
-	import { LENS_ALL, applyLens } from '$lib/loomLens';
+	import { CLOTH_WINDOW_MS } from '$lib/cloth';
+	import { LOOM_PAST_WINDOW_MS } from '$lib/loomBand';
+	import { LENS_ALL } from '$lib/loomLens';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
@@ -265,6 +266,27 @@
 			(configRequests !== null || configRequestsError !== null)
 	);
 
+	// The loom is the page (#972): the tenses replace the numbered panels.
+	// The cloth owns its window constant (30d by design); the ledger fetch's
+	// row limit still caps the payload, so the cloth reads its rows as
+	// "latest N", not "all of 30d".
+	// Live layout (his "wild thought", 08-01): when something burns, the shed
+	// floats to the top and the warp leads only at rest. CSS order over a
+	// stable DOM — the sections keep their identity and animations; only the
+	// reading order answers the state.
+	let loomLive = $derived((liveRuns?.length ?? 0) > 0);
+	// The heddle rail: which view of the one item space the warp lifts.
+	// null = automatic — the needs-you queue when something waits (a
+	// returning reader asks "what does the resident need from me?" first),
+	// the layer stack otherwise. A tap pins a heddle; automatic resumes on
+	// reload rather than fighting the reader mid-session.
+	let warpHeddle = $state<'needs' | 'layers' | null>(null);
+	// Auto-lift waits for every feed to answer — flipping heddles on a
+	// partial count is the #480 tensed-absence flicker in a new costume.
+	let activeHeddle = $derived(
+		warpHeddle ?? (backchannelFeedsResolved && pendingBackchannelCount > 0 ? 'needs' : 'layers')
+	);
+
 	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
 	// band is the page's temporal spine and the only renderer of past/now/
 	// future. The old live-runs / scheduled-wakes / run-receipts *sections*
@@ -301,9 +323,11 @@
 
 	async function refreshRunLedger() {
 		try {
-			// This feed also powers the 24h produce gauge. Preserve that floor
-			// while letting the loom request its longer 3d/7d scrollback spans.
-			const spanMs = Math.max(loomPastWindowMs, LOOM_PAST_WINDOW_MS);
+			// One feed, three readers: the loom band's past bars, the shed's
+			// receipt fallback, and the cloth. The span covers the cloth's 30d
+			// window; the row limit still bounds the payload on the 2s poll, so
+			// the cloth reads its rows as "latest N", not "all of 30d".
+			const spanMs = Math.max(loomPastWindowMs, CLOTH_WINDOW_MS);
 			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, spanMs);
 			runLedgerRows = receipts.rows;
 			runLedgerWithheld = receipts.withheld ?? null;
@@ -631,7 +655,7 @@
 	     scaffolding it replaces. -->
 	<Landing />
 {:else}
-	<div class="mx-auto max-w-2xl p-6">
+	<div class="mx-auto flex max-w-2xl flex-col p-6">
 		<header class="ignite" style="--ignite-delay: 0ms">
 			<div class="flex items-start justify-between gap-4">
 				<!-- The wordmark wears the board's mood (#566): the newest live run's
@@ -685,74 +709,22 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<!-- §1 · backchannel (#875, 2026-08-01): the resident's ask queue owns
-		     the fold. It began as a lens on the loom's filter rail; the
-		     maintainer's live read — "still kinda bolted on … it should be one
-		     of the center elements" — overruled the lens-not-section argument
-		     that used to live in loomLens.ts. That argument's real concern
-		     (a panel squatting the board while the answer is nothing) is
-		     answered here instead: with nothing waiting, the section is one
-		     quiet line. A queue is not a filter — every other chip on the rail
-		     answers "which past runs am I looking at?"; this surface answers
-		     "what does the resident need from me?", and a returning reader
-		     asks that question first. -->
+		<!-- the warp · future (#972: the loom is the page). The standing
+		     intent surface leads at rest; the backchannel is not a sibling
+		     section anymore but this band's needs-you heddle — the center
+		     element by construction (his 07-31 read: "it should be one of
+		     the center elements"), lifted by default when something waits
+		     because a returning reader asks "what does the resident need
+		     from me?" first. The dispatch rack + fuel close the band as
+		     capacity-to-string-new-threads. -->
 		<section
-			class="ignite mt-4"
+			class="ignite mt-4 {loomLive ? 'order-2' : 'order-1'}"
 			style="--ignite-delay: 120ms"
-			aria-labelledby="backchannel-heading"
+			aria-labelledby="warp-heading"
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§1 · backchannel</p>
-					<h2 id="backchannel-heading" class="font-mono text-sm font-semibold text-amber-100">
-						what waits on you
-					</h2>
-				</div>
-				<p class="font-mono text-[10px] text-ink-quiet">
-					{backchannelChip(
-						backchannelFeedsResolved,
-						authoredBackchannelItems.length,
-						derivedBackchannelCount
-					)}
-				</p>
-			</div>
-			<div class="mt-2">
-				{#if prReviewQueueError}
-					<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
-				{/if}
-				{#if configRequestsError}
-					<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
-				{/if}
-				{#if backchannelShowClear(backchannelFeedsResolved, pendingBackchannelCount, prReviewQueueWithheld !== null)}
-					<!-- The collapse that makes a standing section affordable — only
-					     once every feed has answered; before that, an empty sum is
-					     an unmeasured absence, not a clear queue. -->
-					<p class="text-sm text-ink-quiet">nothing waits on you — the queue is clear.</p>
-				{:else if pendingBackchannelCount === 0 && !backchannelFeedsResolved}
-					<p class="text-sm text-ink-quiet">counting…</p>
-				{:else}
-					<BackchannelQueue
-						authoredItems={authoredBackchannelItems}
-						knownPaths={surfaceKnownPaths}
-						prs={prReviewQueue ?? []}
-						requests={configRequests ?? []}
-						stale={prReviewQueueStale}
-						{now}
-						withheld={prReviewQueueWithheld}
-					/>
-				{/if}
-			</div>
-		</section>
-
-		<!-- §1b · the warp (design-work-layers.md, taken 2026-08-01; #972):
-		     the standing intent surface — account-global layers whose items
-		     ripen into runs. Rendered here additively for now; the full
-		     loom-page restructure (#972) makes this the future band, with
-		     the backchannel above becoming its needs-you heddle. -->
-		<section class="ignite mt-8" style="--ignite-delay: 140ms" aria-labelledby="warp-heading">
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">§1b · the warp</p>
+					<p class="eyebrow">the warp · future</p>
 					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
 						standing intent
 					</h2>
@@ -760,64 +732,125 @@
 				<p class="font-mono text-[10px] text-ink-quiet">
 					{surfaceData === null
 						? 'stringing…'
-						: warpLayers.length === 0
-							? 'nothing strung'
-							: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
+						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
 				</p>
 			</div>
-			<div class="mt-2">
-				{#if surfaceData === null}
-					<p class="text-sm text-ink-quiet">stringing…</p>
-				{:else if warpLayers.length === 0}
-					<p class="text-sm text-ink-quiet">
-						the warp is bare — layers are authored under
-						<span class="font-mono">surface/layers/</span>.
-					</p>
-				{:else}
-					<WarpStack layers={warpLayers} knownPaths={surfaceKnownPaths} />
-				{/if}
+			<!-- The heddle rail: one item space, two lifts. A heddle raises a
+			     chosen subset of warp threads to open the shed — the tabs are
+			     exactly that, not navigation. -->
+			<div class="mt-2 flex items-baseline gap-4">
+				<button
+					type="button"
+					class="cursor-pointer font-mono text-[11px] tracking-wide uppercase {activeHeddle ===
+					'needs'
+						? 'text-amber-200'
+						: 'text-ink-quiet hover:text-stone-300'}"
+					onclick={() => (warpHeddle = 'needs')}
+				>
+					needs you · {backchannelChip(
+						backchannelFeedsResolved,
+						authoredBackchannelItems.length,
+						derivedBackchannelCount
+					)}
+				</button>
+				<button
+					type="button"
+					class="cursor-pointer font-mono text-[11px] tracking-wide uppercase {activeHeddle ===
+					'layers'
+						? 'text-amber-200'
+						: 'text-ink-quiet hover:text-stone-300'}"
+					onclick={() => (warpHeddle = 'layers')}
+				>
+					the layers
+				</button>
 			</div>
-		</section>
-
-		<section class="ignite mt-8" style="--ignite-delay: 160ms" aria-labelledby="capacity-heading">
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">§2 · capacity + dispatch</p>
-					<h2 id="capacity-heading" class="font-mono text-sm font-semibold text-amber-100">
-						next wake · fuel
-					</h2>
+			{#if activeHeddle === 'needs'}
+				<div class="mt-2">
+					{#if prReviewQueueError}
+						<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
+					{/if}
+					{#if configRequestsError}
+						<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
+					{/if}
+					{#if backchannelShowClear(backchannelFeedsResolved, pendingBackchannelCount, prReviewQueueWithheld !== null)}
+						<!-- The collapse that makes a standing section affordable — only
+					     once every feed has answered; before that, an empty sum is
+					     an unmeasured absence, not a clear queue. -->
+						<p class="text-sm text-ink-quiet">nothing waits on you — the queue is clear.</p>
+					{:else if pendingBackchannelCount === 0 && !backchannelFeedsResolved}
+						<p class="text-sm text-ink-quiet">counting…</p>
+					{:else}
+						<BackchannelQueue
+							authoredItems={authoredBackchannelItems}
+							knownPaths={surfaceKnownPaths}
+							prs={prReviewQueue ?? []}
+							requests={configRequests ?? []}
+							stale={prReviewQueueStale}
+							{now}
+							withheld={prReviewQueueWithheld}
+						/>
+					{/if}
 				</div>
-				<p class="font-mono text-[10px] text-ink-quiet">
-					{runnersError ??
-						(shells === null
-							? 'report loading'
-							: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
-				</p>
+			{:else}
+				<div class="mt-2">
+					{#if surfaceData === null}
+						<p class="text-sm text-ink-quiet">stringing…</p>
+					{:else if warpLayers.length === 0}
+						<p class="text-sm text-ink-quiet">
+							the warp is bare — layers are authored under
+							<span class="font-mono">surface/layers/</span>.
+						</p>
+					{:else}
+						<WarpStack layers={warpLayers} knownPaths={surfaceKnownPaths} />
+					{/if}
+				</div>
+			{/if}
+
+			<!-- The rack: capacity to string new threads — dispatch + fuel are
+			     warp properties, not a sibling section (#972). -->
+			<div class="mt-6">
+				<div class="flex items-baseline justify-between gap-3">
+					<p class="eyebrow">the rack · next wake + fuel</p>
+					<p class="font-mono text-[10px] text-ink-quiet">
+						{runnersError ??
+							(shells === null
+								? 'report loading'
+								: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
+					</p>
+				</div>
+				{#if runnersData?.profiles.length === 0 && runnersWithheld}
+					<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
+				{/if}
+				{#if shells?.length === 0 && quotaWithheld}
+					<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
+				{/if}
+				<ControlStrip
+					runners={runnersData}
+					repos={connectedRepos}
+					{shells}
+					{runnersError}
+					{runnersNote}
+					onTap={tapWakeRunner}
+					ledgerRows={runLedgerRows}
+					{scheduledWakes}
+					{now}
+				/>
 			</div>
-			{#if runnersData?.profiles.length === 0 && runnersWithheld}
-				<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-			{#if shells?.length === 0 && quotaWithheld}
-				<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-			<ControlStrip
-				runners={runnersData}
-				repos={connectedRepos}
-				{shells}
-				{runnersError}
-				{runnersNote}
-				onTap={tapWakeRunner}
-				ledgerRows={runLedgerRows}
-				{scheduledWakes}
-				{now}
-			/>
 		</section>
 
-		<section class="ignite mt-8" style="--ignite-delay: 250ms" aria-labelledby="loom-heading">
+		<!-- the shed · now (#972): the opening where work is passing — the
+		     band, the run node, the spawn slots. When something burns this
+		     section floats to the top (see loomLive); the warp leads only
+		     at rest. -->
+		<section
+			class="ignite mt-8 {loomLive ? 'order-1' : 'order-2'}"
+			style="--ignite-delay: 250ms"
+			aria-labelledby="shed-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§3 · loom</p>
-					<h2 id="loom-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<p class="eyebrow">the shed · now</p>
+					<h2 id="shed-heading" class="font-mono text-sm font-semibold text-amber-100">
 						{liveRuns === null
 							? 'reading the run field'
 							: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
@@ -863,7 +896,7 @@
 				     "· receipt" for any closed run, which stopped being true the
 				     moment the node became the single answer. -->
 					<p class="eyebrow">
-						§3a · {loomSelection === null
+						{loomSelection === null
 							? focusRunId === null
 								? 'now'
 								: selectedNode && selectedNodeAnswers
@@ -951,71 +984,58 @@
 				</div>
 			</div>
 
-			<div class="ignite" style="--ignite-delay: 1000ms">
-				<p class="eyebrow mt-6">§3b · instruments</p>
-				<!-- The instruments read the loom's dial, not a constant of their own
-			     (2026-07-19: "the 24h block is too static/limiting"). One time
-			     scope for the section: step the past label above, and this
-			     heading, the gauge caption, and its rollup all move with it.
-			     The lens is the same contract in the other axis — narrow the
-			     shelf to `schedule` and the gauge must count schedule runs, or
-			     it becomes an instrument holding its own constant under a band
-			     that has already moved, which is precisely the defect #486 fixed
-			     for the time axis. -->
-				{#if loomLens !== LENS_ALL}
-					<p class="mt-1 font-mono text-[10px] text-ink-mute">
-						lensed — counting only runs matching the selected lens
-					</p>
+			<!-- Spawn slots are a shed property: how much more can pass through
+			     the opening right now. The "last 24h" instruments section died
+			     here (his 08-01 call: "should have gone completely") — its
+			     numbers survive as the cloth's selvage below. -->
+			<div class="ignite mt-4" style="--ignite-delay: 1000ms">
+				{#if liveRunsError}
+					<p class="text-sm text-red-400">{liveRunsError}</p>
+				{:else if liveRuns === null}
+					<p class="text-sm text-ink-quiet">Loading…</p>
+				{:else}
+					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
 				{/if}
-				<h2
-					class="font-mono text-lg font-semibold tracking-tight text-amber-100"
-					use:typeReveal={{ text: `last ${loomPastWindowLabel(loomPastWindowMs)}`, delay: 1150 }}
-				>
-					last {loomPastWindowLabel(loomPastWindowMs)}
-				</h2>
-				<div class="mt-3">
-					{#if runLedgerError}
-						<p class="text-sm text-red-400">{runLedgerError}</p>
-					{:else if runLedgerRows === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else if runLedgerRows.length === 0 && runLedgerWithheld}
-						<WithheldNotice withheld={runLedgerWithheld} />
-					{:else}
-						<ProduceGauge
-							rows={applyLens(runLedgerRows, loomLens)}
-							stale={runLedgerStale}
-							{now}
-							windowMs={loomPastWindowMs}
-						/>
-					{/if}
-				</div>
-
-				<!-- Full claude/codex window bars retired 2026-07-18 (maintainer ask):
-		     fuel lives in the §1 capacity strip's compact bars now — one
-		     surface per fact (loom-viewport §10 dedup). WindowTrack itself
-		     is gone with them; its palette conventions live on in
-		     statusPalette.ts and the comments that cite it. -->
-				<div class="mt-4">
-					{#if liveRunsError}
-						<p class="text-sm text-red-400">{liveRunsError}</p>
-					{:else if liveRuns === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else}
-						<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
-					{/if}
-				</div>
 			</div>
-
-			<!-- §2c (the standing config-requests panel) retired 2026-07-29. The
-		     page had two separate surfaces for "the resident needs you to do
-		     something": PR review in the lens, settings approvals here. That is
-		     one job, so it now answers as the backchannel lens in §2a. -->
 		</section>
 
-		<section class="ignite mt-10" style="--ignite-delay: 2700ms" aria-labelledby="corpus-heading">
+		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
+		     Runs as root nodes of collapsed trees over a sliding window; the
+		     selvage (the cloth's self-finished edge) carries the spend→produce
+		     aggregates the retired instruments section used to hold. -->
+		<section
+			class="ignite order-3 mt-10"
+			style="--ignite-delay: 1400ms"
+			aria-labelledby="cloth-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§3 · corpus</p>
+					<p class="eyebrow">the cloth · past</p>
+					<h2 id="cloth-heading" class="font-mono text-sm font-semibold text-amber-100">
+						what has become
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] {runLedgerError ? 'text-red-400' : 'text-ink-quiet'}">
+					{runLedgerError ?? (runLedgerStale ? 'stale report' : '30d window')}
+				</p>
+			</div>
+			<div class="mt-2">
+				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}
+					<WithheldNotice withheld={runLedgerWithheld} />
+				{:else}
+					<Cloth rows={runLedgerRows} {now} windowMs={CLOTH_WINDOW_MS} stale={runLedgerStale} />
+				{/if}
+			</div>
+		</section>
+
+		<section
+			class="ignite order-4 mt-10"
+			style="--ignite-delay: 2700ms"
+			aria-labelledby="corpus-heading"
+		>
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">the library</p>
 					<h2 id="corpus-heading" class="font-mono text-sm font-semibold text-amber-100">
 						work surface
 					</h2>
@@ -1039,10 +1059,14 @@
 			</div>
 		</section>
 
-		<section class="ignite mt-10" style="--ignite-delay: 3200ms" aria-labelledby="billing-heading">
+		<section
+			class="ignite order-5 mt-10"
+			style="--ignite-delay: 3200ms"
+			aria-labelledby="billing-heading"
+		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">§4 · account</p>
+					<p class="eyebrow">account</p>
 					<h2 id="billing-heading" class="font-mono text-sm font-semibold text-amber-100">
 						subscription
 					</h2>
