@@ -9,9 +9,9 @@ without changing its version label.
 
 Hash snapshot:
 
-- Date: 2026-07-31
+- Date: 2026-08-01
 - Source revision (parent of this export-only change):
-  `b02e58fed42036e0c4d64e3f174eba3a754f57a8`
+  `a7503c10ac068ce2bd0535b537f6d93dffcde8c8`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -41,7 +41,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Hosted-Execution Beta Terms — exact current acceptance pin | [`src/brnrd/legal/hosted-execution-2026-07-08.txt`](../../../src/brnrd/legal/hosted-execution-2026-07-08.txt) | `4c6b86ba299b9f37b5b1ec5eabe1632919f8a359fea7b6e83408bad70260d94e` |
 | Privacy Notice | [`src/frontend/src/routes/privacy/+page.svelte`](../../../src/frontend/src/routes/privacy/+page.svelte) | `5f32045b90ecdc6b674af82a9f268c172613caafb66b6492be577b7970c7f87b` |
 | Legal Notice / *mentions légales* | [`src/frontend/src/routes/legal-notice/+page.svelte`](../../../src/frontend/src/routes/legal-notice/+page.svelte) | `cbbfae6ecb231148d5fa63828c592cc81d005d1472ff2ec795667b5c899c28c6` |
-| K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `1a18739e0188ee07922760c84844156167dae775c0c0e89f7aafe3ba0818bd3d` |
+| K-bis-backed company and host facts rendered by the Legal Notice | [`src/frontend/src/lib/legalNotice.ts`](../../../src/frontend/src/lib/legalNotice.ts) | `e2fc3b4c0c956e35f151c6bd52cc5f256b1f123e2b50574a6794280c0b1d6d20` |
 | Sub-processor list | [`src/frontend/src/routes/sub-processors/+page.svelte`](../../../src/frontend/src/routes/sub-processors/+page.svelte) | `22108856edeec8982213147926d678b6237bc5073257cfce0b86e4813436930e` |
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `3d23e2289ce10bbb59f9fa1c235dc6f207bfd5b2c6e596c99b1f6ae0768d88b3` |
