@@ -142,7 +142,13 @@
 												style={`background-color: ${heatColor}`}
 												aria-hidden="true"
 											></span>
-											<span class="min-w-0 flex-1 font-medium text-amber-100">{item.headline}</span>
+											<!-- The headline wraps whole — text-sm, tight leading — rather
+											     than ellipsizing: a second line beats an amputated clause
+											     (maintainer: "just looks cut"). -->
+											<span
+												class="min-w-0 flex-1 text-sm leading-tight font-medium break-words text-amber-100"
+												>{item.headline}</span
+											>
 											<span
 												class="shrink-0 font-mono text-[10px] tracking-wide uppercase"
 												style={`color: ${heatColor}`}>{heat ?? '—'}</span
@@ -191,11 +197,15 @@
 															class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
 															>{copiedKey === item.key ? 'copied ✓' : 'ignite · copy'}</span
 														>
-														<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span
+														<!-- The mandate renders whole — it lives behind the
+														     expansion already, so wrapping costs nothing and an
+														     ellipsis would cut it mid-clause. -->
+														<span class="min-w-0 flex-1 break-words text-ink-quiet italic"
+															>{item.prompt}</span
 														>
 													</button>
 												{:else if item.prompt}
-													<div class="mt-1 font-mono text-[10px] text-ink-quiet italic truncate">
+													<div class="mt-1 font-mono text-[10px] break-words text-ink-quiet italic">
 														{item.prompt}
 													</div>
 												{/if}
