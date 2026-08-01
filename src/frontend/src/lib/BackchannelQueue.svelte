@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
-	import { buildBackchannelItems } from './backchannel';
+	import { buildBackchannelItems, toggleFold } from './backchannel';
 	import type { AuthoredBackchannelItem, BackchannelItemKind } from './backchannelPage';
 	import type { ConfigChangeRequestItem } from './configRequests';
 	import MarkdownContent from './MarkdownContent.svelte';
@@ -14,6 +14,9 @@
 		/** #875 v2: the resident-authored half — parsed `surface/backchannel.md`
 		 *  sections, document order preserved (order *is* the priority). */
 		authoredItems?: AuthoredBackchannelItem[];
+		/** Briefing fold (design-dashboard-briefing §3): key of the one row
+		 *  whose body starts unfolded. Tests set it; the page leaves it null. */
+		initialOpenKey?: string | null;
 		/** Corpus paths, for resolving internal links inside an item's body. */
 		knownPaths?: Set<string>;
 		prs: PRReviewItem[];
@@ -25,6 +28,7 @@
 
 	let {
 		authoredItems = [],
+		initialOpenKey = null,
 		knownPaths = new Set<string>(),
 		prs,
 		requests,
@@ -57,6 +61,15 @@
 	const SOURCE_PATH = 'surface/backchannel.md';
 
 	let derivedItems = $derived(buildBackchannelItems(prs, requests));
+
+	// The briefing fold (design-dashboard-briefing §3): the queue was measured
+	// at 62% of the page because every item rendered its full markdown body —
+	// the secretary reading every memo aloud. An item is now one row; the body
+	// folds behind it, one open at a time. The whole accordion state is this
+	// single key. Capturing only the prop's initial value is the point — the
+	// prop seeds the fold, the reader's taps own it from there.
+	// svelte-ignore state_referenced_locally
+	let openKey = $state<string | null>(initialOpenKey);
 
 	// The prompt button's honest job: the dashboard has no free-text dispatch
 	// field yet (#875 — `wake_requests` only carries profile/repo/environment,
@@ -101,26 +114,53 @@
 		{/if}
 	{:else}
 		{#if authoredItems.length > 0}
-			<ul class="space-y-2.5">
+			<ul class="space-y-1.5">
 				{#each authoredItems as item (item.key)}
 					{@const kindColor = item.kind ? KIND_COLOR[item.kind] : STATUS_UNKNOWN}
+					{@const open = openKey === item.key}
+					{@const bodyId = `backchannel-fold-${item.key}`}
 					<li
-						class="subpanel px-3 py-2.5 text-xs"
+						class="subpanel px-3 py-2 text-xs"
 						in:fly={{ y: -8, duration: 220 }}
 						out:fade={{ duration: 150 }}
 						animate:flip={{ duration: 220 }}
 					>
-						<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-							<span class="min-w-0 font-medium text-amber-100">{item.headline}</span>
-							{#if item.kind}
-								<span
-									class="shrink-0 font-mono text-[10px] tracking-wide uppercase"
-									style={`color: ${kindColor}`}>{KIND_LABEL[item.kind]}</span
+						<!-- One row: headline · kind chip · refs · the prompt as the
+						     tap-action. The full prose is the open state of exactly
+						     one row (§3). The grammar carries no date, so authored
+						     rows have no age — only the derived rows below do. -->
+						{#if item.bodyMarkdown}
+							<button
+								type="button"
+								class="flex w-full cursor-pointer flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
+								aria-expanded={open}
+								aria-controls={bodyId}
+								onclick={() => (openKey = toggleFold(openKey, item.key))}
+							>
+								<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
+									>{open ? '▾' : '▸'}</span
 								>
-							{/if}
-						</div>
+								<span class="min-w-0 flex-1 font-medium text-amber-100">{item.headline}</span>
+								{#if item.kind}
+									<span
+										class="shrink-0 font-mono text-[10px] tracking-wide uppercase"
+										style={`color: ${kindColor}`}>{KIND_LABEL[item.kind]}</span
+									>
+								{/if}
+							</button>
+						{:else}
+							<div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+								<span class="min-w-0 flex-1 font-medium text-amber-100">{item.headline}</span>
+								{#if item.kind}
+									<span
+										class="shrink-0 font-mono text-[10px] tracking-wide uppercase"
+										style={`color: ${kindColor}`}>{KIND_LABEL[item.kind]}</span
+									>
+								{/if}
+							</div>
+						{/if}
 						{#if item.refs.length > 0}
-							<div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]">
+							<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]">
 								{#each item.refs as ref, i (i)}
 									{#if ref.href}
 										<a
@@ -135,26 +175,30 @@
 								{/each}
 							</div>
 						{/if}
-						{#if item.bodyMarkdown}
-							<div class="mt-1">
+						{#if item.prompt}
+							<!-- The prompt line *is* the tap-action: tapping it copies
+							     the dispatch mandate (the honest collapse of "pre-fill
+							     and send" — see copyPrompt above). Surfaced on the
+							     closed row, not behind the fold. -->
+							<button
+								type="button"
+								class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
+								title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
+								onclick={() => copyPrompt(item.key, item.prompt!)}
+							>
+								<span class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
+									>{copiedKey === item.key ? 'copied ✓' : 'copy'}</span
+								>
+								<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span>
+							</button>
+						{/if}
+						{#if open && item.bodyMarkdown}
+							<div class="mt-1.5" id={bodyId} transition:fade={{ duration: 150 }}>
 								<MarkdownContent
 									markdown={item.bodyMarkdown}
 									sourcePath={SOURCE_PATH}
 									{knownPaths}
 								/>
-							</div>
-						{/if}
-						{#if item.prompt}
-							<div class="mt-1.5 flex items-center gap-2">
-								<button
-									type="button"
-									class="cursor-pointer border border-amber-800/60 bg-amber-950/30 px-2 py-1 font-mono text-[10px] tracking-wide text-amber-200 uppercase hover:border-amber-600/70 hover:bg-amber-950/50"
-									title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
-									onclick={() => copyPrompt(item.key, item.prompt!)}
-								>
-									{copiedKey === item.key ? 'copied ✓' : 'copy prompt'}
-								</button>
-								<span class="min-w-0 truncate text-ink-quiet italic">{item.prompt}</span>
 							</div>
 						{/if}
 					</li>

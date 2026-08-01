@@ -4,7 +4,8 @@ import {
 	backchannelChip,
 	backchannelCount,
 	backchannelShowClear,
-	buildBackchannelItems
+	buildBackchannelItems,
+	toggleFold
 } from './backchannel.ts';
 import type { ConfigChangeRequestItem } from './configRequests.ts';
 import type { PRReviewItem } from './prReviewQueue.ts';
@@ -89,20 +90,30 @@ test('the clear verdict waits for every feed — a mid-load zero is counting, no
 	// The measured 2026-08-01 flicker: derived feeds arrive as [] while the
 	// authored surface file is still in flight → count 0, feeds unresolved.
 	assert.equal(backchannelShowClear(false, 0, false), false);
-	assert.equal(backchannelChip(false, 0), 'counting…');
+	assert.equal(backchannelChip(false, 0, 0), 'counting…');
 });
 
 test('a genuinely empty resolved queue is clear', () => {
 	assert.equal(backchannelShowClear(true, 0, false), true);
-	assert.equal(backchannelChip(true, 0), 'nothing waiting');
+	assert.equal(backchannelChip(true, 0, 0), 'nothing waiting');
 });
 
 test('withheld is never rendered as clear', () => {
 	assert.equal(backchannelShowClear(true, 0, true), false);
 });
 
-test('a partial sum is labeled as partial, a resolved sum as the verdict', () => {
-	assert.equal(backchannelChip(false, 4), '4 so far…');
-	assert.equal(backchannelChip(true, 4), '4 items waiting');
-	assert.equal(backchannelChip(true, 1), '1 item waiting');
+test('the chip attributes the two populations — never a bare sum', () => {
+	// design-dashboard-briefing §3: "16 authored · 4 derived", never "20".
+	assert.equal(backchannelChip(true, 16, 4), '16 authored · 4 derived');
+	assert.equal(backchannelChip(true, 0, 1), '0 authored · 1 derived');
+});
+
+test('a partial sum stays labeled as still counting, attribution intact', () => {
+	assert.equal(backchannelChip(false, 3, 1), '3 authored · 1 derived · counting…');
+});
+
+test('the fold holds one open row: opening another closes the first, tapping the open row closes it', () => {
+	assert.equal(toggleFold(null, 'a'), 'a');
+	assert.equal(toggleFold('a', 'b'), 'b');
+	assert.equal(toggleFold('b', 'b'), null);
 });

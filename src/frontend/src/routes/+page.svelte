@@ -236,10 +236,11 @@
 	);
 	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
 	// The §1 counter and the "does anything wait" question span three feeds,
-	// not two — authored items are the primary one.
-	let pendingBackchannelCount = $derived(
-		authoredBackchannelItems.length + backchannelCount(prReviewQueue, configRequests)
-	);
+	// not two — authored items are the primary one. The chip attributes the
+	// two populations ("N authored · M derived") rather than baring the sum
+	// (design-dashboard-briefing §3).
+	let derivedBackchannelCount = $derived(backchannelCount(prReviewQueue, configRequests));
+	let pendingBackchannelCount = $derived(authoredBackchannelItems.length + derivedBackchannelCount);
 	// All three feeds resolved (loaded or errored) — until then the sum is a
 	// partial read, and rendering it as a verdict is the measured 20 → "clear"
 	// → 4 flicker. `authoredBackchannelItems.length === 0` alone cannot tell
@@ -695,7 +696,11 @@
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] text-ink-quiet">
-					{backchannelChip(backchannelFeedsResolved, pendingBackchannelCount)}
+					{backchannelChip(
+						backchannelFeedsResolved,
+						authoredBackchannelItems.length,
+						derivedBackchannelCount
+					)}
 				</p>
 			</div>
 			<div class="mt-2">
