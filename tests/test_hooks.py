@@ -245,15 +245,13 @@ def test_stop_does_not_reinject_identical_context_on_unchanged_token(tmp_path):
     assert "hookSpecificOutput" not in second
     assert second.get("decision") != "block"
 
-    # A genuinely changed rendered block still lands. The broad portal token
-    # opens rendering, but content — not snapshot identity — owns delivery.
-    _portal(
-        tmp_path, token="t2", pending=0,
-        budget={"elapsed_seconds": 11, "budget_seconds": 3600},
-    )
+    # A genuinely new snapshot (token moves) still renders — the gate is
+    # per-token, not "only ever once for the whole run". Content dedupe is
+    # deliberately *not* layered on top of this one: the closeout render
+    # carries obligations, and an unchanged obligation is unmet, not stale.
+    _portal(tmp_path, token="t2", pending=0)
     third, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert "0 pending event(s)" in third["hookSpecificOutput"]["additionalContext"]
-    assert "11s of 3600s" in third["hookSpecificOutput"]["additionalContext"]
 
 
 def test_stop_does_not_block_when_nothing_pending(tmp_path):
@@ -830,14 +828,31 @@ def test_gate_less_silence_arm_primes_the_routing_latch(tmp_path):
     assert _ROUTING not in second
 
 
-def test_gate_less_silence_warning_is_suppressed_after_seen(tmp_path):
-    # The warning remains an obligation, but an unchanged copy is not new
-    # context. Repeating it trains the reader to skip the boundary that will
-    # later carry an actual change.
+def test_gate_less_silence_warning_survives_the_routing_latch(tmp_path):
+    # The latch spends the *constant*, never the clearable warning beside
+    # it. Silence is a real obligation — deliver something and it goes away
+    # on its own — so it must keep re-rendering at every closeout.
     _stop(tmp_path, token="t1", current_event_replyable=False)
+    second = _stop(tmp_path, token="t2", current_event_replyable=False)
+    assert "nothing communicated on any thread yet" in second
+
+
+def test_content_dedupe_never_reaches_the_closeout_channel(tmp_path):
+    # The guard for the defect above, stated as its own claim rather than as
+    # a side effect of another test: a byte-identical closeout render is what
+    # an unmet obligation looks like, so #963's content dedupe must not see
+    # the Stop phase at all. Post-tool — the ambient bar #818 measured — is
+    # the only channel it governs.
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=False)
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    body = first["hookSpecificOutput"]["additionalContext"]
+    assert "nothing communicated on any thread yet" in body
+
+    # Same portal, new token, byte-identical render: it lands again.
     _portal(tmp_path, token="t2", pending=0, current_event_replyable=False)
-    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
-    assert "hookSpecificOutput" not in second
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert second["hookSpecificOutput"]["additionalContext"] == body
 
 
 def test_routing_latch_is_not_burned_by_an_unrendered_stop(tmp_path):
