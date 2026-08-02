@@ -65,7 +65,8 @@ def frontmatter_body(text: str) -> str:
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
 _OUTBOX_ROUTING_KEYS = (
-    "event", "gate", "respawn", "spawn", "stop", "to", "runner_policy",
+    "event", "note", "gate", "respawn", "spawn", "stop", "to",
+    "runner_policy",
 )
 
 
@@ -82,8 +83,8 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
       ``event: <id>\\n\\nbody``, or ``spawn: true\\n# Task``.
 
     The lenient shape exists because the resident reaches for it
-    naturally — the delivery contract names ``event:`` / ``gate:`` /
-    ``respawn:`` as
+    naturally — the delivery contract names ``event:`` / ``note:`` /
+    ``gate:`` / ``respawn:`` as
     "frontmatter" without showing the fences, and writing the selector
     line then a separator reads as obviously correct. Under the strict
     parser that silently failed: the routing was dropped, the literal
@@ -98,7 +99,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
 
     To avoid mistaking a plain message for routing, the lenient path
     engages **only** when the first non-empty line is a recognised
-    routing selector (``event:`` / ``gate:`` / ``respawn:`` /
+    routing selector (``event:`` / ``note:`` / ``gate:`` / ``respawn:`` /
     ``spawn:`` / ``stop:`` / ``to:`` / ``runner_policy:``) *and* its
     value is a single bare token (``evt-…``, ``true``, a gate name).
     Prose that happens to open with ``event: the meeting is moved``
