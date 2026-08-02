@@ -48,7 +48,13 @@ two doors.
 
 ## Start here
 
-1. [Install brnrd](./getting-started/install/).
+```bash
+npm install -g brnrd     # or: uv tool install brnrd · pipx install brnrd
+brnrd --version
+```
+
+1. [Install brnrd](./getting-started/install/) — the full picture, including
+   what to do when there is no Python on the machine.
 2. [Choose a managed or self-hosted connection](./getting-started/connect/).
 3. [Send your first task](./getting-started/first-task/).
 
