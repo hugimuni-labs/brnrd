@@ -221,7 +221,7 @@
 					{#if identity.spawn}
 						<span
 							class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
-							>↳ spawn</span
+							>↳ strand</span
 						>
 					{/if}
 				</p>

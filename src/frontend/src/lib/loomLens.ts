@@ -1,5 +1,7 @@
 /**
- * Lenses over the loom's past shelf (wyrd §4 band 2).
+ * Lenses over the past inventory (wyrd §4 band 2) — born on the loom
+ * band's past shelf, worn by the cloth since the dissolution (2026-08-02:
+ * each tense owns one object, and the chips lens the past).
  *
  * This is the surface that replaces `.task-classification`, and the shape of
  * the replacement is the whole point. That column asked each run to *coin* a
@@ -159,7 +161,9 @@ export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 	}
 
 	if (workers > 0) {
-		lenses.push({ id: 'stack:worker', label: '↳ workers', facet: 'stack', count: workers });
+		// "Strands" is the loom vocabulary for worker sub-spawn runs (the
+		// maintainer's 08-02 naming steer); the id keeps its mechanical name.
+		lenses.push({ id: 'stack:worker', label: '↳ strands', facet: 'stack', count: workers });
 	}
 
 	return lenses;

@@ -6,18 +6,21 @@
 	import {
 		clothSelvage,
 		groupClothDays,
+		inClothWindow,
 		selvageParts,
 		weaveCloth,
 		type ClothLine,
 		type ClothTree
 	} from './cloth';
+	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
-	// done work as root-run trees, one curated line each, workers folded
-	// beneath and expanded on demand; the selvage (the cloth's self-finished
-	// edge) runs across the top as one compact spend→produce row. The page
-	// owns the rows and the window — this component only weaves.
+	// done work as root-run trees, one curated line each, worker strands
+	// folded beneath and expanded on demand; the selvage (the cloth's
+	// self-finished edge) runs across the top as one compact spend→produce
+	// row. The page owns the rows and the window — this component only
+	// weaves.
 
 	interface Props {
 		rows: RunLedgerRow[] | null;
@@ -28,7 +31,26 @@
 
 	let { rows, now, windowMs, stale }: Props = $props();
 
-	let weave = $derived(rows === null ? null : weaveCloth(rows, now, windowMs));
+	// The lens rail (the dissolution, 2026-08-02). The chips lens the *past
+	// inventory*, and the cloth is the past's one object now, so the rail
+	// moved here from the loom band. The vocabulary is still derived, never
+	// declared (`loomLens.ts`), read off the same window of rows the weave
+	// renders. The lens is local view state, like a fold: it slices what
+	// this cloth shows, and nothing outside the cloth ever asks about it.
+	let windowRows = $derived((rows ?? []).filter((row) => inClothWindow(row, now, windowMs)));
+	let lenses = $derived(availableLenses(windowRows));
+	let lens = $state<string>(LENS_ALL);
+	// A selection can outlive its lens (rows aged out, the vocabulary moved).
+	// Reconciling here keeps the weave and the chip row from disagreeing.
+	let activeLens = $derived(reconcileLens(lens, lenses));
+
+	// Day rules, folds, repo chips and the drop count all recompute on the
+	// lensed set — the weave *is* the lensed view. The selvage does not: it
+	// is the hem of the whole cloth, not of a lens, so it sums the whole
+	// window regardless of which chip is lit.
+	let weave = $derived(
+		rows === null ? null : weaveCloth(applyLens(windowRows, activeLens), now, windowMs)
+	);
 	let days = $derived(weave === null ? null : groupClothDays(weave.trees));
 	let selvage = $derived(rows === null ? null : selvageParts(clothSelvage(rows, now, windowMs)));
 
@@ -109,7 +131,7 @@
 					onclick={() => toggle(expanded, tree.root.id)}
 				>
 					{expanded.has(tree.root.id) ? '▾' : '▸'}
-					{tree.children.length} worker{tree.children.length === 1 ? '' : 's'}
+					{tree.children.length} strand{tree.children.length === 1 ? '' : 's'}
 				</button>
 			{/if}
 		</div>
@@ -144,21 +166,63 @@
 		</span>
 	</div>
 
+	<!-- The lens rail, above the weave it slices. Every chip is derived from
+	     the rows in this window — origins from `source_system`, shapes from
+	     the relic manifests, the strand stack from `is_subspawn`. It renders
+	     even over an empty weave: a lit chip over zero rows must stay
+	     un-clickable-off or the reader is trapped in an empty slice. -->
+	{#if lenses.length > 1}
+		<div
+			class="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] leading-none"
+			role="group"
+			aria-label="lenses over the cloth"
+		>
+			{#each lenses as candidate (candidate.id)}
+				<button
+					type="button"
+					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
+					class:text-amber-200={activeLens === candidate.id}
+					class:text-ink-mute={activeLens !== candidate.id}
+					class:hover:text-stone-400={activeLens !== candidate.id}
+					aria-pressed={activeLens === candidate.id}
+					title={`${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
+					onclick={() => (lens = activeLens === candidate.id ? LENS_ALL : candidate.id)}
+				>
+					{candidate.label}<span class="ml-1 text-ink-mute">{candidate.count}</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
+
 	{#if weave === null || days === null || selvage === null}
 		<p class="font-mono text-[10px] text-ink-quiet">reading the cloth…</p>
-	{:else if weave.trees.length === 0}
-		<p class="font-mono text-[10px] text-ink-quiet">nothing woven in this window yet.</p>
 	{:else}
-		<!-- The selvage: the cloth's self-finished edge. One quiet row, first. -->
-		<p
-			class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-stone-800/70 pb-2 font-mono text-[10px] text-ink-quiet"
-			aria-label="spend and produce over the window"
-		>
-			<span class="tracking-[0.16em] text-ink-mute uppercase">selvage</span>
-			{#each selvage as part, index (index)}
-				<span>{part}</span>
-			{/each}
-		</p>
+		<!-- The selvage: the cloth's self-finished edge. One quiet row, first.
+		     It renders whenever the window holds anything — even under a lens
+		     that empties the weave — because it hems the whole cloth, never
+		     the lensed slice. -->
+		{#if windowRows.length > 0}
+			<p
+				class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-stone-800/70 pb-2 font-mono text-[10px] text-ink-quiet"
+				aria-label="spend and produce over the window"
+			>
+				<span class="tracking-[0.16em] text-ink-mute uppercase">selvage</span>
+				{#each selvage as part, index (index)}
+					<span>{part}</span>
+				{/each}
+			</p>
+		{/if}
+
+		{#if weave.trees.length === 0}
+			<!-- An empty weave under an active lens means something different
+			     from an empty window — saying "nothing woven" while rows sit
+			     one chip away would be the cloth lying about its own contents. -->
+			<p class="font-mono text-[10px] text-ink-quiet">
+				{activeLens === LENS_ALL
+					? 'nothing woven in this window yet.'
+					: 'nothing in this window matches this lens.'}
+			</p>
+		{/if}
 
 		<!-- The weave: root runs day by day, newest day first, one curated
 		     line each; a slim quiet rule gives ~30 rows their day rhythm. The

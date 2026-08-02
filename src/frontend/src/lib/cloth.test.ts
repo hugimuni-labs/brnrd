@@ -13,6 +13,7 @@ import {
 	weaveCloth
 } from './cloth.ts';
 import { loomBarFraction, loomPastStop } from './loomBand.ts';
+import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
 import type { RunLedgerRow } from './runLedger.ts';
 
@@ -504,6 +505,117 @@ test("bars: thermal color is the shelf's own age stop — shared, not copied", (
 	assert.equal(fresh.color, THERMAL_STOPS.amber);
 	assert.equal(cooling.color, THERMAL_STOPS['ember-ash']);
 	assert.equal(old.color, THERMAL_STOPS.ash);
+});
+
+// The lens rail moved from the band to the cloth (the dissolution,
+// 2026-08-02): chips lens the past inventory, so they filter what the cloth
+// weaves — trees, day rules, folds all recompute on the lensed set — while
+// the selvage stays the hem of the whole window, never of a lens. These
+// tests pin that composition (`applyLens` → `weaveCloth`), the exact wiring
+// `Cloth.svelte` runs.
+
+test('lens: an origin chip filters the woven trees', () => {
+	const rows = [
+		row({ run_id: 'a', name: 'spawned a', source_system: 'spawn', ended_at: endedAgo(HOUR) }),
+		row({
+			run_id: 'b',
+			name: 'scheduled b',
+			source_system: 'schedule',
+			ended_at: endedAgo(2 * HOUR)
+		}),
+		row({ run_id: 'c', name: 'spawned c', source_system: 'spawn', ended_at: endedAgo(3 * HOUR) })
+	];
+	const lenses = availableLenses(rows);
+	assert.deepEqual(
+		lenses.map((lens) => [lens.id, lens.count]),
+		[
+			['all', 3],
+			['origin:spawn', 2],
+			['origin:schedule', 1],
+			['shape:bare', 3]
+		],
+		'the vocabulary is read off the rows the cloth holds'
+	);
+	const weave = weaveCloth(applyLens(rows, 'origin:spawn'), NOW, CLOTH_WINDOW_MS);
+	assert.deepEqual(
+		weave.trees.map((tree) => tree.root.id),
+		['a', 'c'],
+		'only the lensed runs weave'
+	);
+});
+
+test('lens: day rules and their counts recompute on the lensed set', () => {
+	const rows = [
+		row({
+			run_id: 'today-spawn',
+			name: 'today spawn',
+			source_system: 'spawn',
+			ended_at: localIso(2026, 7, 1, 11, 0)
+		}),
+		row({
+			run_id: 'today-sched',
+			name: 'today sched',
+			source_system: 'schedule',
+			ended_at: localIso(2026, 7, 1, 9, 0)
+		}),
+		row({
+			run_id: 'yesterday-sched',
+			name: 'yesterday sched',
+			source_system: 'schedule',
+			ended_at: localIso(2026, 6, 31, 22, 0)
+		})
+	];
+	const allDays = groupClothDays(weaveCloth(rows, LOCAL_NOW, CLOTH_WINDOW_MS).trees);
+	assert.deepEqual(
+		allDays.map((day) => day.runCount),
+		[2, 1]
+	);
+	const lensedDays = groupClothDays(
+		weaveCloth(applyLens(rows, 'origin:schedule'), LOCAL_NOW, CLOTH_WINDOW_MS).trees
+	);
+	assert.deepEqual(
+		lensedDays.map((day) => [day.dayLabel, day.runCount]),
+		[
+			['aug 1', 1],
+			['jul 31', 1]
+		],
+		'the aug 1 rule counts only what the lens lets through'
+	);
+});
+
+test('lens: the selvage hems the whole window, never the lensed slice', () => {
+	const rows = [
+		row({
+			run_id: 'a',
+			source_system: 'spawn',
+			wall_clock_seconds: 100,
+			ended_at: endedAgo(HOUR),
+			external_refs: [{ kind: 'pr', number: 7 }]
+		}),
+		row({
+			run_id: 'b',
+			source_system: 'schedule',
+			wall_clock_seconds: 50,
+			ended_at: endedAgo(2 * HOUR),
+			external_refs: [{ kind: 'commit', sha: 'abc' }]
+		})
+	];
+	const weave = weaveCloth(applyLens(rows, 'origin:spawn'), NOW, CLOTH_WINDOW_MS);
+	assert.equal(weave.trees.length, 1, 'the weave is the lensed view');
+	// The component computes the selvage from the un-lensed rows — the same
+	// call regardless of which chip is lit.
+	const summary = clothSelvage(rows, NOW, CLOTH_WINDOW_MS);
+	assert.equal(summary.runCount, 2);
+	assert.equal(summary.wallClockSeconds, 150);
+	assert.equal(summary.prs, 1);
+	assert.equal(summary.commits, 1);
+});
+
+test('lens: a stale selection reconciles to all rather than lying about the weave', () => {
+	const rows = [row({ run_id: 'a', source_system: 'spawn', ended_at: endedAgo(HOUR) })];
+	const lenses = availableLenses(rows);
+	assert.equal(reconcileLens('origin:github', lenses), LENS_ALL, 'a vanished chip falls back');
+	assert.equal(reconcileLens('origin:spawn', lenses), 'origin:spawn', 'a live chip holds');
 });
 
 test('produce chips and age labels speak the loom grammar', () => {

@@ -206,7 +206,7 @@
 							{#if run.is_subspawn}
 								<span
 									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
-									title={parentLabel ? `spawned by ${parentLabel}` : 'spawned child'}>↳ spawn</span
+									title={parentLabel ? `spawned by ${parentLabel}` : 'spawned child'}>↳ strand</span
 								>
 							{/if}
 						</p>
