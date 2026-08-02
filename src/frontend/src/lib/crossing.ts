@@ -15,9 +15,16 @@
  * the run finishes. So one index over the authored layers answers, for any run
  * in any tense, which threads it crossed. Rendered as a fixed strip of ticks in
  * the warp's own layer order, one *alphabet* travels between every surface that
- * draws it: same threads, same order, same width, so a strip on a burning pick
- * and a strip on the cloth line it becomes are legibly the same statement about
- * the same object — the reference drawn instead of the fact repeated.
+ * draws it: same threads, same order, **same hue**, so a strip on a burning
+ * pick and a strip on the cloth line it becomes are legibly the same statement
+ * about the same object — the reference drawn instead of the fact repeated.
+ *
+ * Hue is what makes a lit tick *identifiable* rather than merely countable. The
+ * first cut carried identity in position alone and the maintainer read it
+ * exactly right: "nice to see which one(s) is / are being worked … but the
+ * current version doesn't convey that correctly." Position keeps the order;
+ * colour carries the name; the warp header's legend is where the two are
+ * introduced to each other.
  *
  * The alphabet is the claim, not the x. Inside the pick lane the strips do also
  * land at the same offset (the rows share a lead slot and a padding box), and
@@ -37,6 +44,7 @@
  */
 
 import type { WarpLayer } from './warp.ts';
+import { threadColor } from './statusPalette.ts';
 
 /** The threads, in the warp's own authored order — the column positions every
  *  crossing strip on the page shares. */
@@ -79,6 +87,11 @@ export function buildCrossingIndex(layers: WarpLayer[]): Map<string, string[]> {
 export interface CrossingCell {
 	callSign: string;
 	lit: boolean;
+	/** This thread's identity hue (`statusPalette.threadColor`), assigned by
+	 *  its place in the authored order. Carried on the cell rather than looked
+	 *  up by the renderer so every surface that draws a strip agrees, and so
+	 *  the legend and the strips cannot drift apart. */
+	color: string;
 }
 
 /**
@@ -97,5 +110,9 @@ export function crossingCells(
 ): CrossingCell[] {
 	if (threads.length === 0 || !crossed || crossed.length === 0) return [];
 	const set = new Set(crossed);
-	return threads.map((callSign) => ({ callSign, lit: set.has(callSign) }));
+	return threads.map((callSign, index) => ({
+		callSign,
+		lit: set.has(callSign),
+		color: threadColor(index)
+	}));
 }
