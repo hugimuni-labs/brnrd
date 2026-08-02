@@ -24,8 +24,12 @@
 		 *  itself renders in the rack (`FutureShelf`). */
 		scheduledWakes: ScheduledWake[] | null;
 		now: number;
-		/** Selection is the page's: the band reports, the detail sheet answers. */
+		/** Selection is the page's: the band reports, the unfold below answers. */
 		onSelect?: (kind: 'run' | 'wake', id: string) => void;
+		/** The run currently unfolded beneath the seam (#972 machine round:
+		 *  a strand expands in place into its node). The cell wears an open
+		 *  state so box + node read as one object, not two frames. */
+		selectedId?: string | null;
 		/**
 		 * The daemon's resting face (#566), for the NOW seam when nothing is
 		 * burning. `null` on a pre-upgrade daemon that publishes no mood — and
@@ -35,7 +39,14 @@
 		daemonMood?: DaemonMood | null;
 	}
 
-	let { liveRuns, scheduledWakes, now, onSelect, daemonMood = null }: Props = $props();
+	let {
+		liveRuns,
+		scheduledWakes,
+		now,
+		onSelect,
+		daemonMood = null,
+		selectedId = null
+	}: Props = $props();
 
 	// The resting face, normalized once. Null whenever the wire has nothing to
 	// say — no daemon mood, or a mood with no name — and the seam falls back to
@@ -140,9 +151,13 @@
 						>
 							<button
 								type="button"
-								class="min-w-0 flex-1 cursor-pointer border border-amber-700/50 bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100"
+								class="min-w-0 flex-1 cursor-pointer border bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100 {selectedId ===
+								stopId
+									? 'border-amber-400/80 brightness-125'
+									: 'border-amber-700/50'}"
 								style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
 								title={liveRunDisplayName(run) || run.repo_label || 'live run'}
+								aria-expanded={selectedId === stopId}
 								onclick={() => select('run', stopId)}
 							>
 								<span class="block truncate text-[9px]">

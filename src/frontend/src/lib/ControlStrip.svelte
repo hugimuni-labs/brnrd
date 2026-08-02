@@ -1,6 +1,12 @@
 <script lang="ts">
 	import SpoolRack from './SpoolRack.svelte';
-	import { DIAL_WEDGE_RADIUS, dialDasharray, fuelRows, runnerBlocks } from './controlStrip';
+	import {
+		DIAL_WEDGE_RADIUS,
+		dialDasharray,
+		fuelRows,
+		runnerBlocks,
+		slotChip
+	} from './controlStrip';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { ConnectedRepo, EnvironmentOption } from './repos';
@@ -27,6 +33,12 @@
 		ledgerRows?: RunLedgerRow[] | null;
 		scheduledWakes?: ScheduledWake[] | null;
 		now?: number;
+		/** The spawn-slot capacity chip (#972 machine round: the LIMITS section
+		 *  folded in here — slots are machine capacity, like fuel). `null`
+		 *  spawns means the live-runs packet hasn't landed: no chip, rather
+		 *  than a fabricated zero. */
+		activeSpawns?: number | null;
+		maxSpawns?: number | null;
 	}
 
 	let {
@@ -38,7 +50,9 @@
 		repos = null,
 		ledgerRows = null,
 		scheduledWakes = null,
-		now = Date.now()
+		now = Date.now(),
+		activeSpawns = null,
+		maxSpawns = null
 	}: Props = $props();
 	let expanded = $state(false);
 	let repoSelection = $state<string | null>(null);
@@ -66,6 +80,7 @@
 		runnerBlocks(runners?.profiles ?? [], runners?.default ?? null, runners?.wake_request ?? null)
 	);
 	let fuel = $derived(fuelRows(shells ?? []));
+	let slots = $derived(activeSpawns === null ? null : slotChip(activeSpawns, maxSpawns));
 
 	// The tank line: slice 2's whole visible surface. `readTanks` sorts worst
 	// verdict first, and the strip is a glance instrument, so it shows the
@@ -168,7 +183,21 @@
 		</button>
 
 		<div class="min-w-0 p-2.5" aria-label="quota fuel">
-			<div class="mb-1 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase">fuel</div>
+			<div
+				class="mb-1 flex items-baseline justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
+			>
+				<span>fuel</span>
+				{#if slots}
+					<!-- Spawn slots as a capacity chip (#972): how much more can pass
+					     through the machine right now. Neutral until ≥80% utilization,
+					     then it speaks the quota vocabulary like any draining window. -->
+					<span
+						title={slots.title}
+						class="normal-case"
+						style={slots.level ? `color: ${LEVEL_COLOR[slots.level]}` : ''}>{slots.label}</span
+					>
+				{/if}
+			</div>
 			{#if shells === null}
 				<div class="font-mono text-[10px] text-ink-mute">loading quota…</div>
 			{:else if fuel.length === 0}

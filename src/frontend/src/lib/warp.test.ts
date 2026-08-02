@@ -9,7 +9,9 @@ import {
 	itemRepos,
 	layerCallSign,
 	layerDefinition,
-	warpRepos
+	restingLayers,
+	warpRepos,
+	weavingRows
 } from './warp.ts';
 import type { SurfaceFile } from './surface.ts';
 
@@ -218,4 +220,47 @@ test('warpRepos is the deduplicated union across layers — the repo heddle opti
 		)
 	]);
 	assert.deepEqual(warpRepos(layers), ['hugimuni-labs/brnrd', 'other-org/site']);
+});
+
+// ── the ignition crossing (weavingRows / restingLayers) ────────────────────
+
+const CROSSING_LAYERS = () =>
+	buildWarpLayers([
+		file(
+			'surface/layers/a.md',
+			'# a\n\nD.\n\n## Taken and live\n\nstate: ember\ntaken: run-1 run-2\n\nB.\n\n## Never taken\n\nstate: ember\n\nB.\n'
+		),
+		file(
+			'surface/layers/b.md',
+			'# b\n\nD.\n\n## Taken but closed\n\nstate: banked\ntaken: run-9\n\nB.\n'
+		)
+	]);
+
+test('weavingRows names items whose taken runs are live, in warp order', () => {
+	const rows = weavingRows(CROSSING_LAYERS(), new Set(['run-2', 'run-77']));
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].callSign, 'a');
+	assert.equal(rows[0].item.headline, 'Taken and live');
+	assert.equal(rows[0].liveRunId, 'run-2');
+});
+
+test('weavingRows is empty with no live runs — taken alone is history, not presence', () => {
+	assert.deepEqual(weavingRows(CROSSING_LAYERS(), new Set()), []);
+	// A taken run that already closed does not weave.
+	assert.deepEqual(weavingRows(CROSSING_LAYERS(), new Set(['run-8'])), []);
+});
+
+test('restingLayers rests exactly the weaving items and keeps authored counts', () => {
+	const layers = CROSSING_LAYERS();
+	const rested = restingLayers(layers, new Set(['run-1']));
+	assert.deepEqual(
+		rested[0].items.map((item) => item.headline),
+		['Never taken']
+	);
+	// Counts describe the file, not the view: the header may say one more
+	// ember than the stack shows while it burns.
+	assert.equal(rested[0].counts.ember, 2);
+	// Untouched layers keep identity; with no live ids the array does too.
+	assert.equal(rested[1], layers[1]);
+	assert.equal(restingLayers(layers, new Set()), layers);
 });

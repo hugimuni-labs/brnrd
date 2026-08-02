@@ -6,7 +6,8 @@ import {
 	dialDasharray,
 	fuelRows,
 	quotaWindowCountLabel,
-	runnerBlocks
+	runnerBlocks,
+	slotChip
 } from './controlStrip.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners.ts';
@@ -246,4 +247,27 @@ test('dialDasharray draws the elapsed wedge proportionally and clamps', () => {
 	// Out-of-range fractions clamp instead of drawing an impossible arc.
 	assert.equal(dialDasharray(1.7), dialDasharray(1));
 	assert.equal(dialDasharray(-0.3), dialDasharray(0));
+});
+
+// ── the spawn-slot capacity chip (#972: LIMITS folds into the rail) ────────
+
+test('slotChip stays neutral chrome below 80% utilization', () => {
+	const chip = slotChip(1, 4);
+	assert.equal(chip.label, '1/4 slots');
+	assert.equal(chip.level, null);
+	assert.match(chip.title, /spawn\.max_concurrent/);
+});
+
+test('slotChip speaks the quota vocabulary at contention', () => {
+	// 4/5 in use → 80% utilization, 20% headroom → cooling; full → spent.
+	assert.equal(slotChip(4, 5).level, 'cooling');
+	assert.equal(slotChip(4, 4).level, 'spent');
+	// 3/4 is 75% — still merely a configured ceiling, not contention.
+	assert.equal(slotChip(3, 4).level, null);
+});
+
+test('slotChip renders an unpublished ceiling as a question, not a guess', () => {
+	assert.equal(slotChip(2, null).label, '2/? slots');
+	assert.equal(slotChip(2, null).level, null);
+	assert.equal(slotChip(2, 0).label, '2/? slots');
 });
