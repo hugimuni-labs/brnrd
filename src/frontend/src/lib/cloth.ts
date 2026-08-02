@@ -49,7 +49,15 @@ export interface ClothLine {
 	href: ResolvedPathname | null;
 	/** The run's own name when it has one, else its id — never invented. */
 	name: string;
+	/** True only when a resident authored the name — false when `name` is
+	 * just the run id leaking through. Nameless roots fold per day. */
+	named: boolean;
 	repoLabel: string | null;
+	/** The economical repo marker: null when the window is single-repo or
+	 * this row rides the window's dominant repo; otherwise the short repo
+	 * name (owner stripped) with the full label kept for title/hover.
+	 * Derived from the window's own rows — no config. */
+	repoChip: { short: string; full: string } | null;
 	chips: ClothChip[];
 	/** A run that closed without produce still happened — faint line. */
 	bare: boolean;
@@ -57,6 +65,8 @@ export interface ClothLine {
 	wallSeconds: number;
 	age: string;
 	ageMs: number;
+	/** The close instant (epoch ms) — what the day rule groups on. */
+	endedAt: number;
 }
 
 /** A root run with its worker subruns collapsed beneath it. */
@@ -69,6 +79,31 @@ export interface ClothWeave {
 	trees: ClothTree[];
 	/** Root runs beyond the cap — rendered as "+ N older in the window". */
 	dropped: number;
+}
+
+/** The per-day fold of nameless roots: one quiet line's worth of facts,
+ * with the raw trees kept whole for expansion — folded, never dropped. */
+export interface ClothUnnamedFold {
+	count: number;
+	totalSeconds: number;
+	/** `4 unnamed ticks · 1m 36s total` — durations speak the ledger's
+	 * shared grammar (`durationLabel`), same as every other cloth figure. */
+	label: string;
+	trees: ClothTree[];
+}
+
+/** One calendar day of the weave, under its own slim rule. */
+export interface ClothDay {
+	/** Stable key: the local date, `2026-08-01`. */
+	key: string;
+	/** The rule's quiet-caps text: `aug 1`. */
+	dayLabel: string;
+	/** Every root that closed this day, named and unnamed alike. */
+	runCount: number;
+	/** Named roots, newest first — the day's readable rows. */
+	trees: ClothTree[];
+	/** Nameless roots folded into one line; null when the day has none. */
+	unnamed: ClothUnnamedFold | null;
 }
 
 function isKb(relic: RelicRecord): boolean {
@@ -163,19 +198,60 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 
 function curatedLine(run: MergedRun): ClothLine {
 	const chips = produceChips(run.relics);
+	const authoredName = run.name?.trim() || null;
 	return {
 		id: run.id,
 		runId: run.runId,
 		href: run.runId ? runNodeHref(run.repoLabel, run.runId) : null,
-		name: run.name?.trim() || run.runId || 'run',
+		name: authoredName || run.runId || 'run',
+		named: authoredName !== null,
 		repoLabel: run.repoLabel,
+		repoChip: null,
 		chips,
 		bare: chips.length === 0,
 		duration: durationLabel(run.wallSeconds),
 		wallSeconds: run.wallSeconds,
 		age: clothAgeLabel(run.ageMs),
-		ageMs: run.ageMs
+		ageMs: run.ageMs,
+		endedAt: run.endedAt
 	};
+}
+
+/**
+ * Repo chip economy, derived from the window itself (no config): when one
+ * repo covers every run, no row wears a label at all — the whole cloth is
+ * that repo, so per-row repetition is pure noise. With several repos in the
+ * window, only rows *off* the most common repo get a chip, and the chip is
+ * the short repo name (owner stripped); the full label rides `full` for
+ * title/hover. Ties on the count break toward the newest-first order the
+ * weave already carries, so the derivation is deterministic.
+ */
+function dressRepoChips(trees: ClothTree[]): void {
+	const lines: ClothLine[] = [];
+	for (const tree of trees) {
+		lines.push(tree.root, ...tree.children);
+	}
+	const counts = new Map<string, number>();
+	for (const line of lines) {
+		if (line.repoLabel) counts.set(line.repoLabel, (counts.get(line.repoLabel) ?? 0) + 1);
+	}
+	if (counts.size <= 1) return;
+	let dominant: string | null = null;
+	let best = 0;
+	for (const [label, count] of counts) {
+		if (count > best) {
+			dominant = label;
+			best = count;
+		}
+	}
+	for (const line of lines) {
+		if (line.repoLabel && line.repoLabel !== dominant) {
+			line.repoChip = {
+				short: line.repoLabel.split('/').pop() || line.repoLabel,
+				full: line.repoLabel
+			};
+		}
+	}
 }
 
 /**
@@ -207,7 +283,72 @@ export function weaveCloth(
 		}
 	}
 	const kept = trees.slice(0, Math.max(0, cap));
+	dressRepoChips(kept);
 	return { trees: kept, dropped: trees.length - kept.length };
+}
+
+const DAY_MONTHS = [
+	'jan',
+	'feb',
+	'mar',
+	'apr',
+	'may',
+	'jun',
+	'jul',
+	'aug',
+	'sep',
+	'oct',
+	'nov',
+	'dec'
+] as const;
+
+/**
+ * Group a weave's trees by the *local* calendar day each root closed —
+ * the same clock `runLedger`'s "today" check already reads (`getMonth`/
+ * `getDate` on the local Date), so the rule that says `aug 1` agrees with
+ * the wall clock of whoever is looking at the page. Trees arrive newest
+ * first, so days come out newest first; within a day, named roots keep
+ * that order and nameless roots (`named === false` — the title would just
+ * be the run id) fold into one `ClothUnnamedFold` per day: count, summed
+ * wall clock, and the raw trees kept whole for expansion. A named run
+ * never folds; a fold is never dropped — `runCount` counts both.
+ */
+export function groupClothDays(trees: ClothTree[]): ClothDay[] {
+	const days: ClothDay[] = [];
+	const byKey = new Map<string, ClothDay>();
+	const pad = (value: number) => String(value).padStart(2, '0');
+	for (const tree of trees) {
+		const closed = new Date(tree.root.endedAt);
+		const key = `${closed.getFullYear()}-${pad(closed.getMonth() + 1)}-${pad(closed.getDate())}`;
+		let day = byKey.get(key);
+		if (!day) {
+			day = {
+				key,
+				dayLabel: `${DAY_MONTHS[closed.getMonth()]} ${closed.getDate()}`,
+				runCount: 0,
+				trees: [],
+				unnamed: null
+			};
+			byKey.set(key, day);
+			days.push(day);
+		}
+		day.runCount += 1;
+		if (tree.root.named) {
+			day.trees.push(tree);
+		} else {
+			day.unnamed ??= { count: 0, totalSeconds: 0, label: '', trees: [] };
+			day.unnamed.count += 1;
+			day.unnamed.totalSeconds += tree.root.wallSeconds;
+			day.unnamed.trees.push(tree);
+		}
+	}
+	for (const day of days) {
+		if (day.unnamed) {
+			const { count, totalSeconds } = day.unnamed;
+			day.unnamed.label = `${count} unnamed tick${count === 1 ? '' : 's'} · ${durationLabel(totalSeconds)} total`;
+		}
+	}
+	return days;
 }
 
 /**

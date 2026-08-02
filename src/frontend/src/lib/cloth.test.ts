@@ -6,6 +6,7 @@ import {
 	CLOTH_WINDOW_MS,
 	clothAgeLabel,
 	clothSelvage,
+	groupClothDays,
 	inClothWindow,
 	produceChips,
 	selvageParts,
@@ -284,6 +285,157 @@ test('re-reported rows merge into one line: relics accumulate, largest wall wins
 		line.chips.map((chip) => chip.label),
 		['1pr', '1c']
 	);
+});
+
+// The day rule groups on the *local* calendar day of the run's own close
+// timestamp — the clock `runLedger`'s "today" check already reads. These
+// tests pin that: timestamps are built with the local Date constructor, so
+// a 23:30 / 00:30 pair straddles the same midnight on any machine.
+const LOCAL_NOW = new Date(2026, 7, 1, 18, 0).getTime();
+
+function localIso(...parts: [number, number, number, number, number]): string {
+	return new Date(...parts).toISOString();
+}
+
+test('day rhythm: roots group by local calendar day, newest day first', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'noon', name: 'noon run', ended_at: localIso(2026, 7, 1, 12, 0) }),
+			row({ run_id: 'early', name: 'early run', ended_at: localIso(2026, 7, 1, 0, 30) }),
+			row({ run_id: 'late-prev', name: 'late run', ended_at: localIso(2026, 6, 31, 23, 30) })
+		],
+		LOCAL_NOW,
+		CLOTH_WINDOW_MS
+	);
+	const days = groupClothDays(weave.trees);
+	assert.deepEqual(
+		days.map((day) => day.dayLabel),
+		['aug 1', 'jul 31'],
+		'23:30 and 00:30 land either side of local midnight'
+	);
+	assert.deepEqual(
+		days.map((day) => day.key),
+		['2026-08-01', '2026-07-31']
+	);
+	assert.deepEqual(
+		days.map((day) => day.runCount),
+		[2, 1]
+	);
+	assert.deepEqual(
+		days[0].trees.map((tree) => tree.root.id),
+		['noon', 'early'],
+		'within a day the weave keeps its newest-first order'
+	);
+	assert.equal(days[0].unnamed, null, 'named-only day carries no fold');
+});
+
+test('unnamed runs fold into one quiet line per day; a named run never folds', () => {
+	const weave = weaveCloth(
+		[
+			row({
+				run_id: 'named-1',
+				name: 'the warp takes its shape',
+				ended_at: localIso(2026, 7, 1, 11, 0)
+			}),
+			row({
+				run_id: 'run-260801-1030-a1b2',
+				wall_clock_seconds: 60,
+				ended_at: localIso(2026, 7, 1, 10, 30)
+			}),
+			row({
+				run_id: 'run-260801-0915-c3d4',
+				wall_clock_seconds: 36,
+				ended_at: localIso(2026, 7, 1, 9, 15)
+			}),
+			// Whitespace is not an authored name — it folds too.
+			row({ run_id: 'run-260731-2148-f6hg', name: '  ', ended_at: localIso(2026, 6, 31, 21, 48) })
+		],
+		LOCAL_NOW,
+		CLOTH_WINDOW_MS
+	);
+	const days = groupClothDays(weave.trees);
+	assert.equal(days.length, 2);
+
+	const aug1 = days[0];
+	assert.deepEqual(
+		aug1.trees.map((tree) => tree.root.id),
+		['named-1'],
+		'the named run stays a full row — it never folds'
+	);
+	assert.ok(aug1.unnamed);
+	assert.equal(aug1.unnamed.count, 2);
+	assert.equal(aug1.unnamed.totalSeconds, 96);
+	assert.equal(aug1.unnamed.label, '2 unnamed ticks · 1m 36s total');
+	assert.deepEqual(
+		aug1.unnamed.trees.map((tree) => tree.root.id),
+		['run-260801-1030-a1b2', 'run-260801-0915-c3d4'],
+		'the raw rows survive whole behind the fold'
+	);
+	assert.equal(aug1.runCount, 3, 'the day rule counts named and folded alike');
+
+	const jul31 = days[1];
+	assert.deepEqual(jul31.trees, []);
+	assert.ok(jul31.unnamed);
+	assert.equal(jul31.unnamed.label, '1 unnamed tick · 0s total');
+});
+
+test('repo chips: a single-repo window shows no per-row label at all', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'a', repo_label: 'hugimuni-labs/brnrd', ended_at: endedAgo(HOUR) }),
+			row({ run_id: 'b', repo_label: 'hugimuni-labs/brnrd', ended_at: endedAgo(2 * HOUR) }),
+			row({
+				run_id: 'w',
+				parent_run_id: 'a',
+				is_subspawn: true,
+				repo_label: 'hugimuni-labs/brnrd',
+				ended_at: endedAgo(HOUR / 2)
+			})
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	for (const tree of weave.trees) {
+		assert.equal(tree.root.repoChip, null);
+		for (const child of tree.children) assert.equal(child.repoChip, null);
+	}
+	assert.equal(weave.trees[0].root.repoLabel, 'hugimuni-labs/brnrd', 'the full label survives');
+});
+
+test('repo chips: multi-repo window marks only rows off the dominant repo', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'a', repo_label: 'acme/site', ended_at: endedAgo(HOUR) }),
+			row({ run_id: 'b', repo_label: 'acme/site', ended_at: endedAgo(2 * HOUR) }),
+			row({ run_id: 'c', repo_label: 'acme/tools', ended_at: endedAgo(3 * HOUR) }),
+			row({ run_id: 'd', ended_at: endedAgo(4 * HOUR) })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	const byId = new Map(weave.trees.map((tree) => [tree.root.id, tree.root]));
+	assert.equal(byId.get('a')?.repoChip, null, 'dominant-repo rows stay bare');
+	assert.equal(byId.get('b')?.repoChip, null);
+	assert.deepEqual(
+		byId.get('c')?.repoChip,
+		{ short: 'tools', full: 'acme/tools' },
+		'off-dominant row wears the short chip, full label kept for hover'
+	);
+	assert.equal(byId.get('d')?.repoChip, null, 'a row with no repo label has nothing to wear');
+});
+
+test('curated line: authored names are named, id fallbacks are not', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'a', name: 'nightly sweep', ended_at: endedAgo(HOUR) }),
+			row({ run_id: 'run-260731-2148-f6hg', ended_at: endedAgo(2 * HOUR) })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.equal(weave.trees[0].root.named, true);
+	assert.equal(weave.trees[1].root.named, false);
+	assert.equal(weave.trees[1].root.name, 'run-260731-2148-f6hg', 'the id still shows when opened');
 });
 
 test('produce chips and age labels speak the loom grammar', () => {
