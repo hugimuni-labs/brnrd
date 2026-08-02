@@ -715,3 +715,66 @@ def test_render_prod_line_omits_app_auth_when_the_server_predates_it():
         _prod_fixture("2026-07-30T10:29:00+00:00"), now=now
     )
     assert "app auth" not in rendered
+
+
+# ── resolution_reason / resolved_pr_lookup (#957) ──────────────────────
+#
+# The live-menu strike join reads these instead of re-deriving PR age math,
+# so they get their own direct coverage; test_live_menu.py pins the actual
+# join through the render callers the defect used.
+
+
+def test_resolution_reason_merged_and_closed():
+    now = 1_700_003_600.0  # exactly 2h after the timestamps below
+    merged = {"number": 1, "state": "MERGED", "merged_at": "2023-11-14T21:13:20Z"}
+    closed = {"number": 2, "state": "CLOSED", "closed_at": "2023-11-14T21:13:20Z"}
+    assert forge_state.resolution_reason(merged, now=now) == "merged 2h ago"
+    assert forge_state.resolution_reason(closed, now=now) == "closed 2h ago"
+
+
+def test_resolution_reason_none_for_open_or_unresolved():
+    assert forge_state.resolution_reason({"number": 1, "state": "OPEN"}) is None
+    # merged/closed with no resolvable timestamp still says *something*
+    # happened, just without an age.
+    assert forge_state.resolution_reason(
+        {"number": 1, "state": "MERGED"}
+    ) == "merged"
+    assert forge_state.resolution_reason({}) is None
+    assert forge_state.resolution_reason(None) is None
+
+
+def test_resolved_pr_lookup_joins_worktree_and_standalone_prs():
+    now = 1_700_003_600.0
+    forge = {
+        "worktrees": [
+            {
+                "run_id": "run-a",
+                "branch": "brr/a",
+                "pr": {
+                    "number": 995,
+                    "state": "MERGED",
+                    "merged_at": "2023-11-14T21:13:20Z",
+                },
+            },
+            {"run_id": "run-b", "branch": "brr/b"},  # no pr attached
+        ],
+        "pr_state": {
+            "standalone": [
+                {
+                    "number": 998,
+                    "state": "MERGED",
+                    "merged_at": "2023-11-14T21:13:20Z",
+                },
+                {"number": 997, "state": "OPEN"},
+            ],
+        },
+    }
+    lookup = forge_state.resolved_pr_lookup(forge, now=now)
+    assert lookup == {995: "merged 2h ago", 998: "merged 2h ago"}
+    assert 997 not in lookup
+
+
+def test_resolved_pr_lookup_empty_for_absent_or_malformed_forge():
+    assert forge_state.resolved_pr_lookup(None) == {}
+    assert forge_state.resolved_pr_lookup({}) == {}
+    assert forge_state.resolved_pr_lookup({"worktrees": "not-a-list"}) == {}

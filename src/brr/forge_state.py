@@ -347,12 +347,87 @@ def format_pr(pr: dict[str, Any], *, now: float | None = None) -> str:
     text = f"#{number} {state}"
     if pr.get("draft") and state == "OPEN":
         text += " (draft)"
-    resolved = forge_pr_cache.parse_iso(pr.get("merged_at") or pr.get("closed_at"))
-    if resolved is not None and state in ("MERGED", "CLOSED"):
-        age = (time.time() if now is None else now) - resolved
-        if age >= 0:
-            text += f" {format_age(age)} ago"
+    text += _resolution_age_suffix(pr, state, now=now)
     return text
+
+
+def _resolution_age_suffix(
+    pr: dict[str, Any], state: str, *, now: float | None = None,
+) -> str:
+    """`` 3h ago`` for a merged/closed PR with a known resolution time.
+
+    Shared by :func:`format_pr` and :func:`resolution_reason` so the two
+    "how long ago did this resolve" phrasings can never drift apart.
+    """
+    if state not in ("MERGED", "CLOSED"):
+        return ""
+    resolved = forge_pr_cache.parse_iso(pr.get("merged_at") or pr.get("closed_at"))
+    if resolved is None:
+        return ""
+    age = (time.time() if now is None else now) - resolved
+    if age < 0:
+        return ""
+    return f" {format_age(age)} ago"
+
+
+def resolution_reason(pr: dict[str, Any], *, now: float | None = None) -> str | None:
+    """``merged 35m ago`` / ``closed 2d ago``, or ``None`` when not resolved.
+
+    ``None`` covers everything a caller must leave alone: an open PR, or a
+    PR dict this cache does not carry a recognised state for — see
+    :func:`resolved_pr_lookup`.
+    """
+    if not isinstance(pr, dict):
+        return None
+    state = str(pr.get("state") or "").upper()
+    if state not in ("MERGED", "CLOSED"):
+        return None
+    verb = "merged" if state == "MERGED" else "closed"
+    return f"{verb}{_resolution_age_suffix(pr, state, now=now)}"
+
+
+def resolved_pr_lookup(forge: Any, *, now: float | None = None) -> dict[int, str]:
+    """``{382: "merged 3h ago"}`` for every merged/closed PR this wake's
+    forge-state facet already resolved (issue #957).
+
+    Feeds the live-menu join: an option whose text names a PR number this
+    same daemon pass already knows is done should not render as if the work
+    were still open. Deliberately narrow — only PRs the facet already
+    carries (worktree-attached, or the standalone recently-resolved list)
+    are included; a PR this cache has no opinion on is simply absent from
+    the returned mapping, which is what lets the caller leave it alone
+    rather than guess. No network call: this only reads the facet already
+    built for this wake.
+    """
+    lookup: dict[int, str] = {}
+    if not isinstance(forge, dict):
+        return lookup
+
+    candidates: list[dict[str, Any]] = []
+    worktrees = forge.get("worktrees")
+    if isinstance(worktrees, list):
+        for wt in worktrees:
+            pr = wt.get("pr") if isinstance(wt, dict) else None
+            if isinstance(pr, dict):
+                candidates.append(pr)
+    pr_state = forge.get("pr_state")
+    if isinstance(pr_state, dict):
+        standalone = pr_state.get("standalone")
+        if isinstance(standalone, list):
+            candidates.extend(pr for pr in standalone if isinstance(pr, dict))
+
+    for pr in candidates:
+        number = pr.get("number")
+        if number is None:
+            continue
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            continue
+        reason = resolution_reason(pr, now=now)
+        if reason is not None:
+            lookup.setdefault(number, reason)
+    return lookup
 
 
 def format_age(seconds: float | None) -> str:

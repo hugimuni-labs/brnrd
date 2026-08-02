@@ -321,7 +321,8 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
         lines.extend(["", forge])
     live_menu = snapshot.get("live_menu")
     if isinstance(live_menu, dict):
-        rendered = menus.render_numbered(live_menu)
+        resolved_prs = forge_state.resolved_pr_lookup(snapshot.get("forge"))
+        rendered = menus.render_numbered(live_menu, resolved_prs=resolved_prs)
         lines.extend([
             "",
             "Live menu — same validated generation as the gate; free text "
