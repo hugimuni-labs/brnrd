@@ -157,6 +157,141 @@ def test_prior_wake_is_read_from_its_persisted_boot_score(tmp_path: Path) -> Non
     assert c.last_run == "run-260713-2251-ropg"
 
 
+def _score(source_gate: str | None = None) -> str:
+    """A boot score as ``to_dict`` writes it, carrying only what the picker reads.
+
+    ``source_gate`` left ``None`` is the pre-#987 shape *and* the shape of any
+    wake whose event had no source: the ``attention`` block is present and the
+    field is null.  Both must read as "an ordinary run", never as "skip it".
+    """
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "attention": {"event_ids": ["evt-x"], "source_gate": source_gate},
+        }
+    )
+
+
+def test_a_spawned_worker_is_not_the_prior_wake(tmp_path: Path) -> None:
+    """#987, the live case, pinned.
+
+    ``run-260802-0730-cc2f`` booted with ``continuity: ✓ run-260802-0649-lcrd``
+    — a codex worker ``run-260802-0632-v2ir`` had dispatched — while its own
+    ``## Your last run`` block named ``v2ir``.  Two blocks in one prompt, two
+    answers to *where was I*, and the anchor whose whole job is closing the loop
+    across wakes was the one naming a child.
+
+    A subspawn is not a previous self: different task, often a different Shell
+    and Core, on a thread the parent never joined.  Newest-first is the right
+    order; it just has to be newest-first *on this resident's line*.
+    """
+    runs = tmp_path / "runs"
+    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
+    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
+        _score("schedule"), encoding="utf-8"
+    )
+    # Dispatched by v2ir, and newer — which is exactly why it used to win.
+    (runs / "run-260802-0649-lcrd").mkdir(parents=True)
+    (runs / "run-260802-0649-lcrd" / "boot-score.json").write_text(
+        _score("spawn"), encoding="utf-8"
+    )
+
+    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
+    assert c.mount == "✓"
+    assert c.last_run == "run-260802-0632-v2ir"
+
+
+def test_a_respawn_handoff_is_still_the_prior_wake(tmp_path: Path) -> None:
+    """The distinction the ticket refused to collapse — and it holds today.
+
+    ``_queue_respawn_request`` derives its child's source as ``fm ->
+    current.get("source") -> task.source -> "respawn"``: it *inherits the
+    originating gate*.  So a resident that handed its own thought to a stronger
+    Core writes ``source_gate: telegram`` (or ``schedule`` / ``cli``), never
+    ``spawn`` — and remains the predecessor, because a respawn is the same
+    thought continuing in a different body.
+
+    Only ``_queue_spawn_request`` writes ``"spawn"``.  Skipping exactly that is
+    the conservative rule: it skips what can be *proved* concurrent.
+    """
+    runs = tmp_path / "runs"
+    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
+    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
+        _score("schedule"), encoding="utf-8"
+    )
+    (runs / "run-260802-0649-resp").mkdir(parents=True)
+    (runs / "run-260802-0649-resp" / "boot-score.json").write_text(
+        _score("telegram"), encoding="utf-8"
+    )
+
+    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
+    assert c.last_run == "run-260802-0649-resp"
+
+
+def test_only_workers_are_skipped_ordinary_runs_are_untouched(tmp_path: Path) -> None:
+    """The regression guard: the filter must not eat the ordinary case."""
+    runs = tmp_path / "runs"
+    for name, gate in (
+        ("run-260802-0632-v2ir", "schedule"),
+        ("run-260802-0649-aaaa", "telegram"),
+    ):
+        (runs / name).mkdir(parents=True)
+        (runs / name / "boot-score.json").write_text(_score(gate), encoding="utf-8")
+
+    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
+    assert c.mount == "✓"
+    assert c.last_run == "run-260802-0649-aaaa"
+
+
+def test_a_score_with_no_source_field_behaves_as_it_did_before(tmp_path: Path) -> None:
+    """Absent ⇒ today's behaviour, never ⇒ skip.
+
+    Every score written before #987 predates the question, and a filter that
+    read *silence* as *worker* would walk the whole history backwards looking
+    for a field none of it has — turning a boot that named the wrong run into a
+    boot that names ``✗ first wake`` on a resident with months of memory.
+    Absent is not evidence.
+    """
+    runs = tmp_path / "runs"
+    # Pre-#987 shape: no ``attention`` block at all.
+    (runs / "run-260713-2251-ropg").mkdir(parents=True)
+    (runs / "run-260713-2251-ropg" / "boot-score.json").write_text(
+        json.dumps({"schema_version": "1"}), encoding="utf-8"
+    )
+    # Present-but-null: a wake whose event carried no source.
+    (runs / "run-260713-2300-nsrc").mkdir(parents=True)
+    (runs / "run-260713-2300-nsrc" / "boot-score.json").write_text(
+        _score(None), encoding="utf-8"
+    )
+
+    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260713-2331-qk3d")
+    assert c.mount == "✓"
+    assert c.last_run == "run-260713-2300-nsrc"
+
+
+def test_an_unparseable_worker_score_is_still_a_broken_mount(tmp_path: Path) -> None:
+    """A score the filter cannot read is reported, not quietly stepped over.
+
+    ``build_continuity`` owes an unreadable score a ``✗ unreachable``.  A picker
+    that skipped on parse failure would hand back a healthy ``✓`` for an older
+    run while the broken memory went unmentioned — the mount lying in the
+    reassuring direction, which is the one direction it must never lie in.
+    """
+    runs = tmp_path / "runs"
+    (runs / "run-260802-0632-v2ir").mkdir(parents=True)
+    (runs / "run-260802-0632-v2ir" / "boot-score.json").write_text(
+        _score("schedule"), encoding="utf-8"
+    )
+    (runs / "run-260802-0649-lcrd").mkdir(parents=True)
+    (runs / "run-260802-0649-lcrd" / "boot-score.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+
+    c = cont_mod.build_continuity(tmp_path, current_run_id="run-260802-0730-cc2f")
+    assert c.mount == "✗ unreachable"
+    assert c.last_run == "run-260802-0649-lcrd"
+
+
 def test_unparseable_prior_score_is_a_broken_mount(tmp_path: Path) -> None:
     """A score that will not parse is not a ``✓``. Saying so is the honest move."""
     runs = tmp_path / "runs"

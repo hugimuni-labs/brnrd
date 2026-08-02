@@ -70,15 +70,78 @@ def _format_age(seconds: float) -> str:
     return f"{int(hours / 24)}d ago"
 
 
+#: The event ``source`` a concurrently-dispatched ``spawn:`` worker records.
+#:
+#: Written in exactly one place — ``daemon._queue_spawn_request``, as
+#: ``str(fm.get("source") or "spawn")`` — so a run whose score reports it was
+#: dispatched down the worker stack, not woken as this resident's next thought.
+_SPAWN_SOURCE = "spawn"
+
+
+def _dispatched_as_worker(score_path: Path) -> bool:
+    """Was the run that wrote this score a concurrent ``spawn:`` worker?
+
+    **The fact is already in the file.**  ``BootAttention.source_gate`` is
+    persisted as ``str(event["source"])``, and the spawn dispatcher stamps
+    ``"spawn"`` there — the same value the home run node's ``state.md`` records
+    as ``source: spawn``.  So the picker needs no new field and no schema bump:
+    it reads a fact every score since Slice 1 has already carried, which also
+    makes the fix *retroactive* over the run directories already on disk.
+
+    **``spawn:`` and ``respawn:`` are distinguishable here, and the distinction
+    is deliberate.**  ``daemon._queue_respawn_request`` derives its child's
+    source as ``fm.get("source") or current.get("source") or task.source or
+    "respawn"`` — it *inherits the originating gate* (``telegram``,
+    ``schedule``, ``cli``).  A resident's respawn handoff therefore never lands
+    on ``"spawn"`` and still counts as the predecessor, which is right: a
+    respawn is the same thought continuing in a different body.  A *worker*
+    that respawns does inherit ``"spawn"`` and stays skipped — also right, it
+    is still not this resident's line.
+
+    Anything this cannot prove is a worker degrades to "not a worker": an
+    unreadable, unparseable or field-less score keeps today's behaviour rather
+    than being silently dropped from the candidate set.  A score written before
+    this change has no ``source_gate`` only if its wake had no event source at
+    all; either way the absent case reads as ordinary, never as *skip it*.
+
+    A parse failure deliberately does **not** skip: ``build_continuity`` owes
+    that run a ``✗ unreachable`` mount, and a picker that swallowed it would
+    hand back a healthy ``✓`` for an older run while the broken memory went
+    unmentioned.
+    """
+    try:
+        payload = json.loads(score_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    attention = payload.get("attention")
+    if not isinstance(attention, dict):
+        return False
+    return str(attention.get("source_gate") or "") == _SPAWN_SOURCE
+
+
 def find_prior_wake(
     runs_dir: Path, *, current_run_id: str | None = None
 ) -> tuple[str, Path, float] | None:
-    """Newest prior run that persisted a boot score → ``(run_id, path, mtime)``.
+    """Newest prior run **this resident's line thought** → ``(run_id, path, mtime)``.
 
     **The mount is already on disk.**  Since Slice 1 every wake writes its own
     ``boot-score.json`` into its run directory, which means a resident's last
     wake left behind a machine-readable record of exactly who it was.  Reading
     it is not a reconstruction — it is the previous self, verbatim.
+
+    *Whose* previous self is the part this originally got wrong (#987).  Newest-
+    first with no notion of parentage meant a ``spawn:`` worker the resident had
+    dispatched — a concurrent limb with a different task, often a different
+    Shell and Core, on a thread the parent never joined — outsorted the parent
+    and became the next wake's "predecessor".  It fired against itself on
+    2026-08-02: ``run-260802-0730-cc2f`` booted with
+    ``continuity: ✓ run-260802-0649-lcrd`` (a codex worker) while its own
+    ``## Your last run`` block, which reads the home node and knows about
+    parentage, named ``run-260802-0632-v2ir``.  Two blocks in one prompt, two
+    answers to *where was I*, and the anchor whose whole job is closing the loop
+    across wakes was the one pointing at a child.
 
     A run directory without a score (crashed before assembly, or pre-Slice-1) is
     skipped rather than treated as the prior wake: a mount must not report a
@@ -99,6 +162,8 @@ def find_prior_wake(
         try:
             mtime = score.stat().st_mtime
         except OSError:
+            continue
+        if _dispatched_as_worker(score):
             continue
         return (d.name, score, mtime)
     return None

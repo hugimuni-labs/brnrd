@@ -439,6 +439,11 @@ dominion actually took, whether the memory that was supposed to be here is
 readable. The `mount` field is three-state and the `✗` is load-bearing:
 
 - `✓` — the prior wake's boot-score.json was found and parses (the mount holds).
+  "Prior wake" means the previous thought on *this resident's line*: runs whose
+  score records `source: spawn` are concurrent workers this line dispatched, not
+  predecessors, and the picker skips them. A `respawn:` handoff inherits the
+  originating gate's source, so it still counts — it is the same thought
+  continuing in a different body.
 - `✗ first wake` — no prior score exists; this is an ordinary and useful fact.
 - `✗ unreachable` — the memory is *supposed* to be here and is not; act on this before trusting a single injected block.
 
