@@ -2450,3 +2450,27 @@ class TestExtractCodexThreadId:
         assert _extract_codex_thread_id(
             '{"type":"thread.started","thread_id":""}'
         ) is None
+
+
+def test_stdout_reply_adapter_is_declared_not_inferred_from_profile_name(
+    monkeypatch,
+):
+    from brr import claude_status, runner_select
+
+    selected = runner_select.runner_from_profile(
+        "unfamiliar-shell",
+        {
+            "capabilities": {
+                "stdout_reply": "native:claude-json",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        claude_status,
+        "capture_stdout_with_model",
+        lambda stdout, env: (f"decoded:{stdout}", "observed-core"),
+    )
+
+    assert runner_mod._process_runner_stdout(
+        selected, selected.name, "envelope", {},
+    ) == ("decoded:envelope", "observed-core")

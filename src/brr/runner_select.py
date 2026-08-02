@@ -31,6 +31,44 @@ from typing import Any
 
 from . import runner_failures
 
+CAPABILITY_NAMES = (
+    "headless",
+    "stdout_reply",
+    "boundary_injection",
+    "model_pin",
+    "quota_read",
+)
+
+
+@dataclass(frozen=True)
+class RunnerCapability:
+    """One declared Shell capability: native mapping or named degradation."""
+
+    mode: str
+    mapping: str
+
+    @property
+    def declaration(self) -> str:
+        return f"{self.mode}:{self.mapping}"
+
+
+def _capabilities(value: Any) -> dict[str, RunnerCapability]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, RunnerCapability] = {}
+    for raw_name, raw_cell in value.items():
+        name = str(raw_name).strip().lower().replace("-", "_")
+        if name not in CAPABILITY_NAMES:
+            continue
+        cell = str(raw_cell or "").strip()
+        mode, sep, mapping = cell.partition(":")
+        mode = mode.strip().lower()
+        mapping = mapping.strip()
+        if not sep or mode not in {"native", "degraded", "unknown"} or not mapping:
+            continue
+        out[name] = RunnerCapability(mode=mode, mapping=mapping)
+    return out
+
 # Cost classes, cheapest → strongest. ``relay`` is a brnrd-owned paid fallback,
 # never auto-selected (it needs spend-plan consent), so it sorts outside the
 # local-first ladder.
@@ -158,6 +196,12 @@ class RunnerProfile:
     auth_variant: str | None = None
     auth_env: str | None = None
     generated_core: bool = False
+    capabilities: dict[str, RunnerCapability] | None = None
+
+    def capability(self, name: str) -> RunnerCapability | None:
+        """Return a declared capability by its hyphenated or snake-case name."""
+        key = name.strip().lower().replace("-", "_")
+        return (self.capabilities or {}).get(key)
 
     @property
     def is_relay(self) -> bool:
@@ -188,6 +232,12 @@ class RunnerProfile:
         Selection and invocation keep this typed value. Dictionaries are only
         produced where the daemon must write JSON-compatible state.
         """
+        stdout_reply = self.capability("stdout_reply")
+        quota_read = self.capability("quota_read")
+        declared_capabilities = {
+            name: cell.declaration
+            for name, cell in (self.capabilities or {}).items()
+        }
         values: dict[str, object | None] = {
             "name": self.name,
             "shell": self.shell,
@@ -204,6 +254,9 @@ class RunnerProfile:
             "capability_source": self.capability_source,
             "capability_freshness": self.capability_freshness,
             "generated_core": self.generated_core,
+            "stdout_reply": stdout_reply.mapping if stdout_reply else None,
+            "quota_read": quota_read.mapping if quota_read else None,
+            "capabilities": declared_capabilities or None,
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -216,6 +269,13 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
     """
     profile = profile or {}
     owner = _as_str(profile.get("owner")) or "user"
+    capabilities = _capabilities(profile.get("capabilities"))
+    boundary = capabilities.get("boundary_injection")
+    declared_hooks = (
+        boundary.mapping if boundary is not None and boundary.mode == "native"
+        else None if boundary is not None
+        else _as_str(profile.get("hooks"))
+    )
     return RunnerProfile(
         name=name,
         profile=_as_str(profile.get("profile")) or name,
@@ -230,7 +290,7 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
         cost_class=_as_str(profile.get("class")),
         cost_rank=_as_int(profile.get("cost_rank")),
         quota_source=_as_str(profile.get("quota_source")),
-        hooks=_as_str(profile.get("hooks")),
+        hooks=declared_hooks,
         billing=_as_str(profile.get("billing")),
         consent=_as_str(profile.get("consent")),
         cmd=_as_str(profile.get("cmd")),
@@ -240,6 +300,7 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
         auth_variant=_as_str(profile.get("auth_variant")),
         auth_env=_as_str(profile.get("auth_env")),
         generated_core=bool(profile.get("generated_core")),
+        capabilities=capabilities,
     )
 
 

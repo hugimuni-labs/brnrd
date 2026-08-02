@@ -905,7 +905,7 @@ def _record_task_runner(
     task.meta["runner_name"] = selected.name
     for key in (
         "runner_shell", "runner_core", "runner_class",
-        "core_requested", "core_observed",
+        "runner_quota_read", "core_requested", "core_observed",
     ):
         task.meta.pop(key, None)
     task.meta["runner_shell"] = selected.shell
@@ -917,6 +917,9 @@ def _record_task_runner(
         task.meta["core_requested"] = selected.model
     if selected.cost_class:
         task.meta["runner_class"] = selected.cost_class
+    quota_capability = selected.capability("quota_read")
+    if quota_capability is not None:
+        task.meta["runner_quota_read"] = quota_capability.mapping
 
 
 def _enrich_catalog_quota(
@@ -3284,10 +3287,10 @@ def _run_worker(
         meta = selected.portal_metadata()
         name = selected.name
         quota = runner_quota.describe_runner_quota(name, cfg, brr_dir)
-        # Native hook config is opt-in through a profile's explicit ``hooks:``
-        # field — brr never infers hooks from the runner name. A profile with no
-        # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
-        # inbound injection).
+        # Native hook config is declared by the boundary-injection capability
+        # (with ``hooks:`` retained only for pre-matrix account catalogs).
+        # brr never infers hooks from the runner name; an explicit heartbeat
+        # degradation keeps outbound polling without inbound injection.
         declared_hooks_flavour = selected.hooks
         hooks_flavour = declared_hooks_flavour or name
         env = {
@@ -3606,9 +3609,13 @@ def _run_worker(
             prompt_instruction = task.body
 
         if attempt == 1:
+            quota_capability = runner_choice.capability("quota_read")
             run_levels, _ = _collect_levels(
                 runner_name, outbox_dir, run_root,
                 refresh=False, shared_dir=brr_dir,
+                quota_read=(
+                    quota_capability.mapping if quota_capability is not None else None
+                ),
             )
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
@@ -4787,6 +4794,7 @@ def _collect_levels(
     refresh: bool = True,
     shared_dir: Path | None = None,
     codex_thread_id: str | None = None,
+    quota_read: str | None = None,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
@@ -4835,7 +4843,13 @@ def _collect_levels(
     is the set of level slots whose collector exists (so an empty slot reads
     ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
     """
-    if codex_status.supported(runner_name):
+    codex_collector = quota_read == "session-rollout" or (
+        quota_read is None and codex_status.supported(runner_name)
+    )
+    claude_collector = quota_read == "cached-tui" or (
+        quota_read is None and claude_status.supported(runner_name)
+    )
+    if codex_collector:
         cache_dir = shared_dir or outbox_dir
         probe = (
             codex_usage.load_or_refresh_snapshot(cache_dir)
@@ -4851,7 +4865,7 @@ def _collect_levels(
         return merged, frozenset(
             codex_usage.COLLECTED_SLOTS | codex_status.COLLECTED_SLOTS
         )
-    if claude_status.supported(runner_name):
+    if claude_collector:
         if refresh:
             usage_levels = claude_usage.load_or_refresh_snapshot(
                 outbox_dir, cwd=work_dir
@@ -5193,6 +5207,7 @@ def _write_live_portal_state(
         run_levels, run_level_slots = _collect_levels(
             runner_name, outbox_dir, work_dir,
             refresh=refresh_levels, shared_dir=brr_dir,
+            quota_read=str((runner_meta or {}).get("quota_read") or "") or None,
             codex_thread_id=(
                 task.meta.get("codex_thread_id")
                 if hasattr(task, "meta") else None
@@ -7805,18 +7820,24 @@ def _fire_due_schedules(
             runner_cfg if runner_cfg and runner_cfg != "auto" else ""
         )
         default_model: str | None = None
+        default_quota_read: str | None = None
         if default_runner_name:
             try:
-                default_model = runner.runner_profile(
+                default_profile = runner.runner_profile(
                     default_runner_name, repo_root,
-                ).model
+                )
+                default_model = default_profile.model
+                quota_capability = default_profile.capability("quota_read")
+                default_quota_read = (
+                    quota_capability.mapping if quota_capability is not None else None
+                )
             except Exception:  # noqa: BLE001 - no model means broad bucket only
                 pass
 
         level_cache: dict[str, dict[str, object] | None] = {}
 
         def _pacing_for(
-            runner_name: str, model: str | None,
+            runner_name: str, model: str | None, quota_read: str | None,
         ) -> dict[str, object]:
             if not runner_name:
                 return {"mode": "normal"}
@@ -7827,7 +7848,9 @@ def _fire_due_schedules(
             # passed straight through and never held the cache file).
             if runner_name not in level_cache:
                 levels_dir = brr_dir
-                if claude_status.supported(runner_name):
+                if quota_read == "cached-tui" or (
+                    quota_read is None and claude_status.supported(runner_name)
+                ):
                     levels_dir = (
                         runner_quota.latest_claude_usage_outbox_dir(brr_dir)
                         or brr_dir
@@ -7837,6 +7860,7 @@ def _fire_due_schedules(
                 level_cache[runner_name], _ = _collect_levels(
                     runner_name, levels_dir, None,
                     refresh=False, shared_dir=brr_dir,
+                    quota_read=quota_read,
                 )
             binding_pct = runner_quota.binding_quota_remaining_pct(
                 level_cache[runner_name], model=model,
@@ -7851,13 +7875,22 @@ def _fire_due_schedules(
                 }
             return {"mode": "normal"}
 
-        default_pacing = _pacing_for(default_runner_name, default_model)
+        default_pacing = _pacing_for(
+            default_runner_name, default_model, default_quota_read,
+        )
         entry_pacing: dict[str, dict[str, object]] = {}
         scheduled_entries = []
         for entry in entries:
             profile = entry_runner_profiles.get(entry.id)
+            quota_capability = (
+                profile.capability("quota_read") if profile is not None else None
+            )
             pacing = (
-                _pacing_for(profile.name, profile.model)
+                _pacing_for(
+                    profile.name,
+                    profile.model,
+                    quota_capability.mapping if quota_capability is not None else None,
+                )
                 if profile is not None
                 else default_pacing
             )
