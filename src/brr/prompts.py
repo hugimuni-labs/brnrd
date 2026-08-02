@@ -1424,6 +1424,14 @@ def _build_kb_health_block(repo_root: Path) -> str:
     # maintenance round is due, not a list of pages to trim.
     integrity = [f for f in findings if f.type not in _KB_SIZE_FINDINGS]
     size_pressure = [f for f in findings if f.type in _KB_SIZE_FINDINGS]
+    # Dominion findings ride the same rendered block (#985). They are not kb
+    # pages, but they are the same *kind* of thing the Integrity section is
+    # for — a specific inconsistency with a specific fix — and this is the
+    # one deterministic notice channel a resident already reads on wake.
+    # Appended after the sorted kb findings rather than merged into the sort:
+    # they are all `info`, so the errors → warnings → info order still holds,
+    # and "kb first, then dominion" is a legible grouping in its own right.
+    integrity.extend(_inert_pitfall_findings(repo_root, cfg))
     stats = kb_health.compute_graph_stats(repo_root, kb_dir)
     ownership = _kb_ownership_signal(size_pressure, stats)
     # `cfg` rather than a bare `repo_root`: the mirror's identity check asks
@@ -1462,6 +1470,46 @@ def _build_kb_health_block(repo_root: Path) -> str:
 # Size findings are a maintenance *signal*, not per-page work — see
 # :func:`_build_kb_health_block` and :func:`_kb_ownership_signal`.
 _KB_SIZE_FINDINGS = frozenset({"oversized-page", "recent-log-budget-exceeded"})
+
+
+def _inert_pitfall_findings(repo_root: Path, cfg: dict) -> list:
+    """One ``info`` finding per dominion pitfall that has no ``trigger:`` line.
+
+    A triggerless entry parses, renders in the file, reads as filed — and
+    matches nothing, forever (:func:`brr.pitfalls.inert`). Nothing said so
+    until #985; this is where it gets said. A *notice*, never a refusal:
+    ``parse_pitfalls`` still accepts the entry, so a resident drafting a body
+    before its triggers can save the file and see one line about it next wake.
+
+    Every candidate dominion is reported, not just the first one carrying a
+    store. ``_build_pitfalls_block`` walks the whole candidate list looking
+    for a match, so an inert entry in *any* of them is a real miss there;
+    stopping at the first store would narrow the report without saying it —
+    and the label in each description keeps two stores distinguishable.
+
+    Silent when every entry carries a trigger, when the dominion is disabled,
+    and when there is no ``pitfalls.md`` at all.
+    """
+    from . import dominion, kb_preflight, pitfalls
+
+    out = []
+    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
+        if not candidate.path.is_dir():
+            continue
+        for entry in pitfalls.inert(pitfalls.parse_pitfalls(candidate.path)):
+            out.append(kb_preflight.Finding(
+                type="inert-pitfall",
+                target=f"{pitfalls.PITFALLS_FILE} § {entry.title}",
+                description=(
+                    "entry has no `trigger:` line, so it matches no task and "
+                    "has never been injected — it reads as filed and behaves "
+                    f"as deleted (dominion `{candidate.label}`). Add a "
+                    "`trigger: <keyword>, <keyword>` line under the heading, "
+                    "or delete the entry if the lesson is spent."
+                ),
+                severity="info",
+            ))
+    return out
 
 
 def _kb_mirror_signal(state) -> str:
