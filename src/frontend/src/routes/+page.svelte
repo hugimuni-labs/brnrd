@@ -59,7 +59,7 @@
 	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { buildWarpLayers, emberCount, restingLayers, weavingRows } from '$lib/warp';
-	import Crossing from '$lib/Crossing.svelte';
+	import ThreadLegend from '$lib/ThreadLegend.svelte';
 	import { buildCrossingIndex, crossingCells, crossingThreads } from '$lib/crossing';
 	import { pickRows } from '$lib/pickLane';
 	import WarpBand from '$lib/WarpBand.svelte';
@@ -282,6 +282,10 @@
 		return { label: burning[0].label, clock: burning[0].clock, extra: burning.length - 1 };
 	});
 	let threads = $derived(crossingThreads(warpLayers));
+	// Which layers have an item weaving right now — the answer to "which one is
+	// being worked", rendered on the warp where the question gets asked rather
+	// than only on the run that is doing it.
+	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign)));
 	let crossingIndex = $derived(buildCrossingIndex(warpLayers));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
@@ -849,15 +853,18 @@
 						what is asked
 					</h2>
 				</div>
-				<p class="flex items-center gap-2 font-mono text-[10px] text-ink-quiet">
-					<!-- The threads themselves, all lit: this strip is the legend for
-					     every crossing drawn below it, and it is why the columns mean
-					     anything — same order, same width, everywhere. -->
-					<Crossing cells={crossingCells(threads, threads)} label="the warp threads" />
+				<p class="font-mono text-[10px] text-ink-quiet">
 					{surfaceData === null
 						? 'stringing…'
 						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
 				</p>
+			</div>
+			<!-- The threads, named and coloured: the legend for every crossing strip
+			     drawn below it, and what turns a lit tick from countable into
+			     identifiable. A layer with something weaving wears its own hue and
+			     a bolt — his ask, answered where he asked it. -->
+			<div class="mt-1.5">
+				<ThreadLegend cells={crossingCells(threads, threads)} weaving={weavingCallSigns} />
 			</div>
 			<!-- The flip is dead (2026-08-02): the layer stack is the standing
 			     body and renders always — the old needs-you heddle *replaced*

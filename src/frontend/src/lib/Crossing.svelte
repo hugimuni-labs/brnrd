@@ -38,10 +38,12 @@
 			aria-hidden="true"
 		></span>
 		{#each cells as cell (cell.callSign)}
+			<!-- Lit ticks wear the layer's own hue and cross the beam; unlit ones
+			     sit on it, colourless. Colour is identity here, never magnitude —
+			     `THREAD_SCALE` says so at length. -->
 			<span
-				class="relative block w-[3px] {cell.lit
-					? 'h-[11px] bg-amber-400'
-					: 'h-[5px] bg-stone-700/70'}"
+				class="relative block w-[3px] {cell.lit ? 'h-[11px]' : 'h-[5px] bg-stone-700/70'}"
+				style={cell.lit ? `background-color: ${cell.color}` : ''}
 				aria-hidden="true"
 			></span>
 		{/each}
