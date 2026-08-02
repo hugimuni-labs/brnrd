@@ -25,6 +25,7 @@
 		runNodeFromSurface,
 		type NodeIdentity
 	} from './runNode';
+	import { runFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
@@ -221,6 +222,15 @@
 	<Crossing
 		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined)}
 	/>
+	<!-- The face, immediately before the name — the same slot it takes in the
+	     pick lane and the node header, so one run reads as one run across the
+	     three surfaces it appears on. Hashed from `line.id`, the key this row
+	     already renders under (`run_id ?? event_id ?? ended_at`); a row that
+	     resolved to none of those gets nothing rather than a fabricated mark. -->
+	{#if line.id}
+		{@const face = runFace(line.id)}
+		<span class="shrink-0" aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>
+	{/if}
 	{#if line.href}
 		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
 		     being a page redirect that cost the reader their scroll position

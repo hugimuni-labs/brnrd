@@ -18,6 +18,7 @@
 		type NodeIdentity
 	} from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
+	import { runFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
 	import { glitchReveal, typeReveal } from './transitions';
 
@@ -144,6 +145,10 @@
 		)
 	);
 	let cornerLabel = $derived([identity?.age, 'run node'].filter(Boolean).join(' · '));
+	// The face is hashed from the `runId` prop, never from the identity block:
+	// the prop is always present, and it is the same string the lane and the
+	// cloth hash, so the unfolded node wears the mark the reader tapped.
+	let face = $derived(runFace(runId));
 	let runnerLine = $derived.by(() => {
 		const runner = identity?.runner || digest?.runner || '';
 		return runner ? `runner: ${runner}` : null;
@@ -214,6 +219,9 @@
 			</div>
 			{#if identity?.name}
 				<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
+					<span class="shrink-0 text-sm" aria-hidden="true" style={`color: ${face.color}`}
+						>{face.glyph}</span
+					>
 					<span
 						class="truncate text-sm font-medium text-amber-100"
 						use:typeReveal={{ text: identity.name }}>{identity.name}</span
