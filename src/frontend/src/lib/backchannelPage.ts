@@ -67,10 +67,13 @@ export interface AuthoredBackchannelItem {
 	needs: string | null;
 	refs: BackchannelRef[];
 	prompt: string | null;
+	/** Run ids this item ignited (`taken:` row, daemon-written at ignition —
+	 *  THE WELD, #972). Empty when the item has never crossed into the shed. */
+	taken: string[];
 	bodyMarkdown: string;
 }
 
-const ROW_RE = /^(kind|state|needs|refs|prompt):[ \t]*(.*)$/;
+const ROW_RE = /^(kind|state|needs|refs|prompt|taken):[ \t]*(.*)$/;
 const HEADING_RE = /^##[ \t]+(.*)$/;
 
 /** A single markdown-link ref (`[label](url)`), anchored to the whole
@@ -137,6 +140,7 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 		let needs: string | null = null;
 		let refs: BackchannelRef[] = [];
 		let prompt: string | null = null;
+		let taken: string[] = [];
 		while (i < lines.length) {
 			const row = ROW_RE.exec(lines[i]);
 			if (!row) break;
@@ -153,6 +157,11 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 				refs = parseRefs(value);
 			} else if (key === 'prompt' && prompt === null) {
 				prompt = value.trim() || null;
+			} else if (key === 'taken' && taken.length === 0) {
+				// THE WELD (#972): the run ids this item ignited, written by the
+				// daemon at ignition (`weld.mark_taken`) — space-separated on one
+				// row, ancestry the renderer shows as a back-pointer.
+				taken = value.trim().split(/\s+/).filter(Boolean);
 			}
 			// A row whose key matches but whose value didn't parse (an unknown
 			// kind, a repeated row) is still consumed here rather than leaked
@@ -177,6 +186,7 @@ export function parseBackchannelPage(markdown: string): AuthoredBackchannelItem[
 			needs,
 			refs,
 			prompt,
+			taken,
 			bodyMarkdown: bodyLines.join('\n')
 		});
 		index += 1;

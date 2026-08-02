@@ -685,6 +685,30 @@ def test_merge_label_and_icon():
     assert relics.icon("merge") == "⤵️"
 
 
+def test_item_relic_label_icon_and_identity():
+    """#972, THE WELD: an `item` relic names the warp item that ignited the
+    run. The address is the label (a resolver address, not a URL), and two
+    reports of the same address are one relic — ignition's auto-append and a
+    resident's own `brnrd relic item` must meet, not double."""
+    assert relics.label({"kind": "item", "address": "the-loom#the-weld"}) == (
+        "the-loom#the-weld"
+    )
+    assert relics.label({"kind": "item"}) == "item"
+    assert relics.icon("item") == "🧵"
+    assert relics.dedupe([
+        {"kind": "item", "address": "the-loom#the-weld"},
+        {"kind": "item", "address": "the-loom#the-weld"},
+        {"kind": "item", "address": "the-loom#annals"},
+    ]) == [
+        {"kind": "item", "address": "the-loom#the-weld"},
+        {"kind": "item", "address": "the-loom#annals"},
+    ]
+    # An addressless record has no identity to merge on — kept as-is.
+    assert relics.dedupe([{"kind": "item"}, {"kind": "item"}]) == [
+        {"kind": "item"}, {"kind": "item"},
+    ]
+
+
 # ── live portal counts / compact tail (#342) ─────────────────────────
 
 
