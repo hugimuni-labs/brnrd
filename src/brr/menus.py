@@ -653,19 +653,27 @@ def _referenced_pr_numbers(text: str) -> list[int]:
     return [int(match) for match in _PR_REF_RE.findall(text)]
 
 
-def _strike_reason(
-    label: str, detail: str, resolved_prs: dict[int, str],
-) -> str | None:
+def _strike_reason(label: str, resolved_prs: dict[int, str]) -> str | None:
     """The struck-through reason for one option, or ``None`` to leave it be.
 
-    Strikes only when *every* PR the option's text names is already known
+    **Only the label is scanned, never the detail.** The label is the *act*
+    the reader is being offered; the detail is prose *about* the act, and
+    prose carries numbers for every reason except naming its own target.
+    Caught by driving this repo's own live menu through the join: the option
+    read ``restart the daemon`` and its detail read *"#1013, #968 and #961
+    are merged and dormant until you do"* — three resolved PRs given as the
+    **reason to act**, which struck out the one option on the page that had
+    not happened. That is #957 inverted: a control reading as complete while
+    it is the only thing outstanding.
+
+    Strikes only when *every* PR the label names is already known
     resolved — an option naming one merged PR and one still-open PR is still
     live work, so it renders unchanged rather than half-lying about it. A
     referenced number this wake's forge state has no opinion on blocks the
     strike the same way an open PR does: the option renders unchanged unless
     its completion is something this wake already computed (#957).
     """
-    numbers = _referenced_pr_numbers(f"{label} {detail}")
+    numbers = _referenced_pr_numbers(label)
     if not numbers:
         return None
     reasons: list[str] = []
@@ -703,9 +711,7 @@ def render_numbered(
         label = str(option.get("label") or "")
         rec = " — recommended" if option.get("rec") else ""
         detail = str(option.get("detail") or "").strip()
-        strike_reason = (
-            _strike_reason(label, detail, resolved_prs) if resolved_prs else None
-        )
+        strike_reason = _strike_reason(label, resolved_prs) if resolved_prs else None
         if strike_reason:
             lines.append(f"{index}) `{handle}` — ~~{label}~~{rec} — {strike_reason}")
         else:

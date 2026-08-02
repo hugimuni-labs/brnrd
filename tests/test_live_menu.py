@@ -441,6 +441,56 @@ def test_live_menu_strikes_options_naming_already_resolved_prs(tmp_path):
     ) in prompt
 
 
+def test_a_detail_naming_merged_prs_never_strikes_its_option(tmp_path):
+    """Only the label may resolve to an artifact — the detail is prose.
+
+    Caught by driving this repo's own live menu through the join
+    (run-260802-2128-913s). The option read ``restart the daemon``, and its
+    detail read *"serves: (#1013), the reserved seat (#968) and the vigil
+    guard (#961) are merged and dormant until you do"* — three resolved PRs
+    given as the **reason to act**. Scanning the detail struck out the one
+    option on the page that had not happened: #957 inverted, a control
+    reading as complete while it is the only thing outstanding.
+
+    The rule the fix encodes: the label is the act, the detail is prose about
+    the act, and prose carries numbers for every reason except naming its own
+    target.
+    """
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(
+        brr_dir,
+        {
+            "menu_id": "detail-is-prose",
+            "thread": "telegram:555:",
+            "options": [
+                {
+                    "handle": "restart",
+                    "label": "restart the daemon",
+                    "detail": "#995 and #998 are merged and dormant until you do",
+                },
+            ],
+        },
+    )
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    prompt = prompts.build_daemon_prompt(
+        "task",
+        "evt-next",
+        str(brr_dir / "responses" / "evt-next.md"),
+        tmp_path,
+        communication_snapshot={
+            "current_thread": "telegram:555:",
+            "live_menu": live,
+            "forge": _pr_forge_snapshot(),
+        },
+        event_body="next turn",
+    )
+
+    assert "1) `restart` — restart the daemon" in prompt
+    assert "~~restart the daemon~~" not in prompt
+    assert "merged 6h ago" not in prompt, "no reason tail either — nothing resolved"
+
+
 def test_live_menu_leaves_an_open_pr_option_unchanged(tmp_path):
     """An option naming an OPEN PR is still live work — unchanged."""
     brr_dir = tmp_path / ".brr"
