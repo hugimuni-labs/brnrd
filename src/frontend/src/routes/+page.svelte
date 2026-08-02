@@ -917,7 +917,7 @@
 		     the nested version and the phone shot showed the rail alone. -->
 		<div
 			class="ignite sticky z-30 mt-6 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight)}px`}
+			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
 			aria-label="the machine"
 		>
 			{#key railCondensed}
