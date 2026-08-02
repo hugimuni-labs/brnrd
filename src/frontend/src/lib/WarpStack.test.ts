@@ -27,6 +27,7 @@ async function renderStack(props: {
 	layers: WarpLayer[];
 	initialOpenCallSign?: string | null;
 	initialOpenItemKey?: string | null;
+	onOpenPage?: (path: string) => void;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, {
@@ -218,4 +219,29 @@ test('a layer with no ember items renders its band with counts, nothing inline',
 test('a bare warp renders the one quiet line', async () => {
 	const body = await renderStack({ layers: [] });
 	ok(body.includes('surface/layers/'));
+});
+
+test('a layer band offers its page link when the page supplies an opener (08-02: every layer is a page)', async () => {
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [],
+				counts: { ember: 0, banked: 0, cold: 0, unstated: 0 }
+			})
+		],
+		onOpenPage: () => {}
+	});
+	ok(body.includes('page →'), 'the band carries the library link');
+});
+
+test('without an opener the band stays a pure disclosure — no dead control', async () => {
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [],
+				counts: { ember: 0, banked: 0, cold: 0, unstated: 0 }
+			})
+		]
+	});
+	ok(!body.includes('page →'));
 });

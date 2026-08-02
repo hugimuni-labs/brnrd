@@ -44,6 +44,8 @@
 		configError?: string | null;
 		/** Tests seed the strip open; the page leaves it false (collapsed). */
 		initialNeedsOpen?: boolean;
+		/** Routed through to the stack: opens a corpus page in the library. */
+		onOpenPage?: (path: string) => void;
 	}
 
 	let {
@@ -59,7 +61,8 @@
 		withheld = null,
 		prError = null,
 		configError = null,
-		initialNeedsOpen = false
+		initialNeedsOpen = false,
+		onOpenPage = undefined
 	}: Props = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -177,6 +180,6 @@
 			<span class="font-mono">surface/layers/</span>.
 		</p>
 	{:else}
-		<WarpStack {layers} {knownPaths} />
+		<WarpStack {layers} {knownPaths} {onOpenPage} />
 	{/if}
 </div>
