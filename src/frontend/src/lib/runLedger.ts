@@ -31,7 +31,8 @@ export const RELIC_ICONS: Record<string, string> = {
 	kb: '📚',
 	file: '📄',
 	message: '✉️',
-	reply: '🗣️'
+	reply: '🗣️',
+	item: '🧵'
 };
 
 export function relicIcon(kind: string): string {
@@ -135,6 +136,10 @@ export function relicLabel(r: RelicRecord): string {
 			return String(r.note ?? r.channel ?? 'message');
 		case 'reply':
 			return String(r.excerpt ?? 'reply');
+		case 'item':
+			// THE WELD (#972): the warp item address that ignited the run —
+			// ancestry, not produce; the address is itself the reference.
+			return String(r.address ?? 'item');
 		case 'summary':
 			return String(r.text ?? '');
 		default: {

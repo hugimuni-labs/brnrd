@@ -417,6 +417,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="the issue's project, when it is not this checkout's origin")
     p.set_defaults(func=cmd_relic_issue, action=None)
 
+    p = relic_sub.add_parser(
+        "item", help="record the warp item this run ignited from")
+    p.add_argument(
+        "address",
+        help="item address, <layer>#<slug> (the heading's anchor in "
+             "surface/layers/<layer>.md, e.g. the-loom#gate-chips-row-on-repos)")
+    p.set_defaults(func=cmd_relic_item)
+
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
                    help="search term (omit to print the kb graph shape)")
@@ -1310,6 +1318,78 @@ def cmd_relic_issue(args):
         return 1
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] issue #{number} {action}{where}")
+    return 0
+
+
+def cmd_relic_item(args):
+    """Append an ``item`` relic — the warp item this run serves (#972).
+
+    THE WELD's manifest half: the run's produce manifest carries the
+    ``layer#slug`` address of the warp item that ignited it, so the item and
+    the run's cloth line can point at each other through resolver addresses
+    instead of re-listing each other's content. The daemon writes this relic
+    itself when the dispatching event body names the address
+    (``weld.annotate_ignition``); this front door is for the run that only
+    learns mid-flight which item it is serving.
+
+    Validation is grammar-only and strict: an address outside
+    ``<layer>#<slug>`` (lowercase ``[a-z0-9-]``, both halves starting
+    alphanumeric) is refused with the shape it wanted and **never written** —
+    a malformed address in the manifest would be an unresolvable claim every
+    downstream renderer has to carry. Whether the address *resolves* (the
+    layer file and heading exist in the account home) is deliberately not
+    checked here: the account surface is the daemon's knowledge, not the run
+    environment's, and capture skips an unresolvable address with a log line
+    rather than guessing.
+    """
+    import sys
+
+    from . import relics
+    from . import weld
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd relic] no run outbox in this environment — `brnrd relic` "
+            "records produce for a live brnrd run, and the daemon names the "
+            "outbox through BRR_OUTBOX_DIR / BRR_PORTAL_STATE. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    address = str(getattr(args, "address", "") or "").strip()
+    if not weld.is_item_address(address):
+        print(
+            f"[brnrd relic] not an item address: {address!r} — want "
+            "<layer>#<slug>, lowercase [a-z0-9-] on both sides of the #, "
+            "e.g. `brnrd relic item the-loom#gate-chips-row-on-repos` "
+            "(the slug is the item heading's anchor). Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Same confirmed-append posture as `cmd_relic_issue`: `relics.append` is
+    # best-effort by design, which is right at closeout and wrong at a
+    # prompt — verify the file grew rather than report the intent.
+    control = outbox_dir / relics.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    relics.append(outbox_dir, "item", address=address)
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd relic] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[brnrd relic] item {address}")
     return 0
 
 

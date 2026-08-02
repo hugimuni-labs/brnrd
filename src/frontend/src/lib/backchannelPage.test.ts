@@ -183,3 +183,24 @@ Body.
 	assert.deepEqual(items[0].refs, [{ label: 'some-page.md', href: null }]);
 	assert.equal(items[0].bodyMarkdown, 'Body.');
 });
+
+test('taken: row parses as run-id ancestry and never leaks into the body (THE WELD, #972)', () => {
+	const items = parseBackchannelPage(
+		[
+			'# layer',
+			'',
+			'## The welded item',
+			'',
+			'state: ember',
+			'refs: [#1](https://github.com/o/r/issues/1)',
+			'taken: run-260802-0001-9qgz run-260802-0002-abcd',
+			'',
+			'Body prose.'
+		].join('\n')
+	);
+	assert.equal(items.length, 1);
+	assert.deepEqual(items[0].taken, ['run-260802-0001-9qgz', 'run-260802-0002-abcd']);
+	assert.equal(items[0].state, 'ember');
+	assert.equal(items[0].bodyMarkdown, 'Body prose.');
+	assert.ok(!items[0].bodyMarkdown.includes('taken:'), 'the row is schema, not prose');
+});

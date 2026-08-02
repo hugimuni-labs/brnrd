@@ -96,6 +96,7 @@ from . import trust
 from . import updates
 from . import release_availability
 from . import usage_samples
+from . import weld
 from . import worktree
 from .run import Run, list_runs, run_manifest_path
 
@@ -2863,6 +2864,28 @@ def _run_worker(
     outbox_dir = brr_dir / "outbox" / eid
     outbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_dir = inbox_dir or (brr_dir / "inbox")
+
+    # THE WELD, ignition half (#972): an event body naming a warp item
+    # address (`layer#slug`) ignites that item — the run's manifest gains an
+    # `item` relic and the item gains its `taken: run-…` residue, before the
+    # runner ever wakes. Deliberately the event's *own* body, not the woven
+    # burst body assembled below: a sibling's mention is the sibling's
+    # ignition, and crediting it here would re-run the agenda-lock defect by
+    # another route. Best-effort — the weld must never block the run.
+    try:
+        ignited_items = weld.annotate_ignition(
+            weld.layers_dir(account_context),
+            outbox_dir,
+            run_id=task.id,
+            body=str(event.get("body") or ""),
+        )
+        if ignited_items:
+            print(
+                f"[brnrd] run {task.id}: weld ignition — "
+                + ", ".join(ignited_items)
+            )
+    except Exception as exc:  # noqa: BLE001 - annotation is never a run failure
+        print(f"[brnrd] run {task.id}: weld ignition failed: {exc}")
 
     # #533: a security-defining key (`runner_cmd`, `trust.*`, `docker.*`,
     # `solitary.*`, `environment`/`env`/`default_env`) set in the
@@ -8644,6 +8667,50 @@ def _capture_knowledge(
         )
 
 
+def _weld_capture(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    outbox_dir: Path | None,
+    work_dir: Path | None,
+) -> None:
+    """THE WELD, capture half (#972): run produce → item ``refs:`` rows.
+
+    For each ``item`` relic in this run's manifest, append the run's forge
+    produce (pr / merge / issue relics) onto that warp item's ``refs:`` row
+    in the qualified ``owner/repo#N`` grammar, deduped against refs already
+    there — the run's cloth line and the item then point at each other
+    through resolver addresses, neither re-listing the other.
+
+    The relic list is collected with exactly the ledger row's scope
+    (``collection_scope`` + the #575 host-run identity gate) so the refs
+    landed here and the row's ``external_refs`` are one accounting. The
+    layer-file edit is working-tree only: ``_capture_dominion`` commits the
+    account home right after this in the same finalize, so the surface
+    change rides the existing capture net.
+    """
+    layers_root = weld.layers_dir(account_context)
+    if layers_root is None:
+        return
+    branch, seed = relics.collection_scope(task.meta, work_dir)
+    commit_run_id = task.id if not task.meta.get("branch_name") else None
+    records = relics.collect(
+        work_dir,
+        branch=branch,
+        seed_ref=seed,
+        outbox_dir=outbox_dir,
+        commit_run_id=commit_run_id,
+    )
+    origin = relics.forge_links(work_dir).repo_path if work_dir else None
+    welded = weld.capture_refs(
+        layers_root, records=records, origin_repo=origin,
+    )
+    for address, added in welded.items():
+        print(
+            f"[brnrd] run {task.id}: weld — {', '.join(added)} -> {address}"
+        )
+
+
 def _capture_dominion(
     repo_root: Path,
     cfg: dict,
@@ -10409,6 +10476,20 @@ def _run_worker_and_finalize(
             )
         except Exception as exc:  # noqa: BLE001 - ledger must not block delivery
             print(f"[brnrd] run {task.id}: run-ledger append failed: {exc}")
+
+        # THE WELD, capture half (#972): land this run's forge produce back
+        # on every warp item its manifest names, as qualified `owner/repo#N`
+        # refs. After the ledger append (the manifest is final — the reply
+        # relic landed during knowledge capture) and before `_capture_dominion`
+        # below, whose home-repo commit is the capture net the surface edit
+        # rides — no commit or push of its own.
+        try:
+            _weld_capture(
+                account_context, task, outbox_dir=outbox_path,
+                work_dir=repo_root,
+            )
+        except Exception as exc:  # noqa: BLE001 - the weld must not block delivery
+            print(f"[brnrd] run {task.id}: weld capture failed: {exc}")
 
         publish(repo_root, task)
         publish_default_branch(repo_root, task)

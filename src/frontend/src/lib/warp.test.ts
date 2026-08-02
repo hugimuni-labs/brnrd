@@ -4,6 +4,7 @@ import { parseBackchannelPage } from './backchannelPage.ts';
 import {
 	buildWarpLayers,
 	emberCount,
+	ignitionPayload,
 	isLayerFile,
 	itemRepos,
 	layerCallSign,
@@ -158,6 +159,26 @@ test('emberCount sums the dispatchable draw across the warp', () => {
 
 test('a bare warp is an empty array, not an error', () => {
 	assert.deepEqual(buildWarpLayers([file('surface/index.md', '# hi')]), []);
+});
+
+// ── ignition payload: the copied prompt carries the item's address ─────────
+
+test('the copied ignition payload ends with the correctly-slugged item address', () => {
+	const [item] = parseBackchannelPage(
+		`## Kill "THE FLIP" — the warp stands!
+
+state: ember
+prompt: Implement the restructure.
+
+Body.
+`
+	);
+	const payload = ignitionPayload('the-loom', item);
+	// The address is the last line — the daemon scans ignition event bodies
+	// for `layer#slug` to annotate the item and weld run relics onto its
+	// refs; slug = headingAnchor over the heading text, punctuation dropped.
+	assert.ok(payload.endsWith('\n\nitem: the-loom#kill-the-flip-the-warp-stands'));
+	assert.ok(payload.startsWith('Implement the restructure.'));
 });
 
 // ── multi-repo: repos derived from refs, never declared ────────────────────

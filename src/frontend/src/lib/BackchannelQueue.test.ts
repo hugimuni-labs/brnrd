@@ -69,6 +69,7 @@ function item(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchannelI
 		state: null,
 		needs: null,
 		refs: [],
+		taken: [],
 		prompt: null,
 		bodyMarkdown: '',
 		...overrides

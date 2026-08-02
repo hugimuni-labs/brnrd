@@ -2,7 +2,6 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
-	import BackchannelQueue from '$lib/BackchannelQueue.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
@@ -54,10 +53,9 @@
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
-	import { backchannelChip, backchannelCount, backchannelShowClear } from '$lib/backchannel';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { buildWarpLayers, emberCount } from '$lib/warp';
-	import WarpStack from '$lib/WarpStack.svelte';
+	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
 	import { LOOM_PAST_WINDOW_MS } from '$lib/loomBand';
@@ -238,12 +236,6 @@
 		backchannelFile ? parseBackchannelPage(backchannelFile.markdown) : []
 	);
 	let surfaceKnownPaths = $derived(new Set((surfaceData?.files ?? []).map((f) => f.path)));
-	// The §1 counter and the "does anything wait" question span three feeds,
-	// not two — authored items are the primary one. The chip attributes the
-	// two populations ("N authored · M derived") rather than baring the sum
-	// (design-dashboard-briefing §3).
-	let derivedBackchannelCount = $derived(backchannelCount(prReviewQueue, configRequests));
-
 	// The warp (design-work-layers.md, #972 step 2): the standing intent
 	// surface, discovered from `surface/layers/*.md` in the same corpus feed
 	// the backchannel and corpus browser already read — no new endpoint, a
@@ -254,12 +246,12 @@
 	// not a hidden section (the §1 empty-queue precedent).
 	let warpLayers = $derived(surfaceData ? buildWarpLayers(surfaceData.files) : []);
 	let warpEmberCount = $derived(emberCount(warpLayers));
-	let pendingBackchannelCount = $derived(authoredBackchannelItems.length + derivedBackchannelCount);
-	// All three feeds resolved (loaded or errored) — until then the sum is a
-	// partial read, and rendering it as a verdict is the measured 20 → "clear"
-	// → 4 flicker. `authoredBackchannelItems.length === 0` alone cannot tell
-	// "surface not yet fetched" from "no authored items"; only the feed
-	// handles can.
+	// All three feeds resolved (loaded or errored) — until then the needs
+	// strip's sum is a partial read, and rendering it as a verdict is the
+	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
+	// === 0` alone cannot tell "surface not yet fetched" from "no authored
+	// items"; only the feed handles can. The strip's chip is the only place
+	// this state renders — the layer stack below it never hears about it.
 	let backchannelFeedsResolved = $derived(
 		(surfaceData !== null || surfaceError !== null) &&
 			(prReviewQueue !== null || prReviewQueueError !== null) &&
@@ -275,17 +267,6 @@
 	// stable DOM — the sections keep their identity and animations; only the
 	// reading order answers the state.
 	let loomLive = $derived((liveRuns?.length ?? 0) > 0);
-	// The heddle rail: which view of the one item space the warp lifts.
-	// null = automatic — the needs-you queue when something waits (a
-	// returning reader asks "what does the resident need from me?" first),
-	// the layer stack otherwise. A tap pins a heddle; automatic resumes on
-	// reload rather than fighting the reader mid-session.
-	let warpHeddle = $state<'needs' | 'layers' | null>(null);
-	// Auto-lift waits for every feed to answer — flipping heddles on a
-	// partial count is the #480 tensed-absence flicker in a new costume.
-	let activeHeddle = $derived(
-		warpHeddle ?? (backchannelFeedsResolved && pendingBackchannelCount > 0 ? 'needs' : 'layers')
-	);
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
 	// band is the page's temporal spine and the only renderer of past/now/
@@ -711,11 +692,12 @@
 
 		<!-- the warp · future (#972: the loom is the page). The standing
 		     intent surface leads at rest; the backchannel is not a sibling
-		     section anymore but this band's needs-you heddle — the center
+		     section anymore but this band's needs-you strip — the center
 		     element by construction (his 07-31 read: "it should be one of
-		     the center elements"), lifted by default when something waits
-		     because a returning reader asks "what does the resident need
-		     from me?" first. The dispatch rack + fuel close the band as
+		     the center elements"), a compact count-and-top-asks line above
+		     the stack because a returning reader asks "what does the
+		     resident need from me?" first — answered without ever hiding
+		     the layers. The dispatch rack + fuel close the band as
 		     capacity-to-string-new-threads. -->
 		<section
 			class="ignite mt-4 {loomLive ? 'order-2' : 'order-1'}"
@@ -735,76 +717,28 @@
 						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
 				</p>
 			</div>
-			<!-- The heddle rail: one item space, two lifts. A heddle raises a
-			     chosen subset of warp threads to open the shed — the tabs are
-			     exactly that, not navigation. -->
-			<div class="mt-2 flex items-baseline gap-4">
-				<button
-					type="button"
-					class="cursor-pointer font-mono text-[11px] tracking-wide uppercase {activeHeddle ===
-					'needs'
-						? 'text-amber-200'
-						: 'text-ink-quiet hover:text-stone-300'}"
-					onclick={() => (warpHeddle = 'needs')}
-				>
-					needs you · {backchannelChip(
-						backchannelFeedsResolved,
-						authoredBackchannelItems.length,
-						derivedBackchannelCount
-					)}
-				</button>
-				<button
-					type="button"
-					class="cursor-pointer font-mono text-[11px] tracking-wide uppercase {activeHeddle ===
-					'layers'
-						? 'text-amber-200'
-						: 'text-ink-quiet hover:text-stone-300'}"
-					onclick={() => (warpHeddle = 'layers')}
-				>
-					the layers
-				</button>
+			<!-- The flip is dead (2026-08-02): the layer stack is the standing
+			     body and renders always — the old needs-you heddle *replaced*
+			     it whenever items waited, so a daemon restart that resolved
+			     the feeds made the warp vanish behind a tab. The needs-you
+			     queue is the band's compact strip now, above the stack; feed
+			     state only ever touches the strip's own chip. -->
+			<div class="mt-2">
+				<WarpBand
+					surfaceLoaded={surfaceData !== null}
+					layers={warpLayers}
+					knownPaths={surfaceKnownPaths}
+					authoredItems={authoredBackchannelItems}
+					prs={prReviewQueue}
+					requests={configRequests}
+					feedsResolved={backchannelFeedsResolved}
+					stale={prReviewQueueStale}
+					{now}
+					withheld={prReviewQueueWithheld}
+					prError={prReviewQueueError}
+					configError={configRequestsError}
+				/>
 			</div>
-			{#if activeHeddle === 'needs'}
-				<div class="mt-2">
-					{#if prReviewQueueError}
-						<p class="mb-2 text-sm text-red-400">{prReviewQueueError}</p>
-					{/if}
-					{#if configRequestsError}
-						<p class="mb-2 text-sm text-red-400">{configRequestsError}</p>
-					{/if}
-					{#if backchannelShowClear(backchannelFeedsResolved, pendingBackchannelCount, prReviewQueueWithheld !== null)}
-						<!-- The collapse that makes a standing section affordable — only
-					     once every feed has answered; before that, an empty sum is
-					     an unmeasured absence, not a clear queue. -->
-						<p class="text-sm text-ink-quiet">nothing waits on you — the queue is clear.</p>
-					{:else if pendingBackchannelCount === 0 && !backchannelFeedsResolved}
-						<p class="text-sm text-ink-quiet">counting…</p>
-					{:else}
-						<BackchannelQueue
-							authoredItems={authoredBackchannelItems}
-							knownPaths={surfaceKnownPaths}
-							prs={prReviewQueue ?? []}
-							requests={configRequests ?? []}
-							stale={prReviewQueueStale}
-							{now}
-							withheld={prReviewQueueWithheld}
-						/>
-					{/if}
-				</div>
-			{:else}
-				<div class="mt-2">
-					{#if surfaceData === null}
-						<p class="text-sm text-ink-quiet">stringing…</p>
-					{:else if warpLayers.length === 0}
-						<p class="text-sm text-ink-quiet">
-							the warp is bare — layers are authored under
-							<span class="font-mono">surface/layers/</span>.
-						</p>
-					{:else}
-						<WarpStack layers={warpLayers} knownPaths={surfaceKnownPaths} />
-					{/if}
-				</div>
-			{/if}
 
 			<!-- The rack: capacity to string new threads — dispatch + fuel are
 			     warp properties, not a sibling section (#972). -->

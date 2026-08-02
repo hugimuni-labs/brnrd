@@ -11,10 +11,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'WarpStack.svelte');
 const generated = join(here, '.warpStack.generated.mjs');
 
-// The warp stack's visible contract (design-work-layers.md §Interaction):
-// the folded band is a supply gauge; an opened item offers ignition only
-// when it is ember. Same server-side render dance as BackchannelQueue's
-// tests: compile with stubbed children, assert on the produced markup.
+// The warp stack's visible contract (design-work-layers.md §Interaction,
+// restructured 2026-08-02 — the stack is the standing body and stands open):
+// every layer shows its ember items inline with no click; the held remainder
+// (definition, banked/cold) lives behind the layer's fold with the counts on
+// the band. Same server-side render dance as BackchannelQueue's tests:
+// compile with stubbed children, assert on the produced markup.
 async function renderStack(props: {
 	layers: WarpLayer[];
 	initialOpenCallSign?: string | null;
@@ -62,6 +64,7 @@ const EMBER_ITEM = {
 	needs: null,
 	refs: [],
 	prompt: 'Implement the restructure.',
+	taken: [],
 	bodyMarkdown: 'Body.'
 };
 
@@ -73,10 +76,11 @@ const BANKED_ITEM = {
 	needs: 'the restructure landing first',
 	refs: [],
 	prompt: 'Build the cloth window.',
+	taken: ['run-260802-0001-9qgz'],
 	bodyMarkdown: 'Body.'
 };
 
-test('a folded band shows its call sign and heat counts, not its items', async () => {
+test('a folded band shows call sign, heat counts, and its ember items inline — no click needed', async () => {
 	const body = await renderStack({
 		layers: [
 			layer({
@@ -88,10 +92,19 @@ test('a folded band shows its call sign and heat counts, not its items', async (
 	ok(body.includes('the-loom'));
 	ok(body.includes('1 ember'));
 	ok(body.includes('1 banked'));
-	ok(!body.includes('The restructure'), 'folded band leaks its items');
+	// The embers stand open: the section header's "N ember" is visible work.
+	ok(body.includes('The restructure'), 'ember item renders inline on the folded band');
+	ok(
+		body.includes('Implement the restructure.'),
+		'the ember prompt affordance renders inline on the folded band'
+	);
+	ok(body.includes('ignite · copy'), 'the ignition affordance rides the standing row');
+	// The held remainder stays behind the fold.
+	ok(!body.includes('The past band'), 'banked item leaks out of the folded band');
+	ok(!body.includes('Build the cloth window.'), 'banked prompt leaks out of the folded band');
 });
 
-test('an open band lists items; only an ember offers ignition', async () => {
+test('an open band adds the held items; only an ember offers ignition', async () => {
 	const body = await renderStack({
 		layers: [
 			layer({
@@ -102,11 +115,28 @@ test('an open band lists items; only an ember offers ignition', async () => {
 		initialOpenCallSign: 'the-loom'
 	});
 	ok(body.includes('The restructure'));
-	ok(body.includes('The past band'));
-	// Item folds start closed, so neither prompt renders yet — but the open
-	// band's item rows are present with their heat chips.
+	ok(body.includes('The past band'), 'the fold surfaces the banked item');
 	ok(body.includes('ember'));
 	ok(body.includes('banked'));
+	// A held item's mandate stays context behind its own row fold, and never
+	// wears the ignition affordance.
+	const ignitions = body.split('ignite · copy').length - 1;
+	ok(ignitions === 1, `only the ember offers ignition (saw ${ignitions})`);
+});
+
+test('a layer with no ember items renders its band with counts, nothing inline', async () => {
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [BANKED_ITEM],
+				counts: { ember: 0, banked: 1, cold: 0, unstated: 0 }
+			})
+		]
+	});
+	ok(body.includes('the-loom'));
+	ok(body.includes('1 banked'));
+	ok(!body.includes('The past band'), 'held items stay behind the fold');
+	ok(!body.includes('ignite · copy'));
 });
 
 test('a bare warp renders the one quiet line', async () => {
