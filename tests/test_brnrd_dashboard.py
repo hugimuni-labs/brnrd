@@ -951,9 +951,11 @@ def test_dashboard_run_ledger_span_filters_before_limit():
     one_day = client.get("/v1/dashboard/run-ledger?limit=1&span_seconds=86400")
     assert one_day.status_code == 200
     assert [row["run_id"] for row in one_day.json()["rows"]] == ["recent"]
+    assert one_day.json()["span_seconds_served"] == 86400
 
     seven_days = client.get("/v1/dashboard/run-ledger?limit=10&span_seconds=604800")
     assert [row["run_id"] for row in seven_days.json()["rows"]] == ["recent", "older"]
+    assert seven_days.json()["span_seconds_served"] == 604800
 
 
 def test_dashboard_config_requests_api_returns_pending_oldest_first():
