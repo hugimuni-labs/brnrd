@@ -55,12 +55,15 @@ ARMED_FILE = "armed.json"  # also under STATE_DIRNAME — see armed_letters()
 DEFAULT_STALE_GRACE_S = 7 * 24 * 3600  # an `at:` older than this won't surprise-fire
 
 _FIELD_RE = re.compile(
-    r"^\s*(at|every|conversation_key|reset_on|premise|shell|core|runner)\s*:\s*(.+?)\s*$",
+    r"^\s*(at|every|conversation_key|reset_on|premise|serves|shell|core|runner)\s*:\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 _DURATION_TOKEN_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+# A warp-layer call sign is a layer file's basename (`the-loom`), so the
+# shape is the same one `warp.ts::layerCallSign` produces on the other end.
+_CALL_SIGN_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
 @dataclass
@@ -94,6 +97,17 @@ class ScheduleEntry:
     # ``armed_letters``, the boundary-portal projection that lets a live
     # run sweep its own changes against it by reading, not remembering.
     premise: str | None = None
+    # THE FORWARD WELD (#972, shipped 2026-08-02): warp-layer call signs this
+    # entry's firings are meant to serve — the future-tense half of `taken:`.
+    # `taken:` is written *at* ignition and so can only ever describe a run
+    # that already started; an armed pick had nothing to say about the threads
+    # it was coming for, and rendered a blank where every other row in the
+    # dashboard's lane draws its crossing. This is that sentence.
+    #
+    # Call signs only, never item headlines: the layer names already transit to
+    # the dashboard as corpus, and #502's rule — schedule *bodies* are dominion
+    # content that never reaches the managed backend — stays intact.
+    serves: tuple[str, ...] = ()
     shell: str | None = None
     core: str | None = None
     runner: str | None = None
@@ -143,6 +157,34 @@ def _slug(title: str) -> str:
     return _SLUG_RE.sub("-", title.strip().lower()).strip("-")
 
 
+def parse_serves(text: str | None) -> tuple[str, ...]:
+    """Parse a ``serves:`` row into warp-layer call signs, order preserved.
+
+    Comma- or whitespace-separated; a ``#``-qualified ref keeps only the layer
+    part (``the-loom#the-weld`` → ``the-loom``), because the crossing this
+    feeds is drawn per *thread*, and a strip that claimed item precision it
+    cannot verify against the live surface would be a fabrication one layer
+    down. Duplicates collapse — serving two items on one layer crosses that
+    thread once, exactly as ``taken:`` behaves on the other side of the weld.
+
+    Anything that is not a plausible call sign (a layer file's basename) is
+    dropped rather than published: this value is authored by hand in a
+    dominion file and lands on a public dashboard.
+    """
+    if not text:
+        return ()
+    out: list[str] = []
+    for token in re.split(r"[,\s]+", text.strip()):
+        if not token:
+            continue
+        call_sign = token.split("#", 1)[0].strip().lower()
+        if not _CALL_SIGN_RE.fullmatch(call_sign):
+            continue
+        if call_sign not in out:
+            out.append(call_sign)
+    return tuple(out)
+
+
 def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> ScheduleEntry | None:
     eid = _slug(title)
     if not eid:
@@ -151,6 +193,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
     conv = (fields.get("conversation_key") or "").strip() or None
     reset_on = (fields.get("reset_on") or "").strip() or None
     premise = (fields.get("premise") or "").strip() or None
+    serves = parse_serves(fields.get("serves"))
     runner_fields = {
         key: (fields.get(key) or "").strip() or None
         for key in ("shell", "core", "runner")
@@ -163,7 +206,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
         return ScheduleEntry(
             eid, "every", body, interval=interval,
             raw_when=fields["every"], heading=title, conversation_key=conv,
-            reset_on=reset_on, premise=premise,
+            reset_on=reset_on, premise=premise, serves=serves,
             **runner_fields,
         )
     if "at" in fields:
@@ -172,7 +215,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
             return None
         return ScheduleEntry(
             eid, "at", body, at=at, raw_when=fields["at"], heading=title,
-            conversation_key=conv, premise=premise,
+            conversation_key=conv, premise=premise, serves=serves,
             **runner_fields,
         )
     return None  # no trigger → inert, skipped
