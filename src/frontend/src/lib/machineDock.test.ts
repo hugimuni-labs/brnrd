@@ -57,7 +57,7 @@ test('the offset is whole pixels — a fractional sticky top seams against the r
 	assert.equal(machineDockTop(131.6), 132);
 });
 
-test('condensed, the dock reclaims the rail\'s own bottom padding', () => {
+test("condensed, the dock reclaims the rail's own bottom padding", () => {
 	// His read: "could we remove the space between them, almost at least, when
 	// they are collapsed and on the top?" The space is not a design choice — it
 	// is the rail's `pb-2`. Derived from the thing it cancels, so it stays
