@@ -3196,6 +3196,78 @@ def test_notices_chip_position_is_after_produce_before_card():
     assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
 
 
+# ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
+
+
+def _kind_notice(text, kind=None):
+    record = {"at": "2026-08-02T20:00:00Z", "text": text}
+    if kind is not None:
+        record["kind"] = kind
+    return record
+
+
+def test_notices_chip_absent_when_every_notice_is_advisory():
+    """Seven advisory notices — the measured #1002 shape (seven working
+    `note:` files) — must drive no `!N` chip at all.
+
+    Drive red: revert `_notices_chip` to `len(notices)` and this fails,
+    reproducing the exact bug the ticket measured (`!7` for zero refusals).
+    """
+    notices = [
+        _kind_notice(f"note: body text ignored — event evt-{i} closed", "advisory")
+        for i in range(7)
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!" not in bar
+
+
+def test_notices_chip_counts_only_the_one_refusal_among_advisories():
+    """One real refusal in a pile of six advisories must still read `!1` —
+    the whole point of a `kind` is that the pile no longer drowns it."""
+    notices = [_kind_notice("spawn refused: environment 'host' is not spawnable", "refused")]
+    notices += [
+        _kind_notice(f"note: body text ignored — event evt-{i} closed", "advisory")
+        for i in range(6)
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_legacy_notice_with_no_kind_key_counts_as_refusing():
+    """A record with no ``kind`` at all — written by a daemon generation
+    before #1002, possibly still sitting in a live ``portal-state.json``
+    across a restart — must count. The pessimistic direction: hiding a real
+    refusal behind a silently-dropped legacy entry is the worse failure."""
+    notices = [_kind_notice("reply text staged undeliverable — no gate owns it")]
+    assert "kind" not in notices[0]
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_advisory_notice_is_readable_but_excluded_from_the_seed_briefing_count(
+    tmp_path,
+):
+    """An advisory notice must still render its text at the seed/stop
+    boundary (PR #754's "render, don't just count") while the header count
+    — like the bar's `!N` — excludes it from "refused or dropped"."""
+    notices = [
+        _kind_notice(
+            "note: body text ignored — a note closes event evt-y8lx "
+            "without speaking; use event: to reply",
+            "advisory",
+        ),
+    ]
+    _portal(tmp_path, token="t1", pending=0, notices=notices)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert "+1 advisory" in ctx
+    assert "a note closes event evt-y8lx" in ctx
+
+
 def test_card_chip_meters_the_projection_not_the_file():
     """The chip that said `card ok` all the way through #685.
 
