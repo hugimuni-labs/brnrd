@@ -41,7 +41,7 @@ function run(overrides: Partial<LiveRun> = {}): LiveRun {
 	} as LiveRun;
 }
 
-test('the lane falls: armed picks furthest-first, burning ones last', () => {
+test('the lane is a queue from the front: burning picks first, then soonest-first', () => {
 	const rows = pickRows({
 		liveRuns: [run({ id: 'burning', run_id: 'burning' })],
 		scheduledWakes: [
@@ -52,11 +52,11 @@ test('the lane falls: armed picks furthest-first, burning ones last', () => {
 	});
 	assert.deepEqual(
 		rows.map((row) => row.id),
-		['later', 'soon', 'burning']
+		['burning', 'soon', 'later']
 	);
 	assert.deepEqual(
 		rows.map((row) => row.phase),
-		['armed', 'armed', 'picking']
+		['picking', 'armed', 'armed']
 	);
 });
 
@@ -128,9 +128,9 @@ test('the cap keeps the soonest armed picks and announces what it dropped', () =
 	);
 	const rows = pickRows({ liveRuns: [], scheduledWakes: wakes, now: NOW });
 	assert.equal(rows.length, ARMED_ROW_CAP);
-	// Furthest-first within what was kept, and what was kept is the near end.
-	assert.equal(rows[rows.length - 1].id, 'w0');
-	assert.equal(rows[0].id, `w${ARMED_ROW_CAP - 1}`);
+	// Soonest-first, and what was kept is the near end of the schedule.
+	assert.equal(rows[0].id, 'w0');
+	assert.equal(rows[rows.length - 1].id, `w${ARMED_ROW_CAP - 1}`);
 	assert.equal(armedOverflow(wakes, NOW), 3);
 });
 

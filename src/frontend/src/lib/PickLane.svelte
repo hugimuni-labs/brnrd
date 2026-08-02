@@ -77,67 +77,12 @@
 	{#if liveRuns === null && scheduledWakes === null}
 		<p class="font-mono text-[9px] text-ink-mute">acquiring</p>
 	{:else}
-		{#if overflow > 0}
-			<!-- The lane keeps the *soonest* armed picks, because those are the
-			     ones about to burn. What the cap left off is said, never dropped
-			     silently — a truncated surface renders identically to a complete
-			     one, and only this line knows the difference. -->
-			<p class="mb-1 font-mono text-[9px] text-ink-mute">+{overflow} further out</p>
-		{/if}
-
-		{#each armed as row, index (row.id)}
-			<!-- Armed: the same object, cold. Frost thaws toward amber as the fire
-			     nears, and the bar is imminence drawn as geometry — read the lane
-			     top to bottom and you are reading a countdown. -->
-			<button
-				type="button"
-				class="flex h-[20px] w-full cursor-pointer items-center justify-start gap-1.5 border border-transparent px-1.5 text-left"
-				style={`color: ${row.color};${selectedId === row.id ? ' filter: brightness(1.6);' : ''}`}
-				title={row.label}
-				aria-expanded={selectedId === row.id}
-				onclick={() => select(row)}
-				in:glitchReveal={{ duration: 240, delay: 70 + index * 26 }}
-			>
-				<span
-					class="h-2 w-2 shrink-0 rounded-full"
-					style={statusDotStyle('burning', row.color, row.urgency)}
-					aria-hidden="true"
-				></span>
-				<!-- The forward weld: an armed pick draws its crossing from the
-				     schedule entry's own `serves:` row, in the same cells as the
-				     burning pick below it — and at the same x, since both rows
-				     share this lead slot and padding box. Before this existed it
-				     was the one row in the lane with a blank where its threads
-				     belong. -->
-				<Crossing cells={crossingCells(threads, row.crosses)} label="threads this pick serves" />
-				<span
-					class="h-[7px] shrink-0 rounded-r-[1px]"
-					style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}
-					aria-hidden="true"
-				></span>
-				<span class="truncate font-mono text-[9px] leading-none whitespace-nowrap">
-					{row.clock ? `${row.clock} · ` : ''}{row.note ? `${row.note} · ` : ''}{row.label}
-				</span>
-			</button>
-		{/each}
-
-		<!-- The seam. What used to be a 128px three-column theater with two
-		     decorative hairlines is one rule: the line the picks arrive at. Above
-		     it, everything is still going to happen; on it, something is burning;
-		     under it the run becomes its record. -->
-		<div class="mt-1.5 flex items-center gap-2" aria-hidden="true">
-			<span class="h-px flex-1 bg-amber-900/50"></span>
-			<span class="font-mono text-[8px] tracking-[0.18em] text-amber-200/70 uppercase">now</span>
-			<span class="font-mono text-[8px] text-ink-mute">{clockLabel}</span>
-			<span class="h-px w-6 bg-amber-900/50"></span>
-		</div>
-
 		{#if picking.length === 0}
 			<!-- Idle stays almost nothing (his 08-02 steer, held): presence, and
 			     the fact that nothing is weaving. The next fire is already the
-			     bottom armed row directly above this rule, so the old "next in …"
+			     first armed row directly below this rule, so the old "next in …"
 			     whisper would be the third drawing of a thing now drawn once. -->
-			<div class="mt-1.5 flex items-baseline gap-2">
+			<div class="flex items-baseline gap-2">
 				{#if restingFace}
 					{#if restingFace.glyph}
 						<span class="font-mono text-[11px] text-amber-200/80" aria-hidden="true"
@@ -154,7 +99,7 @@
 				<span class="ml-auto font-mono text-[9px] text-ink-mute">nothing weaving</span>
 			</div>
 		{:else}
-			<div class="mt-1.5 flex flex-col gap-1">
+			<div class="flex flex-col gap-1">
 				{#each shownPicking as row, index (row.id)}
 					<!-- Picking: the same object, lit. `|global` (#970) because the
 					     0→1 case creates this whole branch, and a local intro inside
@@ -210,6 +155,68 @@
 					>
 				{/if}
 			</div>
+		{/if}
+
+		<!-- The seam. What used to be a 128px three-column theater with two
+		     decorative hairlines is one rule: the line a pick crosses when it
+		     starts. Above it, something is burning; below it, the queue waiting
+		     to. (His 08-02 read — "the live run should appear on top beneath the
+		     rack" — is why the burning side is the top one: the sections carry a
+		     run's life top to bottom, the lane carries the queue, and making the
+		     lane rhyme with the sections cost the reader the row they open the
+		     page for.) -->
+		<div class="mt-2 flex items-center gap-2" aria-hidden="true">
+			<span class="h-px flex-1 bg-amber-900/50"></span>
+			<span class="font-mono text-[8px] tracking-[0.18em] text-amber-200/70 uppercase">now</span>
+			<span class="font-mono text-[8px] text-ink-mute">{clockLabel}</span>
+			<span class="h-px w-6 bg-amber-900/50"></span>
+		</div>
+
+		<div class="mt-1.5 flex flex-col">
+			{#each armed as row, index (row.id)}
+				<!-- Armed: the same object, cold — the queue behind the rule, soonest
+			     first. Frost thaws toward amber as the fire nears, and the bar is
+			     imminence drawn as geometry, so reading down from the rule is
+			     reading further into the future. -->
+				<button
+					type="button"
+					class="flex h-[20px] w-full cursor-pointer items-center justify-start gap-1.5 border border-transparent px-1.5 text-left"
+					style={`color: ${row.color};${selectedId === row.id ? ' filter: brightness(1.6);' : ''}`}
+					title={row.label}
+					aria-expanded={selectedId === row.id}
+					onclick={() => select(row)}
+					in:glitchReveal={{ duration: 240, delay: 70 + index * 26 }}
+				>
+					<span
+						class="h-2 w-2 shrink-0 rounded-full"
+						style={statusDotStyle('burning', row.color, row.urgency)}
+						aria-hidden="true"
+					></span>
+					<!-- The forward weld: an armed pick draws its crossing from the
+				     schedule entry's own `serves:` row, in the same cells as the
+				     burning pick above it — and at the same x, since both rows
+				     share this lead slot and padding box. Before this existed it
+				     was the one row in the lane with a blank where its threads
+				     belong. -->
+					<Crossing cells={crossingCells(threads, row.crosses)} label="threads this pick serves" />
+					<span
+						class="h-[7px] shrink-0 rounded-r-[1px]"
+						style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}
+						aria-hidden="true"
+					></span>
+					<span class="truncate font-mono text-[9px] leading-none whitespace-nowrap">
+						{row.clock ? `${row.clock} · ` : ''}{row.note ? `${row.note} · ` : ''}{row.label}
+					</span>
+				</button>
+			{/each}
+		</div>
+
+		{#if overflow > 0}
+			<!-- The tail of the queue. The lane keeps the *soonest* armed picks,
+			     because those are the ones about to burn; what the cap left off is
+			     said, never dropped silently — a truncated surface renders
+			     identically to a complete one, and only this line knows. -->
+			<p class="mt-1 font-mono text-[9px] text-ink-mute">+{overflow} further out</p>
 		{/if}
 	{/if}
 </div>

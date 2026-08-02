@@ -18,10 +18,17 @@
  *   picking — a run burning right now. Amber, elapsed clock, and the warp
  *             items it lifted carried *on the row* instead of in a second list.
  *
- * Order is the fall: furthest-off armed pick at the top, then down through the
- * soonest, then the picking rows at the bottom edge — against the fell line,
- * where the next thing that happens to them is becoming cloth. A row's position
- * in the lane *is* its progress through execution, which is the whole ask.
+ * Order is a queue seen from the front: the picks being thrown at the head, the
+ * ones waiting behind them, soonest first. A row's position still encodes its
+ * phase — above the seam rule it is happening, below it is not yet — it just
+ * encodes *queue depth* rather than a downward journey.
+ *
+ * The first cut ordered it as a fall (furthest-out pick at the top, descending
+ * to the burning one at the bottom) so the lane would rhyme with the page's
+ * sections, which are a run's life top to bottom. His read, minutes after it
+ * deployed: *"I think the live run should appear on top beneath the rack?"* —
+ * correct, and the diagnosis is that the sections and the lane are not the same
+ * axis. Making them rhyme cost the reader the one row they open the page for.
  *
  * Value imports carry `.ts` extensions because the tests run under node's own
  * runner with no bundler in the loop — the rule `cloth.ts` and `futureShelf.ts`
@@ -113,8 +120,8 @@ function elapsedClock(run: LiveRun, now: number): string | null {
 }
 
 /**
- * The lane, ordered as the fall: armed picks furthest-first, then the picking
- * rows last — nearest the fell line.
+ * The lane, ordered as the queue: the burning picks first, then the armed ones
+ * behind them, soonest first.
  *
  * `weaving` is the `taken:`-live join the page already computes for the warp
  * (`weavingRows`); folding it in here is what retires the separate
@@ -138,7 +145,8 @@ export function pickRows(input: {
 
 	// `futureShelfRows` already does the honest work — unparseable instants
 	// dropped, one shared horizon so the bars compare, thermal thaw toward now.
-	// Reversed here because the lane falls: soonest sits closest to the fire.
+	// Its order is soonest-first, which is also the queue's order: the next one
+	// to burn sits closest to the rule it is about to cross.
 	const armed: PickRow[] = futureShelfRows(scheduledWakes, now)
 		.map((row) => ({
 			id: row.wake.id,
@@ -156,8 +164,7 @@ export function pickRows(input: {
 			serves: [],
 			crosses: servesThreads(row.wake)
 		}))
-		.slice(0, ARMED_ROW_CAP)
-		.reverse();
+		.slice(0, ARMED_ROW_CAP);
 
 	const picking: PickRow[] = (liveRuns ?? []).map((run) => {
 		const id = run.run_id || run.id;
@@ -178,7 +185,7 @@ export function pickRows(input: {
 		};
 	});
 
-	return [...armed, ...picking];
+	return [...picking, ...armed];
 }
 
 /** How many armed picks the cap left off the top of the lane. */
