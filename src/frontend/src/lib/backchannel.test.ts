@@ -5,8 +5,10 @@ import {
 	backchannelCount,
 	backchannelShowClear,
 	buildBackchannelItems,
+	needsPreview,
 	toggleFold
 } from './backchannel.ts';
+import type { AuthoredBackchannelItem } from './backchannelPage.ts';
 import type { ConfigChangeRequestItem } from './configRequests.ts';
 import type { PRReviewItem } from './prReviewQueue.ts';
 
@@ -116,4 +118,69 @@ test('the fold holds one open row: opening another closes the first, tapping the
 	assert.equal(toggleFold(null, 'a'), 'a');
 	assert.equal(toggleFold('a', 'b'), 'b');
 	assert.equal(toggleFold('b', 'b'), null);
+});
+
+function authoredItem(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchannelItem {
+	return {
+		key: '0:untitled',
+		headline: 'untitled',
+		kind: null,
+		state: null,
+		needs: null,
+		refs: [],
+		prompt: null,
+		bodyMarkdown: '',
+		...overrides
+	};
+}
+
+test('the needs preview leads with decision/action asks — stable within groups, derived at the tail', () => {
+	// Maintainer, 08-02: "the top item in all that should be a decision/
+	// action ask." A later act item outranks an earlier review item; within
+	// each group the file's own order holds; derived rows stay last.
+	const rows = needsPreview(
+		[
+			authoredItem({ key: '0:read', headline: 'read the weld PR', kind: 'review' }),
+			authoredItem({ key: '1:approve', headline: 'approve the cut', kind: 'act' }),
+			authoredItem({ key: '2:split', headline: 'decide the split', kind: 'decide' })
+		],
+		[
+			{
+				key: 'pr:x#1',
+				kind: 'pr',
+				createdAt: null,
+				headline: '#1 the weld',
+				context: 'x',
+				statusLabel: 'review',
+				href: 'https://example.test/1',
+				linkLabel: 'open'
+			}
+		],
+		3
+	);
+	assert.deepEqual(
+		rows.map((row) => row.headline),
+		['approve the cut', 'decide the split', 'read the weld PR']
+	);
+	assert.equal(rows[0].kind, 'act');
+});
+
+test('the needs preview caps at its limit and gives derived rows their asking kind', () => {
+	const derived = buildBackchannelItems(
+		[
+			{
+				number: 9,
+				title: 'the weld',
+				url: 'https://example.test/9',
+				repo_label: 'x/y',
+				created_at: null,
+				draft: false,
+				author: 'brnrd'
+			}
+		],
+		[]
+	);
+	const rows = needsPreview([], derived, 3);
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].kind, 'review', 'a PR previews as the review it asks for');
 });
