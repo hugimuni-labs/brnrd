@@ -9289,6 +9289,50 @@ def _persist_run_body(
     return path
 
 
+def _persist_boundaries_summary(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    brr_dir: Path,
+) -> Path | None:
+    """Project this run's hook boundary transcript onto its node.
+
+    The transcript itself (`hooks.BOUNDARIES_NAME`) lives beside
+    ``boot-score.json`` in the daemon's own per-run scratch directory
+    (``<brr_dir>/runs/<run-id>/``), never the account dominion — it is
+    diagnostic, unbounded in principle, and not something the resident's
+    memory should carry whole. What the node gets instead is
+    ``hooks.derive_boundaries_summary``'s compact projection, written beside
+    ``body.md``/``state.md`` so the next wake's "## Your last run" block
+    (``prompts._guard_line``) can say whether the closeout guard agreed with
+    the reply it is showing — the fact a false "continuing" claim used to
+    hide.
+
+    Same absence discipline as its source: no transcript, no summary, no
+    file. A guessed ``boundaries.json`` would be worse than none, because a
+    missing file is the one shape that can never be mistaken for "the guard
+    was clean."
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    source = brr_dir / "runs" / task.id / hooks_mod.BOUNDARIES_NAME
+    summary = hooks_mod.derive_boundaries_summary(source)
+    if summary is None:
+        return None
+    path = (
+        account.run_dir(account_context, repo_label, task.id)
+        / hooks_mod.BOUNDARIES_SUMMARY_NAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        protocol._atomic_write(path, json.dumps(summary, sort_keys=True) + "\n")
+    except OSError:
+        return None
+    task.meta["run_boundaries_summary_path"] = str(path)
+    return path
+
+
 def _closed_ledger_run_ids(account_context: account.AccountContext) -> set[str]:
     """Return run ids proved closed by any repo ledger in this account."""
     closed: set[str] = set()
@@ -10508,6 +10552,12 @@ def _run_worker_and_finalize(
             cfg=cfg,
             work_dir=repo_root,
             outbox_dir=outbox_path,
+        )
+        _persist_boundaries_summary(
+            account_context,
+            task,
+            repo_label=repo_label,
+            brr_dir=brr_dir,
         )
         _capture_dominion(
             repo_root,
