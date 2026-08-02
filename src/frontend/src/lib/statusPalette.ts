@@ -110,10 +110,47 @@ export const THREAD_SCALE = [
 	'#c9b98f' // pale warm
 ] as const;
 
-/** The hue for the warp thread at `index` in the authored layer order. */
+/** The hue at `index` in `THREAD_SCALE`, wrapping. The ramp accessor. */
 export function threadColor(index: number): string {
 	const at = Math.abs(Math.trunc(index)) % THREAD_SCALE.length;
 	return THREAD_SCALE[at];
+}
+
+/**
+ * The hue for a warp thread, keyed on its **call sign** rather than its place
+ * in the authored order (#1029).
+ *
+ * His question is the whole reason: *"what to do when we add/split/merge
+ * layers?"* Under the old rule a layer's colour was its seat number, so
+ * inserting a layer repainted every layer below it, a split repainted both
+ * halves and everything after them, and an editorial reorder permuted the
+ * entire palette — silently, across the strips, the legend, the lane and the
+ * cloth at once. Colour named a position, and this canvas's own rule is
+ * *position orders, colour names*. A name derived from position is not a name.
+ *
+ * Keyed on the call sign: add a layer and nothing else moves; split
+ * `the-loom` and both halves take their own stable colour while everyone else
+ * keeps theirs; merge and the survivor keeps the colour the reader learned;
+ * reorder and nothing changes visually, which is correct, because order is a
+ * different channel.
+ *
+ * Still one of the eight authored hues, never a generated one — the argument
+ * the old index tests carried and which survives this change intact: *a
+ * generated colour would be a hue nobody chose*. Only the **assignment** stops
+ * depending on position. Two call signs can still land on the same hue (eight
+ * buckets, five layers today), and that is the honest failure the wrap always
+ * had; position still disambiguates on screen.
+ *
+ * FNV-1a, the same hash `runFace` uses on a run id — deterministic, no
+ * storage, no migration, and stable across every process that renders.
+ */
+export function threadColorFor(callSign: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < callSign.length; i++) {
+		hash ^= callSign.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return threadColor(hash % THREAD_SCALE.length);
 }
 
 /**
