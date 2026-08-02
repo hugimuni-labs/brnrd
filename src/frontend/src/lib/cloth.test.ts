@@ -243,6 +243,19 @@ test('cap: roots beyond the cap come back as an explicit drop count', () => {
 	assert.equal(weave.trees[0].root.id, 'run-0', 'newest roots survive the cap');
 });
 
+test('cap: Infinity lifts the cap entirely — the "show older" control\'s whole trick', () => {
+	// Cloth.svelte's "show older" button (the phone-density pass, 2026-08-02)
+	// re-weaves with `cap: Infinity` rather than issuing a new fetch — every
+	// root beyond `CLOTH_ROOT_CAP` already rode the same `rows` in, so lifting
+	// the cap must render all of them with nothing left dropped.
+	const rows = Array.from({ length: CLOTH_ROOT_CAP + 5 }, (_, index) =>
+		row({ run_id: `run-${index}`, ended_at: endedAgo((index + 1) * HOUR) })
+	);
+	const weave = weaveCloth(rows, NOW, CLOTH_WINDOW_MS, Infinity);
+	assert.equal(weave.trees.length, CLOTH_ROOT_CAP + 5);
+	assert.equal(weave.dropped, 0);
+});
+
 test('cap: workers ride their root and never count against it', () => {
 	const rows: RunLedgerRow[] = [];
 	for (let index = 0; index < 3; index += 1) {
