@@ -2722,14 +2722,37 @@ def _render_closeout_capsule(unmet: list[str]) -> str:
     )
 
 
+#: How many closeout blocks one run may spend, whatever it says between them
+#: (#981). Three is a bound, not a budget: a resident that has been handed the
+#: unmet capsule twice and still ends on a bad closeout is not going to be
+#: argued into a good one on the fourth pass, and #282 is the scar that says
+#: an unbounded guard costs more than the miss it is chasing.
+_CLOSEOUT_BLOCK_CAP = 3
+
+
+def _closeout_reply_key(payload: dict[str, Any]) -> str:
+    """A stable key for the reply this Stop is closing on (#981).
+
+    Whitespace-normalised and hashed rather than stored whole — the hook state
+    file is re-read at every boundary and a full reply would bloat it for no
+    added discrimination. A Shell that hands over no reply (codex today) keys
+    every Stop identically, so such a run keeps exactly the old one-block
+    behaviour: with nothing to compare, "the claim changed" is unassertable,
+    and the guard doctrine here is silence over a guess.
+    """
+    reply = payload.get("last_assistant_message")
+    text = " ".join(reply.split()) if isinstance(reply, str) else ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def _armed_closeout_block(
     ctx: "HookContext",
     payload: dict[str, Any],
     state: dict[str, Any],
     portal: dict[str, Any] | None = None,
 ) -> str | None:
-    """The closeout guard: block once when Stop is reached with a named
-    obligation still unmet, listing every unmet one in a single capsule.
+    """The closeout guard: block when Stop is reached with a named obligation
+    still unmet, listing every unmet one in a single capsule.
 
     **Why this is a hook and not a sentence in the prompt.** The closeout
     contract is stated plainly in ``daemon-substrate.md`` and a weak core
@@ -2753,11 +2776,34 @@ def _armed_closeout_block(
     passed in rather than re-read: the Stop flush handshake refreshes it just
     before, so it is this boundary's view of who is alive, not a stale one.
 
-    Fires at most once per run (``closeout_blocked``): a second block on a run
-    already asked to fix its closeout is the #282 loop. So the unmet set is
-    gathered into one message, not chained across Stop fires.
+    **The latch is on the claim, not on the run (#981).** It used to be one
+    bit — blocked once, silent forever after — and `run-260802-0001-9qgz`
+    is what that costs. The vigil clause caught a false ``continuing`` at
+    00:21:45Z (its first live fire, and it was right); the run then worked
+    thirty more minutes, crossed fourteen more Stop boundaries, delivered
+    three messages, and ended at 00:51:37Z on *another* false ``continuing``
+    — unblocked, because the one bit was spent. The work it promised to
+    report sat unpushed on an unnamed branch until the next tick found it.
+
+    The bit was answering two questions with one value: *have I already
+    nagged **this** miss* (the #282 loop, worth breaking) and *have I ever
+    nagged **anything*** (what it stored). And the exposure ran backwards —
+    the runs that spend the latch earliest are the long ones, which are
+    exactly the runs still holding something unfinished at the end.
+
+    So: keyed on the reply that was blocked. The same reply, presented again,
+    is the #282 loop and stays silent; a reply the resident rewrote and
+    re-submitted is a new claim and re-evaluates. ``_CLOSEOUT_BLOCK_CAP``
+    bounds the exchange anyway, because "the resident keeps producing bad
+    closeouts" must terminate on a number rather than on good intentions —
+    #282 is the scar that says so. ``payload["stop_hook_active"]`` remains the
+    within-turn breaker, independent of both.
     """
-    if state.get("closeout_blocked"):
+    blocked_for = state.get("closeout_blocked_for")
+    reply_key = _closeout_reply_key(payload)
+    if blocked_for is not None and blocked_for == reply_key:
+        return None
+    if int(state.get("closeout_blocks") or 0) >= _CLOSEOUT_BLOCK_CAP:
         return None
     # The Shell's own loop-breaker. If a stop hook already blocked this turn,
     # never stack another.
@@ -2809,7 +2855,8 @@ def _armed_closeout_block(
     if not unmet:
         return None
 
-    state["closeout_blocked"] = True
+    state["closeout_blocked_for"] = reply_key
+    state["closeout_blocks"] = int(state.get("closeout_blocks") or 0) + 1
     return _render_closeout_capsule(unmet)
 
 
