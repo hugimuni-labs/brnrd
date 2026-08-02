@@ -1486,6 +1486,43 @@ def _render_armed_rows(armed: list[Any] | None) -> list[str]:
     return rows
 
 
+def _partition_pending_events(
+    payload: dict[str, Any],
+) -> tuple[list[Any], list[dict[str, Any]], int]:
+    """Split actionable events from this run's self-retiring completions.
+
+    A ``spawn_completed`` event dispatched by the current run is an observed
+    fact: the daemon retires it when the parent ends.  Both the boundary
+    renderer and the Stop blocker consume this partition so they cannot call
+    the same event self-retiring and still-pending in one payload (#990).
+    """
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    inbound = (
+        payload.get("inbound")
+        if isinstance(payload.get("inbound"), dict) else {}
+    )
+    attention = (
+        payload.get("attention")
+        if isinstance(payload.get("attention"), dict) else {}
+    )
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    pending = int(attention.get("pending_event_count", 0) or 0)
+    run_id = str(run.get("id") or "")
+
+    def is_finished_spawn(event: Any) -> bool:
+        return (
+            bool(run_id)
+            and isinstance(event, dict)
+            and event.get("source") == "spawn_completed"
+            and event.get("spawn_parent_run_id") == run_id
+        )
+
+    finished_spawns = [event for event in events if is_finished_spawn(event)]
+    action_events = [event for event in events if not is_finished_spawn(event)]
+    action_pending = max(0, pending - len(finished_spawns))
+    return action_events, finished_spawns, action_pending
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -1585,8 +1622,9 @@ def _render_bar(
         # applies *more* here, since a dense bar habituates faster than prose.
         details.append(
             f"{pending} pending event(s), {pending_files} undelivered outbox "
-            "file(s). Address each below — fold in, or say on .card why it "
-            "stays queued — before your next plan boundary or closeout."
+            "file(s). Address each below with an `event:` reply, or retire it "
+            "deliberately with `note:`, before your next plan boundary or "
+            "closeout."
         )
         details.extend(_render_event_rows(events, event_seen, inbox_pointer))
     if finished_spawns:
@@ -1799,9 +1837,7 @@ def format_delta(
         if isinstance(payload.get("resources"), dict) else {}
     )
 
-    pending = int(attention.get("pending_event_count", 0) or 0)
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
-    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     notices = payload.get("notices") if isinstance(payload.get("notices"), list) else []
     schedule_facet = (
         payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
@@ -1811,19 +1847,9 @@ def format_delta(
         if isinstance(schedule_facet.get("armed"), list) else []
     )
 
-    # Partition pending events into obligations vs finished-spawn facts.
-    # spawn_completed events whose spawn_parent_run_id matches this run are
-    # facts — the parent observed them; they will self-retire at run end.
-    # They must not count toward the obligation total or demand an "address".
-    run_id = str(run.get("id") or "")
-    finished_spawns = [
-        e for e in events
-        if isinstance(e, dict)
-        and e.get("source") == "spawn_completed"
-        and e.get("spawn_parent_run_id") == run_id
-    ] if run_id else []
-    action_events = [e for e in events if e not in finished_spawns]
-    action_pending = max(0, pending - len(finished_spawns))
+    action_events, finished_spawns, action_pending = _partition_pending_events(
+        payload
+    )
 
     if not seed and not stop:
         card_stale = bool(card.get("stale"))
@@ -1857,8 +1883,9 @@ def format_delta(
     )
     if action_pending:
         header_line += (
-            " Address each below — fold in, or say on .card why it stays "
-            "queued — before your next plan boundary or closeout."
+            " Address each below with an `event:` reply, or retire it "
+            "deliberately with `note:`, before your next plan boundary or "
+            "closeout."
         )
     lines.append(header_line)
     lines.extend(_render_event_rows(action_events, event_seen, inbox_pointer))
@@ -2915,10 +2942,8 @@ def _armed_closeout_block(
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
 
 
-def _first_pending_event(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _first_pending_event(events: list[Any]) -> dict[str, Any] | None:
     """The first foldable pending event (one carrying a body), or None."""
-    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
-    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     for ev in events:
         if isinstance(ev, dict) and str(ev.get("body") or "").strip():
             return ev
@@ -2952,8 +2977,9 @@ def _fold_in_message(
     shown = int((decision or {}).get("shown") or 0)
     if status == "seen":
         return (
-            f"{_event_seen_line(event, shown)} — still pending: fold it in, "
-            "or say on .card why it stays queued."
+            f"{_event_seen_line(event, shown)} — still pending: reply with "
+            f"`event: {event.get('id') or '<id>'}`, or retire it deliberately "
+            f"with `note: {event.get('id') or '<id>'}`."
         )
     if source == "schedule":
         label = "(schedule firing folded in — the entry's spec, not a user message:)"
@@ -3127,11 +3153,9 @@ def compute_neutral(
         inject = _suppress_unchanged_inject(state, inject)
 
     if phase == PHASE_STOP:
-        attention = (
-            portal.get("attention")
-            if isinstance(portal.get("attention"), dict) else {}
+        action_events, _finished_spawns, action_pending = (
+            _partition_pending_events(portal)
         )
-        pending = int(attention.get("pending_event_count", 0) or 0)
         # Token-scoped, not a one-shot boolean: a plain "blocked once ever"
         # latch (the pre-fix shape) never let a *later*, genuinely new
         # follow-up re-block once the run had folded in any earlier one —
@@ -3143,9 +3167,9 @@ def compute_neutral(
         # repeat block against the *same* unresolved snapshot preserves the
         # existing "second stop must not block forever" guarantee for the
         # unchanged case.
-        if pending > 0 and state.get("stop_blocked_token") != stop_token:
+        if action_pending > 0 and state.get("stop_blocked_token") != stop_token:
             block = True
-            event = _first_pending_event(portal)
+            event = _first_pending_event(action_events)
             if event is not None:
                 # Fold the waiting follow-up in — the resident addresses it
                 # in this same thought. Honest label and letter policy per
@@ -3159,9 +3183,10 @@ def compute_neutral(
                 )
             else:
                 block_reason = (
-                    f"{pending} pending event(s) are still waiting — fold the "
-                    "foldable ones into this wake (read inbox.json) before "
-                    "ending, or say why they should wait."
+                    f"{action_pending} pending event(s) are still waiting — "
+                    "reply with `event: <id>`, or retire deliberately with "
+                    "`note: <id>`, before ending. Read inbox.json for the "
+                    "complete event bodies."
                 )
             state["stop_blocked_token"] = stop_token
 
