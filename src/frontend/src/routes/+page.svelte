@@ -53,7 +53,12 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
-	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		RunLedgerAuthError,
+		fetchRunLedger,
+		servedWindowMs,
+		type RunLedgerRow
+	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { buildWarpLayers, emberCount } from '$lib/warp';
 	import WarpBand from '$lib/WarpBand.svelte';
@@ -302,10 +307,7 @@
 			runLedgerRows = receipts.rows;
 			runLedgerWithheld = receipts.withheld ?? null;
 			runLedgerStale = receipts.stale;
-			runLedgerWindowMs =
-				receipts.span_seconds_served === null
-					? CLOTH_WINDOW_MS
-					: receipts.span_seconds_served * 1000;
+			runLedgerWindowMs = servedWindowMs(receipts.span_seconds_served, CLOTH_WINDOW_MS);
 			runLedgerError = null;
 		} catch (e) {
 			if (!(e instanceof RunLedgerAuthError)) {
