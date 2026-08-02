@@ -1175,7 +1175,12 @@ def _build_work_surface_block_scored(
     trims: list[TrimResult] = []
     whole_paths: set[Path] = set()
     remaining = max(0, budget)
-    unannounced_skips = 0
+    # The *names* of the pages no placeholder could be afforded for, not a
+    # count of them. A count says a page is missing; only the name says which,
+    # and "go read it" is not an instruction until the reader knows what to
+    # open. This list is the last thing standing between a dropped page and
+    # silence, so it holds paths (#1020).
+    unannounced: list[str] = []
     for path in acc.work_surface_files(ctx):
         relative = path.relative_to(surface).as_posix()
         content = path.read_text(encoding="utf-8").strip()
@@ -1183,7 +1188,7 @@ def _build_work_surface_block_scored(
             continue
         page_bytes = len(content.encode("utf-8"))
         if remaining <= 0:
-            unannounced_skips += 1
+            unannounced.append(relative)
             continue
         # The per-page cap is a defence against *accreting* pages — see
         # `_MAX_ACCRETING_BLOCK_BYTES`, and `ledger/decisions.md`, 458 KB
@@ -1221,8 +1226,10 @@ def _build_work_surface_block_scored(
                 trims.append(trimmed)
                 # A floor overflow may crowd out later pages, but the shared
                 # arithmetic remains total and deterministic.  Those pages
-                # flow through `unannounced_skips` below because not even a
-                # placeholder can fit in a zero remainder.
+                # flow through `unannounced` below because not even a
+                # placeholder can fit in a zero remainder — so the closing
+                # line names them, which is the only reason a hard zero is
+                # survivable.
                 remaining = 0
                 continue
             # Heading overhead can push a budget-trimmed page just past the
@@ -1241,7 +1248,7 @@ def _build_work_surface_block_scored(
                 blocks.append(placeholder)
                 remaining -= placeholder_size
             else:
-                unannounced_skips += 1
+                unannounced.append(relative)
             continue
         blocks.append(block)
         trims.append(trimmed)
@@ -1249,16 +1256,27 @@ def _build_work_surface_block_scored(
         if trimmed.text == content:
             whole_paths.add(path.resolve())
 
-    if unannounced_skips:
+    if unannounced:
         # The budget ran out before even a placeholder fit. One line, not
         # one per page, and it is not charged — the alternative is silence
         # about pages the wake never saw. Emitted even when it is the *only*
         # block: "no authored surface yet" would be a lie about a surface
         # whose pages were all skipped.
-        noun = "page" if unannounced_skips == 1 else "pages"
+        #
+        # The line names each page (#1020). It cost a signed contract to learn
+        # why: this wake dropped `workflow.md` — the agreement governing
+        # gating and merges, quoted by the schedule entry that woke the run —
+        # and reported `2 further surface pages omitted`, a sentence from
+        # which no reader can recover what to open. Naming is tens of bytes
+        # against a budget of tens of thousands, and it is charged to nothing:
+        # the count was already being rendered, and the count was the part
+        # that carried no information.
+        noun = "page" if len(unannounced) == 1 else "pages"
+        named = " · ".join(f"`{relative}`" for relative in unannounced)
         blocks.append(
-            f"_({unannounced_skips} further surface {noun} omitted — the "
-            f"surface budget was exhausted · read them under `{surface}`)_"
+            f"_({len(unannounced)} further surface {noun} omitted — the "
+            f"surface budget was exhausted: {named} · read them under "
+            f"`{surface}`)_"
         )
 
     if not blocks:
