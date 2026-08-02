@@ -44,7 +44,7 @@
  */
 
 import type { WarpLayer } from './warp.ts';
-import { threadColor } from './statusPalette.ts';
+import { threadColorFor } from './statusPalette.ts';
 
 /** The threads, in the warp's own authored order — the column positions every
  *  crossing strip on the page shares. */
@@ -87,10 +87,12 @@ export function buildCrossingIndex(layers: WarpLayer[]): Map<string, string[]> {
 export interface CrossingCell {
 	callSign: string;
 	lit: boolean;
-	/** This thread's identity hue (`statusPalette.threadColor`), assigned by
-	 *  its place in the authored order. Carried on the cell rather than looked
-	 *  up by the renderer so every surface that draws a strip agrees, and so
-	 *  the legend and the strips cannot drift apart. */
+	/** This thread's identity hue (`statusPalette.threadColorFor`), keyed on
+	 *  the **call sign**, never on its place in the authored order (#1029):
+	 *  adding, splitting, merging or reordering layers must not repaint the
+	 *  ones that did not change. Carried on the cell rather than looked up by
+	 *  the renderer so every surface that draws a strip agrees, and so the
+	 *  legend and the strips cannot drift apart. */
 	color: string;
 }
 
@@ -113,6 +115,6 @@ export function crossingCells(
 	return threads.map((callSign, index) => ({
 		callSign,
 		lit: set.has(callSign),
-		color: threadColor(index)
+		color: threadColorFor(callSign)
 	}));
 }
