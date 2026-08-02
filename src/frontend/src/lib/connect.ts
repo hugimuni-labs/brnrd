@@ -73,6 +73,17 @@ export function canApprove(context: ConnectContext): boolean {
 	);
 }
 
+// The zero-repo dead end (2026-08-03): a live code and an account with
+// nothing to bind it to. Its notice below is true and was also the end of
+// the road — no link, no command, on a page reached by a reader who is
+// mid-setup by definition. The predicate is here rather than inline in the
+// route so the one state that earns a way out is named once and testable.
+export function needsRepoEnable(context: ConnectContext): boolean {
+	return (
+		(context.status === 'pending' || context.status === 'approved') && context.repos.length === 0
+	);
+}
+
 // Terminal-state copy — mirrors the notices the backend's approve path
 // would return, so a dead code reads the same before and after the click.
 export function statusNotice(context: ConnectContext): string | null {
