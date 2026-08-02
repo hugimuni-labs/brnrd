@@ -277,7 +277,18 @@ async function bootstrap() {
   const spec = `${PYPI}==${VERSION}`;
   const install = uv
     ? run(uv, ["pip", "install", "--python", PY, "--quiet", "--no-config", spec], { env: CHILD_ENV })
-    : run(PY, ["-m", "pip", "install", "--quiet", "--upgrade", spec], { env: CHILD_ENV });
+    // `--quiet` does not silence pip's self-upgrade notice, so the first four
+    // lines a new user ever sees from brnrd were pip advertising itself and
+    // naming a path inside brnrd's private venv. `--no-input` because a
+    // bootstrap must never block on a prompt nobody is watching for.
+    : run(
+        PY,
+        [
+          "-m", "pip", "install", "--quiet", "--upgrade",
+          "--disable-pip-version-check", "--no-input", spec,
+        ],
+        { env: CHILD_ENV }
+      );
   if (install.status !== 0) {
     console.error(`\nbrnrd: could not install ${spec}. Try: pip install brnrd\n`);
     return false;
