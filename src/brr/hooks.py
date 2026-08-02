@@ -3061,7 +3061,23 @@ def compute_neutral(
     # rendered content decides whether the runner has anything new to see.
     # Apply this after every phase has built its complete block, and before
     # the seen ledger records what was actually delivered.
-    inject = _suppress_unchanged_inject(state, inject)
+    #
+    # **Ambient phases only, and that boundary is the whole correctness
+    # argument.** #818 measured the defect on a *worker's post-tool* channel
+    # — 26 byte-identical status bars in eighteen minutes — and named the
+    # real answer as splitting the channel, because "the statusline and the
+    # actual obligations share one channel". Content dedupe cannot tell the
+    # two apart: an ambient bar repeats because nothing *happened*, while an
+    # obligation repeats because nothing was *done* about it, and
+    # byte-identical is the signature of the second as much as the first.
+    # The closeout render is where the obligations live (the gate-less
+    # delivery warning clears itself the moment the run delivers — see
+    # ``format_delta``'s ``any_delivery`` arm), so it keeps its own
+    # ``stop_last_token`` gate and is never content-suppressed. This is the
+    # cheapest seam the split already has; the finer per-block split stays
+    # #818's open residue.
+    if phase != PHASE_STOP:
+        inject = _suppress_unchanged_inject(state, inject)
 
     if phase == PHASE_STOP:
         attention = (
