@@ -646,8 +646,55 @@ def parse_callback_data(value: object) -> tuple[str, str] | None:
     return menu_id, handle
 
 
-def render_numbered(menu: dict[str, Any]) -> str:
-    """Render the canonical menu as the prompt-contract numbered handles."""
+_PR_REF_RE = re.compile(r"(?<!\w)#(\d+)\b")
+
+
+def _referenced_pr_numbers(text: str) -> list[int]:
+    return [int(match) for match in _PR_REF_RE.findall(text)]
+
+
+def _strike_reason(
+    label: str, detail: str, resolved_prs: dict[int, str],
+) -> str | None:
+    """The struck-through reason for one option, or ``None`` to leave it be.
+
+    Strikes only when *every* PR the option's text names is already known
+    resolved — an option naming one merged PR and one still-open PR is still
+    live work, so it renders unchanged rather than half-lying about it. A
+    referenced number this wake's forge state has no opinion on blocks the
+    strike the same way an open PR does: the option renders unchanged unless
+    its completion is something this wake already computed (#957).
+    """
+    numbers = _referenced_pr_numbers(f"{label} {detail}")
+    if not numbers:
+        return None
+    reasons: list[str] = []
+    seen: set[int] = set()
+    for number in numbers:
+        if number in seen:
+            continue
+        seen.add(number)
+        reason = resolved_prs.get(number)
+        if reason is None:
+            return None
+        reasons.append(f"#{number} {reason}")
+    return "; ".join(reasons)
+
+
+def render_numbered(
+    menu: dict[str, Any],
+    *,
+    resolved_prs: dict[int, str] | None = None,
+) -> str:
+    """Render the canonical menu as the prompt-contract numbered handles.
+
+    ``resolved_prs`` is the same-wake join from :func:`brr.forge_state.
+    resolved_pr_lookup` — a ``{pr_number: "merged 35m ago"}`` map of PRs this
+    daemon pass already knows are done. An option naming only resolved PRs
+    renders struck with the reason, instead of standing as a live control for
+    work that already happened (#957). Omit it (or pass ``None``/``{}``) to
+    render exactly as authored, e.g. from a caller with no forge snapshot.
+    """
     lines: list[str] = []
     for index, option in enumerate(menu.get("options", []), start=1):
         if not isinstance(option, dict):
@@ -655,8 +702,14 @@ def render_numbered(menu: dict[str, Any]) -> str:
         handle = str(option.get("handle") or "")
         label = str(option.get("label") or "")
         rec = " — recommended" if option.get("rec") else ""
-        lines.append(f"{index}) `{handle}` — {label}{rec}")
         detail = str(option.get("detail") or "").strip()
+        strike_reason = (
+            _strike_reason(label, detail, resolved_prs) if resolved_prs else None
+        )
+        if strike_reason:
+            lines.append(f"{index}) `{handle}` — ~~{label}~~{rec} — {strike_reason}")
+        else:
+            lines.append(f"{index}) `{handle}` — {label}{rec}")
         if detail:
             lines.append(f"   {detail}")
     return "\n".join(lines)
