@@ -385,6 +385,7 @@
 	// resting full form: an expanded rack is a panel, not the rail's own height.
 	let railHeight = $state(0);
 	let railFullHeight = $state(0);
+	let machineSentinel = $state<HTMLDivElement | null>(null);
 	let railOpen = $state(false);
 	$effect(() => {
 		if (!railCondensed && !railOpen && railHeight > 0) railFullHeight = railHeight;
@@ -409,6 +410,54 @@
 		} else if (railReturnY !== null) {
 			const back = railReturnY;
 			railReturnY = null;
+			window.scrollTo({ top: back, behavior: 'smooth' });
+		}
+	}
+
+	// THE DOCKED TAP (his 2026-08-03 read: "pressing on the collapsed machine
+	// block doesn't really expand it, just bugs out, and stays as it was — as
+	// opposed to the collapsed rack block, which expands on tap").
+	//
+	// The tap always worked. Only the machine's *head* is sticky, so the lane
+	// it opens appears where the section actually lives in the document —
+	// screens above a reader who has scrolled. Press, nothing visible, and the
+	// head's `glitchReveal` redraw reads as the bug.
+	//
+	// Same answer the rack already gives, and deliberately not a second idiom:
+	// go to the block, remember where you were, and give it back on fold (his
+	// 08-02 steer for the rack, verbatim — "when it's expanded it should just
+	// go to the top of the page, and when it's collapsed, go back"). Not taken:
+	// docking the body as well. An expanded lane pinned to the top of a phone
+	// is chrome eating the page, and it rebuilds THE PICKER YOU CANNOT REACH.
+	let machineReturnY = $state<number | null>(null);
+	function onMachineToggle() {
+		const opening = !machineExpanded;
+		if (opening) {
+			machineOpen = true;
+		} else {
+			machineOpen = false;
+			loomSelection = null;
+		}
+		if (typeof window === 'undefined') return;
+		if (opening) {
+			// Only when the head is docked. At rest the reader is already
+			// looking at the block, and moving them then would cost them their
+			// place to answer a glance they did not ask for.
+			if (railCondensed && machineSentinel) {
+				// The sentinel, never the dock itself. A stuck `sticky` element
+				// reports its *stuck* viewport position, so measuring it gives
+				// back the offset it is already at — the first build did exactly
+				// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
+				// sibling in normal flow is the only thing on the page that
+				// still knows where the block lives. Same trick `railSentinel`
+				// already plays one section above.
+				machineReturnY = window.scrollY;
+				const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
+				window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
+			}
+		} else if (machineReturnY !== null) {
+			const back = machineReturnY;
+			machineReturnY = null;
 			window.scrollTo({ top: back, behavior: 'smooth' });
 		}
 	}
@@ -915,9 +964,10 @@
 		     is precisely the behaviour being fixed and looked identical in a
 		     static screenshot. Driven, not reasoned: the first build shipped
 		     the nested version and the phone shot showed the rail alone. -->
+		<div bind:this={machineSentinel} aria-hidden="true"></div>
 		<div
 			class="ignite sticky z-30 mt-6 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight)}px`}
+			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
 			aria-label="the machine"
 		>
 			{#key railCondensed}
@@ -928,14 +978,7 @@
 						open={machineExpanded}
 						error={liveRunsError}
 						stale={liveRunsStale}
-						onToggle={() => {
-							if (machineExpanded) {
-								machineOpen = false;
-								loomSelection = null;
-							} else {
-								machineOpen = true;
-							}
-						}}
+						onToggle={onMachineToggle}
 					/>
 				</div>
 			{/key}
