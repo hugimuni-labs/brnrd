@@ -1,4 +1,10 @@
-import { quotaWindowReading, type QuotaShell, type QuotaWindow } from './quota.ts';
+import {
+	quotaLevel,
+	quotaWindowReading,
+	type QuotaLevel,
+	type QuotaShell,
+	type QuotaWindow
+} from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners';
 
 export type RunnerBlockKind = 'requested' | 'default';
@@ -36,6 +42,35 @@ const WINDOW_DURATION_S: Record<string, number> = {
  *  and nothing on screen said so; a filling disc reads as a clock natively. */
 export const DIAL_WEDGE_RADIUS = 2.75;
 const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
+
+export interface SlotChip {
+	/** `1/4 slots` — active over configured ceiling; `1/? slots` when the
+	 *  daemon published no ceiling (a fact worth a character, not a guess). */
+	label: string;
+	/** Quota-level word for the headroom left, or null while the reading is
+	 *  merely a configured ceiling (utilization < 80%) — neutral chrome, the
+	 *  same convention Limits.svelte carried before it folded in here. */
+	level: QuotaLevel | null;
+	title: string;
+}
+
+/** The spawn-slot capacity chip (#972 machine round: LIMITS stops being a
+ * section). Same reading the section made — headroom, contention at ≥80%
+ * utilization — compressed to a chip beside fuel; the raw config key demotes
+ * from caption to tooltip. */
+export function slotChip(activeSpawns: number, maxSpawns: number | null): SlotChip {
+	const title = 'spawn slots — concurrent worker-stack children (spawn.max_concurrent)';
+	if (maxSpawns === null || maxSpawns <= 0) {
+		return { label: `${activeSpawns}/? slots`, level: null, title };
+	}
+	const headroomPct = Math.max(0, ((maxSpawns - activeSpawns) / maxSpawns) * 100);
+	const contention = activeSpawns / maxSpawns >= 0.8;
+	return {
+		label: `${activeSpawns}/${maxSpawns} slots`,
+		level: contention ? quotaLevel(headroomPct) : null,
+		title
+	};
+}
 
 export function dialDasharray(fraction: number): string {
 	const clamped = Math.max(0, Math.min(1, fraction));
