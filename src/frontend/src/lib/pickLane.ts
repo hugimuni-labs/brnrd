@@ -107,6 +107,31 @@ export interface PickRow {
  * `serves:` row is what fills it. Anything that is not a list of strings is no
  * claim at all.
  */
+/**
+ * A scheduled wake's own name, for the lane.
+ *
+ * The wire's `summary` is `self-scheduled thought: <entry-id>` — a shape the
+ * daemon chose on purpose (#502: a schedule *body* is dominion content and the
+ * managed backend gets the id, never an excerpt). That is the right thing to
+ * transmit and the wrong thing to render: the reader gets a machine prefix and
+ * a hyphenated slug where a name belongs, on a row they are being asked to
+ * read as an object with a life.
+ *
+ * So the prefix is stripped and the slug is spaced. Only the *known* prefix —
+ * a summary shaped some other way is left exactly as it arrived, because
+ * guessing at an unrecognised format is how a renderer starts editing facts.
+ */
+export function wakeLabel(wake: ScheduledWake): string {
+	const raw = (wake.summary || wake.conversation_key || 'wake').trim();
+	const stripped = raw.startsWith(SCHEDULE_SUMMARY_PREFIX)
+		? raw.slice(SCHEDULE_SUMMARY_PREFIX.length).trim()
+		: raw;
+	return stripped.replace(/-/g, ' ');
+}
+
+/** The daemon's own wording for a schedule row's summary (`cloud.py`). */
+const SCHEDULE_SUMMARY_PREFIX = 'self-scheduled thought:';
+
 export function servesThreads(wake: ScheduledWake): string[] {
 	const serves = wake.links?.serves;
 	if (!Array.isArray(serves)) return [];
@@ -152,7 +177,7 @@ export function pickRows(input: {
 			id: row.wake.id,
 			kind: 'wake' as const,
 			phase: 'armed' as const,
-			label: (row.wake.summary || row.wake.conversation_key || 'wake').trim(),
+			label: wakeLabel(row.wake),
 			clock: row.wake.status === 'quota-paused' ? null : futureEtaLabel(row.etaMs),
 			note:
 				row.wake.status === 'quota-paused' || row.wake.status === 'quota-paced'
@@ -160,7 +185,13 @@ export function pickRows(input: {
 					: null,
 			color: row.color,
 			urgency: row.urgency,
-			barFraction: row.barFraction,
+			// Inverted from `futureShelfRows`' distance fraction, and the reason is
+			// a disagreement the first cut shipped: the thermal colour *warms* as a
+			// wake nears, while the bar *grew* with distance. Two encodings of the
+			// same quantity pointing opposite ways is unreadable however correct
+			// each is alone — long and warm now both mean imminent, and a wake four
+			// days out recedes to a stub instead of dominating the lane.
+			barFraction: 1 - row.barFraction,
 			serves: [],
 			crosses: servesThreads(row.wake)
 		}))
