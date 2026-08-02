@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime, timezone
 
 import pytest
 
-from brr import daemon, menus, prompts, protocol
+from brr import daemon, menus, prompts, protocol, run_context
 from brr.gates import telegram
 from brr.run import Run
 
@@ -367,6 +369,170 @@ def test_next_boot_renders_the_same_validated_live_generation(tmp_path):
     assert "Live menu — the same validated generation rendered at the gate" in prompt
     assert "1) `ship` — Ship it — recommended" in prompt
     assert "2) `hold` — Hold" in prompt
+
+
+# ── a live menu option must not outlive its own completion (#957) ──────
+#
+# Both wake-render callers join the same-pass forge state into the live
+# menu so an option naming a PR the wake already knows is resolved renders
+# struck instead of standing as a live control for finished work. Every
+# test below goes through the caller the defect used — build_daemon_prompt
+# / _render_communication_snapshot — not menus.render_numbered directly.
+
+
+def _iso_ago(seconds: float) -> str:
+    return datetime.fromtimestamp(
+        time.time() - seconds, tz=timezone.utc,
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _menu_pr_options(menu_id: str) -> dict:
+    return {
+        "menu_id": menu_id,
+        "thread": "telegram:555:",
+        "options": [
+            {"handle": "m995", "label": "merge #995"},
+            {"handle": "m998999", "label": "merge #998 + #999"},
+            {"handle": "m997", "label": "merge #997"},
+            {"handle": "hold", "label": "Hold"},
+        ],
+    }
+
+
+def _pr_forge_snapshot() -> dict:
+    """#995 and #998/#999 merged hours ago; #997 still open; no worktrees."""
+    return {
+        "worktrees": [],
+        "pr_state": {
+            "standalone": [
+                {"number": 995, "state": "MERGED", "merged_at": _iso_ago(6 * 3600)},
+                {"number": 998, "state": "MERGED", "merged_at": _iso_ago(5 * 3600)},
+                {"number": 999, "state": "MERGED", "merged_at": _iso_ago(5 * 3600)},
+                {"number": 997, "state": "OPEN"},
+            ],
+        },
+    }
+
+
+def test_live_menu_strikes_options_naming_already_resolved_prs(tmp_path):
+    """An option whose text names a MERGED PR renders struck, with the
+    reason and age the same-pass forge block already knows."""
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(brr_dir, _menu_pr_options("release-check"))
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    prompt = prompts.build_daemon_prompt(
+        "task",
+        "evt-next",
+        str(brr_dir / "responses" / "evt-next.md"),
+        tmp_path,
+        communication_snapshot={
+            "current_thread": "telegram:555:",
+            "live_menu": live,
+            "forge": _pr_forge_snapshot(),
+        },
+        event_body="next turn",
+    )
+
+    assert "1) `m995` — ~~merge #995~~ — #995 merged 6h ago" in prompt
+    assert (
+        "2) `m998999` — ~~merge #998 + #999~~ — "
+        "#998 merged 5h ago; #999 merged 5h ago"
+    ) in prompt
+
+
+def test_live_menu_leaves_an_open_pr_option_unchanged(tmp_path):
+    """An option naming an OPEN PR is still live work — unchanged."""
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(brr_dir, _menu_pr_options("release-check-open"))
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    prompt = prompts.build_daemon_prompt(
+        "task",
+        "evt-next",
+        str(brr_dir / "responses" / "evt-next.md"),
+        tmp_path,
+        communication_snapshot={
+            "current_thread": "telegram:555:",
+            "live_menu": live,
+            "forge": _pr_forge_snapshot(),
+        },
+        event_body="next turn",
+    )
+
+    assert "3) `m997` — merge #997" in prompt
+    assert "~~merge #997~~" not in prompt
+
+
+def test_live_menu_leaves_an_option_with_no_forge_artifact_unchanged(tmp_path):
+    """An option naming no PR at all has nothing to join against."""
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(brr_dir, _menu_pr_options("release-check-hold"))
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    prompt = prompts.build_daemon_prompt(
+        "task",
+        "evt-next",
+        str(brr_dir / "responses" / "evt-next.md"),
+        tmp_path,
+        communication_snapshot={
+            "current_thread": "telegram:555:",
+            "live_menu": live,
+            "forge": _pr_forge_snapshot(),
+        },
+        event_body="next turn",
+    )
+
+    assert "4) `hold` — Hold" in prompt
+
+
+@pytest.mark.parametrize("forge", [None, {}, {"worktrees": [], "pr_state": {}}])
+def test_live_menu_strike_join_is_a_noop_without_resolved_forge_data(
+    tmp_path, forge,
+):
+    """Absent/empty forge data changes nothing — no crash, no strike. A
+    polling tax to fix a rendering bug would be a regression, not a fix, so
+    an option renders unchanged whenever its completion isn't already in
+    the snapshot this wake computed."""
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(brr_dir, _menu_pr_options("release-check-absent"))
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    snapshot = {"current_thread": "telegram:555:", "live_menu": live}
+    if forge is not None:
+        snapshot["forge"] = forge
+
+    prompt = prompts.build_daemon_prompt(
+        "task",
+        "evt-next",
+        str(brr_dir / "responses" / "evt-next.md"),
+        tmp_path,
+        communication_snapshot=snapshot,
+        event_body="next turn",
+    )
+
+    assert "1) `m995` — merge #995" in prompt
+    assert "~~" not in prompt
+
+
+def test_run_context_render_shares_the_same_strike_join(tmp_path):
+    """The sibling context-file renderer joins the identical forge state —
+    a fact added to one copy only re-creates the defect it was added to
+    fix (the established pattern this module's other near-duplicate
+    renderers already guard against)."""
+    brr_dir = tmp_path / ".brr"
+    menus.promote_menu(brr_dir, _menu_pr_options("release-check-ctx"))
+    live = menus.load_live_menu(brr_dir, "telegram:555:")
+
+    rendered = run_context._render_communication_snapshot({
+        "current_thread": "telegram:555:",
+        "live_menu": live,
+        "forge": _pr_forge_snapshot(),
+    })
+
+    assert "~~merge #995~~ — #995 merged 6h ago" in rendered
+    assert "3) `m997` — merge #997" in rendered
+    assert "~~merge #997~~" not in rendered
 
 
 @pytest.mark.parametrize(
