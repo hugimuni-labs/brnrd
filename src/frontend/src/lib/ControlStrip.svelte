@@ -9,6 +9,7 @@
 		runnerBlocks,
 		slotChip
 	} from './controlStrip';
+	import { railKeepsLivePick } from './machineDock';
 	import { quotaLevel, type QuotaShell } from './quota';
 	import type { RunnersResponse } from './runners';
 	import type { ConnectedRepo, EnvironmentOption } from './repos';
@@ -57,8 +58,19 @@
 		 *  the machine below a screenful of intent, so "what is running" left
 		 *  the first glance. It comes back here, where the rail already answers
 		 *  every other resource question, and the rail is on screen at every
-		 *  scroll position by construction. `null` = nothing burning. */
+		 *  scroll position by construction. `null` = nothing burning.
+		 *
+		 *  Superseded by `machineDocks` (his 2026-08-02 correction: "not the
+		 *  collapsed rack + oneline main runner info, as it is now, but a
+		 *  collapsed fuel + collapsed oneline machine stuck to it"). The row
+		 *  survives for a rail rendered with no machine beneath it. */
 		livePick?: { label: string; clock: string | null; extra: number } | null;
+		/** True when the machine's own one-line block docks directly under this
+		 *  rail. Then the rail is *fuel only* — the dock is a better answer to
+		 *  "what is burning" than a borrowed row, and printing both would put
+		 *  one run's name at two y-positions eight pixels apart. Verdict lives
+		 *  in `machineDock.railKeepsLivePick`, not in this component. */
+		machineDocks?: boolean;
 	}
 
 	let {
@@ -75,7 +87,8 @@
 		maxSpawns = null,
 		condensed = false,
 		onRackChange,
-		livePick = null
+		livePick = null,
+		machineDocks = false
 	}: Props = $props();
 	let expanded = $state(false);
 	let repoSelection = $state<string | null>(null);
@@ -206,7 +219,7 @@
 		{#if lead}
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.verdict}</span>
 		{/if}
-		{#if livePick}
+		{#if livePick && railKeepsLivePick(machineDocks)}
 			<span class="ml-auto flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				<span aria-hidden="true">↯</span>
 				<span class="max-w-[16ch] truncate">{livePick.label}</span>
