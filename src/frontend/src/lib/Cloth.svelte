@@ -323,14 +323,12 @@
 
 		<!-- The honest hem: the cap bounds the DOM, never the truth — and now
 		     it's a door, not a wall. Every dropped root already rode the same
-		     `rows` this weave read from (the ledger fetch itself caps at
-		     `PRODUCE_GAUGE_LEDGER_LIMIT` rows and the backend additionally
-		     clamps `span_seconds` to 7 days regardless of the 30-day window
-		     asked for — `src/brnrd/routers/dashboard.py`'s
-		     `dashboard_run_ledger_api`), so lifting `CLOTH_ROOT_CAP` costs no
-		     round trip. Past that ceiling there genuinely is no further page
-		     to ask for: the endpoint has no `offset`, so "older still" past
-		     what this fetch already holds is a real gap, not a rendering one. -->
+		     `rows` this weave read from (the ledger fetch caps at
+		     `PRODUCE_GAUGE_LEDGER_LIMIT` rows), so lifting `CLOTH_ROOT_CAP`
+		     costs no round trip. Past that ceiling there genuinely is no
+		     further page to ask for: the endpoint has no `offset`, so "older
+		     still" past what this fetch already holds is a real gap, not a
+		     rendering one. -->
 		{#if totalRoots > CLOTH_ROOT_CAP}
 			<p class="mt-2 font-mono text-[10px] text-ink-mute">
 				{#if showOlder}

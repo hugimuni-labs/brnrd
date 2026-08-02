@@ -53,12 +53,18 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
-	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		RunLedgerAuthError,
+		fetchRunLedger,
+		servedWindowMs,
+		type RunLedgerRow
+	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { buildWarpLayers, emberCount } from '$lib/warp';
 	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
+	import { loomPastWindowLabel } from '$lib/loomBand';
 	import FutureShelf from '$lib/FutureShelf.svelte';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
@@ -216,6 +222,7 @@
 	let runLedgerWithheld = $state<WithheldLane | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
+	let runLedgerWindowMs = $state(CLOTH_WINDOW_MS);
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
@@ -300,6 +307,7 @@
 			runLedgerRows = receipts.rows;
 			runLedgerWithheld = receipts.withheld ?? null;
 			runLedgerStale = receipts.stale;
+			runLedgerWindowMs = servedWindowMs(receipts.span_seconds_served, CLOTH_WINDOW_MS);
 			runLedgerError = null;
 		} catch (e) {
 			if (!(e instanceof RunLedgerAuthError)) {
@@ -941,14 +949,15 @@
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] {runLedgerError ? 'text-red-400' : 'text-ink-quiet'}">
-					{runLedgerError ?? (runLedgerStale ? 'stale report' : '30d window')}
+					{runLedgerError ??
+						(runLedgerStale ? 'stale report' : `${loomPastWindowLabel(runLedgerWindowMs)} window`)}
 				</p>
 			</div>
 			<div class="mt-2">
 				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}
 					<WithheldNotice withheld={runLedgerWithheld} />
 				{:else}
-					<Cloth rows={runLedgerRows} {now} windowMs={CLOTH_WINDOW_MS} stale={runLedgerStale} />
+					<Cloth rows={runLedgerRows} {now} windowMs={runLedgerWindowMs} stale={runLedgerStale} />
 				{/if}
 			</div>
 		</section>

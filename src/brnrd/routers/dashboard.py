@@ -582,9 +582,10 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
 
 
 _RUN_LEDGER_STALE_SECONDS = 300
-# Match the daemon's published envelope; the loom asks for all of it before
-# selecting a 6h→7d shelf window.
+# Match the daemon's published envelope; the row cap bounds the response even
+# when the cloth asks for its full 30-day window.
 _RUN_LEDGER_API_LIMIT = 256
+_RUN_LEDGER_API_MAX_SPAN_SECONDS = 30 * 24 * 3600
 
 
 def _run_ledger_views(
@@ -1043,7 +1044,11 @@ def dashboard_run_ledger_api(
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account.id)
     capped = max(1, min(limit, _RUN_LEDGER_API_LIMIT))
-    span = None if span_seconds is None else max(1, min(span_seconds, 7 * 24 * 3600))
+    span = (
+        None
+        if span_seconds is None
+        else max(1, min(span_seconds, _RUN_LEDGER_API_MAX_SPAN_SECONDS))
+    )
     view = _run_ledger_views(db, repos, capped, span_seconds=span)
     return JSONResponse(
         {
@@ -1051,6 +1056,7 @@ def dashboard_run_ledger_api(
             "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            "span_seconds_served": span,
             **_withheld_lane(repos, "run_ledger"),
         }
     )

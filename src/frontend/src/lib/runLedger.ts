@@ -245,6 +245,7 @@ export interface RunLedgerResponse {
 	rows: RunLedgerRow[];
 	stale: boolean;
 	reported_at: string | null;
+	span_seconds_served: number | null;
 	withheld?: WithheldLane;
 }
 
@@ -324,4 +325,24 @@ export function dateTimeLabel(value: string | null, now = Date.now()): string {
 		return date.toLocaleTimeString();
 	}
 	return date.toLocaleString();
+}
+
+/** The window the cloth should actually render, from the span the server
+ * reports having served.
+ *
+ * `null` is the server's honest "no span was requested" and falls back to the
+ * caller's default. So does anything that is not a positive finite number —
+ * including the field being **absent**, which is what a client sees when it
+ * talks to a server too old to send it. That case is the whole reason this is
+ * a function and not an inline ternary: `undefined * 1000` is `NaN`, every
+ * `inClothWindow` comparison against `NaN` is false, and the cloth would
+ * render completely empty while saying nothing about why. A surface that
+ * narrows rendering as if it hadn't is the exact defect #994 is about, and
+ * the fix must not reintroduce it one layer up. */
+export function servedWindowMs(spanSecondsServed: unknown, fallbackMs: number): number {
+	return typeof spanSecondsServed === 'number' &&
+		Number.isFinite(spanSecondsServed) &&
+		spanSecondsServed > 0
+		? spanSecondsServed * 1000
+		: fallbackMs;
 }

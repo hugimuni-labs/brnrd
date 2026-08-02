@@ -224,6 +224,40 @@ def test_dashboard_run_ledger_api_returns_rows():
     assert body["rows"][0]["run_id"] == "run-1"
     assert body["rows"][0]["usd_subscription_attributed"] == 0.25
     assert body["stale"] is False
+    assert body["span_seconds_served"] is None
+
+
+def test_dashboard_run_ledger_serves_and_reports_thirty_day_span():
+    client = _client()
+    _account_headers, _daemon_headers, pid = _repo_and_daemon(client)
+    _login(client)
+    now = datetime.now(timezone.utc)
+    rows = [
+        {**_ROW, "run_id": "recent", "ended_at": (now - timedelta(days=1)).isoformat()},
+        {**_ROW, "run_id": "eight-days", "ended_at": (now - timedelta(days=8)).isoformat()},
+        {**_ROW, "run_id": "too-old", "ended_at": (now - timedelta(days=31)).isoformat()},
+    ]
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            Daemon(
+                id="dmn-ledger-span",
+                repo_id=pid,
+                token_id="tok-ledger-span",
+                daemon_name="laptop",
+                run_ledger_json=json.dumps(rows),
+                run_ledger_updated_at=now,
+            )
+        )
+        db.commit()
+
+    response = client.get(
+        "/v1/dashboard/run-ledger?limit=256&span_seconds=2678400"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["span_seconds_served"] == 30 * 24 * 3600
+    assert [row["run_id"] for row in body["rows"]] == ["recent", "eight-days"]
 
 
 def test_dashboard_run_ledger_api_caps_a_busy_window_at_published_envelope():
