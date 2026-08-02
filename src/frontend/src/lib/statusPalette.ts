@@ -80,6 +80,43 @@ export const PITCH_STOPS = Object.fromEntries(
 ) as Record<PitchStop['name'], string>;
 
 /**
+ * The warp threads' identity palette — **categorical, never interpolated, and
+ * never a measurement.**
+ *
+ * Every other scale on this canvas encodes a magnitude (how much is left, how
+ * near the fire is, where in the body a mood sits). This one encodes *which* —
+ * one hue per warp layer, assigned by the layer's place in the authored order
+ * and stable for as long as that order is. It exists because the crossing strip
+ * shipped as five anonymous ticks and the maintainer's read was immediate:
+ * *"nice to see which one(s) is / are being worked … but the current version
+ * doesn't convey that correctly."* Identity carried by position alone is
+ * identity nobody can read without hovering.
+ *
+ * The route stays inside the canvas's own warm→cool arc (the one PITCH_SCALE
+ * walks) and adds exactly two hues to reach eight distinguishable stops, both
+ * light enough to clear WCAG AA normal-text contrast on #0c0906. Indexing wraps
+ * — a ninth layer reuses the first hue rather than inventing one, because a
+ * generated colour would be a hue nobody chose and the order is still what
+ * disambiguates.
+ */
+export const THREAD_SCALE = [
+	STATUS_BURNING, // amber
+	STATUS_COOLING, // ice
+	'#c07a5a', // clay
+	'#b9a8d8', // iris
+	'#9fb98a', // moss
+	'#d9a0a0', // rose
+	'#7897a5', // deep frost
+	'#c9b98f' // pale warm
+] as const;
+
+/** The hue for the warp thread at `index` in the authored layer order. */
+export function threadColor(index: number): string {
+	const at = Math.abs(Math.trunc(index)) % THREAD_SCALE.length;
+	return THREAD_SCALE[at];
+}
+
+/**
  * `mood_pitch` → the accent hue for a mood's glyph, or `null` when the wire
  * carried no usable pitch. Null rather than a default color, for the same
  * reason an unknown mood renders no face: a tint the daemon didn't report is

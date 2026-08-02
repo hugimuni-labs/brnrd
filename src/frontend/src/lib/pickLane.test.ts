@@ -188,3 +188,39 @@ test('a burning pick takes its threads from the taken: index, never from serves'
 	const rows = pickRows({ liveRuns: [run()], scheduledWakes: null, now: NOW });
 	assert.deepEqual(rows[0].crosses, []);
 });
+
+// The armed row's two readings must agree in direction, and the label must be a
+// name rather than the wire's machine prefix.
+
+test('the bar fills as the fire nears, agreeing with the thermal colour', () => {
+	const rows = pickRows({
+		liveRuns: [],
+		scheduledWakes: [
+			wake({ id: 'soon', scheduled_for: at(5 * MINUTE) }),
+			wake({ id: 'far', scheduled_for: at(90 * 60 * MINUTE) })
+		],
+		now: NOW
+	});
+	const soon = rows.find((row) => row.id === 'soon')?.barFraction ?? 0;
+	const far = rows.find((row) => row.id === 'far')?.barFraction ?? 0;
+	assert.ok(soon > far, `imminent should draw longer: ${soon} vs ${far}`);
+});
+
+test('a wake is labelled by its name, not by the daemon prefix the wire carries', () => {
+	const rows = pickRows({
+		liveRuns: [],
+		scheduledWakes: [wake({ summary: 'self-scheduled thought: the-co-maintainer-tick' })],
+		now: NOW
+	});
+	assert.equal(rows[0].label, 'the co maintainer tick');
+});
+
+test('a summary shaped some other way is left as it arrived', () => {
+	// Guessing at an unrecognised format is how a renderer starts editing facts.
+	const rows = pickRows({
+		liveRuns: [],
+		scheduledWakes: [wake({ summary: 'forge review needed' })],
+		now: NOW
+	});
+	assert.equal(rows[0].label, 'forge review needed');
+});
