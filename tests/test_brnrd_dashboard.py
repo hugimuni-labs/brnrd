@@ -545,6 +545,64 @@ def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
         assert views[0]["windows"][0]["percent"] is None
 
 
+def test_dashboard_quota_staleness_carries_a_dated_last_known_measurement():
+    """A stale measurement remains distinct from both a live reading and a
+    window that has never been measured: live fields stay null, while the
+    collector's values survive under an explicit shell scrape timestamp."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd.routers.dashboard import _quota_views
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+    stale_scrape_at = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    measured = {
+        "label": "weekly",
+        "used": 44.0,
+        "limit": 100.0,
+        "percent": 56.0,
+        "reset": "resets Sunday",
+        "resets_at": 1_786_320_000.0,
+    }
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, pid)
+        db.add(
+            Daemon(
+                id="dmn-quota-last-known",
+                repo_id=pid,
+                token_id="tok-quota-last-known",
+                daemon_name="laptop",
+                quota_json=json.dumps(
+                    [
+                        {
+                            "shell": "codex",
+                            "status": "known",
+                            "updated_at": stale_scrape_at,
+                            "windows": [measured],
+                        }
+                    ]
+                ),
+                quota_updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        stale = _quota_views(db, [repo], runner_stats=[])[0]
+
+    assert stale["status"] == "stale"
+    assert stale["as_of"] == stale_scrape_at
+    assert stale["windows"][0]["percent"] is None
+    assert stale["windows"][0]["last_known"] == {
+        key: measured[key] for key in ("used", "limit", "percent", "reset", "resets_at")
+    }
+
+
 def test_dashboard_quota_api_requires_login():
     """The SvelteKit frontend (`src/frontend`) fetches this JSON endpoint
     client-side; a 401 is the right shape for an unauthenticated fetch(),

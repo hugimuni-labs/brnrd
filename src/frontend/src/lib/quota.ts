@@ -6,8 +6,7 @@ import type { WithheldLane } from './withheld';
 // dashboard_quota_api`), which is a thin wrapper around `_quota_views` — the
 // same data the (soon to be replaced) Jinja dashboard renders.
 
-export interface QuotaWindow {
-	label: string;
+export interface QuotaWindowReading {
 	used: number | null;
 	limit: number | null;
 	percent: number | null;
@@ -15,6 +14,17 @@ export interface QuotaWindow {
 	/** Unix epoch seconds — machine-parseable twin of `reset`'s display text.
 	 *  Absent (not just null) on daemon builds older than 2026-07-06. */
 	resets_at?: number | null;
+}
+
+export interface QuotaWindow extends QuotaWindowReading {
+	label: string;
+	/** Stale snapshots keep the live-reading fields null, while preserving the
+	 *  measured values here so consumers cannot mistake old data for current. */
+	last_known?: QuotaWindowReading | null;
+}
+
+export function quotaWindowReading(window: QuotaWindow): QuotaWindowReading {
+	return window.last_known ?? window;
 }
 
 export interface QuotaCredits {
@@ -78,6 +88,9 @@ export interface QuotaShell {
 	shell: string;
 	status: 'known' | 'stale' | 'unknown' | string;
 	windows: QuotaWindow[];
+	/** Scrape time for a stale snapshot's `last_known` window values. This is
+	 *  the shell's own timestamp, never the dashboard response generation time. */
+	as_of?: string | null;
 	/** Derived short-horizon burn rate, **both shells** since 2026-07-19: it is
 	 *  measured off brr's own quota-sample store rather than Codex's session
 	 *  rollouts, so it no longer depends on which shell happens to leave
