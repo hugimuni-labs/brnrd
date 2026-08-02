@@ -688,6 +688,14 @@
 			: []
 	);
 
+	// The cold-start block's own cadence — see refreshOnce(). `0` means the
+	// list has never landed, so the first pass is never throttled.
+	const COLD_REPO_POLL_MS = 15_000;
+	let coldRepoCheckAt = 0;
+	function coldRefetchDue(): boolean {
+		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
+	}
+
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -743,11 +751,19 @@
 		// showing the cold-start block, and that block has to leave on its
 		// own the moment a repo is enabled (in the other tab this very
 		// block sends the reader to). A first-run panel that outstays its
-		// state is a worse bug than the blank page it replaced. The cost is
-		// one small GET per poll for exactly as long as the account is
-		// empty, and it stops the instant it isn't.
-		if (connectedRepos === null || connectedRepos.length === 0) {
+		// state is a worse bug than the blank page it replaced.
+		//
+		// On its own clock, though. This loop runs at POLL_MS = 2s, and the
+		// state it is watching for changes at human speed: the reader has to
+		// reach another page, install a GitHub App, and come back. Riding the
+		// 2s tick would spend thirty GETs a minute, for as long as a tab
+		// stays open, on precisely the accounts that have nothing — and the
+		// answer arrives no sooner. So: a slow interval, plus a refetch the
+		// moment the tab regains focus, which is the *actual* signal that the
+		// reader has come back from doing the thing.
+		if (connectedRepos === null || (connectedRepos.length === 0 && coldRefetchDue())) {
 			try {
+				coldRepoCheckAt = Date.now();
 				const repos = await fetchRepos();
 				connectedRepos = repos.connected_repos;
 				pairingCommand = repos.pairing_command ?? null;
@@ -815,17 +831,30 @@
 		}
 	}
 
+	// Coming back to this tab is the one honest event that says "I may have
+	// just enabled a repo". Cheaper than any interval and strictly faster
+	// than all of them, so the throttle above never costs the reader a wait
+	// they can perceive.
+	function onFocus() {
+		if (connectedRepos !== null && connectedRepos.length === 0) {
+			coldRepoCheckAt = 0;
+			refresh();
+		}
+	}
+
 	onMount(() => {
 		refresh();
 		pollHandle = setInterval(refresh, POLL_MS);
 		tickHandle = setInterval(() => {
 			now = Date.now();
 		}, TICK_MS);
+		window.addEventListener('focus', onFocus);
 	});
 
 	onDestroy(() => {
 		if (pollHandle) clearInterval(pollHandle);
 		if (tickHandle) clearInterval(tickHandle);
+		window.removeEventListener('focus', onFocus);
 	});
 </script>
 
