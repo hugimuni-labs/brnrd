@@ -128,6 +128,7 @@ function authoredItem(overrides: Partial<AuthoredBackchannelItem>): AuthoredBack
 		state: null,
 		needs: null,
 		refs: [],
+		taken: [],
 		prompt: null,
 		bodyMarkdown: '',
 		...overrides

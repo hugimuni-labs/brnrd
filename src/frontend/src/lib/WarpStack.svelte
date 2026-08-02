@@ -101,6 +101,11 @@
 				class="shrink-0 font-mono text-[10px] tracking-wide uppercase"
 				style={`color: ${heatColor}`}>{heat ?? '—'}</span
 			>
+			{#if item.taken.length > 0}
+				<!-- THE WELD (#972): this item has crossed into the shed — the
+				     count marks the ancestry; the run ids ride the fold. -->
+				<span class="shrink-0 font-mono text-[10px] text-amber-300/80">↯ {item.taken.length}</span>
+			{/if}
 		</button>
 		{#if item.prompt && heat === 'ember'}
 			<!-- Ignition, inline: an ember is dispatchable *now*, so its mandate
@@ -123,6 +128,14 @@
 		{/if}
 		{#if itemOpen}
 			<div class="mt-1.5" id={foldId} transition:fade={{ duration: 150 }}>
+				{#if item.taken.length > 0}
+					<!-- The weld's back-pointer: the runs this item ignited, by
+					     address — referencing, never re-listing (#972). -->
+					<div class="font-mono text-[10px]">
+						<span class="tracking-wide text-amber-300 uppercase">taken</span>
+						<span class="text-ink-quiet"> → {item.taken.join(' · ')}</span>
+					</div>
+				{/if}
 				{#if item.needs}
 					<!-- The named missing thing renders first: an open item's
 					     job is to say what resolving it takes. -->

@@ -64,6 +64,7 @@ const EMBER_ITEM = {
 	needs: null,
 	refs: [],
 	prompt: 'Implement the restructure.',
+	taken: [],
 	bodyMarkdown: 'Body.'
 };
 
@@ -75,6 +76,7 @@ const BANKED_ITEM = {
 	needs: 'the restructure landing first',
 	refs: [],
 	prompt: 'Build the cloth window.',
+	taken: ['run-260802-0001-9qgz'],
 	bodyMarkdown: 'Body.'
 };
 
