@@ -12,6 +12,8 @@ import {
 	selvageParts,
 	weaveCloth
 } from './cloth.ts';
+import { loomBarFraction, loomPastStop } from './loomBand.ts';
+import { THERMAL_STOPS } from './statusPalette.ts';
 import type { RunLedgerRow } from './runLedger.ts';
 
 const NOW = Date.parse('2026-08-01T12:00:00Z');
@@ -436,6 +438,72 @@ test('curated line: authored names are named, id fallbacks are not', () => {
 	assert.equal(weave.trees[0].root.named, true);
 	assert.equal(weave.trees[1].root.named, false);
 	assert.equal(weave.trees[1].root.name, 'run-260731-2148-f6hg', 'the id still shows when opened');
+});
+
+test("bars: fractions run the band's own scale against one window-wide max", () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'big', wall_clock_seconds: 900, ended_at: endedAgo(2 * HOUR) }),
+			row({
+				run_id: 'worker',
+				parent_run_id: 'big',
+				is_subspawn: true,
+				wall_clock_seconds: 400,
+				ended_at: endedAgo(HOUR)
+			}),
+			// Three days back: the denominator is the whole visible window,
+			// never per day — a long bar means the same thing on every day.
+			row({ run_id: 'small-old-day', wall_clock_seconds: 100, ended_at: endedAgo(3 * DAY) }),
+			row({ run_id: 'zero', ended_at: endedAgo(4 * HOUR) })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.equal(weave.maxWallSeconds, 900, 'max spans roots and workers across all days');
+	const lines = new Map(
+		weave.trees.flatMap((tree) => [tree.root, ...tree.children]).map((line) => [line.id, line])
+	);
+	assert.equal(lines.get('big')?.barFraction, loomBarFraction(900, 900));
+	assert.equal(lines.get('big')?.barFraction, 1, 'the longest run fills the bar');
+	assert.equal(lines.get('worker')?.barFraction, loomBarFraction(400, 900));
+	assert.equal(
+		lines.get('small-old-day')?.barFraction,
+		loomBarFraction(100, 900),
+		'an older day still divides by the window-wide max'
+	);
+	assert.equal(
+		lines.get('zero')?.barFraction,
+		loomBarFraction(0, 900),
+		'a zero-second run rides the band’s own floor — mirrored by sharing the function'
+	);
+	assert.equal(
+		lines.get('zero')?.barFraction,
+		0.06,
+		'visibly a bar, not a dot — the shelf’s floor'
+	);
+});
+
+test("bars: thermal color is the shelf's own age stop — shared, not copied", () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'fresh', ended_at: endedAgo(2 * HOUR) }),
+			row({ run_id: 'cooling', ended_at: endedAgo(8 * HOUR) }),
+			row({ run_id: 'old', ended_at: endedAgo(3 * DAY) })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	for (const tree of weave.trees) {
+		assert.equal(
+			tree.root.color,
+			THERMAL_STOPS[loomPastStop(tree.root.ageMs)],
+			'the exact pair the shelf computes run.color from'
+		);
+	}
+	const [fresh, cooling, old] = weave.trees.map((tree) => tree.root);
+	assert.equal(fresh.color, THERMAL_STOPS.amber);
+	assert.equal(cooling.color, THERMAL_STOPS['ember-ash']);
+	assert.equal(old.color, THERMAL_STOPS.ash);
 });
 
 test('produce chips and age labels speak the loom grammar', () => {

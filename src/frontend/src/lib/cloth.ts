@@ -16,7 +16,8 @@
 import type { ResolvedPathname } from '$app/types';
 import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger.ts';
 import { runNodeHref } from './runNode.ts';
-import { nestShelfChildren } from './loomBand.ts';
+import { loomBarFraction, loomPastStop, nestShelfChildren } from './loomBand.ts';
+import { THERMAL_STOPS } from './statusPalette.ts';
 import { rollupProduceGauge, type ProduceGaugeSummary } from './produceGauge.ts';
 
 /** The cloth's default sliding window: 30 days of done work. */
@@ -67,6 +68,16 @@ export interface ClothLine {
 	ageMs: number;
 	/** The close instant (epoch ms) — what the day rule groups on. */
 	endedAt: number;
+	/** The band's thermal-age color for this row — `THERMAL_STOPS` keyed by
+	 * `loomPastStop(ageMs)`, the exact pair the shelf computes `run.color`
+	 * from. Shared, never copied: the cloth and the band are one grammar at
+	 * two zooms, so a hue drift between them would be a lie. */
+	color: string;
+	/** Bar width for the row, `loomBarFraction(wallSeconds, max)` where max
+	 * is the window-wide maximum (`ClothWeave.maxWallSeconds`) — global, not
+	 * per day, so bars compare across day rules. Carries the band's floor:
+	 * a zero-second run is still visibly a bar, not a dot. */
+	barFraction: number;
 }
 
 /** A root run with its worker subruns collapsed beneath it. */
@@ -79,6 +90,9 @@ export interface ClothWeave {
 	trees: ClothTree[];
 	/** Root runs beyond the cap — rendered as "+ N older in the window". */
 	dropped: number;
+	/** The largest wall clock among the rendered lines (roots and workers)
+	 * — the shared denominator every bar's fraction was computed against. */
+	maxWallSeconds: number;
 }
 
 /** The per-day fold of nameless roots: one quiet line's worth of facts,
@@ -213,8 +227,29 @@ function curatedLine(run: MergedRun): ClothLine {
 		wallSeconds: run.wallSeconds,
 		age: clothAgeLabel(run.ageMs),
 		ageMs: run.ageMs,
-		endedAt: run.endedAt
+		endedAt: run.endedAt,
+		color: THERMAL_STOPS[loomPastStop(run.ageMs)],
+		barFraction: 0
 	};
+}
+
+/**
+ * Bar lengths in the band's own scale: `loomBarFraction` (sqrt, floored)
+ * against one window-wide maximum over every rendered line — roots and
+ * workers alike, across all days — so a long bar on jul 30 and a long bar
+ * on aug 1 mean the same thing. Runs the shelf's function, not a copy:
+ * the floor that keeps a zero-second run visibly a bar comes with it.
+ */
+function dressBars(trees: ClothTree[]): number {
+	const lines: ClothLine[] = [];
+	for (const tree of trees) {
+		lines.push(tree.root, ...tree.children);
+	}
+	const maxWallSeconds = lines.reduce((max, line) => Math.max(max, line.wallSeconds), 0);
+	for (const line of lines) {
+		line.barFraction = loomBarFraction(line.wallSeconds, maxWallSeconds);
+	}
+	return maxWallSeconds;
 }
 
 /**
@@ -284,7 +319,8 @@ export function weaveCloth(
 	}
 	const kept = trees.slice(0, Math.max(0, cap));
 	dressRepoChips(kept);
-	return { trees: kept, dropped: trees.length - kept.length };
+	const maxWallSeconds = dressBars(kept);
+	return { trees: kept, dropped: trees.length - kept.length, maxWallSeconds };
 }
 
 const DAY_MONTHS = [
