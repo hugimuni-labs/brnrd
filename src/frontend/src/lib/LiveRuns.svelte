@@ -12,6 +12,7 @@
 		moodFace,
 		type LiveRun
 	} from './liveRuns';
+	import { runFace } from './runFace';
 	import { relicIcon } from './runLedger';
 	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
@@ -155,6 +156,7 @@
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}
 				{@const isOpen = expanded.has(run.id)}
+				{@const face = runFace(run.run_id || run.id)}
 				{@const runner = runnerLabel(run)}
 				{@const mood = moodFace(
 					run.mood,
@@ -199,6 +201,12 @@
 							</span>
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
+							<!-- The face, beside the name the card is headed by — the same
+							     mark the pick lane and the cloth draw for this run, hashed
+							     from the same id the card already keys its node link on. -->
+							<span class="shrink-0 text-sm" aria-hidden="true" style={`color: ${face.color}`}
+								>{face.glyph}</span
+							>
 							<span
 								class="truncate text-sm font-medium text-amber-100"
 								use:typeReveal={{ text: primary }}>{primary}</span
