@@ -195,3 +195,27 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 		})
 	);
 }
+
+/**
+ * Does the rail render as its one-line slim bar?
+ *
+ * THE PICKER YOU CANNOT REACH (2026-08-02). This used to be
+ * `condensed && !pinnedOpen`, spelled inline in the component — and it let the
+ * page's *scroll verdict* take back a panel the reader had opened by hand.
+ * Expanding the rack and scrolling one pixel past the sentinel unmounted the
+ * whole strip, spool rack included; since the rack is the last block of that
+ * panel and the strong cores are its last rows, the bottom spool could not be
+ * tapped at all. Reaching it needed the page scroll that deleted it.
+ *
+ * The rule, and the reason this is a function rather than an expression: a
+ * reader's own open outranks the scroll verdict, and both ways of opening —
+ * pinning the slim bar, or expanding the rack — are equally the reader's.
+ * Enumerating them inline is how the second one got left out.
+ */
+export function railIsSlim(state: {
+	condensed: boolean;
+	pinnedOpen: boolean;
+	expanded: boolean;
+}): boolean {
+	return state.condensed && !state.pinnedOpen && !state.expanded;
+}

@@ -31,6 +31,7 @@ async function renderStrip(props: {
 	const runnable = compiled.js.code
 		.replace(/import\s+SpoolRack\s+from\s*'\.\/SpoolRack\.svelte';/, 'const SpoolRack = () => {};')
 		.replace(/'\.\/controlStrip'/g, "'./controlStrip.ts'")
+		.replace(/'\.\/transitions'/g, "'./transitions.ts'")
 		.replace(/'\.\/quota'/g, "'./quota.ts'")
 		.replace(/'\.\/tankForecast'/g, "'./tankForecast.ts'")
 		.replace(/'\.\/statusPalette'/g, "'./statusPalette.ts'");

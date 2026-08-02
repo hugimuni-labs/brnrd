@@ -1,9 +1,11 @@
 <script lang="ts">
 	import SpoolRack from './SpoolRack.svelte';
+	import { glitchReveal } from './transitions';
 	import {
 		DIAL_WEDGE_RADIUS,
 		dialDasharray,
 		fuelRows,
+		railIsSlim,
 		runnerBlocks,
 		slotChip
 	} from './controlStrip';
@@ -41,8 +43,22 @@
 		maxSpawns?: number | null;
 		/** The page's scroll verdict (his 08-02 steer: the rail stays on top,
 		 *  collapsed once the reader scrolls). True ⇒ render the one-line slim
-		 *  bar unless the reader pins the full rail back open. */
+		 *  bar unless the reader has opened the rail themselves. */
 		condensed?: boolean;
+		/** Fired when the *rack* opens or folds — the tall panel, not the slim
+		 *  bar's peek. The page owns the scroll response (his 08-02 steer:
+		 *  "when it's expanded it should just go to the top of the page, and
+		 *  when it's collapsed, go back"). Deliberately not fired for
+		 *  `pinnedOpen`: that form fits on screen, so moving the reader for it
+		 *  would cost them their place to answer a glance. */
+		onRackChange?: (open: boolean) => void;
+		/** The pick burning right now, for the slim bar (2026-08-02, THE PICK).
+		 *  The page order became the fall — warp → machine → cloth — which puts
+		 *  the machine below a screenful of intent, so "what is running" left
+		 *  the first glance. It comes back here, where the rail already answers
+		 *  every other resource question, and the rail is on screen at every
+		 *  scroll position by construction. `null` = nothing burning. */
+		livePick?: { label: string; clock: string | null; extra: number } | null;
 	}
 
 	let {
@@ -57,7 +73,9 @@
 		now = Date.now(),
 		activeSpawns = null,
 		maxSpawns = null,
-		condensed = false
+		condensed = false,
+		onRackChange,
+		livePick = null
 	}: Props = $props();
 	let expanded = $state(false);
 	let repoSelection = $state<string | null>(null);
@@ -101,7 +119,22 @@
 	$effect(() => {
 		if (!condensed) pinnedOpen = false;
 	});
-	let slim = $derived(condensed && !pinnedOpen);
+
+	// THE PICKER YOU CANNOT REACH (2026-08-02, his report — he could not select
+	// `claude-fable` for the run that fixed this). The rule and its history live
+	// on `railIsSlim`; the short version is that a reader's own open outranks
+	// the page's scroll verdict, and expanding the rack is one of the two ways
+	// to open. The page's scroll response — go to the top on open, return on
+	// fold — is `onRackChange`'s half, and it is reported for the *rack* only:
+	// the tall panel is the one that cannot fit on a scrolled screen.
+	let slim = $derived(railIsSlim({ condensed, pinnedOpen, expanded }));
+	let reportedRack = false;
+	$effect(() => {
+		const open = expanded;
+		if (open === reportedRack) return;
+		reportedRack = open;
+		onRackChange?.(open);
+	});
 	let activeBlock = $derived(blocks.find((block) => block.active) ?? null);
 
 	const VERDICT_COLOR: Record<TankVerdict, string> = {
@@ -173,9 +206,25 @@
 		{#if lead}
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.verdict}</span>
 		{/if}
+		{#if livePick}
+			<span class="ml-auto flex min-w-0 items-baseline gap-1.5 text-amber-200">
+				<span aria-hidden="true">↯</span>
+				<span class="max-w-[16ch] truncate">{livePick.label}</span>
+				{#if livePick.clock}<span class="text-amber-500/80">{livePick.clock}</span>{/if}
+				{#if livePick.extra > 0}<span class="text-amber-500/80">+{livePick.extra}</span>{/if}
+			</span>
+		{/if}
 	</button>
 {:else}
-	<div class="panel">
+	<!-- The rail unfolding is drawn, not tweened (his 08-02 read: "TUI
+	     interfaces could be drawn in a stop motion animation with some little
+	     glitching"). `glitchReveal` snaps the reveal onto disagreeing frames,
+	     so the rail assembles in visible steps on the way up. Only `in:` — a
+	     stop-motion *disappearance* reads as failure, so condensing is a clean
+	     cut (transitions.ts says so in as many words), and a one-sided
+	     transition also means the two forms never coexist and fight for
+	     height. -->
+	<div class="panel" in:glitchReveal={{ duration: 260 }}>
 		{#if condensed}
 			<!-- Scrolled but pinned open: the way back down is one tap. -->
 			<div class="flex justify-end border-b border-stone-800/70 px-2.5 py-1">
@@ -393,7 +442,7 @@
 		{/if}
 
 		{#if expanded}
-			<div class="border-t border-stone-800/70 p-3">
+			<div class="border-t border-stone-800/70 p-3" in:glitchReveal={{ duration: 240, delay: 40 }}>
 				<!-- Action receipts live with the control that caused them; keeping
 			     them in the expanded rack avoids turning the glance strip into a
 			     transient status-message row. -->
