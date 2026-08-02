@@ -3222,6 +3222,77 @@ class TestWorkSurfaceInjection:
         assert re.search(r"trimmed page: [\d,]+ B", result.text)
         assert "1 further surface page omitted" in result.text
 
+    def test_the_exhausted_budget_line_names_every_page_it_dropped(self, tmp_path):
+        """#1020 — a count says a page is missing; only a name says which.
+
+        The floor-overflow branch is the one path that guarantees a *hard*
+        zero remainder, so it is the one path where the named per-page
+        placeholder (#688 fix 4) cannot be afforded — and it was therefore
+        the one path that reported its losses as a bare integer. Measured on
+        `run-260802-2128-913s`: `workflow.md`, the signed agreement about
+        gating and merges that the waking schedule entry quotes by name, left
+        the wake as ``2 further surface pages omitted``.
+
+        The trailing line is not charged against the budget, so naming is
+        free; the count it replaces was the part carrying no information.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Gating and merges\n\nThe signed clause.\n", encoding="utf-8"
+        )
+        (surface / "zzz-last.md").write_text("## Tail\n\nAlso dropped.\n", encoding="utf-8")
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "2 further surface pages omitted" in result.text
+        assert "`workflow.md`" in result.text, "the dropped contract is named"
+        assert "`zzz-last.md`" in result.text, "every dropped page, not just the first"
+        assert "The signed clause" not in result.text, "and they really were dropped"
+
+    def test_a_single_unannounced_skip_is_named_in_the_singular(self, tmp_path):
+        """#1020 — the singular branch names its one page too.
+
+        Guards the shape, not just the plural join: a one-page loss is the
+        common case and the easiest place for a count to survive a rewrite.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Gating and merges\n\nThe signed clause.\n", encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "1 further surface page omitted" in result.text
+        assert "`workflow.md`" in result.text
+
     def test_headingless_no_room_still_uses_the_page_placeholder(self, tmp_path):
         """#918 — an over-budget result without a section floor is no-room."""
         home = _seed_account_home(tmp_path)
