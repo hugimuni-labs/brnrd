@@ -176,17 +176,22 @@
 	{/if}
 {/snippet}
 
-{#snippet curatedLine(line: ClothLine, child: boolean)}
-	<!-- The band's bar language at the cloth's zoom: a slim leading duration
-	     bar — width from `loomBarFraction` against the window-wide max (bars
-	     compare across days), color from the shelf's thermal-age stops, bare
-	     runs dimmed the way the shelf dims them. An accent, not a background:
-	     the text line stays the row's voice. Worker rows recede like the
-	     band's nested children — a shorter, thinner, dimmer bar. -->
+{#snippet rowBar(line: ClothLine, child: boolean)}
+	<!-- The duration bar *is* the row (his 2026-08-02 read: "instead of being the
+	     left cell, could be encoded into the whole row line bar itself"). It used
+	     to be a 40px cell at the head of the line, which meant the row's one
+	     quantitative fact was competing with its name for the reader's first
+	     glance and losing — forty pixels is not enough length to compare across
+	     thirty rows anyway. As the row's own underline it has the full width to
+	     work in, so a day of runs reads as a *shape* before it reads as text,
+	     which is what a band of cloth is supposed to do.
+	     Width from `loomBarFraction` against the window-wide max (bars compare
+	     across days), colour from the thermal-age stops, bare runs dimmed. Worker
+	     rows recede: thinner, dimmer, like the band's nested children. -->
 	<span
-		class="shrink-0 self-center overflow-hidden rounded-[1px] bg-stone-900/60 {child
-			? 'h-[2px] w-7 opacity-70 max-[480px]:w-5'
-			: 'h-[3px] w-10 max-[480px]:w-6'}"
+		class="pointer-events-none absolute inset-x-0 bottom-0 block rounded-[1px] bg-stone-900/50 {child
+			? 'h-[1px] opacity-70'
+			: 'h-[2px]'}"
 		aria-hidden="true"
 	>
 		<span
@@ -195,6 +200,9 @@
 			style={`width: ${(line.barFraction * 100).toFixed(2)}%; background-color: ${line.color}`}
 		></span>
 	</span>
+{/snippet}
+
+{#snippet curatedLine(line: ClothLine, child: boolean)}
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
@@ -267,8 +275,9 @@
 {#snippet runRow(tree: ClothTree, index: number)}
 	<div role="listitem" in:glitchReveal={{ duration: 240, delay: index * 24 }}>
 		<div
-			class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
+			class="relative flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[3px] font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
 		>
+			{@render rowBar(tree.root, false)}
 			{@render curatedLine(tree.root, false)}
 			{#if tree.children.length > 0}
 				<button
@@ -287,9 +296,10 @@
 			<div class="mt-0.5 space-y-0.5" out:fade={{ duration: 100 }}>
 				{#each tree.children as child, childIndex (child.id)}
 					<div
-						class="ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
+						class="relative ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[2px] font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
 						in:glitchReveal={{ duration: 240, delay: childIndex * 24 }}
 					>
+						{@render rowBar(child, true)}
 						{@render curatedLine(child, true)}
 					</div>
 					{@render nodeUnfold(child, true)}
