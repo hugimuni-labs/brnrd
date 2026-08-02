@@ -137,6 +137,49 @@ def test_post_tool_reinjects_when_token_moves(tmp_path):
     assert "evt-3" in out["hookSpecificOutput"]["additionalContext"]
 
 
+def test_content_identical_block_is_suppressed_when_portal_token_moves(tmp_path):
+    resources = {
+        "quota": {"status": "known", "summary": "week 80% left"},
+    }
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", resources=resources)
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "q W80" in first["hookSpecificOutput"]["additionalContext"]
+
+    # The portal snapshot moved, but the exact block the resident would see
+    # did not. The content is the authority; a broad snapshot token is not.
+    _portal(tmp_path, token="t2", resources=resources)
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
+
+
+def test_content_changed_block_is_always_resent(tmp_path):
+    env = _env(tmp_path)
+    _portal(tmp_path, token="t1", resources={
+        "quota": {"status": "known", "summary": "week 80% left"},
+    })
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+
+    _portal(tmp_path, token="t2", resources={
+        "quota": {"status": "known", "summary": "week 79% left"},
+    })
+    changed, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" in changed, changed
+    assert "q W79" in changed["hookSpecificOutput"]["additionalContext"]
+
+
+def test_content_block_never_seen_is_always_sent(tmp_path):
+    _portal(tmp_path, token="t1", resources={
+        "quota": {"status": "known", "summary": "week 80% left"},
+    })
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "hookSpecificOutput" in first, first
+    assert "q W80" in first["hookSpecificOutput"]["additionalContext"]
+    state = json.loads((tmp_path / hooks.HOOK_STATE_NAME).read_text())
+    assert hooks.PENDING_INJECT_KEY in state
+    assert hooks.LAST_INJECT_KEY not in state
+
+
 def test_stop_blocks_once_when_pending(tmp_path):
     _portal(tmp_path, token="t1", pending=2,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
@@ -203,7 +246,9 @@ def test_stop_does_not_reinject_identical_context_on_unchanged_token(tmp_path):
     assert second.get("decision") != "block"
 
     # A genuinely new snapshot (token moves) still renders — the gate is
-    # per-token, not "only ever once for the whole run".
+    # per-token, not "only ever once for the whole run". Content dedupe is
+    # deliberately *not* layered on top of this one: the closeout render
+    # carries obligations, and an unchanged obligation is unmet, not stale.
     _portal(tmp_path, token="t2", pending=0)
     third, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert "0 pending event(s)" in third["hookSpecificOutput"]["additionalContext"]
@@ -790,6 +835,24 @@ def test_gate_less_silence_warning_survives_the_routing_latch(tmp_path):
     _stop(tmp_path, token="t1", current_event_replyable=False)
     second = _stop(tmp_path, token="t2", current_event_replyable=False)
     assert "nothing communicated on any thread yet" in second
+
+
+def test_content_dedupe_never_reaches_the_closeout_channel(tmp_path):
+    # The guard for the defect above, stated as its own claim rather than as
+    # a side effect of another test: a byte-identical closeout render is what
+    # an unmet obligation looks like, so #963's content dedupe must not see
+    # the Stop phase at all. Post-tool — the ambient bar #818 measured — is
+    # the only channel it governs.
+    _portal(tmp_path, token="t1", pending=0, current_event_replyable=False)
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    body = first["hookSpecificOutput"]["additionalContext"]
+    assert "nothing communicated on any thread yet" in body
+
+    # Same portal, new token, byte-identical render: it lands again.
+    _portal(tmp_path, token="t2", pending=0, current_event_replyable=False)
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert second["hookSpecificOutput"]["additionalContext"] == body
 
 
 def test_routing_latch_is_not_burned_by_an_unrendered_stop(tmp_path):
