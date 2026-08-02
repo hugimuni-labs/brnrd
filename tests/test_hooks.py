@@ -3222,6 +3222,34 @@ def test_notices_chip_absent_when_every_notice_is_advisory():
     assert "!" not in bar
 
 
+def test_a_redirected_reply_counts_it_reached_the_wrong_correspondent():
+    """`redirected` is not FYI: the reply was delivered to a lane the
+    resident did not address.
+
+    Parent review of #1002. The cross-gate redirect in `_drain_outbox` was
+    filed `advisory` on the reasoning that nothing was refused or dropped —
+    true of the *content* and of the *lifecycle*, false of the *addressing*,
+    which is the one of the three `daemon-substrate.md` tells a run to open
+    `notices` for: did my addressed reply reach who I addressed? A run that
+    reads no `!` believes it did.
+
+    Counting works with no change to the filter, because `_counted_notices`
+    excludes only `advisory` rather than enumerating the kinds that count —
+    the structural property, not the member list.
+    """
+    notices = [
+        _kind_notice(
+            "reply redirected: event evt-9 is owned by gate 'slack', not "
+            "reachable from this run — delivered on this run's own gate instead",
+            "redirected",
+        ),
+        _kind_notice("note: body text ignored — event evt-1 closed", "advisory"),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
 def test_notices_chip_counts_only_the_one_refusal_among_advisories():
     """One real refusal in a pile of six advisories must still read `!1` —
     the whole point of a `kind` is that the pile no longer drowns it."""
