@@ -103,9 +103,9 @@ class TestParseOutboxMessage:
         assert meta == {}
         assert body == text
 
-    def test_leading_non_routing_key_is_left_alone(self):
-        # A message that happens to start "note: ..." is not a routing
-        # selector, so it stays a plain body.
+    def test_routing_word_leading_prose_is_left_alone(self):
+        # A routing word followed by prose is not a selector: the single-token
+        # guard keeps an ordinary "note: heads up" message as plain body.
         text = "note: heads up\n---\nmore\n"
         meta, body = protocol.parse_outbox_message(text)
         assert meta == {}

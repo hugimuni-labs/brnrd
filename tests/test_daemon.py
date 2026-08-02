@@ -1032,6 +1032,127 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     ] == ["handled through outbox"]
 
 
+def _run_worker_with_note(tmp_path, monkeypatch, address, *, fenced=False):
+    """Drive a ``note:`` file through ``_run_worker``'s real drain call."""
+    write_repo_scaffold(tmp_path)
+    current = make_event(tmp_path, eid="evt-current")
+    inbox = tmp_path / ".brr" / "inbox"
+    target_id = protocol.create_event(
+        inbox, source="telegram", body="already handled elsewhere",
+    ).stem
+    target_before = (inbox / f"{target_id}.md").read_text(encoding="utf-8")
+    selector = {
+        "full": target_id,
+        "short": target_id.rsplit("-", 1)[-1],
+        "unknown": "evt-does-not-exist",
+    }[address]
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        daemon.runner, "resolve_runner_profile",
+        lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    scratch = f"PRIVATE resident scratch: {address} note"
+    partial_bodies = []
+    write_partial = protocol.write_partial
+
+    def capture_partial(responses_dir, event_id, body, **kwargs):
+        partial_bodies.append(body)
+        return write_partial(responses_dir, event_id, body, **kwargs)
+
+    monkeypatch.setattr(protocol, "write_partial", capture_partial)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        assert ctx.outbox_host is not None
+        ctx.outbox_host.mkdir(parents=True, exist_ok=True)
+        note_text = f"note: {selector}\n---\n{scratch}\n"
+        if fenced:
+            note_text = "---\n" + note_text
+        (ctx.outbox_host / "note.md").write_text(
+            note_text, encoding="utf-8",
+        )
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text(
+            "current run complete\n", encoding="utf-8",
+        )
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="current run complete\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    daemon._run_worker(
+        current, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    return {
+        "inbox": inbox,
+        "target_id": target_id,
+        "target_before": target_before,
+        "scratch": scratch,
+        "partial_bodies": partial_bodies,
+        "responses": tmp_path / ".brr" / "responses",
+        "outbox": tmp_path / ".brr" / "outbox" / "evt-current",
+    }
+
+
+@pytest.mark.parametrize(
+    ("address", "fenced"),
+    [("full", True), ("short", False)],
+)
+def test_run_worker_note_retires_without_delivering_private_body(
+    tmp_path, monkeypatch, address, fenced,
+):
+    """#973: both documented address forms close without speaking.
+
+    The fenced full-ID path already works on main and needs a caller-level pin.
+    The short-ID incident omitted the opening frontmatter fence; the tolerant
+    parser recognized every other portal verb but not ``note``, so the drain saw
+    an ordinary current-thread reply and sent the resident's scratch to Telegram.
+    """
+    result = _run_worker_with_note(
+        tmp_path, monkeypatch, address, fenced=fenced,
+    )
+
+    target = protocol._read_event(
+        result["inbox"] / f"{result['target_id']}.md",
+    )
+    assert target is not None
+    assert target["status"] == "noted"
+    assert target["noted_by"]
+    assert all(result["scratch"] not in body for body in result["partial_bodies"])
+    assert protocol.list_partials(
+        result["responses"], "evt-current",
+    ) == []
+
+
+def test_run_worker_unknown_note_is_refused_without_delivery_or_event_change(
+    tmp_path, monkeypatch,
+):
+    """An unresolved ``note:`` is a visible refusal, never generic mail."""
+    result = _run_worker_with_note(tmp_path, monkeypatch, "unknown")
+
+    assert (result["inbox"] / f"{result['target_id']}.md").read_text(
+        encoding="utf-8",
+    ) == result["target_before"]
+    assert all(result["scratch"] not in body for body in result["partial_bodies"])
+    notices = daemon._read_outbox_notices(result["outbox"])
+    assert len(notices) == 1
+    assert "note dropped" in notices[0]["text"]
+    assert "not found in any inbox" in notices[0]["text"]
+
+
 def test_drain_outbox_queues_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
