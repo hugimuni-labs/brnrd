@@ -954,6 +954,66 @@ def test_stop_folds_pending_body_verbatim(tmp_path):
     assert "folded-in follow-up" in out["reason"]
 
 
+def test_stop_does_not_nag_for_self_retiring_spawn_completion(tmp_path):
+    """The Stop guard and closeout renderer must classify from one source.
+
+    This is the live #990 path: the daemon reports its own completed child as
+    observed and self-retiring in the injected closeout.  The same Stop fire
+    must not then block on that event as though it were an unmet obligation.
+    """
+    run_id = "run-1"
+    completion_id = "evt-spawn-done"
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": completion_id,
+        "source": "spawn_completed",
+        "spawn_parent_run_id": run_id,
+        "spawned_by_run": "run-child",
+        "spawn_status": "done",
+        "summary": "concurrent spawn run-child finished: status=done",
+        "body": "concurrent spawn run-child finished: status=done",
+    }])
+
+    out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+
+    assert code == 0
+    assert out.get("decision") != "block"
+    assert "0 pending event(s)" in out["hookSpecificOutput"]["additionalContext"]
+    assert "1 finished spawn(s) observed" in (
+        out["hookSpecificOutput"]["additionalContext"]
+    )
+    assert "no address needed; will retire at run end" in (
+        out["hookSpecificOutput"]["additionalContext"]
+    )
+
+
+def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
+    """A finished child cannot mask a real follow-up or become its nag."""
+    _portal(tmp_path, token="t1", pending=2, events=[
+        {
+            "id": "evt-spawn-done",
+            "source": "spawn_completed",
+            "spawn_parent_run_id": "run-1",
+            "spawn_status": "done",
+            "body": "child completion is a self-retiring fact",
+        },
+        {
+            "id": "evt-followup",
+            "source": "telegram",
+            "body": "please answer the actual follow-up",
+        },
+    ])
+
+    out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+
+    assert code == 0
+    assert out["decision"] == "block"
+    assert "please answer the actual follow-up" in out["reason"]
+    assert "child completion is a self-retiring fact" not in out["reason"]
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert "1 pending event(s)" in context
+    assert "1 finished spawn(s) observed" in context
+
+
 # ── Pending-event letter chrome ──────────────────────────────────────────
 #
 # The boundary-injected pending list, reworked after run-260731-1802-j6ke
