@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { machineDockTop, machineHeadFields, railKeepsLivePick } from './machineDock.ts';
+import {
+	RAIL_BOTTOM_PADDING_PX,
+	machineDockTop,
+	machineHeadFields,
+	railKeepsLivePick
+} from './machineDock.ts';
 
 test('parked, the head carries everything — it is the only line there is', () => {
 	assert.deepEqual(machineHeadFields(false), {
@@ -50,6 +55,28 @@ test('an unmeasured rail docks at the top rather than floating off it', () => {
 
 test('the offset is whole pixels — a fractional sticky top seams against the rail', () => {
 	assert.equal(machineDockTop(131.6), 132);
+});
+
+test('condensed, the dock reclaims the rail\'s own bottom padding', () => {
+	// His read: "could we remove the space between them, almost at least, when
+	// they are collapsed and on the top?" The space is not a design choice — it
+	// is the rail's `pb-2`. Derived from the thing it cancels, so it stays
+	// correct if that padding changes; a nudged constant would silently stop
+	// matching.
+	assert.equal(machineDockTop(132, true), 132 - RAIL_BOTTOM_PADDING_PX);
+});
+
+test('at rest the spacing stays — two blocks in a page, not one instrument', () => {
+	assert.equal(machineDockTop(132, false), 132);
+	assert.equal(machineDockTop(132), 132);
+});
+
+test('the overlap can never push the dock above the viewport', () => {
+	// A rail shorter than its own padding is not a real layout, but a first
+	// paint with a partial measurement is — and a negative sticky top hides the
+	// head off-screen, which reads as the block having vanished.
+	assert.equal(machineDockTop(4, true), 0);
+	assert.equal(machineDockTop(0, true), 0);
 });
 
 test('the rail drops its live-pick row once the machine docks beneath it', () => {
