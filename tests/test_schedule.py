@@ -719,3 +719,63 @@ def test_lint_stale_reference_leaves_a_merged_pr_cited_as_provenance_alone():
     assert provenance_findings == []
     assert [f.rule for f in remit_findings] == ["stale-reference"]
     assert "#527" in remit_findings[0].message
+
+
+# THE FORWARD WELD (2026-08-02): `serves:` names the warp threads an entry's
+# firings are for. `taken:` is written *at* ignition and so can only describe a
+# run that already started, which left an armed pick as the one row in the
+# dashboard's lane with a blank where its crossing belongs.
+
+
+def test_parse_serves_names_warp_threads(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## Loom upkeep\nevery: 2h\nserves: the-loom, the-post\nkeep weaving\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.serves == ("the-loom", "the-post")
+    assert e.body == "keep weaving"
+
+
+def test_parse_serves_absent_is_empty_never_none(tmp_path: Path):
+    # The consumer publishes `list(entry.serves)`; an entry that never stated
+    # one must be an empty crossing, not a null the renderer has to special-case.
+    dom = _write(tmp_path / "dom", "## Plain\nevery: 1h\ntick\n")
+    (e,) = schedule.parse_schedule(dom)
+    assert e.serves == ()
+
+
+def test_serves_keeps_the_layer_half_of_a_qualified_ref():
+    # The crossing is drawn per thread. Claiming item precision the strip
+    # cannot verify against the live surface would be a fabrication one layer
+    # down, so the item half is dropped rather than published.
+    assert schedule.parse_serves("the-loom#the-weld") == ("the-loom",)
+
+
+def test_serves_collapses_two_items_on_one_layer_to_one_thread():
+    # Same rule `taken:` already follows on the other side of the weld.
+    assert schedule.parse_serves("the-loom#a, the-loom#b, the-post") == (
+        "the-loom",
+        "the-post",
+    )
+
+
+def test_serves_drops_anything_that_is_not_a_call_sign():
+    # Hand-authored in a dominion file, published to a public dashboard.
+    assert schedule.parse_serves("the-loom, ../etc/passwd, owner/repo, ok2") == (
+        "the-loom",
+        "ok2",
+    )
+
+
+def test_serves_is_case_folded_like_a_filename():
+    assert schedule.parse_serves("The-Loom") == ("the-loom",)
+
+
+def test_serves_accepts_whitespace_separation(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## At one\nat: 2026-06-10T09:00:00Z\nserves: the-loom  the-clockwork\ngo\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.serves == ("the-loom", "the-clockwork")

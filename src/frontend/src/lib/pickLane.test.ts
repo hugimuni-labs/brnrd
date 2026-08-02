@@ -41,7 +41,7 @@ function run(overrides: Partial<LiveRun> = {}): LiveRun {
 	} as LiveRun;
 }
 
-test('the lane falls: armed picks furthest-first, burning ones last', () => {
+test('the lane is a queue from the front: burning picks first, then soonest-first', () => {
 	const rows = pickRows({
 		liveRuns: [run({ id: 'burning', run_id: 'burning' })],
 		scheduledWakes: [
@@ -52,11 +52,11 @@ test('the lane falls: armed picks furthest-first, burning ones last', () => {
 	});
 	assert.deepEqual(
 		rows.map((row) => row.id),
-		['later', 'soon', 'burning']
+		['burning', 'soon', 'later']
 	);
 	assert.deepEqual(
 		rows.map((row) => row.phase),
-		['armed', 'armed', 'picking']
+		['picking', 'armed', 'armed']
 	);
 });
 
@@ -128,9 +128,9 @@ test('the cap keeps the soonest armed picks and announces what it dropped', () =
 	);
 	const rows = pickRows({ liveRuns: [], scheduledWakes: wakes, now: NOW });
 	assert.equal(rows.length, ARMED_ROW_CAP);
-	// Furthest-first within what was kept, and what was kept is the near end.
-	assert.equal(rows[rows.length - 1].id, 'w0');
-	assert.equal(rows[0].id, `w${ARMED_ROW_CAP - 1}`);
+	// Soonest-first, and what was kept is the near end of the schedule.
+	assert.equal(rows[0].id, 'w0');
+	assert.equal(rows[rows.length - 1].id, `w${ARMED_ROW_CAP - 1}`);
 	assert.equal(armedOverflow(wakes, NOW), 3);
 });
 
@@ -148,4 +148,43 @@ test('an empty machine is an empty lane, not a fabricated row', () => {
 	assert.deepEqual(pickRows({ liveRuns: [], scheduledWakes: [], now: NOW }), []);
 	assert.equal(armedOverflow([], NOW), 0);
 	assert.equal(armedOverflow(null, NOW), 0);
+});
+
+// THE FORWARD WELD (2026-08-02): `serves:` is the future-tense half of
+// `taken:`. Without it an armed pick is the one row in the lane with a blank
+// where its crossing belongs.
+
+test('an armed pick crosses the threads its schedule entry serves', () => {
+	const rows = pickRows({
+		liveRuns: [],
+		scheduledWakes: [wake({ links: { serves: ['the-loom', 'the-post'] } })],
+		now: NOW
+	});
+	assert.deepEqual(rows[0].crosses, ['the-loom', 'the-post']);
+});
+
+test('an entry that never stated serves makes no claim about threads', () => {
+	// Not "crosses nothing" — no claim. `crossingCells` draws neither as a
+	// strip, and only this distinction keeps a pre-weld daemon honest.
+	assert.deepEqual(pickRows({ liveRuns: [], scheduledWakes: [wake()], now: NOW })[0].crosses, []);
+});
+
+test('a malformed links payload is no claim, not a crash', () => {
+	// `links` is free-form JSON on the activity record; a daemon older than the
+	// weld sends no key at all, and nothing validates the shape server-side.
+	for (const links of [null, {}, { serves: 'the-loom' }, { serves: [1, null, ''] }]) {
+		const rows = pickRows({
+			liveRuns: [],
+			scheduledWakes: [wake({ links } as Partial<ScheduledWake>)],
+			now: NOW
+		});
+		assert.deepEqual(rows[0].crosses, []);
+	}
+});
+
+test('a burning pick takes its threads from the taken: index, never from serves', () => {
+	// Two sources for one strip is the duplicated fact this whole round is
+	// about. `taken:` is authoritative for a run that exists.
+	const rows = pickRows({ liveRuns: [run()], scheduledWakes: null, now: NOW });
+	assert.deepEqual(rows[0].crosses, []);
 });
