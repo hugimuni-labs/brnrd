@@ -6,51 +6,18 @@
  * touches the NOW seam — and spends the horizontal space on magnitude
  * instead: past bar length ∝ spend, future bar length ∝ distance-to-fire.
  * Age itself stays on the thermal color, where it always lived.
+ *
+ * The dissolution (2026-08-02): each tense owns one object, so the band's
+ * own shelves are gone — the past bars render in the cloth, the future bars
+ * in the rack (`futureShelf.ts`) — and the band keeps only the NOW seam.
+ * The grammar stays here, shared, because it *is* one grammar: the cloth's
+ * bars and the rack's ETAs run these exact functions, never copies. (The
+ * past-window stepper and the shelf-cell click rule died with the shelves:
+ * the cloth's fixed 30d window covers every step the stepper offered.)
  */
-export const LOOM_PAST_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const LOOM_MIN_FUTURE_HORIZON_MS = 6 * 60 * 60 * 1000;
 export const LOOM_CENTER_ZONE_PX = 120;
 export const LOOM_DUE_SOON_MS = 15 * 60 * 1000;
-
-/**
- * Scrollback stops for the past shelf ("can't scroll back", 2026-07-16).
- * Discrete windows, not continuous zoom: each step is a legible unit a
- * reader can name; the shelf re-fills with the runs of the new span.
- */
-export const LOOM_PAST_WINDOWS_MS = [
-	6 * 60 * 60 * 1000,
-	12 * 60 * 60 * 1000,
-	24 * 60 * 60 * 1000,
-	3 * 24 * 60 * 60 * 1000,
-	7 * 24 * 60 * 60 * 1000
-] as const;
-
-/**
- * Does this click on a shelf cell mean "fill the frame below" rather than
- * "take me to the node page"?
- *
- * The loom is the spine (#482) *and* a closed run is a place (#478). Both
- * shipped; the second silently won, because the cell is an `<a>` and the
- * plainest click there is navigates. Resolved by splitting the gesture rather
- * than the element — the anchor stays real (right-click copies a URL,
- * ctrl/cmd/middle-click opens a tab, the status bar shows the target), and
- * only the unmodified primary click is intercepted.
- *
- * Lives here, not inline in the component, because "which clicks navigate" is
- * the entire defect and deserves a test that doesn't need a browser.
- */
-export function loomCellClickSelects(event: {
-	button?: number;
-	metaKey?: boolean;
-	ctrlKey?: boolean;
-	shiftKey?: boolean;
-	altKey?: boolean;
-	defaultPrevented?: boolean;
-}): boolean {
-	if (event.defaultPrevented) return false;
-	if ((event.button ?? 0) !== 0) return false;
-	return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
-}
 
 export function loomPastWindowLabel(windowMs: number): string {
 	const hours = Math.round(windowMs / 3_600_000);

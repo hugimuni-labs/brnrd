@@ -1,44 +1,31 @@
 <script lang="ts">
-	import type { ResolvedPathname } from '$app/types';
 	import { glitchReveal } from './transitions';
-	import { durationLabel, type RelicRecord, type RunLedgerRow } from './runLedger';
-	import { runNodeHref } from './runNode';
+	import { durationLabel } from './runLedger';
 	import { liveRunDisplayName, moodFace, type DaemonMood, type LiveRun } from './liveRuns';
 	import type { ScheduledWake } from './scheduledWakes';
-	import {
-		LOOM_CENTER_ZONE_PX,
-		LOOM_DUE_SOON_MS,
-		LOOM_PAST_WINDOWS_MS,
-		LOOM_PAST_WINDOW_MS,
-		loomBarFraction,
-		loomCellClickSelects,
-		loomFutureHorizon,
-		loomFutureStop,
-		loomPastStop,
-		loomPastWindowLabel,
-		nestShelfChildren
-	} from './loomBand';
-	import {
-		STATUS_BURNING,
-		THERMAL_STOPS,
-		glowFor,
-		statusDotStyle,
-		type GlowUrgency
-	} from './statusPalette';
-	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
+	import { LOOM_CENTER_ZONE_PX } from './loomBand';
+	import { STATUS_BURNING, glowFor } from './statusPalette';
+	import { futureEtaLabel, futureShelfRows, nextFutureWake } from './futureShelf';
+
+	// The dissolution (2026-08-02): each tense owns exactly one object. The
+	// cloth is the past, the rack is the future, and this band is the now —
+	// the NOW seam alone, the same instrument zoomed to the pick being woven.
+	// The past shelf's closed-run bars live in the cloth (whose 30d window
+	// covers every step the old 6h→7d stepper offered, lens rail included);
+	// the future shelf's ETA bars live in the rack (`FutureShelf.svelte`).
+	// The seam keeps one whisper of the future — the idle "next in …" line —
+	// because an idle seam's whole job is to answer "when does the next
+	// thing happen". A live run here is a strand crossing the seam: what is
+	// being woven through the shed right now, and for how long.
 
 	interface Props {
-		ledgerRows: RunLedgerRow[] | null;
 		liveRuns: LiveRun[] | null;
+		/** Read only for the idle seam's "next in …" whisper — the schedule
+		 *  itself renders in the rack (`FutureShelf`). */
 		scheduledWakes: ScheduledWake[] | null;
 		now: number;
 		/** Selection is the page's: the band reports, the detail sheet answers. */
 		onSelect?: (kind: 'run' | 'wake', id: string) => void;
-		onPastWindowChange?: (windowMs: number) => void;
-		selectedId?: string | null;
-		/** The page owns lens state, same as selection: the band reports. */
-		lens?: string;
-		onLensChange?: (lens: string) => void;
 		/**
 		 * The daemon's resting face (#566), for the NOW seam when nothing is
 		 * burning. `null` on a pre-upgrade daemon that publishes no mood — and
@@ -48,232 +35,19 @@
 		daemonMood?: DaemonMood | null;
 	}
 
-	let {
-		ledgerRows,
-		liveRuns,
-		scheduledWakes,
-		now,
-		onSelect,
-		onPastWindowChange,
-		selectedId = null,
-		lens = LENS_ALL,
-		onLensChange,
-		daemonMood = null
-	}: Props = $props();
+	let { liveRuns, scheduledWakes, now, onSelect, daemonMood = null }: Props = $props();
 
 	// The resting face, normalized once. Null whenever the wire has nothing to
 	// say — no daemon mood, or a mood with no name — and the seam falls back to
 	// its hollow dot rather than inventing a face to fill the space.
 	let restingFace = $derived(daemonMood ? moodFace(daemonMood.name, daemonMood.glyph) : null);
 
-	// Past scrollback ("can't scroll back", 2026-07-16): a discrete window
-	// over the past shelf. Click the label to step 6h → 12h → 24h → 3d → 7d.
-	// (The wheel used to step it too; the shelf's own vertical scroll owns
-	// the wheel now.)
-	let pastWindowMs = $state<number>(LOOM_PAST_WINDOW_MS);
-
-	function cyclePastWindow() {
-		const index = LOOM_PAST_WINDOWS_MS.findIndex((window) => window >= pastWindowMs);
-		pastWindowMs = LOOM_PAST_WINDOWS_MS[(index + 1) % LOOM_PAST_WINDOWS_MS.length];
-		onPastWindowChange?.(pastWindowMs);
-	}
-
-	// The shelf model (2026-07-17 steer): one run = one horizontal bar row,
-	// newest at the NOW seam. Length carries spend, color carries age, the
-	// legend carries produce — in type, not pictograms.
-	interface ShelfRun {
-		id: string;
-		/**
-		 * Route to this run's Wyrd node, or null when the row has no real
-		 * `run_id` (the shelf id then falls back to an event id or timestamp,
-		 * which names no durable node — those rows keep the select-only
-		 * behaviour instead of linking somewhere that can never resolve).
-		 */
-		href: ResolvedPathname | null;
-		ageMs: number;
-		wallSeconds: number;
-		color: string;
-		legend: string;
-		/** A run that closed without produce still happened — faint row. */
-		bare: boolean;
-		/** 0 = its own root row; 1 = nested under the parent that spawned it
-		 *  (`nestShelfChildren`, #539). Only ever one hop deep. */
-		depth: 0 | 1;
-		/** Last child of its brood — where the tree rail's vertical stops. */
-		lastChild: boolean;
-	}
-
-	function isKb(relic: RelicRecord): boolean {
-		return relic.kind === 'kb' || relic.kind === 'kb_page';
-	}
-
-	function produceLegend(relics: RelicRecord[]): string {
-		const prs = relics.filter((relic) => relic.kind === 'pr').length;
-		const commits = relics.filter((relic) => relic.kind === 'commit').length;
-		const kb = relics.filter(isKb).length;
-		const parts = [
-			prs > 0 ? `${prs}pr` : '',
-			commits > 0 ? `${commits}c` : '',
-			kb > 0 ? `${kb}kb` : ''
-		].filter(Boolean);
-		return parts.join(' ');
-	}
-
-	/** The window predicate, lifted out of `shelfRuns` so the lens vocabulary
-	 *  and the shelf are derived from the same set of rows. A lens offered over
-	 *  a wider set than the shelf renders would count rows the reader cannot
-	 *  see. */
-	function inPastWindow(row: RunLedgerRow, timestamp: number, windowMs: number): boolean {
-		const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
-		const ageMs = timestamp - endedAt;
-		return Number.isFinite(endedAt) && ageMs >= 0 && ageMs <= windowMs;
-	}
-
-	function shelfRuns(rows: RunLedgerRow[], timestamp: number, windowMs: number): ShelfRun[] {
-		const grouped: Array<{
-			id: string;
-			runId: string | null;
-			repoLabel: string | null;
-			endedAt: number;
-			wallSeconds: number;
-			relics: RelicRecord[];
-			parentRunId: string | null;
-			isSubspawn: boolean;
-		}> = [];
-		for (const row of rows) {
-			const endedAt = row.ended_at ? Date.parse(row.ended_at) : Number.NaN;
-			const ageMs = timestamp - endedAt;
-			if (!Number.isFinite(endedAt) || ageMs < 0 || ageMs > windowMs) continue;
-			const id = row.run_id ?? row.event_id ?? row.ended_at ?? '';
-			if (!id) continue;
-			const current = grouped.find((group) => group.id === id);
-			if (current) {
-				current.runId ??= row.run_id;
-				current.repoLabel ??= row.repo_label;
-				current.endedAt = Math.max(current.endedAt, endedAt);
-				current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
-				current.relics.push(...(row.external_refs ?? []));
-				current.parentRunId ??= row.parent_run_id;
-				current.isSubspawn ||= Boolean(row.is_subspawn);
-			} else {
-				grouped.push({
-					id,
-					runId: row.run_id,
-					repoLabel: row.repo_label,
-					endedAt,
-					wallSeconds: row.wall_clock_seconds ?? 0,
-					relics: [...(row.external_refs ?? [])],
-					parentRunId: row.parent_run_id,
-					isSubspawn: Boolean(row.is_subspawn)
-				});
-			}
-		}
-
-		// A dispatched child's row nests under the row of the run that spawned
-		// it (#539) rather than sorting purely by its own age — same edge
-		// `groupWithChildren` folds into the receipt panel, read here for the
-		// shelf's position instead of its relics.
-		const withAge = grouped.map((group) => ({ ...group, ageMs: timestamp - group.endedAt }));
-		return nestShelfChildren(withAge).map((group) => {
-			const produce = produceLegend(group.relics);
-			return {
-				id: group.id,
-				href: group.runId ? runNodeHref(group.repoLabel, group.runId) : null,
-				ageMs: group.ageMs,
-				wallSeconds: group.wallSeconds,
-				color: THERMAL_STOPS[loomPastStop(group.ageMs)],
-				legend: produce
-					? `${produce} · ${durationLabel(group.wallSeconds)}`
-					: durationLabel(group.wallSeconds),
-				bare: !produce,
-				depth: group.depth,
-				lastChild: group.lastChild
-			};
-		});
-	}
-
-	// The lens vocabulary is derived from the rows on screen, so it moves with
-	// the past window — step 6h → 7d and a dispatch source that had no runs in
-	// the near window appears as a chip. Nothing here holds a list of the legal
-	// values; see `loomLens.ts` for why that is the whole point.
-	let windowRows = $derived(
-		(ledgerRows ?? []).filter((row) => inPastWindow(row, now, pastWindowMs))
-	);
-	let lenses = $derived(availableLenses(windowRows));
-	// A selection can outlive its lens (the window narrowed, the rows aged out).
-	// Reconciling here rather than trusting the prop keeps the shelf and the
-	// chip row from disagreeing for a poll.
-	let activeLens = $derived(reconcileLens(lens, lenses));
-	let runs = $derived(shelfRuns(applyLens(windowRows, activeLens), now, pastWindowMs));
-	let maxWallSeconds = $derived(Math.max(...runs.map((run) => run.wallSeconds), 0));
-	let wakes = $derived(
-		[...(scheduledWakes ?? [])]
-			.filter((wake) => {
-				const instant = wake.scheduled_for ? Date.parse(wake.scheduled_for) : Number.NaN;
-				return Number.isFinite(instant);
-			})
-			.sort((a, b) => Date.parse(a.scheduled_for ?? '') - Date.parse(b.scheduled_for ?? ''))
-	);
-	let futureHorizon = $derived(
-		loomFutureHorizon(
-			wakes.map((wake) => wake.scheduled_for),
-			now
-		)
-	);
-
-	function wakeEta(wake: ScheduledWake): number {
-		return wake.scheduled_for ? Date.parse(wake.scheduled_for) - now : Number.NaN;
-	}
-
-	function wakeColor(wake: ScheduledWake): string {
-		if (wake.status === 'quota-paused') return THERMAL_STOPS.ash;
-		const eta = wakeEta(wake);
-		if (eta < 0) return THERMAL_STOPS.ash;
-		return THERMAL_STOPS[loomFutureStop(eta, futureHorizon)];
-	}
-
-	function wakeUrgency(wake: ScheduledWake): GlowUrgency {
-		if (wake.status === 'quota-paused') return 'calm';
-		const eta = wakeEta(wake);
-		if (eta < 0) return 'alarm';
-		return eta <= LOOM_DUE_SOON_MS ? 'attention' : 'calm';
-	}
-
-	function ageLabel(ms: number): string {
-		const minutes = Math.max(0, Math.round(ms / 60_000));
-		if (minutes < 60) return `${minutes}m ago`;
-		const hours = Math.floor(minutes / 60);
-		if (hours < 48) return `${hours}h ${minutes % 60}m ago`;
-		return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
-	}
-
-	function etaLabel(ms: number): string {
-		const minutes = Math.round(Math.abs(ms) / 60_000);
-		if (ms < 0) return `${minutes}m overdue`;
-		if (minutes < 60) return `in ${minutes}m`;
-		return `in ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-	}
-
-	function wakeLegend(wake: ScheduledWake): string {
-		const eta = wakeEta(wake);
-		const summary = (wake.summary || wake.conversation_key || 'wake').trim();
-		if (wake.status === 'quota-paused') return `quota-paused · ${summary}`;
-		if (wake.status === 'quota-paced') return `${etaLabel(eta)} · quota-paced · ${summary}`;
-		return `${etaLabel(eta)} · ${summary}`;
-	}
+	// The idle seam's one look ahead: the soonest wake still ahead of now,
+	// read through the same rows the rack renders in full.
+	let nextWake = $derived(nextFutureWake(futureShelfRows(scheduledWakes, now)));
 
 	function select(kind: 'run' | 'wake', id: string) {
 		onSelect?.(kind, id);
-	}
-
-	// A plain left click fills §2a and keeps the reader in the band; every
-	// modified click still follows the anchor. The rule itself lives in
-	// `loomBand.ts` (`loomCellClickSelects`) so it can be tested without a
-	// browser — it is the whole of the defect this slice fixes.
-	function selectFromCell(event: MouseEvent, id: string) {
-		if (!loomCellClickSelects(event)) return;
-		event.preventDefault();
-		select('run', id);
 	}
 
 	function elapsedLabel(run: LiveRun): string {
@@ -281,184 +55,29 @@
 		if (!Number.isFinite(started)) return '';
 		return durationLabel(Math.max(0, (now - started) / 1000));
 	}
-
-	let nextWake = $derived(wakes.find((wake) => wakeEta(wake) > 0) ?? null);
-
-	// One row geometry, whether the cell ends up a link or a button — the band
-	// is a 128px instrument and the two must not drift a pixel apart.
-	const SHELF_ROW_CLASS =
-		'flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-end gap-1.5';
-
-	function shelfRowStyle(run: ShelfRun): string {
-		return `color: ${run.color};${selectedId === run.id ? ' filter: brightness(1.6);' : ''}`;
-	}
-
-	// A nested child recedes from the NOW-seam edge its parent's bar touches
-	// (#539) — the shelf reads right-to-left, anchored at that edge, so
-	// "indented" here means held back from it rather than pushed in from the
-	// far side, which a plain margin-left would do nothing visible to (the
-	// row is already `justify-end`).
-	//
-	// The indent alone left the brood ambiguous once the spawn pool grew
-	// past two: four offset rows say "these are children", never "children
-	// *of which*". So the offset now carries a tree rail down the seam edge
-	// — mirrored, because the tree hangs off the right. The `└` terminator
-	// is the whole reason `nestShelfChildren` reports `lastChild`.
-	function shelfRowClass(run: ShelfRun): string {
-		if (run.depth === 0) return SHELF_ROW_CLASS;
-		const last = run.lastChild ? ' shelf-child-last' : '';
-		return `${SHELF_ROW_CLASS} shelf-child${last}`;
-	}
-
-	/** Shared prefix for a shelf row's title/tooltip — the one place both the
-	 * link and select-only branches source the "spawned by" tell from, so a
-	 * nested row reads the same regardless of which branch rendered it. */
-	function shelfRowTitle(run: ShelfRun): string {
-		const nested = run.depth > 0 ? 'spawned · ' : '';
-		return `${nested}${run.id} · ${run.legend} · ${ageLabel(run.ageMs)}`;
-	}
 </script>
 
-{#snippet shelfRow(run: ShelfRun)}
-	<span
-		class="truncate font-mono text-[9px] leading-none whitespace-nowrap"
-		class:opacity-50={run.bare}
-	>
-		{run.legend}
-	</span>
-	<span
-		class="h-[7px] shrink-0 rounded-l-[1px]"
-		class:opacity-40={run.bare}
-		style={`width: ${(loomBarFraction(run.wallSeconds, maxWallSeconds) * 62).toFixed(2)}%; background-color: ${run.color}`}
-		aria-hidden="true"
-	></span>
-{/snippet}
-
-<div
-	class="panel overflow-hidden px-3 py-2.5"
-	aria-label="past produce, live runs now, and scheduled future"
->
-	<!-- The lens rail (wyrd §4 band 2). Every chip here was derived from the
-	     rows on screen a moment ago — the origins from `source_system`, the
-	     shapes from the relic manifests, the stack from `is_subspawn`. None of
-	     them is a name anything chose; that is what replaced the coined
-	     `.task-classification` slug rather than a tidier enum of the same kind.
-	     The rail is also where `/activity` and the standing PR-review section
-	     went: "what has this been doing" and "what is waiting on me" are
-	     questions you ask of the board, not panels that sit on it. -->
-	{#if lenses.length > 1}
-		<div
-			class="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] leading-none"
-			role="group"
-			aria-label="lenses over the past shelf"
-		>
-			{#each lenses as candidate (candidate.id)}
-				<button
-					type="button"
-					class="cursor-pointer tracking-[0.08em] uppercase transition-colors"
-					class:text-amber-200={activeLens === candidate.id}
-					class:text-ink-mute={activeLens !== candidate.id}
-					class:hover:text-stone-400={activeLens !== candidate.id}
-					aria-pressed={activeLens === candidate.id}
-					title={candidate.facet === 'artifact'
-						? `${candidate.count} PR${candidate.count === 1 ? '' : 's'} waiting on a review`
-						: `${candidate.count} run${candidate.count === 1 ? '' : 's'} · ${candidate.facet}`}
-					onclick={() => onLensChange?.(activeLens === candidate.id ? LENS_ALL : candidate.id)}
-				>
-					{candidate.label}<span class="ml-1 text-ink-mute">{candidate.count}</span>
-				</button>
-			{/each}
-		</div>
-	{/if}
+<div class="panel overflow-hidden px-3 py-2.5" aria-label="live runs at the now seam">
 	<div
 		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
 	>
-		<span>
-			<button
-				type="button"
-				class="cursor-pointer uppercase hover:text-stone-400"
-				title="step the past window: 6h → 12h → 24h → 3d → 7d"
-				onclick={cyclePastWindow}
-			>
-				past · {loomPastWindowLabel(pastWindowMs)}
-			</button>
-			{#if runs.length > 0}
-				<span class="ml-1 text-ink-mute">· {runs.length} run{runs.length === 1 ? '' : 's'}</span>
-			{/if}
-		</span>
+		<span aria-hidden="true"></span>
 		<span class="text-center text-amber-200">now</span>
-		<span class="text-right">
-			future
-			{#if wakes.length > 0}
-				<span class="ml-1 normal-case text-ink-mute">· {wakes.length}</span>
-			{/if}
-		</span>
+		<span aria-hidden="true"></span>
 	</div>
 
 	<div
 		class="mt-1 grid h-[128px]"
 		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
 	>
-		<!-- Past shelf: newest row at the top, bars anchored to the NOW seam,
-		     length ∝ spend (sqrt-scaled), color = thermal age. Rows flex
-		     between 11px and 22px so four runs fill the band as confidently
-		     as twenty-six; past that, the shelf scrolls. -->
-		<div
-			class="loom-shelf flex min-w-0 flex-col gap-px overflow-y-auto pr-1.5"
-			aria-label="closed runs in the selected past window"
-		>
-			<!-- An empty shelf under an active lens means something different from
-			     an empty window, and saying "no runs in 24h" while 26 runs sit
-			     one click away would be the band lying about its own contents. -->
-			{#if ledgerRows !== null && runs.length === 0}
-				<span class="m-auto truncate px-1 text-center font-mono text-[9px] text-ink-mute">
-					{activeLens === LENS_ALL
-						? `no runs in ${loomPastWindowLabel(pastWindowMs)}`
-						: `no runs match this lens in ${loomPastWindowLabel(pastWindowMs)}`}
-				</span>
-			{/if}
-			<!-- A closed run is a *place*, so its cell is a real link into that
-			     run's Wyrd node — right-clickable, openable in a tab, and a URL
-			     you can send someone. A plain left click, though, fills the
-			     detail frame below rather than navigating: the loom is the spine
-			     and the reader keeps their place (see `selectFromCell`). Rows
-			     with no durable run id are select-only; identical geometry. -->
-			<!-- `|global` on both `in:` directives below is the whole of the
-			     #970 regression fix. Transitions are local by default, and a
-			     local intro only plays when its *own nearest block* toggles.
-			     The link/select `{#if run.href}` split put a fresh block
-			     between each shelf row and its `in:`, so a row added to the
-			     keyed each created that block mid-birth and the glitch never
-			     fired — every row, grouped or not, silently bypassed both
-			     directives from then on (noticed when runs grouped into the
-			     dispatch tree). Global restores the band grammar: a past row
-			     *appearing* is the state change, wherever creation started. -->
-			{#each runs as run, index (run.id)}
-				{#if run.href}
-					<a
-						href={run.href}
-						class={shelfRowClass(run)}
-						style={shelfRowStyle(run)}
-						title={`${shelfRowTitle(run)} — click to open below, ctrl/⌘-click for the full node`}
-						onclick={(event) => selectFromCell(event, run.id)}
-						in:glitchReveal|global={{ duration: 240, delay: index * 24 }}
-					>
-						{@render shelfRow(run)}
-					</a>
-				{:else}
-					<button
-						type="button"
-						class={shelfRowClass(run)}
-						style={shelfRowStyle(run)}
-						title={shelfRowTitle(run)}
-						onclick={() => select('run', run.id)}
-						in:glitchReveal|global={{ duration: 240, delay: index * 24 }}
-					>
-						{@render shelfRow(run)}
-					</button>
-				{/if}
-			{/each}
+		<!-- The flanks the shelves vacated. A seam only reads as a seam with
+		     material either side, so each side keeps one quiet warp hairline —
+		     the threads the seam is drawn across, with nothing shelved on
+		     them. The past's bars are the cloth's now; the future's are the
+		     rack's. -->
+		<div class="flex items-center pr-1.5" aria-hidden="true">
+			<span class="h-px w-full bg-stone-800/60"></span>
 		</div>
 
 		<!-- The NOW seam: an instrument, not a snapshot. Idle it answers
@@ -499,7 +118,7 @@
 					</span>
 					{#if nextWake}
 						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-ink-mute">
-							next {etaLabel(wakeEta(nextWake))}
+							next {futureEtaLabel(nextWake.etaMs)}
 						</span>
 					{/if}
 				</div>
@@ -511,10 +130,10 @@
 						     state belongs to the panel that issued the stop, not to a
 						     band that merely reports position. -->
 						{@const stopping = run.stop_requested}
-						<!-- `|global` for the same reason as the past shelf (#970): the
-						     0→1 case creates this whole `{:else}` branch, and a local
-						     intro inside the freshly-born each block never fires — the
-						     seam's most common ignition was the one that didn't play. -->
+						<!-- `|global` (#970): the 0→1 case creates this whole `{:else}`
+						     branch, and a local intro inside the freshly-born each block
+						     never fires — the seam's most common ignition was the one
+						     that didn't play. -->
 						<div
 							class="flex min-w-0 items-stretch gap-px"
 							in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
@@ -538,11 +157,8 @@
 							<!-- The stop control used to sit here as a `w-7` sibling
 							     (#492). It moved to the node panel's expanded view
 							     (`RunNodeInline`) on 2026-07-19: a destructive action was
-							     taking width from a 9px cell that had none to spare, and
-							     the loom's job is position and density, not affordances
-							     that must be readable to be safe. The *state* stays — a
-							     stopping run still says so, because that is information
-							     the band should carry, and it costs no width. -->
+							     taking width from a 9px cell that had none to spare. The
+							     *state* stays — a stopping run still says so. -->
 						</div>
 					{/each}
 					{#if liveRuns.length > 2}
@@ -554,89 +170,8 @@
 			{/if}
 		</div>
 
-		<!-- Future shelf: soonest at the top, bars anchored to the NOW seam,
-		     length ∝ distance-to-fire against the horizon — a countdown you
-		     can read as geometry. Frost thaws to amber as the fire nears. -->
-		<div
-			class="loom-shelf flex min-w-0 flex-col gap-px overflow-y-auto pl-1.5"
-			aria-label="scheduled wakes"
-		>
-			{#if scheduledWakes !== null && wakes.length === 0}
-				<span class="m-auto truncate font-mono text-[9px] text-ink-mute"> nothing queued </span>
-			{/if}
-			{#each wakes as wake, index (wake.id)}
-				{@const eta = wakeEta(wake)}
-				{@const color = wakeColor(wake)}
-				{@const urgency = wakeUrgency(wake)}
-				<button
-					type="button"
-					class="flex max-h-[22px] min-h-[11px] flex-1 shrink-0 cursor-pointer items-center justify-start gap-1.5"
-					style={`color: ${color};${selectedId === wake.id ? ' filter: brightness(1.6);' : ''}`}
-					title={wakeLegend(wake)}
-					onclick={() => select('wake', wake.id)}
-					in:glitchReveal={{ duration: 240, delay: 70 + index * 26 }}
-				>
-					<span
-						class="h-2 w-2 shrink-0 rounded-full"
-						style={statusDotStyle('burning', color, urgency)}
-						aria-hidden="true"
-					></span>
-					<span
-						class="h-[7px] shrink-0 rounded-r-[1px]"
-						style={`width: ${(loomBarFraction(Math.max(eta, 0), futureHorizon) * 38).toFixed(2)}%; background-color: ${color}`}
-						aria-hidden="true"
-					></span>
-					<span class="truncate font-mono text-[9px] leading-none whitespace-nowrap">
-						{wakeLegend(wake)}
-					</span>
-				</button>
-			{/each}
+		<div class="flex items-center pl-1.5" aria-hidden="true">
+			<span class="h-px w-full bg-stone-800/60"></span>
 		</div>
 	</div>
 </div>
-
-<style>
-	/* The shelf scrolls, but chrome must not: a scrollbar gutter inside a
-	   112px instrument reads as clutter. Thin and dark where supported. */
-	.loom-shelf {
-		scrollbar-width: thin;
-		scrollbar-color: var(--color-stone-800, #292524) transparent;
-	}
-
-	/* The dispatch rail. A spawned child's row is held back from the NOW
-	   seam (see `shelfRowClass`); the rail fills that gap with the tree
-	   the offset only implied — mirrored, since the shelf hangs off the
-	   right edge, so it reads `─┤` down to `─┘` rather than the familiar
-	   `├─ └─`. Drawn in CSS rather than box-drawing glyphs on purpose:
-	   rows are 11–22px with a 1px gap, and a 9px glyph cannot join across
-	   that seam without hairline breaks at every row. The vertical starts
-	   1px high to bridge the flex gap into the parent's row above. */
-	.shelf-child {
-		position: relative;
-		margin-right: 10px;
-	}
-	.shelf-child::before,
-	.shelf-child::after {
-		content: '';
-		position: absolute;
-		background-color: var(--color-stone-600, #57534e);
-	}
-	/* the vertical: parent's row edge → this child (→ the next, and on) */
-	.shelf-child::before {
-		top: -1px;
-		bottom: 0;
-		right: -6px;
-		width: 1px;
-	}
-	/* the last child terminates it: the line stops at the elbow */
-	.shelf-child-last::before {
-		bottom: 50%;
-	}
-	/* the elbow's arm, reaching left from the rail to this row's bar */
-	.shelf-child::after {
-		top: 50%;
-		right: -6px;
-		width: 6px;
-		height: 1px;
-	}
-</style>
