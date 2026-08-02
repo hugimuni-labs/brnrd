@@ -30,6 +30,13 @@ Append format — one JSON object per line, at least a ``"kind"`` key:
     {"kind": "summary", "text": "Closed #200 and #317 as one relics feature."}
     {"kind": "issue", "number": 317, "action": "closed"}
     {"kind": "kb", "path": "design-run-relics.md"}
+    {"kind": "item", "address": "the-loom#gate-chips-row-on-repos"}
+
+An ``item`` relic (#972, THE WELD) names the warp item that ignited the run
+— a ``layer#slug`` resolver address into ``surface/layers/``, appended by
+the daemon at ignition (``weld.annotate_ignition``) or by the resident via
+``brnrd relic item``. It is ancestry, not forge produce, so it never gets a
+URL derived; the address is the link, resolved by the surface renderer.
 
 ``url`` is never the resident's job: the daemon knows the run's forge and
 ``owner/repo``, so issue/PR/commit/branch relics get their link derived at
@@ -62,7 +69,7 @@ CONTROL_NAME = ".relics.jsonl"
 
 _LIVE_KINDS = {
     "commit", "branch", "pr", "merge", "kb", "issue", "comment", "message",
-    "file",
+    "file", "item",
 }
 
 # Subjects that attest a merge the run performed. GitHub's own generated
@@ -95,6 +102,7 @@ _ICONS: dict[str, str] = {
     "file": "📄",
     "message": "✉️",
     "reply": "🗣️",
+    "item": "🧵",
 }
 
 
@@ -134,6 +142,8 @@ def label(record: dict[str, Any]) -> str:
         return str(record.get("note") or record.get("channel") or "message")
     if kind == "reply":
         return str(record.get("excerpt") or "reply")
+    if kind == "item":
+        return str(record.get("address") or "item")
     if kind == "summary":
         return str(record.get("text") or "")
     for field in ("text", "path", "note", "name", "on"):
@@ -624,6 +634,12 @@ def _identity(record: dict[str, Any]) -> tuple[str, str] | None:
     if kind in {"kb", "file"}:
         path = str(record.get("path") or "")
         return (kind, path) if path else None
+    if kind == "item":
+        # THE WELD (#972): one ignition, one relic — the daemon appends the
+        # relic at run start, so a retried finalize or a resident's own
+        # `brnrd relic item` for the same address must meet it, not double it.
+        address = str(record.get("address") or "")
+        return ("item", address) if address else None
     return None
 
 
