@@ -1,3 +1,4 @@
+import type { AuthoredBackchannelItem, BackchannelItemKind } from './backchannelPage';
 import type { ConfigChangeRequestItem } from './configRequests';
 import type { PRReviewItem } from './prReviewQueue';
 
@@ -66,6 +67,40 @@ export function backchannelChip(
  * row closes whichever was open; tapping the open row closes it. */
 export function toggleFold(open: string | null, key: string): string | null {
 	return open === key ? null : key;
+}
+
+export interface NeedsPreviewRow {
+	key: string;
+	headline: string;
+	kind: BackchannelItemKind | null;
+}
+
+/** The needs strip's collapsed preview: the top asks, decision/action first
+ * (maintainer, 08-02: "the top item in all that should be a decision/action
+ * ask"). Authored `decide`/`act` items lead, then the remaining authored
+ * items — stable within each group, the file's own order preserved (order
+ * *is* the priority within a band) — then the derived rows at the end, the
+ * same tail position the full list gives them. Derived rows wear the kind
+ * their action asks for: a PR is a `review`, a config request a `decide`. */
+export function needsPreview(
+	authored: AuthoredBackchannelItem[],
+	derived: BackchannelItem[],
+	limit: number
+): NeedsPreviewRow[] {
+	const asks = authored.filter((item) => item.kind === 'decide' || item.kind === 'act');
+	const rest = authored.filter((item) => item.kind !== 'decide' && item.kind !== 'act');
+	return [
+		...[...asks, ...rest].map((item) => ({
+			key: `a:${item.key}`,
+			headline: item.headline,
+			kind: item.kind
+		})),
+		...derived.map((item) => ({
+			key: `d:${item.key}`,
+			headline: item.headline,
+			kind: (item.kind === 'pr' ? 'review' : 'decide') as BackchannelItemKind
+		}))
+	].slice(0, limit);
 }
 
 export function buildBackchannelItems(
