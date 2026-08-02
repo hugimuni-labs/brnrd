@@ -3405,6 +3405,94 @@ def test_prior_run_block_never_hands_back_the_current_run(tmp_path):
     assert "run-current" not in block
 
 
+def test_prior_run_block_carries_the_guard_line_when_a_summary_exists(tmp_path):
+    """The closeout guard's verdict rides the projection, clean shape."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    node = tmp_path / "home" / "runs" / "Gurio__brr" / "run-clean"
+    node.mkdir(parents=True)
+    (node / "state.md").write_text(
+        "---\nrun_id: run-clean\nstatus: done\n---\n", encoding="utf-8",
+    )
+    (node / "body.md").write_text("## Now\n\nShipped it.\n", encoding="utf-8")
+    (node / "boundaries.json").write_text(
+        json.dumps({
+            "total": 20, "skipped": 0, "stops": 16,
+            "guard_fire_count": 1,
+            "guard_fires": [{"at": "2026-08-02T07:31:00Z", "blocked": True}],
+            "final_stop_at": "2026-08-02T07:45:00Z",
+            "final_stop_block": False,
+            "final_stop_block_reason": None,
+        }),
+        encoding="utf-8",
+    )
+
+    block = prompts._build_prior_run_block(repo)
+
+    assert "guard: 16 stops · blocked ×1 · final stop clear" in block
+
+
+def test_prior_run_block_shouts_when_the_run_ended_over_a_live_block(tmp_path):
+    """The case the feature exists for: a false ``continuing`` on a blocked Stop."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    node = tmp_path / "home" / "runs" / "Gurio__brr" / "run-blocked"
+    node.mkdir(parents=True)
+    (node / "state.md").write_text(
+        "---\nrun_id: run-blocked\nstatus: done\n---\n", encoding="utf-8",
+    )
+    (node / "body.md").write_text("## Now\n\ncontinuing — almost there.\n", encoding="utf-8")
+    (node / "boundaries.json").write_text(
+        json.dumps({
+            "total": 4, "skipped": 0, "stops": 1,
+            "guard_fire_count": 1,
+            "guard_fires": [{"at": "2026-08-02T07:31:00Z", "blocked": True}],
+            "final_stop_at": "2026-08-02T07:31:00Z",
+            "final_stop_block": True,
+            "final_stop_block_reason": "the gate never ran",
+        }),
+        encoding="utf-8",
+    )
+
+    block = prompts._build_prior_run_block(repo)
+
+    assert "guard: 1 stop · blocked ×1 · final stop BLOCKED" in block
+
+
+def test_prior_run_block_has_no_guard_line_when_no_summary_exists(tmp_path):
+    """Absent `boundaries.json` renders nothing — no `guard: unknown` placeholder."""
+    from brr import prompts
+
+    repo = tmp_path / "repo"
+    (repo / ".brr").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / ".brr" / "config").write_text(
+        f"repo.label=Gurio/brr\nhome.path={tmp_path / 'home'}\n", encoding="utf-8",
+    )
+    node = tmp_path / "home" / "runs" / "Gurio__brr" / "run-older-node"
+    node.mkdir(parents=True)
+    (node / "state.md").write_text(
+        "---\nrun_id: run-older-node\nstatus: done\n---\n", encoding="utf-8",
+    )
+    (node / "body.md").write_text("## Now\n\nEarlier work, no boundaries file.\n", encoding="utf-8")
+
+    block = prompts._build_prior_run_block(repo)
+
+    assert "guard" not in block
+
+
 def test_prior_run_block_stays_inside_this_repo(tmp_path):
     """A neighbouring repo's last run is a plausible wrong memory — worse than none."""
     from brr import prompts

@@ -6958,6 +6958,84 @@ def test_run_body_captures_the_resident_card_without_daemon_prose(tmp_path):
     assert task.meta["run_body_path"] == str(path)
 
 
+def test_persist_boundaries_summary_writes_beside_body_and_state(tmp_path):
+    """The node gets the derived summary, not the raw transcript.
+
+    The source transcript lives in the daemon's own scratch dir
+    (``<brr_dir>/runs/<run-id>/boundaries.jsonl``, where the hook backchannel
+    writes it — see ``hooks._transcript_env`` in test_hooks.py for the same
+    layout), never the account dominion; only ``hooks.derive_boundaries_summary``'s
+    compact projection lands on the node.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-guard", event_id="evt-guard", body="work", source="telegram")
+    brr_dir = tmp_path / "brr-scratch"
+    run_dir = brr_dir / "runs" / "run-guard"
+    run_dir.mkdir(parents=True)
+    lines = [
+        {
+            "at": "2026-08-02T07:30:12Z", "phase": "session-start",
+            "inject": "hi", "block": False, "block_reason": None,
+        },
+        {
+            "at": "2026-08-02T07:31:00Z", "phase": "stop",
+            "inject": "closeout", "block": True, "block_reason": "not done",
+        },
+        {
+            "at": "2026-08-02T07:31:05Z", "phase": "stop",
+            "inject": "closeout again", "block": False, "block_reason": None,
+        },
+    ]
+    (run_dir / "boundaries.jsonl").write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8",
+    )
+
+    path = daemon._persist_boundaries_summary(
+        ctx, task, repo_label="Gurio/brr", brr_dir=brr_dir,
+    )
+
+    assert path == ctx.runs_dir / "Gurio__brr" / "run-guard" / "boundaries.json"
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    assert summary["stops"] == 2
+    assert summary["guard_fire_count"] == 1
+    assert summary["final_stop_block"] is False
+    assert task.meta["run_boundaries_summary_path"] == str(path)
+
+
+def test_persist_boundaries_summary_omits_the_file_when_transcript_absent(tmp_path):
+    """No transcript in the daemon's scratch dir ⇒ no `boundaries.json` on the node.
+
+    Never a guessed, zero-valued summary — same pessimism as its source
+    (`hooks.derive_boundaries_summary`).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-no-transcript", event_id="evt-x", body="work", source="telegram")
+    brr_dir = tmp_path / "brr-scratch"
+    (brr_dir / "runs" / "run-no-transcript").mkdir(parents=True)
+
+    path = daemon._persist_boundaries_summary(
+        ctx, task, repo_label="Gurio/brr", brr_dir=brr_dir,
+    )
+
+    assert path is None
+    assert not (
+        ctx.runs_dir / "Gurio__brr" / "run-no-transcript" / "boundaries.json"
+    ).exists()
+    assert "run_boundaries_summary_path" not in task.meta
+
+
 def test_card_now_projection_keeps_the_full_body_off_the_live_card():
     body = "## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story."
 
