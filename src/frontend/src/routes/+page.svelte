@@ -59,6 +59,9 @@
 	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
 	import { buildWarpLayers, emberCount, restingLayers, weavingRows } from '$lib/warp';
+	import Crossing from '$lib/Crossing.svelte';
+	import { buildCrossingIndex, crossingCells, crossingThreads } from '$lib/crossing';
+	import { pickRows } from '$lib/pickLane';
 	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
@@ -258,6 +261,26 @@
 	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
 	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
 	let warpStackLayers = $derived(restingLayers(warpLayers, liveRunIds));
+	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
+	// run id → the ones each run lifted, read off the `taken:` rows the weld
+	// already writes. One index, three readers — the warp header's legend, the
+	// pick lane's burning rows, the cloth's lines — so the same columns land at
+	// the same x all the way down the page. That shared geometry is the answer
+	// to "temporal repeating instead of referencing": a run and the intent it
+	// served point at each other through position, and neither re-lists the
+	// other.
+	// The rail's one line about the now. Same `pickRows` the lane draws from —
+	// one computation, two readers, so the bar and the lane can never disagree
+	// about which pick is burning.
+	let livePick = $derived.by(() => {
+		const burning = pickRows({ liveRuns, scheduledWakes: null, now }).filter(
+			(row) => row.phase === 'picking'
+		);
+		if (burning.length === 0) return null;
+		return { label: burning[0].label, clock: burning[0].clock, extra: burning.length - 1 };
+	});
+	let threads = $derived(crossingThreads(warpLayers));
+	let crossingIndex = $derived(buildCrossingIndex(warpLayers));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
 	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
@@ -792,6 +815,7 @@
 				maxSpawns={spawnMaxConcurrent}
 				condensed={railCondensed}
 				{onRackChange}
+				{livePick}
 			/>
 		</div>
 		<!-- The rail's missing height, held in flow so the page below never
@@ -799,9 +823,72 @@
 		     which is only while this part of the document is off-screen. -->
 		<div style={`height: ${railReserve}px`} aria-hidden="true"></div>
 
+		<!-- the warp · intent (#972: the loom is the page), and the head of the
+		     fall (2026-08-02, THE PICK). The page order *is* a run's life now —
+		     warp (conceived) → machine (armed → picking) → cloth (woven) — so
+		     intent stopped sitting between the now and the past, which is what
+		     made the whole page read as three unrelated bands. The warp is
+		     intent: heat, no clock. Everything with a clock — the next pick,
+		     fuel, scheduled picks, live picks — is the machine's, one section
+		     below. The two futures are different axes, not one store; welding
+		     them is `serves:`/`taken:` references, never a merge, and the
+		     crossing strip is that weld drawn.
+
+		     The backchannel is not a sibling section but this band's needs-you
+		     strip — the center element by construction (his 07-31 read: "it
+		     should be one of the center elements"), because a returning reader
+		     asks "what does the resident need from me?" first, and it is
+		     answered without ever hiding the layers. -->
+		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-labelledby="warp-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">the warp · intent</p>
+					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
+						what is asked
+					</h2>
+				</div>
+				<p class="flex items-center gap-2 font-mono text-[10px] text-ink-quiet">
+					<!-- The threads themselves, all lit: this strip is the legend for
+					     every crossing drawn below it, and it is why the columns mean
+					     anything — same order, same width, same x. -->
+					<Crossing cells={crossingCells(threads, threads)} label="the warp threads" />
+					{surfaceData === null
+						? 'stringing…'
+						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
+				</p>
+			</div>
+			<!-- The flip is dead (2026-08-02): the layer stack is the standing
+			     body and renders always — the old needs-you heddle *replaced*
+			     it whenever items waited, so a daemon restart that resolved
+			     the feeds made the warp vanish behind a tab. The needs-you
+			     queue is the band's compact strip now, above the stack; feed
+			     state only ever touches the strip's own chip. -->
+			<div class="mt-2">
+				<WarpBand
+					surfaceLoaded={surfaceData !== null}
+					layers={warpStackLayers}
+					knownPaths={surfaceKnownPaths}
+					authoredItems={authoredBackchannelItems}
+					prs={prReviewQueue}
+					requests={configRequests}
+					feedsResolved={backchannelFeedsResolved}
+					onOpenPage={openInLibrary}
+					stale={prReviewQueueStale}
+					{now}
+					withheld={prReviewQueueWithheld}
+					prError={prReviewQueueError}
+					configError={configRequestsError}
+				/>
+			</div>
+			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
+				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
+			{/if}
+		</section>
+
 		<!-- the machine (#972 machine round; re-laid 08-02, then again the same
-		     evening as THE PICK). Directly under the sticky rail, always — no
-		     float, no reorder. Inside it is now *one lane*: his read was
+		     evening as THE PICK). Under the warp, above the cloth: the middle of
+		     the fall, where intent becomes a burning pick and then a record. No
+		     float, no reorder on liveness. Inside it is now *one lane*: his read was
 		     "they repeat after each other … really turn the UI around pushing a
 		     run object through the stages of the execution", and one live run
 		     was in fact drawn five times on this page. Three of those five were
@@ -811,7 +898,7 @@
 		     grammar, ordered as the fall: armed picks descending toward the
 		     seam rule, a burning run sitting on it, and the unfold below where
 		     the run becomes its record. -->
-		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-labelledby="machine-heading">
+		<section class="ignite mt-10" style="--ignite-delay: 400ms" aria-labelledby="machine-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the machine · the pick</p>
@@ -843,6 +930,8 @@
 					{liveRuns}
 					{scheduledWakes}
 					{weaving}
+					{threads}
+					{crossingIndex}
 					{now}
 					onSelect={selectFromLoom}
 					{daemonMood}
@@ -934,61 +1023,6 @@
 			{/if}
 		</section>
 
-		<!-- the warp · intent (#972: the loom is the page). The standing
-		     intent surface, under the machine now in a fixed order (08-02:
-		     the float died); the backchannel is not a sibling section but
-		     this band's needs-you strip — the center element by construction
-		     (his 07-31 read: "it should be one of the center elements"), a
-		     compact count-and-top-asks line above the stack because a
-		     returning reader asks "what does the resident need from me?"
-		     first — answered without ever hiding the layers. The warp is
-		     intent: heat, no clock. Everything with a clock — the next pick,
-		     fuel, scheduled picks, live strands — is the machine's, one
-		     section above. The two futures are different axes, not one
-		     store; welding them is `serves:`/`taken:` references, never a
-		     merge. -->
-		<section class="ignite mt-10" style="--ignite-delay: 400ms" aria-labelledby="warp-heading">
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">the warp · intent</p>
-					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
-						what is asked
-					</h2>
-				</div>
-				<p class="font-mono text-[10px] text-ink-quiet">
-					{surfaceData === null
-						? 'stringing…'
-						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
-				</p>
-			</div>
-			<!-- The flip is dead (2026-08-02): the layer stack is the standing
-			     body and renders always — the old needs-you heddle *replaced*
-			     it whenever items waited, so a daemon restart that resolved
-			     the feeds made the warp vanish behind a tab. The needs-you
-			     queue is the band's compact strip now, above the stack; feed
-			     state only ever touches the strip's own chip. -->
-			<div class="mt-2">
-				<WarpBand
-					surfaceLoaded={surfaceData !== null}
-					layers={warpStackLayers}
-					knownPaths={surfaceKnownPaths}
-					authoredItems={authoredBackchannelItems}
-					prs={prReviewQueue}
-					requests={configRequests}
-					feedsResolved={backchannelFeedsResolved}
-					onOpenPage={openInLibrary}
-					stale={prReviewQueueStale}
-					{now}
-					withheld={prReviewQueueWithheld}
-					prError={prReviewQueueError}
-					configError={configRequestsError}
-				/>
-			</div>
-			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-		</section>
-
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
 		     Runs as root nodes of collapsed trees over a sliding window; the
 		     selvage (the cloth's self-finished edge) carries the spend→produce
@@ -1016,6 +1050,8 @@
 						windowMs={runLedgerWindowMs}
 						stale={runLedgerStale}
 						surface={surfaceData}
+						{threads}
+						{crossingIndex}
 					/>
 				{/if}
 			</div>

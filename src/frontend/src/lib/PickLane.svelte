@@ -4,6 +4,8 @@
 	import type { ScheduledWake } from './scheduledWakes';
 	import type { WeavingRow } from './warp';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
+	import Crossing from './Crossing.svelte';
+	import { crossingCells } from './crossing';
 	import { statusDotStyle, glowFor, STATUS_BURNING } from './statusPalette';
 
 	// THE PICK — one object, one place, moving (his 2026-08-02 steer: "really
@@ -34,6 +36,13 @@
 		 *  pre-upgrade daemon that publishes no mood, and then the idle line
 		 *  renders its hollow dot rather than inventing a face. */
 		daemonMood?: DaemonMood | null;
+		/** The warp threads in authored order, and run id → threads crossed
+		 *  (`crossing.ts`). The strip lands at the same x here and on the cloth
+		 *  line this pick becomes — that shared column is the whole point. An
+		 *  armed pick draws none: `serves:` does not exist yet, so a scheduled
+		 *  wake has nothing honest to say about the threads it will lift. */
+		threads?: string[];
+		crossingIndex?: Map<string, string[]>;
 	}
 
 	let {
@@ -43,7 +52,9 @@
 		now,
 		onSelect,
 		selectedId = null,
-		daemonMood = null
+		daemonMood = null,
+		threads = [],
+		crossingIndex = new Map()
 	}: Props = $props();
 
 	let rows = $derived(pickRows({ liveRuns, scheduledWakes, weaving, now }));
@@ -155,6 +166,7 @@
 					>
 						<span class="flex min-w-0 items-baseline gap-1.5">
 							<span class="shrink-0 text-amber-300/80" aria-hidden="true">↯</span>
+							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id))} />
 							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
 							{#if row.clock || row.note}
 								<span class="shrink-0 text-[8px] text-amber-500/80">{row.note ?? row.clock}</span>
