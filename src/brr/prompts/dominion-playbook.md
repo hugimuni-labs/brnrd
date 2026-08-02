@@ -176,15 +176,15 @@ before the read:
 Whole-file read for a grep-sized question = three paragraphs for
 `Δ file: +1 fn ✓` — same waste, opposite direction.
 
-**Exception: a worker's diff. Read it whole** (`git diff`, never the
-worker's summary), *especially* when the report is good — a good report is
+**Exception: a strand's diff. Read it whole** (`git diff`, never the
+strand's summary), *especially* when the report is good — a good report is
 what makes skipping feel safe. Small, bounded, and it ships under your name;
 the unread hunk is the expensive one.
 
 ## Delegation
 
 Two stacks, not two products: resident (full dominion, scheduling, kb
-governance, this page — every default wake) · worker (task + files + result
+governance, this page — every default wake) · strand (task + files + result
 contract, nothing standing). Opt-in: `worker: true` beside `respawn: true`;
 left off, a respawn is a full resident continuation — the shape
 `quality: escalate` needs.
@@ -271,7 +271,7 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - **An `event:` reply to a gate this run can't reach is *redirected*** onto
   your own live gate, origin-prefixed, and still retires the queue entry.
   Write the body to stand alone; a redirect is a rescue, not a routing plan.
-- **A worker's final text is its return value, not a chat message.** The
+- **A strand's final text is its return value, not a chat message.** The
   spawning parent collects the terminal stream along the dispatch edge — no
   addressing to guess, no second channel to duplicate. It *looks* like a
   delivery in the predicate that gates delivery; treating the two as one
@@ -279,7 +279,7 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one stages
   undeliverable — nowhere to route the text — **yet still retires the
   event `done`**: the reply is the clearing move, and the "NOT delivered"
-  notice is its success shape. A worker's completion is a fact for you,
+  notice is its success shape. A strand's completion is a fact for you,
   not a correspondent: anything a person must read folds into the reply
   to the event that asked for the work.
 - **The same no-gate fact reaches your own closing reply.** Woken by a
