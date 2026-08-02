@@ -78,6 +78,7 @@
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
 	import { railScrollVerdict } from '$lib/controlStrip';
+	import { machineDockTop } from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -865,6 +866,7 @@
 				condensed={railCondensed}
 				{onRackChange}
 				{livePick}
+				machineDocks={true}
 			/>
 		</div>
 		<!-- The rail's missing height, held in flow so the page below never
@@ -888,21 +890,49 @@
 		     lane in place; folding it returns the weaving items to the warp
 		     stack below, where they render lit instead of resting. -->
 		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-label="the machine">
-			<RunBlock
-				burning={burningRows}
-				armed={armedRows}
-				open={machineExpanded}
-				error={liveRunsError}
-				stale={liveRunsStale}
-				onToggle={() => {
-					if (machineExpanded) {
-						machineOpen = false;
-						loomSelection = null;
-					} else {
-						machineOpen = true;
-					}
-				}}
-			/>
+			<!-- THE DOCK (his 2026-08-02 magnet steer, in his own correction:
+			     "not the collapsed rack + oneline main runner info, as it is
+			     now, but a collapsed fuel + collapsed oneline machine stuck to
+			     it"). Fuel on top, the machine's one line flush beneath it, and
+			     the rail's borrowed live-pick row deleted — one fact, one
+			     surface.
+
+			     Only the *head* sticks. The lane below stays in normal flow: a
+			     tall panel pinned to the top of a phone is chrome eating the
+			     page, and it would re-raise THE PICKER YOU CANNOT REACH (#1011)
+			     by making an opened panel's own scroll position fight the dock.
+			     Nothing here reads the scroll verdict to change what is open —
+			     docking is visual, and the reader's expansion survives every
+			     offset.
+
+			     `top` is the rail's *live* height because the rail changes form
+			     as it condenses; a pinned constant would either gap or hide the
+			     head behind it, and a head hidden behind the rail reads as the
+			     block having vanished, which is the complaint this answers. -->
+			<div
+				class="sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+				style={`top: ${machineDockTop(railHeight)}px`}
+			>
+				{#key railCondensed}
+					<div in:glitchReveal={{ duration: 200 }}>
+						<RunBlock
+							burning={burningRows}
+							armed={armedRows}
+							open={machineExpanded}
+							error={liveRunsError}
+							stale={liveRunsStale}
+							onToggle={() => {
+								if (machineExpanded) {
+									machineOpen = false;
+									loomSelection = null;
+								} else {
+									machineOpen = true;
+								}
+							}}
+						/>
+					</div>
+				{/key}
+			</div>
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
 					<!-- The lane: armed picks falling toward the seam, the burning ones
