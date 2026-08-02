@@ -74,9 +74,27 @@ export function machineHeadFields(open: boolean): MachineHeadFields {
  * guessing here is a header that hides behind the rail, which reads as the
  * block having vanished.
  */
-export function machineDockTop(railHeight: number | null | undefined): number {
+export const RAIL_BOTTOM_PADDING_PX = 8;
+
+export function machineDockTop(
+	railHeight: number | null | undefined,
+	condensed: boolean = false
+): number {
 	if (typeof railHeight !== 'number' || !Number.isFinite(railHeight)) return 0;
-	return Math.max(0, Math.round(railHeight));
+	// Condensed and stuck, the two blocks are one instrument, and the seam
+	// between them is not a design choice — it is the rail's own `pb-2`, 8px of
+	// breathing room that means something at rest and means nothing when the
+	// pair is welded to the top of the viewport (his read: "could we remove the
+	// space between them, almost at least, when they are collapsed and on the
+	// top?").
+	//
+	// Reclaim exactly that padding rather than nudging a constant until it
+	// looks right: a number derived from the thing it cancels stays correct
+	// when that thing changes, and a nudged one silently stops matching. The
+	// residual hairline is the panels' own brackets, and it is the "almost" —
+	// two panels fused with *zero* seam stop reading as two things.
+	const overlap = condensed ? RAIL_BOTTOM_PADDING_PX : 0;
+	return Math.max(0, Math.round(railHeight) - overlap);
 }
 
 /**
