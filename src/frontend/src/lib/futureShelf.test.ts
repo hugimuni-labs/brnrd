@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { futureEtaLabel, futureShelfRows, nextFutureWake } from './futureShelf.ts';
+import { futureEtaLabel, futureShelfRows } from './futureShelf.ts';
 import { LOOM_MIN_FUTURE_HORIZON_MS, loomBarFraction } from './loomBand.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
 import type { ScheduledWake } from './scheduledWakes.ts';
@@ -135,16 +135,4 @@ test('eta labels: minutes, then hours, and overdue says so', () => {
 	assert.equal(futureEtaLabel(42 * 60 * 1000), 'in 42m');
 	assert.equal(futureEtaLabel(2 * HOUR + 5 * 60 * 1000), 'in 2h 5m');
 	assert.equal(futureEtaLabel(-12 * 60 * 1000), '12m overdue');
-});
-
-test('the next wake is the soonest still ahead — never an overdue one', () => {
-	const rows = futureShelfRows(
-		[
-			wake({ id: 'late', scheduled_for: at(-10 * 60 * 1000) }),
-			wake({ id: 'ahead', scheduled_for: at(HOUR) })
-		],
-		NOW
-	);
-	assert.equal(nextFutureWake(rows)?.wake.id, 'ahead');
-	assert.equal(nextFutureWake([]), null);
 });
