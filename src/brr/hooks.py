@@ -989,16 +989,43 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
     return "card ok"
 
 
+# #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
+# ``dropped`` | ``advisory``. Only the first two are a claim that something
+# the resident asked for did not happen; an ``advisory`` is FYI on a
+# directive that *was* accepted and acted on (the ``note:`` body-ignored
+# case that opened this ticket). Both surfaces below (the bar chip, the
+# seed/stop briefing count) must agree on which kinds count, so the
+# filter lives once, here.
+def _counted_notices(notices: list) -> list:
+    """The subset of *notices* that represent a refusal or a drop.
+
+    A record with no ``kind`` key at all is a legacy entry — written by a
+    daemon generation before #1002, possibly still sitting in a live
+    ``portal-state.json`` across a daemon restart. It counts as refusing:
+    the pessimistic direction, chosen deliberately, because a real refusal
+    hidden by an under-count costs far more than one stale advisory
+    over-counted. Only an entry explicitly marked ``advisory`` is excluded.
+    """
+    if not isinstance(notices, list):
+        return []
+    return [
+        n for n in notices
+        if not (isinstance(n, dict) and n.get("kind") == "advisory")
+    ]
+
+
 def _notices_chip(notices: list) -> str | None:
-    """``!N`` when *notices* is non-empty; absent at zero.
+    """``!N`` when *notices* has a refused/dropped entry; absent at zero.
 
     A refused outbox file is deleted exactly like an accepted one — the only
     thing between a dropped reply and silence is a resident habitually opening
     ``portal-state.json``.  ``!N`` on the bar makes a non-zero refusal count
     visible without demanding that read.  Absent at zero so it earns its ink
-    the same way every other differential segment does.
+    the same way every other differential segment does. An ``advisory``
+    notice never drives this count (#1002) — it stays readable in
+    ``portal-state.json`` and in the seed/stop briefing below, just not here.
     """
-    n = len(notices) if isinstance(notices, list) else 0
+    n = len(_counted_notices(notices))
     return f"!{n}" if n else None
 
 
@@ -2109,19 +2136,29 @@ def format_delta(
     # single loss was a 10,229 B analysis, staged and gone two minutes before
     # its run's closeout claimed nothing was outstanding.
     #
-    # Text, not classification. Sorting loss-notices from config-warnings by
-    # matching their prose would be the renderer guessing at something only
-    # the writer knows; that split wants a ``kind:`` field on the record
-    # (#716) and a daemon change, which is a restart away. Rendering the text
-    # is the half that is live in the very next hook subprocess — and it is
-    # also what makes a *standing* notice legible. This account carries one
-    # permanently (a repo-side ``runners.md`` that is ignored by design), so
-    # ``!N`` is never zero here and has stopped carrying information. Four
-    # words of the text tell a reader "that one again" from "that one is
-    # new"; the count cannot, which is precisely why it habituated.
+    # Text, not classification — that *was* true here, and it was the split
+    # #1002 closed: sorting loss-notices from config-warnings by matching
+    # their prose was the renderer guessing at something only the writer
+    # knew. A ``kind:`` field now rides the record itself (daemon.py:5765),
+    # written at the source that actually knows whether a directive was
+    # refused, dropped, or merely advisory — so the header count below
+    # counts only the first two, exactly like the bar's ``!N`` chip
+    # (``_notices_chip``, same filter, ``_counted_notices``). Rendering the
+    # full text stays: it is still the half that is live in the very next
+    # hook subprocess, and it is what makes a *standing* notice legible even
+    # once it stops being a refusal. This account carries one permanently (a
+    # repo-side ``runners.md`` that is ignored by design), so before #1002
+    # ``!N`` was never zero here and had stopped carrying information — the
+    # kind field is exactly what lets a standing advisory stop doing that
+    # without going silent. Four words of the text tell a reader "that one
+    # again" from "that one is new"; the count alone cannot, which is
+    # precisely why it habituated.
     if (seed or stop) and notices:
         shown = notices[-_NOTICE_LINES:]
-        head = f"- notices: {len(notices)} directive(s) brnrd refused or dropped"
+        counted = len(_counted_notices(notices))
+        head = f"- notices: {counted} directive(s) brnrd refused or dropped"
+        if len(notices) > counted:
+            head += f" (+{len(notices) - counted} advisory)"
         if stop:
             head += (
                 " — a refused outbox file is deleted exactly like an accepted"
@@ -2133,7 +2170,9 @@ def format_delta(
             if len(text) > _NOTICE_TEXT_CAP:
                 text = text[: _NOTICE_TEXT_CAP - 1].rstrip() + "…"
             if text:
-                lines.append(f"  · {text}")
+                kind = record.get("kind") if isinstance(record, dict) else None
+                label = f"[{kind}] " if kind else ""
+                lines.append(f"  · {label}{text}")
         if len(notices) > len(shown):
             lines.append(
                 f"  · (+{len(notices) - len(shown)} older — "
