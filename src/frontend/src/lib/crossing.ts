@@ -112,7 +112,7 @@ export function crossingCells(
 ): CrossingCell[] {
 	if (threads.length === 0 || !crossed || crossed.length === 0) return [];
 	const set = new Set(crossed);
-	return threads.map((callSign, index) => ({
+	return threads.map((callSign) => ({
 		callSign,
 		lit: set.has(callSign),
 		color: threadColorFor(callSign)
