@@ -1284,14 +1284,56 @@ def test_guard_is_off_unless_armed(tmp_path):
     assert out.get("decision") != "block"
 
 
-def test_guard_never_loops(tmp_path):
+def test_guard_never_loops_on_the_same_reply(tmp_path):
     """#282 is the standing scar: a hook that re-fires into a run with nothing
-    left to do burns the budget. Block once, then let the run end."""
+    left to do burns the budget. The reply that was blocked, presented again,
+    is exactly that loop — silent."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _armed(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("no closeout"), env)
+    assert first["decision"] == "block"
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("no closeout"), env)
+    assert second.get("decision") != "block"
+
+
+def test_guard_blocks_a_second_distinct_bad_closeout(tmp_path):
+    """#981, and the whole point of the latch move. `run-260802-0001-9qgz`
+    was blocked for a false `continuing` at 00:21:45Z, worked thirty more
+    minutes across fourteen more Stop boundaries, and ended at 00:51:37Z on
+    a *different* false `continuing` — unblocked, because one bit had been
+    spent half an hour earlier on a claim it had already fixed."""
     _portal(tmp_path, token="t1", pending=0)
     env = _armed(tmp_path)
     first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("no closeout"), env)
     assert first["decision"] == "block"
     second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("still no closeout"), env)
+    assert second["decision"] == "block", "a new reply is a new claim, not a re-nag"
+
+
+def test_guard_stops_arguing_after_the_cap(tmp_path):
+    """The bound #282 actually needs. Distinct replies re-arm the guard, so
+    without a cap a resident that cannot produce a closeout would be blocked
+    forever; three is where the exchange ends whatever it says next."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _armed(tmp_path)
+    for attempt in range(hooks._CLOSEOUT_BLOCK_CAP):
+        out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(f"no closeout {attempt}"), env)
+        assert out["decision"] == "block", attempt
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin("still no closeout"), env)
+    assert out.get("decision") != "block", "the cap ends it, however new the reply"
+
+
+def test_guard_keeps_one_block_when_the_shell_hands_over_no_reply(tmp_path):
+    """A Shell that hands over no `last_assistant_message` leaves "the claim
+    changed" unassertable, and the doctrine here is silence over a guess: the
+    key never varies, so such a run keeps exactly the old single-block
+    behaviour rather than re-firing on an empty reply forever."""
+    (tmp_path / hooks.CARD_NAME).unlink(missing_ok=True)
+    _portal(tmp_path, token="t1", pending=0)
+    env = _armed_obl(tmp_path, obligations="card")
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(), env)
+    assert first["decision"] == "block"
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(), env)
     assert second.get("decision") != "block"
 
 
@@ -1982,9 +2024,10 @@ def test_vigil_is_off_unless_armed(tmp_path):
     assert out.get("decision") != "block"
 
 
-def test_vigil_blocks_once_by_construction(tmp_path):
+def test_vigil_blocks_once_per_claim(tmp_path):
     """#779's anti-pattern is a boundary that re-asserts forever. This one
-    shares the closeout latch: one block, then the run is allowed to end."""
+    shares the closeout latch, which since #981 is keyed on the reply: the
+    same unchanged claim, presented twice, is answered once."""
     env = _armed_vigil(tmp_path)
     first, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_HOLDING), env)
     assert first["decision"] == "block"
