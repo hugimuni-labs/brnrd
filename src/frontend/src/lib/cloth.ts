@@ -62,6 +62,10 @@ export interface ClothLine {
 	/** Warp item addresses from the run's `item` relics (THE WELD, #972):
 	 * the standing intent this run was ignited from. Empty for un-welded runs. */
 	items: string[];
+	/** Runner identity from the ledger row (shell/core), for the in-place
+	 * node unfold's header — first-known wins across re-reports. */
+	runnerShell: string | null;
+	runnerCore: string | null;
 	chips: ClothChip[];
 	/** A run that closed without produce still happened — faint line. */
 	bare: boolean;
@@ -182,6 +186,8 @@ interface MergedRun {
 	isSubspawn: boolean;
 	repoLabel: string | null;
 	name: string | null;
+	runnerShell: string | null;
+	runnerCore: string | null;
 	endedAt: number;
 	wallSeconds: number;
 	relics: RelicRecord[];
@@ -203,6 +209,8 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 			current.isSubspawn ||= Boolean(row.is_subspawn);
 			current.repoLabel ??= row.repo_label;
 			current.name ??= row.name;
+			current.runnerShell ??= row.runner_shell;
+			current.runnerCore ??= row.runner_core;
 			current.endedAt = Math.max(current.endedAt, endedAt);
 			current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
 			current.relics.push(...(row.external_refs ?? []));
@@ -214,6 +222,8 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 				isSubspawn: Boolean(row.is_subspawn),
 				repoLabel: row.repo_label,
 				name: row.name,
+				runnerShell: row.runner_shell,
+				runnerCore: row.runner_core,
 				endedAt,
 				wallSeconds: row.wall_clock_seconds ?? 0,
 				relics: [...(row.external_refs ?? [])],
@@ -239,6 +249,8 @@ function curatedLine(run: MergedRun): ClothLine {
 		repoLabel: run.repoLabel,
 		repoChip: null,
 		items: itemAddresses(run.relics),
+		runnerShell: run.runnerShell,
+		runnerCore: run.runnerCore,
 		chips,
 		bare: chips.length === 0,
 		duration: durationLabel(run.wallSeconds),

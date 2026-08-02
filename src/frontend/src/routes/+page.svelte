@@ -275,11 +275,39 @@
 	// The cloth owns its window constant (30d by design); the ledger fetch's
 	// row limit still caps the payload, so the cloth reads its rows as
 	// "latest N", not "all of 30d".
-	// Live layout (his "wild thought", 08-01): when something burns, the shed
-	// floats to the top and the warp leads only at rest. CSS order over a
-	// stable DOM — the sections keep their identity and animations; only the
-	// reading order answers the state.
-	let loomLive = $derived((liveRuns?.length ?? 0) > 0);
+	//
+	// The float is dead (his 08-02 steer: "unreliable and too flashy… against
+	// good user experience"). Nothing reorders on liveness any more: the rail
+	// is sticky on top, the machine sits directly under it and is almost
+	// nothing while idle, and ignition *reveals* the machine in place instead
+	// of moving sections around the reader.
+
+	// The sticky rail's scroll verdict: once the sentinel above the rail
+	// leaves the viewport, the reader has scrolled and the rail condenses to
+	// its one-line form (ControlStrip `condensed`).
+	let railSentinel = $state<HTMLElement | null>(null);
+	let railCondensed = $state(false);
+	$effect(() => {
+		const sentinel = railSentinel;
+		if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+		const observer = new IntersectionObserver(
+			([entry]) => {
+				railCondensed = !entry.isIntersecting;
+			},
+			{ threshold: 0 }
+		);
+		observer.observe(sentinel);
+		return () => observer.disconnect();
+	});
+
+	// The library open ask (the warp's "page →", 08-02): the token
+	// distinguishes repeat asks for one path from a stale request riding a
+	// re-render; the corpus browser answers, this page scrolls to it.
+	let libraryRequest = $state<{ path: string; token: number }>({ path: '', token: 0 });
+	function openInLibrary(path: string) {
+		libraryRequest = { path, token: libraryRequest.token + 1 };
+		document.getElementById('corpus-heading')?.scrollIntoView({ behavior: 'smooth' });
+	}
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"), amended
 	// by the dissolution (2026-08-02): the page's tenses are the spine now —
@@ -692,106 +720,20 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<!-- the warp · intent (#972: the loom is the page). The standing
-		     intent surface leads at rest; the backchannel is not a sibling
-		     section anymore but this band's needs-you strip — the center
-		     element by construction (his 07-31 read: "it should be one of
-		     the center elements"), a compact count-and-top-asks line above
-		     the stack because a returning reader asks "what does the
-		     resident need from me?" first — answered without ever hiding
-		     the layers. The warp is intent: heat, no clock. Everything with
-		     a clock — dispatch, fuel, scheduled picks, live strands — is the
-		     machine's, one section below (the machine round, 2026-08-02).
-		     The two futures are different axes, not one store; welding them
-		     is `serves:`/`taken:` references, never a merge. -->
-		<section
-			class="ignite mt-4 {loomLive ? 'order-2' : 'order-1'}"
+		<!-- the rail, sticky (his 08-02 steer): resource truth — fuel, tank,
+		     slots, the next pick — stays on top at every scroll position and
+		     condenses to one line once the reader scrolls past it. This is
+		     where the old order-flip died: nothing jumps when a run ignites. -->
+		<div bind:this={railSentinel} aria-hidden="true"></div>
+		<div
+			class="ignite sticky top-0 z-40 -mx-6 bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm"
 			style="--ignite-delay: 120ms"
-			aria-labelledby="warp-heading"
 		>
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">the warp · intent</p>
-					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
-						what is asked
-					</h2>
-				</div>
-				<p class="font-mono text-[10px] text-ink-quiet">
-					{surfaceData === null
-						? 'stringing…'
-						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
-				</p>
-			</div>
-			<!-- The flip is dead (2026-08-02): the layer stack is the standing
-			     body and renders always — the old needs-you heddle *replaced*
-			     it whenever items waited, so a daemon restart that resolved
-			     the feeds made the warp vanish behind a tab. The needs-you
-			     queue is the band's compact strip now, above the stack; feed
-			     state only ever touches the strip's own chip. -->
-			<div class="mt-2">
-				<WarpBand
-					surfaceLoaded={surfaceData !== null}
-					layers={warpStackLayers}
-					knownPaths={surfaceKnownPaths}
-					authoredItems={authoredBackchannelItems}
-					prs={prReviewQueue}
-					requests={configRequests}
-					feedsResolved={backchannelFeedsResolved}
-					stale={prReviewQueueStale}
-					{now}
-					withheld={prReviewQueueWithheld}
-					prError={prReviewQueueError}
-					configError={configRequestsError}
-				/>
-			</div>
-			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-		</section>
-
-		<!-- the machine · future → now (#972 machine round: rack + shed fuse).
-		     The machine between intent and cloth, read top to bottom the way
-		     a pick actually flows: the rail where new picks are strung
-		     (dispatch + fuel, spawn slots as a capacity chip), the future
-		     lane of scheduled picks approaching the seam, items crossing
-		     from the warp while their runs burn, and the NOW seam where
-		     live strands run — each unfolding in place into its own node.
-		     When something burns the whole machine floats to the top, rail
-		     and runs together (his 08-02 steer: "the fuel block should be
-		     placed together with the block where we show the runs"); the
-		     warp leads only at rest. -->
-		<section
-			class="ignite mt-8 {loomLive ? 'order-1' : 'order-2'}"
-			style="--ignite-delay: 250ms"
-			aria-labelledby="machine-heading"
-		>
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">the machine · future → now</p>
-					<h2 id="machine-heading" class="font-mono text-sm font-semibold text-amber-100">
-						{liveRuns === null
-							? 'reading the run field'
-							: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
-					</h2>
-				</div>
-				<p
-					class="font-mono text-[10px] {liveRunsError
-						? 'text-red-400'
-						: liveRunsStale
-							? 'text-amber-400'
-							: 'text-ink-quiet'}"
-				>
-					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
-				</p>
-			</div>
-
-			<!-- The rail: capacity to string new picks — dispatch, fuel, tank,
-			     slots. One panel; the LIMITS section died into its fuel chip. -->
 			{#if runnersData?.profiles.length === 0 && runnersWithheld}
-				<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
+				<WithheldNotice withheld={runnersWithheld} class="mb-2 text-sm text-amber-200" />
 			{/if}
 			{#if shells?.length === 0 && quotaWithheld}
-				<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
+				<WithheldNotice withheld={quotaWithheld} class="mb-2 text-sm text-amber-200" />
 			{/if}
 			<ControlStrip
 				runners={runnersData}
@@ -805,7 +747,39 @@
 				{now}
 				activeSpawns={liveRuns === null ? null : activeSpawns}
 				maxSpawns={spawnMaxConcurrent}
+				condensed={railCondensed}
 			/>
+		</div>
+
+		<!-- the machine · future → now (#972 machine round, re-laid 08-02).
+		     Directly under the sticky rail, always — no float, no reorder:
+		     the future lane of scheduled picks approaching the seam, items
+		     crossing from the warp while their runs burn, and the NOW seam
+		     where live strands run — each unfolding in place into its own
+		     node. Idle it is almost nothing (one slim seam line); ignition
+		     reveals it right here instead of moving it. -->
+		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-labelledby="machine-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">the machine · future → now</p>
+					<h2 id="machine-heading" class="font-mono text-sm font-semibold text-amber-100">
+						{liveRuns === null
+							? 'reading the run field'
+							: liveRuns.length === 0
+								? 'idle'
+								: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
+					</h2>
+				</div>
+				<p
+					class="font-mono text-[10px] {liveRunsError
+						? 'text-red-400'
+						: liveRunsStale
+							? 'text-amber-400'
+							: 'text-ink-quiet'}"
+				>
+					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
+				</p>
+			</div>
 
 			<!-- The future lane: what is queued and when it fires. The rail
 			     above answers "where does the next wake run"; a tap unfolds
@@ -941,15 +915,66 @@
 			{/if}
 		</section>
 
+		<!-- the warp · intent (#972: the loom is the page). The standing
+		     intent surface, under the machine now in a fixed order (08-02:
+		     the float died); the backchannel is not a sibling section but
+		     this band's needs-you strip — the center element by construction
+		     (his 07-31 read: "it should be one of the center elements"), a
+		     compact count-and-top-asks line above the stack because a
+		     returning reader asks "what does the resident need from me?"
+		     first — answered without ever hiding the layers. The warp is
+		     intent: heat, no clock. Everything with a clock — the next pick,
+		     fuel, scheduled picks, live strands — is the machine's, one
+		     section above. The two futures are different axes, not one
+		     store; welding them is `serves:`/`taken:` references, never a
+		     merge. -->
+		<section class="ignite mt-10" style="--ignite-delay: 400ms" aria-labelledby="warp-heading">
+			<div class="flex items-baseline justify-between gap-3">
+				<div>
+					<p class="eyebrow">the warp · intent</p>
+					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
+						what is asked
+					</h2>
+				</div>
+				<p class="font-mono text-[10px] text-ink-quiet">
+					{surfaceData === null
+						? 'stringing…'
+						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
+				</p>
+			</div>
+			<!-- The flip is dead (2026-08-02): the layer stack is the standing
+			     body and renders always — the old needs-you heddle *replaced*
+			     it whenever items waited, so a daemon restart that resolved
+			     the feeds made the warp vanish behind a tab. The needs-you
+			     queue is the band's compact strip now, above the stack; feed
+			     state only ever touches the strip's own chip. -->
+			<div class="mt-2">
+				<WarpBand
+					surfaceLoaded={surfaceData !== null}
+					layers={warpStackLayers}
+					knownPaths={surfaceKnownPaths}
+					authoredItems={authoredBackchannelItems}
+					prs={prReviewQueue}
+					requests={configRequests}
+					feedsResolved={backchannelFeedsResolved}
+					onOpenPage={openInLibrary}
+					stale={prReviewQueueStale}
+					{now}
+					withheld={prReviewQueueWithheld}
+					prError={prReviewQueueError}
+					configError={configRequestsError}
+				/>
+			</div>
+			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
+				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
+			{/if}
+		</section>
+
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
 		     Runs as root nodes of collapsed trees over a sliding window; the
 		     selvage (the cloth's self-finished edge) carries the spend→produce
 		     aggregates the retired instruments section used to hold. -->
-		<section
-			class="ignite order-3 mt-10"
-			style="--ignite-delay: 1400ms"
-			aria-labelledby="cloth-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 900ms" aria-labelledby="cloth-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the cloth · past</p>
@@ -966,16 +991,18 @@
 				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}
 					<WithheldNotice withheld={runLedgerWithheld} />
 				{:else}
-					<Cloth rows={runLedgerRows} {now} windowMs={runLedgerWindowMs} stale={runLedgerStale} />
+					<Cloth
+						rows={runLedgerRows}
+						{now}
+						windowMs={runLedgerWindowMs}
+						stale={runLedgerStale}
+						surface={surfaceData}
+					/>
 				{/if}
 			</div>
 		</section>
 
-		<section
-			class="ignite order-4 mt-10"
-			style="--ignite-delay: 2700ms"
-			aria-labelledby="corpus-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 1600ms" aria-labelledby="corpus-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the library</p>
@@ -997,16 +1024,12 @@
 				{:else if surfaceData === null}
 					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
-					<WorkSurface data={surfaceData} />
+					<WorkSurface data={surfaceData} openRequest={libraryRequest} />
 				{/if}
 			</div>
 		</section>
 
-		<section
-			class="ignite order-5 mt-10"
-			style="--ignite-delay: 3200ms"
-			aria-labelledby="billing-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 2100ms" aria-labelledby="billing-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">account</p>

@@ -15,6 +15,15 @@
 	} from './cloth';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
+	import RunNodeInline from './RunNodeInline.svelte';
+	import {
+		nodeDigest,
+		repoRunSlug,
+		runIdSlug,
+		runNodeFromSurface,
+		type NodeIdentity
+	} from './runNode';
+	import type { SurfaceResponse } from './surface';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
 	// done work as root-run trees, one curated line each, worker strands
@@ -28,9 +37,14 @@
 		now: number;
 		windowMs: number;
 		stale: boolean;
+		/** The corpus, for the in-place node unfold (his 08-02 steer: a cloth
+		 *  item previews where the reader stands — a page redirect costs them
+		 *  their place on the way back). Null while loading; the unfold then
+		 *  falls back to a plain run-page link. */
+		surface?: SurfaceResponse | null;
 	}
 
-	let { rows, now, windowMs, stale }: Props = $props();
+	let { rows, now, windowMs, stale, surface = null }: Props = $props();
 
 	// The lens rail (the dissolution, 2026-08-02). The chips lens the *past
 	// inventory*, and the cloth is the past's one object now, so the rail
@@ -82,7 +96,68 @@
 		if (set.has(id)) set.delete(id);
 		else set.add(id);
 	}
+
+	// The in-place unfold: one open node at a time, keyed by line id. A row
+	// tap answers with the run's own node right where the reader stands —
+	// the same grammar the machine's seam speaks — and the full page stays
+	// one link deeper (`RunNodeInline`'s "full node →").
+	let openNode = $state<string | null>(null);
+
+	function clothIdentity(line: ClothLine, child: boolean): NodeIdentity {
+		return {
+			// Empty on purpose: the node's own digest speaks for a closed run's
+			// status — same rule the page's selected sheet follows.
+			status: '',
+			name: line.named ? line.name : (line.runId ?? line.name),
+			context: line.repoLabel,
+			runner: [line.runnerShell, line.runnerCore].filter(Boolean).join(' · ') || null,
+			spawn: child,
+			age: line.age,
+			mood: null,
+			moodGlyph: null,
+			moodFrames: null,
+			moodRest: null,
+			moodPitch: null
+		};
+	}
+
+	function clothVitals(line: ClothLine): string[] {
+		const parts: string[] = [];
+		if (line.chips.length > 0) parts.push(line.chips.map((chip) => chip.label).join(' '));
+		parts.push(line.duration);
+		return parts;
+	}
 </script>
+
+{#snippet nodeUnfold(line: ClothLine, child: boolean)}
+	{#if openNode === line.id && line.href && line.runId}
+		{@const digest = surface
+			? nodeDigest(runNodeFromSurface(surface, repoRunSlug(line.repoLabel), runIdSlug(line.runId)))
+			: null}
+		<div
+			class="mt-1 mb-1.5 {child ? 'ml-8' : 'ml-4'} max-[480px]:ml-2"
+			out:fade={{ duration: 100 }}
+		>
+			{#if digest?.mirrored}
+				<RunNodeInline
+					data={surface}
+					repoSlug={repoRunSlug(line.repoLabel)}
+					runId={runIdSlug(line.runId)}
+					href={line.href}
+					vitals={clothVitals(line)}
+					identity={clothIdentity(line, child)}
+				/>
+			{:else}
+				<!-- No node in the corpus (closed before the weld, or the mirror
+				     hasn't landed) — the honest fallback keeps the way through. -->
+				<p class="panel px-3 py-2 font-mono text-[10px] text-ink-quiet">
+					no run node mirrored for this run —
+					<a href={line.href} class="text-amber-300 hover:text-amber-100">open the run page →</a>
+				</p>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
 
 {#snippet curatedLine(line: ClothLine, child: boolean)}
 	<!-- The band's bar language at the cloth's zoom: a slim leading duration
@@ -119,13 +194,18 @@
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
 	{#if line.href}
-		<a
-			href={line.href}
-			class="min-w-[9ch] flex-1 break-words text-amber-100 hover:text-amber-50"
+		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
+		     being a page redirect that cost the reader their scroll position
+		     on the way back. -->
+		<button
+			type="button"
+			class="min-w-[9ch] flex-1 cursor-pointer break-words text-left text-amber-100 hover:text-amber-50"
 			class:opacity-60={line.bare}
+			aria-expanded={openNode === line.id}
+			onclick={() => (openNode = openNode === line.id ? null : line.id)}
 		>
 			{line.name}
-		</a>
+		</button>
 	{:else}
 		<span class="min-w-[9ch] flex-1 break-words text-stone-200" class:opacity-60={line.bare}
 			>{line.name}</span
@@ -182,6 +262,7 @@
 				</button>
 			{/if}
 		</div>
+		{@render nodeUnfold(tree.root, false)}
 		{#if expanded.has(tree.root.id)}
 			<div class="mt-0.5 space-y-0.5" out:fade={{ duration: 100 }}>
 				{#each tree.children as child, childIndex (child.id)}
@@ -191,6 +272,7 @@
 					>
 						{@render curatedLine(child, true)}
 					</div>
+					{@render nodeUnfold(child, true)}
 				{/each}
 			</div>
 		{/if}

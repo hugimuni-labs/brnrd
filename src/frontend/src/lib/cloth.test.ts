@@ -712,3 +712,16 @@ test("weld: a run's item relics surface as addresses on its line — referencing
 	assert.deepEqual(lines.get('welded')?.items, ['the-loom#band-animation'], 'deduped address list');
 	assert.deepEqual(lines.get('plain')?.items, [], 'an un-welded run carries no address');
 });
+
+test('runner identity rides the line, first-known across re-reports — the in-place unfold header reads it', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), runner_shell: null, runner_core: null }),
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), runner_shell: 'claude', runner_core: 'fable' })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.equal(weave.trees[0].root.runnerShell, 'claude');
+	assert.equal(weave.trees[0].root.runnerCore, 'fable');
+});

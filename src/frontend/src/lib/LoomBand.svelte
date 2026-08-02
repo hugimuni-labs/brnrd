@@ -68,125 +68,126 @@
 	}
 </script>
 
-<div class="panel overflow-hidden px-3 py-2.5" aria-label="live runs at the now seam">
+{#if liveRuns !== null && liveRuns.length === 0}
+	<!-- Idle: the machine is almost nothing when nothing is woven (his 08-02
+	     steer: "it should be almost nothing when there is no job running").
+	     One line — presence, clock, the next fire — instead of an empty
+	     128px theater; the full seam returns the moment a strand burns. -->
 	<div
-		class="grid items-center font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase"
-		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
+		class="panel flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2"
+		aria-label="the now seam, idle"
 	>
-		<span aria-hidden="true"></span>
-		<span class="text-center text-amber-200">now</span>
-		<span aria-hidden="true"></span>
+		<span class="font-mono text-[9px] tracking-[0.16em] text-amber-200/80 uppercase">now</span>
+		{#if restingFace}
+			{#if restingFace.glyph}
+				<span class="font-mono text-[11px] text-amber-200/80" aria-hidden="true"
+					>{restingFace.glyph}</span
+				>
+			{/if}
+			<span class="font-mono text-[8px] text-ink-quiet">{restingFace.name}</span>
+		{:else}
+			<span
+				class="h-2 w-2 self-center rounded-full border border-stone-600 bg-stone-950"
+				aria-hidden="true"
+			></span>
+		{/if}
+		<span class="font-mono text-[10px] text-stone-400">
+			{new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+		</span>
+		{#if nextWake}
+			<span class="font-mono text-[9px] text-ink-mute">next {futureEtaLabel(nextWake.etaMs)}</span>
+		{/if}
+		<span class="ml-auto font-mono text-[9px] text-ink-mute">nothing weaving</span>
 	</div>
+{:else}
+	<div class="panel overflow-hidden px-3 py-2.5" aria-label="live runs at the now seam">
+		<div
+			class="grid items-center font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase"
+			style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
+		>
+			<span aria-hidden="true"></span>
+			<span class="text-center text-amber-200">now</span>
+			<span aria-hidden="true"></span>
+		</div>
 
-	<div
-		class="mt-1 grid h-[128px]"
-		style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
-	>
-		<!-- The flanks the shelves vacated. A seam only reads as a seam with
+		<div
+			class="mt-1 grid h-[128px]"
+			style={`grid-template-columns: minmax(0, 1fr) ${LOOM_CENTER_ZONE_PX}px minmax(0, 1fr)`}
+		>
+			<!-- The flanks the shelves vacated. A seam only reads as a seam with
 		     material either side, so each side keeps one quiet warp hairline —
 		     the threads the seam is drawn across, with nothing shelved on
 		     them. The past's bars are the cloth's now; the future's are the
 		     rack's. -->
-		<div class="flex items-center pr-1.5" aria-hidden="true">
-			<span class="h-px w-full bg-stone-800/60"></span>
-		</div>
+			<div class="flex items-center pr-1.5" aria-hidden="true">
+				<span class="h-px w-full bg-stone-800/60"></span>
+			</div>
 
-		<!-- The NOW seam: an instrument, not a snapshot. Idle it answers
+			<!-- The NOW seam: an instrument, not a snapshot. Idle it answers
 		     "when does the next thing happen"; active it answers "what is
 		     running and for how long". Everything else is the sheet's job. -->
-		<div class="relative z-10 border-x border-amber-900/40 bg-stone-950/70 px-1">
-			{#if liveRuns === null}
-				<div
-					class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-ink-mute"
-				>
-					acquiring
-				</div>
-			{:else if liveRuns.length === 0}
-				<div class="absolute inset-0 flex flex-col items-center justify-center gap-1">
-					<!-- Idle is not empty: the daemon is breathing, and #566 gives that
-					     a face. The resting glyph takes the hollow dot's place rather
-					     than crowding a line beside it — the dot was always the
-					     placeholder for "nothing to show here", and now there is
-					     something. No mood on the wire (pre-upgrade daemon) ⇒ the dot,
-					     exactly as before. -->
-					{#if restingFace}
-						<span class="flex min-w-0 max-w-full items-baseline gap-1 px-1">
-							{#if restingFace.glyph}
-								<span class="shrink-0 font-mono text-[11px] text-amber-200/80" aria-hidden="true"
-									>{restingFace.glyph}</span
-								>
-							{/if}
-							<span class="truncate font-mono text-[8px] text-ink-quiet">{restingFace.name}</span>
-						</span>
-					{:else}
-						<span
-							class="h-2.5 w-2.5 rounded-full border border-stone-600 bg-stone-950"
-							aria-hidden="true"
-						></span>
-					{/if}
-					<span class="font-mono text-[10px] text-stone-400">
-						{new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-					</span>
-					{#if nextWake}
-						<span class="max-w-full truncate px-1 text-center font-mono text-[8px] text-ink-mute">
-							next {futureEtaLabel(nextWake.etaMs)}
-						</span>
-					{/if}
-				</div>
-			{:else}
-				<div class="absolute inset-1 flex flex-col justify-center gap-1 overflow-hidden">
-					{#each liveRuns.slice(0, 2) as run, index (run.id)}
-						{@const stopId = run.run_id || run.id}
-						<!-- Server truth only now: the optimistic "I just tapped it"
+			<div class="relative z-10 border-x border-amber-900/40 bg-stone-950/70 px-1">
+				{#if liveRuns === null}
+					<div
+						class="absolute inset-0 flex items-center justify-center font-mono text-[9px] text-ink-mute"
+					>
+						acquiring
+					</div>
+				{:else}
+					<div class="absolute inset-1 flex flex-col justify-center gap-1 overflow-hidden">
+						{#each liveRuns.slice(0, 2) as run, index (run.id)}
+							{@const stopId = run.run_id || run.id}
+							<!-- Server truth only now: the optimistic "I just tapped it"
 						     state belongs to the panel that issued the stop, not to a
 						     band that merely reports position. -->
-						{@const stopping = run.stop_requested}
-						<!-- `|global` (#970): the 0→1 case creates this whole `{:else}`
+							{@const stopping = run.stop_requested}
+							<!-- `|global` (#970): the 0→1 case creates this whole `{:else}`
 						     branch, and a local intro inside the freshly-born each block
 						     never fires — the seam's most common ignition was the one
 						     that didn't play. -->
-						<div
-							class="flex min-w-0 items-stretch gap-px"
-							in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
-						>
-							<button
-								type="button"
-								class="min-w-0 flex-1 cursor-pointer border bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100 {selectedId ===
-								stopId
-									? 'border-amber-400/80 brightness-125'
-									: 'border-amber-700/50'}"
-								style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
-								title={liveRunDisplayName(run) || run.repo_label || 'live run'}
-								aria-expanded={selectedId === stopId}
-								onclick={() => select('run', stopId)}
+							<div
+								class="flex min-w-0 items-stretch gap-px"
+								in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
 							>
-								<span class="block truncate text-[9px]">
-									{liveRunDisplayName(run) || run.repo_label || 'live run'}
-								</span>
-								{#if elapsedLabel(run)}
-									<span class="mt-0.5 block text-[8px] text-amber-500/80">
-										{stopping ? 'stopping…' : elapsedLabel(run)}
+								<button
+									type="button"
+									class="min-w-0 flex-1 cursor-pointer border bg-stone-950/90 px-1.5 py-1 text-left font-mono leading-tight text-amber-100 {selectedId ===
+									stopId
+										? 'border-amber-400/80 brightness-125'
+										: 'border-amber-700/50'}"
+									style={glowFor(liveRuns.length > 1 ? 'attention' : 'calm', STATUS_BURNING)}
+									title={liveRunDisplayName(run) || run.repo_label || 'live run'}
+									aria-expanded={selectedId === stopId}
+									onclick={() => select('run', stopId)}
+								>
+									<span class="block truncate text-[9px]">
+										{liveRunDisplayName(run) || run.repo_label || 'live run'}
 									</span>
-								{/if}
-							</button>
-							<!-- The stop control used to sit here as a `w-7` sibling
+									{#if elapsedLabel(run)}
+										<span class="mt-0.5 block text-[8px] text-amber-500/80">
+											{stopping ? 'stopping…' : elapsedLabel(run)}
+										</span>
+									{/if}
+								</button>
+								<!-- The stop control used to sit here as a `w-7` sibling
 							     (#492). It moved to the node panel's expanded view
 							     (`RunNodeInline`) on 2026-07-19: a destructive action was
 							     taking width from a 9px cell that had none to spare. The
 							     *state* stays — a stopping run still says so. -->
-						</div>
-					{/each}
-					{#if liveRuns.length > 2}
-						<span class="text-center font-mono text-[8px] text-amber-500/70"
-							>+{liveRuns.length - 2}</span
-						>
-					{/if}
-				</div>
-			{/if}
-		</div>
+							</div>
+						{/each}
+						{#if liveRuns.length > 2}
+							<span class="text-center font-mono text-[8px] text-amber-500/70"
+								>+{liveRuns.length - 2}</span
+							>
+						{/if}
+					</div>
+				{/if}
+			</div>
 
-		<div class="flex items-center pl-1.5" aria-hidden="true">
-			<span class="h-px w-full bg-stone-800/60"></span>
+			<div class="flex items-center pl-1.5" aria-hidden="true">
+				<span class="h-px w-full bg-stone-800/60"></span>
+			</div>
 		</div>
 	</div>
-</div>
+{/if}

@@ -20,8 +20,12 @@
 
 	interface Props {
 		data: SurfaceResponse;
+		/** An outside ask to open a page (the warp's "page →", 08-02): the
+		 *  token distinguishes repeat asks for the same path from a stale one
+		 *  riding a re-render. */
+		openRequest?: { path: string; token: number } | null;
 	}
-	let { data }: Props = $props();
+	let { data, openRequest = null }: Props = $props();
 
 	// Which layer sections are open in the nav (authored open by default; knowledge
 	// and runs collapsed — the file list is too long to show all at once).
@@ -39,6 +43,15 @@
 	// file a reader opens would paint, having been charged for the first.
 	const ledger = revealLedger();
 	setContext(REVEAL_LEDGER, ledger);
+
+	// Answer an outside open ask exactly once per token.
+	let lastOpenToken = 0;
+	$effect(() => {
+		const request = openRequest;
+		if (!request || request.token === lastOpenToken || !request.path) return;
+		lastOpenToken = request.token;
+		select(request.path);
+	});
 
 	let knownPaths = $derived(new Set(data.files.map((f) => f.path)));
 	let navTree = $derived(buildNavTree(data.files));
