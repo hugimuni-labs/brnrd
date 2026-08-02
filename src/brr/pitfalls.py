@@ -53,7 +53,10 @@ def parse_pitfalls(dominion_dir: Path) -> list[Pitfall]:
     anywhere in its block, and free-form lesson prose. Text before the
     first ``## `` (a file header / comment) is ignored. A pitfall with no
     ``trigger:`` line parses but never matches — it's inert until the
-    resident gives it a trigger.
+    resident gives it a trigger. Deliberately not an error: a resident
+    drafting a lesson before its triggers must be able to save the file.
+    :func:`inert` is how that state gets *said* rather than merely
+    tolerated (see #985).
     """
     path = dominion_dir / PITFALLS_FILE
     try:
@@ -98,6 +101,27 @@ def match(pitfalls: list[Pitfall], task_text: str) -> list[Pitfall]:
     if not task_text:
         return []
     return [p for p in pitfalls if p.matches(task_text)]
+
+
+def inert(pitfalls: list[Pitfall]) -> list[Pitfall]:
+    """Return the entries that can never match — no triggers at all.
+
+    The store's one silent failure mode. :func:`parse_pitfalls` accepts a
+    triggerless entry on purpose (a body drafted before its triggers is
+    legitimate), and :meth:`Pitfall.matches` then returns ``False`` for it
+    against every task forever. On disk the entry is indistinguishable from
+    a live one: same heading, same prose, same place in the file — so it
+    reads as *filed* while behaving as *deleted*.
+
+    Found live 2026-08-02 (#985): a lesson demoted out of the always-injected
+    playbook into this trigger-gated store lost its ``trigger:`` line in the
+    move and matched nothing for nine days. The demotion **is** the trigger
+    line, which is why this state has to be reported at exactly the moment
+    the memory system is otherwise working as designed.
+
+    Order is the file's, so a report built from this reads top-to-bottom.
+    """
+    return [p for p in pitfalls if not any(t.strip() for t in p.triggers)]
 
 
 def format_block(matched: list[Pitfall]) -> str:
