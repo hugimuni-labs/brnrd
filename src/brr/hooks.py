@@ -1490,6 +1490,7 @@ def _render_bar(
     *,
     run: dict[str, Any],
     pending: int,
+    pending_known: bool,
     pending_files: int,
     events: list[Any],
     budget: dict[str, Any],
@@ -1557,6 +1558,8 @@ def _render_bar(
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(delivery_chip)
+    if not pending_known:
+        segments.append("✉?")
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(f"⚒{produce_total}")
@@ -1632,7 +1635,7 @@ def _render_bar(
     # closes again — the ask would still be silent on exactly the boundary it
     # exists for, one layer past where the fix was aimed.
     if (
-        pending == 0 and pending_files == 0 and not any_delivery
+        pending_known and pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
         and not notices_chip and not finished_spawns and not armed
     ):
@@ -1738,7 +1741,8 @@ def format_delta(
     staleness (2026-07-05) and non-zero pending events, which always earn a
     detail line: a stale-or-blank ``.card`` or an unaddressed follow-up is a
     mid-run failure, not one that can wait for closeout or be buried in a
-    glyph.
+    glyph. An unavailable count is the compact ``✉?`` chip — neither a false
+    zero nor silence.
 
     ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
@@ -1839,7 +1843,8 @@ def format_delta(
         card_stale = bool(card.get("stale"))
         run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
         return _render_bar(
-            run=run, pending=action_pending, pending_files=pending_files,
+            run=run, pending=action_pending, pending_known=pending_known,
+            pending_files=pending_files,
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
@@ -3128,7 +3133,9 @@ def compute_neutral(
         # changes nothing the daemon writes into portal-state, so the one
         # boundary the ask exists for is exactly the one that would render
         # nothing.
-        if token is not None and (token != state.get("last_token") or edge):
+        if portal_unavailable or (
+            token is not None and (token != state.get("last_token") or edge)
+        ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
