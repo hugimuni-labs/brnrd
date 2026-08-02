@@ -66,18 +66,18 @@ test('window predicate: parseable close inside the window, nothing else', () => 
 	assert.ok(!inClothWindow(row({ ended_at: null }), NOW, CLOTH_WINDOW_MS));
 });
 
-test('grouping: roots newest-first, worker subruns nested beneath their root', () => {
+test('grouping: roots newest-first, strand subruns nested beneath their root', () => {
 	const rows = [
 		row({ run_id: 'old-root', ended_at: endedAgo(5 * HOUR) }),
 		row({
-			run_id: 'worker-late',
+			run_id: 'strand-late',
 			parent_run_id: 'old-root',
 			is_subspawn: true,
 			ended_at: endedAgo(3 * HOUR)
 		}),
 		row({ run_id: 'new-root', ended_at: endedAgo(1 * HOUR) }),
 		row({
-			run_id: 'worker-early',
+			run_id: 'strand-early',
 			parent_run_id: 'old-root',
 			is_subspawn: true,
 			ended_at: endedAgo(4 * HOUR)
@@ -91,7 +91,7 @@ test('grouping: roots newest-first, worker subruns nested beneath their root', (
 	);
 	assert.deepEqual(
 		weave.trees[1].children.map((child) => child.id),
-		['worker-late', 'worker-early'],
+		['strand-late', 'strand-early'],
 		'children age-ordered (newest first) beneath their root'
 	);
 	assert.deepEqual(weave.trees[0].children, []);
@@ -243,13 +243,13 @@ test('cap: roots beyond the cap come back as an explicit drop count', () => {
 	assert.equal(weave.trees[0].root.id, 'run-0', 'newest roots survive the cap');
 });
 
-test('cap: workers ride their root and never count against it', () => {
+test('cap: strands ride their root and never count against it', () => {
 	const rows: RunLedgerRow[] = [];
 	for (let index = 0; index < 3; index += 1) {
 		rows.push(row({ run_id: `root-${index}`, ended_at: endedAgo((index + 1) * HOUR) }));
 		rows.push(
 			row({
-				run_id: `worker-${index}`,
+				run_id: `strand-${index}`,
 				parent_run_id: `root-${index}`,
 				is_subspawn: true,
 				ended_at: endedAgo((index + 1) * HOUR + 30 * 60 * 1000)
@@ -446,7 +446,7 @@ test("bars: fractions run the band's own scale against one window-wide max", () 
 		[
 			row({ run_id: 'big', wall_clock_seconds: 900, ended_at: endedAgo(2 * HOUR) }),
 			row({
-				run_id: 'worker',
+				run_id: 'strand',
 				parent_run_id: 'big',
 				is_subspawn: true,
 				wall_clock_seconds: 400,
@@ -460,13 +460,13 @@ test("bars: fractions run the band's own scale against one window-wide max", () 
 		NOW,
 		CLOTH_WINDOW_MS
 	);
-	assert.equal(weave.maxWallSeconds, 900, 'max spans roots and workers across all days');
+	assert.equal(weave.maxWallSeconds, 900, 'max spans roots and strands across all days');
 	const lines = new Map(
 		weave.trees.flatMap((tree) => [tree.root, ...tree.children]).map((line) => [line.id, line])
 	);
 	assert.equal(lines.get('big')?.barFraction, loomBarFraction(900, 900));
 	assert.equal(lines.get('big')?.barFraction, 1, 'the longest run fills the bar');
-	assert.equal(lines.get('worker')?.barFraction, loomBarFraction(400, 900));
+	assert.equal(lines.get('strand')?.barFraction, loomBarFraction(400, 900));
 	assert.equal(
 		lines.get('small-old-day')?.barFraction,
 		loomBarFraction(100, 900),
@@ -618,7 +618,7 @@ test('lens: a stale selection reconciles to all rather than lying about the weav
 	assert.equal(reconcileLens('origin:spawn', lenses), 'origin:spawn', 'a live chip holds');
 });
 
-// The lens that can strand rows. `stack:worker` keeps only sub-spawns, so
+// The lens that can strand rows. `stack:strand` keeps only sub-spawns, so
 // every surviving row's parent is *gone* from the set — and `weaveCloth`
 // drops any `depth: 1` run it meets before a root (`trees.length > 0`).
 // A chip that counts N and weaves 0 would be the cloth lying with a number
@@ -644,7 +644,7 @@ test('lens: strands weave as roots once the lens removes their parents', () => {
 			ended_at: endedAgo(HOUR)
 		})
 	];
-	const strands = availableLenses(rows).find((lens) => lens.id === 'stack:worker');
+	const strands = availableLenses(rows).find((lens) => lens.id === 'stack:strand');
 	assert.equal(strands?.count, 2, 'the chip counts both strands');
 
 	const unlensed = weaveCloth(rows, NOW, CLOTH_WINDOW_MS);
@@ -654,7 +654,7 @@ test('lens: strands weave as roots once the lens removes their parents', () => {
 		'unlensed, the strands hang under the run that dispatched them'
 	);
 
-	const weave = weaveCloth(applyLens(rows, 'stack:worker'), NOW, CLOTH_WINDOW_MS);
+	const weave = weaveCloth(applyLens(rows, 'stack:strand'), NOW, CLOTH_WINDOW_MS);
 	assert.deepEqual(
 		weave.trees.map((tree) => tree.root.id),
 		['child-b', 'child-a'],

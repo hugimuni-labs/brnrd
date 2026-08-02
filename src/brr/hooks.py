@@ -13,7 +13,7 @@ Two directions across the single endpoint:
 - **Outbound flush** (runner → portal broker): ``post-tool`` / ``stop`` drop a
   token in ``.flush`` and, on daemon-managed Tier-2 runs, wait for the broker's
   matching ``.flush.ack``. The daemon remains the sole process that promotes
-  files (worker emit + conversation indexing are in-process-coupled), but the
+  files (run emit + conversation indexing are in-process-coupled), but the
   *runner boundary* now owns when the promotion must be complete. In
   particular, Stop cannot race a final ``gate: forge`` handoff against runner
   exit. Tier-0/1 runners retain the heartbeat/post-return recovery path.
@@ -1188,7 +1188,7 @@ _EVENT_GLYPHS = (
     ("github", "⎇"),
     ("forge", "⎇"),
     ("spawn", "⚙"),
-    ("worker", "⚙"),
+    ("strand", "⚙"),
 )
 _EVENT_GLYPH_DEFAULT = "✉"
 
@@ -3110,7 +3110,7 @@ def compute_neutral(
     # the seen ledger records what was actually delivered.
     #
     # **Ambient phases only, and that boundary is the whole correctness
-    # argument.** #818 measured the defect on a *worker's post-tool* channel
+    # argument.** #818 measured the defect on a *run's post-tool* channel
     # — 26 byte-identical status bars in eighteen minutes — and named the
     # real answer as splitting the channel, because "the statusline and the
     # actual obligations share one channel". Content dedupe cannot tell the

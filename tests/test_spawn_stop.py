@@ -85,7 +85,7 @@ def _drain_stop(tmp_path, monkeypatch, files, *, task_id="run-parent"):
     emitted = []
     monkeypatch.setattr(daemon.updates, "emit",
                         lambda brr, pkt: emitted.append(pkt))
-    emit = daemon._WorkerEmit(
+    emit = daemon._RunEmit(
         brr_dir=brr_dir, conversation_key="", event_id="evt-1")
     task = types.SimpleNamespace(id=task_id, conversation_key="cloud:1:")
     stats: dict[str, int] = {}
@@ -229,7 +229,7 @@ class TestStopVerb:
         outbox = tmp_path / "outbox"
         outbox.mkdir()
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=tmp_path / ".brr", conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="run-parent", conversation_key="")
         handled = daemon._queue_stop_request(
@@ -321,7 +321,7 @@ def test_run_progress_folds_stopped_as_terminal(tmp_path):
     assert view.detail == "stopped by run-parent"
 
 
-# ── daemon: the to: message verb + worker view isolation ────────────
+# ── daemon: the to: message verb + run view isolation ────────────
 
 
 class TestMessageVerb:
@@ -349,7 +349,7 @@ class TestMessageVerb:
 
         # Visibility: only the addressed child's view carries it.
         child_view = daemon._pending_events_for_agent(
-            inbox, "evt-child", worker=True)
+            inbox, "evt-child", strand=True)
         assert [e["id"] for e in child_view] == [msg["id"]]
         resident_view = daemon._pending_events_for_agent(inbox, "evt-lead")
         assert msg["id"] not in [e["id"] for e in resident_view]
@@ -393,8 +393,8 @@ class TestMessageVerb:
         assert any("empty body" in x["text"] for x in notices)
 
 
-class TestWorkerViewIsolation:
-    def test_worker_view_hides_user_thread_events(self, tmp_path):
+class TestStrandViewIsolation:
+    def test_strand_view_hides_user_thread_events(self, tmp_path):
         inbox = tmp_path / "inbox"
         inbox.mkdir()
         protocol.create_event(inbox, "telegram", "user says hi")
@@ -404,13 +404,13 @@ class TestWorkerViewIsolation:
             spawn_message_from_run="run-parent",
         )
 
-        worker_view = daemon._pending_events_for_agent(
-            inbox, "evt-child", worker=True)
-        assert [e["id"] for e in worker_view] == [msg.stem]
+        strand_view = daemon._pending_events_for_agent(
+            inbox, "evt-child", strand=True)
+        assert [e["id"] for e in strand_view] == [msg.stem]
 
-        other_worker = daemon._pending_events_for_agent(
-            inbox, "evt-other-child", worker=True)
-        assert other_worker == []
+        other_strand = daemon._pending_events_for_agent(
+            inbox, "evt-other-child", strand=True)
+        assert other_strand == []
 
     def test_resident_view_hides_edge_messages_keeps_user_events(self, tmp_path):
         inbox = tmp_path / "inbox"

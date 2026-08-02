@@ -539,7 +539,7 @@ def test_lint_overlap_misses_this_accounts_real_dispatch_grants():
     push dispatch tick`) score ~0.006 on whole-body SequenceMatcher ratio —
     their overlap is shared *remit* (both hold unsupervised spawn
     authority), not shared *prose*. A threshold that caught this pair would
-    flag nearly every pair of substantial entries. See the worker report for
+    flag nearly every pair of substantial entries. See the run report for
     issue #579.
     """
     director = schedule.ScheduleEntry(

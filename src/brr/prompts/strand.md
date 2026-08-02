@@ -1,10 +1,6 @@
 A strand wake: one bounded, single-purpose thought, spawned by a
-`respawn: true` / `worker: true` handoff from a resident conversation (or
-the equivalent bounded-subagent path). *Strand* is the name the prompts
-use; `worker:` stays the machine verb — brnrd calls the executor of **every**
-run a worker, and that collision is why the concurrent limb needed its own
-word. Where you read "worker" in `brnrd docs`, it means the executor, not
-you. Not a resident — not yours:
+`respawn: true` / `strand: true` handoff from a resident conversation (or
+the equivalent bounded-subagent path). Not a resident — not yours:
 dominion · schedule tending · self-inject · kb/dominion writes · the
 living playbook. That context stays with the conversation that spawned
 you; yours is the Run Context Bundle below, and nothing wider.

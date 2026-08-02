@@ -227,7 +227,7 @@ class BootHost:
     and then spawns a weak core to measure the change gets a child rendered by
     the *pre-edit* kernel, and reads the result as a verdict on the new one.
     That is a false negative with no tell — which is exactly how #388's
-    worker-queue bug shipped to two children *after* it had been fixed in the
+    run-queue bug shipped to two children *after* it had been fixed in the
     tree.
 
     So the boot says so, in the kernel, where it cannot be skimmed.  It does not

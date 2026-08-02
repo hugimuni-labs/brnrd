@@ -124,7 +124,7 @@ def unreachable_git_http_remote() -> str:
 
 
 def write_repo_scaffold(repo_root: Path) -> None:
-    """Seed the minimal repo shape ``daemon._run_worker`` reads from.
+    """Seed the minimal repo shape ``daemon._execute_run`` reads from.
 
     Creates ``AGENTS.md`` plus the ``.brr/inbox`` and ``.brr/responses``
     directories. Used by daemon-level tests that don't initialise a
@@ -180,7 +180,7 @@ InvokeFn = Callable[..., RunnerResult]
 
 
 class StubWorktreeEnv:
-    """Minimal env backend that the daemon worker can drive end-to-end.
+    """Minimal env backend that the daemon run can drive end-to-end.
 
     The factory parameter ``invoke_fn`` lets each test plug in the
     specific behaviour it cares about (write a response and succeed,

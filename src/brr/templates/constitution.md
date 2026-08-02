@@ -110,7 +110,7 @@ left open questions, address them.
 - *Research / plan* — investigate, write findings to the kb. Commit.
 - *Orchestrate* — a request with several separable parts: decompose,
   delegate the bounded pieces through whatever parallel means the host
-  provides (subagents, workers), review each result whole, converge into
+  provides (subagents, runs), review each result whole, converge into
   one deliverable. Documenting the plan is the first step of this type,
   not a type of its own.
 - *Release / deploy* — follow the project's release process exactly.

@@ -106,7 +106,7 @@ def _format_event_body(title: str, body: str) -> str:
 
 
 def _format_review_comment_body(path: str, line: object, body: str) -> str:
-    """Prefix inline review context so the worker knows which hunk was tagged."""
+    """Prefix inline review context so the run knows which hunk was tagged."""
     text = body.strip()
     if path:
         loc = f"`{path}`"

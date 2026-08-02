@@ -33,8 +33,8 @@ def _task(
     )
 
 
-def _worker_emit(tmp_path: Path) -> daemon._WorkerEmit:
-    return daemon._WorkerEmit(
+def _run_emit(tmp_path: Path) -> daemon._RunEmit:
+    return daemon._RunEmit(
         tmp_path / ".brr", "schedule:director-tick:", "evt-lead",
     )
 
@@ -53,7 +53,7 @@ def test_mirror_emitted_once_then_on_narration_change(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     _seed_foreign(inbox)
     task = _task()
-    emit = _worker_emit(tmp_path)
+    emit = _run_emit(tmp_path)
     state: dict[str, object] = {"last": "working on it"}
 
     daemon._emit_mirror_cards(emit, task, "evt-lead", inbox, state)
@@ -83,7 +83,7 @@ def test_mirror_resolves_answered_when_event_folds_in(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     _seed_foreign(inbox)
     task = _task()
-    emit = _worker_emit(tmp_path)
+    emit = _run_emit(tmp_path)
     state: dict[str, object] = {"last": "working"}
 
     daemon._emit_mirror_cards(emit, task, "evt-lead", inbox, state)
@@ -109,7 +109,7 @@ def test_final_drain_marks_still_pending_event_queued(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     _seed_foreign(inbox)
     task = _task()
-    emit = _worker_emit(tmp_path)
+    emit = _run_emit(tmp_path)
     state: dict[str, object] = {"last": "working"}
 
     daemon._emit_mirror_cards(emit, task, "evt-lead", inbox, state)
@@ -120,18 +120,18 @@ def test_final_drain_marks_still_pending_event_queued(tmp_path, monkeypatch):
     assert packets[1].payload["status"] == "queued"
 
 
-def test_worker_run_emits_no_mirrors(tmp_path, monkeypatch):
+def test_strand_run_emits_no_mirrors(tmp_path, monkeypatch):
     """A spawn child sees the parent's whole pending backlog as foreign
     events; it must not stamp "folded into a running thought" under them
-    (live incident 2026-07-16 — worker spam under an actively-answered
-    chat). Worker-stack runs own no thread: no mirror packets, ever."""
+    (live incident 2026-07-16 — run spam under an actively-answered
+    chat). Strand-stack runs own no thread: no mirror packets, ever."""
     packets = _capture(monkeypatch)
     inbox = tmp_path / ".brr" / "inbox"
     _seed_foreign(inbox)
     task = _task()
-    task.meta["worker"] = True
+    task.meta["strand"] = True
     daemon._emit_mirror_cards(
-        _worker_emit(tmp_path), task, "evt-lead", inbox, {},
+        _run_emit(tmp_path), task, "evt-lead", inbox, {},
     )
     assert packets == []
 
@@ -141,7 +141,7 @@ def test_no_mirror_for_runs_own_thread(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     _seed_foreign(inbox)  # telegram:555:
     task = _task(conv="telegram:555:", source="telegram")
-    emit = _worker_emit(tmp_path)
+    emit = _run_emit(tmp_path)
 
     daemon._emit_mirror_cards(emit, task, "evt-lead", inbox, {"last": "x"})
     assert packets == []  # origin chat already has the real card
@@ -155,7 +155,7 @@ def test_no_mirror_for_respawn_or_non_chat_events(tmp_path, monkeypatch):
     # Non-chat gate source: no mirror rendering exists for it.
     protocol.create_event(inbox, source="github", body="issue comment")
     task = _task()
-    emit = _worker_emit(tmp_path)
+    emit = _run_emit(tmp_path)
 
     daemon._emit_mirror_cards(emit, task, "evt-lead", inbox, {"last": "x"})
     assert packets == []

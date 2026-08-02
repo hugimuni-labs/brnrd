@@ -4,7 +4,7 @@ Maintainer ask, 2026-07-23: *"to avoid the recent sync issues on the
 runner selector … could we double check the set model on daemon just
 before spawning a run?"*
 
-``_run_worker`` resolves the runner profile early — before the trust and
+``_execute_run`` resolves the runner profile early — before the trust and
 env setup, the worktree build, and the prompt assembly — and only spawns
 the process several hundred lines later. That gap is a real window: an
 operator who changes the pin from the dashboard or ``.brr/config`` inside
@@ -59,7 +59,7 @@ def test_runner_changed_between_resolution_and_spawn_is_adopted_and_surfaced(
     _stub_rest(monkeypatch)
     calls = _profiles_in_sequence(monkeypatch, ["codex", "claude"])
 
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert calls["n"] >= 2, "the pin was never re-read before the spawn"
 
@@ -85,7 +85,7 @@ def test_unchanged_runner_selection_is_silent(tmp_path, monkeypatch, capsys):
     _stub_rest(monkeypatch)
     _profiles_in_sequence(monkeypatch, ["codex"])
 
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     notices = daemon._read_outbox_notices(
         tmp_path / ".brr" / "outbox" / "evt-stable"

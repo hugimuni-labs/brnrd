@@ -1,4 +1,4 @@
-"""Tests for the daemon worker after the triage stage was removed."""
+"""Tests for the daemon run after the triage stage was removed."""
 
 import json
 import os
@@ -164,7 +164,7 @@ def test_quota_pacing_status_stays_absent_without_measurement():
     assert daemon._quota_pacing_status({}, None) is None
 
 
-def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
+def test_execute_run_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-1")
     worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
@@ -198,7 +198,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert task.status == "done"
     assert task.body == "raw event body"
@@ -216,7 +216,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
-def test_run_worker_installs_project_repo_run_id_hook(tmp_path, monkeypatch):
+def test_execute_run_installs_project_repo_run_id_hook(tmp_path, monkeypatch):
     """#575: a resident's own hand ``git commit`` inside a host run needs
     the same ``Brnrd-Run-Id`` stamping #565 gave the account-knowledge
     checkout — installed against ``repo_root`` (the checkout every worktree
@@ -249,12 +249,12 @@ def test_run_worker_installs_project_repo_run_id_hook(tmp_path, monkeypatch):
         daemon.gitops, "ensure_run_id_hook", lambda root: hook_calls.append(root),
     )
 
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert hook_calls == [tmp_path]
 
 
-def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkeypatch):
+def test_execute_run_refuses_untrusted_when_solitary_unavailable(tmp_path, monkeypatch):
     """#517: an untrusted event with no isolated env to hold it is refused
     before any runner is prepared — fail closed, visibly."""
     write_repo_scaffold(tmp_path)
@@ -274,7 +274,7 @@ def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkey
     monkeypatch.setattr(envs.SolitaryEnv, "prepare", fail_prepare, raising=False)
 
     # No docker.image in cfg → solitary can't back the run → refuse.
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert invoked == []
     assert task.status == "done"
@@ -287,7 +287,7 @@ def test_run_worker_refuses_untrusted_when_solitary_unavailable(tmp_path, monkey
 
 
 def _stub_wake_runner(monkeypatch, seen_overrides, resolved="codex"):
-    """Common runner/prompt/env stubs for the wake-tap worker tests."""
+    """Common runner/prompt/env stubs for the wake-tap run tests."""
     def fake_resolve(_root, overrides=None):
         seen_overrides.append(overrides)
         name = overrides["runner"] if overrides and overrides.get("runner") else resolved
@@ -312,8 +312,8 @@ def _stub_wake_runner(monkeypatch, seen_overrides, resolved="codex"):
     )
 
 
-def test_run_worker_reads_the_dispatch_time_claim_verdict(tmp_path, monkeypatch):
-    """#733: the worker consumes the verdict `_apply_dashboard_wake_request`
+def test_execute_run_reads_the_dispatch_time_claim_verdict(tmp_path, monkeypatch):
+    """#733: the run consumes the verdict `_apply_dashboard_wake_request`
     stamped on the event — it no longer decides anything about a tap.
 
     The runner override, the "you were asked for" line on the prompt, and
@@ -337,7 +337,7 @@ def test_run_worker_reads_the_dispatch_time_claim_verdict(tmp_path, monkeypatch)
     _stub_wake_runner(monkeypatch, seen_overrides)
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
 
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, brr_dir / "responses", {}, 0)
 
     assert task.status == "done"
     assert seen_overrides and seen_overrides[0] == {"runner": "codex-mini"}
@@ -353,7 +353,7 @@ def test_run_worker_reads_the_dispatch_time_claim_verdict(tmp_path, monkeypatch)
     }
 
 
-def test_run_worker_surfaces_a_refused_tap_on_the_run(tmp_path, monkeypatch):
+def test_execute_run_surfaces_a_refused_tap_on_the_run(tmp_path, monkeypatch):
     """#733's other half: a tap that existed and did not apply must not look
     like no tap. "You asked for X, you got Y, because Z" reaches the run via
     `resources.runner.wake_request` (facets.py) — the surface a human reads
@@ -372,7 +372,7 @@ def test_run_worker_surfaces_a_refused_tap_on_the_run(tmp_path, monkeypatch):
         daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
     )
 
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, brr_dir / "responses", {}, 0)
 
     # Refused ⇒ no override; the wake ran on the default resolve.
     assert seen_overrides and seen_overrides[0] is None
@@ -384,13 +384,13 @@ def test_run_worker_surfaces_a_refused_tap_on_the_run(tmp_path, monkeypatch):
     }
 
 
-def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
+def test_execute_run_never_claims_a_tap_itself(tmp_path, monkeypatch):
     """The duplicated guard ladder is gone (#733).
 
     A mirrored tap with no verdict stamped on the event is *not this
-    worker's business*: a concurrent `spawn:` child and a crash re-dispatch
-    both reach `_run_worker` without passing dispatch, and neither is "the
-    next wake the account owner is about to cause". The worker must leave
+    run's business*: a concurrent `spawn:` child and a crash re-dispatch
+    both reach `_execute_run` without passing dispatch, and neither is "the
+    next wake the account owner is about to cause". The run must leave
     the mirror alone and never reach the network — running the ladder here
     a second time is what made #733's expiry invisible.
     """
@@ -404,7 +404,7 @@ def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
     wake_request_mod.store_pending(brr_dir, {"request_id": "wake_untouched"})
 
     def _never(*args, **kwargs):
-        raise AssertionError("the worker must not claim a tap")
+        raise AssertionError("the run must not claim a tap")
 
     monkeypatch.setattr(cloud, "claim_wake_request", _never)
     monkeypatch.setattr(cloud, "_request", _never)
@@ -415,7 +415,7 @@ def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
         daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
     )
 
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, brr_dir / "responses", {}, 0)
 
     assert seen_overrides and seen_overrides[0] is None
     # Still armed for the wake it was actually parked for.
@@ -425,7 +425,7 @@ def test_run_worker_never_claims_a_tap_itself(tmp_path, monkeypatch):
     assert "wake_request" not in task.meta
 
 
-def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
+def test_execute_run_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-ledger")
     monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
@@ -460,7 +460,7 @@ def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
         lambda *args, **kwargs: next(snapshots),
     )
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event,
         tmp_path,
         tmp_path / ".brr" / "responses",
@@ -623,10 +623,10 @@ def test_capture_knowledge_stopped_run_suppresses_shared_window_sweep(
     assert daemon.relics.read_reported(outbox) == []
 
 
-def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
+def test_execute_run_crash_retires_event_instead_of_infinite_retry_loop(
     tmp_path, monkeypatch,
 ):
-    """A crash inside ``_run_worker`` must not orphan the event as "processing".
+    """A crash inside ``_execute_run`` must not orphan the event as "processing".
 
     Found live 2026-07-06: an uncaught exception left ``task`` unset, so
     nothing ever advanced the event's status past "processing" —
@@ -643,12 +643,12 @@ def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     protocol.set_status(event, "processing")  # matches real dispatch (daemon.py:4437)
     monkeypatch.setattr(
         daemon,
-        "_run_worker",
+        "_execute_run",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        daemon._run_worker_and_finalize(
+        daemon._run_and_finalize(
             event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
         )
 
@@ -658,7 +658,7 @@ def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     assert reread["status"] not in ("pending", "processing")
 
 
-def test_run_worker_does_not_infer_native_hooks_from_runner_name(
+def test_execute_run_does_not_infer_native_hooks_from_runner_name(
     tmp_path, monkeypatch
 ):
     write_repo_scaffold(tmp_path)
@@ -698,14 +698,14 @@ def test_run_worker_does_not_infer_native_hooks_from_runner_name(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
     assert task.status == "done"
 
 
-def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
+def test_execute_run_installs_native_hooks_only_when_profile_declares_them(
     tmp_path, monkeypatch
 ):
     write_repo_scaffold(tmp_path)
@@ -755,7 +755,7 @@ def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -765,7 +765,7 @@ def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
     assert seen_env["BRR_RUNNER"] == "claude"
 
 
-def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
+def test_execute_run_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-quota")
     _stub_env_isolated(monkeypatch, tmp_path)
@@ -784,7 +784,7 @@ def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
     # Pin the config-derived fallback path hermetically: without this the
     # codex level collector reads the *host's* live session rollout and
     # overrides the stubbed summary (level quota wins by design; see
-    # test_run_worker_threads_level_quota_into_prompt for that path).
+    # test_execute_run_threads_level_quota_into_prompt for that path).
     monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
     captured: dict[str, object] = {}
 
@@ -811,7 +811,7 @@ def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -820,7 +820,7 @@ def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
     assert captured["runner_quota"] == "weekly 0% - resets 2026-06-17T01:29Z"
 
 
-def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
+def test_execute_run_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-2")
 
@@ -840,7 +840,7 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: ExplodingEnv())
 
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert task.status == "error"
     assert event["status"] == "done"
@@ -856,7 +856,7 @@ def test_presence_label_for_event_never_falls_back_to_task_body():
     """#585: a presence `label` is dashboard chrome, not a content channel.
 
     The pre-fix shape derived the label as
-    ``event.get("summary") or task.body``, so a spawn worker's presence
+    ``event.get("summary") or task.body``, so a spawn run's presence
     label was its own full task spec whenever `summary` was unpopulated —
     which it always was (audited: no writer sets it on this creation-time
     `event` dict). `_presence_label_for_event` must never read `body`
@@ -892,7 +892,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
     )
-    # _run_worker_and_finalize calls publish at the end; stub it so the test
+    # _run_and_finalize calls publish at the end; stub it so the test
     # exercises the presence finally without real git pushes.
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
 
@@ -914,7 +914,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event, tmp_path, brr_dir / "responses", {}, 0,
     )
 
@@ -923,7 +923,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
     assert presence.list_active(brr_dir) == []
 
 
-def test_run_worker_does_not_retry_on_empty_stdout(tmp_path, monkeypatch):
+def test_execute_run_does_not_retry_on_empty_stdout(tmp_path, monkeypatch):
     """Ceremony cut 2026-07-16: empty stdout alone no longer triggers a
     full re-run — a clean silent run with no other success signal takes
     the give-up path in one attempt and surfaces a terminal failure note."""
@@ -976,7 +976,7 @@ def test_run_worker_does_not_retry_on_empty_stdout(tmp_path, monkeypatch):
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: RetryEnv())
 
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 1)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 1)
 
     assert task.status == "error"
     assert attempts == ["evt-3-attempt-1"]
@@ -984,7 +984,7 @@ def test_run_worker_does_not_retry_on_empty_stdout(tmp_path, monkeypatch):
     assert task.terminal_reply
 
 
-def test_run_worker_accepts_current_outbox_reply_without_stdout(
+def test_execute_run_accepts_current_outbox_reply_without_stdout(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -1018,7 +1018,7 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
     )
 
@@ -1069,7 +1069,7 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -1100,7 +1100,7 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     """A respawn this run just queued must not show up as attention-owed.
 
     Found live (2026-07-06): a run that queued a codex-shell respawn for a
-    bounded worker task kept re-triggering the Stop-hook fold-in-or-explain
+    bounded run task kept re-triggering the Stop-hook fold-in-or-explain
     gate every phase after, because the queued event was indistinguishable
     from an unaddressed user message in ``_pending_events_for_agent`` —
     ``pending_event_count`` could never reach zero from inside the very run
@@ -1118,7 +1118,7 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
         inbox, "telegram", "a genuine user follow-up",
     )
     protocol.create_event(
-        inbox, "telegram", "queued worker task",
+        inbox, "telegram", "queued run task",
         respawned_by_run="run-current", respawned_from_event=current_id,
         shell="codex",
     )
@@ -1128,7 +1128,7 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     assert [ev["id"] for ev in events] == [real_followup.stem]
 
 
-def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
+def test_execute_run_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     """A respawn event must never be flagged as a duplicate of its parent.
 
     Found live (2026-07-06): ``_queue_respawn_request`` carries the
@@ -1138,7 +1138,7 @@ def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     ``origin_message_key_for_event`` hashes into the exact-duplicate key.
     The respawn event recomputed to the *same* key as the message that
     triggered the run which queued it, so the moment it started, the
-    "arrived via two channels" check in ``_run_worker`` matched it
+    "arrived via two channels" check in ``_execute_run`` matched it
     against its own parent and silently squashed it with "I already
     received this source message on another configured channel" instead
     of actually running.
@@ -1191,7 +1191,7 @@ def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(respawn_event, tmp_path, responses, {}, 0)
+    task = daemon._execute_run(respawn_event, tmp_path, responses, {}, 0)
 
     assert task.status == "done"
     assert "deduplicated_by_event_id" not in task.meta
@@ -1199,7 +1199,7 @@ def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     assert response == "real respawn answer\n"
 
 
-def test_drain_outbox_queues_worker_respawn_request(tmp_path):
+def test_drain_outbox_queues_strand_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1217,10 +1217,10 @@ def test_drain_outbox_queues_worker_respawn_request(tmp_path):
     (outbox / "respawn.md").write_text(
         "---\n"
         "respawn: true\n"
-        "worker: true\n"
+        "strand: true\n"
         "shell: codex-mini\n"
         "---\n"
-        "bounded task for a worker wake\n",
+        "bounded task for a run wake\n",
         encoding="utf-8",
     )
     task = Run(
@@ -1233,7 +1233,7 @@ def test_drain_outbox_queues_worker_respawn_request(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -1247,10 +1247,10 @@ def test_drain_outbox_queues_worker_respawn_request(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("respawned_from_event") == event_id
     ][0]
-    assert spawned["worker"] is True
+    assert spawned["strand"] is True
 
 
-def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
+def test_drain_outbox_bare_respawn_omits_strand_key(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1283,7 +1283,7 @@ def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -1297,7 +1297,7 @@ def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("respawned_from_event") == event_id
     ][0]
-    assert "worker" not in spawned
+    assert "strand" not in spawned
 
 
 def test_drain_outbox_quality_respawn_resolves_local_escalation(
@@ -1346,7 +1346,7 @@ def test_drain_outbox_quality_respawn_resolves_local_escalation(
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -1368,12 +1368,12 @@ def test_drain_outbox_quality_respawn_resolves_local_escalation(
 
 
 def test_drain_outbox_queues_spawn_request(tmp_path):
-    """``spawn:`` frontmatter queues a cap-1 concurrent worker-stack child.
+    """``spawn:`` frontmatter queues a cap-1 concurrent run-stack child.
 
     kb/design-director-loop.md §"Concurrent sub-spawns", slice 1: unlike
     ``respawn:`` (queued for after this run ends), a spawn is meant for the
     daemon's second dispatch slot — this test only covers the *queueing*
-    shape (worker forced, parent linkage, exclusion-reuse); the main-loop
+    shape (run forced, parent linkage, exclusion-reuse); the main-loop
     concurrent-dispatch wiring itself has no automated end-to-end test
     (consistent with the rest of ``start()``'s dispatch loop, which isn't
     unit-tested at that level either).
@@ -1397,7 +1397,7 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
         "shell: codex-mini\n"
         "reason: cheaper core has quota headroom\n"
         "---\n"
-        "bounded task for a concurrent worker child\n",
+        "bounded task for a concurrent run child\n",
         encoding="utf-8",
     )
     task = Run(
@@ -1411,7 +1411,7 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -1426,7 +1426,7 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("spawn_parent_run_id") == "run-parent"
     ][0]
-    assert spawned["worker"] is True
+    assert spawned["strand"] is True
     assert spawned["spawn_immediate"] is True
     # Forced regardless of the repo's own `environment=` config — a
     # spawn shares the daemon process with its still-running parent, so
@@ -1472,7 +1472,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
         encoding="utf-8",
     )
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
+        daemon._RunEmit(brr_dir, None, event_id),
         task, responses, event_id, outbox, inbox,
     )
     assert promoted == 1
@@ -1482,7 +1482,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
     ]
     assert len(spawned) == 1
     assert spawned[0]["environment"] == "solitary"
-    assert spawned[0]["worker"] is True
+    assert spawned[0]["strand"] is True
 
     # `host` — an opt *up* — is refused, leaves a notice, queues nothing.
     (outbox / "spawn-host.md").write_text(
@@ -1491,7 +1491,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
         encoding="utf-8",
     )
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
+        daemon._RunEmit(brr_dir, None, event_id),
         task, responses, event_id, outbox, inbox,
     )
     assert promoted == 0
@@ -1503,8 +1503,8 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
     assert any("not spawnable" in str(n.get("text", "")) for n in notices)
 
 
-def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
-    """A worker-stack run must not itself spawn a further child (no nesting)."""
+def test_drain_outbox_spawn_refuses_nested_from_strand_run(tmp_path):
+    """A run-stack run must not itself spawn a further child (no nesting)."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1517,12 +1517,12 @@ def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
         encoding="utf-8",
     )
     task = Run(
-        id="run-worker-child", event_id=event_id, body="original task",
-        source="telegram", meta={"worker": True},
+        id="run-run-child", event_id=event_id, body="original task",
+        source="telegram", meta={"strand": True},
     )
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
+        daemon._RunEmit(brr_dir, None, event_id),
         task, responses, event_id, outbox, inbox,
     )
 
@@ -1586,11 +1586,11 @@ def test_notify_spawn_parent_of_crash_lands_pending_event(tmp_path):
 
     Bug found live 2026-07-07: the main loop's reap step only called
     ``_notify_spawn_parent`` in the success branch of
-    ``current_spawn.result()``; a worker future that raised (a runner
+    ``current_spawn.result()``; a run future that raised (a runner
     launch failure, an unhandled exception) left the parent with no signal
     the spawn ever existed, contradicting the "completion always lands
     back" design. This exercises the crash-path notifier built straight
-    from the raw inbox event dict (a crashed worker never produces the
+    from the raw inbox event dict (a crashed run never produces the
     richer ``Run`` object the clean-finish path reads from).
     """
     inbox = tmp_path / ".brr" / "inbox"
@@ -1653,7 +1653,7 @@ def test_extract_spawn_contract_ignores_dot_brr_runtime_paths():
     """`.brr/worktrees/<run-id>` is named in the working rules of every
     host-environment spawn spec brnrd writes — and it is a `brr/` token
     reached via a `.`, not a `/`. The first cut of this check extracted
-    `brr/worktrees` from it and would have flagged a compliant worker.
+    `brr/worktrees` from it and would have flagged a compliant run.
     Ordering saved the two live dispatches on 2026-07-23; ordering is not
     a guard."""
     spec = (
@@ -1762,13 +1762,13 @@ def test_notify_spawn_parent_scanned_branch_mismatch_annotates_not_indicts(tmp_p
     """#640: a *scanned* (undeclared) contract — no ``branch:``/``report:``
     frontmatter, just the first ``brr/<slug>`` matched in spec prose — is a
     fuzzy read. A mismatch there must annotate the completion note, not
-    stamp the worker's real status as ``contract-mismatch`` nor set the
+    stamp the run's real status as ``contract-mismatch`` nor set the
     event-layer flag; only a *declared* contract may indict (guarded by
     ``test_notify_spawn_parent_declared_branch_mismatch_still_indicts``
     below, #640-negative)."""
     inbox = tmp_path / ".brr" / "inbox"
     response_path = tmp_path / "response.md"
-    response_path.write_text("worker's own account of the work\n", encoding="utf-8")
+    response_path.write_text("run's own account of the work\n", encoding="utf-8")
     task = _spawn_child_run(
         body="Branch: `brr/wake-request-source-gate`\n",
         publish_branch="brr/stopped-run-kb-credit",
@@ -1819,7 +1819,7 @@ def test_notify_spawn_parent_no_branch_in_spec_is_unchanged(tmp_path):
 
 
 def test_notify_spawn_parent_contract_check_failure_fails_open(tmp_path, monkeypatch):
-    """A bug in the contract check itself must never surface as a worker
+    """A bug in the contract check itself must never surface as a run
     failure — it degrades to the ordinary completion event, logged."""
     inbox = tmp_path / ".brr" / "inbox"
     task = _spawn_child_run(body="Branch: `brr/thing`\n", publish_branch="brr/thing")
@@ -1884,7 +1884,7 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
 
     accepted = daemon._queue_spawn_request(
-        daemon._WorkerEmit(brr_dir, "", event_id),
+        daemon._RunEmit(brr_dir, "", event_id),
         task,
         inbox,
         event_id,
@@ -1905,17 +1905,17 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
 
 
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
-    """#640a: a spec whose prose responsibly names a *sibling* worker's
+    """#640a: a spec whose prose responsibly names a *sibling* run's
     branch ahead of its own (the worktree-discipline "don't collide with
     the run on X" note) must not have that sibling mention read as the
     contract when a ``branch:`` was declared. Declared + published match
     ⇒ no mismatch, status untouched — even though the first ``brr/<slug>``
-    in the prose is the sibling's, not this worker's own."""
+    in the prose is the sibling's, not this run's own."""
     inbox = tmp_path / ".brr" / "inbox"
     task = Run(
         id="run-child", event_id="evt-child",
         body=(
-            "A sibling worker is live on `brr/sibling-branch` — do not "
+            "A sibling run is live on `brr/sibling-branch` — do not "
             "collide with it.\n\n"
             "## Deliverable\nBranch: `brr/real-slug`\n"
         ),
@@ -1962,7 +1962,7 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
     assert "status=contract-mismatch" in note["body"]
 
 
-# ── #633: contract-mismatch requires evidence the worker ran ────────
+# ── #633: contract-mismatch requires evidence the run ran ────────
 
 
 def test_notify_spawn_parent_no_evidence_is_runner_failed_not_mismatch(tmp_path):
@@ -1989,7 +1989,7 @@ def test_notify_spawn_parent_no_evidence_is_runner_failed_not_mismatch(tmp_path)
             "spawn_parent_conversation_key": "telegram:42:",
             "spawn_contract_branch": "brr/control-verbs-owner-only",
             "response_path": str(response_path),
-            # No has_new_commit, no trace_dirs — nothing the worker did.
+            # No has_new_commit, no trace_dirs — nothing the run did.
         },
     )
 
@@ -2021,8 +2021,8 @@ def test_notify_spawn_parent_omits_status_before_terminal_state(tmp_path):
     assert "spawn_status" not in note
 
 
-def test_notify_spawn_parent_worker_ran_declared_mismatch_still_indicts(tmp_path):
-    """#633-negative: a worker that *ran* (real commit on the branch) and
+def test_notify_spawn_parent_strand_ran_declared_mismatch_still_indicts(tmp_path):
+    """#633-negative: a run that *ran* (real commit on the branch) and
     published the wrong declared branch must still be stamped
     contract-mismatch — the #633 evidence gate must not swallow a genuine
     violation just because the run's own terminal status was ``error``."""
@@ -2367,7 +2367,7 @@ def test_notify_spawn_parent_mismatch_reap_preserves_contract_keys(tmp_path):
 
 
 def test_notify_spawn_parent_report_found_false_carried(tmp_path):
-    """spawn_report_found=False rides through when the worker skipped its
+    """spawn_report_found=False rides through when the run skipped its
     declared report. Must be red against unmodified source.
     """
     inbox = tmp_path / ".brr" / "inbox"
@@ -2450,8 +2450,8 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     never touching real event dispatch. ``test_concurrent_spawn_pool_
     respects_configured_width`` and its siblings drive the real
     ``start()`` loop's dispatch/reap wiring, but monkeypatch
-    ``_notify_spawn_parent`` away entirely and hand the fake worker a
-    ``Run`` with bare ``meta={"worker": True}`` — never exercising the
+    ``_notify_spawn_parent`` away entirely and hand the fake run a
+    ``Run`` with bare ``meta={"strand": True}`` — never exercising the
     real ``spawn_parent_run_id``/``spawn_parent_conversation_key``
     propagation ``Run.from_event`` performs from the actual dispatched
     event. ``test_drain_outbox_queues_spawn_request``'s own docstring
@@ -2493,14 +2493,14 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
         meta={"repo_label": "Gurio/brr"},
     )
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:99:", parent_event_id),
+        daemon._RunEmit(brr_dir, "telegram:99:", parent_event_id),
         parent_task, responses, parent_event_id, parent_outbox, inbox,
     )
     assert promoted == 1
 
     cfg: dict = {}
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         # Real meta propagation via the real Run.from_event — this is the
         # exact mechanism that must carry spawn_parent_run_id /
         # spawn_parent_conversation_key from the dispatched event through
@@ -2527,7 +2527,7 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     # Both push lanes, not just one. `write_repo_scaffold` deliberately does
     # not `git init`, and since #746 `publish_default_branch` refuses to ship
@@ -2554,7 +2554,7 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
 
 def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     """Symmetric to ``test_clean_finish_spawn_notifies_parent_end_to_end``,
-    for the crash half of the same reap block: a spawn whose worker raises
+    for the crash half of the same reap block: a spawn whose run raises
     before producing a ``Run`` must still land a (failure) notification in
     the parent's thread, via the real ``_queue_spawn_request`` → dispatch →
     reap → ``_notify_spawn_parent_of_crash`` path — not a hand-built event
@@ -2583,14 +2583,14 @@ def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
         meta={"repo_label": "Gurio/brr"},
     )
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:77:", parent_event_id),
+        daemon._RunEmit(brr_dir, "telegram:77:", parent_event_id),
         parent_task, responses, parent_event_id, parent_outbox, inbox,
     )
     assert promoted == 1
 
     cfg: dict = {}
 
-    def fake_run_worker(_event, *_args, **_kwargs):
+    def fake_execute_run(_event, *_args, **_kwargs):
         raise RuntimeError("boom: runner launch failed")
 
     ticks = {"n": 0}
@@ -2609,7 +2609,7 @@ def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -2645,7 +2645,7 @@ def test_dispatch_records_user_run_signal_for_non_schedule_event(tmp_path, monke
 
     cfg: dict = {}
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         task = Run.from_event(event, cfg)
         task.status = "done"
         return task
@@ -2663,7 +2663,7 @@ def test_dispatch_records_user_run_signal_for_non_schedule_event(tmp_path, monke
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "publish_default_branch", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
@@ -2692,7 +2692,7 @@ def test_dispatch_does_not_record_user_run_signal_for_schedule_event(
 
     cfg: dict = {}
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         task = Run.from_event(event, cfg)
         task.status = "done"
         return task
@@ -2710,7 +2710,7 @@ def test_dispatch_does_not_record_user_run_signal_for_schedule_event(
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "publish_default_branch", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
@@ -2754,7 +2754,7 @@ def _stuck_spawn_dispatch(tmp_path, conv_key="telegram:88:", parent_run="run-par
         meta={"repo_label": "Gurio/brr"},
     )
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, conv_key, parent_event_id),
+        daemon._RunEmit(brr_dir, conv_key, parent_event_id),
         parent_task, responses, parent_event_id, parent_outbox, inbox,
     )
     assert promoted == 1
@@ -2764,7 +2764,7 @@ def _stuck_spawn_dispatch(tmp_path, conv_key="telegram:88:", parent_run="run-par
     assert len(spawn_events) == 1
     spawn_event = spawn_events[0]
     # The exact write the concurrent-spawn dispatch slot performs before
-    # submitting the worker — the last durable trace a daemon death leaves.
+    # submitting the run — the last durable trace a daemon death leaves.
     protocol.set_status(spawn_event, "processing")
     return spawn_event
 
@@ -2773,14 +2773,14 @@ def _boot_daemon_once(tmp_path, monkeypatch):
     """Drive a fresh ``daemon.start`` through boot, exiting on the first tick.
 
     The reconciliation sweep under test runs *before* the main loop, so one
-    tick is enough; ``_run_worker`` is rigged to fail loudly if the loop
+    tick is enough; ``_execute_run`` is rigged to fail loudly if the loop
     ever reaches a dispatch, pinning that the sweep (not a re-dispatched
-    worker) produced whatever the assertions observe.
+    run) produced whatever the assertions observe.
     """
     cfg: dict = {}
 
-    def fail_run_worker(*_a, **_k):
-        raise AssertionError("boot tick must not dispatch a worker")
+    def fail_execute_run(*_a, **_k):
+        raise AssertionError("boot tick must not dispatch a run")
 
     def stop_immediately(*_a, **_k):
         raise StopIteration
@@ -2791,7 +2791,7 @@ def _boot_daemon_once(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fail_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fail_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", stop_immediately)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -2864,7 +2864,7 @@ def test_orphaned_spawn_reconciliation_is_idempotent_across_restarts(
     assert len(notes) == 1
 
 
-def test_spawn_reconciliation_leaves_live_worker_untouched(
+def test_spawn_reconciliation_leaves_live_strand_untouched(
     tmp_path, monkeypatch,
 ):
     """Conservative liveness: a spawn whose run still has a live presence
@@ -2912,8 +2912,8 @@ def test_spawn_reconciliation_waits_out_fresh_dispatches(tmp_path):
 
 
 def test_spawn_reconciliation_accepts_closed_ledger_as_proof(tmp_path):
-    """A closed ledger row for the event's run proves the worker ended even
-    inside the staleness horizon (daemon died between the worker's ledger
+    """A closed ledger row for the event's run proves the run ended even
+    inside the staleness horizon (daemon died between the run's ledger
     append and the reap-notify), so the parent hears promptly instead of a
     day later."""
     spawn_event = _stuck_spawn_dispatch(tmp_path, conv_key="telegram:92:")
@@ -2957,7 +2957,7 @@ def _frozen_run(tmp_path, conv_key="telegram:95:", *, pid="dead"):
     manifest is built through the real ``Run.from_event`` seam — including
     the exact ``task.meta["pid"]`` write whose stated purpose is this
     future boot's proof of death. The conversation log then receives the
-    same lifecycle packets a live worker would have emitted before the
+    same lifecycle packets a live run would have emitted before the
     crash, so the "frozen card" the sweep must update is the projection a
     real card renders from. Returns ``(event, task)``.
     """
@@ -2981,7 +2981,7 @@ def _frozen_run(tmp_path, conv_key="telegram:95:", *, pid="dead"):
     elif pid is not None:
         task.meta["pid"] = pid
     task.save(runs_dir)
-    emit = daemon._WorkerEmit(brr_dir, conv_key, str(event["id"]))
+    emit = daemon._RunEmit(brr_dir, conv_key, str(event["id"]))
     emit(
         "run_created", run_id=task.id, event_id=event["id"],
         env="worktree", repo_label="Gurio/brr",
@@ -3001,16 +3001,16 @@ def _boot_daemon_recording_dispatches(tmp_path, monkeypatch):
     Unlike ``_boot_daemon_once``, the loop is allowed to dispatch: the
     #316 marker must leave the crash-recovery re-dispatch of the frozen
     run's event undisturbed, so the retry itself is part of what these
-    tests pin. The fake worker raises, which drives the real
+    tests pin. The fake run raises, which drives the real
     crashed-before-a-Run backstop (event retired to ``error``), keeping a
     double boot from re-dispatching endlessly.
     """
     dispatched: list[str] = []
     ticks = {"n": 0}
 
-    def fake_run_worker(event, *_a, **_k):
+    def fake_execute_run(event, *_a, **_k):
         dispatched.append(str(event.get("id") or ""))
-        raise RuntimeError("worker stub: dispatch recorded")
+        raise RuntimeError("run stub: dispatch recorded")
 
     def fake_fire_due_schedules(*_a, **_k):
         ticks["n"] += 1
@@ -3023,7 +3023,7 @@ def _boot_daemon_recording_dispatches(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -3141,7 +3141,7 @@ def test_interrupted_marker_idempotent_across_double_boot(tmp_path, monkeypatch)
     records = _host_interrupted_records(brr_dir, "telegram:98:")
     assert len(records) == 1
     assert records[0].get("run_id") == task.id
-    # First boot retried the event; the fake worker's crash retired it
+    # First boot retried the event; the fake run's crash retired it
     # (the real crashed-before-a-Run backstop), so the second boot had
     # nothing to dispatch — and nothing to re-mark.
     assert len(first) == 1
@@ -3243,7 +3243,7 @@ def test_drain_outbox_parks_runner_policy_proposal(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -3434,7 +3434,7 @@ def test_drain_outbox_parks_config_change_proposal(tmp_path, monkeypatch):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -3493,7 +3493,7 @@ def test_drain_outbox_rejects_config_change_off_allowlist(tmp_path, monkeypatch)
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -3550,7 +3550,7 @@ def test_drain_outbox_parks_dominion_budget_config_change(tmp_path, monkeypatch)
     stats: dict[str, int] = {}
 
     daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -3608,7 +3608,7 @@ def test_drain_outbox_rejects_non_integer_config_change_value(tmp_path, monkeypa
     stats: dict[str, int] = {}
 
     daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task,
         responses,
         event_id,
@@ -3889,7 +3889,7 @@ def test_config_change_cross_conversation_blocked_for_owner(tmp_path):
     assert "different conversation" in response
 
 
-def test_run_worker_writes_terminal_failure_response_on_runner_error(
+def test_execute_run_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -3919,7 +3919,7 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -3954,7 +3954,7 @@ def test_interrupted_terminal_failure_omits_stderr_detail(tmp_path, monkeypatch)
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -3967,7 +3967,7 @@ def test_interrupted_terminal_failure_omits_stderr_detail(tmp_path, monkeypatch)
     assert task.terminal_reply == response
 
 
-def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
+def test_execute_run_writes_terminal_failure_response_after_empty_stdout(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -3996,7 +3996,7 @@ def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -4036,7 +4036,7 @@ def test_write_terminal_failure_response_notices_schedule_crash(tmp_path):
     response_path = tmp_path / ".brr" / "responses" / "evt-tick-crash.md"
 
     wrote = daemon._write_terminal_failure_response(
-        daemon._WorkerEmit(tmp_path / ".brr", "schedule:director-tick", "evt-tick-crash"),
+        daemon._RunEmit(tmp_path / ".brr", "schedule:director-tick", "evt-tick-crash"),
         task,
         event,
         responses_dir,
@@ -4051,7 +4051,7 @@ def test_write_terminal_failure_response_notices_schedule_crash(tmp_path):
     assert "runner killed after 1 attempt(s) with exit code 143" in response
 
 
-def test_run_worker_calls_sync_before_resolving_branch_plan(
+def test_execute_run_calls_sync_before_resolving_branch_plan(
     tmp_path, monkeypatch,
 ):
     """Pre-task fetch+ff fires before the daemon picks a seed ref."""
@@ -4102,7 +4102,7 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert call_order[:2] == ["sync", "resolve"]
     # When the event carries no structured branch field, we still
@@ -4112,7 +4112,7 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
     assert captured_targets, "sync.refresh_before_run was not called"
 
 
-def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
+def test_execute_run_proceeds_when_sync_fails(tmp_path, monkeypatch):
     """A sync error never blocks task execution."""
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-sync-fail")
@@ -4150,7 +4150,7 @@ def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert task.status == "done"
 
@@ -4203,8 +4203,8 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
         # boot spawn-reconciliation sweep (#311) — both inspect and skip
         # this non-spawn event; call 3 is the loop's first dispatch scan.
         # The fourth call breaks the loop in the main thread. The finally
-        # block waits for the in-flight worker to finish before tearing
-        # the pool down, so statuses observed by the worker thread are
+        # block waits for the in-flight run to finish before tearing
+        # the pool down, so statuses observed by the run thread are
         # present when pytest.raises captures the exit.
         if len(pending_calls) <= 3:
             return [event]
@@ -4214,7 +4214,7 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _ev, status: statuses.append(status))
     monkeypatch.setattr(
         daemon,
-        "_run_worker",
+        "_execute_run",
         lambda *_a, **_k: Run(id="task-err", event_id="evt-err", body="help", status="error"),
     )
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
@@ -4383,7 +4383,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     order_lock = threading.Lock()
 
     def record(label: str) -> None:
-        # Worker thread and main thread both append; the lock keeps
+        # Run thread and main thread both append; the lock keeps
         # the timeline observable without rare interleaving artefacts.
         with order_lock:
             order.append(label)
@@ -4416,7 +4416,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
     # Short scan interval so the loop's second iteration (where the
     # watcher reports a change and the now-empty pool triggers
-    # reexec) lands quickly after the worker thread finishes.
+    # reexec) lands quickly after the run thread finishes.
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.05)
     monkeypatch.setattr(
         daemon.protocol,
@@ -4429,8 +4429,8 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
         lambda _event, status: record(f"status:{status}"),
     )
 
-    def fake_run_worker(*_args, **_kwargs):
-        record("worker")
+    def fake_execute_run(*_args, **_kwargs):
+        record("run")
         return Run(
             id="task-reload",
             event_id="evt-reload",
@@ -4438,7 +4438,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
             status="done",
         )
 
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(
         daemon,
         "publish",
@@ -4456,7 +4456,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     #
     # The *interleaving* is not deterministic, and asserting one made this test
     # flaky under load. The main thread polls the watcher every _SCAN_INTERVAL
-    # (0.05s) while the worker thread runs on its own schedule; when the worker
+    # (0.05s) while the run thread runs on its own schedule; when the run
     # needs more than one tick to reach `push`, extra `watch:N` ticks appear —
     # correct behaviour that a hard-coded list reads as a regression. Assert
     # the causal contract; let the scheduler be the scheduler.
@@ -4464,7 +4464,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     assert causal == [
         "write-pid",
         "status:processing",
-        "worker",
+        "run",
         "status:done",
         "push",
         "clear-pid",
@@ -4510,7 +4510,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     started_two = threading.Event()
     release = threading.Event()
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         eid = event["id"]
         with lock:
             running_ids.add(eid)
@@ -4521,7 +4521,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
             running_ids.discard(eid)
         return Run(
             id=f"task-{eid}", event_id=eid, body="spawned",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     checked = threading.Event()
@@ -4529,7 +4529,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     def fake_fire_due_schedules(*_a, **_k):
         # Called every main-loop tick regardless of busy/idle state — the
         # one hook available to observe pool state and stop the loop
-        # without racing the worker threads over StopIteration.
+        # without racing the run threads over StopIteration.
         if started_two.is_set() and not checked.is_set():
             checked.set()
             time.sleep(0.05)
@@ -4552,7 +4552,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
         daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 2},
     )
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
@@ -4561,7 +4561,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     for i in range(3):
         protocol.create_event(
             tmp_path / ".brr" / "inbox", "spawn", f"spawned work {i}",
-            spawn_immediate=True, worker=True, environment="worktree",
+            spawn_immediate=True, strand=True, environment="worktree",
         )
 
     with pytest.raises(StopIteration):
@@ -4598,7 +4598,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
     started = threading.Event()
     release = threading.Event()
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         nonlocal dispatch_count
         with dispatch_lock:
             dispatch_count += 1
@@ -4606,7 +4606,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
         release.wait(timeout=5)
         return Run(
             id=f"task-{event['id']}", event_id=event["id"], body="spawned",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     ticks_since_start = 0
@@ -4616,7 +4616,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
         if started.is_set():
             ticks_since_start += 1
             # Let several ticks elapse with the event still "processing"
-            # before releasing the worker and stopping the loop — this is
+            # before releasing the run and stopping the loop — this is
             # exactly the window the bug needed to over-dispatch.
             if ticks_since_start >= 5:
                 release.set()
@@ -4631,7 +4631,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
         daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 4},
     )
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
@@ -4639,7 +4639,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
 
     protocol.create_event(
         tmp_path / ".brr" / "inbox", "spawn", "spawned work",
-        spawn_immediate=True, worker=True, environment="worktree",
+        spawn_immediate=True, strand=True, environment="worktree",
     )
 
     with pytest.raises(StopIteration):
@@ -4692,7 +4692,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
         record("reexec")
         raise StopIteration
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         eid = event.get("id")
         if eid == "evt-resident":
             record("resident-start")
@@ -4706,7 +4706,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
         record("spawn-run")
         return Run(
             id="task-spawn", event_id=eid, body="spawned work",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     monkeypatch.setattr(
@@ -4721,7 +4721,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: record("push"))
     monkeypatch.setattr(
         daemon, "_notify_spawn_parent", lambda *_a, **_k: record("notify"),
@@ -4732,7 +4732,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
         resident_started.wait(timeout=5)
         protocol.create_event(
             tmp_path / ".brr" / "inbox", "spawn", "spawned work",
-            spawn_immediate=True, worker=True, environment="worktree",
+            spawn_immediate=True, strand=True, environment="worktree",
         )
         # Give the loop a couple of ticks to observe reload_requested
         # flip true and still dispatch the spawn before unblocking the
@@ -4760,14 +4760,14 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
 def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
     tmp_path, monkeypatch,
 ):
-    """A reload waits for spawned workers without making a user wait too.
+    """A reload waits for spawned runs without making a user wait too.
 
     A parent can edit Python, finish, and leave concurrent ``spawn:``
     children running.  The next loop sees ``current is None`` and a pending
     reload.  Before this regression, it called ``pool.shutdown(wait=True)``
     immediately, so a fresh user event could not use the deliberately
-    reserved resident executor thread until every worker ended.  That turns
-    background worker duration into correspondent latency.
+    reserved resident executor thread until every run ended.  That turns
+    background run duration into correspondent latency.
     """
     write_repo_scaffold(tmp_path)
     inbox = tmp_path / ".brr" / "inbox"
@@ -4784,7 +4784,7 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
         def changed(self):
             return spawns_ready.is_set()
 
-    def fake_run_worker(event, *_args, **_kwargs):
+    def fake_execute_run(event, *_args, **_kwargs):
         nonlocal spawn_count
         if event.get("spawn_immediate"):
             with spawn_lock:
@@ -4795,8 +4795,8 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
             release_spawns.wait(timeout=2)
             order.append(f"spawn-{event['id']}-done")
             return Run(
-                id=f"run-{event['id']}", event_id=event["id"], body="worker",
-                status="done", meta={"worker": True},
+                id=f"run-{event['id']}", event_id=event["id"], body="run",
+                status="done", meta={"strand": True},
             )
         resident_started.set()
         order.append("resident-started")
@@ -4811,7 +4811,7 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
         raise StopIteration
 
     # The unfixed shutdown path otherwise waits for intentionally blocked
-    # workers.  The timer makes it fail deterministically rather than hang;
+    # runs.  The timer makes it fail deterministically rather than hang;
     # the healthy path starts the resident before this escape hatch matters.
     timer = threading.Timer(0.3, release_spawns.set)
     timer.start()
@@ -4829,7 +4829,7 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
         daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 7},
     )
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(daemon, "_fire_due_schedules", lambda *_args, **_kwargs: None)
@@ -4837,8 +4837,8 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
 
     for i in range(2):
         protocol.create_event(
-            inbox, "spawn", f"worker {i}", spawn_immediate=True,
-            worker=True, environment="worktree",
+            inbox, "spawn", f"run {i}", spawn_immediate=True,
+            strand=True, environment="worktree",
         )
 
     try:
@@ -4849,14 +4849,14 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
         release_spawns.set()
 
     assert resident_started.is_set(), (
-        "a pending reload must not hold the free resident seat behind workers"
+        "a pending reload must not hold the free resident seat behind runs"
     )
     assert order.index("resident-started") < order.index("reexec")
 
 
 def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     """The publish kernel reads ``publish_branch`` + ``expected_remote_oid``
-    directly from ``task.meta`` (no extra threading from the worker)."""
+    directly from ``task.meta`` (no extra threading from the run)."""
     task = Run(
         id="task-lease",
         event_id="evt-lease",
@@ -4870,7 +4870,7 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
             "expected_remote_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
         },
     )
-    monkeypatch.setattr(daemon, "_run_worker", lambda *_a, **_k: task)
+    monkeypatch.setattr(daemon, "_execute_run", lambda *_a, **_k: task)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda *_a, **_k: None)
     captured: dict = {}
 
@@ -4882,7 +4882,7 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "publish", fake_publish)
 
     event = {"id": "evt-lease", "source": "github", "body": "rebase"}
-    daemon._run_worker_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
+    daemon._run_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
 
     assert captured["publish_branch"] == "brr/deliver-pr-rebase"
     assert (
@@ -4891,13 +4891,13 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     )
 
 
-def test_worker_finalize_tolerates_gate_cleanup_after_response(
+def test_run_finalize_tolerates_gate_cleanup_after_response(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-cleaned", body="answer first")
 
-    def fake_run_worker(ev, *_args, **_kwargs):
+    def fake_execute_run(ev, *_args, **_kwargs):
         daemon._set_event_status_if_present(ev, "done")
         ev["_path"].unlink()
         return Run(
@@ -4908,10 +4908,10 @@ def test_worker_finalize_tolerates_gate_cleanup_after_response(
             status="done",
         )
 
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda *_args, **_kwargs: None)
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -5128,7 +5128,7 @@ def test_result_satisfied_delivery_missing_artifact_fails():
 def test_post_delivery_attend_skips_when_gate_not_configured(tmp_path, monkeypatch):
     """The daemon dwell is a real gate behavior, not a unit-test tax.
 
-    A direct worker test has no configured Telegram gate, so even with the
+    A direct run test has no configured Telegram gate, so even with the
     default-positive seconds knob the helper returns before sleeping.
     """
     brr_dir = tmp_path / ".brr"
@@ -5149,7 +5149,7 @@ def test_post_delivery_attend_skips_when_gate_not_configured(tmp_path, monkeypat
     )
 
     result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        daemon._RunEmit(brr_dir, "telegram:42:", "evt-a"),
         task,
         event,
         inbox,
@@ -5188,7 +5188,7 @@ def test_post_delivery_attend_emits_phase_and_yields_on_pending_event(
     )
 
     result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        daemon._RunEmit(brr_dir, "telegram:42:", "evt-a"),
         task,
         event,
         inbox,
@@ -5249,7 +5249,7 @@ def test_post_delivery_attend_enqueues_follow_up_that_lands_during_dwell(
     protocol.inbox_wake().clear()
 
     result = daemon._post_delivery_attend(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        daemon._RunEmit(brr_dir, "telegram:42:", "evt-a"),
         task,
         event,
         inbox,
@@ -5270,7 +5270,7 @@ def test_post_delivery_attend_enqueues_follow_up_that_lands_during_dwell(
     assert protocol.inbox_wake().is_set()
 
 
-def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
+def test_execute_run_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     """The daemon persists the assembled prompt in .brr/runs/<run-id>/prompt.md.
 
     On successful runs the trace directories are cleaned up, but the run dir
@@ -5311,7 +5311,7 @@ def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert task.status == "done"
     prompt_path = tmp_path / ".brr" / "runs" / task.id / "prompt.md"
@@ -5490,7 +5490,7 @@ def test_resources_facet_coexisting_known_when_siblings_passed():
 def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
     """``brr_dir`` wires a *live*, heartbeat-refreshed sibling-run read —
     the same presence query already used for the wake-time-only
-    ``present_snapshot`` (``_run_worker``'s "Other thoughts awake right
+    ``present_snapshot`` (``_execute_run``'s "Other thoughts awake right
     now"), extended to the portal-state facet a running resident's hooks
     surface after every tool call."""
     brr_dir = tmp_path / ".brr"
@@ -5773,7 +5773,7 @@ def test_home_run_uses_host_tree_and_home_run_node(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event,
         ctx.dominion_repo,
         ctx.responses_dir,
@@ -5812,7 +5812,7 @@ def test_home_run_has_no_publish_lane_and_refuses_spawn(tmp_path):
 
     outbox = tmp_path / "outbox"
     accepted = daemon._queue_spawn_request(
-        daemon._WorkerEmit(tmp_path, "", "evt-home"),
+        daemon._RunEmit(tmp_path, "", "evt-home"),
         task,
         tmp_path / "inbox",
         "evt-home",
@@ -5977,7 +5977,7 @@ def test_host_publish_noop_when_nothing_to_push(tmp_path, capsys):
 
 
 def test_host_env_run_finalize_publishes_default_branch(tmp_path, monkeypatch):
-    """e2e: a host-env run through ``_run_worker_and_finalize`` lands its
+    """e2e: a host-env run through ``_run_and_finalize`` lands its
     default-branch merge on the (bare, local) remote."""
     origin = tmp_path / "origin.git"
     subprocess.run(
@@ -6032,7 +6032,7 @@ def test_host_env_run_finalize_publishes_default_branch(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker_and_finalize(
+    task = daemon._run_and_finalize(
         event, repo, repo / ".brr" / "responses", {}, 0,
     )
 
@@ -6205,7 +6205,7 @@ def test_dashboard_dispatch_header_stamps_event_before_repo_routing(
 ):
     """An applied claim routes the wake to the repo the tap named — the one
     thing only this site can do, and the reason it owns the claim rather
-    than `_run_worker` (whose repo root is already chosen)."""
+    than `_execute_run` (whose repo root is already chosen)."""
     from brr import wake_request as wake_request_mod
 
     repo_b = tmp_path / "repo-b"
@@ -6750,7 +6750,7 @@ def test_event_pin_outranks_the_sticky_record(tmp_path, monkeypatch):
     assert wake_request_mod.sticky_record(repo_a / ".brr") is not None
 
 
-def test_run_worker_notes_a_sticky_inherited_profile(tmp_path, monkeypatch):
+def test_execute_run_notes_a_sticky_inherited_profile(tmp_path, monkeypatch):
     """The run context bundle's "Requested Runner" line says when a profile
     came from the sticky record — so a wake can tell tap-fresh from
     tap-inherited, and see when the inheritance lapses."""
@@ -6773,7 +6773,7 @@ def test_run_worker_notes_a_sticky_inherited_profile(tmp_path, monkeypatch):
     _stub_wake_runner(monkeypatch, seen_overrides)
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
 
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, brr_dir / "responses", {}, 0)
 
     assert task.status == "done"
     assert seen_overrides and seen_overrides[0] == {"runner": "claude-fable"}
@@ -7134,7 +7134,7 @@ def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     )
     calls: list[tuple[str, str]] = []
 
-    def fake_run_worker(*args, **kwargs):
+    def fake_execute_run(*args, **kwargs):
         return task
 
     def fake_persist(
@@ -7148,13 +7148,13 @@ def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
     def fake_capture(_repo, _cfg, captured_task, *, account_context=None):
         calls.append(("capture", captured_task.meta.get("run_state_stage", "")))
 
-    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", fake_execute_run)
     monkeypatch.setattr(daemon, "publish", lambda _repo, _task: None)
     monkeypatch.setattr(daemon, "_persist_run_state_doc", fake_persist)
     monkeypatch.setattr(daemon, "_capture_dominion", fake_capture)
     monkeypatch.setattr(daemon, "_retire_internal_event", lambda _event, _responses, **_kw: False)
 
-    daemon._run_worker_and_finalize(
+    daemon._run_and_finalize(
         event,
         tmp_path,
         tmp_path / ".brr" / "responses",
@@ -7194,7 +7194,7 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["source"] == "claude /usage PTY + claude result JSON"
 
 
-def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
+def test_execute_run_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     conv = "telegram:chat:42"
     now = time.time()
@@ -7250,7 +7250,7 @@ def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatc
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         lead, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -7261,7 +7261,7 @@ def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatc
     assert all(ev.get("id") != "evt-follow" for ev in pending)
 
 
-def test_run_worker_threads_level_quota_into_prompt(tmp_path, monkeypatch):
+def test_execute_run_threads_level_quota_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-level-quota")
     _stub_env_isolated(monkeypatch, tmp_path)
@@ -7305,7 +7305,7 @@ def test_run_worker_threads_level_quota_into_prompt(tmp_path, monkeypatch):
 
     monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -7318,7 +7318,7 @@ def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
     default. They used to be *required*, and a spawn without them was dropped
     with the only trace a print to the daemon's uncaptured stdout: the prompt
     contract said optional, the code said mandatory, and the resident waited
-    for a worker that never existed."""
+    for a run that never existed."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -7337,7 +7337,7 @@ def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
     stats: dict[str, int] = {}
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        daemon._RunEmit(brr_dir, "telegram:42:", event_id),
         task, responses, event_id, outbox, inbox, stats=stats,
     )
 
@@ -7347,7 +7347,7 @@ def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
     assert len(spawned) == 1
     child = protocol._read_event(spawned[0])
     assert child["body"].strip() == "bounded side task"
-    assert child["worker"] is True
+    assert child["strand"] is True
     assert child["spawn_immediate"] is True
     # No shell/core keys — dispatch resolves the account default.
     assert "shell" not in child
@@ -7368,14 +7368,14 @@ def test_refused_spawn_leaves_a_notice_the_running_resident_can_read(tmp_path):
     (outbox / "spawn.md").write_text(
         "---\nspawn: true\n---\nnested work\n", encoding="utf-8",
     )
-    # A worker-stack run: nesting is refused by design.
+    # A run-stack run: nesting is refused by design.
     task = Run(
-        id="run-worker", event_id=event_id, body="original", source="telegram",
-        meta={"worker": True},
+        id="run-run", event_id=event_id, body="original", source="telegram",
+        meta={"strand": True},
     )
 
     promoted = daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
+        daemon._RunEmit(brr_dir, None, event_id),
         task, responses, event_id, outbox, inbox,
     )
 
@@ -7401,7 +7401,7 @@ def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
     task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
 
     daemon._drain_outbox(
-        daemon._WorkerEmit(brr_dir, None, event_id),
+        daemon._RunEmit(brr_dir, None, event_id),
         task, responses, event_id, outbox, inbox,
     )
 
@@ -7411,28 +7411,28 @@ def test_reply_to_a_stale_event_leaves_a_notice(tmp_path):
     assert "NOT delivered" in notices[0]["text"]
 
 
-def test_worker_boot_prompt_excludes_foreign_pending_events(
+def test_strand_boot_prompt_excludes_foreign_pending_events(
     tmp_path, monkeypatch,
 ):
-    """A worker's boot prompt gets the same pending-event isolation as its
+    """A run's boot prompt gets the same pending-event isolation as its
     live inbox.json.
 
     Found live (2026-07-18, first wyrd fleet): the live inbox correctly
-    showed a worker zero foreign events, but the boot-prompt snapshot was
-    built without ``worker=`` — so the worker's prompt listed two of the
+    showed a run zero foreign events, but the boot-prompt snapshot was
+    built without ``run=`` — so the run's prompt listed two of the
     maintainer's pending telegram messages under "Inbox — other pending
     events" while inbox.json stayed empty. Isolation must hold on both
-    surfaces; the prompt is the one the worker actually reads at wake.
+    surfaces; the prompt is the one the run actually reads at wake.
     """
     write_repo_scaffold(tmp_path)
     event = make_event(
-        tmp_path, eid="evt-worker-child", source="spawn",
-        body="bounded worker task",
+        tmp_path, eid="evt-run-child", source="spawn",
+        body="bounded run task",
     )
     event["spawn_immediate"] = True
-    event["worker"] = True
+    event["strand"] = True
     event["environment"] = "worktree"
-    # A foreign user message pending in the shared inbox at worker boot.
+    # A foreign user message pending in the shared inbox at run boot.
     protocol.create_event(
         tmp_path / ".brr" / "inbox", "telegram", "user says something private",
     )
@@ -7467,7 +7467,7 @@ def test_worker_boot_prompt_excludes_foreign_pending_events(
         envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
     )
 
-    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+    task = daemon._execute_run(event, tmp_path, brr_dir / "responses", {}, 0)
 
     assert task.status == "done"
     assert prompt_kwargs.get("pending_events") == []
@@ -7843,7 +7843,7 @@ def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
 ):
     """The daemon-side wiring, which had no test at all.
 
-    Without this, either ``_enrich_catalog_quota`` call site in ``_run_worker``
+    Without this, either ``_enrich_catalog_quota`` call site in ``_execute_run``
     could be deleted and the suite would stay green — the exact "the number
     exists, the chooser cannot see it" failure #632 was filed about.
     """

@@ -59,7 +59,7 @@ def _inbox_scope(
     principal: Principal,
     since_seq: int,
 ) -> tuple[set[str], dict[str, str], int]:
-    """Resolve the account cursor in a short worker-thread DB visit."""
+    """Resolve the account cursor in a short run-thread DB visit."""
 
     with session_factory() as db:
         repos = _account_repos(db, principal)

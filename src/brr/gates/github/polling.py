@@ -20,7 +20,7 @@ Five triggers:
 
 The pollers share ``_fetch_pr_head_branch`` to attach ``branch_target``
 to PR-anchored events, so the daemon's pre-task fetch+ff hook can
-refresh the PR head before the worker runs.
+refresh the PR head before the run runs.
 """
 
 from __future__ import annotations

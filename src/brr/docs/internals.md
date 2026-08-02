@@ -315,7 +315,7 @@ progress to a human:
   originating chat or topic on `run_created`, then edits the same
   message via `editMessageText` for later packets. Per-run state lives
   under `.brr/gates/telegram/progress/<run-id>.json` so concurrent
-  workers never share a file.
+  runs never share a file.
 - The Slack gate posts one threaded reply per run on `run_created`,
   then updates it with `chat.update`. Per-run state lives under
   `.brr/gates/slack/progress/<run-id>.json` on the same one-writer
@@ -333,7 +333,7 @@ separate status module.
 
 The daemon runs **single-flight**: one *thought* at a time, by design. A
 resident agent's continuity lives in durable memory (the dominion), not in
-throughput-parallel workers, so the local loop spawns one worker when idle
+parallel runs, so the local loop starts one run when idle
 and lets new events wait. Per-run worktree/branch isolation and the
 partitioned per-event/per-run state still hold — they let overlapping
 thoughts (ad-hoc sessions, a second daemon) coexist without sharing a

@@ -759,7 +759,7 @@ def test_dashboard_live_runs_api_returns_spawn_max_concurrent():
             live_runs_json=json.dumps(
                 [
                     {"id": "pres-3", "kind": "daemon", "stream": "telegram:x:", "label": "primary", "run_id": "run-c", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:00:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": False},
-                    {"id": "pres-4", "kind": "daemon", "stream": "telegram:x:", "label": "worker", "run_id": "run-d", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:01:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": True, "parent_run_id": "run-c"},
+                    {"id": "pres-4", "kind": "daemon", "stream": "telegram:x:", "label": "run", "run_id": "run-d", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:01:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": True, "parent_run_id": "run-c"},
                 ]
             ),
             live_runs_updated_at=datetime.now(timezone.utc),

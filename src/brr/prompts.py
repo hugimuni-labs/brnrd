@@ -1354,8 +1354,8 @@ def _build_web_capability_block(runner_shell: str | None) -> str:
     """Declare this wake's native web-research capability (issue #411 L0).
 
     Renders 1–2 ``- Web research:`` lines for the bundle's Mode section —
-    the one place both resident and worker wakes read runner facts (the
-    resident-only injected-block stack is skipped for workers, and a worker
+    the one place both resident and strand wakes read runner facts (the
+    resident-only injected-block stack is skipped for strands, and a strand
     needs this fact just as much).  The declaration itself lives in the
     packaged capabilities data (:mod:`brr.runner_capabilities`), keyed by
     Shell: whether a wake can verify a changing fact is a property of the
@@ -1627,7 +1627,7 @@ def _kb_ownership_signal(size_findings: list, stats) -> str:
         f"The graph is {stats.total_pages} pages, log {stats.log_bytes:,} B over "
         f"{stats.log_entry_count} entries. Read this as the kb asking for a "
         "maintenance *round* — promote what's load-bearing, breadcrumb what's "
-        "spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "spent, cut what's dead, relink the orphans. Strand-delegable; worth a "
         "dedicated pass, not a per-wake reflex to shorten the longest file. Full "
         "graph shape on demand: `brnrd kb`."
     )
@@ -2054,9 +2054,9 @@ def _join_prompt_parts(
     ``inject_blocks=False`` skips the resident stack entirely — the base
     injected blocks (identity core, dominion digest, work surface, runner
     policy, pitfalls, knowledge sources, kb health) and the
-    introspection dev-mode block. That's the B4 worker trim: a bounded
-    worker wake gets its task and files, not the standing resident context.
-    The ``diffense`` review-pack step is independent of that trim (a worker
+    introspection dev-mode block. That's the B4 strand trim: a bounded
+    strand wake gets its task and files, not the standing resident context.
+    The ``diffense`` review-pack step is independent of that trim (a strand
     wake asking for diffense is out of scope for now; whatever the caller
     passes is honored as-is).
     """
@@ -2096,7 +2096,7 @@ def _join_prompt_parts(
 def _collect_preamble_contracts(
     repo_root: Path,
     *,
-    is_worker: bool = False,
+    is_strand: bool = False,
     is_daemon: bool = True,
     has_diffense: bool = False,
     has_introspection: bool = False,
@@ -2140,11 +2140,11 @@ def _collect_preamble_contracts(
             bytes=_rendered_bytes(text),
         )
 
-    # Preamble: run.md / worker.md
+    # Preamble: run.md / strand.md
     entries.append(_file_entry(
-        "worker.md" if is_worker else "run.md",
-        block_key="worker-preamble" if is_worker else "run-preamble",
-        label="Worker preamble (worker.md)" if is_worker
+        "strand.md" if is_strand else "run.md",
+        block_key="strand-preamble" if is_strand else "run-preamble",
+        label="Strand preamble (strand.md)" if is_strand
               else "Operational preamble (run.md)",
         authority=AUTHORITY_CONTRACT,
     ))
@@ -2159,10 +2159,10 @@ def _collect_preamble_contracts(
 
     # register.md — a *worked example* of the register (weave.md is the rules;
     # this is a being mid-wake, written in them). Resident path only: a bounded
-    # worker gets the register contract but not the personality exemplar, which
+    # strand gets the register contract but not the personality exemplar, which
     # is orientation for a light that has to sustain a whole run, not labour.
     # Rides right after weave.md so a mounted wake reads the rule then the hand.
-    if not is_worker:
+    if not is_strand:
         entries.append(_file_entry(
             "register.md",
             block_key="register",
@@ -2218,7 +2218,7 @@ def _collect_preamble_contracts(
 def _build_orientation(
     *,
     is_daemon: bool,
-    is_worker: bool,
+    is_strand: bool,
     environment: str | None,
     pending_count: int,
     has_event_body: bool,
@@ -2244,7 +2244,7 @@ def _build_orientation(
             reason="the verbatim event body is the last block below",
         ))
 
-    if is_daemon and not is_worker:
+    if is_daemon and not is_strand:
         steps.append(OrientationStep(
             action="write .card",
             reason="the card is the surface the user watches while you think",
@@ -2254,17 +2254,17 @@ def _build_orientation(
     #
     # This was gated on ``pending_count`` alone, and it caused a live incident on
     # 2026-07-13. ``pending_count`` is the **parent's** queue — events addressed
-    # to the resident, in the resident's gate thread. A spawned worker inherited
+    # to the resident, in the resident's gate thread. A spawned strand inherited
     # it and was handed, at position 1, in the imperative:
     #
     #     next:
     #       2. answer 12 queued events — one outbox file each, `event: <id>`
     #
-    # Two workers (claude-haiku, codex-mini) did exactly that: they answered
+    # Two strands (claude-haiku, codex-mini) did exactly that: they answered
     # twelve of the user's messages to the resident, in the resident's thread,
     # with no context for any of them.
     #
-    # ``worker.md`` states plainly that the spawning conversation "is not yours
+    # ``strand.md`` states plainly that the spawning conversation "is not yours
     # to hold or extend" — and it states it in *prose*, *below* this list. The
     # kernel overrode it. That is the whole thesis of the boot work confirmed
     # from the wrong end: **the imperative action-list at the hot slot is what
@@ -2272,9 +2272,9 @@ def _build_orientation(
     # kernel did not misfire. It worked perfectly, and carried a wrong
     # instruction with total authority.
     #
-    # A worker has no gate authority, no `event:` disposition to make, and no
+    # A strand has no gate authority, no `event:` disposition to make, and no
     # standing in that thread. It must never see this step.
-    if pending_count and not is_worker:
+    if pending_count and not is_strand:
         plural = "s" if pending_count != 1 else ""
         steps.append(OrientationStep(
             action=f"answer {pending_count} queued event{plural}",
@@ -2514,7 +2514,7 @@ def build_boot_score(
     repo_root: Path | None = None,
     *,
     is_daemon: bool = True,
-    is_worker: bool = False,
+    is_strand: bool = False,
     runner_name: str | None = None,
     runner_shell: str | None = None,
     runner_core: str | None = None,
@@ -2583,14 +2583,14 @@ def build_boot_score(
         # Preamble + substrate + toggle blocks
         preamble_contracts = _collect_preamble_contracts(
             effective_root,
-            is_worker=is_worker,
+            is_strand=is_strand,
             is_daemon=is_daemon,
             has_diffense=has_diffense,
             has_introspection=has_introspection,
         )
 
-        # Inject-stack blocks (skipped for workers)
-        if not is_worker:
+        # Inject-stack blocks (skipped for strands)
+        if not is_strand:
             _, inject_contracts, block_whole = _build_injected_blocks_with_contracts(
                 effective_root, task_text=task_text
             )
@@ -2616,13 +2616,13 @@ def build_boot_score(
             # full inject-stack scan ``contracts=`` was chosen to avoid.
             injected_whole = (
                 frozenset()
-                if is_worker
+                if is_strand
                 else _build_work_surface_block_scored(effective_root)[1]
             )
 
     # Host kind
     kind = "daemon" if is_daemon else "ad-hoc"
-    pub_owner = "resident-owned" if not is_worker else "worker"
+    pub_owner = "resident-owned" if not is_strand else "strand"
 
     hooks_info = _collect_hooks_info(
         installed=hooks_installed, hook_stamps=hook_stamps
@@ -2671,7 +2671,7 @@ def build_boot_score(
         ),
         orientation=_build_orientation(
             is_daemon=is_daemon,
-            is_worker=is_worker,
+            is_strand=is_strand,
             environment=environment,
             pending_count=pending_count,
             has_event_body=has_event_body,
@@ -2719,7 +2719,7 @@ def build_daemon_prompt_with_score(
     source_gate = kwargs.get("source_gate")
     continuity = kwargs.get("continuity")
     environment = kwargs.get("environment")
-    worker = bool(kwargs.get("worker", False))
+    strand = bool(kwargs.get("strand", False))
     diffense = bool(kwargs.get("diffense", False))
     event_body = kwargs.get("event_body", "")
     pending_events = kwargs.get("pending_events") or []
@@ -2737,7 +2737,7 @@ def build_daemon_prompt_with_score(
 
     mount_sink: dict[str, str] | None = kwargs.pop("_mount_sink", None)
 
-    if worker:
+    if strand:
         injected_keyed: list[tuple[str, str]] = []
         inject_contracts: list[Any] = []
         injected_whole: frozenset[Path] = frozenset()
@@ -2750,7 +2750,7 @@ def build_daemon_prompt_with_score(
 
     preamble_contracts = _collect_preamble_contracts(
         repo_root,
-        is_worker=worker,
+        is_strand=strand,
         is_daemon=True,
         has_diffense=has_diff,
         has_introspection=bool(introspection_block),
@@ -2814,7 +2814,7 @@ def build_daemon_prompt_with_score(
     score = build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=worker,
+        is_strand=strand,
         runner_name=str(runner_name) if runner_name else None,
         runner_shell=str(runner_shell) if runner_shell else None,
         runner_core=str(runner_core) if runner_core else None,
@@ -2971,7 +2971,7 @@ def build_init_wake_prompt(
     is *not* a special mode. What init supplies is only what is genuinely
     different: the Stage line, the playbook as the task, and a facts block.
 
-    Resident stack (``worker=False``, F3): the user meets the being they
+    Resident stack (``strand=False``, F3): the user meets the being they
     will be working with, not a bounded thought that opens by disclaiming
     residency. The injected resident blocks must therefore degrade on a
     repo with no connected account — the normal state at minute zero.
@@ -2992,7 +2992,7 @@ def build_init_wake_prompt(
     kwargs.setdefault("stage", INIT_WAKE_STAGE)
     kwargs.setdefault("source", "init")
     kwargs.setdefault("environment", "host")
-    kwargs.setdefault("worker", False)
+    kwargs.setdefault("strand", False)
     kwargs.setdefault("outbox_path", outbox_path)
     return build_daemon_prompt_with_score(
         task, event_id, response_path, repo_root, **kwargs,
@@ -3060,7 +3060,7 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
     return preamble
 
 
-def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
+def _preamble_parts(repo_root: Path, *, strand: bool) -> list[tuple[str, str]]:
     """The preamble as ``(block_key, text)`` parts, in read order.
 
     Same bytes as ``_read_preamble_with_weave`` + ``daemon-substrate.md`` glued
@@ -3073,14 +3073,14 @@ def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
     transcript experiment most needs to be able to move, and an unkeyed preamble
     string is precisely what made that impossible.
     """
-    key = "worker-preamble" if worker else "run-preamble"
-    parts = [(key, read_prompt("worker.md" if worker else "run.md", repo_root))]
+    key = "strand-preamble" if strand else "run-preamble"
+    parts = [(key, read_prompt("strand.md" if strand else "run.md", repo_root))]
     # Order mirrors read/authority: how you write (weave), you having written
     # (register — resident only), then who drives (daemon-substrate). Kept in
     # lockstep with :func:`_collect_preamble_contracts`, which registers the same
     # blocks in the same order for the manifest and the mount.
     riders = [("weave.md", "weave")]
-    if not worker:
+    if not strand:
         riders.append(("register.md", "register"))
     riders.append(("daemon-substrate.md", "daemon-substrate"))
     for name, k in riders:
@@ -3100,17 +3100,17 @@ def _glue_preamble(parts: list[str]) -> str:
     return out
 
 
-def _build_worker_preamble(repo_root: Path) -> str:
-    """Read ``worker.md`` plus the working-register contract (``weave.md``).
+def _build_strand_preamble(repo_root: Path) -> str:
+    """Read ``strand.md`` plus the working-register contract (``weave.md``).
 
-    The slim counterpart to :func:`_read_preamble_with_weave`: a worker wake
-    (B4, ``kb/design-director-loop.md`` §orchestrator/worker) gets the bounded
+    The slim counterpart to :func:`_read_preamble_with_weave`: a strand wake
+    (B4, ``kb/design-director-loop.md`` §orchestrator/strand) gets the bounded
     task preamble instead of the resident's ``run.md`` — no dominion write,
     no kb governance, no "reconsider intent" stewardship framing, none of
     which apply to a bounded handoff. ``weave.md`` still rides: it governs
-    *how* any wake writes to its working surfaces, resident or worker alike.
+    *how* any wake writes to its working surfaces, resident or strand alike.
     """
-    preamble = read_prompt("worker.md", repo_root)
+    preamble = read_prompt("strand.md", repo_root)
     weave = read_prompt("weave.md", repo_root)
     if weave.strip():
         preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
@@ -3164,7 +3164,7 @@ def build_daemon_prompt(
     continuity: Any | None = None,
     hooks_installed: bool | None = None,
     diffense: bool = False,
-    worker: bool = False,
+    strand: bool = False,
     _prepared_injected_keyed: list[tuple[str, str]] | None = None,
     _mountable: frozenset[str] = frozenset(),
     _mount_sink: dict[str, str] | None = None,
@@ -3183,12 +3183,12 @@ def build_daemon_prompt(
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
 
-    ``worker=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
-    swaps in the slim worker stack: ``worker.md`` + ``weave.md`` instead of
+    ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/strand)
+    swaps in the slim strand stack: ``strand.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
     (identity core, dominion digest, work surface, runner policy, pitfalls,
     knowledge sources, kb health, introspection) are
-    skipped entirely — a worker wake still gets ``daemon-substrate.md`` (it
+    skipped entirely — a strand wake still gets ``daemon-substrate.md`` (it
     still runs under the daemon and needs the delivery/portal mechanics) and
     the full Run Context Bundle (its actual task). Default ``False`` is
     byte-identical to the prior behavior.
@@ -3206,7 +3206,7 @@ def build_daemon_prompt(
 
     preamble = _glue_preamble([
         kept
-        for key, text in _preamble_parts(repo_root, worker=worker)
+        for key, text in _preamble_parts(repo_root, strand=strand)
         if (kept := _take(key, text)) is not None
     ])
     bundle = _build_run_context_bundle(
@@ -3285,7 +3285,7 @@ def build_daemon_prompt(
     kernel = format_kernel(build_boot_score(
         repo_root,
         is_daemon=True,
-        is_worker=worker,
+        is_strand=strand,
         runner_name=runner_name,
         runner_shell=runner_shell,
         runner_core=runner_core,
@@ -3323,7 +3323,7 @@ def build_daemon_prompt(
     prompt = _join_prompt_parts(
         preamble, repo_root, trailer, kernel=kernel,
         task_text=pitfall_text, diffense=diffense,
-        inject_blocks=not worker,
+        inject_blocks=not strand,
         prepared_injected_blocks=prepared_blocks,
         prepared_introspection_block=_prepared_introspection_block,
     )
@@ -3725,7 +3725,7 @@ def _build_run_context_bundle(
         sections.append("### Also awake right now")
         sections.append(
             "Other thoughts are active in this repo (ad-hoc sessions, or "
-            "another worker). You share one dominion, so if one is on the "
+            "another strand). You share one dominion, so if one is on the "
             "same stream or files, expect its edits to land alongside yours "
             "— don't fight it. Contradictions in shared memory are normal "
             "and get reconciled by judgement, not locks (see your playbook)."
