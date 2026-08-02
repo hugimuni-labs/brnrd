@@ -30,11 +30,17 @@ async function renderStrip(props: {
 	});
 	const runnable = compiled.js.code
 		.replace(/import\s+SpoolRack\s+from\s*'\.\/SpoolRack\.svelte';/, 'const SpoolRack = () => {};')
-		.replace(/'\.\/controlStrip'/g, "'./controlStrip.ts'")
-		.replace(/'\.\/transitions'/g, "'./transitions.ts'")
-		.replace(/'\.\/quota'/g, "'./quota.ts'")
-		.replace(/'\.\/tankForecast'/g, "'./tankForecast.ts'")
-		.replace(/'\.\/statusPalette'/g, "'./statusPalette.ts'");
+		// Node's ESM resolver needs the extension the compiler drops. This was
+		// a hand-listed set — `./controlStrip`, `./transitions`, `./quota`,
+		// `./tankForecast`, `./statusPalette` — and adding an import to the
+		// component broke these tests with a module-not-found that reads
+		// nothing like "you forgot to update a list in a test file". A class
+		// defined by listing its members meets the member nobody listed; the
+		// structural property is "a relative specifier with no extension", so
+		// match that instead. The character class excludes `.`, so anything
+		// already carrying one (`./SpoolRack.svelte`, handled above) is left
+		// alone.
+		.replace(/'(\.\/[A-Za-z0-9_-]+)'/g, "'$1.ts'");
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}-${Math.random()}`);

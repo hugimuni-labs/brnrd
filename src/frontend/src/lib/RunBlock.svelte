@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { runFace } from './runFace';
+	import { machineHeadFields } from './machineDock';
 	import type { PickRow } from './pickLane';
 
 	/**
@@ -27,6 +28,10 @@
 	let lead = $derived(burning[0] ?? null);
 	let face = $derived(lead ? runFace(lead.id) : null);
 	let nextArmed = $derived(armed[0] ?? null);
+	// Open, the head keeps identity and drops every measurement the lane below
+	// draws in full — his "when it is expanded, it shouldn't repeat the both
+	// collapsed and semi-expanded shape". Rule and reasoning: `machineDock.ts`.
+	let head = $derived(machineHeadFields(open));
 </script>
 
 <button
@@ -52,22 +57,27 @@
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
 				<span class="max-w-[26ch] truncate text-[11px]">{lead.label}</span>
 			</span>
-			{#if lead.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
-			{#if lead.note}<span class="text-ink-quiet">{lead.note}</span>{/if}
-			{#if burning.length > 1}<span class="text-amber-500/80">+{burning.length - 1}</span>{/if}
+			{#if head.clock && lead.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
+			{#if head.note && lead.note}<span class="text-ink-quiet">{lead.note}</span>{/if}
+			{#if head.extra && burning.length > 1}<span class="text-amber-500/80"
+					>+{burning.length - 1}</span
+				>{/if}
 		{:else}
 			<span class="text-ink-quiet">parked</span>
 		{/if}
 		<span class="ml-auto {error ? 'text-red-400' : 'text-ink-quiet'}">
 			{#if error}
+				<!-- Health is never suppressed while open: a dead feed is a fact about
+				     the block, not a measurement the rows below repeat, and hiding it
+				     would leave the lane looking authoritative over nothing. -->
 				<span class="max-w-[32ch] truncate">{error}</span>
-			{:else if nextArmed}
+			{:else if head.armedTail && nextArmed}
 				{armed.length} armed{nextArmed.clock ? ` · next ${nextArmed.clock}` : ''}{stale
 					? ' · stale'
 					: ''}
 			{:else if stale}
 				stale report
-			{:else if !lead}
+			{:else if head.armedTail && !lead}
 				nothing armed
 			{/if}
 		</span>
