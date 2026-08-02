@@ -184,7 +184,22 @@ def dispatch_control(repo_root: Path, verb: str) -> ControlOutcome:
 # ── The terminal portal loop ────────────────────────────────────────
 
 
-def _default_reader(prompt: str = "you> ") -> str:
+#: The submit rule, stated where the rule applies. The reply reader ends on
+#: a blank line, and a bare ``you> `` never said so: a user who typed two
+#: lines and pressed Enter saw nothing happen and had to "press enter double
+#: time to unblock it". Full sentence on the first beat only — this prompt is
+#: printed on every message of the interview, and a paragraph each time is
+#: noise on a terminal.
+FIRST_PROMPT = (
+    "[reply] type as many lines as you like — a blank line (Enter twice) "
+    "sends it; sending nothing skips the question.\nyou> "
+)
+#: Every beat after the first: the rule survives as a parenthetical, because
+#: the one thing a first-timer must never do is wonder whether it hung.
+NEXT_PROMPT = "you (blank line sends)> "
+
+
+def _default_reader(prompt: str = FIRST_PROMPT) -> str:
     """Read a multi-line reply from the TTY; a blank line ends it."""
     print(prompt, end="", flush=True)
     lines: list[str] = []
@@ -197,6 +212,25 @@ def _default_reader(prompt: str = "you> ") -> str:
             break
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def make_terminal_reader() -> Callable[[], str]:
+    """A zero-argument reader that says the submit rule, then stops repeating it.
+
+    The beat counter lives in the closure rather than in module state so two
+    sessions in one process (the test suite, `brnrd init` re-run in a REPL)
+    each get their own first beat.
+    """
+    state = {"first": True}
+
+    def read() -> str:
+        prompt = FIRST_PROMPT if state["first"] else NEXT_PROMPT
+        state["first"] = False
+        # Looked up on the module, not captured, so monkeypatching
+        # ``_default_reader`` still reaches the real read.
+        return _default_reader(prompt)
+
+    return read
 
 
 def _outbox_messages(outbox_dir: Path) -> list[Path]:
@@ -286,7 +320,7 @@ class _Session:
         self.runner_name = runner_name
         self.cfg = cfg if cfg is not None else conf.load_config(repo_root)
         self.facts = facts or {}
-        self.reader = reader or _default_reader
+        self.reader = reader or make_terminal_reader()
         self.writer = writer or (lambda text: print(text, flush=True))
         self.invoke = invoke or runner_mod.invoke_runner
         self.control = control or dispatch_control
@@ -332,7 +366,18 @@ class _Session:
             if ev.get("id") != self.event_id
         ]
 
-    def refresh_portals(self, phase: str) -> None:
+    def refresh_portals(self, phase: str, *, awaiting_reply: bool = False) -> None:
+        """Republish both portal files.
+
+        ``awaiting_reply`` is the fact the wake could not otherwise have:
+        between the model's question and the human's blank line there is a
+        window — a minute of typing is normal — in which nothing at all
+        changes on disk, and a still portal is indistinguishable from a
+        user who walked away. So the flag is raised *before* the blocking
+        read and lowered after it, and the change token is derived from the
+        capsule's contents (``portals.content_token``) so the flip alone
+        moves it. ``phase`` keeps its own meaning and is not repurposed.
+        """
         events = self._pending_for_wake()
         portals.write_live_inbox(self.outbox_dir, self.event_id, events)
         portals.write_portal_state(
@@ -341,7 +386,7 @@ class _Session:
                 current_event_id=self.event_id,
                 events=events,
                 phase=phase,
-                change_token=str(len(events)),
+                awaiting_reply=awaiting_reply,
             ),
         )
 
@@ -432,18 +477,26 @@ class _Session:
         )
 
     def _offer_reply(self) -> None:
-        """Give the human the floor; silence is a valid answer.
+        """Give the human the floor, and *say so on the portal* while they have it.
 
-        A vanished user is not an error: the playbook's own failure-honesty
-        rule says take defaults and finish the install. An empty reply here
-        posts nothing, so the wake sees no new event and proceeds.
+        Silence is still a valid answer — a vanished user takes defaults and
+        the install finishes. But "vanished" and "typing" used to look
+        identical to the wake, so the floor is now announced: the flag goes
+        up before the read blocks and comes down in a ``finally``, on every
+        exit — a sent reply, a bare Enter, EOF, ^C, or an unexpected error
+        out of an injected reader. A flag left standing after the read
+        returned would be a worse lie than the silence it replaces.
         """
         if not self.interactive:
             return
+        self.refresh_portals("interview", awaiting_reply=True)
+        reply = ""
         try:
             reply = self.reader()
         except (EOFError, KeyboardInterrupt):
-            return
+            reply = ""
+        finally:
+            self.refresh_portals("interview")
         if not reply.strip():
             return
         self.result.replies += 1
