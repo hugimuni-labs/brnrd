@@ -3,7 +3,7 @@ import {
 	type AuthoredBackchannelItem,
 	type WarpHeat
 } from './backchannelPage.ts';
-import type { SurfaceFile } from './surface.ts';
+import { headingAnchor, type SurfaceFile } from './surface.ts';
 
 // The warp (design-work-layers.md, taken 2026-08-01): the standing intent
 // surface — account-global work layers whose items ripen into runs. A layer
@@ -96,6 +96,17 @@ export function buildWarpLayers(files: SurfaceFile[]): WarpLayer[] {
  * capacity strip can price (design-work-layers.md §Foundation). */
 export function emberCount(layers: WarpLayer[]): number {
 	return layers.reduce((sum, layer) => sum + layer.counts.ember, 0);
+}
+
+/** The copied ignition payload: the item's `prompt:` row plus its resolver
+ * address (`<layer-callsign>#<slug>`, the warp namespace of the one address
+ * scheme — design-work-layers.md §Storage cosmology). The daemon scans
+ * ignition event bodies for this address to annotate the item
+ * ("taken: run-…") and weld run relics back onto its `refs:` — the copied
+ * prompt is how the address reaches the event body. Slug = `headingAnchor`
+ * over the item's heading text, same anchor grammar the corpus browser uses. */
+export function ignitionPayload(callSign: string, item: AuthoredBackchannelItem): string {
+	return `${item.prompt ?? ''}\n\nitem: ${callSign}#${headingAnchor(item.headline)}`;
 }
 
 // ── multi-repo: repos are derived, never declared ──────────────────────────

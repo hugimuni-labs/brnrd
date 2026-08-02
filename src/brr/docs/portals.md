@@ -106,8 +106,17 @@ exists) or routed via `gate:`; a worker completion is a signal to fold in,
 not an address whose reply anyone sees.
 
 The built-in vocabulary is `summary`, `commit`, `branch`, `pr`, `merge`,
-`issue`, `comment`, `kb`, `file`, `message`, and `reply`. Unknown kinds remain readable
+`issue`, `comment`, `kb`, `file`, `message`, `reply`, and `item`. Unknown kinds remain readable
 through their first descriptive field, but use a built-in kind when it fits.
+
+**`item` is ancestry, not produce** (#972, the weld): it names the warp item
+(`<layer>#<slug>`, a resolver address into `surface/layers/`) this run
+ignited from. The daemon writes it for you when the dispatching message
+names the address; if you only learn mid-run which item you are serving,
+record it with `brnrd relic item the-loom#gate-chips-row-on-repos` — the
+slug is the item heading's anchor. At capture, the run's forge produce
+lands back on that item's `refs:` row, so the item and the run reference
+each other instead of re-listing each other.
 
 **Worth a line of your own:**
 
