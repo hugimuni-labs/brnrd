@@ -37,10 +37,11 @@
 		 *  renders its hollow dot rather than inventing a face. */
 		daemonMood?: DaemonMood | null;
 		/** The warp threads in authored order, and run id → threads crossed
-		 *  (`crossing.ts`). The strip lands at the same x here and on the cloth
-		 *  line this pick becomes — that shared column is the whole point. An
-		 *  armed pick draws none: `serves:` does not exist yet, so a scheduled
-		 *  wake has nothing honest to say about the threads it will lift. */
+		 *  (`crossing.ts`). Same alphabet everywhere it is drawn — same threads,
+		 *  same cells, same width — so a strip here and a strip on the cloth line
+		 *  this pick becomes are legibly one statement. Armed rows read their
+		 *  threads from the schedule entry's `serves:` row instead of this index;
+		 *  see `PickRow.crosses`. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
 	}
@@ -90,7 +91,7 @@
 			     top to bottom and you are reading a countdown. -->
 			<button
 				type="button"
-				class="flex h-[18px] w-full cursor-pointer items-center justify-start gap-1.5 text-left"
+				class="flex h-[20px] w-full cursor-pointer items-center justify-start gap-1.5 border border-transparent px-1.5 text-left"
 				style={`color: ${row.color};${selectedId === row.id ? ' filter: brightness(1.6);' : ''}`}
 				title={row.label}
 				aria-expanded={selectedId === row.id}
@@ -103,10 +104,11 @@
 					aria-hidden="true"
 				></span>
 				<!-- The forward weld: an armed pick draws its crossing from the
-				     schedule entry's own `serves:` row, at the same x as the
-				     burning pick below it and the cloth line after that. Before
-				     this existed it was the one row in the lane with a blank
-				     where its threads belong. -->
+				     schedule entry's own `serves:` row, in the same cells as the
+				     burning pick below it — and at the same x, since both rows
+				     share this lead slot and padding box. Before this existed it
+				     was the one row in the lane with a blank where its threads
+				     belong. -->
 				<Crossing cells={crossingCells(threads, row.crosses)} label="threads this pick serves" />
 				<span
 					class="h-[7px] shrink-0 rounded-r-[1px]"
@@ -171,7 +173,16 @@
 						in:glitchReveal|global={{ duration: 260, delay: 35 + index * 38 }}
 					>
 						<span class="flex min-w-0 items-baseline gap-1.5">
-							<span class="shrink-0 text-amber-300/80" aria-hidden="true">↯</span>
+							<!-- Same 8px lead slot the armed row's dot occupies, so the
+							     crossing strip after it starts at the same x whatever the
+							     row's heat. Alignment across the *cloth* is not claimed:
+							     that row wraps, so what travels between the two surfaces is
+							     the strip's alphabet — same threads, same order, same
+							     width — not its position. -->
+							<span
+								class="inline-block w-2 shrink-0 text-center text-amber-300/80"
+								aria-hidden="true">↯</span
+							>
 							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id))} />
 							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
 							{#if row.clock || row.note}
