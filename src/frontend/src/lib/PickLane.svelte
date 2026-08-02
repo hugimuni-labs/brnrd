@@ -102,6 +102,12 @@
 					style={statusDotStyle('burning', row.color, row.urgency)}
 					aria-hidden="true"
 				></span>
+				<!-- The forward weld: an armed pick draws its crossing from the
+				     schedule entry's own `serves:` row, at the same x as the
+				     burning pick below it and the cloth line after that. Before
+				     this existed it was the one row in the lane with a blank
+				     where its threads belong. -->
+				<Crossing cells={crossingCells(threads, row.crosses)} label="threads this pick serves" />
 				<span
 					class="h-[7px] shrink-0 rounded-r-[1px]"
 					style={`width: ${(row.barFraction * 34).toFixed(2)}%; background-color: ${row.color}`}

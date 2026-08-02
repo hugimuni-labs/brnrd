@@ -78,6 +78,32 @@ export interface PickRow {
 	 *  nothing. */
 	barFraction: number;
 	serves: PickServes[];
+	/**
+	 * Warp threads this pick crosses, for `crossing.ts` — the forward weld.
+	 *
+	 * An armed pick reads them from the schedule entry's `serves:` row, which
+	 * the daemon publishes on the activity record's `links`. A picking one
+	 * reads nothing here: the page already holds a `taken:`-built index that is
+	 * authoritative for a run that exists, and two sources for one strip is
+	 * exactly the duplicated fact this whole round is about. Empty means *no
+	 * claim* — not "crosses nothing".
+	 */
+	crosses: string[];
+}
+
+/**
+ * The warp threads a scheduled wake says it serves.
+ *
+ * Defensive about the wire on purpose: `links` is free-form JSON on the
+ * activity record, so this is the one field on a `ScheduledWake` that a daemon
+ * older than the forward weld simply will not send, and a hand-authored
+ * `serves:` row is what fills it. Anything that is not a list of strings is no
+ * claim at all.
+ */
+export function servesThreads(wake: ScheduledWake): string[] {
+	const serves = wake.links?.serves;
+	if (!Array.isArray(serves)) return [];
+	return serves.filter((thread): thread is string => typeof thread === 'string' && thread !== '');
 }
 
 function elapsedClock(run: LiveRun, now: number): string | null {
@@ -127,7 +153,8 @@ export function pickRows(input: {
 			color: row.color,
 			urgency: row.urgency,
 			barFraction: row.barFraction,
-			serves: []
+			serves: [],
+			crosses: servesThreads(row.wake)
 		}))
 		.slice(0, ARMED_ROW_CAP)
 		.reverse();
@@ -144,7 +171,10 @@ export function pickRows(input: {
 			color: THERMAL_STOPS.amber,
 			urgency: (liveRuns ?? []).length > 1 ? ('attention' as const) : ('calm' as const),
 			barFraction: 1,
-			serves: servesByRun.get(id) ?? []
+			serves: servesByRun.get(id) ?? [],
+			// A live run's threads come from the page's `taken:` index, which is
+			// authoritative for a run that exists. Nothing to add here.
+			crosses: []
 		};
 	});
 
