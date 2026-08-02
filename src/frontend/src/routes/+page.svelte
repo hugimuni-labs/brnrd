@@ -78,7 +78,7 @@
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
 	import { railScrollVerdict } from '$lib/controlStrip';
-	import { machineDockTop } from '$lib/machineDock';
+	import { machineDockTop, machineDockVerdict, machineTapVerdict } from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -346,6 +346,14 @@
 	// nothing there to toggle.
 	let railSentinel = $state<HTMLElement | null>(null);
 	let railCondensed = $state(false);
+	// Whether the machine's one line is stuck to the top with the lane it
+	// belongs to left behind at the block's home. Measured off the block's own
+	// sentinel rather than inferred from `railCondensed`: the two boundaries sit
+	// about sixteen pixels apart, and this one decides what the head *says* and
+	// what a tap on it *does*, so it has to be the geometric fact and not a
+	// neighbour's proxy. Verdict, dead band, and why travel terminates against
+	// it: `machineDock.machineDockVerdict`.
+	let machineDocked = $state(false);
 	$effect(() => {
 		const sentinel = railSentinel;
 		if (!sentinel || typeof window === 'undefined') return;
@@ -357,6 +365,18 @@
 				railFullHeight,
 				condensed: railCondensed
 			});
+			// The sentinel's *bottom*: it carries the seam above the block as a
+			// real box, so its bottom edge and the dock's in-flow top are the
+			// same line. Its top is 24px higher, and that gap is the trip's
+			// landing margin below — two different numbers off one element, so
+			// neither is a constant nudged until it looked right.
+			machineDocked = machineSentinel
+				? machineDockVerdict({
+						home: machineSentinel.getBoundingClientRect().bottom,
+						dockTop: machineDockTop(railHeight, railCondensed),
+						docked: machineDocked
+					})
+				: false;
 		};
 		read();
 		window.addEventListener('scroll', read, { passive: true });
@@ -429,33 +449,39 @@
 	// go to the top of the page, and when it's collapsed, go back"). Not taken:
 	// docking the body as well. An expanded lane pinned to the top of a phone
 	// is chrome eating the page, and it rebuilds THE PICKER YOU CANNOT REACH.
+	//
+	// Amended 2026-08-03 (THE DOCK THAT TAPPED WRONG, his "when the machine
+	// block is scrolled up it is not collapsed, so pressing it the first time
+	// doesn't expand it"): the trip above only ever ran when the tap happened
+	// to be an *opening* one. Docked with the block already open, the same tap
+	// was a fold — of a lane the reader could not see, at a position above
+	// them, so the page below rose by exactly one lane's height ("the menu hits
+	// scrolled randomly a bit"). Docked, the head is a pointer and every tap on
+	// it travels; only a tap taken with the lane on screen may fold. The
+	// verdict is `machineTapVerdict`, and the whole argument lives with it.
 	let machineReturnY = $state<number | null>(null);
 	function onMachineToggle() {
-		const opening = !machineExpanded;
-		if (opening) {
+		const tap = machineTapVerdict(machineExpanded, machineDocked);
+		if (tap.open === true) {
 			machineOpen = true;
-		} else {
+		} else if (tap.open === false) {
 			machineOpen = false;
 			loomSelection = null;
 		}
 		if (typeof window === 'undefined') return;
-		if (opening) {
-			// Only when the head is docked. At rest the reader is already
-			// looking at the block, and moving them then would cost them their
-			// place to answer a glance they did not ask for.
-			if (railCondensed && machineSentinel) {
-				// The sentinel, never the dock itself. A stuck `sticky` element
-				// reports its *stuck* viewport position, so measuring it gives
-				// back the offset it is already at — the first build did exactly
-				// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
-				// sibling in normal flow is the only thing on the page that
-				// still knows where the block lives. Same trick `railSentinel`
-				// already plays one section above.
-				machineReturnY = window.scrollY;
-				const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
-				window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
-			}
-		} else if (machineReturnY !== null) {
+		if (tap.travel) {
+			if (!machineSentinel) return;
+			// The sentinel, never the dock itself. A stuck `sticky` element
+			// reports its *stuck* viewport position, so measuring it gives
+			// back the offset it is already at — the first build did exactly
+			// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
+			// sibling in normal flow is the only thing on the page that
+			// still knows where the block lives. Same trick `railSentinel`
+			// already plays one section above.
+			machineReturnY = window.scrollY;
+			const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
+			window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
+		} else if (tap.open === false && machineReturnY !== null) {
 			const back = machineReturnY;
 			machineReturnY = null;
 			window.scrollTo({ top: back, behavior: 'smooth' });
@@ -964,18 +990,29 @@
 		     is precisely the behaviour being fixed and looked identical in a
 		     static screenshot. Driven, not reasoned: the first build shipped
 		     the nested version and the phone shot showed the rail alone. -->
-		<div bind:this={machineSentinel} aria-hidden="true"></div>
+		<!-- The seam above the block, held by the sentinel as a real box rather
+		     than written as the dock's own `mt-6`. A stuck sticky box parks its
+		     border box at `top` exactly — the margin goes with it — so a seam
+		     living on the dock would leave the marker 24px adrift from the thing
+		     it marks, and `machineDockVerdict` reads that edge to decide what a
+		     tap means. Marker and gap in one element: the two edges cannot
+		     disagree. -->
+		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
-			class="ignite sticky z-30 mt-6 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			class="ignite sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
 			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
 			aria-label="the machine"
 		>
-			{#key railCondensed}
+			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
+			     this line's form — pointer or disclosure — so it is what the
+			     redraw should mark. -->
+			{#key machineDocked}
 				<div in:glitchReveal={{ duration: 200 }}>
 					<RunBlock
 						burning={burningRows}
 						armed={armedRows}
 						open={machineExpanded}
+						docked={machineDocked}
 						error={liveRunsError}
 						stale={liveRunsStale}
 						onToggle={onMachineToggle}
