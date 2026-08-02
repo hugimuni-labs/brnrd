@@ -3714,3 +3714,74 @@ def test_the_transcript_cap_announces_itself(tmp_path, monkeypatch):
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert len(_transcript(run_dir)) == before
     assert (run_dir / "boundaries.jsonl").stat().st_size == size
+
+
+# ── Boundary summary (`boundaries.json`) ──────────────────────────────────
+#
+# `derive_boundaries_summary` reads the exact transcript `record_boundary`
+# writes, so these fixtures are driven through the real hook entry point
+# (`hooks.run_hook`) rather than hand-assembled — the same discipline the
+# transcript tests above already keep. Only the malformed-line case appends
+# synthetic damage on top of a real file, because that damage cannot be
+# produced any other way.
+
+
+def test_derive_boundaries_summary_is_none_when_the_file_is_absent(tmp_path):
+    """No transcript, no summary — never a guessed zero-valued one."""
+    assert hooks.derive_boundaries_summary(tmp_path / "boundaries.jsonl") is None
+
+
+def test_derive_boundaries_summary_is_none_when_every_line_is_malformed(tmp_path):
+    """Total corruption reads the same as absence, not as a clean zero run."""
+    path = tmp_path / "boundaries.jsonl"
+    path.write_text(
+        "not json at all\n{\"phase\": \"stop\"\n{\"no_phase_field\": true}\n",
+        encoding="utf-8",
+    )
+    assert hooks.derive_boundaries_summary(path) is None
+
+
+def test_derive_boundaries_summary_counts_stops_and_skips_bad_lines(tmp_path):
+    """Realistic transcript, driven through `run_hook`, plus damage on top."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "body": "one more thing"}])
+    hooks.run_hook(hooks.PHASE_SESSION_START, "{}", env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)  # blocks: pending event unaddressed
+    # A second Stop against the same unresolved snapshot does not re-block
+    # (the token-scoped latch, #981) — this run's last word is clean.
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    path = run_dir / "boundaries.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("{not valid json\n")
+
+    summary = hooks.derive_boundaries_summary(path)
+
+    assert summary is not None
+    assert summary["total"] == 4
+    assert summary["skipped"] == 1
+    assert summary["stops"] == 2
+    assert summary["guard_fire_count"] == 1
+    assert summary["guard_fires"][0]["blocked"] is True
+    assert summary["guard_fires"][0]["at"]
+    # The run's last word was clean, even though an earlier Stop blocked.
+    assert summary["final_stop_block"] is False
+    assert summary["final_stop_block_reason"] is None
+    assert summary["final_stop_at"]
+
+
+def test_derive_boundaries_summary_final_stop_blocked_is_the_case_that_matters(tmp_path):
+    """A run whose *last* Stop was still live under a block — the accepted defect."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "body": "finish this"}])
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    summary = hooks.derive_boundaries_summary(run_dir / "boundaries.jsonl")
+
+    assert summary["stops"] == 1
+    assert summary["guard_fire_count"] == 1
+    assert summary["final_stop_block"] is True
+    assert "finish this" in summary["final_stop_block_reason"]

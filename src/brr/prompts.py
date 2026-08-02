@@ -4619,7 +4619,49 @@ def _build_prior_run_block(repo_root: Path) -> str:
     ]
     if shape:
         rendered.append("\nalso in that body: " + " · ".join(shape))
+    guard_line = _guard_line(body_path.parent)
+    if guard_line:
+        rendered.append("\n" + guard_line)
     return "\n".join(rendered)
+
+
+def _guard_line(node_dir: Path) -> str:
+    """``guard: 16 stops · blocked ×1 · final stop clear`` — or ``""``.
+
+    The closeout guard's own verdict, projected from ``boundaries.json``
+    (``hooks.derive_boundaries_summary``, written beside this node's
+    ``body.md``/``state.md`` by ``daemon._persist_boundaries_summary``). The
+    frame line above carries the reply and its status; until this, nothing
+    on the node said whether the guard *agreed* with that reply — a run that
+    ended on a false ``continuing`` claim (the guard fired, and the run ended
+    anyway) read identical to a clean close. ``BLOCKED`` (uppercase, the one
+    case this line exists for) means the run's last Stop was still live under
+    a block when it ended; ``clear`` means the guard had nothing outstanding.
+
+    Absent — not ``"guard: unknown"`` — when the summary itself is: an older
+    node, one from a run whose transcript never parsed. A placeholder here
+    would read as a clean bill of health for a run this feature cannot
+    actually vouch for.
+    """
+    import json
+
+    path = node_dir / "boundaries.json"
+    try:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(summary, dict):
+        return ""
+    stops = summary.get("stops")
+    if not isinstance(stops, int):
+        return ""
+    parts = [f"{stops} stop{'s' if stops != 1 else ''}"]
+    fire_count = summary.get("guard_fire_count")
+    if isinstance(fire_count, int) and fire_count > 0:
+        parts.append(f"blocked ×{fire_count}")
+    verdict = "BLOCKED" if summary.get("final_stop_block") else "clear"
+    parts.append(f"final stop {verdict}")
+    return "guard: " + " · ".join(parts)
 
 
 def _body_section_shape(body: str) -> list[str]:
