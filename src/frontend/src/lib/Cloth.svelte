@@ -16,6 +16,8 @@
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
 	import RunNodeInline from './RunNodeInline.svelte';
+	import Crossing from './Crossing.svelte';
+	import { crossingCells } from './crossing';
 	import {
 		nodeDigest,
 		repoRunSlug,
@@ -42,9 +44,24 @@
 		 *  their place on the way back). Null while loading; the unfold then
 		 *  falls back to a plain run-page link. */
 		surface?: SurfaceResponse | null;
+		/** THE CROSSING (`crossing.ts`): the warp threads in authored order, and
+		 *  run id → the ones each run lifted. Drawn at the same column positions
+		 *  the pick lane uses, so a burning pick and the cloth line it becomes
+		 *  carry the same strip — the reference drawn, instead of the fact
+		 *  repeated in a second list. */
+		threads?: string[];
+		crossingIndex?: Map<string, string[]>;
 	}
 
-	let { rows, now, windowMs, stale, surface = null }: Props = $props();
+	let {
+		rows,
+		now,
+		windowMs,
+		stale,
+		surface = null,
+		threads = [],
+		crossingIndex = new Map()
+	}: Props = $props();
 
 	// The lens rail (the dissolution, 2026-08-02). The chips lens the *past
 	// inventory*, and the cloth is the past's one object now, so the rail
@@ -193,6 +210,9 @@
 	     leftover space like before; `min-w-[9ch]` is the floor that stops the
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
+	<Crossing
+		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined)}
+	/>
 	{#if line.href}
 		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
 		     being a page redirect that cost the reader their scroll position

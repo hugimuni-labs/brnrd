@@ -52,6 +52,13 @@
 		 *  `pinnedOpen`: that form fits on screen, so moving the reader for it
 		 *  would cost them their place to answer a glance. */
 		onRackChange?: (open: boolean) => void;
+		/** The pick burning right now, for the slim bar (2026-08-02, THE PICK).
+		 *  The page order became the fall — warp → machine → cloth — which puts
+		 *  the machine below a screenful of intent, so "what is running" left
+		 *  the first glance. It comes back here, where the rail already answers
+		 *  every other resource question, and the rail is on screen at every
+		 *  scroll position by construction. `null` = nothing burning. */
+		livePick?: { label: string; clock: string | null; extra: number } | null;
 	}
 
 	let {
@@ -67,7 +74,8 @@
 		activeSpawns = null,
 		maxSpawns = null,
 		condensed = false,
-		onRackChange
+		onRackChange,
+		livePick = null
 	}: Props = $props();
 	let expanded = $state(false);
 	let repoSelection = $state<string | null>(null);
@@ -197,6 +205,14 @@
 		{/if}
 		{#if lead}
 			<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.verdict}</span>
+		{/if}
+		{#if livePick}
+			<span class="ml-auto flex min-w-0 items-baseline gap-1.5 text-amber-200">
+				<span aria-hidden="true">↯</span>
+				<span class="max-w-[16ch] truncate">{livePick.label}</span>
+				{#if livePick.clock}<span class="text-amber-500/80">{livePick.clock}</span>{/if}
+				{#if livePick.extra > 0}<span class="text-amber-500/80">+{livePick.extra}</span>{/if}
+			</span>
 		{/if}
 	</button>
 {:else}
