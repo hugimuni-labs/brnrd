@@ -9,6 +9,7 @@
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
+	import { quotaWindowCountLabel } from '$lib/controlStrip';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
@@ -746,10 +747,7 @@
 				<div class="flex items-baseline justify-between gap-3">
 					<p class="eyebrow">the rack · next wake + fuel</p>
 					<p class="font-mono text-[10px] text-ink-quiet">
-						{runnersError ??
-							(shells === null
-								? 'report loading'
-								: `${shells.length} quota source${shells.length === 1 ? '' : 's'}`)}
+						{runnersError ?? (shells === null ? 'report loading' : quotaWindowCountLabel(shells))}
 					</p>
 				</div>
 				{#if runnersData?.profiles.length === 0 && runnersWithheld}
