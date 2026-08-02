@@ -100,6 +100,7 @@ function authored(overrides: Partial<AuthoredBackchannelItem>): AuthoredBackchan
 		state: null,
 		needs: null,
 		refs: [],
+		taken: [],
 		prompt: null,
 		bodyMarkdown: '',
 		...overrides
@@ -119,6 +120,7 @@ const LOOM_LAYER: WarpLayer = {
 			needs: null,
 			refs: [],
 			prompt: 'Implement the restructure.',
+			taken: [],
 			bodyMarkdown: ''
 		}
 	],

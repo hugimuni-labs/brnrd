@@ -59,6 +59,9 @@ export interface ClothLine {
 	 * name (owner stripped) with the full label kept for title/hover.
 	 * Derived from the window's own rows — no config. */
 	repoChip: { short: string; full: string } | null;
+	/** Warp item addresses from the run's `item` relics (THE WELD, #972):
+	 * the standing intent this run was ignited from. Empty for un-welded runs. */
+	items: string[];
 	chips: ClothChip[];
 	/** A run that closed without produce still happened — faint line. */
 	bare: boolean;
@@ -127,6 +130,20 @@ function isKb(relic: RelicRecord): boolean {
 }
 
 /** Produce chips in the loom shelf's legend grammar: `2pr 5c 1kb`. */
+/** THE WELD (#972), the run's half of the back-pointer: the warp item
+ * addresses (`layer#slug`) this run's manifest names — the item that ignited
+ * it. Rendered as an ancestry chip on the cloth line; the item's own `taken:`
+ * row points back. Referencing, never re-listing. */
+export function itemAddresses(relics: RelicRecord[]): string[] {
+	const out: string[] = [];
+	for (const relic of relics) {
+		if (relic.kind !== 'item') continue;
+		const address = typeof relic.address === 'string' ? relic.address : '';
+		if (address && !out.includes(address)) out.push(address);
+	}
+	return out;
+}
+
 export function produceChips(relics: RelicRecord[]): ClothChip[] {
 	const prs = relics.filter((relic) => relic.kind === 'pr').length;
 	const commits = relics.filter((relic) => relic.kind === 'commit').length;
@@ -221,6 +238,7 @@ function curatedLine(run: MergedRun): ClothLine {
 		named: authoredName !== null,
 		repoLabel: run.repoLabel,
 		repoChip: null,
+		items: itemAddresses(run.relics),
 		chips,
 		bare: chips.length === 0,
 		duration: durationLabel(run.wallSeconds),
