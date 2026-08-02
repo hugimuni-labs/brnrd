@@ -77,6 +77,33 @@ ALL_COMMANDS = tuple(
     sorted(PUBLIC_COMMANDS + HIDDEN_COMMANDS + tuple(RETIRED_COMMANDS))
 )
 
+#: Set by the npm launcher (``packaging/npm/bin/brnrd.js``) when the process
+#: was started through ``npx brnrd``. Absent for every other install shape.
+LAUNCHER_ENV = "BRNRD_LAUNCHER"
+
+
+def brnrd_cmd() -> str:
+    """How the user must spell a brnrd command **on this machine**.
+
+    ``npx brnrd init`` installs into a managed virtualenv under
+    ``~/.local/share/brnrd`` and execs the binary inside it; it never puts
+    ``brnrd`` on the user's PATH. So every line that ends "then run ``brnrd
+    up``" is a lie to that user — and the first one they meet is the last
+    line of their first session. The launcher is the only component that
+    knows which spelling brought it here, so it says so in the environment
+    and this reads it back.
+
+    Read at *call* time, never captured at import: the value is process
+    environment, tests monkeypatch it, and a launcher that sets it after
+    this module is imported still has to count.
+
+    Compose with it rather than around it — ``f"{brnrd_cmd()} up"`` — so a
+    third spelling (should one ever arrive) lands here and nowhere else.
+    """
+    if os.environ.get(LAUNCHER_ENV) == "npx":
+        return "npx brnrd"
+    return "brnrd"
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the full argparse tree.
@@ -87,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
     from . import __version__
     parser = argparse.ArgumentParser(
-        prog="brnrd",
+        prog=brnrd_cmd(),
         description="Resident agent runtime for local and managed repo work",
     )
     parser.add_argument("--version", action="version", version=f"brnrd {__version__}")
@@ -1993,8 +2020,8 @@ def cmd_add(args):
     ctx = account.resolve_context(account_repo_root, cfg)
     if ctx.kind != "account":
         raise SystemExit(
-            "brnrd account add requires a connected account home; "
-            "run `brnrd account connect` first"
+            f"{brnrd_cmd()} account add requires a connected account home; "
+            f"run `{brnrd_cmd()} account connect` first"
         )
     repo_root = _repo_root_from_arg(args.repo)
     target_cfg = conf.load_config(repo_root)
@@ -2397,7 +2424,10 @@ def cmd_account_status(args):
         kind = f"[{root.kind}]"
         print(f"    {star} {root.label:<24} {kind:<8} {root.root}")
     if ctx.kind != "account":
-        print("\n  this is a project home — `brnrd account connect` links it to brnrd.")
+        print(
+            f"\n  this is a project home — `{brnrd_cmd()} account connect` "
+            "links it to brnrd."
+        )
     return 0
 
 
@@ -2592,7 +2622,7 @@ def cmd_brnrd_connect(args):
     if args.no_service:
         print(
             "[brnrd] Paired without a background service. "
-            "Run `brnrd up --foreground` to begin draining the brnrd inbox."
+            f"Run `{brnrd_cmd()} up --foreground` to begin draining the brnrd inbox."
         )
         return
 
