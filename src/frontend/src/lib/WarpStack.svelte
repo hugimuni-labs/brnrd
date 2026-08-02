@@ -15,13 +15,18 @@
 		/** Tests seed the open item; the page leaves it null (every item
 		 *  reduced or hidden per its layer's fold). */
 		initialOpenItemKey?: string | null;
+		/** Opens a corpus page in the library below (his 08-02 steer: "not
+		 *  all of the layers have the links") — the layer band's page link
+		 *  and item-body internal links both route through it. */
+		onOpenPage?: (path: string) => void;
 	}
 
 	let {
 		layers,
 		knownPaths = new Set<string>(),
 		initialOpenCallSign = null,
-		initialOpenItemKey = null
+		initialOpenItemKey = null,
+		onOpenPage = undefined
 	}: Props = $props();
 
 	// Heat wears the existing thermal palette — no new hue enters for the
@@ -202,7 +207,12 @@
 				{/if}
 				{#if item.bodyMarkdown}
 					<div class="mt-1.5">
-						<MarkdownContent markdown={item.bodyMarkdown} sourcePath={layer.path} {knownPaths} />
+						<MarkdownContent
+							markdown={item.bodyMarkdown}
+							sourcePath={layer.path}
+							{knownPaths}
+							onNavigate={onOpenPage ? (target) => onOpenPage(target) : undefined}
+						/>
 					</div>
 				{/if}
 			</div>
@@ -241,32 +251,45 @@
 					     the band's one-line truth — how much is ready, held, undefined
 					     — and the disclosure opens the *held* remainder (definition +
 					     banked/cold); the embers below never fold. -->
-					<button
-						type="button"
-						class="flex w-full cursor-pointer flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
-						aria-expanded={open}
-						aria-controls={bandId}
-						onclick={() => toggleLayer(layer.callSign)}
-					>
-						<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
-							>{open ? '▾' : '▸'}</span
+					<div class="flex items-baseline gap-x-2">
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 cursor-pointer flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
+							aria-expanded={open}
+							aria-controls={bandId}
+							onclick={() => toggleLayer(layer.callSign)}
 						>
-						<span class="min-w-0 flex-1 font-mono font-medium text-amber-100">{layer.callSign}</span
-						>
-						<span class="flex shrink-0 items-center gap-2 font-mono text-[10px]">
-							{#if layer.counts.ember > 0}
-								<span style={`color: ${HEAT_COLOR.ember}`}>{layer.counts.ember} ember</span>
-							{/if}
-							{#if layer.counts.banked > 0}
-								<span style={`color: ${HEAT_COLOR.banked}`}>{layer.counts.banked} banked</span>
-							{/if}
-							{#if layer.counts.cold + layer.counts.unstated > 0}
-								<span style={`color: ${HEAT_COLOR.cold}`}
-									>{layer.counts.cold + layer.counts.unstated} cold</span
-								>
-							{/if}
-						</span>
-					</button>
+							<span class="font-mono text-[10px] text-ink-quiet" aria-hidden="true"
+								>{open ? '▾' : '▸'}</span
+							>
+							<span class="min-w-0 flex-1 font-mono font-medium text-amber-100"
+								>{layer.callSign}</span
+							>
+							<span class="flex shrink-0 items-center gap-2 font-mono text-[10px]">
+								{#if layer.counts.ember > 0}
+									<span style={`color: ${HEAT_COLOR.ember}`}>{layer.counts.ember} ember</span>
+								{/if}
+								{#if layer.counts.banked > 0}
+									<span style={`color: ${HEAT_COLOR.banked}`}>{layer.counts.banked} banked</span>
+								{/if}
+								{#if layer.counts.cold + layer.counts.unstated > 0}
+									<span style={`color: ${HEAT_COLOR.cold}`}
+										>{layer.counts.cold + layer.counts.unstated} cold</span
+									>
+								{/if}
+							</span>
+						</button>
+						{#if onOpenPage}
+							<!-- Every layer is an authored page; the stack says so now.
+							     Opens in the library on this same page — no page leave. -->
+							<button
+								type="button"
+								class="shrink-0 cursor-pointer font-mono text-[10px] text-ink-quiet hover:text-amber-200"
+								title="read this layer's page in the library"
+								onclick={() => onOpenPage?.(layer.path)}>page →</button
+							>
+						{/if}
+					</div>
 
 					{#if embers.length > 0}
 						<!-- The live threads, standing open: the section header's ember
@@ -286,6 +309,7 @@
 										markdown={layer.definitionMarkdown}
 										sourcePath={layer.path}
 										{knownPaths}
+										onNavigate={onOpenPage ? (target) => onOpenPage(target) : undefined}
 									/>
 								</div>
 							{/if}
