@@ -114,6 +114,16 @@
 			{line.chips.map((chip) => chip.label).join(' ')}
 		</span>
 	{/if}
+	{#if line.items.length > 0}
+		<!-- THE WELD (#972): the warp item this run was ignited from — the
+		     address is the reference; the item's `taken:` row points back. -->
+		<span
+			class="hidden shrink-0 font-mono text-[10px] text-amber-300/80 sm:inline"
+			title="ignited from the warp"
+		>
+			🧵 {line.items.join(' · ')}
+		</span>
+	{/if}
 	<span class="ml-auto shrink-0 text-[10px] whitespace-nowrap text-ink-mute">
 		{line.duration} · {line.age}
 	</span>

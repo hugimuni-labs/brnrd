@@ -628,3 +628,25 @@ test('produce chips and age labels speak the loom grammar', () => {
 	assert.equal(clothAgeLabel(3 * HOUR + 12 * 60 * 1000), '3h 12m ago');
 	assert.equal(clothAgeLabel(2 * DAY + 5 * HOUR), '2d 5h ago');
 });
+
+test("weld: a run's item relics surface as addresses on its line — referencing, never re-listing", () => {
+	const weave = weaveCloth(
+		[
+			row({
+				run_id: 'welded',
+				ended_at: endedAgo(HOUR),
+				external_refs: [
+					{ kind: 'item', address: 'the-loom#band-animation' },
+					{ kind: 'item', address: 'the-loom#band-animation' },
+					{ kind: 'pr', number: 999 }
+				]
+			}),
+			row({ run_id: 'plain', ended_at: endedAgo(2 * HOUR) })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	const lines = new Map(weave.trees.map((tree) => [tree.root.id, tree.root]));
+	assert.deepEqual(lines.get('welded')?.items, ['the-loom#band-animation'], 'deduped address list');
+	assert.deepEqual(lines.get('plain')?.items, [], 'an un-welded run carries no address');
+});
