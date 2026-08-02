@@ -3978,7 +3978,8 @@ def _format_communication_snapshot(
 
     live_menu = snapshot.get("live_menu")
     if isinstance(live_menu, dict):
-        rendered_menu = menus.render_numbered(live_menu)
+        resolved_prs = forge_state.resolved_pr_lookup(snapshot.get("forge"))
+        rendered_menu = menus.render_numbered(live_menu, resolved_prs=resolved_prs)
         if lines:
             lines.append("")
         lines.append(
