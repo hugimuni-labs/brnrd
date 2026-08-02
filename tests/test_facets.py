@@ -199,7 +199,7 @@ def test_build_coexisting_never_leaks_a_sibling_task_body_substring(tmp_path):
 
 
 def test_build_coexisting_incident_shape_issue_number_prose_does_not_leak():
-    """The real #574 incident shape: a spawn worker's task body opens with
+    """The real #574 incident shape: a spawn run's task body opens with
     `Fix GitHub issue **#565**: …`. A sibling's facet must not carry that
     prose — a bare, short `#565` alone would be fine (it's not a directive
     by itself), but the surrounding sentence must not survive."""

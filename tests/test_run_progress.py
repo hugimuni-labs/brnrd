@@ -389,7 +389,7 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     _emit(brr_dir, key, "attempt_started", run_id="run-r", attempt=1)
     _emit(brr_dir, key, "run_started", run_id="run-r",
           runner="codex", branch="brr/run-r", env="docker")
-    # Backfill the display base the same way daemon._run_worker does
+    # Backfill the display base the same way daemon._execute_run does
     # via the run record (env_prepared doesn't carry seed_ref by name).
     conversations.append_run(
         brr_dir, key,

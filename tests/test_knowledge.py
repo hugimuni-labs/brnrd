@@ -504,7 +504,7 @@ def test_committed_pages_in_window_credits_resident_committed_pages(tmp_path):
 
 def test_committed_pages_in_window_attributes_by_run_identity_not_time(tmp_path):
     """#565: stopped runs were credited, on their own dashboard nodes, with a
-    concurrent sibling worker's kb commits, because the window used to union
+    concurrent sibling run's kb commits, because the window used to union
     in everything committed in ``start..HEAD`` on the *shared* account-
     knowledge checkout with no regard for who committed it. Two runs land
     commits into the same overlapping window here; each must be credited
@@ -921,7 +921,7 @@ def test_commit_msg_hook_leaves_a_hand_commit_untouched_without_the_env(
     the hook is a no-op — credited to no run, never a guess (#565).
 
     Explicitly ``delenv`` rather than trusting a bare environment: this
-    suite can itself run inside a brnrd-dispatched worker, whose own shell
+    suite can itself run inside a brnrd-dispatched run, whose own shell
     carries a real ``BRR_RUN_ID`` — exactly the ambient value this test
     must rule out to mean anything.
     """

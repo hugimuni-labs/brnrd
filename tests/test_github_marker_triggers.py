@@ -158,7 +158,7 @@ def test_dashboard_coarse_recheck_only_touches_stale_repos(monkeypatch):
     _spy_sync(monkeypatch, calls)
 
     # This test owns the refresh lifetime: it is about which stale repos the
-    # worker selects, not whether a fire-and-forget thread wins a race with
+    # run selects, not whether a fire-and-forget thread wins a race with
     # the assertions (or with teardown of the in-memory SQLite engine).
     def run_refresh_synchronously(request, account_id):
         session_router._run_github_background_refresh(

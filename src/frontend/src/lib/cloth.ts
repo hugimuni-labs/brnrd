@@ -2,7 +2,7 @@
 //
 // The "last 24h" instruments section dies; the past renders as a sliding
 // window (default 30 days) of done work: runs as root nodes of collapsed
-// trees (run → worker subruns), one curated line each, expansion on demand.
+// trees (run → strand subruns), one curated line each, expansion on demand.
 // The selvage is the cloth's self-finished edge — one compact row of
 // spend→produce aggregates over the same window.
 //
@@ -83,7 +83,7 @@ export interface ClothLine {
 	barFraction: number;
 }
 
-/** A root run with its worker subruns collapsed beneath it. */
+/** A root run with its strand subruns collapsed beneath it. */
 export interface ClothTree {
 	root: ClothLine;
 	children: ClothLine[];
@@ -93,7 +93,7 @@ export interface ClothWeave {
 	trees: ClothTree[];
 	/** Root runs beyond the cap — rendered as "+ N older in the window". */
 	dropped: number;
-	/** The largest wall clock among the rendered lines (roots and workers)
+	/** The largest wall clock among the rendered lines (roots and strands)
 	 * — the shared denominator every bar's fraction was computed against. */
 	maxWallSeconds: number;
 }
@@ -254,7 +254,7 @@ function curatedLine(run: MergedRun): ClothLine {
 /**
  * Bar lengths in the band's own scale: `loomBarFraction` (sqrt, floored)
  * against one window-wide maximum over every rendered line — roots and
- * workers alike, across all days — so a long bar on jul 30 and a long bar
+ * strands alike, across all days — so a long bar on jul 30 and a long bar
  * on aug 1 mean the same thing. Runs the shelf's function, not a copy:
  * the floor that keeps a zero-second run visibly a bar comes with it.
  */
@@ -309,14 +309,14 @@ function dressRepoChips(trees: ClothTree[]): void {
 
 /**
  * Weave the window's rows into root-run trees, newest root first, each
- * root's worker subruns age-ordered beneath it.
+ * root's strand subruns age-ordered beneath it.
  *
  * The dispatch edge (`is_subspawn`/`parent_run_id`) is read through
  * `nestShelfChildren` — the loom shelf's own resolution of the same join,
  * with its orphan rule intact: a child whose parent is not in the window
  * renders as a root rather than silently vanishing.
  *
- * The cap applies to *roots* — a fleet's workers ride their root, they are
+ * The cap applies to *roots* — a fleet's strands ride their root, they are
  * not what the reader scrolls past — and the overflow comes back as
  * `dropped`, which the component is obligated to render.
  */

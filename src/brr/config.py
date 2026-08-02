@@ -35,7 +35,7 @@ override) so its 50+ call sites are unaffected. A security key set in
 silent: ``load_config_report`` returns the ignored key names alongside
 the merged config so a caller (today: the daemon, at run-dispatch time)
 can log a warning and surface a portal notice. See ``daemon.py``'s
-``_run_worker`` for where that happens.
+``_execute_run`` for where that happens.
 
 Deliberately *not* security keys: ``home.path`` / ``home.kind`` /
 ``account.id`` / ``account_id`` / ``forge.identity`` and friends. Those
@@ -86,7 +86,7 @@ _REPO_PROFILE_RELPATHS = ("runners.md", "prompts/runners.md")
 # per call. ``load_config`` was a pure file read and is called 13 times by
 # ``prompts.py`` alone while assembling one wake, so the draft put ~26
 # subprocess spawns on the hottest path in the product; it showed up as
-# the +7% full-suite wall time the worker reported and correctly flagged.
+# the +7% full-suite wall time the run reported and correctly flagged.
 #
 # Keying on the raw repo config means any edit to a locating key
 # (``home.path``, ``account.id``, ...) misses the cache and re-resolves,

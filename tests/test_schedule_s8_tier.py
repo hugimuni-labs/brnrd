@@ -104,7 +104,7 @@ def _fire(repo, brr_dir, cfg=None):
 
 
 def _real_event(brr_dir, source="github"):
-    """A real on-disk event — ``_run_worker_and_finalize`` writes its status."""
+    """A real on-disk event — ``_run_and_finalize`` writes its status."""
     inbox = brr_dir / "inbox"
     protocol.create_event(inbox, source, "do the thing")
     return protocol.list_pending(inbox)[0]
@@ -719,9 +719,9 @@ def test_attribution_survives_an_exception_in_the_finalize_stretch(tmp_path, mon
     brr_dir = repo / ".brr"
     dom = dominion.ensure_dominion(repo, push=False)
 
-    def _fake_run_worker(event, repo_root, *a, **k):
-        # Stand in for the real worker: the agent writes its dominion and
-        # `_run_worker` captures it — on success and on hard failure alike.
+    def _fake_execute_run(event, repo_root, *a, **k):
+        # Stand in for the real run: the agent writes its dominion and
+        # `_execute_run` captures it — on success and on hard failure alike.
         _write_schedule(dom, "## Upkeep\nevery: 60s\nrun upkeep my way\n")
         _capture(dom, "run-crash")
         return _run("run-crash", trust.COLLABORATOR)
@@ -729,12 +729,12 @@ def test_attribution_survives_an_exception_in_the_finalize_stretch(tmp_path, mon
     def _boom(*a, **k):
         raise RuntimeError("publish exploded")
 
-    monkeypatch.setattr(daemon, "_run_worker", _fake_run_worker)
+    monkeypatch.setattr(daemon, "_execute_run", _fake_execute_run)
     monkeypatch.setattr(daemon, "_capture_knowledge", lambda *a, **k: None)
     monkeypatch.setattr(daemon, "publish", _boom)
 
     with pytest.raises(RuntimeError, match="publish exploded"):
-        daemon._run_worker_and_finalize(
+        daemon._run_and_finalize(
             _real_event(brr_dir), repo, brr_dir / "responses", {}, 0,
         )
 
@@ -751,12 +751,12 @@ def test_attribution_in_finally_tolerates_a_run_that_never_started(tmp_path, mon
     dominion.ensure_dominion(repo, push=False)
 
     def _boom(*a, **k):
-        raise RuntimeError("worker never produced a Run")
+        raise RuntimeError("run never produced a Run")
 
-    monkeypatch.setattr(daemon, "_run_worker", _boom)
+    monkeypatch.setattr(daemon, "_execute_run", _boom)
 
     with pytest.raises(RuntimeError, match="never produced a Run"):
-        daemon._run_worker_and_finalize(
+        daemon._run_and_finalize(
             _real_event(brr_dir), repo, brr_dir / "responses", {}, 0,
         )
 

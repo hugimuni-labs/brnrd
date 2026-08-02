@@ -74,7 +74,7 @@ class TestDrainOutbox:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         n = daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
@@ -143,7 +143,7 @@ class TestDrainOutbox:
         staged = outbox / "note.md.tmp.4242.cafe"
         staged.write_text("the whole message\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
 
@@ -218,7 +218,7 @@ class TestDrainOutbox:
             "daily summary\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -251,7 +251,7 @@ class TestDrainOutbox:
             "projected body\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -296,7 +296,7 @@ class TestDrainOutbox:
             "Closes #749 move 5 (the ticket stays open for moves 1-4).\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -335,7 +335,7 @@ class TestDrainOutbox:
             "Ships the whole thing.\n\nCloses #839.\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -361,7 +361,7 @@ class TestDrainOutbox:
             "Closes #749 move 5 (the ticket stays open for moves 1-4).\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -385,7 +385,7 @@ class TestDrainOutbox:
             "Fix #533: split config and closes #534\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -403,7 +403,7 @@ class TestDrainOutbox:
         outbox.mkdir(parents=True)
         (outbox / "ping.md").write_text("---\ngate: nosuchgate\n---\nhi\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -436,7 +436,7 @@ class TestDrainOutbox:
             daemon, "_gate_is_configured",
             lambda _brr, name: name in {"telegram", "cloud"},
         )
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -466,7 +466,7 @@ class TestDrainOutbox:
         outbox.mkdir(parents=True)
         (outbox / "ping.md").write_text("---\ngate: telegram:12345\n---\nhi\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -482,7 +482,7 @@ class TestDrainOutbox:
 
     def test_missing_outbox_is_noop(self, tmp_path):
         brr_dir = tmp_path / ".brr"
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         responses = brr_dir / "responses"
@@ -506,7 +506,7 @@ class TestDrainOutbox:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
         task = types.SimpleNamespace(id="task-A", source="telegram")
@@ -542,7 +542,7 @@ class TestDrainOutbox:
         (outbox / "reply.md").write_text(
             f"---\nevent: {bid}\n---\nthread-specific answer\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="telegram:111:", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
         task = types.SimpleNamespace(id="task-A", source="telegram")
@@ -574,7 +574,7 @@ class TestDrainOutbox:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         # Same gate as the target (telegram) — the reachable, unchanged path.
         task = types.SimpleNamespace(id="task-A", source="telegram")
@@ -598,7 +598,7 @@ class TestDrainOutbox:
             "gate: telegram\ntelegram_chat_id: 999\n---\ndaily summary\n")
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -630,7 +630,7 @@ class TestDrainOutbox:
         outbox.mkdir(parents=True)
         (outbox / "reply.md").write_text("---\nevent: evt-ghost\n---\nhi\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -659,7 +659,7 @@ class TestDrainOutbox:
         (outbox / "reply.md").write_text(
             f"---\nevent: {short}\n---\nhere's the answer\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -684,7 +684,7 @@ class TestDrainOutbox:
         (outbox / "reply.md").write_text(
             f"---\nevent: {tail}\n---\nhere's the answer\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -717,7 +717,7 @@ class TestDrainOutbox:
         (outbox / "reply.md").write_text(
             f"---\nevent: {short}\n---\nhere's the self-reply\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id=own_id)
         task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, own_id, outbox, inbox)
@@ -761,7 +761,7 @@ class TestDrainOutbox:
         (outbox / "reply.md").write_text(
             f"---\nevent: {shared_tail}\n---\nwhich one?\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram")
         n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
@@ -816,7 +816,7 @@ class TestCrossGateReplyRouting:
         (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nthe answer\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram")
 
@@ -845,7 +845,7 @@ class TestCrossGateReplyRouting:
         (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nlooks fine\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: False)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="telegram:1:", event_id="evt-A")
         task = types.SimpleNamespace(
             id="task-A", source="telegram", conversation_key="telegram:1:", meta={},
@@ -892,7 +892,7 @@ class TestCrossGateReplyRouting:
         bid = protocol.list_pending(inbox)[0]["id"]
         (outbox / "reply.md").write_text(f"---\nevent: {bid}\n---\nnoted\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
 
@@ -948,7 +948,7 @@ class TestCrossGateReplyRouting:
         # No frontmatter: an ordinary mid-thought message to the waking thread.
         (outbox / "note.md").write_text("noted\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id=eid)
         task = types.SimpleNamespace(id="task-A", source="schedule", meta={})
 
@@ -990,7 +990,7 @@ class TestCrossGateReplyRouting:
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
         # ``cloud`` is a real gate, just not reachable from this run — branch 2.
         monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: False)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="telegram:1:", event_id="evt-A")
         task = types.SimpleNamespace(
             id="task-A", source="telegram", conversation_key="telegram:1:", meta={},
@@ -1038,7 +1038,7 @@ class TestDrainOutboxCrossInbox:
         for name, text in files:
             (outbox / name).write_text(text)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id=event_id)
         task = types.SimpleNamespace(
             id="task-A", source="telegram", meta={})
@@ -1148,7 +1148,7 @@ class TestDrainOutboxNote:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-A")
         task = types.SimpleNamespace(id="task-A", source="telegram", meta={})
         n = daemon._drain_outbox(
@@ -1285,7 +1285,7 @@ class TestDrainAgentCard:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         st = state if state is not None else {}
@@ -1314,7 +1314,7 @@ class TestDrainAgentCard:
         emitted2 = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted2.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
@@ -1331,7 +1331,7 @@ class TestDrainAgentCard:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
@@ -1349,7 +1349,7 @@ class TestDrainAgentCard:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
@@ -1395,7 +1395,7 @@ class TestDrainAgentCard:
         emitted = []
         monkeypatch.setattr(daemon.updates, "emit",
                             lambda brr, pkt: emitted.append(pkt))
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1")
         n = daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
@@ -1680,7 +1680,7 @@ def test_terminal_route_names_what_carried_the_stream():
     # content, not the run's only voice.
     assert route("telegram", delivered_elsewhere=True) == "gate-extra"
 
-    # A worker's report on the dispatch edge. Not a chat delivery: an
+    # A run's report on the dispatch edge. Not a chat delivery: an
     # unambiguous return value to one parent, with nothing to duplicate and
     # no addressing to guess.
     assert route(
@@ -1990,7 +1990,7 @@ class TestTerminalStreamDedupe:
         outbox.mkdir(parents=True)
         (outbox / "001.md").write_text(body)
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1", meta={})
         daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
@@ -2030,7 +2030,7 @@ class TestTerminalStreamDedupe:
         (inbox / "evt-2.md").write_text("---\nid: evt-2\nstatus: pending\n---\nq\n")
         (outbox / "001.md").write_text("---\nevent: evt-2\n---\nsame text\n")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=brr_dir, conversation_key="", event_id="evt-1")
         task = types.SimpleNamespace(id="task-1", meta={})
         daemon._drain_outbox(emit, task, responses, "evt-1", outbox, inbox)
@@ -2057,7 +2057,7 @@ class TestLiveRunBodyMirror:
         card = outbox / ".card"
         card.write_text("## Now\n\nMid-flight.\n", encoding="utf-8")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=repo / ".brr", conversation_key="k", event_id="evt-1",
         )
         task = daemon.Run(
@@ -2090,7 +2090,7 @@ class TestLiveRunBodyMirror:
         card = outbox / ".card"
         card.write_text("plain\n", encoding="utf-8")
         monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-        emit = daemon._WorkerEmit(
+        emit = daemon._RunEmit(
             brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1",
         )
         task = types.SimpleNamespace(id="task-1")
@@ -2126,7 +2126,7 @@ def test_parked_proposal_counts_as_promoted_but_not_as_delivered(
         "---\nrunner_policy: propose\n---\ncore: opus\n", encoding="utf-8")
     (outbox / "002.md").write_text("a real reply\n", encoding="utf-8")
     monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
-    emit = daemon._WorkerEmit(
+    emit = daemon._RunEmit(
         brr_dir=brr_dir, conversation_key="", event_id="evt-1")
     task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
     stats: dict[str, int] = {}

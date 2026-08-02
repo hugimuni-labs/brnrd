@@ -82,42 +82,42 @@ def test_attention_line_names_the_gate_not_the_runner() -> None:
 # ── The queue is the resident's, and only the resident's ──────────────────────
 
 
-def test_worker_is_never_told_to_answer_the_residents_queue() -> None:
+def test_strand_is_never_told_to_answer_the_residents_queue() -> None:
     """The 2026-07-13 incident, pinned.
 
     ``pending_count`` is the **parent's** queue — events addressed to the
-    resident, in the resident's gate thread.  It leaked into the worker kernel,
-    which handed a spawned worker, at position 1, in the imperative:
+    resident, in the resident's gate thread.  It leaked into the run kernel,
+    which handed a spawned run, at position 1, in the imperative:
 
         next:
           2. answer 12 queued events — one outbox file each, `event: <id>`
 
-    Two workers (claude-haiku, codex-mini) did precisely that: they answered
+    Two runs (claude-haiku, codex-mini) did precisely that: they answered
     twelve of the user's messages to the resident, in the resident's thread,
     with no context for any of them.
 
-    ``worker.md`` says the spawning conversation "is not yours to hold or
+    ``strand.md`` says the spawning conversation "is not yours to hold or
     extend" — in prose, *below* the kernel.  The kernel won.  Which is the boot
     thesis confirmed from its ugly end: **the imperative list at the hot slot is
     what gets acted on; the prose contract beneath it is what gets skimmed.**
     """
     from brr.prompts import _build_orientation
 
-    def actions(*, is_worker: bool) -> list[str]:
+    def actions(*, is_strand: bool) -> list[str]:
         return [
             s.action
             for s in _build_orientation(
                 is_daemon=True,
-                is_worker=is_worker,
+                is_strand=is_strand,
                 environment="worktree",
                 pending_count=12,
                 has_event_body=True,
             )
         ]
 
-    assert not any("queued event" in a for a in actions(is_worker=True))
+    assert not any("queued event" in a for a in actions(is_strand=True))
     # …and the resident still gets it: the fix is a gate, not a deletion.
-    assert any("queued event" in a for a in actions(is_worker=False))
+    assert any("queued event" in a for a in actions(is_strand=False))
 
 
 # ── Continuity ────────────────────────────────────────────────────────────────
@@ -172,11 +172,11 @@ def _score(source_gate: str | None = None) -> str:
     )
 
 
-def test_a_spawned_worker_is_not_the_prior_wake(tmp_path: Path) -> None:
+def test_a_spawned_strand_is_not_the_prior_wake(tmp_path: Path) -> None:
     """#987, the live case, pinned.
 
     ``run-260802-0730-cc2f`` booted with ``continuity: ✓ run-260802-0649-lcrd``
-    — a codex worker ``run-260802-0632-v2ir`` had dispatched — while its own
+    — a codex run ``run-260802-0632-v2ir`` had dispatched — while its own
     ``## Your last run`` block named ``v2ir``.  Two blocks in one prompt, two
     answers to *where was I*, and the anchor whose whole job is closing the loop
     across wakes was the one naming a child.
@@ -228,7 +228,7 @@ def test_a_respawn_handoff_is_still_the_prior_wake(tmp_path: Path) -> None:
     assert c.last_run == "run-260802-0649-resp"
 
 
-def test_only_workers_are_skipped_ordinary_runs_are_untouched(tmp_path: Path) -> None:
+def test_only_strands_are_skipped_ordinary_runs_are_untouched(tmp_path: Path) -> None:
     """The regression guard: the filter must not eat the ordinary case."""
     runs = tmp_path / "runs"
     for name, gate in (
@@ -247,7 +247,7 @@ def test_a_score_with_no_source_field_behaves_as_it_did_before(tmp_path: Path) -
     """Absent ⇒ today's behaviour, never ⇒ skip.
 
     Every score written before #987 predates the question, and a filter that
-    read *silence* as *worker* would walk the whole history backwards looking
+    read *silence* as *run* would walk the whole history backwards looking
     for a field none of it has — turning a boot that named the wrong run into a
     boot that names ``✗ first wake`` on a resident with months of memory.
     Absent is not evidence.
@@ -269,7 +269,7 @@ def test_a_score_with_no_source_field_behaves_as_it_did_before(tmp_path: Path) -
     assert c.last_run == "run-260713-2300-nsrc"
 
 
-def test_an_unparseable_worker_score_is_still_a_broken_mount(tmp_path: Path) -> None:
+def test_an_unparseable_strand_score_is_still_a_broken_mount(tmp_path: Path) -> None:
     """A score the filter cannot read is reported, not quietly stepped over.
 
     ``build_continuity`` owes an unreadable score a ``✗ unreachable``.  A picker
@@ -494,7 +494,7 @@ def test_stale_image_is_announced_in_the_kernel() -> None:
     """A spawn assembled by a superseded daemon says so, first thing.
 
     The 2026-07-13 failure: two children rendered the pre-#388 kernel — the
-    worker-queue bug included — *after* the fix was in the tree, because the
+    run-queue bug included — *after* the fix was in the tree, because the
     daemon assembles a spawn's whole prompt in its own process image and the
     re-exec that would refresh it waits on the resident doing the spawning.
     Nothing in either child's wake said so, so the floor measurement read as a

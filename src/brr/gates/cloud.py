@@ -2141,7 +2141,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     writes — acceptable for a first cut, worth revisiting with a tailed
     read if a busy thread's log makes this tick hot. Budget/keepalive
     posture is deliberately *not* included here: that state lives only in
-    the worker's in-memory loop today (``daemon.py``'s
+    the run's in-memory loop today (``daemon.py``'s
     ``_keepalive_until``/budget tracking), nothing persists it yet, so it
     would need new state-threading, not just a read — named as the
     remaining gap rather than guessed at.

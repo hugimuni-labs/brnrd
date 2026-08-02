@@ -567,7 +567,7 @@ def load_armed_letters(brr_dir: Path) -> list[dict[str, Any]]:
 # scores ~0.86, two genuinely unrelated short entries score ~0.29. 0.6
 # separates paraphrase-or-closer from unrelated with real headroom either
 # side. It will **not** catch this account's own standing example — see the
-# worker report for #579, this is a known, load-bearing limitation, not an
+# run report for #579, this is a known, load-bearing limitation, not an
 # oversight: a threshold low enough to catch it would flag most entry pairs
 # and make the linter cry wolf on everything, which the issue itself calls
 # worse than not existing.

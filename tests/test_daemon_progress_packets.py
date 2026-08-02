@@ -1,6 +1,6 @@
 """Tests for the daemon lifecycle packets after triage was removed.
 
-These verify that the worker emits the run-progress packets in the
+These verify that the run emits the run-progress packets in the
 right order for happy-path, retry, and Docker-preserved-container
 scenarios. Records are read directly from the per-conversation log.
 """
@@ -54,7 +54,7 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke()),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -101,7 +101,7 @@ def test_sync_packet_is_scoped_to_run(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke()),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -149,7 +149,7 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=_retry_invoke),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
     )
 
@@ -216,7 +216,7 @@ def test_transport_death_is_retried_and_the_next_attempt_lands(
         lambda _name: StubWorktreeEnv(invoke_fn=_drop_then_succeed),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
     )
 
@@ -259,7 +259,7 @@ def test_transport_retries_are_bounded_by_max_retries(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=_always_drop),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
     )
 
@@ -304,7 +304,7 @@ def test_clean_silent_run_fails_once_without_retry(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=_silent_invoke),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
     )
 
@@ -348,7 +348,7 @@ def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
 
     # max_retries=3 — even with retries allowed, hard failure must skip
     # them and give up immediately.
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
     )
 
@@ -391,7 +391,7 @@ def test_quota_failure_is_classified_for_attempt_and_terminal_packets(
         lambda _name: StubWorktreeEnv(invoke_fn=_quota_hit),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
     )
 
@@ -444,7 +444,7 @@ def test_relay_candidate_rides_attempt_failure_and_terminal_response(
         lambda _name: StubWorktreeEnv(invoke_fn=_quota_hit),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -501,7 +501,7 @@ def test_operational_failure_falls_back_to_next_runner(tmp_path, monkeypatch):
         lambda _name: StubWorktreeEnv(invoke_fn=_quota_then_success),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -543,7 +543,7 @@ def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatc
         lambda _name: StubWorktreeEnv(invoke_fn=_always_fail),
     )
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -616,7 +616,7 @@ def test_docker_env_emits_container_started(tmp_path, monkeypatch):
     fake_env = _FakeDockerEnv(succeed=True)
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: fake_env)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -637,7 +637,7 @@ def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
     fake_env = _FakeDockerEnv(succeed=False)
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: fake_env)
 
-    task = daemon._run_worker(
+    task = daemon._execute_run(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 

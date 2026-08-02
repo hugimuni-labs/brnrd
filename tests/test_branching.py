@@ -155,14 +155,14 @@ def _init_repo_with_origin(tmp_path: Path) -> Path:
 def test_event_branch_seeds_from_remote_when_local_diverged(tmp_path):
     """When the gate names a branch whose local copy has diverged from
     the remote, the plan must seed from ``origin/<branch>`` so the
-    worker sprouts from the forge-visible state. Without this, the
-    daemon's pre-task ff is refused and the worker would build on a
+    run sprouts from the forge-visible state. Without this, the
+    daemon's pre-task ff is refused and the run would build on a
     stale local branch, producing a divergent, unpushable history."""
     repo = _init_repo_with_origin(tmp_path)
     bare = tmp_path / "origin.git"
 
     # Branch published on origin, then advanced via a sibling clone so
-    # the worker repo's tracking ref outruns its local branch copy.
+    # the run repo's tracking ref outruns its local branch copy.
     subprocess.run(
         ["git", "checkout", "-b", "feature/x"], cwd=repo, check=True,
         stdout=subprocess.PIPE,

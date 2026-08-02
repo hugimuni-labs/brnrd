@@ -177,7 +177,7 @@ def capture_image_fingerprint() -> None:
 def image_is_stale() -> bool:
     """Has the checkout's code moved out from under this running process?
 
-    Safe to call from worker threads — unlike :meth:`DevReloadWatcher.changed`,
+    Safe to call from run threads — unlike :meth:`DevReloadWatcher.changed`,
     this only reads (it never advances a snapshot), so concurrent callers cannot
     race each other into swallowing an edit.
 

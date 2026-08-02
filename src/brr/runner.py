@@ -39,7 +39,7 @@ _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
 
 # Live runner subprocesses, keyed by invocation label. The daemon runs the
-# resident's thought *and* up to ``spawn.max_concurrent`` worker children in
+# resident's thought *and* up to ``spawn.max_concurrent`` run children in
 # one process, each invoking its own runner subprocess concurrently — a
 # single module-global handle (the pre-2026-07-18 shape) meant a budget kill
 # for one run could terminate a *different* run's process, and a finishing
@@ -91,7 +91,7 @@ def start_registered_process(
     """Start a process atomically with its invocation-label registration.
 
     A stop can arrive while a runner is being launched.  Holding the registry
-    lock across ``Popen`` means it sees either no process (and the worker's
+    lock across ``Popen`` means it sees either no process (and the run's
     stopped flag prevents a retry) or the fully registered process; never an
     unaddressable live interval.
     """
@@ -772,7 +772,7 @@ def _profiles_source(repo_root: Path | None = None) -> tuple[str, str]:
     prompt-injected agent that reaches the tree — able to name the binary
     the next run would execute. A repo-side copy is now ignored, and
     ``config.ignored_repo_profile_files`` is what makes that visible
-    (``daemon.py``'s ``_run_worker``, beside the #533 key notice); the
+    (``daemon.py``'s ``_execute_run``, beside the #533 key notice); the
     migration is ``brnrd config promote``.
 
     The **cache key** is part of the guarantee, not bookkeeping. It was a

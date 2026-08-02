@@ -6,7 +6,7 @@ the collision-avoidance half of the Society-of-Mind concurrency model
 (``kb/design-agent-dominion.md`` §4). The daemon is single-flight, but the
 system is *already* multi-thought because ad-hoc editor and CLI sessions,
 a hand-run agent) work alongside the daemon, so knowing who's present is
-useful even with one daemon worker.
+useful even with one daemon run.
 
 Design: each participant owns exactly one JSON file (``<id>.json``) and
 only ever writes its own, so the registry needs **no lock** — concurrent
@@ -30,7 +30,7 @@ from typing import Any
 
 # A participant is considered gone if its heartbeat is older than this.
 # Sized comfortably above the daemon heartbeat interval (30s) so a busy
-# worker that simply hasn't ticked recently isn't pruned as dead.
+# run that simply hasn't ticked recently isn't pruned as dead.
 DEFAULT_STALE_AFTER_S = 300.0
 PRESENCE_DIRNAME = "presence"
 
@@ -105,7 +105,7 @@ def register(
     *parent_run_id* / *is_subspawn* mirror the same fields already carried
     on the closed-run ledger row (``run_ledger.py``) — a concurrent
     ``spawn:`` child sets both while it's still live, so the live-runs
-    dashboard view can tell a worker-stack child apart from a resident
+    dashboard view can tell a run-stack child apart from a resident
     thought at the same joining key the ledger already uses, rather than
     only after the run closes (kb/design-multi-workstream-concurrency.md
     "Ranked moves" #1).
