@@ -145,6 +145,31 @@ def test_closed_run_appends_one_well_formed_jsonl_row(tmp_path, monkeypatch):
     assert row["estimate_vs_actual"] == "actual"
 
 
+def test_external_refs_carry_item_relics_with_no_new_field(tmp_path, monkeypatch):
+    """#972, THE WELD: an `item` relic reported at ignition reaches the
+    ledger row through the collected relic manifest (`external_refs`) — the
+    dashboard's back-pointer needs no dedicated column, and a doubled report
+    collapses to one record on the way in."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger.codex_status, "load_levels", lambda: _levels())
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".relics.jsonl").write_text(
+        '{"kind": "item", "address": "the-loom#the-weld"}\n'
+        '{"kind": "item", "address": "the-loom#the-weld"}\n',
+        encoding="utf-8",
+    )
+
+    path = run_ledger.append_closed_run(
+        tmp_path, _task("run-weld"), {}, outbox_dir=outbox, work_dir=None,
+    )
+
+    row = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["external_refs"] == [
+        {"kind": "item", "address": "the-loom#the-weld"},
+    ]
+
+
 def test_claude_snapshot_absence_writes_nulls(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     monkeypatch.setattr(
