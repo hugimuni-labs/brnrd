@@ -1176,12 +1176,25 @@ def test_unknown_phase_is_noop(tmp_path):
     assert code == 0
 
 
-def test_missing_portal_state_is_graceful(tmp_path):
-    # No portal-state.json written — post-tool still flushes, no inject.
+def test_missing_portal_state_post_tool_marks_pending_count_unknown(tmp_path):
     out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+
     assert code == 0
     assert (tmp_path / hooks.FLUSH_SIGNAL_NAME).exists()
-    assert "hookSpecificOutput" not in out
+    rendered = out["hookSpecificOutput"]["additionalContext"]
+    assert "✉?" in rendered
+    assert "0 pending event(s)" not in rendered
+
+
+def test_malformed_portal_state_post_tool_marks_pending_count_unknown(tmp_path):
+    (tmp_path / "portal-state.json").write_text("{not json", encoding="utf-8")
+
+    out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+
+    assert code == 0
+    rendered = out["hookSpecificOutput"]["additionalContext"]
+    assert "✉?" in rendered
+    assert "0 pending event(s)" not in rendered
 
 
 def test_missing_portal_state_seed_reports_unknown_pending_count(tmp_path):

@@ -3546,6 +3546,7 @@ def _run_worker(
         cfg=cfg,
         brr_dir=brr_dir,
         account_context=account_context,
+        repo_label=repo_label,
     )
 
     attempt = 0
@@ -3798,6 +3799,7 @@ def _run_worker(
             cfg=cfg,
             brr_dir=brr_dir,
             account_context=account_context,
+            repo_label=repo_label,
         )
 
         def _emit_heartbeat() -> None:
@@ -3874,6 +3876,7 @@ def _run_worker(
                 cfg=cfg,
                 brr_dir=brr_dir,
                 account_context=account_context,
+                repo_label=repo_label,
             )
             if presence_id:
                 presence.heartbeat(
@@ -3946,6 +3949,7 @@ def _run_worker(
                 cfg=cfg,
                 brr_dir=brr_dir,
                 account_context=account_context,
+                repo_label=repo_label,
                 refresh_levels=False,
             )
 
@@ -4052,6 +4056,7 @@ def _run_worker(
             cfg=cfg,
             brr_dir=brr_dir,
             account_context=account_context,
+            repo_label=repo_label,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -4723,17 +4728,23 @@ def _pending_events_for_agent(
     """
     sources: list[tuple[Path, str | None, bool]] = [(inbox_dir, None, False)]
     if account_context is not None and account_context.enabled and repo_label:
-        sources = [
-            (
-                source_inbox,
-                source_label,
-                source_inbox == account_context.dispatch_inbox,
-            )
-            for source_inbox, _responses, _root, source_label
-            in _dispatchable_inbox_sources(
+        seen_sources = {inbox_dir.resolve()}
+        for source_inbox, _responses, _root, source_label in (
+            _dispatchable_inbox_sources(
                 account_context, account_context.default_repo.root,
             )
-        ]
+        ):
+            resolved = source_inbox.resolve()
+            if resolved in seen_sources:
+                continue
+            seen_sources.add(resolved)
+            sources.append(
+                (
+                    source_inbox,
+                    source_label,
+                    source_inbox == account_context.dispatch_inbox,
+                )
+            )
 
     events: list[dict] = []
     for source_inbox, source_label, account_scoped in sources:
@@ -5189,6 +5200,7 @@ def _write_live_portal_state(
     cfg: dict | None = None,
     brr_dir: Path | None = None,
     account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -5210,6 +5222,9 @@ def _write_live_portal_state(
     refreshed on every heartbeat/flush instead of frozen at wake time. A
     caller that omits it gets the previous ``unimplemented`` behaviour
     unchanged.
+
+    *repo_label* is the caller's single repository-identity fact, shared with
+    ``inbox.json`` so the two live portals cannot scan different drawers.
     """
     if not outbox_dir:
         return None
@@ -5219,7 +5234,7 @@ def _write_live_portal_state(
             inbox_dir, current_event_id,
             worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
             account_context=account_context,
-            repo_label=str(task.meta.get("repo_label") or "") or None,
+            repo_label=repo_label,
         )
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
