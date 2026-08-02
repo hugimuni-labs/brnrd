@@ -98,6 +98,51 @@ export function emberCount(layers: WarpLayer[]): number {
 	return layers.reduce((sum, layer) => sum + layer.counts.ember, 0);
 }
 
+// ── the ignition crossing: items weaving right now ─────────────────────────
+//
+// The render half of THE WELD (#972, machine round): the daemon annotates an
+// ignited item with `taken: run-…` (`weld.annotate_ignition`); while such a
+// run is live, the item is *in the machine* — it rides the machine block's
+// weaving lane and leaves the warp stack for exactly that long. One item
+// space, moved by tense — referencing, not repeating.
+
+export interface WeavingRow {
+	callSign: string;
+	path: string;
+	item: AuthoredBackchannelItem;
+	/** The live run this item is crossing on — the first of the item's
+	 *  `taken:` runs that is currently live. */
+	liveRunId: string;
+}
+
+/** Items whose `taken:` runs intersect the live set, in warp order. */
+export function weavingRows(layers: WarpLayer[], liveRunIds: ReadonlySet<string>): WeavingRow[] {
+	const rows: WeavingRow[] = [];
+	if (liveRunIds.size === 0) return rows;
+	for (const layer of layers) {
+		for (const item of layer.items) {
+			const live = item.taken.find((id) => liveRunIds.has(id));
+			if (live) rows.push({ callSign: layer.callSign, path: layer.path, item, liveRunId: live });
+		}
+	}
+	return rows;
+}
+
+/** The warp stack minus the items currently weaving. Layer heat counts stay
+ * authored — they describe the file, not the view — so a layer header may
+ * legitimately count one more ember than the stack shows while it burns. */
+export function restingLayers(layers: WarpLayer[], liveRunIds: ReadonlySet<string>): WarpLayer[] {
+	if (liveRunIds.size === 0) return layers;
+	let touched = false;
+	const out = layers.map((layer) => {
+		const items = layer.items.filter((item) => !item.taken.some((id) => liveRunIds.has(id)));
+		if (items.length === layer.items.length) return layer;
+		touched = true;
+		return { ...layer, items };
+	});
+	return touched ? out : layers;
+}
+
 /** The copied ignition payload: the item's `prompt:` row plus its resolver
  * address (`<layer-callsign>#<slug>`, the warp namespace of the one address
  * scheme — design-work-layers.md §Storage cosmology). The daemon scans
