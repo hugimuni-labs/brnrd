@@ -2,9 +2,11 @@
 	import type { CrossingCell } from './crossing';
 
 	// The crossing strip: the warp threads, in their authored order, with the
-	// ones this pick lifted lit. Fixed cell width on purpose — the columns are
-	// only a loom if they land at the same x on a burning pick and on the cloth
-	// line it becomes three hours later.
+	// ones this pick lifted lit. Fixed cell width on purpose — the strip is only
+	// a reference if the same threads occupy the same cells wherever it is drawn,
+	// so a burning pick and the cloth line it becomes three hours later make
+	// legibly the same statement. Position is a bonus the pick lane can offer and
+	// the (wrapping) cloth row cannot; the alphabet is the part that travels.
 
 	interface Props {
 		cells: CrossingCell[];
