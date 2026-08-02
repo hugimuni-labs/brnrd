@@ -15,11 +15,18 @@ const generated = join(here, '.warpStack.generated.mjs');
 // restructured 2026-08-02 — the stack is the standing body and stands open):
 // every layer shows its ember items inline with no click; the held remainder
 // (definition, banked/cold) lives behind the layer's fold with the counts on
-// the band. Same server-side render dance as BackchannelQueue's tests:
-// compile with stubbed children, assert on the produced markup.
+// the band. An ember's mandate is a further, three-level disclosure of its
+// own (2026-08-02, "the mandate folds": the ignite·copy block dominated the
+// phone viewport): a collapsed layer shows the item's headline and heat only;
+// an open layer with the item unselected shows a reduced, clamped mandate
+// line with ignition still reachable; selecting the item shows the full
+// bordered mandate block, as before. Same server-side render dance as
+// BackchannelQueue's tests: compile with stubbed children, assert on the
+// produced markup.
 async function renderStack(props: {
 	layers: WarpLayer[];
 	initialOpenCallSign?: string | null;
+	initialOpenItemKey?: string | null;
 }): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, {
@@ -80,7 +87,7 @@ const BANKED_ITEM = {
 	bodyMarkdown: 'Body.'
 };
 
-test('a folded band shows call sign, heat counts, and its ember items inline — no click needed', async () => {
+test('a folded band shows call sign, heat counts, and ember headlines — no mandate text at all', async () => {
 	const body = await renderStack({
 		layers: [
 			layer({
@@ -93,15 +100,84 @@ test('a folded band shows call sign, heat counts, and its ember items inline —
 	ok(body.includes('1 ember'));
 	ok(body.includes('1 banked'));
 	// The embers stand open: the section header's "N ember" is visible work.
-	ok(body.includes('The restructure'), 'ember item renders inline on the folded band');
+	ok(body.includes('The restructure'), 'ember item headline renders inline on the folded band');
+	// Deviation from the pre-2026-08-02 contract: the mandate used to ride
+	// the standing row unconditionally, which is exactly what dominated the
+	// phone viewport (maintainer feedback). The three-level disclosure now
+	// hides the mandate — and its ignite·copy affordance — entirely while
+	// the layer is collapsed; state 1 is headline + heat only.
 	ok(
-		body.includes('Implement the restructure.'),
-		'the ember prompt affordance renders inline on the folded band'
+		!body.includes('Implement the restructure.'),
+		'the ember mandate text stays folded while the layer is collapsed'
 	);
-	ok(body.includes('ignite · copy'), 'the ignition affordance rides the standing row');
+	ok(
+		!body.includes('ignite · copy'),
+		'the ignition affordance folds with the mandate on a collapsed layer'
+	);
 	// The held remainder stays behind the fold.
 	ok(!body.includes('The past band'), 'banked item leaks out of the folded band');
 	ok(!body.includes('Build the cloth window.'), 'banked prompt leaks out of the folded band');
+});
+
+test('an open layer with the item unselected shows a reduced, clamped mandate — ignition stays on the row', async () => {
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [EMBER_ITEM, BANKED_ITEM],
+				counts: { ember: 1, banked: 1, cold: 0, unstated: 0 }
+			})
+		],
+		initialOpenCallSign: 'the-loom'
+	});
+	ok(body.includes('The restructure'), 'the headline still renders');
+	// State 2: the mandate text is present but visually reduced — clamped,
+	// no bordered block — and the ignite affordance rides the same row.
+	ok(
+		body.includes('Implement the restructure.'),
+		'the reduced mandate carries the full text (CSS clamps it)'
+	);
+	ok(
+		body.includes('line-clamp-2'),
+		'the reduced mandate is CSS line-clamped, not an ellipsis or a truncation'
+	);
+	ok(body.includes('ignite · copy'), 'ignition is still reachable from the reduced row');
+	ok(
+		!body.includes('border-amber-800/60'),
+		'the reduced mandate never wears the full bordered block'
+	);
+	// The item itself is not selected — its own fold (taken/needs/refs/body)
+	// never mounts.
+	ok(
+		!body.includes('id="warp-item-the-loom-0:restructure"'),
+		'the item fold stays unmounted while unselected'
+	);
+});
+
+test('selecting an item shows the full bordered mandate block regardless of the layer fold', async () => {
+	const body = await renderStack({
+		layers: [
+			layer({
+				items: [EMBER_ITEM, BANKED_ITEM],
+				counts: { ember: 1, banked: 1, cold: 0, unstated: 0 }
+			})
+		],
+		// The layer itself stays collapsed — selecting an item must reach
+		// the full mandate on its own, without requiring the layer to open.
+		initialOpenCallSign: null,
+		initialOpenItemKey: '0:restructure'
+	});
+	ok(body.includes('The restructure'), 'the headline still renders');
+	ok(body.includes('Implement the restructure.'), 'the full mandate text renders');
+	ok(
+		body.includes('border-amber-800/60'),
+		'state 3 wears the full bordered block, same as the standing design'
+	);
+	ok(body.includes('ignite · copy'), 'ignition and copy stay reachable on the selected item');
+	ok(body.includes('aria-expanded="true"'), 'the selected item row reports its open state');
+	ok(
+		body.includes('id="warp-item-the-loom-0:restructure"'),
+		'the selected item mounts its own fold (taken/needs/refs/body)'
+	);
 });
 
 test('an open band adds the held items; only an ember offers ignition', async () => {
