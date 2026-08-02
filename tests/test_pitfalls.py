@@ -172,3 +172,79 @@ def test_format_entry_heading_round_trips_as_distinct_pitfall(tmp_path: Path) ->
     assert parsed[1].body == (
         "Check the provider status before changing configuration."
     )
+
+
+# ── inert entries (#985) ─────────────────────────────────────────────
+#
+# The store's one silent failure mode: an entry with no `trigger:` line
+# parses, reads as filed, and matches nothing forever. These pin the
+# *detector*; `tests/test_prompts.py` pins that what it detects actually
+# reaches the block a wake renders.
+
+
+def test_inert_reports_an_entry_with_no_trigger_line(tmp_path: Path) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## Probe config\nSee the probe before trusting the screenshot.\n",
+    )
+
+    assert [p.title for p in pitfalls.inert(pitfalls.parse_pitfalls(dom))] == [
+        "Probe config"
+    ]
+
+
+def test_inert_is_silent_when_every_entry_carries_a_trigger(
+    tmp_path: Path,
+) -> None:
+    """The bar most likely to regress: a clean file costs nothing.
+
+    A notice that fires for a non-reason stops being read, and takes the
+    files where it *is* a reason down with it.
+    """
+    dom = _write(
+        tmp_path / "dom",
+        "## First\ntrigger: docker\nbody a\n\n"
+        "## Second\ntrigger: quota, budget\nbody b\n",
+    )
+
+    assert pitfalls.inert(pitfalls.parse_pitfalls(dom)) == []
+
+
+def test_inert_catches_a_trigger_line_with_nothing_in_it(
+    tmp_path: Path,
+) -> None:
+    """`trigger:` followed by only separators is the same defect wearing a
+    trigger line — `parse_pitfalls` drops the empty fields, so the entry
+    reaches `matches()` with an empty trigger list exactly as if the line
+    had never been written."""
+    dom = _write(tmp_path / "dom", "## Hollow\ntrigger: , ,\nbody\n")
+
+    (entry,) = pitfalls.parse_pitfalls(dom)
+    assert entry.triggers == []
+    assert [p.title for p in pitfalls.inert([entry])] == ["Hollow"]
+
+
+def test_inert_keeps_file_order_and_reports_only_the_inert_ones(
+    tmp_path: Path,
+) -> None:
+    dom = _write(
+        tmp_path / "dom",
+        "## Alpha\nno trigger here\n\n"
+        "## Beta\ntrigger: beta\nbody\n\n"
+        "## Gamma\nnor here\n",
+    )
+
+    assert [p.title for p in pitfalls.inert(pitfalls.parse_pitfalls(dom))] == [
+        "Alpha", "Gamma",
+    ]
+
+
+def test_an_inert_entry_never_matches_anything(tmp_path: Path) -> None:
+    """The consequence the notice exists to report, asserted rather than
+    assumed: this is *why* an inert entry is worth a line."""
+    dom = _write(tmp_path / "dom", "## Probe config\nprobe config screenshot\n")
+
+    parsed = pitfalls.parse_pitfalls(dom)
+
+    assert pitfalls.inert(parsed) == parsed
+    assert pitfalls.match(parsed, "probe config screenshot probe") == []

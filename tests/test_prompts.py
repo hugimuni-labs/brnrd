@@ -3878,3 +3878,110 @@ class TestSyncMarkerBannerSpeaksItsClass:
         )
         assert dominion.needs_sync(path.parent) == "an older bare reason"
         assert dominion.needs_sync_status(path.parent) is None
+
+
+# ── an inert pitfall on the wake surface (#985) ──────────────────────
+#
+# Driven through `_build_kb_health_block` — the function that actually
+# renders `## Findings (deterministic preflight)` into a wake — and not
+# through `pitfalls.inert` alone. The defect #985 names is that nothing
+# *says* a triggerless entry is inert; a detector whose finding never
+# reaches the rendered block is the same defect one layer down.
+#
+# `kb_preflight.scan` and the graph stats are stubbed flat so the only
+# thing that can put the block on screen is the pitfall store. The
+# dominion resolution, the parse, and the rendering stay real end to end.
+
+
+class TestInertPitfallReachesTheWake:
+    @staticmethod
+    def _repo(tmp_path, monkeypatch):
+        from brr import kb_health, kb_preflight
+
+        repo = tmp_path / "repo"
+        (repo / ".brr").mkdir(parents=True)
+        # Point the account home at an empty tmp dir so no candidate can
+        # resolve to the operator's real dominion — this test reads a
+        # pitfall store, and the real one is live resident memory.
+        (repo / ".brr" / "config").write_text(
+            f"home.path={tmp_path / 'home'}\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root, _kb=None: [])
+        monkeypatch.setattr(
+            kb_health, "compute_graph_stats",
+            lambda _root, _kb=None: kb_health.GraphStats(
+                total_pages=0, total_bytes=0
+            ),
+        )
+        return repo
+
+    def test_a_triggerless_entry_is_named_in_the_rendered_block(
+        self, tmp_path, monkeypatch
+    ):
+        """The headline case: the entry title and the file, on screen."""
+        from brr.prompts import _build_kb_health_block
+
+        repo = self._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(
+            repo,
+            "## Seeing unshipped frontend — the probe config\n"
+            "Read the probe before trusting the screenshot.\n",
+        )
+
+        block = _build_kb_health_block(repo)
+
+        assert "inert-pitfall" in block
+        assert "Seeing unshipped frontend — the probe config" in block
+        assert "pitfalls.md" in block
+        assert "[info]" in block
+
+    def test_a_file_whose_entries_all_have_triggers_renders_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """**The bar most likely to regress.** A clean store renders no
+        line, no empty section, no block at all — #623: a guard that fires
+        every wake for a non-reason stops being read, and takes the wakes
+        where it *is* a reason down with it."""
+        from brr.prompts import _build_kb_health_block
+
+        repo = self._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(
+            repo,
+            "## Docker rebuild\ntrigger: docker\nRebuild before you test.\n\n"
+            "## Quota flicker\ntrigger: quota, budget\nCheck the provider.\n",
+        )
+
+        assert _build_kb_health_block(repo) == ""
+
+    def test_no_pitfalls_file_at_all_renders_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        from brr.prompts import _build_kb_health_block
+
+        repo = self._repo(tmp_path, monkeypatch)
+
+        assert _build_kb_health_block(repo) == ""
+
+    def test_it_is_a_notice_not_a_refusal(self, tmp_path, monkeypatch):
+        """A resident drafting a body before its triggers must still be able
+        to save the file. So the inert entry is *reported* while the rest of
+        the store keeps working: its neighbour still fires, and the inert
+        entry itself is still parsed rather than dropped."""
+        from brr import pitfalls
+        from brr.prompts import _build_kb_health_block, _build_pitfalls_block
+
+        repo = self._repo(tmp_path, monkeypatch)
+        _seed_pitfalls(
+            repo,
+            "## Half-drafted\nBody written, triggers not chosen yet.\n\n"
+            "## Docker rebuild\ntrigger: docker\nRebuild before you test.\n",
+        )
+
+        assert "Half-drafted" in _build_kb_health_block(repo)
+
+        fired = _build_pitfalls_block(repo, "rebuild the docker image")
+        assert "Docker rebuild" in fired
+        assert "Half-drafted" not in fired
+
+        parsed = pitfalls.parse_pitfalls(dominion.dominion_path(repo))
+        assert [p.title for p in parsed] == ["Half-drafted", "Docker rebuild"]
