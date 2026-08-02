@@ -70,7 +70,8 @@
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
-	import { typeReveal } from '$lib/transitions';
+	import { glitchReveal, typeReveal } from '$lib/transitions';
+	import RunBlock from '$lib/RunBlock.svelte';
 	import {
 		ConfigRequestsAuthError,
 		fetchConfigRequests,
@@ -259,9 +260,29 @@
 	// tense. Heat counts in the warp header stay authored (they describe the
 	// file), so a header may count one more ember than the stack shows while
 	// it burns.
+	// The machine's fold (his 08-02 steer: the parked machine is a one-line
+	// run block on top; tapping it unfolds the lane), and the one selection
+	// the whole loom answers to (promote composition, 2026-07-16, amended by
+	// the dissolution — the detail sheet serves every tense from this one
+	// selection). The expanded verdict reads the reader's own acts only —
+	// deliberately NOT `focusRunId`, which auto-focuses the sole live run:
+	// keying the fold on it would auto-expand the machine whenever anything
+	// burns, which is exactly the parked run block's job to prevent (his
+	// steer: the block IS the pulse; the lane is one tap away).
+	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
+	let loomSelection = $state<LoomSelection>(null);
+	let machineOpen = $state(false);
+	let machineExpanded = $derived(machineOpen || loomSelection !== null);
 	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
 	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
-	let warpStackLayers = $derived(restingLayers(warpLayers, liveRunIds));
+	// One item space, moved by tense — but only when the machine is open to
+	// receive it. Parked, the machine is a single line: a weaving item
+	// resting out of the warp would render *nowhere*. So the item leaves the
+	// warp stack only while the lane that carries it is actually on screen;
+	// parked, it stays in the warp, lit by the legend's weaving bolt.
+	let warpStackLayers = $derived(
+		machineExpanded ? restingLayers(warpLayers, liveRunIds) : warpLayers
+	);
 	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
 	// run id → the ones each run lifted, read off the `taken:` rows the weld
 	// already writes. One index, three readers — the warp header's legend, the
@@ -272,15 +293,20 @@
 	// the strip, and neither re-lists the other. (The strips also share an x
 	// *within* the lane; the cloth's rows wrap, so there they do not — the
 	// alphabet is the claim, not the column.)
-	// The rail's one line about the now. Same `pickRows` the lane draws from —
-	// one computation, two readers, so the bar and the lane can never disagree
-	// about which pick is burning.
+	// The machine's own row set. Same `pickRows` the lane draws from — one
+	// computation, three readers (the rail's slim line, the parked run block,
+	// the lane), so no two surfaces can disagree about which pick is burning.
+	let machineRows = $derived(pickRows({ liveRuns, scheduledWakes, now }));
+	let burningRows = $derived(machineRows.filter((row) => row.phase === 'picking'));
+	let armedRows = $derived(machineRows.filter((row) => row.phase === 'armed'));
+	// The rail's one line about the now.
 	let livePick = $derived.by(() => {
-		const burning = pickRows({ liveRuns, scheduledWakes: null, now }).filter(
-			(row) => row.phase === 'picking'
-		);
-		if (burning.length === 0) return null;
-		return { label: burning[0].label, clock: burning[0].clock, extra: burning.length - 1 };
+		if (burningRows.length === 0) return null;
+		return {
+			label: burningRows[0].label,
+			clock: burningRows[0].clock,
+			extra: burningRows.length - 1
+		};
 	});
 	let threads = $derived(crossingThreads(warpLayers));
 	// Which layers have an item weaving right now — the answer to "which one is
@@ -403,8 +429,8 @@
 	// existing component (node panel, LiveRuns card, receipt rows, schedule
 	// row) for just that selection. No selection = the "now" default, all
 	// live runs.
-	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
-	let loomSelection = $state<LoomSelection>(null);
+	// (`loomSelection` itself is declared above the machine derivations it
+	// participates in.)
 
 	// The lens (wyrd §4 band 2) lived here as page state while the band wore
 	// the chips. The dissolution moved the rail into the cloth — the chips
@@ -846,23 +872,163 @@
 		     which is only while this part of the document is off-screen. -->
 		<div style={`height: ${railReserve}px`} aria-hidden="true"></div>
 
-		<!-- the warp · intent (#972: the loom is the page), and the head of the
-		     fall (2026-08-02, THE PICK). The page order *is* a run's life now —
-		     warp (conceived) → machine (armed → picking) → cloth (woven) — so
-		     intent stopped sitting between the now and the past, which is what
-		     made the whole page read as three unrelated bands. The warp is
-		     intent: heat, no clock. Everything with a clock — the next pick,
-		     fuel, scheduled picks, live picks — is the machine's, one section
-		     below. The two futures are different axes, not one store; welding
-		     them is `serves:`/`taken:` references, never a merge, and the
-		     crossing strip is that weld drawn.
+		<!-- the machine · the now (his 08-02 steer: "practically I think it
+		     should be on top… it's the user-facing surface — looking what run is
+		     doing at the moment and an overview of all of the runs"). The fall
+		     (#1013: warp → machine → cloth as a run's biography) survives in the
+		     tenses below, but the pulse outranks the biography at the top of the
+		     page: the first question a returning reader asks is "what is
+		     happening right now", and while parked the machine costs one line,
+		     so the answer is free even when it is "nothing".
+
+		     Parked, the machine is RunBlock's single line — the burning run's
+		     name with its face watermarked behind it (A RUN HAS NO FACE,
+		     answered where he asked it: "the face appears in the middle of the
+		     block and kinda shadows the name"). Tapping the line unfolds the
+		     lane in place; folding it returns the weaving items to the warp
+		     stack below, where they render lit instead of resting. -->
+		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-label="the machine">
+			<RunBlock
+				burning={burningRows}
+				armed={armedRows}
+				open={machineExpanded}
+				error={liveRunsError}
+				stale={liveRunsStale}
+				onToggle={() => {
+					if (machineExpanded) {
+						machineOpen = false;
+						loomSelection = null;
+					} else {
+						machineOpen = true;
+					}
+				}}
+			/>
+			{#if machineExpanded}
+				<div in:glitchReveal={{ duration: 240 }}>
+					<!-- The lane: armed picks falling toward the seam, the burning ones
+				     sitting on it, the warp items each pick lifted carried as chips
+				     on the pick itself. One tap unfolds any of them below, in the
+				     same frame, in the same grammar. -->
+					<div class="mt-3">
+						<PickLane
+							{liveRuns}
+							{scheduledWakes}
+							{weaving}
+							{threads}
+							{crossingIndex}
+							{now}
+							onSelect={selectFromLoom}
+							{daemonMood}
+							selectedId={loomSelection?.kind === 'wake' ? loomSelection.id : focusRunId}
+						/>
+					</div>
+					{#if scheduledWakes?.length === 0 && activityWithheld}
+						<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
+					{/if}
+
+					<!-- The unfold: a selected strand (or the sole live one) expands in
+				     place into its run node; a selected wake into its schedule row.
+				     No sibling section, no second NOW eyebrow — the stem ties the
+				     panel to the seam it dropped from (the machine round:
+				     `NOW · NODE` as a separate section dies). -->
+					{#if loomSelection !== null || focusRunId !== null || (liveRuns?.length ?? 0) > 1}
+						<div class="ignite" style="--ignite-delay: 600ms">
+							<div class="mx-auto h-2 w-px bg-amber-700/60" aria-hidden="true"></div>
+							{#if loomSelection !== null}
+								<div class="flex justify-end">
+									<button
+										type="button"
+										class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+										onclick={() => (loomSelection = null)}
+									>
+										✕ fold
+									</button>
+								</div>
+							{/if}
+							<div class="mt-1">
+								{#if loomSelection?.kind === 'wake'}
+									{#if scheduledWakesError}
+										<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
+									{/if}
+									{#if selectedWakes.length > 0}
+										<ScheduleLane wakes={selectedWakes} {now} />
+									{:else}
+										<p class="text-sm text-ink-quiet">
+											that wake left the schedule — it likely fired.
+										</p>
+									{/if}
+								{:else if loomSelection?.kind === 'run' || focusRunId !== null}
+									<!-- The loom stays the spine: a selected run fills this frame with
+					     its own node instead of sending the reader to a page and
+					     costing them their place in the band. One panel, not three —
+					     the node speaks, with the live/receipt vitals folded into its
+					     header and everything heavier behind its own expand. -->
+									{#if selectedNode && selectedNodeAnswers}
+										<RunNodeInline
+											data={surfaceData}
+											repoSlug={selectedNode.repoSlug}
+											runId={selectedNode.runId}
+											href={selectedNode.href}
+											vitals={selectedVitals}
+											liveLevel={selectedLiveLevel}
+											identity={selectedIdentity}
+										/>
+									{:else if selectedLiveRuns.length > 0}
+										<LiveRuns
+											runs={selectedLiveRuns}
+											stale={liveRunsStale}
+											{now}
+											withheld={liveRunsWithheld}
+										/>
+									{:else if selectedLedgerRows.length > 0}
+										<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+									{:else}
+										<p class="text-sm text-ink-quiet">
+											no receipt rows for that run in the current window.
+										</p>
+									{/if}
+								{:else}
+									<!-- Multi-run now, nothing unfolded: tapping a card *selects*
+							     it, and this same frame answers with the node panel — the
+							     identical grammar a seam tap speaks. The card's old inline
+							     expansion was a third rendering of the run (2026-07-20:
+							     "3 visual elements for a run"); it survives only in the
+							     fallbacks above, where no node can answer. -->
+									<LiveRuns
+										runs={liveRuns ?? []}
+										stale={liveRunsStale}
+										{now}
+										withheld={liveRunsWithheld}
+										onSelect={(id) => selectFromLoom('run', id)}
+									/>
+								{/if}
+							</div>
+						</div>
+					{/if}
+					{#if liveRunsError}
+						<p class="mt-2 text-sm text-red-400">{liveRunsError}</p>
+					{/if}
+				</div>
+			{/if}
+		</section>
+
+		<!-- the warp · intent (#972: the loom is the page). The fall (THE PICK,
+		     2026-08-02) ordered the page as a run's biography — warp → machine
+		     → cloth; the same evening's later steer amended it: the pulse
+		     outranks the biography, so the machine sits above and the warp is
+		     the page's second word. The warp is still intent: heat, no clock.
+		     Everything with a clock — the next pick, fuel, scheduled picks,
+		     live picks — is the machine's, one section above. The two futures
+		     are different axes, not one store; welding them is
+		     `serves:`/`taken:` references, never a merge, and the crossing
+		     strip is that weld drawn.
 
 		     The backchannel is not a sibling section but this band's needs-you
 		     strip — the center element by construction (his 07-31 read: "it
 		     should be one of the center elements"), because a returning reader
 		     asks "what does the resident need from me?" first, and it is
 		     answered without ever hiding the layers. -->
-		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-labelledby="warp-heading">
+		<section class="ignite mt-6" style="--ignite-delay: 400ms" aria-labelledby="warp-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the warp · intent</p>
@@ -908,144 +1074,6 @@
 			</div>
 			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
 				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-		</section>
-
-		<!-- the machine (#972 machine round; re-laid 08-02, then again the same
-		     evening as THE PICK). Under the warp, above the cloth: the middle of
-		     the fall, where intent becomes a burning pick and then a record. No
-		     float, no reorder on liveness. Inside it is now *one lane*: his read was
-		     "they repeat after each other … really turn the UI around pushing a
-		     run object through the stages of the execution", and one live run
-		     was in fact drawn five times on this page. Three of those five were
-		     here — the future shelf, the `from the warp · weaving` list, and the
-		     NOW seam's own cell — three drawings of the same objects at
-		     different phases, stacked. `PickLane` draws them once, in one
-		     grammar, ordered as the fall: armed picks descending toward the
-		     seam rule, a burning run sitting on it, and the unfold below where
-		     the run becomes its record. -->
-		<section class="ignite mt-10" style="--ignite-delay: 400ms" aria-labelledby="machine-heading">
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">the machine · the pick</p>
-					<h2 id="machine-heading" class="font-mono text-sm font-semibold text-amber-100">
-						{liveRuns === null
-							? 'reading the run field'
-							: liveRuns.length === 0
-								? 'idle'
-								: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
-					</h2>
-				</div>
-				<p
-					class="font-mono text-[10px] {liveRunsError
-						? 'text-red-400'
-						: liveRunsStale
-							? 'text-amber-400'
-							: 'text-ink-quiet'}"
-				>
-					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
-				</p>
-			</div>
-
-			<!-- The lane: armed picks falling toward the seam, the burning ones
-			     sitting on it, the warp items each pick lifted carried as chips
-			     on the pick itself. One tap unfolds any of them below, in the
-			     same frame, in the same grammar. -->
-			<div class="mt-3">
-				<PickLane
-					{liveRuns}
-					{scheduledWakes}
-					{weaving}
-					{threads}
-					{crossingIndex}
-					{now}
-					onSelect={selectFromLoom}
-					{daemonMood}
-					selectedId={loomSelection?.kind === 'wake' ? loomSelection.id : focusRunId}
-				/>
-			</div>
-			{#if scheduledWakes?.length === 0 && activityWithheld}
-				<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
-
-			<!-- The unfold: a selected strand (or the sole live one) expands in
-			     place into its run node; a selected wake into its schedule row.
-			     No sibling section, no second NOW eyebrow — the stem ties the
-			     panel to the seam it dropped from (the machine round:
-			     `NOW · NODE` as a separate section dies). -->
-			{#if loomSelection !== null || focusRunId !== null || (liveRuns?.length ?? 0) > 1}
-				<div class="ignite" style="--ignite-delay: 600ms">
-					<div class="mx-auto h-2 w-px bg-amber-700/60" aria-hidden="true"></div>
-					{#if loomSelection !== null}
-						<div class="flex justify-end">
-							<button
-								type="button"
-								class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-								onclick={() => (loomSelection = null)}
-							>
-								✕ fold
-							</button>
-						</div>
-					{/if}
-					<div class="mt-1">
-						{#if loomSelection?.kind === 'wake'}
-							{#if scheduledWakesError}
-								<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
-							{/if}
-							{#if selectedWakes.length > 0}
-								<ScheduleLane wakes={selectedWakes} {now} />
-							{:else}
-								<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
-							{/if}
-						{:else if loomSelection?.kind === 'run' || focusRunId !== null}
-							<!-- The loom stays the spine: a selected run fills this frame with
-				     its own node instead of sending the reader to a page and
-				     costing them their place in the band. One panel, not three —
-				     the node speaks, with the live/receipt vitals folded into its
-				     header and everything heavier behind its own expand. -->
-							{#if selectedNode && selectedNodeAnswers}
-								<RunNodeInline
-									data={surfaceData}
-									repoSlug={selectedNode.repoSlug}
-									runId={selectedNode.runId}
-									href={selectedNode.href}
-									vitals={selectedVitals}
-									liveLevel={selectedLiveLevel}
-									identity={selectedIdentity}
-								/>
-							{:else if selectedLiveRuns.length > 0}
-								<LiveRuns
-									runs={selectedLiveRuns}
-									stale={liveRunsStale}
-									{now}
-									withheld={liveRunsWithheld}
-								/>
-							{:else if selectedLedgerRows.length > 0}
-								<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
-							{:else}
-								<p class="text-sm text-ink-quiet">
-									no receipt rows for that run in the current window.
-								</p>
-							{/if}
-						{:else}
-							<!-- Multi-run now, nothing unfolded: tapping a card *selects*
-						     it, and this same frame answers with the node panel — the
-						     identical grammar a seam tap speaks. The card's old inline
-						     expansion was a third rendering of the run (2026-07-20:
-						     "3 visual elements for a run"); it survives only in the
-						     fallbacks above, where no node can answer. -->
-							<LiveRuns
-								runs={liveRuns ?? []}
-								stale={liveRunsStale}
-								{now}
-								withheld={liveRunsWithheld}
-								onSelect={(id) => selectFromLoom('run', id)}
-							/>
-						{/if}
-					</div>
-				</div>
-			{:else if liveRunsError}
-				<p class="mt-2 text-sm text-red-400">{liveRunsError}</p>
 			{/if}
 		</section>
 
