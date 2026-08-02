@@ -14,9 +14,15 @@
  * bars and the rack's ETAs run these exact functions, never copies. (The
  * past-window stepper and the shelf-cell click rule died with the shelves:
  * the cloth's fixed 30d window covers every step the stepper offered.)
+ *
+ * THE PICK (2026-08-02, same evening): the band itself is gone too. Its NOW
+ * seam was a third drawing of objects the lane now draws once, so the
+ * three-column instrument and its `LOOM_CENTER_ZONE_PX` center went with it.
+ * What survives here is what always was shared arithmetic — the horizon, the
+ * sqrt bar scale, the due-soon threshold, the past-window label — read by the
+ * cloth, the produce gauge, and `futureShelf.ts` on the lane's behalf.
  */
 export const LOOM_MIN_FUTURE_HORIZON_MS = 6 * 60 * 60 * 1000;
-export const LOOM_CENTER_ZONE_PX = 120;
 export const LOOM_DUE_SOON_MS = 15 * 60 * 1000;
 
 export function loomPastWindowLabel(windowMs: number): string {

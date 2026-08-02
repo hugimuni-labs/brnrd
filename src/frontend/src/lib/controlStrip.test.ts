@@ -6,6 +6,7 @@ import {
 	dialDasharray,
 	fuelRows,
 	quotaWindowCountLabel,
+	railIsSlim,
 	runnerBlocks,
 	slotChip
 } from './controlStrip.ts';
@@ -270,4 +271,33 @@ test('slotChip renders an unpublished ceiling as a question, not a guess', () =>
 	assert.equal(slotChip(2, null).label, '2/? slots');
 	assert.equal(slotChip(2, null).level, null);
 	assert.equal(slotChip(2, 0).label, '2/? slots');
+});
+
+// THE PICKER YOU CANNOT REACH (2026-08-02). The rail's form has two inputs the
+// reader controls and one the page controls, and the bug was that only one of
+// the reader's two counted. These pin the rule that replaced it: scrolling may
+// condense a rail nobody touched; it may never take back a panel the reader
+// opened.
+
+test('at the top of the page the rail is never slim, whatever the reader opened', () => {
+	for (const pinnedOpen of [false, true]) {
+		for (const expanded of [false, true]) {
+			assert.equal(railIsSlim({ condensed: false, pinnedOpen, expanded }), false);
+		}
+	}
+});
+
+test('scrolled past an untouched rail, it condenses to the slim bar', () => {
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: false }), true);
+});
+
+test('an expanded rack survives the scroll verdict — the bug that hid the last spool', () => {
+	// He could not select `claude-fable`: it is the last row of the rack, the
+	// rack is the last block of the rail, and reaching it took the page scroll
+	// that used to unmount the whole panel.
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: true }), false);
+});
+
+test('pinning the slim bar open survives the scroll verdict too', () => {
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: true, expanded: false }), false);
 });
