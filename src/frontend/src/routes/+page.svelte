@@ -889,8 +889,7 @@
 		     block and kinda shadows the name"). Tapping the line unfolds the
 		     lane in place; folding it returns the weaving items to the warp
 		     stack below, where they render lit instead of resting. -->
-		<section class="ignite mt-6" style="--ignite-delay: 250ms" aria-label="the machine">
-			<!-- THE DOCK (his 2026-08-02 magnet steer, in his own correction:
+		<!-- THE DOCK (his 2026-08-02 magnet steer, in his own correction:
 			     "not the collapsed rack + oneline main runner info, as it is
 			     now, but a collapsed fuel + collapsed oneline machine stuck to
 			     it"). Fuel on top, the machine's one line flush beneath it, and
@@ -909,30 +908,39 @@
 			     as it condenses; a pinned constant would either gap or hide the
 			     head behind it, and a head hidden behind the rail reads as the
 			     block having vanished, which is the complaint this answers. -->
-			<div
-				class="sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
-				style={`top: ${machineDockTop(railHeight)}px`}
-			>
-				{#key railCondensed}
-					<div in:glitchReveal={{ duration: 200 }}>
-						<RunBlock
-							burning={burningRows}
-							armed={armedRows}
-							open={machineExpanded}
-							error={liveRunsError}
-							stale={liveRunsStale}
-							onToggle={() => {
-								if (machineExpanded) {
-									machineOpen = false;
-									loomSelection = null;
-								} else {
-									machineOpen = true;
-								}
-							}}
-						/>
-					</div>
-				{/key}
-			</div>
+		<!-- Sticky travels only inside its own parent's box, so this dock is a
+		     direct child of the page column — a sibling of the rail, exactly as
+		     the rail is. Nested one level into the machine's own `<section>` it
+		     stuck for the height of that section and then left with it, which
+		     is precisely the behaviour being fixed and looked identical in a
+		     static screenshot. Driven, not reasoned: the first build shipped
+		     the nested version and the phone shot showed the rail alone. -->
+		<div
+			class="ignite sticky z-30 mt-6 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight)}px`}
+			aria-label="the machine"
+		>
+			{#key railCondensed}
+				<div in:glitchReveal={{ duration: 200 }}>
+					<RunBlock
+						burning={burningRows}
+						armed={armedRows}
+						open={machineExpanded}
+						error={liveRunsError}
+						stale={liveRunsStale}
+						onToggle={() => {
+							if (machineExpanded) {
+								machineOpen = false;
+								loomSelection = null;
+							} else {
+								machineOpen = true;
+							}
+						}}
+					/>
+				</div>
+			{/key}
+		</div>
+		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
 			{#if machineExpanded}
 				<div in:glitchReveal={{ duration: 240 }}>
 					<!-- The lane: armed picks falling toward the seam, the burning ones
