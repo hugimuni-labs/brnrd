@@ -45,6 +45,24 @@
 </script>
 
 {#snippet curatedLine(line: ClothLine, child: boolean)}
+	<!-- The band's bar language at the cloth's zoom: a slim leading duration
+	     bar — width from `loomBarFraction` against the window-wide max (bars
+	     compare across days), color from the shelf's thermal-age stops, bare
+	     runs dimmed the way the shelf dims them. An accent, not a background:
+	     the text line stays the row's voice. Worker rows recede like the
+	     band's nested children — a shorter, thinner, dimmer bar. -->
+	<span
+		class="shrink-0 self-center overflow-hidden rounded-[1px] bg-stone-900/60 {child
+			? 'h-[2px] w-7 opacity-70'
+			: 'h-[3px] w-10'}"
+		aria-hidden="true"
+	>
+		<span
+			class="block h-full rounded-[1px]"
+			class:opacity-40={line.bare}
+			style={`width: ${(line.barFraction * 100).toFixed(2)}%; background-color: ${line.color}`}
+		></span>
+	</span>
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
