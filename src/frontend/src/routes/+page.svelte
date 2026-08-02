@@ -76,6 +76,7 @@
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
+	import { railScrollVerdict } from '$lib/controlStrip';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -310,22 +311,33 @@
 	// nothing while idle, and ignition *reveals* the machine in place instead
 	// of moving sections around the reader.
 
-	// The sticky rail's scroll verdict: once the sentinel above the rail
-	// leaves the viewport, the reader has scrolled and the rail condenses to
-	// its one-line form (ControlStrip `condensed`).
+	// The sticky rail's scroll verdict, with hysteresis (THE BOUNDARY THAT
+	// FLICKERED — the rule and its history live on `railScrollVerdict`).
+	// Condense only once the reader has scrolled past the whole full rail;
+	// un-condense only back near its natural top. A slow touchpad scroll can
+	// sit between the two thresholds for as long as it likes — there is
+	// nothing there to toggle.
 	let railSentinel = $state<HTMLElement | null>(null);
 	let railCondensed = $state(false);
 	$effect(() => {
 		const sentinel = railSentinel;
-		if (!sentinel || typeof IntersectionObserver === 'undefined') return;
-		const observer = new IntersectionObserver(
-			([entry]) => {
-				railCondensed = !entry.isIntersecting;
-			},
-			{ threshold: 0 }
-		);
-		observer.observe(sentinel);
-		return () => observer.disconnect();
+		if (!sentinel || typeof window === 'undefined') return;
+		const read = () => {
+			const railTop = sentinel.getBoundingClientRect().top + window.scrollY;
+			railCondensed = railScrollVerdict({
+				scrollY: window.scrollY,
+				railTop,
+				railFullHeight,
+				condensed: railCondensed
+			});
+		};
+		read();
+		window.addEventListener('scroll', read, { passive: true });
+		window.addEventListener('resize', read, { passive: true });
+		return () => {
+			window.removeEventListener('scroll', read);
+			window.removeEventListener('resize', read);
+		};
 	});
 
 	// The rail's flow footprint stays constant while its painted height changes
@@ -338,8 +350,11 @@
 	//
 	// The spacer below the rail absorbs exactly the difference, so the document
 	// height never changes with the rail's form. It is only ever non-zero while
-	// the rail is condensed — i.e. while the reader is scrolled past it — so the
-	// reserved space is never visible. `railFullHeight` is sampled only in the
+	// the rail is condensed, and the hysteresis above guarantees condensing
+	// happens only once the *whole* full rail has scrolled past — so the
+	// reserved space genuinely never enters the viewport (at the old
+	// single-threshold trigger it inflated while still on screen: a blank band
+	// right where the rail had been). `railFullHeight` is sampled only in the
 	// resting full form: an expanded rack is a panel, not the rail's own height.
 	let railHeight = $state(0);
 	let railFullHeight = $state(0);
@@ -798,7 +813,9 @@
 		<div bind:this={railSentinel} aria-hidden="true"></div>
 		<div
 			bind:clientHeight={railHeight}
-			class="ignite sticky top-0 z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm"
+			class="ignite sticky top-0 z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm {railOpen
+				? 'overscroll-contain'
+				: ''}"
 			style="--ignite-delay: 120ms"
 		>
 			{#if runnersData?.profiles.length === 0 && runnersWithheld}

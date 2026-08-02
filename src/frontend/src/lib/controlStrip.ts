@@ -219,3 +219,43 @@ export function railIsSlim(state: {
 }): boolean {
 	return state.condensed && !state.pinnedOpen && !state.expanded;
 }
+
+/**
+ * The rail's condense verdict, with hysteresis.
+ *
+ * THE BOUNDARY THAT FLICKERED (2026-08-02, his touchpad report: "it glitches
+ * real hard between the collapsed and normal unless I scroll fast enough to
+ * go past the head of the warp"). The old verdict was a single
+ * IntersectionObserver threshold on the sentinel above the rail: one shared
+ * boundary for condensing and un-condensing. A slow touchpad scroll sits *at*
+ * that boundary for many frames, and every 1px of jitter toggled a ~140px
+ * layout change plus a 260ms glitch reveal — the flicker was the trigger's
+ * geometry, not the animation's.
+ *
+ * Second defect, same boundary: the spacer that holds the rail's flow
+ * footprint is documented as "only ever non-zero while off-screen", but at
+ * the old threshold the rail condensed the moment its *top* left the
+ * viewport — inflating the spacer while the freed area was still on screen,
+ * a visible blank band exactly where the rail had been.
+ *
+ * The rule: a form change earns a dead band at least as tall as the form
+ * change itself. Condense only once the reader has scrolled past the whole
+ * full rail (the freed space is then provably off-screen; the sticky slim
+ * bar takes over seamlessly). Un-condense only back near the rail's natural
+ * top, where the full form belongs. Between the two thresholds the verdict
+ * holds its last state — jitter has nothing to toggle.
+ */
+export const RAIL_UNCONDENSE_SLACK_PX = 8;
+export const RAIL_CONDENSE_FLOOR_PX = 48;
+
+export function railScrollVerdict(state: {
+	scrollY: number;
+	railTop: number;
+	railFullHeight: number;
+	condensed: boolean;
+}): boolean {
+	const condenseAt = state.railTop + Math.max(state.railFullHeight, RAIL_CONDENSE_FLOOR_PX);
+	const releaseAt = state.railTop + RAIL_UNCONDENSE_SLACK_PX;
+	if (!state.condensed) return state.scrollY > condenseAt;
+	return state.scrollY >= releaseAt;
+}
