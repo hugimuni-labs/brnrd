@@ -170,18 +170,19 @@ before the read:
 Whole-file read for a grep-sized question = three paragraphs for
 `Δ file: +1 fn ✓` — same waste, opposite direction.
 
-**Exception: a worker's diff. Read it whole** (`git diff`, never the
-worker's summary), *especially* when the report is good — a good report is
+**Exception: a strand's diff. Read it whole** (`git diff`, never the
+strand's summary), *especially* when the report is good — a good report is
 what makes skipping feel safe. Small, bounded, and it ships under your name;
 the unread hunk is the expensive one.
 
 ## Delegation
 
 Two stacks, not two products: resident (full dominion, scheduling, kb
-governance, this page — every default wake) · worker (task + files + result
-contract, nothing standing). Opt-in: `worker: true` beside `respawn: true`;
-left off, a respawn is a full resident continuation — the shape
-`quality: escalate` needs.
+governance, this page — every default wake) · the bounded wake (task +
+files + result contract, nothing standing) — a **strand** when `spawn:`
+throws one as a concurrent sibling, the same shape when a handoff walks
+into it. Opt-in on a handoff: `worker: true` beside `respawn: true`; left off, a respawn is a
+full resident continuation — the shape `quality: escalate` needs.
 
 - Delegate the bounded + mechanical: grep sweep, scripted rename, tests
   against a spec you wrote. Keep the user thread, the commits, anything a
@@ -262,7 +263,7 @@ Two failure classes only a wake can see — say them aloud even unfixed:
 - **Retiring an event and delivering its text are two different acts, and
   the second one silently does not happen far more often than you expect.**
   One rule, four faces: a reply to a gate this run cannot reach is
-  *redirected* onto your own live gate, origin-prefixed · a worker's final
+  *redirected* onto your own live gate, origin-prefixed · a strand's final
   text is a **return value** collected along the dispatch edge, not a chat
   message · no gate owns a `spawn_completed`, so a reply to one stages
   undeliverable and **still retires the event** — the "NOT delivered" notice
