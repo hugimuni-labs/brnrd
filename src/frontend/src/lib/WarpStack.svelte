@@ -12,9 +12,17 @@
 		knownPaths?: Set<string>;
 		/** Tests seed the open layer fold; the page leaves it null (all folded). */
 		initialOpenCallSign?: string | null;
+		/** Tests seed the open item; the page leaves it null (every item
+		 *  reduced or hidden per its layer's fold). */
+		initialOpenItemKey?: string | null;
 	}
 
-	let { layers, knownPaths = new Set<string>(), initialOpenCallSign = null }: Props = $props();
+	let {
+		layers,
+		knownPaths = new Set<string>(),
+		initialOpenCallSign = null,
+		initialOpenItemKey = null
+	}: Props = $props();
 
 	// Heat wears the existing thermal palette — no new hue enters for the
 	// warp (design-work-layers.md: heat extends the loom's thermal grammar
@@ -34,7 +42,8 @@
 	// saying what the fold holds. One open fold, one open item.
 	// svelte-ignore state_referenced_locally
 	let openCallSign = $state<string | null>(initialOpenCallSign);
-	let openItemKey = $state<string | null>(null);
+	// svelte-ignore state_referenced_locally
+	let openItemKey = $state<string | null>(initialOpenItemKey);
 
 	function toggleLayer(callSign: string) {
 		openCallSign = openCallSign === callSign ? null : callSign;
@@ -73,7 +82,7 @@
 	}
 </script>
 
-{#snippet itemRow(layer: WarpLayer, item: AuthoredBackchannelItem)}
+{#snippet itemRow(layer: WarpLayer, item: AuthoredBackchannelItem, layerOpen: boolean)}
 	{@const heat = item.state}
 	{@const heatColor = heat ? HEAT_COLOR[heat] : STATUS_UNKNOWN}
 	{@const itemOpen = openItemKey === item.key}
@@ -108,23 +117,47 @@
 			{/if}
 		</button>
 		{#if item.prompt && heat === 'ember'}
-			<!-- Ignition, inline: an ember is dispatchable *now*, so its mandate
-			     rides the standing row, not an expansion (the play affordance
-			     renders on dispatchable items only, per the design). A banked or
-			     cold item's prompt is context and stays behind its fold. -->
-			<button
-				type="button"
-				class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
-				title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
-				onclick={() => copyPrompt(item.key, ignitionPayload(layer.callSign, item))}
-			>
-				<span class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
-					>{copiedKey === item.key ? 'copied ✓' : 'ignite · copy'}</span
+			{#if itemOpen}
+				<!-- Selected: the full mandate, the bordered block, same as
+				     the standing design — this is the one state that earns
+				     the space (maintainer: "show completely when it's
+				     selected"). -->
+				<button
+					type="button"
+					class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 border border-amber-800/60 bg-amber-950/30 px-2 py-1 text-left hover:border-amber-600/70 hover:bg-amber-950/50"
+					title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
+					onclick={() => copyPrompt(item.key, ignitionPayload(layer.callSign, item))}
 				>
-				<!-- The mandate renders whole — wrapping costs one line and an
-				     ellipsis would cut it mid-clause. -->
-				<span class="min-w-0 flex-1 break-words text-ink-quiet italic">{item.prompt}</span>
-			</button>
+					<span class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200 uppercase"
+						>{copiedKey === item.key ? 'copied ✓' : 'ignite · copy'}</span
+					>
+					<!-- The mandate renders whole — wrapping costs one line and an
+					     ellipsis would cut it mid-clause. -->
+					<span class="min-w-0 flex-1 break-words text-ink-quiet italic">{item.prompt}</span>
+				</button>
+			{:else if layerOpen}
+				<!-- Reduced: the layer is open but this item isn't selected —
+				     the mandate rides the row as a quiet, clamped line, no
+				     border box, so an open layer with several embers doesn't
+				     re-create the same phone-swallowing stack (maintainer:
+				     "reduced when it's collapsed"). Ignition itself stays on
+				     the row — only the mandate text folds. -->
+				<button
+					type="button"
+					class="mt-1 flex w-full max-w-full cursor-pointer items-baseline gap-1.5 px-0.5 text-left hover:text-amber-200"
+					title="Copy this item's dispatch mandate — paste it wherever you message the resident to send it. No auto-dispatch."
+					onclick={() => copyPrompt(item.key, ignitionPayload(layer.callSign, item))}
+				>
+					<span class="shrink-0 font-mono text-[10px] tracking-wide text-amber-200/80 uppercase"
+						>{copiedKey === item.key ? 'copied ✓' : 'ignite · copy'}</span
+					>
+					<span class="line-clamp-2 min-w-0 flex-1 text-ink-quiet italic">{item.prompt}</span>
+				</button>
+			{/if}
+			<!-- Layer folded and item not selected: no mandate at all — just
+			     the headline + heat row above (maintainer: "the contents...
+			     should either be hidden under each item or really
+			     reduced"). -->
 		{/if}
 		{#if itemOpen}
 			<div class="mt-1.5" id={foldId} transition:fade={{ duration: 150 }}>
@@ -240,7 +273,7 @@
 						     count is visible work, not a number behind a click. -->
 						<ul class="mt-1.5 space-y-1">
 							{#each embers as item (item.key)}
-								{@render itemRow(layer, item)}
+								{@render itemRow(layer, item, open)}
 							{/each}
 						</ul>
 					{/if}
@@ -259,7 +292,7 @@
 							{#if held.length > 0}
 								<ul class="space-y-1">
 									{#each held as item (item.key)}
-										{@render itemRow(layer, item)}
+										{@render itemRow(layer, item, open)}
 									{/each}
 								</ul>
 							{:else if !layer.definitionMarkdown}
