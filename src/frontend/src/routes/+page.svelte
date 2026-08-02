@@ -5,11 +5,9 @@
 	import BillingPanel from '$lib/BillingPanel.svelte';
 	import LoomBand from '$lib/LoomBand.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
-	import Limits from '$lib/Limits.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
-	import { quotaWindowCountLabel } from '$lib/controlStrip';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
@@ -60,7 +58,7 @@
 		type RunLedgerRow
 	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
-	import { buildWarpLayers, emberCount } from '$lib/warp';
+	import { buildWarpLayers, emberCount, restingLayers, weavingRows } from '$lib/warp';
 	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
@@ -252,6 +250,15 @@
 	// not a hidden section (the §1 empty-queue precedent).
 	let warpLayers = $derived(surfaceData ? buildWarpLayers(surfaceData.files) : []);
 	let warpEmberCount = $derived(emberCount(warpLayers));
+	// The ignition crossing, render half (#972 machine round): while an
+	// ignited item's `taken:` run is live, the item rides the machine block's
+	// weaving lane and the warp stack rests it — one item space, moved by
+	// tense. Heat counts in the warp header stay authored (they describe the
+	// file), so a header may count one more ember than the stack shows while
+	// it burns.
+	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
+	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
+	let warpStackLayers = $derived(restingLayers(warpLayers, liveRunIds));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
 	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
@@ -685,15 +692,18 @@
 
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<!-- the warp · future (#972: the loom is the page). The standing
+		<!-- the warp · intent (#972: the loom is the page). The standing
 		     intent surface leads at rest; the backchannel is not a sibling
 		     section anymore but this band's needs-you strip — the center
 		     element by construction (his 07-31 read: "it should be one of
 		     the center elements"), a compact count-and-top-asks line above
 		     the stack because a returning reader asks "what does the
 		     resident need from me?" first — answered without ever hiding
-		     the layers. The dispatch rack + fuel close the band as
-		     capacity-to-string-new-threads. -->
+		     the layers. The warp is intent: heat, no clock. Everything with
+		     a clock — dispatch, fuel, scheduled picks, live strands — is the
+		     machine's, one section below (the machine round, 2026-08-02).
+		     The two futures are different axes, not one store; welding them
+		     is `serves:`/`taken:` references, never a merge. -->
 		<section
 			class="ignite mt-4 {loomLive ? 'order-2' : 'order-1'}"
 			style="--ignite-delay: 120ms"
@@ -701,9 +711,9 @@
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the warp · future</p>
+					<p class="eyebrow">the warp · intent</p>
 					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
-						standing intent
+						what is asked
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] text-ink-quiet">
@@ -721,7 +731,7 @@
 			<div class="mt-2">
 				<WarpBand
 					surfaceLoaded={surfaceData !== null}
-					layers={warpLayers}
+					layers={warpStackLayers}
 					knownPaths={surfaceKnownPaths}
 					authoredItems={authoredBackchannelItems}
 					prs={prReviewQueue}
@@ -734,66 +744,31 @@
 					configError={configRequestsError}
 				/>
 			</div>
-
-			<!-- The rack: capacity to string new threads — dispatch + fuel are
-			     warp properties, not a sibling section (#972). -->
-			<div class="mt-6">
-				<div class="flex items-baseline justify-between gap-3">
-					<p class="eyebrow">the rack · next wake + fuel</p>
-					<p class="font-mono text-[10px] text-ink-quiet">
-						{runnersError ?? (shells === null ? 'report loading' : quotaWindowCountLabel(shells))}
-					</p>
-				</div>
-				{#if runnersData?.profiles.length === 0 && runnersWithheld}
-					<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-				{#if shells?.length === 0 && quotaWithheld}
-					<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-				<ControlStrip
-					runners={runnersData}
-					repos={connectedRepos}
-					{shells}
-					{runnersError}
-					{runnersNote}
-					onTap={tapWakeRunner}
-					ledgerRows={runLedgerRows}
-					{scheduledWakes}
-					{now}
-				/>
-				<!-- The future's one object (the dissolution): the scheduled
-				     wakes with their ETA bars, dissolved out of the loom band.
-				     The strip above answers "where does the next wake run";
-				     this shelf answers "what is queued and when it fires". A
-				     tap opens the wake in the shed's detail sheet, exactly as
-				     a band tap did. -->
-				<div class="mt-3">
-					<FutureShelf
-						{scheduledWakes}
-						{now}
-						onSelect={selectFromLoom}
-						selectedId={loomSelection?.id ?? null}
-					/>
-				</div>
-				{#if scheduledWakes?.length === 0 && activityWithheld}
-					<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-			</div>
+			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
+				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
+			{/if}
 		</section>
 
-		<!-- the shed · now (#972): the opening where work is passing — the
-		     band, the run node, the spawn slots. When something burns this
-		     section floats to the top (see loomLive); the warp leads only
-		     at rest. -->
+		<!-- the machine · future → now (#972 machine round: rack + shed fuse).
+		     The machine between intent and cloth, read top to bottom the way
+		     a pick actually flows: the rail where new picks are strung
+		     (dispatch + fuel, spawn slots as a capacity chip), the future
+		     lane of scheduled picks approaching the seam, items crossing
+		     from the warp while their runs burn, and the NOW seam where
+		     live strands run — each unfolding in place into its own node.
+		     When something burns the whole machine floats to the top, rail
+		     and runs together (his 08-02 steer: "the fuel block should be
+		     placed together with the block where we show the runs"); the
+		     warp leads only at rest. -->
 		<section
 			class="ignite mt-8 {loomLive ? 'order-1' : 'order-2'}"
 			style="--ignite-delay: 250ms"
-			aria-labelledby="shed-heading"
+			aria-labelledby="machine-heading"
 		>
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the shed · now</p>
-					<h2 id="shed-heading" class="font-mono text-sm font-semibold text-amber-100">
+					<p class="eyebrow">the machine · future → now</p>
+					<h2 id="machine-heading" class="font-mono text-sm font-semibold text-amber-100">
 						{liveRuns === null
 							? 'reading the run field'
 							: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
@@ -809,127 +784,161 @@
 					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
 				</p>
 			</div>
-			<!-- The dissolution (2026-08-02): the band keeps only the now. Its
-			     past shelf renders as the cloth (with the lens rail), its
-			     future shelf as the rack's FutureShelf — each tense owns
-			     exactly one object. -->
-			<div class="mt-2">
-				<LoomBand {liveRuns} {scheduledWakes} {now} onSelect={selectFromLoom} {daemonMood} />
+
+			<!-- The rail: capacity to string new picks — dispatch, fuel, tank,
+			     slots. One panel; the LIMITS section died into its fuel chip. -->
+			{#if runnersData?.profiles.length === 0 && runnersWithheld}
+				<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
+			{/if}
+			{#if shells?.length === 0 && quotaWithheld}
+				<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
+			{/if}
+			<ControlStrip
+				runners={runnersData}
+				repos={connectedRepos}
+				{shells}
+				{runnersError}
+				{runnersNote}
+				onTap={tapWakeRunner}
+				ledgerRows={runLedgerRows}
+				{scheduledWakes}
+				{now}
+				activeSpawns={liveRuns === null ? null : activeSpawns}
+				maxSpawns={spawnMaxConcurrent}
+			/>
+
+			<!-- The future lane: what is queued and when it fires. The rail
+			     above answers "where does the next wake run"; a tap unfolds
+			     the wake beneath the seam, same grammar as a strand. -->
+			<div class="mt-3">
+				<FutureShelf
+					{scheduledWakes}
+					{now}
+					onSelect={selectFromLoom}
+					selectedId={loomSelection?.id ?? null}
+				/>
 			</div>
-			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
-				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
+			{#if scheduledWakes?.length === 0 && activityWithheld}
+				<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
 
-			<!-- The detail sheet: the band's other half. Everything the dissolved
-	     live-runs / scheduled-wakes / run-receipts sections used to say is
-	     said here, for the selected thread of time only. -->
-			<div class="ignite" style="--ignite-delay: 600ms">
-				<div class="mt-4 flex items-baseline justify-between gap-3">
-					<!-- The label names the panel that actually renders. It used to say
-				     "· receipt" for any closed run, which stopped being true the
-				     moment the node became the single answer. -->
-					<p class="eyebrow">
-						{loomSelection === null
-							? focusRunId === null
-								? 'now'
-								: selectedNode && selectedNodeAnswers
-									? 'now · node'
-									: 'now'
-							: loomSelection.kind === 'wake'
-								? 'selected wake'
-								: selectedNode && selectedNodeAnswers
-									? 'selected run · node'
-									: selectedLiveRuns.length > 0
-										? 'selected run · live'
-										: 'selected run · receipt'}
+			{#if weaving.length > 0}
+				<!-- The ignition crossing, render half: an item whose `taken:`
+				     run is live has left the warp stack and rides here, beside
+				     the seam it crossed. Tap follows it to its run. -->
+				<div class="mt-3" aria-label="items weaving now">
+					<p class="mb-1 font-mono text-[9px] tracking-[0.16em] text-ink-mute uppercase">
+						from the warp · weaving
 					</p>
+					<div class="flex flex-col gap-px">
+						{#each weaving as row (row.callSign + row.item.key)}
+							<button
+								type="button"
+								class="flex w-full cursor-pointer items-baseline gap-1.5 text-left font-mono text-[10px] text-amber-200/90 hover:text-amber-100"
+								onclick={() => selectFromLoom('run', row.liveRunId)}
+							>
+								<span class="shrink-0 text-amber-300/80" aria-hidden="true">↯</span>
+								<span class="min-w-0 flex-1 truncate">{row.item.headline}</span>
+								<span class="shrink-0 text-ink-quiet">{row.callSign}</span>
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<!-- The NOW seam: the band keeps only the now (the dissolution);
+			     the cell of an unfolded strand wears its open state so box and
+			     node read as one object. -->
+			<div class="mt-3">
+				<LoomBand
+					{liveRuns}
+					{scheduledWakes}
+					{now}
+					onSelect={selectFromLoom}
+					{daemonMood}
+					selectedId={loomSelection?.kind === 'wake' ? null : focusRunId}
+				/>
+			</div>
+
+			<!-- The unfold: a selected strand (or the sole live one) expands in
+			     place into its run node; a selected wake into its schedule row.
+			     No sibling section, no second NOW eyebrow — the stem ties the
+			     panel to the seam it dropped from (the machine round:
+			     `NOW · NODE` as a separate section dies). -->
+			{#if loomSelection !== null || focusRunId !== null || (liveRuns?.length ?? 0) > 1}
+				<div class="ignite" style="--ignite-delay: 600ms">
+					<div class="mx-auto h-2 w-px bg-amber-700/60" aria-hidden="true"></div>
 					{#if loomSelection !== null}
-						<div class="flex shrink-0 items-baseline gap-3">
+						<div class="flex justify-end">
 							<button
 								type="button"
 								class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 								onclick={() => (loomSelection = null)}
 							>
-								✕ back to now
+								✕ fold
 							</button>
 						</div>
 					{/if}
-				</div>
-				<div class="mt-2">
-					{#if loomSelection?.kind === 'wake'}
-						{#if scheduledWakesError}
-							<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
-						{/if}
-						{#if selectedWakes.length > 0}
-							<ScheduleLane wakes={selectedWakes} {now} />
-						{:else}
-							<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
-						{/if}
-					{:else if loomSelection?.kind === 'run' || focusRunId !== null}
-						<!-- The loom stays the spine: a selected run fills this frame with
+					<div class="mt-1">
+						{#if loomSelection?.kind === 'wake'}
+							{#if scheduledWakesError}
+								<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
+							{/if}
+							{#if selectedWakes.length > 0}
+								<ScheduleLane wakes={selectedWakes} {now} />
+							{:else}
+								<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
+							{/if}
+						{:else if loomSelection?.kind === 'run' || focusRunId !== null}
+							<!-- The loom stays the spine: a selected run fills this frame with
 				     its own node instead of sending the reader to a page and
 				     costing them their place in the band. One panel, not three —
 				     the node speaks, with the live/receipt vitals folded into its
 				     header and everything heavier behind its own expand. -->
-						{#if selectedNode && selectedNodeAnswers}
-							<RunNodeInline
-								data={surfaceData}
-								repoSlug={selectedNode.repoSlug}
-								runId={selectedNode.runId}
-								href={selectedNode.href}
-								vitals={selectedVitals}
-								liveLevel={selectedLiveLevel}
-								identity={selectedIdentity}
-							/>
-						{:else if selectedLiveRuns.length > 0}
+							{#if selectedNode && selectedNodeAnswers}
+								<RunNodeInline
+									data={surfaceData}
+									repoSlug={selectedNode.repoSlug}
+									runId={selectedNode.runId}
+									href={selectedNode.href}
+									vitals={selectedVitals}
+									liveLevel={selectedLiveLevel}
+									identity={selectedIdentity}
+								/>
+							{:else if selectedLiveRuns.length > 0}
+								<LiveRuns
+									runs={selectedLiveRuns}
+									stale={liveRunsStale}
+									{now}
+									withheld={liveRunsWithheld}
+								/>
+							{:else if selectedLedgerRows.length > 0}
+								<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+							{:else}
+								<p class="text-sm text-ink-quiet">
+									no receipt rows for that run in the current window.
+								</p>
+							{/if}
+						{:else}
+							<!-- Multi-run now, nothing unfolded: tapping a card *selects*
+						     it, and this same frame answers with the node panel — the
+						     identical grammar a seam tap speaks. The card's old inline
+						     expansion was a third rendering of the run (2026-07-20:
+						     "3 visual elements for a run"); it survives only in the
+						     fallbacks above, where no node can answer. -->
 							<LiveRuns
-								runs={selectedLiveRuns}
+								runs={liveRuns ?? []}
 								stale={liveRunsStale}
 								{now}
 								withheld={liveRunsWithheld}
+								onSelect={(id) => selectFromLoom('run', id)}
 							/>
-						{:else if selectedLedgerRows.length > 0}
-							<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
-						{:else}
-							<p class="text-sm text-ink-quiet">
-								no receipt rows for that run in the current window.
-							</p>
 						{/if}
-					{:else if liveRunsError}
-						<p class="text-sm text-red-400">{liveRunsError}</p>
-					{:else if liveRuns === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else}
-						<!-- Multi-run "now": tapping a card *selects* it, and this same
-					     sheet answers with the node panel — the identical grammar a
-					     loom tap speaks. The card's old inline expansion was a third
-					     rendering of the run (2026-07-20: "3 visual elements for a
-					     run"); it survives only in the fallbacks above, where no
-					     node can answer. -->
-						<LiveRuns
-							runs={liveRuns}
-							stale={liveRunsStale}
-							{now}
-							withheld={liveRunsWithheld}
-							onSelect={(id) => selectFromLoom('run', id)}
-						/>
-					{/if}
+					</div>
 				</div>
-			</div>
-
-			<!-- Spawn slots are a shed property: how much more can pass through
-			     the opening right now. The "last 24h" instruments section died
-			     here (his 08-01 call: "should have gone completely") — its
-			     numbers survive as the cloth's selvage below. -->
-			<div class="ignite mt-4" style="--ignite-delay: 1000ms">
-				{#if liveRunsError}
-					<p class="text-sm text-red-400">{liveRunsError}</p>
-				{:else if liveRuns === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
-				{/if}
-			</div>
+			{:else if liveRunsError}
+				<p class="mt-2 text-sm text-red-400">{liveRunsError}</p>
+			{/if}
 		</section>
 
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
