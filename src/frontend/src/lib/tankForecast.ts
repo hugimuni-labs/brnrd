@@ -25,7 +25,7 @@
 // *queued* to draw next. That is priced only for scheduled wakes, and only off
 // `source_system`, which the daemon writes and no run can improvise.
 
-import type { QuotaBurn, QuotaShell, QuotaWindow } from './quota';
+import { quotaWindowReading, type QuotaBurn, type QuotaShell, type QuotaWindow } from './quota.ts';
 import type { RunLedgerRow } from './runLedger';
 import type { ScheduledWake } from './scheduledWakes';
 
@@ -262,7 +262,8 @@ export function readTank(
 		burn?: QuotaBurn | null;
 	} = {}
 ): Tank | null {
-	const percent = window.percent;
+	const reading = quotaWindowReading(window);
+	const percent = reading.percent;
 	if (percent === null || percent === undefined) return null;
 
 	const compact = compactWindowName(window);
@@ -271,7 +272,7 @@ export function readTank(
 	const used = 100 - remaining;
 
 	const duration = WINDOW_DURATION_S[compact.window];
-	const resetsAt = window.resets_at;
+	const resetsAt = reading.resets_at;
 	const secondsLeft = resetsAt === null || resetsAt === undefined ? null : resetsAt - nowMs / 1000;
 
 	let elapsedFraction: number | null = null;

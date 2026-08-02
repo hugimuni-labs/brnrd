@@ -441,6 +441,28 @@ describe('readTank', () => {
 		const tank = readTank(shell([], 'stale'), window({ resets_at: NOW / 1000 }), 0, NOW);
 		assert.equal(tank?.stale, true);
 	});
+
+	it('reads a stale tank from its explicitly separated last-known measurement', () => {
+		const tank = readTank(
+			shell([], 'stale'),
+			window({
+				percent: null,
+				resets_at: null,
+				last_known: {
+					used: null,
+					limit: null,
+					percent: 42,
+					reset: null,
+					resets_at: NOW / 1000 + 2.5 * HOUR
+				}
+			}),
+			0,
+			NOW
+		);
+
+		assert.equal(tank?.remainingPercent, 42);
+		assert.equal(tank?.stale, true);
+	});
 });
 
 describe('readTanks', () => {

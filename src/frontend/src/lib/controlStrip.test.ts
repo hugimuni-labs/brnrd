@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DIAL_WEDGE_RADIUS, dialDasharray, fuelRows, runnerBlocks } from './controlStrip.ts';
+import {
+	DIAL_WEDGE_RADIUS,
+	dialDasharray,
+	fuelRows,
+	quotaWindowCountLabel,
+	runnerBlocks
+} from './controlStrip.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners.ts';
 
@@ -151,6 +157,61 @@ test('fuelRows derives countdown and window-elapsed fraction from resets_at', ()
 	);
 	assert.equal(rows[2].resetShort, null);
 	assert.equal(rows[2].timeFraction, null);
+});
+
+test('stale fuel rows render the last-known value with its scrape time', () => {
+	const asOf = '2026-08-02T05:40:00Z';
+	const rows = fuelRows([
+		{
+			shell: 'codex',
+			status: 'stale',
+			as_of: asOf,
+			windows: [
+				{
+					label: 'weekly',
+					used: null,
+					limit: null,
+					percent: null,
+					reset: null,
+					resets_at: null,
+					last_known: {
+						used: 58,
+						limit: 100,
+						percent: 42,
+						reset: 'resets Sunday',
+						resets_at: 1_786_320_000
+					}
+				}
+			]
+		}
+	]);
+	const expectedTime = new Date(asOf).toLocaleTimeString([], {
+		hour: '2-digit',
+		minute: '2-digit'
+	});
+
+	assert.equal(rows[0].percentLabel, `42% · as of ${expectedTime}`);
+	assert.equal(rows[0].stale, true);
+	assert.notEqual(rows[0].resetShort, null);
+	assert.match(rows[0].tooltip, /42% left · resets Sunday/u);
+});
+
+test('quota window count names the rows in the fuel grid, not their shells', () => {
+	const shells: QuotaShell[] = [
+		{ shell: 'claude', status: 'known', windows: [{ label: '5h' }, { label: 'weekly' }] },
+		{ shell: 'codex', status: 'known', windows: [{ label: 'weekly' }, { label: 'monthly' }] }
+	].map((shell) => ({
+		...shell,
+		windows: shell.windows.map((window) => ({
+			...window,
+			used: null,
+			limit: null,
+			percent: null,
+			reset: null
+		}))
+	}));
+
+	assert.equal(quotaWindowCountLabel(shells), '4 quota windows');
 });
 
 test('fuelRows clamps an already-passed reset to zero, full window', () => {

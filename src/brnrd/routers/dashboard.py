@@ -313,24 +313,31 @@ def _parse_scrape_updated_at(value: Any) -> datetime | None:
         return None
 
 
-def _stale_quota_windows(windows: Any) -> list[dict[str, Any]]:
-    """Keep stale quota rows visible without rendering old percentages as truth."""
+def _stale_quota_windows(windows: Any, *, as_of: Any) -> list[dict[str, Any]]:
+    """Keep stale rows and their explicitly dated last-known measurements."""
     if not isinstance(windows, list):
         return []
     out: list[dict[str, Any]] = []
     for window in windows:
         if not isinstance(window, dict):
             continue
-        out.append(
-            {
-                **window,
-                "used": None,
-                "limit": None,
-                "percent": None,
-                "reset": None,
-                "resets_at": None,
-            }
-        )
+        last_known = {
+            field: window.get(field)
+            for field in ("used", "limit", "percent", "reset", "resets_at")
+        }
+        stale_window = {
+            **window,
+            "used": None,
+            "limit": None,
+            "percent": None,
+            "reset": None,
+            "resets_at": None,
+        }
+        if isinstance(as_of, str) and as_of and any(
+            value is not None for value in last_known.values()
+        ):
+            stale_window["last_known"] = last_known
+        out.append(stale_window)
     return out
 
 
@@ -360,15 +367,20 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 existing = real.get(name)
                 if existing is not None and existing["_reported_at"] >= reported_at:
                     continue
-                scrape_at = _parse_scrape_updated_at(shell.get("updated_at")) or reported_at
+                scrape_updated_at = _parse_scrape_updated_at(shell.get("updated_at"))
+                scrape_at = scrape_updated_at or reported_at
                 stale = (now - scrape_at).total_seconds() > _QUOTA_STALE_SECONDS
+                as_of = shell.get("updated_at") if scrape_updated_at is not None else None
                 real[name] = {
                     "shell": name,
                     "status": "stale" if stale else str(shell.get("status") or "unknown"),
                     "windows": (
-                        _stale_quota_windows(shell.get("windows"))
+                        _stale_quota_windows(
+                            shell.get("windows"), as_of=as_of
+                        )
                         if stale else shell.get("windows") or []
                     ),
+                    **({"as_of": as_of} if stale and as_of is not None else {}),
                     "credits": shell.get("credits"),
                     "reset_credits": shell.get("reset_credits"),
                     "spend": shell.get("spend"),
