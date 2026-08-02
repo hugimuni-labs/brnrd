@@ -264,11 +264,13 @@
 	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
 	// run id → the ones each run lifted, read off the `taken:` rows the weld
 	// already writes. One index, three readers — the warp header's legend, the
-	// pick lane's burning rows, the cloth's lines — so the same columns land at
-	// the same x all the way down the page. That shared geometry is the answer
-	// to "temporal repeating instead of referencing": a run and the intent it
-	// served point at each other through position, and neither re-lists the
-	// other.
+	// pick lane's rows, the cloth's lines — so one alphabet travels the whole
+	// page: same threads, same cells, same width, wherever a strip is drawn.
+	// That shared vocabulary is the answer to "temporal repeating instead of
+	// referencing": a run and the intent it served point at each other through
+	// the strip, and neither re-lists the other. (The strips also share an x
+	// *within* the lane; the cloth's rows wrap, so there they do not — the
+	// alphabet is the claim, not the column.)
 	// The rail's one line about the now. Same `pickRows` the lane draws from —
 	// one computation, two readers, so the bar and the lane can never disagree
 	// about which pick is burning.
@@ -850,7 +852,7 @@
 				<p class="flex items-center gap-2 font-mono text-[10px] text-ink-quiet">
 					<!-- The threads themselves, all lit: this strip is the legend for
 					     every crossing drawn below it, and it is why the columns mean
-					     anything — same order, same width, same x. -->
+					     anything — same order, same width, everywhere. -->
 					<Crossing cells={crossingCells(threads, threads)} label="the warp threads" />
 					{surfaceData === null
 						? 'stringing…'

@@ -1223,7 +1223,15 @@ def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 "status": status,
                 "phase": entry.kind,
                 "scheduled_for": _iso_from_epoch(scheduled_for),
-                "links": {},
+                # THE FORWARD WELD: the warp threads this entry's firings are
+                # meant to serve, so the dashboard's lane can draw an armed
+                # pick's crossing the same way it draws a burning one's. Rides
+                # `links` — already free-form JSON on the activity record and
+                # already served back — so this needs no schema, no migration,
+                # and no new endpoint. Call signs only (`schedule.parse_serves`
+                # drops anything else), which are already public as corpus; the
+                # entry's body stays behind, per #502.
+                "links": {"serves": list(entry.serves)} if entry.serves else {},
             }
         )
     return records

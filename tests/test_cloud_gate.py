@@ -3064,3 +3064,57 @@ def test_publish_live_runs_says_what_the_server_dropped(capsys):
     # An older API that does not send these fields yet is not an error.
     cloud._report_live_runs_losses({})
     assert capsys.readouterr().out == ""
+
+
+def test_schedule_activity_publishes_serves_as_links_never_the_body(tmp_path, monkeypatch):
+    """The forward weld reaches the dashboard on `links`, and only the threads do.
+
+    `links` is already free-form JSON on the activity record and already served
+    back by `/v1/dashboard/activity`, so the weld needs no schema, no migration
+    and no new endpoint. #502's rule holds in the same breath: the entry's body
+    is dominion content and must not transit the managed backend.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr_dir = repo / ".brr"
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    (dom / "schedule.md").write_text(
+        "## Loom upkeep\nevery: 100s\nserves: the-loom, the-post#the-graveyard\n"
+        "a private thought nobody outside this machine may read\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cloud.dominion,
+        "resident_dominion_candidates",
+        lambda *_args, **_kwargs: [type("Candidate", (), {"path": dom})()],
+    )
+
+    record = cloud._schedule_activity_records(brr_dir)[0]
+
+    assert record["links"] == {"serves": ["the-loom", "the-post"]}
+    assert "private thought" not in json.dumps(record)
+
+
+def test_schedule_activity_omits_links_when_nothing_is_served(tmp_path, monkeypatch):
+    """An entry that never stated `serves:` publishes no claim about threads.
+
+    An empty list and an absent key would render identically in the lane today,
+    but they are different facts — "this tick serves nothing" versus "this tick
+    has never said" — and the one the wire can support is the second.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    brr_dir = repo / ".brr"
+    dom = tmp_path / "dominion"
+    dom.mkdir()
+    (dom / "schedule.md").write_text("## Bare tick\nevery: 100s\ngo\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cloud.dominion,
+        "resident_dominion_candidates",
+        lambda *_args, **_kwargs: [type("Candidate", (), {"path": dom})()],
+    )
+
+    record = cloud._schedule_activity_records(brr_dir)[0]
+
+    assert record["links"] == {}

@@ -45,10 +45,10 @@
 		 *  falls back to a plain run-page link. */
 		surface?: SurfaceResponse | null;
 		/** THE CROSSING (`crossing.ts`): the warp threads in authored order, and
-		 *  run id → the ones each run lifted. Drawn at the same column positions
-		 *  the pick lane uses, so a burning pick and the cloth line it becomes
-		 *  carry the same strip — the reference drawn, instead of the fact
-		 *  repeated in a second list. */
+		 *  run id → the ones each run lifted. Same alphabet the pick lane draws —
+		 *  same threads, same cells, same width — so a burning pick and the cloth
+		 *  line it becomes carry legibly the same strip. Not the same *x*: this
+		 *  row wraps, so the strip sits where the row's own content puts it. */
 		threads?: string[];
 		crossingIndex?: Map<string, string[]>;
 	}

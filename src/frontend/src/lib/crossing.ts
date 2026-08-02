@@ -14,14 +14,23 @@
  * onto warp items at ignition (THE WELD, #972), and it keeps the run id after
  * the run finishes. So one index over the authored layers answers, for any run
  * in any tense, which threads it crossed. Rendered as a fixed strip of ticks in
- * the warp's own layer order, the same column positions appear on the pick that
- * is burning and on the cloth line it becomes — the reference drawn instead of
- * the fact repeated.
+ * the warp's own layer order, one *alphabet* travels between every surface that
+ * draws it: same threads, same order, same width, so a strip on a burning pick
+ * and a strip on the cloth line it becomes are legibly the same statement about
+ * the same object — the reference drawn instead of the fact repeated.
  *
- * What it deliberately cannot draw: an *armed* pick's crossing. `serves:` (a
- * schedule entry naming the warp items it will lift) does not exist daemon-side
- * yet, so a scheduled wake has nothing honest to say about which threads it is
- * coming for, and it renders blank rather than guessing.
+ * The alphabet is the claim, not the x. Inside the pick lane the strips do also
+ * land at the same offset (the rows share a lead slot and a padding box), and
+ * that is worth having. Across the cloth they cannot: those rows wrap, so their
+ * strip sits where the row's own content puts it. Making it otherwise would take
+ * a grid shared by three components, which is a much larger change than the one
+ * this buys.
+ *
+ * An *armed* pick's crossing arrives by the other door: `schedule.md`'s
+ * `serves:` row, published on the activity record's `links` (THE FORWARD WELD).
+ * `taken:` is written at ignition and so can only describe a run that already
+ * started, which is why the future tense needed its own sentence. A run the warp
+ * never welded still draws nothing at all — see `crossingCells`.
  *
  * Value imports carry `.ts` extensions because the tests run under node's own
  * runner with no bundler in the loop.
