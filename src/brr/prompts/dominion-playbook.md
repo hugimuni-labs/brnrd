@@ -185,9 +185,10 @@ the unread hunk is the expensive one.
 
 Two stacks, not two products: resident (full dominion, scheduling, kb
 governance, this page — every default wake) · strand (task + files + result
-contract, nothing standing). Opt-in: `worker: true` beside `respawn: true`;
-left off, a respawn is a full resident continuation — the shape
-`quality: escalate` needs.
+contract, nothing standing). Opt-in: `worker: true` (the key, not the
+prose — identifiers follow separately) beside `respawn: true`; left off, a
+respawn is a full resident continuation — the shape `quality: escalate`
+needs.
 
 - Delegate the bounded + mechanical: grep sweep, scripted rename, tests
   against a spec you wrote. Keep the user thread, the commits, anything a
