@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+// The dissolution (2026-08-02): the band keeps only the NOW seam, but the
+// grammar tested here stays shared — the cloth runs the past stops and the
+// nesting, the rack's future shelf runs the horizon and the future stops,
+// and both run the bar fraction. (`loomCellClickSelects` died with the past
+// shelf: the cloth's rows are plain anchors that always navigate.)
 import {
 	LOOM_MIN_FUTURE_HORIZON_MS,
 	loomBarFraction,
-	loomCellClickSelects,
 	loomFutureHorizon,
 	loomFutureStop,
 	loomPastStop,
@@ -55,28 +59,6 @@ test('thermal positions step rather than interpolate', () => {
 	assert.equal(loomFutureStop(5 * 60 * 1000, LOOM_MIN_FUTURE_HORIZON_MS), 'amber');
 	assert.equal(loomFutureStop(2 * 60 * 60 * 1000, LOOM_MIN_FUTURE_HORIZON_MS), 'frost');
 	assert.equal(loomFutureStop(5 * 60 * 60 * 1000, LOOM_MIN_FUTURE_HORIZON_MS), 'frost-deep');
-});
-
-// The #478/#482 collision: a shelf cell is a real anchor *and* the loom is the
-// spine. Only the unmodified primary click may be intercepted — every gesture a
-// reader uses to mean "open this elsewhere" has to survive untouched, or the
-// fix trades one broken affordance for another.
-test('a plain left click selects; every modified click still follows the link', () => {
-	assert.equal(loomCellClickSelects({ button: 0 }), true);
-	assert.equal(loomCellClickSelects({}), true, 'a bare synthetic click is primary');
-
-	assert.equal(loomCellClickSelects({ button: 1 }), false, 'middle-click opens a tab');
-	assert.equal(loomCellClickSelects({ button: 2 }), false, 'right-click opens the menu');
-	assert.equal(loomCellClickSelects({ button: 0, metaKey: true }), false);
-	assert.equal(loomCellClickSelects({ button: 0, ctrlKey: true }), false);
-	assert.equal(loomCellClickSelects({ button: 0, shiftKey: true }), false);
-	assert.equal(loomCellClickSelects({ button: 0, altKey: true }), false, 'alt-click downloads');
-
-	assert.equal(
-		loomCellClickSelects({ button: 0, defaultPrevented: true }),
-		false,
-		'something upstream already handled it'
-	);
 });
 
 // #539: a spawned child's shelf row follows the row of the run that
