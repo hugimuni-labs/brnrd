@@ -3493,6 +3493,111 @@ def record_boundary(
     return path
 
 
+# ── Boundary summary (the run node's `boundaries.json`) ──────────────────
+#
+# `boundaries.jsonl` is complete but linear: reading it for one fact (did the
+# closeout guard ever fire? did the run end over a live block?) means
+# scrolling a whole run's transcript. The wake's "## Your last run" block
+# (`prompts._build_prior_run_block`) projects the previous run's node — its
+# frame, its `## Now`, its section shape — and until now that projection
+# dropped the one field that says whether the closeout guard AGREED with the
+# reply it is showing: a run that ended on a false "continuing" claim (the
+# guard fired, and the run ended anyway) reads identical to a clean close.
+# This is the derivation half — pure and read-only over the transcript
+# `record_boundary` already wrote, no schema change to it. The write half
+# (deciding *where* the summary lands) is `daemon._persist_boundaries_summary`;
+# the render half (turning it into the wake's one `guard:` line) is
+# `prompts._guard_line`.
+
+#: Sibling of `BOUNDARIES_NAME`, same run-node directory.
+BOUNDARIES_SUMMARY_NAME = "boundaries.json"
+
+
+def derive_boundaries_summary(path: Path) -> dict[str, Any] | None:
+    """Summarise *path* (a run's `boundaries.jsonl`) into a small flat dict.
+
+    ``None`` — never a zero-valued summary — whenever the transcript cannot
+    be trusted: absent, unreadable, or every line in it failed to parse.
+    That is deliberate and pessimistic: a missing `boundaries.json` must stay
+    distinguishable from one honestly reporting "nothing happened", and the
+    only way to keep that true is to never emit the latter from data this
+    thin. In practice a real transcript always carries at least the
+    unconditional `session-start` record, so an all-malformed file is
+    corruption, not an ordinary empty run.
+
+    Malformed individual lines — a line torn by a crash mid-write, a
+    dict missing the `phase` field — are skipped and counted, not fatal:
+    `record_boundary`'s own append is best-effort, so its reader tolerates
+    exactly the damage the writer already tolerates in itself.
+
+    The "guard fire" this counts is the only signal the transcript can prove:
+    a `phase: stop` record with `block: true`. `compute_neutral` has two
+    sources for that bit at Stop — the pending-event fold-in and
+    `_armed_closeout_block` — and `record_boundary` does not carry which one
+    fired, only the outcome. Rather than guess from `block_reason`'s prose
+    (an assertion-on-a-proxy this codebase specifically avoids elsewhere),
+    this counts every Stop block as a guard verdict: the defect this feature
+    answers is "did the run end over a live objection", not "which clause
+    raised it", and that question the bare `block` bit already answers
+    honestly. The final stop's own verdict — the fact the accepted defect is
+    about — is the last `phase: stop` record in file order, blocked or not.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    total = 0
+    skipped = 0
+    stops = 0
+    guard_fires: list[dict[str, Any]] = []
+    final_stop: dict[str, Any] | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("phase"), str):
+            skipped += 1
+            continue
+        total += 1
+        at = record.get("at")
+        at = at if isinstance(at, str) else None
+        block = bool(record.get("block"))
+        if record["phase"] != PHASE_STOP:
+            continue
+        stops += 1
+        block_reason = record.get("block_reason")
+        final_stop = {
+            "at": at,
+            "block": block,
+            "block_reason": block_reason if isinstance(block_reason, str) else None,
+        }
+        if block:
+            guard_fires.append({"at": at, "blocked": True})
+
+    if total == 0:
+        return None
+
+    return {
+        "total": total,
+        "skipped": skipped,
+        "stops": stops,
+        "guard_fire_count": len(guard_fires),
+        "guard_fires": guard_fires,
+        "final_stop_at": final_stop["at"] if final_stop else None,
+        "final_stop_block": final_stop["block"] if final_stop else False,
+        "final_stop_block_reason": (
+            final_stop["block_reason"] if final_stop else None
+        ),
+    }
+
+
 def _safe_json(text: str) -> dict[str, Any]:
     if not text or not text.strip():
         return {}
