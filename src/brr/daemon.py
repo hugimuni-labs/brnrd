@@ -5795,7 +5795,19 @@ _MAX_NOTICES = 12
 # the canonical example). ``_notices_chip``/the seed-stop briefing count only
 # the first two toward ``!N`` — an advisory must stay readable but never
 # swells that count back into meaninglessness.
-_NOTICE_KINDS = frozenset({"refused", "dropped", "advisory"})
+# ``redirected`` is the fourth word, added in parent review of #1002: brnrd
+# did the thing, *but not as addressed*. Three kinds could say "it did not
+# happen" and "it happened, FYI", and could not say "it happened to someone
+# else" — so the cross-gate reply redirect was filed as an advisory and
+# stopped driving ``!N``. That is the one case the resident contract tells a
+# run to check ``notices`` for: *did my addressed reply reach who I
+# addressed?* Here, provably, it did not.
+#
+# Nothing on the counting side changed to accommodate it. ``hooks.
+# _counted_notices`` excludes only ``advisory``, so a new kind counts by
+# construction — a small proof the filter was written against the structural
+# property ("is this FYI") rather than against a list of members.
+_NOTICE_KINDS = frozenset({"refused", "dropped", "advisory", "redirected"})
 
 
 def _record_outbox_notice(outbox_dir: Path | None, text: str, *, kind: str) -> None:
@@ -6816,9 +6828,14 @@ def _drain_outbox(
                 f"reply redirected: event {target} is owned by gate "
                 f"{target_source!r}, not reachable from this run — delivered "
                 "on this run's own gate instead, prefixed with its origin",
-                # Delivered — just not where it was originally addressed.
-                # Nothing refused or dropped.
-                kind="advisory",
+                # Delivered, and *not where it was addressed*. Content ✓,
+                # lifecycle ✓, addressing ✗ — and addressing is the one of
+                # the three the resident is told to check `notices` for. A
+                # run that believes its answer reached the asker, when it
+                # reached a different lane, has an unanswered correspondent
+                # and possibly a reader who should not have had the text.
+                # Counts, therefore, and says which failed.
+                kind="redirected",
             )
             summary = _short_event_summary(target_event)
             origin_note = (
