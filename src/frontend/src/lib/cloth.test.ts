@@ -13,6 +13,7 @@ import {
 	weaveCloth
 } from './cloth.ts';
 import { loomBarFraction, loomPastStop } from './loomBand.ts';
+import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
 import type { RunLedgerRow } from './runLedger.ts';
 
@@ -504,6 +505,166 @@ test("bars: thermal color is the shelf's own age stop — shared, not copied", (
 	assert.equal(fresh.color, THERMAL_STOPS.amber);
 	assert.equal(cooling.color, THERMAL_STOPS['ember-ash']);
 	assert.equal(old.color, THERMAL_STOPS.ash);
+});
+
+// The lens rail moved from the band to the cloth (the dissolution,
+// 2026-08-02): chips lens the past inventory, so they filter what the cloth
+// weaves — trees, day rules, folds all recompute on the lensed set — while
+// the selvage stays the hem of the whole window, never of a lens. These
+// tests pin that composition (`applyLens` → `weaveCloth`), the exact wiring
+// `Cloth.svelte` runs.
+
+test('lens: an origin chip filters the woven trees', () => {
+	const rows = [
+		row({ run_id: 'a', name: 'spawned a', source_system: 'spawn', ended_at: endedAgo(HOUR) }),
+		row({
+			run_id: 'b',
+			name: 'scheduled b',
+			source_system: 'schedule',
+			ended_at: endedAgo(2 * HOUR)
+		}),
+		row({ run_id: 'c', name: 'spawned c', source_system: 'spawn', ended_at: endedAgo(3 * HOUR) })
+	];
+	const lenses = availableLenses(rows);
+	assert.deepEqual(
+		lenses.map((lens) => [lens.id, lens.count]),
+		[
+			['all', 3],
+			['origin:spawn', 2],
+			['origin:schedule', 1],
+			['shape:bare', 3]
+		],
+		'the vocabulary is read off the rows the cloth holds'
+	);
+	const weave = weaveCloth(applyLens(rows, 'origin:spawn'), NOW, CLOTH_WINDOW_MS);
+	assert.deepEqual(
+		weave.trees.map((tree) => tree.root.id),
+		['a', 'c'],
+		'only the lensed runs weave'
+	);
+});
+
+test('lens: day rules and their counts recompute on the lensed set', () => {
+	const rows = [
+		row({
+			run_id: 'today-spawn',
+			name: 'today spawn',
+			source_system: 'spawn',
+			ended_at: localIso(2026, 7, 1, 11, 0)
+		}),
+		row({
+			run_id: 'today-sched',
+			name: 'today sched',
+			source_system: 'schedule',
+			ended_at: localIso(2026, 7, 1, 9, 0)
+		}),
+		row({
+			run_id: 'yesterday-sched',
+			name: 'yesterday sched',
+			source_system: 'schedule',
+			ended_at: localIso(2026, 6, 31, 22, 0)
+		})
+	];
+	const allDays = groupClothDays(weaveCloth(rows, LOCAL_NOW, CLOTH_WINDOW_MS).trees);
+	assert.deepEqual(
+		allDays.map((day) => day.runCount),
+		[2, 1]
+	);
+	const lensedDays = groupClothDays(
+		weaveCloth(applyLens(rows, 'origin:schedule'), LOCAL_NOW, CLOTH_WINDOW_MS).trees
+	);
+	assert.deepEqual(
+		lensedDays.map((day) => [day.dayLabel, day.runCount]),
+		[
+			['aug 1', 1],
+			['jul 31', 1]
+		],
+		'the aug 1 rule counts only what the lens lets through'
+	);
+});
+
+test('lens: the selvage hems the whole window, never the lensed slice', () => {
+	const rows = [
+		row({
+			run_id: 'a',
+			source_system: 'spawn',
+			wall_clock_seconds: 100,
+			ended_at: endedAgo(HOUR),
+			external_refs: [{ kind: 'pr', number: 7 }]
+		}),
+		row({
+			run_id: 'b',
+			source_system: 'schedule',
+			wall_clock_seconds: 50,
+			ended_at: endedAgo(2 * HOUR),
+			external_refs: [{ kind: 'commit', sha: 'abc' }]
+		})
+	];
+	const weave = weaveCloth(applyLens(rows, 'origin:spawn'), NOW, CLOTH_WINDOW_MS);
+	assert.equal(weave.trees.length, 1, 'the weave is the lensed view');
+	// The component computes the selvage from the un-lensed rows — the same
+	// call regardless of which chip is lit.
+	const summary = clothSelvage(rows, NOW, CLOTH_WINDOW_MS);
+	assert.equal(summary.runCount, 2);
+	assert.equal(summary.wallClockSeconds, 150);
+	assert.equal(summary.prs, 1);
+	assert.equal(summary.commits, 1);
+});
+
+test('lens: a stale selection reconciles to all rather than lying about the weave', () => {
+	const rows = [row({ run_id: 'a', source_system: 'spawn', ended_at: endedAgo(HOUR) })];
+	const lenses = availableLenses(rows);
+	assert.equal(reconcileLens('origin:github', lenses), LENS_ALL, 'a vanished chip falls back');
+	assert.equal(reconcileLens('origin:spawn', lenses), 'origin:spawn', 'a live chip holds');
+});
+
+// The lens that can strand rows. `stack:worker` keeps only sub-spawns, so
+// every surviving row's parent is *gone* from the set — and `weaveCloth`
+// drops any `depth: 1` run it meets before a root (`trees.length > 0`).
+// A chip that counts N and weaves 0 would be the cloth lying with a number
+// beside it. `nestShelfChildren` is what prevents that: a child whose
+// parent is not in the set renders as a root. Pinned because the guard is
+// three files away from the lens that needs it — neuter the `&& parent`
+// clause there and this is the test that goes red.
+test('lens: strands weave as roots once the lens removes their parents', () => {
+	const rows = [
+		row({ run_id: 'parent', source_system: 'cloud', ended_at: endedAgo(3 * HOUR) }),
+		row({
+			run_id: 'child-a',
+			source_system: 'spawn',
+			is_subspawn: true,
+			parent_run_id: 'parent',
+			ended_at: endedAgo(2 * HOUR)
+		}),
+		row({
+			run_id: 'child-b',
+			source_system: 'spawn',
+			is_subspawn: true,
+			parent_run_id: 'parent',
+			ended_at: endedAgo(HOUR)
+		})
+	];
+	const strands = availableLenses(rows).find((lens) => lens.id === 'stack:worker');
+	assert.equal(strands?.count, 2, 'the chip counts both strands');
+
+	const unlensed = weaveCloth(rows, NOW, CLOTH_WINDOW_MS);
+	assert.deepEqual(
+		unlensed.trees.map((tree) => [tree.root.id, tree.children.map((child) => child.id)]),
+		[['parent', ['child-b', 'child-a']]],
+		'unlensed, the strands hang under the run that dispatched them'
+	);
+
+	const weave = weaveCloth(applyLens(rows, 'stack:worker'), NOW, CLOTH_WINDOW_MS);
+	assert.deepEqual(
+		weave.trees.map((tree) => tree.root.id),
+		['child-b', 'child-a'],
+		'lensed, each strand stands on its own rather than vanishing with its parent'
+	);
+	assert.equal(
+		weave.trees.length,
+		strands?.count,
+		'the weave holds exactly what the chip promised'
+	);
 });
 
 test('produce chips and age labels speak the loom grammar', () => {

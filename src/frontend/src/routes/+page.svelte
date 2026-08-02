@@ -58,8 +58,7 @@
 	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
-	import { LOOM_PAST_WINDOW_MS } from '$lib/loomBand';
-	import { LENS_ALL } from '$lib/loomLens';
+	import FutureShelf from '$lib/FutureShelf.svelte';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
@@ -216,7 +215,6 @@
 	let runLedgerWithheld = $state<WithheldLane | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
-	let loomPastWindowMs = $state(LOOM_PAST_WINDOW_MS);
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
@@ -268,48 +266,36 @@
 	// reading order answers the state.
 	let loomLive = $derived((liveRuns?.length ?? 0) > 0);
 
-	// Promote composition (2026-07-16, "A - promote: lets do it"): the loom
-	// band is the page's temporal spine and the only renderer of past/now/
-	// future. The old live-runs / scheduled-wakes / run-receipts *sections*
-	// dissolved into this one selection-driven detail sheet: the band
-	// reports a selection, the sheet answers with the full existing
-	// component (LiveRuns card, receipt rows, schedule row) for just that
-	// selection. No selection = the "now" default, all live runs.
+	// Promote composition (2026-07-16, "A - promote: lets do it"), amended
+	// by the dissolution (2026-08-02): the page's tenses are the spine now —
+	// cloth (past), band (now), rack's future shelf (future) — and this one
+	// selection-driven detail sheet still answers for all of them: the band
+	// or the shelf reports a selection, the sheet answers with the full
+	// existing component (node panel, LiveRuns card, receipt rows, schedule
+	// row) for just that selection. No selection = the "now" default, all
+	// live runs.
 	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
 	let loomSelection = $state<LoomSelection>(null);
 
-	// The lens (wyrd §4 band 2). Page-owned for the same reason selection is:
-	// the band reports a choice, the frame below answers it. This is also where
-	// `/activity` and the standing §2d PR-review section went — see the lens
-	// rail comment in `LoomBand.svelte`.
-	let loomLens = $state<string>(LENS_ALL);
-
-	function changeLoomLens(next: string) {
-		loomLens = next;
-		// A lens is a change of question, so a selection made under the old one
-		// is stale. Clearing it also keeps the review lens from opening onto a
-		// run node that has nothing to do with the queue it just asked for.
-		loomSelection = null;
-	}
+	// The lens (wyrd §4 band 2) lived here as page state while the band wore
+	// the chips. The dissolution moved the rail into the cloth — the chips
+	// lens the past inventory, and the cloth is the past's one object — and
+	// the lens became the cloth's own view state, like a fold: nothing
+	// outside the cloth ever answered to it once the shelf was gone.
 
 	function selectFromLoom(kind: 'run' | 'wake', id: string) {
 		loomSelection =
 			loomSelection && loomSelection.kind === kind && loomSelection.id === id ? null : { kind, id };
 	}
 
-	function changeLoomPastWindow(windowMs: number) {
-		loomPastWindowMs = windowMs;
-		void refreshRunLedger();
-	}
-
 	async function refreshRunLedger() {
 		try {
-			// One feed, three readers: the loom band's past bars, the shed's
-			// receipt fallback, and the cloth. The span covers the cloth's 30d
-			// window; the row limit still bounds the payload on the 2s poll, so
-			// the cloth reads its rows as "latest N", not "all of 30d".
-			const spanMs = Math.max(loomPastWindowMs, CLOTH_WINDOW_MS);
-			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, spanMs);
+			// One feed, two readers: the shed's receipt fallback and the cloth
+			// (the band's past shelf dissolved into the latter). The span is the
+			// cloth's 30d window; the row limit still bounds the payload on the
+			// 2s poll, so the cloth reads its rows as "latest N", not "all of
+			// 30d".
+			const receipts = await fetchRunLedger(fetch, PRODUCE_GAUGE_LEDGER_LIMIT, CLOTH_WINDOW_MS);
 			runLedgerRows = receipts.rows;
 			runLedgerWithheld = receipts.withheld ?? null;
 			runLedgerStale = receipts.stale;
@@ -654,12 +640,12 @@
 				<div class="flex items-center gap-4">
 					<!-- /activity retired 2026-07-19. Its honest content — open runs,
 				     queued wakes, parked respawns — is the loom's NOW seam and
-				     future shelf, and its one real affordance over them (filter
-				     and scroll back through history) is the lens rail plus the
-				     past-window stepper. It survived this long as a page mostly
-				     because it was reporting 279 phantom running runs; once #486
-				     reaped those it rendered about three rows. Folded, not
-				     re-fitted. -->
+				     the rack's future shelf, and its one real affordance over
+				     them (filter and scroll back through history) is the
+				     cloth's lens rail over its 30d window. It survived this
+				     long as a page mostly because it was reporting 279 phantom
+				     running runs; once #486 reaped those it rendered about
+				     three rows. Folded, not re-fitted. -->
 					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 					<a
@@ -769,6 +755,23 @@
 					{scheduledWakes}
 					{now}
 				/>
+				<!-- The future's one object (the dissolution): the scheduled
+				     wakes with their ETA bars, dissolved out of the loom band.
+				     The strip above answers "where does the next wake run";
+				     this shelf answers "what is queued and when it fires". A
+				     tap opens the wake in the shed's detail sheet, exactly as
+				     a band tap did. -->
+				<div class="mt-3">
+					<FutureShelf
+						{scheduledWakes}
+						{now}
+						onSelect={selectFromLoom}
+						selectedId={loomSelection?.id ?? null}
+					/>
+				</div>
+				{#if scheduledWakes?.length === 0 && activityWithheld}
+					<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
+				{/if}
 			</div>
 		</section>
 
@@ -800,23 +803,13 @@
 					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
 				</p>
 			</div>
+			<!-- The dissolution (2026-08-02): the band keeps only the now. Its
+			     past shelf renders as the cloth (with the lens rail), its
+			     future shelf as the rack's FutureShelf — each tense owns
+			     exactly one object. -->
 			<div class="mt-2">
-				<LoomBand
-					ledgerRows={runLedgerRows}
-					{liveRuns}
-					{scheduledWakes}
-					{now}
-					onSelect={selectFromLoom}
-					onPastWindowChange={changeLoomPastWindow}
-					selectedId={loomSelection?.id ?? null}
-					lens={loomLens}
-					onLensChange={changeLoomLens}
-					{daemonMood}
-				/>
+				<LoomBand {liveRuns} {scheduledWakes} {now} onSelect={selectFromLoom} {daemonMood} />
 			</div>
-			{#if scheduledWakes?.length === 0 && activityWithheld}
-				<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
-			{/if}
 			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
 				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
