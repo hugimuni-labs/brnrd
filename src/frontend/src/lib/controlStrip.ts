@@ -1,4 +1,4 @@
-import type { QuotaShell, QuotaWindow } from './quota';
+import { quotaWindowReading, type QuotaShell, type QuotaWindow } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners';
 
 export type RunnerBlockKind = 'requested' | 'default';
@@ -40,6 +40,11 @@ const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
 export function dialDasharray(fraction: number): string {
 	const clamped = Math.max(0, Math.min(1, fraction));
 	return `${(clamped * DIAL_CIRCUMFERENCE).toFixed(3)} ${DIAL_CIRCUMFERENCE.toFixed(3)}`;
+}
+
+export function quotaWindowCountLabel(shells: QuotaShell[]): string {
+	const count = shells.reduce((total, shell) => total + shell.windows.length, 0);
+	return `${count} quota window${count === 1 ? '' : 's'}`;
 }
 
 function shortDelta(seconds: number): string {
@@ -96,7 +101,7 @@ function compactWindowName(window: QuotaWindow): { owner: string | null; window:
 	};
 }
 
-function resetLabel(window: QuotaWindow): string | null {
+function resetLabel(window: QuotaWindow | ReturnType<typeof quotaWindowReading>): string | null {
 	if (window.reset) return window.reset;
 	if (window.resets_at === null || window.resets_at === undefined) return null;
 	return `resets ${new Date(window.resets_at * 1000).toISOString()}`;
@@ -111,24 +116,30 @@ function resetLabel(window: QuotaWindow): string | null {
 export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): FuelRow[] {
 	return shells.flatMap((shell) =>
 		shell.windows.map((window, index) => {
+			const reading = quotaWindowReading(window);
 			const compact = compactWindowName(window);
 			const owner = compact.owner ?? shell.shell.toLowerCase();
 			const percent =
-				window.percent === null || window.percent === undefined
+				reading.percent === null || reading.percent === undefined
 					? null
-					: Math.max(0, Math.min(100, window.percent));
-			const percentLabel = percent === null ? '?' : `${Math.round(percent)}%`;
+					: Math.max(0, Math.min(100, reading.percent));
+			const asOf =
+				percent !== null && shell.status === 'stale' && shell.as_of
+					? new Date(shell.as_of).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+					: null;
+			const percentLabel =
+				percent === null ? '?' : `${Math.round(percent)}%${asOf ? ` · as of ${asOf}` : ''}`;
 			const label = `${owner} · ${compact.window}`;
-			const reset = resetLabel(window);
+			const reset = resetLabel(reading);
 
 			// Reset visibility (2026-07-18 ask): the fuel bar answers "how
 			// much is left", the countdown + time track answer "how long
 			// until it refills". Both derive from `resets_at`; a report
 			// without it (older daemon) keeps the bar and drops the clock.
 			const secondsLeft =
-				window.resets_at === null || window.resets_at === undefined
+				reading.resets_at === null || reading.resets_at === undefined
 					? null
-					: window.resets_at - nowMs / 1000;
+					: reading.resets_at - nowMs / 1000;
 			const resetShort = secondsLeft === null ? null : shortDelta(secondsLeft);
 			const duration = WINDOW_DURATION_S[compact.window];
 			const timeFraction =
