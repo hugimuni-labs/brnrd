@@ -8,11 +8,18 @@ test('fetchRunLedger sends the selected shelf span to the existing endpoint', as
 	const fakeFetch = (async (input: RequestInfo | URL) => {
 		requested = String(input);
 		return new Response(
-			JSON.stringify({ generated_at: '', rows: [], stale: false, reported_at: null })
+			JSON.stringify({
+				generated_at: '',
+				rows: [],
+				stale: false,
+				reported_at: null,
+				span_seconds_served: 259200
+			})
 		);
 	}) as typeof fetch;
 
-	await fetchRunLedger(fakeFetch, 256, 3 * 24 * 60 * 60 * 1000);
+	const response = await fetchRunLedger(fakeFetch, 256, 3 * 24 * 60 * 60 * 1000);
 
 	assert.equal(requested, '/v1/dashboard/run-ledger?limit=256&span_seconds=259200');
+	assert.equal(response.span_seconds_served, 259200);
 });

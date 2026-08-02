@@ -245,6 +245,7 @@ export interface RunLedgerResponse {
 	rows: RunLedgerRow[];
 	stale: boolean;
 	reported_at: string | null;
+	span_seconds_served: number | null;
 	withheld?: WithheldLane;
 }
 
