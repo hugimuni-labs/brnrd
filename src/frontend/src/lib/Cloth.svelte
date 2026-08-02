@@ -4,6 +4,7 @@
 	import { glitchReveal } from './transitions';
 	import { loomPastWindowLabel } from './loomBand';
 	import {
+		CLOTH_ROOT_CAP,
 		clothSelvage,
 		groupClothDays,
 		inClothWindow,
@@ -44,15 +45,32 @@
 	// Reconciling here keeps the weave and the chip row from disagreeing.
 	let activeLens = $derived(reconcileLens(lens, lenses));
 
+	// "Show older" (the phone-density pass, 2026-08-02): `CLOTH_ROOT_CAP`
+	// bounds the DOM, not the fetch — every root the weave folds already
+	// rode `rows` in from the page's one ledger request (`weave.dropped` is
+	// the exact count of roots already in hand but uncapped). So lifting
+	// the cap costs nothing, network or otherwise: it just renders what's
+	// already there. `Infinity` rather than a bigger finite cap because a
+	// half-measure ("+40 more") would just relocate the "no way past this"
+	// complaint instead of closing it.
+	let showOlder = $state(false);
+	let rootCap = $derived(showOlder ? Infinity : CLOTH_ROOT_CAP);
+
 	// Day rules, folds, repo chips and the drop count all recompute on the
 	// lensed set — the weave *is* the lensed view. The selvage does not: it
 	// is the hem of the whole cloth, not of a lens, so it sums the whole
 	// window regardless of which chip is lit.
 	let weave = $derived(
-		rows === null ? null : weaveCloth(applyLens(windowRows, activeLens), now, windowMs)
+		rows === null ? null : weaveCloth(applyLens(windowRows, activeLens), now, windowMs, rootCap)
 	);
 	let days = $derived(weave === null ? null : groupClothDays(weave.trees));
 	let selvage = $derived(rows === null ? null : selvageParts(clothSelvage(rows, now, windowMs)));
+	// `weave.dropped` reads 0 once `showOlder` lifts the cap (nothing is
+	// dropped any more) — so the hem needs the *pre-lift* total, not the
+	// live drop count, to know whether it still has anything to say once
+	// expanded. `trees.length + dropped` is invariant under the cap: it's
+	// every root the fetch produced, capped or not.
+	let totalRoots = $derived(weave === null ? 0 : weave.trees.length + weave.dropped);
 
 	// Expansion is local UI state keyed by the root's id — not part of the
 	// fetched data, so a re-poll doesn't fold an open brood. The unnamed
@@ -75,8 +93,8 @@
 	     band's nested children — a shorter, thinner, dimmer bar. -->
 	<span
 		class="shrink-0 self-center overflow-hidden rounded-[1px] bg-stone-900/60 {child
-			? 'h-[2px] w-7 opacity-70'
-			: 'h-[3px] w-10'}"
+			? 'h-[2px] w-7 opacity-70 max-[480px]:w-5'
+			: 'h-[3px] w-10 max-[480px]:w-6'}"
 		aria-hidden="true"
 	>
 		<span
@@ -88,18 +106,30 @@
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
-	<!-- The title wraps whole (min-w-0 + break-words) — same call the warp's
-	     headlines took in #978: a second line beats an amputated clause. -->
+	<!-- The title wraps whole (min-w-[9ch] + flex-1 + break-words) — same call
+	     the warp's headlines took in #978: a second line beats an amputated
+	     clause. `min-w-0` used to sit here instead of a real floor: paired
+	     with every sibling on this row being `shrink-0`, the name was the
+	     *only* flexible box, so the flex algorithm could shrink it to nothing
+	     under crowding (narrow phone viewport + duration/chips/toggle all
+	     competing for space) — and `break-words` then had to wrap a hyphenated
+	     slug like "the-by-species-split" one character per line to fit that
+	     near-zero box (the vertical waterfall). `flex-1` lets it claim
+	     leftover space like before; `min-w-[9ch]` is the floor that stops the
+	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
+	     row, below) rather than crushing the name into a column of letters. -->
 	{#if line.href}
 		<a
 			href={line.href}
-			class="min-w-0 break-words text-amber-100 hover:text-amber-50"
+			class="min-w-[9ch] flex-1 break-words text-amber-100 hover:text-amber-50"
 			class:opacity-60={line.bare}
 		>
 			{line.name}
 		</a>
 	{:else}
-		<span class="min-w-0 break-words text-stone-200" class:opacity-60={line.bare}>{line.name}</span>
+		<span class="min-w-[9ch] flex-1 break-words text-stone-200" class:opacity-60={line.bare}
+			>{line.name}</span
+		>
 	{/if}
 	<!-- Repo chip only when this row is off the window's dominant repo —
 	     a single-repo window says nothing per row (the whole cloth is that
@@ -124,14 +154,21 @@
 			🧵 {line.items.join(' · ')}
 		</span>
 	{/if}
-	<span class="ml-auto shrink-0 text-[10px] whitespace-nowrap text-ink-mute">
+	<!-- Metadata stays `shrink-0` (it must never itself collapse to
+	     mush) but rides `ml-auto` inside a `flex-wrap` row (below), so on a
+	     narrow phone where the name has already claimed its floor and there
+	     is no room left on the line, this drops to its own trailing line
+	     instead of squeezing the name further. -->
+	<span class="ml-auto shrink-0 text-[10px] whitespace-nowrap text-ink-mute max-[480px]:text-[9px]">
 		{line.duration} · {line.age}
 	</span>
 {/snippet}
 
 {#snippet runRow(tree: ClothTree, index: number)}
 	<div role="listitem" in:glitchReveal={{ duration: 240, delay: index * 24 }}>
-		<div class="flex min-w-0 items-baseline gap-2 font-mono text-xs leading-relaxed">
+		<div
+			class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
+		>
 			{@render curatedLine(tree.root, false)}
 			{#if tree.children.length > 0}
 				<button
@@ -149,7 +186,7 @@
 			<div class="mt-0.5 space-y-0.5" out:fade={{ duration: 100 }}>
 				{#each tree.children as child, childIndex (child.id)}
 					<div
-						class="ml-4 flex min-w-0 items-baseline gap-2 font-mono text-[11px] leading-relaxed"
+						class="ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
 						in:glitchReveal={{ duration: 240, delay: childIndex * 24 }}
 					>
 						{@render curatedLine(child, true)}
@@ -160,7 +197,7 @@
 	</div>
 {/snippet}
 
-<div class="panel p-4">
+<div class="panel p-4 max-[480px]:p-2.5">
 	<div class="mb-3 flex items-center justify-between gap-2 text-sm">
 		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">the cloth</span>
 		<span class="flex items-center gap-2">
@@ -267,7 +304,7 @@
 								</button>
 								{#if unfolded.has(day.key)}
 									<div
-										class="mt-0.5 ml-4 space-y-0.5"
+										class="mt-0.5 ml-4 space-y-0.5 max-[480px]:ml-2"
 										role="list"
 										aria-label={`unnamed runs closed on ${day.dayLabel}`}
 										out:fade={{ duration: 100 }}
@@ -284,10 +321,30 @@
 			{/each}
 		</div>
 
-		<!-- The honest hem: the cap bounds the DOM, never the truth. -->
-		{#if weave.dropped > 0}
+		<!-- The honest hem: the cap bounds the DOM, never the truth — and now
+		     it's a door, not a wall. Every dropped root already rode the same
+		     `rows` this weave read from (the ledger fetch itself caps at
+		     `PRODUCE_GAUGE_LEDGER_LIMIT` rows and the backend additionally
+		     clamps `span_seconds` to 7 days regardless of the 30-day window
+		     asked for — `src/brnrd/routers/dashboard.py`'s
+		     `dashboard_run_ledger_api`), so lifting `CLOTH_ROOT_CAP` costs no
+		     round trip. Past that ceiling there genuinely is no further page
+		     to ask for: the endpoint has no `offset`, so "older still" past
+		     what this fetch already holds is a real gap, not a rendering one. -->
+		{#if totalRoots > CLOTH_ROOT_CAP}
 			<p class="mt-2 font-mono text-[10px] text-ink-mute">
-				+ {weave.dropped} older in the window
+				{#if showOlder}
+					every root in this window's fetch is shown
+				{:else}
+					+ {weave.dropped} older in the window ·
+					<button
+						type="button"
+						class="cursor-pointer text-ink-mute underline decoration-dotted hover:text-stone-300"
+						onclick={() => (showOlder = true)}
+					>
+						show older
+					</button>
+				{/if}
 			</p>
 		{/if}
 	{/if}
