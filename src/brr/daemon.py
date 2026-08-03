@@ -3321,6 +3321,12 @@ def _run_worker(
             "BRR_BOOT_SCORE": str(
                 brr_dir / "runs" / task.id / "boot-score.json"
             ),
+            # The account/repo-shared ``.brr`` dir, warm across every run —
+            # lets claude_status durably persist its spend/context reading
+            # somewhere the *next* run's portal assembly can still find it
+            # after this run's own outbox is swept (#1027; see
+            # claude_status._shared_dir).
+            "BRR_SHARED_DIR": str(brr_dir),
         }
         # Conversation identity passthrough: lets the resident stamp its own
         # commits with the Brnrd-Conversation-Id trailer (see gitops.commit_all
@@ -4876,7 +4882,17 @@ def _collect_levels(
             )
         else:
             usage_levels = claude_usage.load_snapshot(outbox_dir)
-        result_levels = claude_status.load_snapshot(outbox_dir)
+        # This run's own outbox first (freshest, when this run has already
+        # produced its own result JSON), the account-shared copy second —
+        # the honest cross-run fallback for the far more common case at
+        # wake-time: a fresh run's own outbox has no reading of its own yet,
+        # and the *previous* run's reading is exactly what "spend: absent"
+        # was hiding (#1027). ``shared_dir`` is ``None`` for a caller that
+        # never wired one (e.g. an ad-hoc test); the outbox-only read still
+        # applies then, unchanged from before this fix.
+        result_levels = claude_status.load_snapshot(
+            outbox_dir
+        ) or claude_status.load_snapshot(shared_dir)
         merged = _merge_level_snapshots(usage_levels, result_levels)
         # The seam that makes burn shell-agnostic. Claude's `/usage` scrape is a
         # *point* reading that forgets itself; sampling it here — into the

@@ -1,6 +1,7 @@
 """Claude result-JSON spend/context collector for head-less daemon runs."""
 
 import json
+import shutil
 
 from brr import claude_status, facets
 
@@ -64,6 +65,77 @@ def test_capture_stdout_passes_plain_text_through(tmp_path):
         == "plain reply\n"
     )
     assert claude_status.load_snapshot(tmp_path) is None
+
+
+def test_capture_stdout_writes_shared_copy_alongside_outbox(tmp_path):
+    """#1027: the reading must also land somewhere the outbox sweep spares.
+
+    ``BRR_SHARED_DIR`` names the account-shared ``.brr`` dir a *different*,
+    later run's portal assembly can still read from after this run's own
+    outbox directory is deleted (``daemon._remove_outbox``). Both copies are
+    written — the outbox one is unchanged and still feeds same-run readers
+    plus the closeout preservation copy (#1049).
+    """
+    outbox_dir = tmp_path / "outbox" / "evt-1"
+    shared_dir = tmp_path / "shared"
+    stdout = json.dumps(_RESULT)
+
+    reply = claude_status.capture_stdout(
+        stdout,
+        {"BRR_OUTBOX_DIR": str(outbox_dir), "BRR_SHARED_DIR": str(shared_dir)},
+    )
+
+    assert reply == "final reply\n"
+    outbox_snap = claude_status.load_snapshot(outbox_dir)
+    shared_snap = claude_status.load_snapshot(shared_dir)
+    assert outbox_snap["spend"]["total_cost_usd"] == 0.022774
+    assert shared_snap["spend"]["total_cost_usd"] == 0.022774
+
+
+def test_capture_stdout_shared_copy_survives_outbox_deletion(tmp_path):
+    """The whole point: delete the outbox dir, the shared reading remains."""
+    outbox_dir = tmp_path / "outbox" / "evt-1"
+    shared_dir = tmp_path / "shared"
+    stdout = json.dumps(_RESULT)
+
+    claude_status.capture_stdout(
+        stdout,
+        {"BRR_OUTBOX_DIR": str(outbox_dir), "BRR_SHARED_DIR": str(shared_dir)},
+    )
+    shutil.rmtree(outbox_dir)
+
+    assert claude_status.load_snapshot(outbox_dir) is None
+    shared_snap = claude_status.load_snapshot(shared_dir)
+    assert shared_snap["spend"]["total_cost_usd"] == 0.022774
+
+
+def test_capture_stdout_without_shared_dir_only_writes_outbox(tmp_path):
+    """No ``BRR_SHARED_DIR`` (older daemon, bare CLI test) -> no crash, no stray write."""
+    reply = claude_status.capture_stdout(
+        json.dumps(_RESULT), {"BRR_OUTBOX_DIR": str(tmp_path)}
+    )
+    assert reply == "final reply\n"
+    assert claude_status.load_snapshot(tmp_path)["spend"]["total_cost_usd"] == 0.022774
+
+
+def test_capture_stdout_empty_env_dict_does_not_fall_back_to_process_environ(
+    tmp_path, monkeypatch
+):
+    """A real-but-empty ``env={}`` must not silently read the daemon's own environ.
+
+    ``RunnerInvocation.env`` defaults to ``{}``, not ``None`` — an empty dict
+    is a legitimate "nothing set" from a caller, and ``{} or os.environ``
+    would have quietly substituted the *daemon process's* own environment
+    (which carries no ``BRR_OUTBOX_DIR``/``BRR_SHARED_DIR`` of its own,
+    contaminating the write with whatever the daemon's host env happens to
+    carry — or, as here, writing nowhere the test can find it).
+    """
+    stray_dir = tmp_path / "stray-process-environ-dir"
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(stray_dir))
+
+    claude_status.capture_stdout(json.dumps(_RESULT), {})
+
+    assert not stray_dir.exists()
 
 
 def test_result_error_text_uses_errors_when_result_absent():
