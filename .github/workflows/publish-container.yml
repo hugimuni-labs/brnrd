@@ -102,7 +102,19 @@ jobs:
       SCW_CONTAINER_ID: ${{ secrets.SCW_CONTAINER_ID }}
 
     steps:
+      # Full history, not the default depth-1 shallow clone: scw_rollout.py's
+      # commit-ordering guard (#1045) needs `git merge-base --is-ancestor` to
+      # resolve the *currently deployed* commit locally, and that commit is
+      # not necessarily this job's parent — a quiet weekend can leave prod
+      # several merges behind. A depth-1 checkout would make that guard read
+      # `unknown` (and roll out anyway) far more often than it needs to. This
+      # repo is small (~1400 commits, tens of MB packed); the full fetch costs
+      # a few seconds here, once, and buys the guard an ancestor answer on
+      # every deploy instead of only the ones that follow their predecessor
+      # closely. Revisit if repo growth ever makes that trade worse.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # The deploy tail (#848: registry tags are the release mechanism, and a
       # published image nobody rolls out is not a release). The whole rollout
