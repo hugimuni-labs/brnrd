@@ -70,16 +70,37 @@ jobs:
       #     authenticating as an org member.
       # Flip continue-on-error off (and make this a required status check)
       # once both are cleared -- see the #1033 PR description.
+      #
+      # `--report "$GITHUB_STEP_SUMMARY"` is not decoration and not a copy of
+      # the sweep job below (added in review, 2026-08-03). `continue-on-error`
+      # means this check renders **green on the PR no matter what it found**,
+      # so the only thing standing between a confirmed-dead first-party link
+      # and total silence is whether the finding is somewhere a reader lands.
+      # Raw stdout is not: nobody opens the log of a check that passed. The job
+      # summary is rendered on the run page the green check links to. Fixing
+      # the classifier is not fixing the renderer -- while this check is
+      # advisory, the summary *is* the entire output, and dropping it makes an
+      # advisory guard byte-identical to a guard that does not exist.
       - name: Check first-party links
         continue-on-error: true
-        run: python scripts/check_link_liveness.py --first-party-only
+        run: python scripts/check_link_liveness.py --first-party-only --report "$GITHUB_STEP_SUMMARY"
 
   scheduled-full-sweep:
     # Weekly (+ manual dispatch), every origin including third-party.
     # Advisory only, by #1033's design note ("a red build because someone's
-    # marketing page 503'd teaches people to ignore the job") -- a failed
-    # scheduled run is visible in the Actions tab and to anyone watching
-    # this repo without gating any PR.
+    # marketing page 503'd teaches people to ignore the job").
+    #
+    # Corrected in review, 2026-08-03: this comment used to say "a failed
+    # scheduled run is visible in the Actions tab". It cannot be. With
+    # `continue-on-error: true` on the only step that can fail, the step is
+    # marked failed-but-ignored, the **job is green, and so is the run** --
+    # the Actions list shows a passing workflow every week regardless of what
+    # was found. The signal is the job summary written below and the step's
+    # own annotation inside the run, both of which require opening a run that
+    # advertises itself as fine. That is a real limitation of shipping this
+    # advisory, not a thing the comment gets to claim its way out of; the
+    # honest fix is flipping `continue-on-error` off once the two false
+    # positives named above are cleared.
     name: Link liveness (full sweep)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

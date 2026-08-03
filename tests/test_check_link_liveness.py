@@ -408,3 +408,78 @@ def test_gather_links_ignores_untracked_files(tmp_path):
     urls = {link.url for link in links}
     assert "https://brnrd.dev/kept" in urls
     assert "https://brnrd.dev/not-kept" not in urls
+
+
+# --- the CLI itself ----------------------------------------------------
+#
+# Added in review (2026-08-03): `main()` had no coverage at all, and the
+# `--report` file it writes is the *only* output a reader of the CI job ever
+# sees while the step runs `continue-on-error` (the check renders green
+# regardless of findings, so nobody opens its log). A report that omits the
+# verdict is a count beside a green tick with no way to read it. These drive
+# the real entry point, through the real argument parser.
+
+
+def _cli_with(monkeypatch, links, statuses):
+    """Run `main()` with the network and the file walk both replaced.
+
+    `gather_links` and `check_link` are the two boundaries `main()` reaches
+    through; poisoning `requests` is not enough, because a failure there
+    would render as UNREACHABLE rather than as the status under test.
+    """
+    monkeypatch.setattr(mod, "gather_links", lambda: ([mod.Link("f.md", u) for u in links], 0))
+    monkeypatch.setattr(
+        mod,
+        "check_link",
+        lambda url, session=None, timeout=None: mod.LinkResult(url, statuses[url], statuses[url].upper()),
+    )
+
+
+def test_cli_report_file_carries_the_failing_verdict_not_just_the_count(tmp_path, monkeypatch):
+    dead = "https://brnrd.dev/gone"
+    _cli_with(monkeypatch, [dead], {dead: "dead"})
+    out = tmp_path / "summary.md"
+
+    rc = mod.main(["--first-party-only", "--report", str(out)])
+
+    assert rc == 1
+    written = out.read_text(encoding="utf-8")
+    assert "1 DEAD" in written
+    # The load-bearing assertion: the count alone is not the finding.
+    assert "FAIL --" in written
+
+
+def test_cli_report_file_carries_the_passing_verdict_too(tmp_path, monkeypatch):
+    live = "https://brnrd.dev/pricing"
+    _cli_with(monkeypatch, [live], {live: "live"})
+    out = tmp_path / "summary.md"
+
+    rc = mod.main(["--first-party-only", "--report", str(out)])
+
+    assert rc == 0
+    assert "PASS --" in out.read_text(encoding="utf-8")
+
+
+def test_cli_exit_code_ignores_a_dead_third_party_link(tmp_path, monkeypatch):
+    """The blocking policy, asserted at the exit code the CI step reads.
+
+    The host matters. This test first read ``some-vendor.example.org``, which
+    ``is_allowlisted`` skips (it ends in ``.example.org``) — so nothing was
+    ever checked, the exit code was 0 for want of any result at all, and the
+    test passed while proving nothing about third-party dead links. A dead
+    link that is never checked and a dead link that is checked-and-tolerated
+    produce the same exit code; only the report can tell them apart, so this
+    asserts on the report too.
+    """
+    dead = "https://vendor.io/gone"
+    assert not mod.is_allowlisted(dead), "the fixture must reach the checker at all"
+    monkeypatch.setattr(mod, "gather_links", lambda: ([mod.Link("f.md", dead)], 0))
+    monkeypatch.setattr(
+        mod, "check_link", lambda url, session=None, timeout=None: mod.LinkResult(url, "dead", "HTTP 404")
+    )
+    out = tmp_path / "summary.md"
+
+    assert mod.main(["--report", str(out)]) == 0
+    written = out.read_text(encoding="utf-8")
+    assert "1 DEAD" in written and "[third-party]" in written
+    assert "PASS --" in written
