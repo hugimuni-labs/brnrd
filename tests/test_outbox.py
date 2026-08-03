@@ -1729,6 +1729,75 @@ def test_terminal_route_names_what_carried_the_stream():
     # returning an empty string that reads as "no terminal stream".
     assert route("") == "unknown"
 
+    # "no run left unheard": nobody owns the source, but a `notify.gate`
+    # fallback carried the text anyway — distinct from both the ordinary
+    # undeliverable shape and a gate that was actually addressed.
+    assert route("schedule", undeliverable=False, gate_fallback=True) == "gate-fallback"
+    # Duplicate still wins over everything, gate-fallback included — a
+    # duplicate terminal is never re-routed anywhere, so the caller must
+    # never be able to pass ``duplicate=True, gate_fallback=True`` and get
+    # anything but the duplicate verdict.
+    assert route(
+        "schedule", duplicate=True, gate_fallback=True) == "duplicate"
+
+
+def test_resolve_notify_gate_explicit_key_wins(tmp_path, monkeypatch):
+    # An explicit key resolves outright — no need to check whether it is
+    # also the *only* configured gate.
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    assert daemon._resolve_notify_gate(
+        {"notify.gate": "slack"}, tmp_path) == "slack"
+
+
+def test_resolve_notify_gate_explicit_key_not_deliverable_resolves_to_nothing(
+    tmp_path, monkeypatch,
+):
+    # A misconfigured/typo'd explicit key must not silently fall back to
+    # inference — that would surprise an operator who deliberately named a
+    # gate. It resolves like "nothing resolved" (current undeliverable
+    # staging), never a crash.
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "telegram",
+    )
+    assert daemon._resolve_notify_gate(
+        {"notify.gate": "slack"}, tmp_path) == ""
+
+
+def test_resolve_notify_gate_infers_the_single_configured_user_chat_gate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver", lambda _brr, gate: gate == "cloud",
+    )
+    assert daemon._resolve_notify_gate({}, tmp_path) == "cloud"
+
+
+def test_resolve_notify_gate_zero_or_several_candidates_resolve_to_nothing(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: False)
+    assert daemon._resolve_notify_gate({}, tmp_path) == ""
+
+    monkeypatch.setattr(
+        daemon, "_gate_can_deliver",
+        lambda _brr, gate: gate in ("telegram", "slack"),
+    )
+    assert daemon._resolve_notify_gate({}, tmp_path) == ""
+
+
+def test_resolve_notify_gate_never_infers_github(tmp_path, monkeypatch):
+    # A forge PR/issue thread is not the correspondent who scheduled the
+    # wake — inference must not silently pick it even when it is the only
+    # gate configured. An explicit ``notify.gate=github`` still goes
+    # through (that is the operator saying so), just never the guess.
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, gate: gate == "github")
+    assert daemon._resolve_notify_gate({}, tmp_path) == ""
+    assert daemon._resolve_notify_gate(
+        {"notify.gate": "github"}, tmp_path) == "github"
+
 
 def test_portal_state_marks_schedule_event_not_replyable(tmp_path):
     brr_dir = tmp_path / ".brr"
