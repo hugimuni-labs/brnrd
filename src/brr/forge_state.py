@@ -254,7 +254,10 @@ def _pr_state_facet(
     state = forge_pr_cache.read_state(repo_root, now=now)
     prs = state.get("prs")
     if not isinstance(prs, list):
-        # absent / error: unknown, and unknown is not "no PRs".
+        # absent / error / unsupported: unknown, and unknown is not "no PRs".
+        # ``forge_kind`` only ever carries a value on the ``unsupported``
+        # status (see :func:`forge_pr_cache.read_state`); it rides along here
+        # so :func:`pr_state_note` can name the forge without a second read.
         return {
             "status": state.get("status") or "absent",
             "fetched_at": state.get("fetched_at"),
@@ -262,6 +265,7 @@ def _pr_state_facet(
             "error": state.get("error"),
             "has_rows": False,
             "standalone": [],
+            "forge_kind": state.get("forge_kind"),
         }
 
     by_branch: dict[str, dict[str, Any]] = {}
@@ -491,6 +495,23 @@ def pr_state_note(pr_state: Any) -> str:
         return ""
     if status == "absent":
         return "PR state: unknown (no local cache yet — the daemon refreshes it on its tick)"
+    if status == "unsupported":
+        # Not "unknown" — the ``absent ≠ unknown ≠ none`` doctrine gets a
+        # fourth member here (#852): we *know* ``gh`` is never queried while
+        # this holds ("we asked and it failed" would wrongly imply a retry
+        # might help), so the sentence says so plainly instead of wearing
+        # the ``error``/``stale`` phrasing that would call it unknown or
+        # imply a refresh is due. Deliberately not "permanent" or "never
+        # retried" — forge_pr_cache.refresh_if_stale re-derives the kind on
+        # the normal TTL cadence, so a remote change or a `.brr/config
+        # forge.kind` fix is picked up on its own; this line just never
+        # promises a `gh` call is what will do the noticing.
+        kind = str(pr_state.get("forge_kind") or "").strip()
+        forge = f" ({kind})" if kind else ""
+        return (
+            f"PR state: unsupported{forge} — this remote isn't GitHub, and "
+            "`gh` is never queried for it"
+        )
     if status == "error":
         error = str(pr_state.get("error") or "").strip() or "refresh failed"
         # A failed refresh may still be showing rows kept from an earlier good

@@ -51,6 +51,33 @@ def _repo_with_remote(tmp_path: Path) -> Path:
     return repo
 
 
+def _repo_with_gitlab_remote(tmp_path: Path) -> Path:
+    """A repo whose ``origin`` is GitLab, not GitHub — the #852 defect shape.
+
+    Same bare-store push-target trick as :func:`_repo_with_remote`, just a
+    different forge behind ``origin`` so ``gh pr list --repo <label>`` would
+    silently be aimed at github.com for a repo that was never there.
+    """
+    store = tmp_path / "store.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(store)],
+        check=True, stdout=subprocess.PIPE,
+    )
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "one\n"})
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://gitlab.com/group/proj.git"],
+        cwd=repo, check=True,
+    )
+    subprocess.run(["git", "remote", "add", "store", str(store)], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "push", "-u", "store", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return repo
+
+
 def _repo_with_worktree(tmp_path: Path, run_id: str = "run-pr-1") -> tuple[Path, str]:
     repo = _repo_with_remote(tmp_path)
     wt_path, branch = worktree.create(repo, run_id)
@@ -220,6 +247,181 @@ def test_refresh_if_stale_refreshes_an_old_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
     assert forge_pr_cache.refresh_if_stale(repo) is True
     assert calls and calls[0][:3] == ["gh", "pr", "list"]
+
+
+# ── non-GitHub forge kind gate (#852) ─────────────────────────────────
+#
+# ``gh pr list --repo OWNER/REPO`` only ever resolves against github.com.
+# A GitLab (or Bitbucket/Gitea/unrecognised) remote must never reach that
+# subprocess at all — these drive the actual caller the defect lived in,
+# ``refresh(repo_root)``, exactly as the daemon's tick calls it.
+
+
+def test_refresh_never_shells_out_on_a_non_github_remote(tmp_path, monkeypatch):
+    repo = _repo_with_gitlab_remote(tmp_path)
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail(f"refresh() shelled out to gh for a non-GitHub remote: {cmd}")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    payload = forge_pr_cache.refresh(repo)
+
+    assert payload["unsupported"] is True
+    assert payload["forge_kind"] == "gitlab"
+    assert payload["prs"] is None
+    assert payload["error"] is None  # unsupported is a verdict, not a failure
+
+    state = forge_pr_cache.read_state(repo)
+    assert state["status"] == "unsupported"
+    assert state["forge_kind"] == "gitlab"
+    assert state["prs"] is None
+
+
+def test_refresh_drops_stale_rows_when_the_remote_turns_out_unsupported(tmp_path, monkeypatch):
+    """Unlike a failed ``gh`` call, ``unsupported`` must not carry forward
+    rows from a prior good fetch — the label now names a different forge
+    than whatever those rows described, so nothing about them is still true
+    of this repo (module docstring carve-out, parent review of #852).
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+    _write_cache(repo, {"fetched_at": _iso(-60), "prs": [_pr(390, "brr/x")]})
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail("gh called for a non-GitHub remote")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    payload = forge_pr_cache.refresh(repo)
+
+    assert payload["prs"] is None  # not the #390 row carried over from before
+
+
+def test_refresh_if_stale_never_shells_out_for_an_unsupported_forge(tmp_path, monkeypatch):
+    """Re-deriving the kind (cheap: local git + config, no subprocess) must
+    never itself reach ``gh`` — only a *changed* kind may (see the next
+    test). This covers the common case: nothing changed, TTL just elapsed.
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail("gh called for a repo whose forge kind is still non-github")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    assert forge_pr_cache.refresh(repo)["unsupported"] is True
+
+    # Within the TTL window: no re-derivation yet, same cadence as any other
+    # status.
+    assert forge_pr_cache.refresh_if_stale(repo) is False
+
+    # A tick long after the TTL re-derives (cheaply) but the kind is still
+    # gitlab, so gh is still never touched.
+    far_future = time.time() + forge_pr_cache.DEFAULT_TTL_SECONDS + 1
+    forge_pr_cache.refresh_if_stale(repo, now=far_future)
+    assert forge_pr_cache.read_state(repo)["status"] == "unsupported"
+
+
+def test_refresh_if_stale_recovers_once_the_remote_becomes_github(tmp_path, monkeypatch):
+    """The two facts a forge kind is computed from are user-editable — a
+    ``git remote set-url`` fix must not be trapped behind a cached verdict
+    forever (parent review of the initial #852 fix).
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail("gh called before the remote pointed at GitHub")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    forge_pr_cache.refresh(repo)
+    assert forge_pr_cache.read_state(repo)["status"] == "unsupported"
+    # Within the TTL window: unchanged, no re-derivation yet.
+    assert forge_pr_cache.refresh_if_stale(repo) is False
+
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "https://github.com/Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    def fake_gh(cmd, **kwargs):
+        assert "--repo" in cmd and "Gurio/brr" in cmd
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
+    far_future = time.time() + forge_pr_cache.DEFAULT_TTL_SECONDS + 1
+    assert forge_pr_cache.refresh_if_stale(repo, now=far_future) is True
+    assert forge_pr_cache.read_state(repo)["status"] == "fresh"
+
+
+def test_refresh_still_queries_github_as_before(tmp_path, monkeypatch):
+    """The gate must not catch the case it is meant to leave alone."""
+    repo = _repo_with_remote(tmp_path)  # github.com origin
+
+    def fake_gh(cmd, **kwargs):
+        assert "--repo" in cmd and "Gurio/brr" in cmd
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
+    payload = forge_pr_cache.refresh(repo)
+
+    assert "unsupported" not in payload
+    assert payload["prs"] == []
+    assert forge_pr_cache.read_state(repo)["status"] == "fresh"
+
+
+def test_render_shows_unsupported_not_stale_or_unknown():
+    """The renderer must learn the new state, not reuse error/stale phrasing.
+
+    Drives the same renderer both real callers use (:func:`prompts._format_forge_state`
+    / :func:`run_context._render_forge_state`) on the shape :func:`forge_pr_cache.read_state`
+    now produces for a non-GitHub remote — the doctrine at forge_state.py's
+    ``pr_state_note`` (absent != unknown != none) gets a fourth member here.
+    """
+    facet = {
+        "worktrees": [
+            {
+                "run_id": "run-1", "branch": "feature/x",
+                "unpushed": 1, "dirty": False, "current": True,
+            },
+        ],
+        "pr_state": {"status": "unsupported", "forge_kind": "gitlab", "standalone": []},
+    }
+    for render in (prompts._format_forge_state, run_context._render_forge_state):
+        rendered = render(facet)
+        pr_line = next(line for line in rendered.splitlines() if "PR state" in line)
+        assert "unsupported" in pr_line
+        assert "gitlab" in pr_line
+        assert "stale" not in pr_line
+        assert "unknown" not in pr_line
+
+
+def test_end_to_end_gitlab_remote_never_shells_out_and_renders_unsupported(
+    tmp_path, monkeypatch,
+):
+    """The full path the daemon tick drives: refresh -> facet -> renderer.
+
+    Neutering the gate (dropping the ``kind != "github"`` check in
+    :func:`forge_pr_cache.refresh`) turns this red on the ``pytest.fail`` in
+    ``forbidden`` below — confirmed by hand while building this fix.
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+    wt_path, _branch = worktree.create(repo, "run-pr-1")
+    commit_files(wt_path, {"feature.txt": "wip\n"}, message="feature")
+    Run(
+        id="run-pr-1", event_id="evt-pr", body="work", status="running",
+        meta={"seed_ref": "main", "has_new_commit": True},
+    ).save(repo / ".brr" / "runs")
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail(f"the daemon tick's refresh shelled out to gh: {cmd}")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    forge_pr_cache.refresh(repo)
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="run-pr-1",
+    )
+    assert facet["pr_state"]["status"] == "unsupported"
+    rendered = prompts._format_forge_state(facet)
+    assert "unsupported" in rendered
+    assert "gitlab" in rendered
 
 
 # ── facet: cache folded onto the branches ────────────────────────────
