@@ -67,9 +67,14 @@ PUBLIC_COMMANDS = (
 # a run gates on it deliberately and ``brnrd docs portals`` carries the
 # spelling. An operator browsing ``--help`` has no use for it, and the public
 # list is at its ceiling.
+#
+# ``mood`` (the mood seam's ergonomics ask, 2026-08-03) is the resident's
+# front door onto `.mood`, same shape as ``relic``/``promise``: it only does
+# anything inside a live wake, and it collapses the lookup-then-write
+# round-trip ``brnrd emotes`` used to leave to the resident by hand.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic", "gate-run", "close-check", "promise",
+    "relic", "gate-run", "close-check", "promise", "mood",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -479,6 +484,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--why", default=None, metavar="REASON",
         help="why the promise is being withdrawn (required with --release)")
     promise_p.set_defaults(func=cmd_promise)
+
+    # The mood seam's front door: collapses the lookup-then-write round trip
+    # `brnrd emotes <query>` then a hand-written `.mood` used to leave to the
+    # resident. Hidden per HIDDEN_COMMANDS, same reasoning as `emotes` and
+    # `relic` — it is the resident's, and `daemon-substrate.md` names the
+    # spelling directly.
+    mood_p = sub.add_parser("mood")
+    mood_p.add_argument(
+        "feeling",
+        help="a feeling, or a handle (`brnrd emotes <query>` finds one)")
+    mood_p.add_argument(
+        "narration", nargs="*",
+        help="optional narration lines, written after the resolved handle")
+    mood_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="the run's outbox dir, when the environment does not name one "
+             "(BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    mood_p.set_defaults(func=cmd_mood)
 
     p = relic_sub.add_parser(
         "item", help="record the warp item this run ignited from")
@@ -1298,6 +1321,91 @@ def _wake_outbox_dir() -> Path | None:
     from . import hooks
 
     return hooks.HookContext(dict(os.environ)).outbox_dir
+
+
+def cmd_mood(args):
+    """Resolve a feeling to a face and write `.mood` in one shot.
+
+    Collapses the round trip `brnrd emotes <query>` then a hand-written
+    `.mood` used to leave to the resident: resolve the query through
+    `brr.emotes`'s own resolver — the one `lookup` every other reader of
+    `.mood` (the boundary chip, the dashboard) already trusts, per that
+    module's own history (#601/#603 shipped two resolvers for one question
+    and the tolerant one never reached the wire) — write the resolved
+    handle, and echo the face straight back so the resident sees and owns
+    it in the same boundary instead of trusting a write it cannot see
+    confirmed.
+
+    **No match writes nothing.** Same honesty bar `emotes.lookup` already
+    keeps: a family word (`satisfied` is four faces) or an invented handle
+    is a real miss, and guessing between candidates would be a face the
+    resident didn't mean. `emotes.near_misses` names the nearest faces —
+    the same line `brnrd emotes`'s own no-match case prints — so the
+    resident can retry with the actual handle instead of staring at
+    silence.
+
+    `--outbox` overrides the environment for anything driving this outside
+    a live wake's own process (a script, a test); environment resolution
+    (`BRR_OUTBOX_DIR` / `BRR_PORTAL_STATE`, `_wake_outbox_dir`'s job) is the
+    default and applies whenever the flag is not given — the same
+    precedence the daemon itself uses to find a run's outbox.
+    """
+    import sys
+
+    from . import emotes as emo
+    from . import hooks
+
+    explicit = str(getattr(args, "outbox", "") or "").strip()
+    outbox_dir = Path(explicit) if explicit else _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd mood] no run outbox in this environment — `brnrd mood` "
+            "sets the `.mood` control file for a live brnrd run; point it "
+            "at one with BRR_OUTBOX_DIR / BRR_PORTAL_STATE, or --outbox. "
+            "Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    feeling = str(getattr(args, "feeling", "") or "").strip()
+    emote = emo.lookup(feeling) if feeling else None
+    if emote is None:
+        near = emo.near_misses(feeling, limit=4) if feeling else []
+        if near:
+            names = " · ".join(e.name for e in near)
+            print(
+                f"[brnrd mood] no face matches {feeling!r} — nearest: "
+                f"{names}. Nothing was written.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[brnrd mood] no face matches {feeling!r} — try a "
+                "feeling, not a handle. Nothing was written.",
+                file=sys.stderr,
+            )
+        return 1
+
+    narration = " ".join(getattr(args, "narration", None) or []).strip()
+    text = emote.name + ("\n" + narration if narration else "") + "\n"
+
+    mood_path = outbox_dir / hooks.MOOD_NAME
+    try:
+        mood_path.parent.mkdir(parents=True, exist_ok=True)
+        mood_path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"[brnrd mood] could not write {mood_path}: {exc}. Nothing "
+            "was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    face = emo.glyph(emote.name)
+    prefix = f"{face} " if face else ""
+    note = f" — {narration}" if narration else ""
+    print(f"[brnrd mood] {prefix}{emote.name}{note}")
+    return 0
 
 
 def cmd_relic_issue(args):
