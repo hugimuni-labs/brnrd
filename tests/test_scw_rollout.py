@@ -368,7 +368,21 @@ def test_check_commit_ordering_proceeds_on_a_true_ancestor(tmp_path, monkeypatch
     })
 
     assert mod.check_commit_ordering("https://api/x", "tok", repo) is True
-    assert "::notice::" not in capsys.readouterr().out
+    # This assertion used to read `"::notice::" not in out`. It was changed
+    # deliberately, and the distinction matters: it pinned an *accident*, not
+    # a contract. Nothing had decided the success path should be silent, and
+    # nothing documented it — the guard simply fell through.
+    #
+    # It was wrong, and #1045's own first live deploy is the evidence: the
+    # step went straight from the checkout to `container status: ready`, so a
+    # guard that ran and resolved correctly was byte-identical in the log to
+    # a guard that was never called. A no-op and a silent success are the
+    # same shape at a terminal, and a guard whose success is invisible cannot
+    # be confirmed still wired in after the next refactor.
+    out = capsys.readouterr().out
+    assert "::notice::commit ordering ok" in out
+    assert deployed[:8] in out
+    assert "rolling forward" in out
 
 
 def test_check_commit_ordering_declines_and_names_both_shas(tmp_path, monkeypatch, capsys):
