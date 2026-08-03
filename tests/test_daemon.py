@@ -8084,3 +8084,95 @@ def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
     # claude had no reading in this snapshot — unknown stays unknown, and the
     # key must be absent rather than empty so the renderer emits nothing.
     assert "quota_level" not in catalog[2]
+
+
+def _capture_ctx(tmp_path):
+    """The scaffold the `_capture_control_files` tests share."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-sym", event_id="evt-sym", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    return ctx, task, outbox, ctx.runs_dir / "Gurio__brr" / "run-sym"
+
+
+def test_capture_control_files_refuses_a_symlink(tmp_path):
+    """A name is not a file, and this destination is published.
+
+    Everything under `.brr/` rides the repo bind mount, so a run environment
+    can write its own outbox (#518) — including replacing a control file
+    with a symlink. `Path.read_bytes` follows one silently, and
+    `runs/<repo>/<run>/` is mirrored to brnrd.dev unredacted. So a one-line
+    `.pr` nobody would ever inspect is enough to publish an ssh key or the
+    account's `security.config`.
+
+    Driven before it was fixed: `read_bytes` on a symlink returned the
+    target's contents and the copy published them.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    secret = tmp_path / "security.config"
+    secret.write_text("runner_cmd: /bin/anything\n", encoding="utf-8")
+    (outbox / ".mood").symlink_to(secret)
+    # A real file beside it, so the refusal is per-file and not a bail-out.
+    (outbox / ".name").write_text("a-run-name\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "mood").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "a-run-name\n"
+    assert all(p.name != "mood" for p in written)
+
+
+def test_capture_control_files_refuses_a_symlink_to_a_directory(tmp_path):
+    """The same class, in the shape a `read_bytes` guard alone would miss."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (outbox / ".relics.jsonl").symlink_to(target)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert not (run_dir / "relics.jsonl").exists()
+
+
+def test_capture_control_files_skips_a_file_over_the_cap(tmp_path):
+    """The readers cap what they *parse*; nothing capped what a run writes.
+
+    `relics._MAX_RECORDS` bounds parsing, not the file. Without a cap here
+    an unbounded control file is read whole into the daemon's memory at
+    closeout and then committed to the account git repo, where it is
+    permanent.
+
+    Skipped, not truncated: half a JSONL file is a file that parses and lies.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(
+        b"x" * (daemon._MAX_PRESERVED_BYTES + 1)
+    )
+    (outbox / ".name").write_text("still-copied\n", encoding="utf-8")
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "relics.jsonl").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "still-copied\n"
+
+
+def test_capture_control_files_keeps_a_file_at_exactly_the_cap(tmp_path):
+    """The boundary is inclusive — the guard rejects *over*, not *at*."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(b"x" * daemon._MAX_PRESERVED_BYTES)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert (run_dir / "relics.jsonl").stat().st_size == daemon._MAX_PRESERVED_BYTES

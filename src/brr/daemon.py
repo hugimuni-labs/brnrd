@@ -42,6 +42,7 @@ import json
 import os
 import re
 import shutil
+import stat as stat_module
 import signal
 import subprocess
 import tempfile
@@ -9616,6 +9617,15 @@ PRESERVED: dict[str, str] = {
 #: Control files deliberately *not* copied, each with the reason. Every
 #: name :func:`_discover_control_file_names` can find must resolve here or
 #: in :data:`PRESERVED` — see ``test_capture_control_files_partition_is_total``.
+#: Byte ceiling for one preserved control file. Generous against every real
+#: artifact here (the largest, a busy run's ``.relics.jsonl``, is kilobytes)
+#: and small against the failure it exists for: the run writes these files,
+#: the destination is a git repo that is committed and pushed, and nothing
+#: downstream bounds them. `relics._MAX_RECORDS` caps what a reader
+#: *parses*, never what a writer can *write*.
+_MAX_PRESERVED_BYTES = 1_000_000
+
+
 NOT_PRESERVED: dict[str, str] = {
     portals.KEEPALIVE_NAME: (
         "transient slot control, meaningless after the run"
@@ -9695,7 +9705,45 @@ def _capture_control_files(
     written: list[Path] = []
     for source_name, dest_name in PRESERVED.items():
         source = outbox_dir / source_name
+        # A name is not a file, and this is a *publish*. Everything under
+        # `.brr/` rides the repo bind mount, so it is writable from inside
+        # every run environment (#518) — which means the thing at one of
+        # these paths is whatever the run put there, and a symlink resolves
+        # wherever the run pointed it. `read_bytes` follows one silently
+        # (driven, not reasoned: it hands back the target's contents), and
+        # the destination is `runs/<repo>/<run>/`, which the dashboard
+        # mirrors to brnrd.dev **unredacted**. So a one-line `.pr` nobody
+        # would ever inspect is enough to publish `security.config` or an
+        # ssh key.
+        #
+        # Refuse the whole class rather than resolve-and-compare: "is it
+        # inside the outbox" invites a TOCTOU race and a symlink here is
+        # never legitimate anyway. Loud, because unlike an absent file this
+        # is not a normal shape.
         try:
+            if source.is_symlink():
+                print(
+                    f"[brnrd] capture: refusing {source_name} on run "
+                    f"{task.id} — it is a symlink, and this destination is "
+                    "published"
+                )
+                continue
+            stat = source.stat()
+            if not stat_module.S_ISREG(stat.st_mode):
+                continue
+            # The readers of these files cap what they *parse*
+            # (`relics._MAX_RECORDS`), never what a run can *write*. Without
+            # a cap here an unbounded control file is read whole into the
+            # daemon's memory at closeout and then committed to the account
+            # git repo, where it is permanent. Skipping loudly beats
+            # truncating: half a JSONL file is a file that parses and lies.
+            if stat.st_size > _MAX_PRESERVED_BYTES:
+                print(
+                    f"[brnrd] capture: skipping {source_name} on run "
+                    f"{task.id} — {stat.st_size} B exceeds the "
+                    f"{_MAX_PRESERVED_BYTES} B preserve cap"
+                )
+                continue
             data = source.read_bytes()
         except OSError:
             continue
