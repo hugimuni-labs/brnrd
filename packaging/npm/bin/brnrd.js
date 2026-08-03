@@ -48,10 +48,21 @@ const WINDOWS = platform() === "win32";
 
 // `npx brnrd` and a globally installed `brnrd` reach this same file, and the
 // difference matters to the user: one leaves a command on PATH, the other does
-// not. npm sets `npm_command=exec` for `npx` (and `npm exec`); a global bin
-// invoked from a shell inherits no `npm_*` variables at all. Probed on
-// npm 11.6.1 / node 22 in both directions, not assumed.
-const VIA_NPX = process.env.npm_command === "exec";
+// not. This used to read `process.env.npm_command === "exec"` — true for npx
+// on a clean shell, but an environment variable is exactly the kind of state
+// a wrapping shell, direnv, corepack, or a parent process can leak into a
+// session that never ran npx at all (#1084: a reporter ran a plain
+// `npm install -g brnrd` then `brnrd --version` and still got the npx
+// advice — `npm_command` was already `exec` in their shell for reasons
+// upstream of this script, not because of anything they typed).
+//
+// The physical difference is more reliable than the env: npx always
+// installs into a disposable `_npx/<hash>/` directory inside the npm cache
+// (`~/.npm/_npx/…` on npm 7+, confirmed empirically, not just documented);
+// a real global install symlinks into `<prefix>/lib/node_modules/brnrd/`.
+// That is where this file itself is running from, so it can't be spoofed by
+// anything in the calling shell's environment.
+const VIA_NPX = __dirname.split(/[\\/]/).includes("_npx");
 
 // Durable, XDG-ish, and *not* inside node_modules — npx's cache is disposable
 // and a daemon service must not be pointed at it.
