@@ -35,6 +35,35 @@ SYNC_MARKER_FILE = "dominion.needs-sync"
 # smaller again, but the guard test keeps the budget honest.
 DEFAULT_INJECT_BUDGET_BYTES = 20480
 
+# #919: this single total used to answer two different questions at once —
+# *how much fits in a wake* and *how much of that is the product's* — so the
+# first product-generic rule any resident derived was unlandable without an
+# unrelated, unplanned cut to the seed, at whatever hour the resident hit the
+# wall (once measured at exactly 4 bytes of headroom). Splitting the ceiling
+# from the reserve makes bumping either one a deliberate, nameable decision
+# instead of arithmetic silently donating one side's room to the other.
+#
+# `RESIDENT_RESERVE_BYTES` is the floor guaranteed to the resident's *own*
+# self-inject entries (recent pain, current focus) — a seed that ate this
+# would leave a resident with a memory it cannot write to.
+#
+# `SEED_CEILING_BYTES` is how much of the total the shipped product seed
+# (`dominion-playbook.md`) may occupy. It is its own number, not derived from
+# subtracting the reserve from the total — bumping the total inject budget no
+# longer silently hands the seed more room, and bumping the seed's ceiling no
+# longer silently eats the resident's reserve. The assertion below is what
+# keeps the three numbers honest with each other; it fails loudly, at import
+# time, rather than a resident discovering the gap by hitting it while trying
+# to write.
+RESIDENT_RESERVE_BYTES = 2048
+SEED_CEILING_BYTES = 18_393
+
+assert SEED_CEILING_BYTES + RESIDENT_RESERVE_BYTES <= DEFAULT_INJECT_BUDGET_BYTES, (
+    "SEED_CEILING_BYTES + RESIDENT_RESERVE_BYTES must not exceed "
+    "DEFAULT_INJECT_BUDGET_BYTES — a deliberate bump to whichever side needs "
+    "the room, never a silent donation (#919)."
+)
+
 # The seed playbook copied into a fresh dominion. It's the *starting*
 # orientation — the agent owns and evolves its own copy thereafter.
 _SEED_PLAYBOOK = Path(__file__).resolve().parent / "prompts" / "dominion-playbook.md"
