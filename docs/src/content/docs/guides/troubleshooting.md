@@ -44,11 +44,26 @@ retry.
 There is no `brnrd update` command. Use the installer that owns the tool:
 
 ```bash
-uv tool upgrade brnrd
+npm update -g brnrd
+# or: uv tool upgrade brnrd
 # or: pipx upgrade brnrd
 ```
 
-If you used the npm-shaped bootstrapper, rerun `npx brnrd init`.
+Running through `npx`? `npx brnrd@latest <command>` picks up the new version;
+the launcher installs whatever version you pin.
+
+## `brnrd: command not found`
+
+`npx brnrd …` runs brnrd without adding anything to your `PATH`, so it leaves no
+`brnrd` command behind. Either keep prefixing (`npx brnrd up`) or install it for
+real:
+
+```bash
+npm install -g brnrd
+```
+
+Both use the same durable environment under `~/.local/share/brnrd` — installing
+after having used `npx` costs nothing and reuses what is already there.
 
 ## Stop or uninstall the service
 

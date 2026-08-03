@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-// `npx brnrd` — a bootstrapping installer, not a port and not an ephemeral run.
+// The brnrd launcher — a bootstrapping installer, not a port, and not an
+// ephemeral run. Reached two ways, and the difference is the user's:
+//
+//   npm install -g brnrd   → a real `brnrd` command on PATH, this file behind it
+//   npx brnrd <command>    → the same durable install, but no command afterwards
 //
 // Why this exists: brnrd's audience is people who already run AI coding tools,
 // and those ship through npm. They have Node. They very often do NOT have `uv`
@@ -41,6 +45,13 @@ const PYPI = "brnrd";
 const VERSION = require("../package.json").version; // launcher and payload move together
 const UV_RELEASE = require("../uv-assets.json");
 const WINDOWS = platform() === "win32";
+
+// `npx brnrd` and a globally installed `brnrd` reach this same file, and the
+// difference matters to the user: one leaves a command on PATH, the other does
+// not. npm sets `npm_command=exec` for `npx` (and `npm exec`); a global bin
+// invoked from a shell inherits no `npm_*` variables at all. Probed on
+// npm 11.6.1 / node 22 in both directions, not assumed.
+const VIA_NPX = process.env.npm_command === "exec";
 
 // Durable, XDG-ish, and *not* inside node_modules — npx's cache is disposable
 // and a daemon service must not be pointed at it.
@@ -266,12 +277,42 @@ async function bootstrap() {
   const spec = `${PYPI}==${VERSION}`;
   const install = uv
     ? run(uv, ["pip", "install", "--python", PY, "--quiet", "--no-config", spec], { env: CHILD_ENV })
-    : run(PY, ["-m", "pip", "install", "--quiet", "--upgrade", spec], { env: CHILD_ENV });
+    // `--quiet` does not silence pip's self-upgrade notice, so the first four
+    // lines a new user ever sees from brnrd were pip advertising itself and
+    // naming a path inside brnrd's private venv. `--no-input` because a
+    // bootstrap must never block on a prompt nobody is watching for.
+    : run(
+        PY,
+        [
+          "-m", "pip", "install", "--quiet", "--upgrade",
+          "--disable-pip-version-check", "--no-input", spec,
+        ],
+        { env: CHILD_ENV }
+      );
   if (install.status !== 0) {
     console.error(`\nbrnrd: could not install ${spec}. Try: pip install brnrd\n`);
     return false;
   }
   return true;
+}
+
+// Told once, at the end of the run that installed brnrd, and only to the
+// person who has no `brnrd` command: a first-time user follows the docs, sees
+// `brnrd --version`, and gets `command not found` with nothing on screen to
+// explain why. The launcher is the only thing that knows which of the two
+// npm spellings brought it here, so it is the only thing that can say this.
+function pathAdvice() {
+  console.error(
+    [
+      "",
+      `brnrd: installed — ${EXE}`,
+      "",
+      "  You ran this through npx, so there is no `brnrd` command on your PATH.",
+      "  For one:  npm install -g brnrd",
+      "  Or keep going as you are:  npx brnrd <command>",
+      "",
+    ].join("\n")
+  );
 }
 
 async function main() {
@@ -280,11 +321,18 @@ async function main() {
 
   // The launcher's version is the contract: a version-pinned `npx brnrd`
   // must install that same brnrd version, not whatever is newest on PyPI.
-  if (!current || !current.includes(VERSION)) {
+  const bootstrapped = !current || !current.includes(VERSION);
+  if (bootstrapped) {
     if (!await bootstrap()) process.exit(1);
   }
 
-  const result = run(EXE, args);
+  // brnrd prints its own next steps ("next: `brnrd up`"). Under npx that
+  // command does not exist, so the payload is told how it was launched and
+  // spells those lines `npx brnrd …` instead.
+  const result = run(EXE, args, {
+    env: VIA_NPX ? { ...process.env, BRNRD_LAUNCHER: "npx" } : process.env,
+  });
+  if (bootstrapped && VIA_NPX) pathAdvice();
   process.exit(result.status === null ? 1 : result.status);
 }
 

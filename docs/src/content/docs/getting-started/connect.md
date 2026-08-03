@@ -14,9 +14,10 @@ From the repository you want the resident to know:
 brnrd account connect       # pair, install, and start
 ```
 
-Installed through the npm bootstrapper? `npx brnrd account connect` does the
-same thing in one line — it bootstraps a durable install first, then runs the
-command.
+Nothing installed yet? `npx brnrd account connect` does the whole cold start in
+one line — it bootstraps a durable install first, then runs the command. It
+leaves no `brnrd` command on your `PATH` though, so `npm install -g brnrd`
+afterwards (or instead) is worth the four seconds.
 
 The managed connection relays messages and status between brnrd.dev and your
 daemon. It does not move run execution to hosted compute. See
