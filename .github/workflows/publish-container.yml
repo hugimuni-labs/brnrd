@@ -7,22 +7,28 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  publish:
-    name: Build and publish
+  # Unconstrained: every commit still gets its own immutable
+  # `sha-<7>` tag in both registries, whatever else is racing (#848 —
+  # "registry tags are the release mechanism, and a published image
+  # nobody rolls out is not a release"). A `concurrency:` group here
+  # would cancel or requeue builds and leave commits with no image
+  # anywhere in either `cancel-in-progress` variant (#1039 comment 1).
+  build:
+    name: Build and publish image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.image.outputs.tag }}
     env:
       GHCR_IMAGE: ghcr.io/hugimuni-labs/brnrd
       # Full target without a tag, for example:
       # rg.<region>.scw.cloud/<namespace>/brnrd
       SCW_REGISTRY_IMAGE: ${{ secrets.SCW_REGISTRY_IMAGE }}
       SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      # The Serverless Container to roll the mirrored image out to. Optional
-      # until the cutover target exists; when absent the deploy tail is
-      # skipped with a visible notice, never silently.
-      SCW_CONTAINER_ID: ${{ secrets.SCW_CONTAINER_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +78,32 @@ jobs:
           docker tag "$GHCR_IMAGE:${{ steps.image.outputs.tag }}" "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
           docker push "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
 
+  # Constrained: at most one rollout per ref in flight at a time, and a
+  # superseded one is cancelled outright (#1039 — four builds in three
+  # minutes overlapped freely and prod ended up serving whichever deploy
+  # step finished last, with no relationship to commit order). Cancelling
+  # here is the right call precisely because it does *not* touch the
+  # image: `build` already pushed this commit's `sha-<7>` tag to both
+  # registries, so a cancelled rollout loses only a container update
+  # that a newer commit is already about to redo.
+  deploy:
+    name: Deploy the mirrored image
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: scw-rollout-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      SCW_REGISTRY_IMAGE: ${{ secrets.SCW_REGISTRY_IMAGE }}
+      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      # The Serverless Container to roll the mirrored image out to. Optional
+      # until the cutover target exists; when absent the deploy tail is
+      # skipped with a visible notice, never silently.
+      SCW_CONTAINER_ID: ${{ secrets.SCW_CONTAINER_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
       # The deploy tail (#848: registry tags are the release mechanism, and a
       # published image nobody rolls out is not a release). The whole rollout
       # lives in scripts/scw_rollout.py — its docstring carries why, including
@@ -81,7 +113,7 @@ jobs:
       - name: Deploy the mirrored image to the Serverless Container
         if: ${{ env.SCW_SECRET_KEY != '' && env.SCW_REGISTRY_IMAGE != '' && env.SCW_CONTAINER_ID != '' }}
         shell: bash
-        run: python3 scripts/scw_rollout.py "$SCW_REGISTRY_IMAGE:${{ steps.image.outputs.tag }}"
+        run: python3 scripts/scw_rollout.py "$SCW_REGISTRY_IMAGE:${{ needs.build.outputs.tag }}"
 
       - name: Note the skipped deploy tail
         if: ${{ env.SCW_SECRET_KEY != '' && env.SCW_REGISTRY_IMAGE != '' && env.SCW_CONTAINER_ID == '' }}
