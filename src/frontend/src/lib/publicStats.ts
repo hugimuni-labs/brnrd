@@ -7,6 +7,16 @@
 // Gurio/brr → hugimuni-labs/brnrd transfer rewrites exactly this line.
 export const GITHUB_REPO = 'hugimuni-labs/brnrd';
 
+// The published docs. Beside GITHUB_REPO for the same reason it is a
+// constant: the transfer above moved the Pages site too, and the landing
+// went on linking the retired host — the product's only documentation link,
+// answering 404 (driven 2026-08-03, both hosts). Bound once here so the
+// signed-in surfaces that now carry it cannot rot separately; ColdStart's
+// test sweeps the whole frontend for the dead host, so the old spelling
+// does not survive even in a comment. The trailing slash matters — the
+// Starlight site sets `trailingSlash: 'always'` (docs/astro.config.mjs).
+export const DOCS_URL = 'https://hugimuni-labs.github.io/brnrd/';
+
 export interface PublicStats {
 	accounts: number;
 	supporter_seats_total: number;

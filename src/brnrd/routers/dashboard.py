@@ -30,6 +30,8 @@ from ._session import (
     _repos,
     _start_github_background_refresh,
     _time_label,
+    PAIR_REPO_PLACEHOLDER,
+    pairing_command,
 )
 
 router = APIRouter(tags=["web"])
@@ -831,6 +833,13 @@ def dashboard_repos_api(
             "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
             "notice": _notice_text(notice),
             "setup_installation_id": installation_id or "",
+            # The same three lines each connected repo carries as
+            # `setup_command`, with a placeholder where a real checkout's
+            # name would go — for the dashboard's cold-start block, which
+            # renders precisely when `connected_repos` is empty and so has
+            # no repo row to read the command off. Account-level like
+            # `install_url` and `github_app_slug` beside it.
+            "pairing_command": pairing_command(PAIR_REPO_PLACEHOLDER),
         }
     )
 

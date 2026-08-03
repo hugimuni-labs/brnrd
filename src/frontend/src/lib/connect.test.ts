@@ -6,6 +6,7 @@ import {
 	approveConnect,
 	canApprove,
 	fetchConnectContext,
+	needsRepoEnable,
 	statusNotice,
 	type ConnectContext
 } from './connect.ts';
@@ -103,4 +104,18 @@ test('statusNotice names every terminal state and stays silent when live', () =>
 	assert.match(String(statusNotice(ctx({ status: 'expired' }))), /expired/);
 	assert.match(String(statusNotice(ctx({ status: 'consumed' }))), /already used/);
 	assert.match(String(statusNotice(ctx({ repos: [] }))), /No repos connected yet/);
+});
+
+// The zero-repo dead end (2026-08-03): the notice above is true and used to
+// be the whole of it — a reader mid-setup, told to "connect a repo first",
+// with no indication that doing so is a page in this app. Exactly one status
+// earns a way out; every other one is genuinely terminal and must not offer
+// an affordance it cannot honour.
+test('needsRepoEnable marks the one dead end that has somewhere to go', () => {
+	assert.equal(needsRepoEnable(ctx({ repos: [] })), true);
+	assert.equal(needsRepoEnable(ctx({ status: 'approved', repos: [] })), true);
+	assert.equal(needsRepoEnable(ctx()), false, 'a code with repos to bind is not a dead end');
+	for (const status of ['expired', 'consumed', 'unknown'] as const) {
+		assert.equal(needsRepoEnable(ctx({ status, repos: [] })), false, `${status} is terminal`);
+	}
 });

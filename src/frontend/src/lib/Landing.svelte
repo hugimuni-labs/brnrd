@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import {
+		DOCS_URL,
 		GITHUB_REPO,
 		fetchPublicStats,
 		fetchRepoStats,
@@ -49,7 +50,7 @@
 		</div>
 		<nav class="flex items-center gap-4 pt-2">
 			<a
-				href="https://gurio.github.io/brr/"
+				href={DOCS_URL}
 				rel="external"
 				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
 				>docs</a

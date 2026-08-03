@@ -8,7 +8,9 @@
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
+	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
+	import { DOCS_URL } from '$lib/publicStats';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
@@ -112,6 +114,11 @@
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
+	// Backend-owned pairing lines for the cold start, from the same
+	// `/v1/dashboard/repos` fetch — an account with no repos has no repo row
+	// to read `setup_command` off, so the account-level spelling comes with
+	// the list itself.
+	let pairingCommand = $state<string | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -681,6 +688,14 @@
 			: []
 	);
 
+	// The cold-start block's own cadence — see refreshOnce(). `0` means the
+	// list has never landed, so the first pass is never throttled.
+	const COLD_REPO_POLL_MS = 15_000;
+	let coldRepoCheckAt = 0;
+	function coldRefetchDue(): boolean {
+		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
+	}
+
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -731,10 +746,27 @@
 				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
-		if (connectedRepos === null) {
+		// Once, normally — the repo list is not a live surface. The one
+		// exception is a cold account: while it has *no* repos the page is
+		// showing the cold-start block, and that block has to leave on its
+		// own the moment a repo is enabled (in the other tab this very
+		// block sends the reader to). A first-run panel that outstays its
+		// state is a worse bug than the blank page it replaced.
+		//
+		// On its own clock, though. This loop runs at POLL_MS = 2s, and the
+		// state it is watching for changes at human speed: the reader has to
+		// reach another page, install a GitHub App, and come back. Riding the
+		// 2s tick would spend thirty GETs a minute, for as long as a tab
+		// stays open, on precisely the accounts that have nothing — and the
+		// answer arrives no sooner. So: a slow interval, plus a refetch the
+		// moment the tab regains focus, which is the *actual* signal that the
+		// reader has come back from doing the thing.
+		if (connectedRepos === null || (connectedRepos.length === 0 && coldRefetchDue())) {
 			try {
+				coldRepoCheckAt = Date.now();
 				const repos = await fetchRepos();
 				connectedRepos = repos.connected_repos;
+				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
@@ -799,17 +831,30 @@
 		}
 	}
 
+	// Coming back to this tab is the one honest event that says "I may have
+	// just enabled a repo". Cheaper than any interval and strictly faster
+	// than all of them, so the throttle above never costs the reader a wait
+	// they can perceive.
+	function onFocus() {
+		if (connectedRepos !== null && connectedRepos.length === 0) {
+			coldRepoCheckAt = 0;
+			refresh();
+		}
+	}
+
 	onMount(() => {
 		refresh();
 		pollHandle = setInterval(refresh, POLL_MS);
 		tickHandle = setInterval(() => {
 			now = Date.now();
 		}, TICK_MS);
+		window.addEventListener('focus', onFocus);
 	});
 
 	onDestroy(() => {
 		if (pollHandle) clearInterval(pollHandle);
 		if (tickHandle) clearInterval(tickHandle);
+		window.removeEventListener('focus', onFocus);
 	});
 </script>
 
@@ -852,6 +897,19 @@
 				     long as a page mostly because it was reporting 279 phantom
 				     running runs; once #486 reaped those it rendered about
 				     three rows. Folded, not re-fitted. -->
+					<!-- Docs, on a signed-in surface at last (2026-08-03). The only
+				     docs link in the product lived on the landing, which means it
+				     vanished at the exact moment a reader acquired questions: he
+				     signed up and reported "no docs link or like install it like
+				     this line or anything clear you know?". A third entry beside
+				     the two already here, in their grammar — still not the nav bar
+				     the note above declines to build. -->
+					<a
+						href={DOCS_URL}
+						rel="external"
+						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>docs</a
+					>
 					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 					<a
@@ -879,6 +937,15 @@
 				resident dashboard
 			</h1>
 		</header>
+
+		<!-- The cold start, directly under the title and above everything
+		     else: for an account with nothing connected every section below
+		     is an empty state, so anything under the fold is under the
+		     horizon. It renders only while `connectedRepos` is a landed,
+		     empty list — the same source the rail and the consent notice
+		     read, never a second notion of "empty" — and leaves by itself
+		     when the first repo appears. -->
+		<ColdStart repos={connectedRepos} pairCommand={pairingCommand} />
 
 		<PublishConsentNotice repos={connectedRepos} />
 
