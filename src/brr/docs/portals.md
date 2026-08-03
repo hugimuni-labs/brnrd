@@ -74,6 +74,66 @@ they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
 write.** A dropped directive that nobody reads is a request that silently
 never happened.
 
+### `brnrd do` — the verdict rides the act
+
+`brnrd do` is porcelain over the grammar above, not a new channel: every
+write it makes lands as one of the same outbox files this manual already
+describes, staged and drained exactly the way a hand-written `note.md` /
+`event: <id>` reply would be. What it adds is the read-back — instead of
+staging a file and separately remembering to poll `notices`, one call
+stages the file, waits for the daemon's own drain to consume it, and diffs
+`notices` from just before the stage to report `✓` / `✗ <notice>` / `?
+still queued` in the same call.
+
+```
+brnrd do [--outbox DIR] [--timeout SECONDS] \
+  [--mood <feeling-or-handle> [--mood-note "…"]] \
+  [--note <event-id>]... \
+  [--reply <event-id> --body-file FILE | --body "…"]... \
+  [--gate <name> --body-file FILE]... \
+  [--card FILE] \
+  [-- <command> [args…]]
+```
+
+- `--note` / `--reply` / `--gate` each stage the canonical `note:` /
+  `event:` / `gate:` fenced frontmatter this manual already specifies, wait
+  up to `--timeout` (default 30s) for the drain to consume the file, and
+  report the verdict: `✓` (consumed, no fresh matching notice), `✗
+  <kind>: <text>` (a fresh notice named this directive), or `? still
+  queued` (still sitting in the outbox at the timeout — never a hang).
+  `--mood` / `--card` write the `.mood` / `.card` control files directly
+  (never drained, so the verdict is just the write) — `--mood` resolves
+  through the same `emotes.lookup` / `emotes.near_misses` this manual's
+  `.mood` row already points at, so a near-miss reports candidates instead
+  of writing nothing silently.
+- Bare `brnrd do` (no verbs) prints a compact one-screen read of pending
+  events, outbound counts, notices, the quota line, and spawn-pool
+  headroom — the canonical replacement for hand-parsing
+  `portal-state.json`.
+- `-- <command> [args…]` (only recognised for `do`, split out of argv
+  before anything else parses it) runs the given command via `execvp`
+  after the verbs above are staged — argv passthrough, never shell
+  interpretation, so it does no globbing/piping/env-expansion beyond what
+  your own shell already did. Verdict lines move to stderr so the
+  command's stdout stays pipeable, and the command's own stdout/stderr/
+  exit code become `brnrd do`'s — the boundary carries both the speech
+  acts and the real work in one call. Omit `--` for a pure update call,
+  exactly as above.
+
+**One correlation gap, named rather than patched around.** A notice
+records its verb and target in the message text (`"note dropped: event
+evt-… …"`, `"reply dropped: …"`) but never the staged filename that
+produced it, so `brnrd do` matches a fresh notice to "was this about the
+directive I just staged" by substring, not by identity. It works because
+every refusal/drop/redirect notice in `daemon.py`'s `_drain_outbox` names
+both its verb and its target — but a concurrent notice from unrelated
+activity that happened to share both substrings would still misattribute.
+The precise fix is daemon-side: give `_record_outbox_notice`
+(`daemon.py`, the function starting ~L6135) an optional `source_file:`
+field threaded from each call site's own `fpath.name`, so a reader could
+join on identity instead of text. Not done here — no daemon-side changes
+in this change — named so the gap has one place to live.
+
 ### `await:` — a select, not a sleep (#959)
 
 The measurement this closes: a resident waiting on a dispatched worker or a
