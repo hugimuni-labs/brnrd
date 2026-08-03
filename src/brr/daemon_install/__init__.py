@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 from pathlib import Path
 
+from ..cli import brnrd_cmd
 from . import linux, macos
 
 
@@ -28,9 +29,10 @@ def install(
             print("[brnrd] launchd service loaded and kickstarted")
         else:
             print("[brnrd] launchd service written; it will load at next login")
+        brnrd = brnrd_cmd()
         print(
-            "[brnrd] next: `brnrd daemon status`, `brnrd daemon logs`, "
-            "`brnrd daemon uninstall`",
+            f"[brnrd] next: `{brnrd} daemon status`, `{brnrd} daemon logs`, "
+            f"`{brnrd} daemon uninstall`",
         )
         return None
     _unsupported("install")
