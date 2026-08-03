@@ -75,8 +75,10 @@ def create_app(
     app.state.engine = engine
     app.state.SessionLocal = make_session_factory(engine)
     # The forwarder is the seam where a response body leaves brnrd
-    # without being persisted. Default dispatches to the configured
-    # platform (Telegram today); tests install a capturing forwarder.
+    # without being persisted. Default dispatches through a per-platform
+    # routing table (``inbox.make_default_forwarder``, keyed on
+    # ``reply_to["platform"]`` — telegram, github, whatsapp today); tests
+    # install a capturing forwarder.
     app.state.forwarder = forwarder or make_default_forwarder(settings)
     # Transient, RAM-only relay for diffense review packs. Never touches
     # the database — brnrd renders a relayed pack, it does not store it.

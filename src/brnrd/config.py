@@ -86,6 +86,22 @@ class Settings:
     # memory only, so the cap bounds transient buffering, not storage.
     telegram_media_max_mb: int = _env_int("BRNRD_TELEGRAM_MEDIA_MAX_MB", 10)
 
+    # WhatsApp (Meta Business Cloud API) — the second cloud lane after
+    # Telegram. ``whatsapp_access_token`` is the permanent/system-user
+    # bearer token for the configured phone number; ``whatsapp_verify_token``
+    # is the arbitrary string Meta echoes back on the GET hub-challenge
+    # subscription handshake (never a secret in transit — it rides a query
+    # string — so it only proves the *subscriber* configured it, not that
+    # the request came from Meta); ``whatsapp_app_secret`` is what actually
+    # authenticates each POST via ``X-Hub-Signature-256`` (the same scheme
+    # GitHub's webhook HMAC uses, see ``_hub_signature_ok``).
+    whatsapp_access_token: str = os.environ.get("BRNRD_WHATSAPP_ACCESS_TOKEN", "")
+    whatsapp_phone_number_id: str = os.environ.get("BRNRD_WHATSAPP_PHONE_NUMBER_ID", "")
+    whatsapp_verify_token: str = os.environ.get("BRNRD_WHATSAPP_VERIFY_TOKEN", "")
+    whatsapp_app_secret: str = os.environ.get("BRNRD_WHATSAPP_APP_SECRET", "")
+    whatsapp_api_base_url: str = os.environ.get("BRNRD_WHATSAPP_API_BASE_URL", "https://graph.facebook.com")
+    whatsapp_api_version: str = os.environ.get("BRNRD_WHATSAPP_API_VERSION", "v22.0")
+
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 
     github_oauth_client_id: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID")
