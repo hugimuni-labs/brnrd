@@ -996,21 +996,38 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
 # case that opened this ticket). Both surfaces below (the bar chip, the
 # seed/stop briefing count) must agree on which kinds count, so the
 # filter lives once, here.
+#
+# #716: ``kind`` alone under-distinguishes. A record also carries a
+# ``lifetime`` — ``"run"`` (this run's own directive; a fresh refusal is a
+# real transition worth an alarm) or ``"standing"`` (an environmental fact
+# — an ignored `.brr/config` security key, an unreachable `runners.md` —
+# that re-fires identically on every wake and nothing this run does can
+# clear). Counting a standing notice pins ``!N`` at a nonzero baseline from
+# t=0, so a genuine new refusal reads as a delta against noise (``!1`` ->
+# ``!2``) instead of the zero-to-one transition the chip exists to show.
+# Excluded for the same *reason* as ``advisory`` — FYI, not a failure to
+# act on right now — via a second, independent field rather than folding
+# it into ``kind`` (which would make the record lie about what happened).
 def _counted_notices(notices: list) -> list:
     """The subset of *notices* that represent a refusal or a drop.
 
-    A record with no ``kind`` key at all is a legacy entry — written by a
-    daemon generation before #1002, possibly still sitting in a live
-    ``portal-state.json`` across a daemon restart. It counts as refusing:
-    the pessimistic direction, chosen deliberately, because a real refusal
-    hidden by an under-count costs far more than one stale advisory
-    over-counted. Only an entry explicitly marked ``advisory`` is excluded.
+    A record with no ``kind`` key, no ``lifetime`` key, or neither, is a
+    legacy entry — written by a daemon generation before #1002 or #716,
+    possibly still sitting in a live ``portal-state.json`` across a daemon
+    restart. It counts as refusing: the pessimistic direction, chosen
+    deliberately, because a real refusal hidden by an under-count costs far
+    more than one stale advisory or standing notice over-counted. Only an
+    entry explicitly marked ``kind == "advisory"`` or
+    ``lifetime == "standing"`` is excluded.
     """
     if not isinstance(notices, list):
         return []
     return [
         n for n in notices
-        if not (isinstance(n, dict) and n.get("kind") == "advisory")
+        if not (
+            isinstance(n, dict)
+            and (n.get("kind") == "advisory" or n.get("lifetime") == "standing")
+        )
     ]
 
 
@@ -1022,8 +1039,10 @@ def _notices_chip(notices: list) -> str | None:
     ``portal-state.json``.  ``!N`` on the bar makes a non-zero refusal count
     visible without demanding that read.  Absent at zero so it earns its ink
     the same way every other differential segment does. An ``advisory``
-    notice never drives this count (#1002) — it stays readable in
-    ``portal-state.json`` and in the seed/stop briefing below, just not here.
+    notice never drives this count (#1002), and neither does a ``standing``
+    one (#716 — an environmental fact this run cannot clear, not a fresh
+    refusal) — both stay readable in ``portal-state.json`` and in the
+    seed/stop briefing below, just not here.
     """
     n = len(_counted_notices(notices))
     return f"!{n}" if n else None
@@ -2146,19 +2165,45 @@ def format_delta(
     # (``_notices_chip``, same filter, ``_counted_notices``). Rendering the
     # full text stays: it is still the half that is live in the very next
     # hook subprocess, and it is what makes a *standing* notice legible even
-    # once it stops being a refusal. This account carries one permanently (a
-    # repo-side ``runners.md`` that is ignored by design), so before #1002
-    # ``!N`` was never zero here and had stopped carrying information — the
-    # kind field is exactly what lets a standing advisory stop doing that
-    # without going silent. Four words of the text tell a reader "that one
-    # again" from "that one is new"; the count alone cannot, which is
-    # precisely why it habituated.
+    # once it stops driving the count.
+    #
+    # #1002's ``kind`` field alone was not enough. This account carries a
+    # standing notice permanently (a repo-side ``runners.md`` that is
+    # ignored by design) — but it is genuinely ``kind="refused"``/
+    # ``"dropped"`` (brnrd really did not honour the input); retagging it
+    # ``advisory`` to keep it out of the count would make the chip honest by
+    # making the record lie about what happened. #716's fix is a second,
+    # orthogonal field: ``lifetime``. A ``"standing"`` record is excluded
+    # from the count below for the same *reason* as an advisory (FYI, not a
+    # fresh failure to act on) without pretending it is one — so the header
+    # now names the two exclusions separately, and a reader sees "standing"
+    # on the environmental notice rather than the wrong-severity "advisory".
+    # Four words of the text still tell a reader "that one again" from
+    # "that one is new"; the count alone cannot, which is why it habituated
+    # before either field existed.
     if (seed or stop) and notices:
         shown = notices[-_NOTICE_LINES:]
         counted = len(_counted_notices(notices))
+        advisory_extra = sum(
+            1
+            for n in notices
+            if isinstance(n, dict)
+            and n.get("lifetime") != "standing"
+            and n.get("kind") == "advisory"
+        )
+        standing_extra = sum(
+            1
+            for n in notices
+            if isinstance(n, dict) and n.get("lifetime") == "standing"
+        )
         head = f"- notices: {counted} directive(s) brnrd refused or dropped"
-        if len(notices) > counted:
-            head += f" (+{len(notices) - counted} advisory)"
+        extras = []
+        if advisory_extra:
+            extras.append(f"+{advisory_extra} advisory")
+        if standing_extra:
+            extras.append(f"+{standing_extra} standing")
+        if extras:
+            head += f" ({', '.join(extras)})"
         if stop:
             head += (
                 " — a refused outbox file is deleted exactly like an accepted"
@@ -2171,7 +2216,17 @@ def format_delta(
                 text = text[: _NOTICE_TEXT_CAP - 1].rstrip() + "…"
             if text:
                 kind = record.get("kind") if isinstance(record, dict) else None
-                label = f"[{kind}] " if kind else ""
+                lifetime = (
+                    record.get("lifetime") if isinstance(record, dict) else None
+                )
+                # Only "standing" earns a place in the label — it's the
+                # surprising case (an environmental fact, not this run's own
+                # directive) and the one #716 needs legible; "run" is the
+                # default for nearly every record and would just be noise.
+                label_bits = [b for b in (kind,) if b]
+                if lifetime == "standing":
+                    label_bits.append("standing")
+                label = f"[{' · '.join(label_bits)}] " if label_bits else ""
                 lines.append(f"  · {label}{text}")
         if len(notices) > len(shown):
             lines.append(
