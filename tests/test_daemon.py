@@ -4052,6 +4052,171 @@ def test_write_terminal_failure_response_notices_schedule_crash(tmp_path):
     assert "runner killed after 1 attempt(s) with exit code 143" in response
 
 
+class TestNotifyGateFallback:
+    """The 'no run left unheard' fallback (#743 family): a schedule-woken
+    (or any gate-less) run's terminal reply reaches a configured chat gate
+    via ``notify.gate`` instead of being staged undeliverable, when one
+    can be resolved. Drives the real ``_run_worker`` decision site
+    (``daemon.py`` around ``_terminal_reply_lands``/``_terminal_route``),
+    with only ``_gate_can_deliver`` faked to control which gates read as
+    configured on this fake account."""
+
+    def _run(
+        self, tmp_path, monkeypatch, *, cfg_extra=None, configured_gates=(),
+        eid="evt-tick", body="director tick note\n", duplicate=False,
+    ):
+        # A real git repo, not just ``write_repo_scaffold``'s directory
+        # shape: an account-attached run stays on the ``worktree`` env
+        # (unlike a ``repo_label="home"`` run, which is forced to
+        # ``host``), and ``WorktreeEnv.prepare`` really does ``git
+        # worktree add`` against *repo_root*.
+        init_git_repo(tmp_path)
+        commit_files(tmp_path, {"AGENTS.md": "# Project\n"})
+        (tmp_path / ".brr" / "inbox").mkdir(parents=True)
+        (tmp_path / ".brr" / "responses").mkdir(parents=True)
+        cfg = {
+            "repo.label": "Gurio/notify",
+            "home.path": str(tmp_path / "account-home"),
+            **(cfg_extra or {}),
+        }
+        ctx = daemon.account.resolve_context(tmp_path, cfg)
+        event = make_event(tmp_path, eid=eid, source="schedule", body="tick")
+        monkeypatch.setattr(
+            daemon.runner, "resolve_runner_profile",
+            lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
+        )
+        monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+        monkeypatch.setattr(
+            daemon.prompts, "build_daemon_prompt",
+            lambda task, eid, rp, root, **kw: "PROMPT",
+        )
+        monkeypatch.setattr(
+            daemon, "_gate_can_deliver",
+            lambda _brr, gate: gate in configured_gates,
+        )
+        if duplicate:
+            monkeypatch.setattr(
+                daemon, "_terminal_stream_duplicates_delivered",
+                lambda _task, _resp_path: True,
+            )
+        base_env = envs.get_env("worktree")
+
+        def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text(body, encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout=body, stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+
+        monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+        inbox_dir = tmp_path / ".brr" / "inbox"
+        responses_dir = tmp_path / ".brr" / "responses"
+        task = daemon._run_worker(
+            event, tmp_path, responses_dir, cfg, 0,
+            account_context=ctx, inbox_dir=inbox_dir,
+        )
+        return task, ctx, event, inbox_dir, responses_dir
+
+    def _message_rows(self, ctx, task):
+        messages_dir = daemon.message_store.run_messages_dir(
+            ctx, "Gurio/notify", task.id,
+        )
+        return daemon.message_store.list_messages(messages_dir)
+
+    def test_single_configured_gate_is_inferred_and_delivered(
+        self, tmp_path, monkeypatch,
+    ):
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+        )
+
+        assert task.status == "done"
+        assert task.meta["terminal_route"] == "gate-fallback"
+        assert event.get("terminal_suppressed") is True
+
+        [fallback] = protocol.list_done(inbox_dir, "telegram")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.DELIVERED
+        assert row["platform_gate"] == "telegram"
+
+    def test_zero_configured_gates_stays_undeliverable(self, tmp_path, monkeypatch):
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=(),
+        )
+
+        assert task.meta["terminal_route"] == "undeliverable"
+        # Nothing synthesized beyond the schedule event's own retirement.
+        assert list(inbox_dir.glob("*.md")) == [event["_path"]]
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_several_configured_gates_with_no_explicit_key_stays_undeliverable(
+        self, tmp_path, monkeypatch,
+    ):
+        # Ambiguous — brr does not guess which correspondent was meant.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram", "slack"),
+        )
+
+        assert task.meta["terminal_route"] == "undeliverable"
+        assert list(inbox_dir.glob("*.md")) == [event["_path"]]
+
+        [row] = self._message_rows(ctx, task)
+        assert row["status"] == daemon.message_store.UNDELIVERABLE
+
+    def test_explicit_notify_gate_wins_over_single_gate_inference(
+        self, tmp_path, monkeypatch,
+    ):
+        # Two candidates would otherwise be ambiguous (previous test) — the
+        # explicit key resolves it outright, to the *named* gate, not
+        # necessarily the one inference would have picked.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch,
+            cfg_extra={"notify.gate": "slack"},
+            configured_gates=("telegram", "slack"),
+        )
+
+        assert task.meta["terminal_route"] == "gate-fallback"
+        assert protocol.list_done(inbox_dir, "telegram") == []
+        [fallback] = protocol.list_done(inbox_dir, "slack")
+        fallback_body = protocol.read_response(responses_dir, fallback["id"])
+        assert fallback_body.strip() == "director tick note"
+
+        [row] = self._message_rows(ctx, task)
+        assert row["platform_gate"] == "slack"
+
+    def test_duplicate_terminal_never_fires_the_fallback(self, tmp_path, monkeypatch):
+        # Single-delivery invariant: a terminal stream that exactly
+        # duplicates a reply this run already delivered mid-run must stay
+        # suppressed as a duplicate, never re-routed through notify.gate —
+        # two channels would double-post the same text. Note this
+        # combination (an *unowned*-source run whose terminal stream is
+        # also a *duplicate*) can't be produced by the mid-run outbox drain
+        # today — the digest that arms the dedupe is only recorded for a
+        # reply the drain itself judged deliverable
+        # (``_drain_outbox``: ``if not ppath: continue`` skips the
+        # bookkeeping before it, and a schedule-sourced reply is never
+        # deliverable in the first place). So this pins the *ordering* the
+        # decision site guarantees directly — duplicate is checked before
+        # notify.gate is even resolved — by forcing the duplicate verdict
+        # the dedupe would produce if it ever could reach this shape,
+        # rather than the (currently unreachable) natural path to it.
+        task, ctx, event, inbox_dir, responses_dir = self._run(
+            tmp_path, monkeypatch, configured_gates=("telegram",),
+            duplicate=True,
+        )
+
+        assert task.meta["terminal_route"] == "duplicate"
+        # notify.gate was never even consulted: no fallback event landed.
+        assert protocol.list_done(inbox_dir, "telegram") == []
+
+
 def test_run_worker_calls_sync_before_resolving_branch_plan(
     tmp_path, monkeypatch,
 ):
