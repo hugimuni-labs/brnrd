@@ -7667,6 +7667,40 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["source"] == "claude /usage PTY + claude result JSON"
 
 
+def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is_fresh(
+    monkeypatch, tmp_path,
+):
+    """#1027: a *new* run's own outbox has no result-JSON reading of its own
+    yet — that is exactly the wake-time state ``portal-state.json``'s
+    ``spend``/``context_window`` facets render from. The last claude run's
+    reading, durably written into the account-shared dir (``BRR_SHARED_DIR``,
+    ``claude_status._shared_dir``), is what must be found instead of
+    reporting ``absent`` for a fact that is one run stale, not unknown."""
+    monkeypatch.setattr(
+        daemon.claude_usage, "load_snapshot", lambda outbox: None,
+    )
+    outbox_dir = tmp_path / "outbox" / "evt-fresh-run"
+    outbox_dir.mkdir(parents=True)
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    daemon.claude_status.write_snapshot(
+        shared_dir,
+        {
+            "source": "claude result JSON",
+            "spend": {"summary": "$0.42 this session (estimated)"},
+            "context_window": {"summary": "80% context left (est)"},
+        },
+    )
+
+    levels, slots = daemon._collect_levels(
+        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
+    )
+
+    assert slots == {"quota", "spend", "context_window"}
+    assert levels["spend"]["summary"] == "$0.42 this session (estimated)"
+    assert levels["context_window"]["summary"] == "80% context left (est)"
+
+
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     conv = "telegram:chat:42"

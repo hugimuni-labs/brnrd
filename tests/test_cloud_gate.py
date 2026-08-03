@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
+from brr import claude_status  # noqa: E402
 from brr import protocol  # noqa: E402
 from brr import schedule  # noqa: E402
 from brr import usage_samples  # noqa: E402
@@ -1124,6 +1125,39 @@ def test_claude_quota_shell_credits_absent_without_a_spend_snapshot(tmp_path):
     shell = cloud._claude_quota_shell(brr_dir)
     assert shell is not None
     assert shell["credits"] is None
+
+
+def test_claude_credits_block_reads_the_shared_spend_snapshot_directly(tmp_path):
+    """#1027: the per-run outbox dir is swept the moment its run ends
+    (``daemon._remove_outbox``), so a glob over surviving outbox dirs almost
+    never finds anything — the account-shared copy claude_status now writes
+    (``BRR_SHARED_DIR``) is what the dashboard credits block reads first.
+    No outbox dir exists at all here, proving this is not the old glob
+    fallback finding it."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir(parents=True)
+    (brr_dir / claude_status.SNAPSHOT_NAME).write_text(
+        json_mod.dumps(
+            {
+                "spend": {
+                    "summary": "$2.40 this session (estimated)",
+                    "total_cost_usd": 2.40,
+                },
+                "updated_at": "2026-08-03T12:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    credits = cloud._claude_credits_block(brr_dir)
+
+    assert credits == {
+        "total_cost_usd": 2.40,
+        "summary": "$2.40 this session (estimated)",
+        "updated_at": "2026-08-03T12:00:00Z",
+    }
 
 
 def test_claude_quota_shell_surfaces_per_model_weekly_windows(tmp_path):
