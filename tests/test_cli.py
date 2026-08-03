@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import types
 
 import pytest
@@ -422,6 +423,112 @@ def test_portal_state_errors_without_file(capsys, monkeypatch):
 
     assert main(["portal", "state"]) == 1
     assert "no live portal-state.json" in capsys.readouterr().err
+
+
+# ── portal await (#959) ────────────────────────────────────────────────
+
+
+def test_portal_await_errors_without_file(capsys, monkeypatch):
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
+
+    assert main(["portal", "await"]) == 1
+    assert "no live portal-state.json" in capsys.readouterr().err
+
+
+def test_portal_await_errors_when_nothing_armed(tmp_path, capsys):
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({"version": 1, "await": {"armed": False}}), encoding="utf-8",
+    )
+
+    assert main(["portal", "await", "--path", str(state)]) == 1
+    assert "no await:" in capsys.readouterr().err
+
+
+def test_portal_await_returns_resolved_outcome_without_sleeping(tmp_path, capsys):
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {
+                "armed": True, "resolved": True, "outcome": "condition",
+                "which": "file:/tmp/gate.log", "deadline": "2026-08-03T10:00:00Z",
+                "capped": False,
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert main(["portal", "await", "--path", str(state)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "outcome": "condition", "which": "file:/tmp/gate.log",
+        "deadline": "2026-08-03T10:00:00Z", "capped": False,
+    }
+
+
+def test_portal_await_pending_sleeps_at_most_the_hard_cap_then_reports(
+    tmp_path, capsys, monkeypatch,
+):
+    """The structural bound (#959): whatever ``--tick-seconds`` asks for, one
+    call never blocks past ``_AWAIT_POLL_HARD_CAP_SECONDS``."""
+    from brr import cli
+
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {"armed": True, "resolved": False, "capped": False},
+        }),
+        encoding="utf-8",
+    )
+    slept = []
+    monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
+
+    assert main([
+        "portal", "await", "--path", str(state), "--tick-seconds", "999",
+    ]) == 0
+
+    assert slept == [cli._AWAIT_POLL_HARD_CAP_SECONDS]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "pending"
+
+
+def test_portal_await_reports_a_resolution_that_landed_during_the_sleep(
+    tmp_path, capsys, monkeypatch,
+):
+    """The daemon's own heartbeat can resolve the wait *during* one poll
+    tick's sleep — the re-read after waking must see it, not the stale
+    pre-sleep snapshot."""
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {"armed": True, "resolved": False, "capped": False},
+        }),
+        encoding="utf-8",
+    )
+
+    def _resolve_during_sleep(_seconds):
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "resolved": True, "outcome": "timeout",
+                    "which": None, "capped": False,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(time, "sleep", _resolve_during_sleep)
+
+    assert main(["portal", "await", "--path", str(state)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "timeout"
 
 
 def test_run_requires_instruction():
