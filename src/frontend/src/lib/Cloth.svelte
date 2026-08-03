@@ -15,6 +15,18 @@
 	} from './cloth';
 	import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens';
 	import type { RunLedgerRow } from './runLedger';
+	import RunNodeInline from './RunNodeInline.svelte';
+	import Crossing from './Crossing.svelte';
+	import { crossingCells } from './crossing';
+	import {
+		nodeDigest,
+		repoRunSlug,
+		runIdSlug,
+		runNodeFromSurface,
+		type NodeIdentity
+	} from './runNode';
+	import { runFace } from './runFace';
+	import type { SurfaceResponse } from './surface';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
 	// done work as root-run trees, one curated line each, worker strands
@@ -28,9 +40,29 @@
 		now: number;
 		windowMs: number;
 		stale: boolean;
+		/** The corpus, for the in-place node unfold (his 08-02 steer: a cloth
+		 *  item previews where the reader stands — a page redirect costs them
+		 *  their place on the way back). Null while loading; the unfold then
+		 *  falls back to a plain run-page link. */
+		surface?: SurfaceResponse | null;
+		/** THE CROSSING (`crossing.ts`): the warp threads in authored order, and
+		 *  run id → the ones each run lifted. Same alphabet the pick lane draws —
+		 *  same threads, same cells, same width — so a burning pick and the cloth
+		 *  line it becomes carry legibly the same strip. Not the same *x*: this
+		 *  row wraps, so the strip sits where the row's own content puts it. */
+		threads?: string[];
+		crossingIndex?: Map<string, string[]>;
 	}
 
-	let { rows, now, windowMs, stale }: Props = $props();
+	let {
+		rows,
+		now,
+		windowMs,
+		stale,
+		surface = null,
+		threads = [],
+		crossingIndex = new Map()
+	}: Props = $props();
 
 	// The lens rail (the dissolution, 2026-08-02). The chips lens the *past
 	// inventory*, and the cloth is the past's one object now, so the rail
@@ -82,19 +114,85 @@
 		if (set.has(id)) set.delete(id);
 		else set.add(id);
 	}
+
+	// The in-place unfold: one open node at a time, keyed by line id. A row
+	// tap answers with the run's own node right where the reader stands —
+	// the same grammar the machine's seam speaks — and the full page stays
+	// one link deeper (`RunNodeInline`'s "full node →").
+	let openNode = $state<string | null>(null);
+
+	function clothIdentity(line: ClothLine, child: boolean): NodeIdentity {
+		return {
+			// Empty on purpose: the node's own digest speaks for a closed run's
+			// status — same rule the page's selected sheet follows.
+			status: '',
+			name: line.named ? line.name : (line.runId ?? line.name),
+			context: line.repoLabel,
+			runner: [line.runnerShell, line.runnerCore].filter(Boolean).join(' · ') || null,
+			spawn: child,
+			age: line.age,
+			mood: null,
+			moodGlyph: null,
+			moodFrames: null,
+			moodRest: null,
+			moodPitch: null
+		};
+	}
+
+	function clothVitals(line: ClothLine): string[] {
+		const parts: string[] = [];
+		if (line.chips.length > 0) parts.push(line.chips.map((chip) => chip.label).join(' '));
+		parts.push(line.duration);
+		return parts;
+	}
 </script>
 
-{#snippet curatedLine(line: ClothLine, child: boolean)}
-	<!-- The band's bar language at the cloth's zoom: a slim leading duration
-	     bar — width from `loomBarFraction` against the window-wide max (bars
-	     compare across days), color from the shelf's thermal-age stops, bare
-	     runs dimmed the way the shelf dims them. An accent, not a background:
-	     the text line stays the row's voice. Worker rows recede like the
-	     band's nested children — a shorter, thinner, dimmer bar. -->
+{#snippet nodeUnfold(line: ClothLine, child: boolean)}
+	{#if openNode === line.id && line.href && line.runId}
+		{@const digest = surface
+			? nodeDigest(runNodeFromSurface(surface, repoRunSlug(line.repoLabel), runIdSlug(line.runId)))
+			: null}
+		<div
+			class="mt-1 mb-1.5 {child ? 'ml-8' : 'ml-4'} max-[480px]:ml-2"
+			out:fade={{ duration: 100 }}
+		>
+			{#if digest?.mirrored}
+				<RunNodeInline
+					data={surface}
+					repoSlug={repoRunSlug(line.repoLabel)}
+					runId={runIdSlug(line.runId)}
+					href={line.href}
+					vitals={clothVitals(line)}
+					identity={clothIdentity(line, child)}
+				/>
+			{:else}
+				<!-- No node in the corpus (closed before the weld, or the mirror
+				     hasn't landed) — the honest fallback keeps the way through. -->
+				<p class="panel px-3 py-2 font-mono text-[10px] text-ink-quiet">
+					no run node mirrored for this run —
+					<a href={line.href} class="text-amber-300 hover:text-amber-100">open the run page →</a>
+				</p>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet rowBar(line: ClothLine, child: boolean)}
+	<!-- The duration bar *is* the row (his 2026-08-02 read: "instead of being the
+	     left cell, could be encoded into the whole row line bar itself"). It used
+	     to be a 40px cell at the head of the line, which meant the row's one
+	     quantitative fact was competing with its name for the reader's first
+	     glance and losing — forty pixels is not enough length to compare across
+	     thirty rows anyway. As the row's own underline it has the full width to
+	     work in, so a day of runs reads as a *shape* before it reads as text,
+	     which is what a band of cloth is supposed to do.
+	     Width from `loomBarFraction` against the window-wide max (bars compare
+	     across days), colour from the thermal-age stops, bare runs dimmed. Worker
+	     rows recede: thinner, dimmer, like the band's nested children. -->
 	<span
-		class="shrink-0 self-center overflow-hidden rounded-[1px] bg-stone-900/60 {child
-			? 'h-[2px] w-7 opacity-70 max-[480px]:w-5'
-			: 'h-[3px] w-10 max-[480px]:w-6'}"
+		class="pointer-events-none absolute inset-x-0 bottom-0 block rounded-[1px] bg-stone-900/50 {child
+			? 'h-[1px] opacity-70'
+			: 'h-[2px]'}"
 		aria-hidden="true"
 	>
 		<span
@@ -103,6 +201,9 @@
 			style={`width: ${(line.barFraction * 100).toFixed(2)}%; background-color: ${line.color}`}
 		></span>
 	</span>
+{/snippet}
+
+{#snippet curatedLine(line: ClothLine, child: boolean)}
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
@@ -118,14 +219,31 @@
 	     leftover space like before; `min-w-[9ch]` is the floor that stops the
 	     collapse — the row wraps onto a second flex line (`flex-wrap` on the
 	     row, below) rather than crushing the name into a column of letters. -->
+	<Crossing
+		cells={crossingCells(threads, line.runId ? crossingIndex.get(line.runId) : undefined)}
+	/>
+	<!-- The face, immediately before the name — the same slot it takes in the
+	     pick lane and the node header, so one run reads as one run across the
+	     three surfaces it appears on. Hashed from `line.id`, the key this row
+	     already renders under (`run_id ?? event_id ?? ended_at`); a row that
+	     resolved to none of those gets nothing rather than a fabricated mark. -->
+	{#if line.id}
+		{@const face = runFace(line.id)}
+		<span class="shrink-0" aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>
+	{/if}
 	{#if line.href}
-		<a
-			href={line.href}
-			class="min-w-[9ch] flex-1 break-words text-amber-100 hover:text-amber-50"
+		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
+		     being a page redirect that cost the reader their scroll position
+		     on the way back. -->
+		<button
+			type="button"
+			class="min-w-[9ch] flex-1 cursor-pointer break-words text-left text-amber-100 hover:text-amber-50"
 			class:opacity-60={line.bare}
+			aria-expanded={openNode === line.id}
+			onclick={() => (openNode = openNode === line.id ? null : line.id)}
 		>
 			{line.name}
-		</a>
+		</button>
 	{:else}
 		<span class="min-w-[9ch] flex-1 break-words text-stone-200" class:opacity-60={line.bare}
 			>{line.name}</span
@@ -167,8 +285,9 @@
 {#snippet runRow(tree: ClothTree, index: number)}
 	<div role="listitem" in:glitchReveal={{ duration: 240, delay: index * 24 }}>
 		<div
-			class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
+			class="relative flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[3px] font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
 		>
+			{@render rowBar(tree.root, false)}
 			{@render curatedLine(tree.root, false)}
 			{#if tree.children.length > 0}
 				<button
@@ -182,15 +301,18 @@
 				</button>
 			{/if}
 		</div>
+		{@render nodeUnfold(tree.root, false)}
 		{#if expanded.has(tree.root.id)}
 			<div class="mt-0.5 space-y-0.5" out:fade={{ duration: 100 }}>
 				{#each tree.children as child, childIndex (child.id)}
 					<div
-						class="ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
+						class="relative ml-4 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[2px] font-mono text-[11px] leading-relaxed max-[480px]:ml-2 max-[480px]:gap-x-1.5"
 						in:glitchReveal={{ duration: 240, delay: childIndex * 24 }}
 					>
+						{@render rowBar(child, true)}
 						{@render curatedLine(child, true)}
 					</div>
+					{@render nodeUnfold(child, true)}
 				{/each}
 			</div>
 		{/if}
@@ -323,14 +445,12 @@
 
 		<!-- The honest hem: the cap bounds the DOM, never the truth — and now
 		     it's a door, not a wall. Every dropped root already rode the same
-		     `rows` this weave read from (the ledger fetch itself caps at
-		     `PRODUCE_GAUGE_LEDGER_LIMIT` rows and the backend additionally
-		     clamps `span_seconds` to 7 days regardless of the 30-day window
-		     asked for — `src/brnrd/routers/dashboard.py`'s
-		     `dashboard_run_ledger_api`), so lifting `CLOTH_ROOT_CAP` costs no
-		     round trip. Past that ceiling there genuinely is no further page
-		     to ask for: the endpoint has no `offset`, so "older still" past
-		     what this fetch already holds is a real gap, not a rendering one. -->
+		     `rows` this weave read from (the ledger fetch caps at
+		     `PRODUCE_GAUGE_LEDGER_LIMIT` rows), so lifting `CLOTH_ROOT_CAP`
+		     costs no round trip. Past that ceiling there genuinely is no
+		     further page to ask for: the endpoint has no `offset`, so "older
+		     still" past what this fetch already holds is a real gap, not a
+		     rendering one. -->
 		{#if totalRoots > CLOTH_ROOT_CAP}
 			<p class="mt-2 font-mono text-[10px] text-ink-mute">
 				{#if showOlder}

@@ -98,9 +98,3 @@ export function futureShelfRows(
 		};
 	});
 }
-
-/** The soonest wake still ahead of now — never an overdue one. The idle
- * NOW seam's one whisper of the future reads this. */
-export function nextFutureWake(rows: FutureShelfRow[]): FutureShelfRow | null {
-	return rows.find((row) => row.etaMs > 0) ?? null;
-}

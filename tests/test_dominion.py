@@ -191,13 +191,14 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
     assert "truncated to fit dominion inject budget" not in digest
     assert "collapsed" not in digest.split("\n", 1)[0]  # no collapse banner
 
-    # The invariant, numerically: seed + its inject wrapper fit the default
-    # budget with real headroom for the agent's own self-inject entries.
+    # The invariant, numerically (#919 rec 3: the seed's own ceiling, not the
+    # inject budget minus an inline reserve — the two are named separately so
+    # that bumping one never silently spends the other's room).
     seed = (path / dominion.PLAYBOOK_FILE).read_text(encoding="utf-8")
     wrapper = len(b"<!-- self-inject: full playbook.md -->\n")
     seed_bytes = len(seed.encode("utf-8")) + wrapper
-    assert seed_bytes <= dominion.DEFAULT_INJECT_BUDGET_BYTES
-    assert dominion.DEFAULT_INJECT_BUDGET_BYTES - seed_bytes >= 2048
+    assert seed_bytes <= dominion.SEED_CEILING_BYTES
+    assert dominion.DEFAULT_INJECT_BUDGET_BYTES - seed_bytes >= dominion.RESIDENT_RESERVE_BYTES
 
 
 def test_build_injected_context_matches_runner_injection(tmp_path):

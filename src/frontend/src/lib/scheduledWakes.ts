@@ -21,6 +21,12 @@ export interface ScheduledWake {
 	conversation_key: string | null;
 	scheduled_for: string | null; // next-fire instant, ISO; null = anchoring
 	reported_at: string | null;
+	/** Free-form record annotations. THE FORWARD WELD (2026-08-02) rides
+	 *  `links.serves`: the warp-layer call signs this entry's firings are for,
+	 *  authored as a `serves:` row in `schedule.md`. Absent on any daemon
+	 *  older than that, and on any entry that never stated one — which is a
+	 *  different fact from "serves nothing" and stays drawn as nothing. */
+	links?: { serves?: string[] } | null;
 }
 
 export interface ScheduledWakesResponse {

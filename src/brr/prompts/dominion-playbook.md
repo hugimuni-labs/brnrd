@@ -124,14 +124,12 @@ them before they are believed or resold:
   - a **default** label is worse than a missing one. Absent information, say
     unknown — asserting a specific, actionable, wrong thing is how a guard
     sends people looking for a problem that is not there.
-  - **a remedy is part of a diagnostic's truth claim.** When a message names
-    both a problem and the fix, both are assertions, and the second one is
-    rarely re-checked once the first goes right — a notice can prescribe the
-    worse action for weeks and nothing surfaces it, because the diagnosis
-    keeps being true. If the information that
-    picks between two opposite remedies is available, read it and say which;
-    if not, name the ambiguity rather than the confident branch. A remedy
-    that fires unchanged every time has never been checked against anything.
+  - **a remedy is part of a diagnostic's truth claim.** A message naming both
+    a problem and a fix makes two assertions, and only the first is ever
+    re-checked — so a notice can prescribe the worse action for weeks while
+    its diagnosis stays true. Can you tell which of two opposite remedies
+    applies? Say it. Cannot? Name the ambiguity, never the confident branch.
+    A remedy that fires unchanged every time has been checked against nothing.
 - **A claim has a direction it can be wrong in — pick the pessimistic one.**
   Making a diagnostic *more* informative is exactly where this bites: the
   vague text you are replacing usually claimed nothing, and the specific
@@ -146,22 +144,18 @@ them before they are believed or resold:
   rule. Compare whitespace-insensitively for sentences, exactly for anything
   a parser reads.
 - **A hard block fires once and is recorded; a soft nag has no counter.** A
-  guard that merely *injects* a line has no bookkeeping: if the condition it
-  names cannot be cleared by anything the run is able to do, it repeats at
-  every boundary, and a run told the same unmeetable thing over and over
-  degrades its own output trying to satisfy it. Softness is not gentleness.
-  Before adding narration to a boundary, ask what clears it — and if the
-  honest answer is *nothing this run can do*, the line is wrong, not merely
-  noisy.
+  guard that merely *injects* a line keeps no books, so a condition the run
+  cannot clear repeats at every boundary — and a run told the same unmeetable
+  thing repeatedly degrades its own output trying to satisfy it. Softness is
+  not gentleness. Before adding narration to a boundary, ask what clears it;
+  if the honest answer is *nothing this run can do*, the line is wrong, not
+  merely noisy.
 - **A guard covers a channel, not a class.** A forge closes an issue on a
-  closing keyword in a commit message *and* on one in a pull-request body; a
-  commit hook sees only the first. So the scoped sentence a run writes for its
-  human reader — *this closes only part of it* — is read by the scanner as a
-  plain close, its qualifier discarded, on the one surface nothing checks. The
-  predicate can be complete, correct and well-argued and still never execute
-  where the failure happens. Meeting a guard, ask which surfaces it is
-  installed on before trusting the class it names as closed; writing one, walk
-  every channel the same act can arrive on.
+  keyword in a commit message *and* on one in a PR body; a commit hook sees
+  only the first. The predicate can be complete, correct and well-argued and
+  still never execute where the failure happens. Meeting a guard, ask which
+  surfaces it is installed on before trusting the class it claims; writing
+  one, walk every channel the same act can arrive on.
 
 ## Reading economically
 
@@ -239,21 +233,18 @@ Two failure classes only a wake can see — say them aloud even unfixed:
   never the block's own content, always a second source that should agree —
   a date on the newest entry, a byte count, the file the block claims to
   summarise.
-- **An absent reading renders as "fine".** A collector meeting a shape it
-  doesn't recognise returns nothing → every surface downstream shows "no
-  reading yet" = healthy, while the resource is provably gone. Ask of any
-  meter: what does the consumer see when this returns nothing — the same
-  thing as all-is-well? Then the silence is a lie you will act on. Two traps
-  in the fix: a synthesised number must not land in a slot that means
-  something else, and making the number exist ≠ putting it where the
-  decision reads — check the surface you actually consult.
-- **And a field can be empty for more than one reason.** Before rendering
-  "unknown", count the ways the value could have ended up missing. One of
-  them is usually a measurement the system already took and discarded — a
-  count that came back zero, a size that was on disk the whole time. Reporting
-  a measured zero as unknown is the same lie as reporting an unknown as fine,
-  pointed the other way, and it is the harder one to notice: honest-looking
-  caution, spent on a fact you were holding.
+- **An absent reading renders as "fine", and empty has more than one
+  reason.** A collector meeting a shape it doesn't recognise returns nothing
+  → every surface downstream reads "no reading yet" = healthy while the
+  resource is provably gone. Ask of any meter: *what does the consumer see
+  when this returns nothing* — the same thing as all-is-well? Then the
+  silence is a lie you will act on. Fixing it, count the ways the value could
+  be missing before rendering "unknown": one of them is usually a measurement
+  already taken and discarded, and reporting a measured zero as unknown is the
+  same lie pointed the other way — honest-looking caution spent on a fact you
+  were holding. Two traps: a synthesised number must not land in a slot that
+  means something else, and making it exist ≠ putting it where the decision
+  reads.
 
 ## Identity and delivery — seams that fail politely
 
@@ -268,25 +259,17 @@ Two failure classes only a wake can see — say them aloud even unfixed:
     forge action authors as the *operator*, silently (commits stay safe; the
     `gh`-mediated actions leak) ⇒ stop: merge locally + push, or
     `gate: forge`
-- **An `event:` reply to a gate this run can't reach is *redirected*** onto
-  your own live gate, origin-prefixed, and still retires the queue entry.
-  Write the body to stand alone; a redirect is a rescue, not a routing plan.
-- **A worker's final text is its return value, not a chat message.** The
-  spawning parent collects the terminal stream along the dispatch edge — no
-  addressing to guess, no second channel to duplicate. It *looks* like a
-  delivery in the predicate that gates delivery; treating the two as one
-  channel is how a delivery question stays unresolved for months.
-- **No gate owns a `spawn_completed`** ⇒ an `event:` reply to one stages
-  undeliverable — nowhere to route the text — **yet still retires the
-  event `done`**: the reply is the clearing move, and the "NOT delivered"
-  notice is its success shape. A worker's completion is a fact for you,
-  not a correspondent: anything a person must read folds into the reply
-  to the event that asked for the work.
-- **The same no-gate fact reaches your own closing reply.** Woken by a
-  schedule, no spawning parent ⇒ the terminal message is captured and
-  dispatched nowhere — the run's body, not a delivery, and nothing warns you
-  once anything at all went out. Decide where the reply goes *before*
-  writing it: the card and a `gate:` write are the only surfaces a person
+- **Retiring an event and delivering its text are two different acts, and
+  the second one silently does not happen far more often than you expect.**
+  One rule, four faces: a reply to a gate this run cannot reach is
+  *redirected* onto your own live gate, origin-prefixed · a worker's final
+  text is a **return value** collected along the dispatch edge, not a chat
+  message · no gate owns a `spawn_completed`, so a reply to one stages
+  undeliverable and **still retires the event** — the "NOT delivered" notice
+  is the success shape · and a schedule-woken run has no parent at all, so
+  its closing reply is the run's *body*, read by nobody. In every face the
+  queue clears and the words go nowhere. Decide where a reply lands **before**
+  writing it; the card and a `gate:` write are the only surfaces a person
   reads.
 - **After any `spawn:` / `respawn:` / `event:`-addressed write → read
   `notices`**: a refused file is deleted exactly like an accepted one, so

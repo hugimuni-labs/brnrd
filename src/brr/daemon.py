@@ -42,6 +42,7 @@ import json
 import os
 import re
 import shutil
+import stat as stat_module
 import signal
 import subprocess
 import tempfile
@@ -54,7 +55,9 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import account
+from . import await_verb
 from . import branching
+from .cli import brnrd_cmd
 from . import closekeyword
 from . import config as conf
 from . import conversations
@@ -67,6 +70,7 @@ from . import forge_pr_cache
 from . import forge_state
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
+from . import gate_receipt
 from . import claude_status
 from . import claude_usage
 from . import gitops
@@ -90,6 +94,7 @@ from . import wake_request as wake_request_mod
 from . import runner_select
 from . import schedule as schedule_mod
 from . import spending_plan
+from . import statusline
 from . import sync
 from . import transcript
 from . import trust
@@ -2912,6 +2917,8 @@ def _run_worker(
             "honoured (they load only from the daemon-owned "
             "security.config; run `brnrd config promote` to migrate them "
             "there).",
+            kind="refused",
+            lifetime="standing",
         )
 
     # #693: the *file* half of the same domain. A runner profile carries
@@ -2969,6 +2976,8 @@ def _run_worker(
             "loaded. A profile carries `cmd:`, the command brnrd executes, "
             "so profiles load only from the daemon-owned home or the "
             f"bundled catalog. {remedy}",
+            kind="refused",
+            lifetime="standing",
         )
 
     # #700: the *unreachable* half of the same domain. #693 (above) covers
@@ -3003,6 +3012,11 @@ def _run_worker(
             "the bundled catalog instead of your account's runners.md. Run "
             "brnrd from the main checkout (or resolve #663) to restore your "
             "custom profiles.",
+            # Technical unreachability, not a policy call — nothing here
+            # decided to ignore the account's profiles, the path just
+            # couldn't be resolved from this worktree (#663).
+            kind="dropped",
+            lifetime="standing",
         )
 
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
@@ -3318,6 +3332,12 @@ def _run_worker(
             "BRR_BOOT_SCORE": str(
                 brr_dir / "runs" / task.id / "boot-score.json"
             ),
+            # The account/repo-shared ``.brr`` dir, warm across every run —
+            # lets claude_status durably persist its spend/context reading
+            # somewhere the *next* run's portal assembly can still find it
+            # after this run's own outbox is swept (#1027; see
+            # claude_status._shared_dir).
+            "BRR_SHARED_DIR": str(brr_dir),
         }
         # Conversation identity passthrough: lets the resident stamp its own
         # commits with the Brnrd-Conversation-Id trailer (see gitops.commit_all
@@ -3509,6 +3529,10 @@ def _run_worker(
             f"runner selection changed between resolution and spawn: "
             f"{runner_choice.name} -> {reselected.name}. The run starts on "
             f"{reselected.name}, the currently-set profile.",
+            # Nothing refused or dropped — the run adopts the new
+            # selection and proceeds. FYI only.
+            kind="advisory",
+            lifetime="run",
         )
         runner_choice = reselected
         runner_name = runner_choice.name
@@ -4955,7 +4979,26 @@ def _collect_levels(
             )
         else:
             usage_levels = claude_usage.load_snapshot(outbox_dir)
+        # This run's own outbox first (freshest, when this run has already
+        # produced its own result JSON), the account-shared copy second —
+        # the honest cross-run fallback for the far more common case at
+        # wake-time: a fresh run's own outbox has no reading of its own yet,
+        # and the *previous* run's reading is exactly what "spend: absent"
+        # was hiding (#1027). ``shared_dir`` is ``None`` for a caller that
+        # never wired one (e.g. an ad-hoc test); the outbox-only read still
+        # applies then, unchanged from before this fix.
         result_levels = claude_status.load_snapshot(outbox_dir)
+        if result_levels is None:
+            # Falling back to the shared slot: this reading is a *different*
+            # run's session, not this one's — one mutable slot every claude
+            # run overwrites, so it can be a worker's cost seconds old by the
+            # time the next resident turn reads it. Rewrite its summaries to
+            # say so; serving the unmodified "...this session" text here
+            # would move #1027's absent-reading lie one layer down instead
+            # of removing it (see claude_status.mark_cross_run).
+            result_levels = claude_status.mark_cross_run(
+                claude_status.load_snapshot(shared_dir)
+            )
         merged = _merge_level_snapshots(usage_levels, result_levels)
         # The seam that makes burn shell-agnostic. Claude's `/usage` scrape is a
         # *point* reading that forgets itself; sampling it here — into the
@@ -5175,6 +5218,110 @@ def _change_token(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def _extend_keepalive(keepalive_path: Path | None, deadline_epoch: float) -> None:
+    """Arm/extend ``.keepalive`` to at least *deadline_epoch* (#959).
+
+    An ``await:`` that outlives the run's budget must extend the slot, not
+    silently truncate — a resident that armed a 20-minute wait and got killed
+    at minute 12 with no explanation is worse than one that was warned. This
+    never *shortens* an existing keepalive an agent wrote for its own
+    reasons; it only pushes the deadline out when the await needs longer.
+    Best-effort, like every other control-file write on this path.
+    """
+    if keepalive_path is None:
+        return
+    existing = portals.keepalive_until(keepalive_path)
+    if existing is not None and existing >= deadline_epoch:
+        return
+    try:
+        _write_text_atomic(keepalive_path, _iso_utc(deadline_epoch) + "\n")
+    except OSError:
+        pass
+
+
+def _resolve_await_state(
+    task: Run,
+    pending_events: list[dict[str, object]],
+    *,
+    outbox_dir: Path | None,
+    keepalive_path: Path | None,
+    hard_cap_seconds: float | None,
+    start_monotonic: float | None,
+) -> dict[str, object]:
+    """Evaluate an armed ``await:`` against this tick's pending events.
+
+    Called from the same heartbeat/flush tick that already computed
+    *pending_events* — the daemon's own clock, ticking every
+    ``_HEARTBEAT_INTERVAL`` regardless of whether the resident calls
+    anything, is what makes this a listening wait rather than a sleeping
+    one. Mutates ``task.meta["await"]`` in place so the outcome, once
+    reached, is sticky across later ticks instead of being re-derived (a
+    ``pid:`` condition's target may be reused by a new process by the next
+    tick; the first exit is the one that counted).
+
+    Returns the projection this tick's ``portal-state.json`` should carry.
+    ``{"armed": False}`` when no ``await:`` was ever staged this run.
+    """
+    armed = task.meta.get("await") if hasattr(task, "meta") else None
+    if not armed:
+        return {"armed": False}
+    if armed.get("resolved"):
+        return {
+            "armed": True,
+            "conditions": armed.get("conditions", []),
+            "timeout_seconds": armed.get("timeout_seconds"),
+            "capped": bool(armed.get("capped")),
+            "resolved": True,
+            "outcome": armed.get("outcome"),
+            "which": armed.get("which"),
+        }
+
+    now = time.time()
+    requested_deadline = float(armed["armed_at"]) + float(armed["timeout_seconds"])
+    effective_deadline = requested_deadline
+    if hard_cap_seconds is not None and start_monotonic is not None:
+        remaining_hard = (start_monotonic + hard_cap_seconds) - time.monotonic()
+        max_deadline = now + max(remaining_hard, 0.0)
+        if requested_deadline > max_deadline:
+            effective_deadline = max_deadline
+            if not armed.get("capped"):
+                armed["capped"] = True
+                _record_outbox_notice(
+                    outbox_dir,
+                    "await capped: the requested timeout would outlive this "
+                    f"run's remaining budget ceiling — armed until "
+                    f"{_iso_utc(effective_deadline)} instead of "
+                    f"{_iso_utc(requested_deadline)}.",
+                    kind="advisory",
+                    lifetime="run",
+                )
+
+    _extend_keepalive(keepalive_path, effective_deadline)
+
+    outcome, which = await_verb.evaluate(
+        armed.get("conditions_detail", []), pending_events,
+    )
+    if outcome is None and now >= effective_deadline:
+        outcome = "timeout"
+        which = None
+
+    result: dict[str, object] = {
+        "armed": True,
+        "conditions": armed.get("conditions", []),
+        "timeout_seconds": armed.get("timeout_seconds"),
+        "deadline": _iso_utc(effective_deadline),
+        "capped": bool(armed.get("capped")),
+        "resolved": outcome is not None,
+    }
+    if outcome is not None:
+        armed["resolved"] = True
+        armed["outcome"] = outcome
+        armed["which"] = which
+        result["outcome"] = outcome
+        result["which"] = which
+    return result
+
+
 def _write_live_portal_state(
     outbox_dir: Path | None,
     inbox_dir: Path,
@@ -5235,6 +5382,13 @@ def _write_live_portal_state(
             worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
             account_context=account_context,
             repo_label=repo_label,
+        )
+        await_state = _resolve_await_state(
+            task, events,
+            outbox_dir=outbox_dir,
+            keepalive_path=keepalive_path,
+            hard_cap_seconds=hard_cap_seconds,
+            start_monotonic=start_monotonic,
         )
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
@@ -5392,6 +5546,7 @@ def _write_live_portal_state(
                 ),
                 "keepalive": _keepalive_state(keepalive_path),
             },
+            "await": await_state,
             "scm": scm_facet,
             "produce": produce_facet,
             # #904's armed dated-letters projection: the still-armed `at:`
@@ -5686,12 +5841,19 @@ def _note_event_closed(
             f"note dropped: event {raw_target} is ambiguous — matches "
             f"{len(ambiguous)} pending events ({candidates}); address the "
             "full id — nothing was retired",
+            # Text says "dropped"; the docstring above says "refused" —
+            # this is the ambiguous/unresolved-target case, same shape as
+            # an `event:` reply's own refusal (_event_refusal_cause below).
+            kind="refused",
+            lifetime="run",
         )
         return None
     if resolved_event is None:
         cause = _event_refusal_cause(address_sources, raw_target, raw_target)
         _record_outbox_notice(
             outbox_dir, f"note dropped: {cause} — nothing was retired",
+            kind="refused",
+            lifetime="run",
         )
         return None
     noted_id = str(resolved_event.get("id") or "")
@@ -5706,6 +5868,10 @@ def _note_event_closed(
             outbox_dir,
             f"note dropped: event {noted_id} vanished before it could be "
             "marked noted",
+            # The target resolved fine; this is a race the write lost,
+            # not a policy refusal of a known target.
+            kind="dropped",
+            lifetime="run",
         )
         return None
     if body.strip():
@@ -5713,6 +5879,10 @@ def _note_event_closed(
             outbox_dir,
             f"note: body text ignored — a note closes event {noted_id} "
             "without speaking; use event: to reply",
+            # #1002's own opening example: the file was accepted and
+            # acted on (the event *is* retired noted) — FYI, not a failure.
+            kind="advisory",
+            lifetime="run",
         )
     return noted_id
 
@@ -5764,7 +5934,10 @@ def _queue_respawn_request(
     outbox_dir: Path | None = None,
 ) -> bool:
     if inbox_dir is None:
-        _record_outbox_notice(outbox_dir, "respawn dropped: no inbox to queue into")
+        _record_outbox_notice(
+            outbox_dir, "respawn dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
+        )
         return False
     proposed = str(
         fm.get("proposed_runner")
@@ -5790,7 +5963,10 @@ def _queue_respawn_request(
     carry = str(fm.get("carry_forward") or "").strip()
     new_body = body.strip() or carry or task.body
     if not new_body.strip():
-        _record_outbox_notice(outbox_dir, "respawn dropped: the request had no body")
+        _record_outbox_notice(
+            outbox_dir, "respawn dropped: the request had no body", kind="dropped",
+            lifetime="run",
+        )
         return False
     worker = _truthy(fm.get("worker"))
     reserved = {
@@ -5865,9 +6041,58 @@ def _queue_respawn_request(
 NOTICES_FILE = ".notices.jsonl"
 _MAX_NOTICES = 12
 
+# #1002: a notice is one of three kinds, and only two of them are a problem.
+# ``refused`` — a well-formed, resolvable target existed and brr said no on
+# purpose (ownership, policy, security boundary). ``dropped`` — the directive
+# could not be carried out at all: malformed/missing input, an unresolvable
+# target, or plumbing (inbox/gate) that wasn't there. ``advisory`` — the
+# directive *was* accepted and acted on; the notice is FYI, not a failure
+# (the accepted-but-body-ignored ``note:`` case that opened this ticket is
+# the canonical example). ``_notices_chip``/the seed-stop briefing count only
+# the first two toward ``!N`` — an advisory must stay readable but never
+# swells that count back into meaninglessness.
+# ``redirected`` is the fourth word, added in parent review of #1002: brnrd
+# did the thing, *but not as addressed*. Three kinds could say "it did not
+# happen" and "it happened, FYI", and could not say "it happened to someone
+# else" — so the cross-gate reply redirect was filed as an advisory and
+# stopped driving ``!N``. That is the one case the resident contract tells a
+# run to check ``notices`` for: *did my addressed reply reach who I
+# addressed?* Here, provably, it did not.
+#
+# Nothing on the counting side changed to accommodate it. ``hooks.
+# _counted_notices`` excludes only ``advisory``, so a new kind counts by
+# construction — a small proof the filter was written against the structural
+# property ("is this FYI") rather than against a list of members.
+_NOTICE_KINDS = frozenset({"refused", "dropped", "advisory", "redirected"})
 
-def _record_outbox_notice(outbox_dir: Path | None, text: str) -> None:
-    """Tell the *running resident* that brr refused or dropped its directive.
+# #716: ``kind`` answers *what* happened; it cannot also answer *whose
+# lifetime the record has*, and the two collide at exactly one spot — the
+# environmental writers a few hundred lines up (a repo-side ``.brr/config``
+# security key, a repo-side or account-unreachable ``runners.md``, #533/#693/
+# #700). Those are genuinely ``refused``/``dropped`` by *kind* (brnrd did not
+# honour the input) and genuinely **standing** by *lifetime*: the condition
+# lives in the environment, re-fires identically on every wake, and cannot be
+# cleared by anything the running resident does — only a human editing the
+# tree or running ``brnrd config promote`` retires it. Counting a standing
+# notice the same way as a run-scoped refusal pins ``!N`` at a nonzero
+# baseline from t=0, so a genuinely new refusal reads as a delta against
+# noise (``!1`` -> ``!2``) instead of the zero-to-one transition the whole
+# chip design assumes — #716, measured twice.
+#
+# ``lifetime`` is the fix: a second, orthogonal dimension, not a fifth
+# ``kind``. Retagging the environmental writers ``advisory`` was considered
+# and rejected — ``advisory`` means "this run's directive was accepted and
+# acted on", which is false of an ignored security key; making the chip
+# honest by making the record lie is not the fix. ``_counted_notices``
+# excludes a record from ``!N`` when it is ``advisory`` **or** standing —
+# two independent reasons to be FYI-only, not one collapsed into the other.
+_NOTICE_LIFETIMES = frozenset({"run", "standing"})
+
+
+def _record_outbox_notice(
+    outbox_dir: Path | None, text: str, *, kind: str, lifetime: str
+) -> None:
+    """Tell the *running resident* brr refused/dropped a directive, or FYI.
 
     Every drop path in the outbox drain used to end at a ``print()`` — and
     the daemon's stdout is captured nowhere. From inside the run, a spawn
@@ -5876,17 +6101,42 @@ def _record_outbox_notice(outbox_dir: Path | None, text: str) -> None:
     a 401 that kills a gate thread while the daemon reports healthy; the
     fix is the same too — put the failure where the reader already looks.
 
+    *kind* is required, not defaulted — every call site has to decide which
+    of the three this is (see the block comment above) rather than inherit
+    a guess. A record with no ``kind`` at all only ever happens because it
+    was written by a daemon generation before this one (see
+    :func:`_read_outbox_notices` callers / ``hooks._notices_chip`` for the
+    read side of that back-compat case) — never from here going forward.
+
+    *lifetime* is required for the same reason (#716's follow-on to #1002):
+    ``"run"`` for a directive this run issued and brnrd would not carry out
+    — clearable, a transition worth an alarm. ``"standing"`` for a fact
+    about the environment this run cannot change — re-fires every wake by
+    construction, and must not count toward ``!N`` or it drowns the signal
+    that chip exists to carry. A record with no ``lifetime`` at all is the
+    same back-compat case as a missing ``kind``: a prior daemon generation's
+    write, read pessimistically (counted) by ``hooks._counted_notices``.
+
     Notices land in the run's own outbox dir and are surfaced in
     ``portal-state.json`` (``notices``), which residents re-read at plan
     boundaries and before closeout. Control file, never delivered.
     """
+    if kind not in _NOTICE_KINDS:
+        raise ValueError(f"_record_outbox_notice: invalid kind {kind!r}")
+    if lifetime not in _NOTICE_LIFETIMES:
+        raise ValueError(f"_record_outbox_notice: invalid lifetime {lifetime!r}")
     print(f"[brnrd] outbox: {text}")
     if outbox_dir is None:
         return
     try:
         outbox_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(
-            {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "text": text},
+            {
+                "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "text": text,
+                "kind": kind,
+                "lifetime": lifetime,
+            },
             ensure_ascii=False,
         )
         with (outbox_dir / NOTICES_FILE).open("a", encoding="utf-8") as fh:
@@ -6106,10 +6356,16 @@ def _queue_child_message(
     """
     target = str(fm.get("to") or "").strip()
     if not target:
-        _record_outbox_notice(outbox_dir, "message dropped: no target run/event id")
+        _record_outbox_notice(
+            outbox_dir, "message dropped: no target run/event id", kind="dropped",
+            lifetime="run",
+        )
         return False
     if not body.strip():
-        _record_outbox_notice(outbox_dir, f"message to {target!r} dropped: empty body")
+        _record_outbox_notice(
+            outbox_dir, f"message to {target!r} dropped: empty body", kind="dropped",
+            lifetime="run",
+        )
         return False
     control = _find_run_control(target)
     if control is None:
@@ -6117,6 +6373,8 @@ def _queue_child_message(
             outbox_dir,
             f"message refused: {target!r} matches no live concurrent spawn "
             "(already finished, never dispatched here, or the id is wrong)",
+            kind="refused",
+            lifetime="run",
         )
         return False
     if str(control.get("parent_run_id")) != task.id:
@@ -6124,16 +6382,23 @@ def _queue_child_message(
             outbox_dir,
             f"message refused: {target!r} was not dispatched by this run — "
             "a run messages only its own dispatchees (kb/design-wyrd.md §3)",
+            kind="refused",
+            lifetime="run",
         )
         return False
     if control.get("stopped"):
         _record_outbox_notice(
             outbox_dir,
             f"message refused: {target!r} is being stopped",
+            kind="refused",
+            lifetime="run",
         )
         return False
     if inbox_dir is None:
-        _record_outbox_notice(outbox_dir, "message dropped: no inbox to queue into")
+        _record_outbox_notice(
+            outbox_dir, "message dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
+        )
         return False
     spawn_event_id = str(control["event_id"])
     new_path = protocol.create_event(
@@ -6239,7 +6504,10 @@ def _queue_stop_request(
     """
     target = str(fm.get("stop") or "").strip()
     if not target:
-        _record_outbox_notice(outbox_dir, "stop dropped: no target run/event id")
+        _record_outbox_notice(
+            outbox_dir, "stop dropped: no target run/event id", kind="dropped",
+            lifetime="run",
+        )
         return False
     control = _find_run_control(target)
     if control is None:
@@ -6247,6 +6515,8 @@ def _queue_stop_request(
             outbox_dir,
             f"stop refused: {target!r} matches no live concurrent spawn "
             "(already finished, never dispatched here, or the id is wrong)",
+            kind="refused",
+            lifetime="run",
         )
         return False
     parent_run_id = control.get("parent_run_id")
@@ -6262,7 +6532,7 @@ def _queue_stop_request(
                 f"stop refused: {target!r} was dispatched by {parent_run_id!r}, "
                 "not by this run; only its dispatcher may stop it"
             )
-        _record_outbox_notice(outbox_dir, notice)
+        _record_outbox_notice(outbox_dir, notice, kind="refused", lifetime="run")
         return False
     reason = str(fm.get("reason") or "").strip() or body.strip()
     spawn_event_id = str(control["event_id"])
@@ -6318,6 +6588,8 @@ def _queue_spawn_request(
             outbox_dir,
             "spawn refused: the account home is a shared host tree and cannot "
             "provide concurrent worktree isolation.",
+            kind="refused",
+            lifetime="run",
         )
         return False
     if bool(task.meta.get("worker")):
@@ -6325,10 +6597,15 @@ def _queue_spawn_request(
             outbox_dir,
             "spawn refused: a worker-stack run cannot spawn (no nested spawns). "
             "Do the work inline, or hand it back to the resident.",
+            kind="refused",
+            lifetime="run",
         )
         return False
     if inbox_dir is None:
-        _record_outbox_notice(outbox_dir, "spawn dropped: no inbox to queue into")
+        _record_outbox_notice(
+            outbox_dir, "spawn dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
+        )
         return False
     # ``shell:``/``core:`` are optional — absent, the child dispatches on the
     # account's configured default, exactly like any fresh event (nothing
@@ -6351,7 +6628,10 @@ def _queue_spawn_request(
     contract_report = str(fm.get("report") or "").strip()
     new_body = body.strip()
     if not new_body:
-        _record_outbox_notice(outbox_dir, "spawn dropped: the request had no body")
+        _record_outbox_notice(
+            outbox_dir, "spawn dropped: the request had no body", kind="dropped",
+            lifetime="run",
+        )
         return False
     source = str(fm.get("source") or "spawn")
     meta: dict = {"worker": True}
@@ -6386,6 +6666,8 @@ def _queue_spawn_request(
             outbox_dir,
             f"spawn refused: environment {requested_env!r} is not spawnable — "
             "worktree is the floor; opt-down to docker/solitary only.",
+            kind="refused",
+            lifetime="run",
         )
         return False
     else:
@@ -6699,6 +6981,51 @@ def _drain_outbox(
                 )
             _retire_outbox_staging(fpath)
             continue
+        if "await" in fm:
+            # A select, not a sleep (#959): declare the condition set once
+            # instead of hand-rolling a poll loop that can collapse into one
+            # boundary-free shell call. Refusals below are deliberately
+            # `kind="refused"` (a well-formed directive brnrd declines) except
+            # the malformed-input cases, which are `"dropped"` (nothing
+            # resolvable was there to refuse).
+            if bool(task.meta.get("worker")):
+                _record_outbox_notice(
+                    outbox_dir,
+                    "await refused: a worker-stack run cannot arm a wait — "
+                    "hold happens in the resident that dispatched it.",
+                    kind="refused",
+                    lifetime="run",
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            conditions, timeout_seconds, error = await_verb.parse_await(fm)
+            if error:
+                _record_outbox_notice(
+                    outbox_dir, f"await dropped: {error}", kind="dropped",
+                    lifetime="run",
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            task.meta["await"] = {
+                "conditions": [c["raw"] for c in conditions],
+                "conditions_detail": conditions,
+                "timeout_seconds": timeout_seconds,
+                "armed_at": time.time(),
+                "resolved": False,
+                "capped": False,
+            }
+            promoted += 1
+            if stats is not None:
+                stats["await"] = stats.get("await", 0) + 1
+            emit(
+                "await_armed",
+                run_id=task.id,
+                event_id=event_id,
+                conditions=[c["raw"] for c in conditions],
+                timeout_seconds=timeout_seconds,
+            )
+            _retire_outbox_staging(fpath)
+            continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
@@ -6757,6 +7084,10 @@ def _drain_outbox(
                 f"reply dropped: event {raw_target} is ambiguous — matches "
                 f"{len(ambiguous)} pending events ({candidates}); address "
                 "the full id — the message was NOT delivered",
+                # Text says "dropped"; this is the ambiguous-target
+                # refusal, same shape as `_note_event_closed`'s.
+                kind="refused",
+                lifetime="run",
             )
             _stage_outbound(
                 task,
@@ -6793,6 +7124,8 @@ def _drain_outbox(
             _record_outbox_notice(
                 outbox_dir,
                 f"reply dropped: {cause} — the message was NOT delivered",
+                kind="refused",
+                lifetime="run",
             )
             _stage_outbound(
                 task,
@@ -6848,6 +7181,15 @@ def _drain_outbox(
                 f"reply redirected: event {target} is owned by gate "
                 f"{target_source!r}, not reachable from this run — delivered "
                 "on this run's own gate instead, prefixed with its origin",
+                # Delivered, and *not where it was addressed*. Content ✓,
+                # lifecycle ✓, addressing ✗ — and addressing is the one of
+                # the three the resident is told to check `notices` for. A
+                # run that believes its answer reached the asker, when it
+                # reached a different lane, has an unanswered correspondent
+                # and possibly a reader who should not have had the text.
+                # Counts, therefore, and says which failed.
+                kind="redirected",
+                lifetime="run",
             )
             summary = _short_event_summary(target_event)
             origin_note = (
@@ -6917,6 +7259,11 @@ def _drain_outbox(
                     if retires_target else
                     f"reply text staged undeliverable — {undeliverable_reason}"
                 ),
+                # Genuinely undelivered — no gate owns the target source at
+                # all, so nothing reaches anyone. Not a policy refusal of a
+                # known destination; the plumbing to reach one is absent.
+                kind="dropped",
+                lifetime="run",
             )
         ppath = (
             protocol.write_partial(
@@ -7215,6 +7562,8 @@ def _deliver_out_of_bound(
     if inbox_dir is None or not body:
         _record_outbox_notice(
             outbox_dir, f"gate message dropped: gate {gate!r} had no body/inbox",
+            kind="dropped",
+            lifetime="run",
         )
         return False
     if not _gate_can_deliver(emit.brr_dir, gate):
@@ -7228,6 +7577,10 @@ def _deliver_out_of_bound(
                 f"gate message dropped: {gate!r} is not a configured gate — "
                 f"the `gate:` key takes a bare gate name (e.g. `telegram`), "
                 f"not a thread string; the message was NOT delivered",
+                # Malformed input (a thread string where a bare gate name
+                # was expected), not a policy denial of a real gate.
+                kind="dropped",
+                lifetime="run",
             )
         else:
             configured = _configured_gate_names(emit.brr_dir)
@@ -7237,6 +7590,10 @@ def _deliver_out_of_bound(
                 f"account (configured gates: "
                 f"{', '.join(configured) if configured else 'none'}); the "
                 f"message was NOT delivered",
+                # Plumbing unavailable (gate not configured/running here),
+                # not a deliberate policy refusal of a known destination.
+                kind="dropped",
+                lifetime="run",
             )
         return False
     refusal = _pr_body_close_keyword_refusal(gate, fm, body)
@@ -7252,6 +7609,10 @@ def _deliver_out_of_bound(
             f"gate message dropped: the {gate!r} PR body carries a close "
             f"keyword GitHub would act on; the pull request was NOT created. "
             f"Fix the line and re-stage the file.\n{refusal}",
+            # Named by its own helper: `_pr_body_close_keyword_refusal` — a
+            # deliberate policy denial of a well-formed, resolvable target.
+            kind="refused",
+            lifetime="run",
         )
         return False
     # Never let agent-written frontmatter override the reserved event keys
@@ -7416,6 +7777,10 @@ def _drain_live_menu(
             f"{_LIVE_MENU_NAME} ignored: worker-stack children may propose "
             "items in their report, but the single-flight owner composes the "
             "live menu in v1",
+            # A policy denial of a well-formed write — workers don't get
+            # this authority, full stop.
+            kind="refused",
+            lifetime="run",
         )
         return False
 
@@ -7424,6 +7789,9 @@ def _drain_live_menu(
         _record_outbox_notice(
             outbox_dir,
             f"{_LIVE_MENU_NAME} ignored: this run has no conversation thread",
+            # No plumbing to attach the menu to — not a policy call.
+            kind="dropped",
+            lifetime="run",
         )
         return False
     try:
@@ -7450,12 +7818,16 @@ def _drain_live_menu(
         _record_outbox_notice(
             outbox_dir,
             f"malformed {_LIVE_MENU_NAME} ignored: {exc}",
+            kind="dropped",
+            lifetime="run",
         )
         return False
     except OSError as exc:
         _record_outbox_notice(
             outbox_dir,
             f"{_LIVE_MENU_NAME} could not be promoted: {exc}",
+            kind="dropped",
+            lifetime="run",
         )
         return False
 
@@ -8572,6 +8944,13 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             summary,
             conversation_key=conv,
             spawned_by_run=task.id,
+            # Carried alongside the run id (#959): a resident's `await:
+            # spawn:<id>` may only have the *dispatch* event id on hand (the
+            # `spawn_event_id` its own `spawn: true` write was told), not the
+            # run id this child was eventually assigned — the other two
+            # spawn_completed sites (stop-cancelled, crashed) already only
+            # ever have the event id, never a run id.
+            spawned_by_event=str(getattr(task, "event_id", "") or ""),
             spawn_parent_run_id=parent_run_id,
             **contract_kwargs,
             **produce_kwargs,
@@ -9390,6 +9769,331 @@ def _persist_run_body(
     path.parent.mkdir(parents=True, exist_ok=True)
     protocol._atomic_write(path, body + "\n")
     task.meta["run_body_path"] = str(path)
+    return path
+
+
+# ── Control-file preservation (#1027, #1017) ────────────────────────────
+#
+# Closeout used to *render* the run's outbox — ``.card`` into ``body.md``,
+# ``.relics.jsonl`` into the node's ``## Produce`` section — and sweep
+# everything else when the outbox directory was deleted a few lines below
+# in ``_run_worker``'s ``finally:``. ``.brr/outbox/`` holds a couple dozen
+# live directories against hundreds of finished runs, so "swept" was
+# permanent. The measured cost is #1027: ``claude_status`` writes a
+# complete, correct spend reading every claude run, and exactly one had
+# survived on this account since April. The maintainer's framing: the run
+# should **be** its folder, preserved, not a rendering of it.
+#
+# The modules below each declare the control files they own as a module
+# constant (``relics.CONTROL_NAME``, ``gate_receipt.RECEIPT_NAME``, the
+# various ``SNAPSHOT_NAME``s, ...). ``_discover_control_file_names`` reads
+# that constant set back via introspection instead of a hand-copied list,
+# so a module that grows a new ``*_NAME`` control-file constant is caught
+# by ``test_capture_control_files_partition_is_total`` (a class defined by
+# listing its members meets the member nobody listed).
+_CONTROL_FILE_MODULES = (
+    relics, gate_receipt, claude_status, codex_usage, claude_usage,
+    statusline, run_ledger, hooks_mod, portals, menus,
+)
+# Matches a public (no leading underscore) module-level constant ending in
+# ``NAME`` — ``SNAPSHOT_NAME``, ``CONTROL_NAME``, ``RECEIPT_NAME``,
+# ``RUN_MOOD_CONTROL_NAME``, ``CARD_NAME``, ... — every shape the modules
+# above actually use for a control-file constant. Deliberately ``NAME$``,
+# not ``NAMES?$``: ``portals.CONTROL_NAMES`` is a *collection* of names,
+# not a single file, and must not be mistaken for one.
+_CONTROL_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*NAME$")
+
+
+def _discover_control_file_names() -> dict[str, str]:
+    """Every ``*_NAME`` string constant on :data:`_CONTROL_FILE_MODULES`.
+
+    Keyed by *value* (the literal filename actually written to disk), not
+    by the Python identifier: several modules re-export the same file under
+    a second name for their own import-cycle reasons
+    (``hooks.GATE_RECEIPT_NAME`` mirrors ``gate_receipt.RECEIPT_NAME``,
+    ``hooks.MOOD_NAME`` mirrors ``run_ledger.RUN_MOOD_CONTROL_NAME``,
+    ``menus.MENU_NAME`` mirrors ``portals.LIVE_MENU_NAME``) — a partition
+    keyed on the identifier would ask the same question twice under two
+    names and could answer it two different ways by accident.
+
+    This does not claim every discovered name is a *per-run outbox* file —
+    ``run_ledger.LEDGER_NAME`` names the repo-shared ledger,
+    ``hooks.BOUNDARIES_NAME``/``BOUNDARIES_SUMMARY_NAME`` name files that
+    live in the daemon's own scratch dir or are written straight onto the
+    run node, and ``menus.STORE_NAME`` is a directory, not a file. Deciding
+    *that* is exactly what :data:`PRESERVED` / :data:`NOT_PRESERVED` are
+    for — see their reasons below — the discovery step's only job is to
+    make sure nothing shaped like a control-file constant goes undecided.
+    """
+    found: dict[str, str] = {}
+    for module in _CONTROL_FILE_MODULES:
+        for attr, value in vars(module).items():
+            if not _CONTROL_NAME_RE.match(attr):
+                continue
+            if not isinstance(value, str) or not value:
+                continue
+            found.setdefault(value, f"{module.__name__}.{attr}")
+    return found
+
+
+#: Control files copied onto the run node at closeout, dot stripped —
+#: ``source name in the outbox`` -> ``dest name beside body.md``. Every
+#: entry earns its line with a reason a reviewer can check against the
+#: writer's own source, because ``runs/<repo>/<run>/`` is a **published**
+#: surface (the dashboard mirrors it within seconds, unredacted) — this is
+#: a publish decision, not a copy, and the pessimistic direction wins ties.
+PRESERVED: dict[str, str] = {
+    # The raw produce manifest, beside the rendered ``## Produce`` section
+    # ``_run_state_produce_lines`` already writes — a reader who wants the
+    # exact relic records (not the human summary) gets them.
+    relics.CONTROL_NAME: "relics.jsonl",
+    # Resident narration. Already mirrors to the dashboard by existing
+    # design (``daemon-substrate.md``'s ``.mood`` row says so in as many
+    # words), so preserving it on the node adds no new exposure.
+    run_ledger.RUN_MOOD_CONTROL_NAME: "mood",
+    # The resident-authored run name — one line, no privacy surface.
+    run_ledger.RUN_NAME_CONTROL_NAME: "name",
+    # The PR this run created — one line (a number or a URL), no privacy
+    # surface. Read *before* ``_remove_outbox`` deletes the file the same
+    # as ``_capture_pr_handle`` already does (see the ``finally:`` note
+    # below it) — private to this module because it names the daemon's own
+    # in-run handshake file, not a shape other modules declare.
+    _PR_CONTROL_NAME: "pr",
+    # Checked, not assumed: the receipt's referents are ``git rev-parse
+    # HEAD``, ``git status --porcelain`` (repo-relative paths only),
+    # sha256 digests, the configured gate command, and timestamps — no
+    # absolute host path in any field ``gate_receipt.write_receipt``
+    # writes. See the report for the one residual case (a ``gate_command``
+    # an operator configured as an absolute path) this can't rule out.
+    gate_receipt.RECEIPT_NAME: "gate-receipt.json",
+    # #1027's whole retention gap: a complete, correct spend reading that
+    # today survives nowhere. Renamed for the reader, not just dot-stripped
+    # — "spend" is the word #1027 and the maintainer both used.
+    claude_status.SNAPSHOT_NAME: "spend.json",
+    # Same shape and same no-privacy-surface argument as ``spend.json`` —
+    # the daemon-side PTY scrape of Claude's subscription quota windows.
+    # Usually absent from *this* directory in normal daemon operation
+    # (``usage_samples.record`` samples it into the account-shared dir, not
+    # the per-run outbox — see ``_collect_probe``'s ``claude`` branch), so
+    # the copy is a no-op on most runs and a real record on the runs where
+    # it isn't.
+    claude_usage.SNAPSHOT_NAME: "claude-usage-levels.json",
+    # Codex's quota is account state by design (``_collect_probe``'s
+    # ``codex`` branch: "one cache every reader shares, warm across runs
+    # and daemon restarts" — its ``cache_dir`` is the account-shared dir
+    # when one exists), so this is nearly always absent from a run's own
+    # outbox and the copy nearly always a no-op; preserved for the same
+    # reason as its Claude sibling on the runs where it is not.
+    codex_usage.SNAPSHOT_NAME: "codex-usage-levels.json",
+    # Vestigial in daemon mode today (``statusline.py``'s own docstring:
+    # "the daemon no longer registers this command" under headless
+    # ``claude --print``) but the same content shape and the same
+    # no-privacy-surface argument as its siblings — preserved rather than
+    # silently dropped in case an operator wires the interactive helper in
+    # by hand.
+    statusline.SNAPSHOT_NAME: "statusline.json",
+    # Resident-authored, thread-scoped — the live menu this run offered its
+    # own correspondent. Same privacy class as ``.mood``: it is *this*
+    # run's own thread, never another correspondent's pending state (that
+    # is exactly what makes ``inbox.json``/``portal-state.json`` below
+    # unsafe and this safe). The task framed it as "outlives the run
+    # conceptually" — a record of what was offered is worth keeping.
+    portals.LIVE_MENU_NAME: "menu.json",
+    # ``brr/the-promise-and-the-produce`` (#1046, promise manifest) is not
+    # on ``main`` as of this change, so there is no ``promises.CONTROL_NAME``
+    # to import — literal name, on purpose; per the task spec, said here
+    # rather than silently assumed. Once #1046 lands, ``promises.CONTROL_NAME``
+    # will resolve to this same literal and ``_discover_control_file_names``
+    # will find it already classified — no red test, no forgotten decision.
+    ".promises.jsonl": "promises.jsonl",
+}
+
+#: Control files deliberately *not* copied, each with the reason. Every
+#: name :func:`_discover_control_file_names` can find must resolve here or
+#: in :data:`PRESERVED` — see ``test_capture_control_files_partition_is_total``.
+#: Byte ceiling for one preserved control file. Generous against every real
+#: artifact here (the largest, a busy run's ``.relics.jsonl``, is kilobytes)
+#: and small against the failure it exists for: the run writes these files,
+#: the destination is a git repo that is committed and pushed, and nothing
+#: downstream bounds them. `relics._MAX_RECORDS` caps what a reader
+#: *parses*, never what a writer can *write*.
+_MAX_PRESERVED_BYTES = 1_000_000
+
+
+NOT_PRESERVED: dict[str, str] = {
+    portals.KEEPALIVE_NAME: (
+        "transient slot control, meaningless after the run"
+    ),
+    hooks_mod.HOOK_STATE_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    hooks_mod.FLUSH_SIGNAL_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    hooks_mod.FLUSH_ACK_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    portals.LIVE_INBOX_NAME: (
+        "daemon-owned inbound snapshot of OTHER runs' pending events — "
+        "publishing it would put another correspondent's event body on a "
+        "mirrored, unredacted surface"
+    ),
+    portals.LIVE_PORTAL_STATE_NAME: (
+        "same reason as inbox.json — a daemon-owned inbound snapshot of "
+        "other runs'/events' state, not this run's own"
+    ),
+    hooks_mod.CARD_NAME: (
+        "already captured as body.md by _persist_run_body; copying it here "
+        "too would duplicate the same text under two names on the node"
+    ),
+    hooks_mod.FORGE_HANDOFF_NAME: (
+        "a daemon/agent handshake marker naming an internal event id — "
+        "meaningless once the run node is read after the fact, same class "
+        "as .hook-state.json"
+    ),
+    hooks_mod.BOUNDARIES_NAME: (
+        "lives in the daemon's own per-run scratch dir, never the outbox "
+        "(see _persist_boundaries_summary's docstring); the node already "
+        "gets the derived boundaries.json summary through that separate path"
+    ),
+    hooks_mod.BOUNDARIES_SUMMARY_NAME: (
+        "the *destination* name _persist_boundaries_summary already writes "
+        "straight onto the run node — nothing in the outbox is ever named "
+        "this, so there is nothing here to copy; classified for totality, "
+        "not because a copy would do anything"
+    ),
+    run_ledger.LEDGER_NAME: (
+        "the repo-shared ledger file (shared_brr_dir()/run-ledger.jsonl), "
+        "one file for the whole repo across every run — not a per-run "
+        "outbox artifact"
+    ),
+    menus.STORE_NAME: (
+        "not a control filename at all — the cross-run menu-generation-"
+        "archive subdirectory name (menus.STORE_NAME), never a file in a "
+        "run's own outbox"
+    ),
+}
+
+
+def _capture_control_files(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    outbox_dir: Path | None,
+) -> list[Path]:
+    """Copy this run's :data:`PRESERVED` control files onto its node.
+
+    Beside ``_capture_pr_handle``'s prose: this is the general case of the
+    same idea. Called from the same try-block that still has ``outbox_dir``
+    on disk — the outbox is removed in ``_run_worker``'s ``finally:``,
+    after this runs. Silent per-file: a run legitimately lacks most of
+    these (no PR, no gate run yet, Codex/statusline usually caches
+    elsewhere — see :data:`PRESERVED`'s comments), and an absent source is
+    not a failure to report, matching every other closeout capture step's
+    absence discipline.
+    """
+    if account_context is None or not account_context.enabled or outbox_dir is None:
+        return []
+    run_dir = account.run_dir(account_context, repo_label, task.id)
+    written: list[Path] = []
+    for source_name, dest_name in PRESERVED.items():
+        source = outbox_dir / source_name
+        # A name is not a file, and this is a *publish*. Everything under
+        # `.brr/` rides the repo bind mount, so it is writable from inside
+        # every run environment (#518) — which means the thing at one of
+        # these paths is whatever the run put there, and a symlink resolves
+        # wherever the run pointed it. `read_bytes` follows one silently
+        # (driven, not reasoned: it hands back the target's contents), and
+        # the destination is `runs/<repo>/<run>/`, which the dashboard
+        # mirrors to brnrd.dev **unredacted**. So a one-line `.pr` nobody
+        # would ever inspect is enough to publish `security.config` or an
+        # ssh key.
+        #
+        # Refuse the whole class rather than resolve-and-compare: "is it
+        # inside the outbox" invites a TOCTOU race and a symlink here is
+        # never legitimate anyway. Loud, because unlike an absent file this
+        # is not a normal shape.
+        try:
+            if source.is_symlink():
+                print(
+                    f"[brnrd] capture: refusing {source_name} on run "
+                    f"{task.id} — it is a symlink, and this destination is "
+                    "published"
+                )
+                continue
+            stat = source.stat()
+            if not stat_module.S_ISREG(stat.st_mode):
+                continue
+            # The readers of these files cap what they *parse*
+            # (`relics._MAX_RECORDS`), never what a run can *write*. Without
+            # a cap here an unbounded control file is read whole into the
+            # daemon's memory at closeout and then committed to the account
+            # git repo, where it is permanent. Skipping loudly beats
+            # truncating: half a JSONL file is a file that parses and lies.
+            if stat.st_size > _MAX_PRESERVED_BYTES:
+                print(
+                    f"[brnrd] capture: skipping {source_name} on run "
+                    f"{task.id} — {stat.st_size} B exceeds the "
+                    f"{_MAX_PRESERVED_BYTES} B preserve cap"
+                )
+                continue
+            data = source.read_bytes()
+        except OSError:
+            continue
+        dest = run_dir / dest_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(dest)
+        except OSError:
+            continue
+        written.append(dest)
+    return written
+
+
+def _persist_boundaries_summary(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    brr_dir: Path,
+) -> Path | None:
+    """Project this run's hook boundary transcript onto its node.
+
+    The transcript itself (`hooks.BOUNDARIES_NAME`) lives beside
+    ``boot-score.json`` in the daemon's own per-run scratch directory
+    (``<brr_dir>/runs/<run-id>/``), never the account dominion — it is
+    diagnostic, unbounded in principle, and not something the resident's
+    memory should carry whole. What the node gets instead is
+    ``hooks.derive_boundaries_summary``'s compact projection, written beside
+    ``body.md``/``state.md`` so the next wake's "## Your last run" block
+    (``prompts._guard_line``) can say whether the closeout guard agreed with
+    the reply it is showing — the fact a false "continuing" claim used to
+    hide.
+
+    Same absence discipline as its source: no transcript, no summary, no
+    file. A guessed ``boundaries.json`` would be worse than none, because a
+    missing file is the one shape that can never be mistaken for "the guard
+    was clean."
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    source = brr_dir / "runs" / task.id / hooks_mod.BOUNDARIES_NAME
+    summary = hooks_mod.derive_boundaries_summary(source)
+    if summary is None:
+        return None
+    path = (
+        account.run_dir(account_context, repo_label, task.id)
+        / hooks_mod.BOUNDARIES_SUMMARY_NAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        protocol._atomic_write(path, json.dumps(summary, sort_keys=True) + "\n")
+    except OSError:
+        return None
+    task.meta["run_boundaries_summary_path"] = str(path)
     return path
 
 
@@ -10620,6 +11324,18 @@ def _run_worker_and_finalize(
             work_dir=repo_root,
             outbox_dir=outbox_path,
         )
+        _persist_boundaries_summary(
+            account_context,
+            task,
+            repo_label=repo_label,
+            brr_dir=brr_dir,
+        )
+        _capture_control_files(
+            account_context,
+            task,
+            repo_label=repo_label,
+            outbox_dir=outbox_path,
+        )
         _capture_dominion(
             repo_root,
             cfg,
@@ -10865,7 +11581,7 @@ def start(
     # executing* — which is the only thing a spawn's boot can honestly claim.
     reload_mod.capture_image_fingerprint()
     if not (repo_root / "AGENTS.md").exists():
-        raise SystemExit("[brnrd] run `brnrd init` first")
+        raise SystemExit(f"[brnrd] run `{brnrd_cmd()} init` first")
 
     _write_pid(brr_dir)
     running = True

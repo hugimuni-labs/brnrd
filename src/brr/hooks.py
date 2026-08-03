@@ -47,6 +47,7 @@ from . import card as card_rule
 from . import facets
 from . import gate_receipt
 from . import portals
+from . import promises
 from . import relics
 
 PHASE_POST_TOOL = "post-tool"
@@ -787,6 +788,30 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "when nonzero.",
     ),
     _BarSegment(
+        "gate", "gate",
+        "this run's gate receipt: verdict and the head it was earned on "
+        "(`gate GREEN@e59f527`), plus `(moved)` when the tree moved under "
+        "the gate while it ran (#917). Renders only once a receipt exists — "
+        "a run that has not gated is not a run that failed. The sha is the "
+        "honest half: the tree a run gates is often not the tree it is "
+        "checked out in, so a receipt describing another tree is legible as "
+        "such rather than mistaken for this one. Not a staleness verdict — "
+        "that needs the tree the receipt names, and the closeout clause "
+        "makes that comparison where it has the standing to (#1048).",
+    ),
+    _BarSegment(
+        "owed", "owed",
+        "outstanding promises — rows in `.promises.jsonl` this run has not "
+        "yet matched with produce (`owed 2`). Renders only when the count is "
+        "> 0, the same differential discipline as `!N`: a blueprint with "
+        "nothing outstanding says nothing. Deliberately not a ratio against "
+        "`⚒` — that count includes things nobody promised, so `2/5` would be "
+        "an aggregate over a population with no shared denominator, and a "
+        "chip shaped like a progress bar gets read as one. The chip is the "
+        "ambient half; *which* things are owed rides a detail line, latched "
+        "on the blueprint's own delta (#1008).",
+    ),
+    _BarSegment(
         "mood", "mood",
         "the resident's own `.mood` control file (#566 layer 2), truncated "
         "to 16 chars, with the emote's base-frame glyph prefixed when "
@@ -989,16 +1014,108 @@ def _card_chip(card: dict[str, Any], card_stale: bool) -> str:
     return "card ok"
 
 
+# #1002: a notice carries a ``kind`` since daemon.py:5765 — ``refused`` |
+# ``dropped`` | ``advisory``. Only the first two are a claim that something
+# the resident asked for did not happen; an ``advisory`` is FYI on a
+# directive that *was* accepted and acted on (the ``note:`` body-ignored
+# case that opened this ticket). Both surfaces below (the bar chip, the
+# seed/stop briefing count) must agree on which kinds count, so the
+# filter lives once, here.
+#
+# #716: ``kind`` alone under-distinguishes. A record also carries a
+# ``lifetime`` — ``"run"`` (this run's own directive; a fresh refusal is a
+# real transition worth an alarm) or ``"standing"`` (an environmental fact
+# — an ignored `.brr/config` security key, an unreachable `runners.md` —
+# that re-fires identically on every wake and nothing this run does can
+# clear). Counting a standing notice pins ``!N`` at a nonzero baseline from
+# t=0, so a genuine new refusal reads as a delta against noise (``!1`` ->
+# ``!2``) instead of the zero-to-one transition the chip exists to show.
+# Excluded for the same *reason* as ``advisory`` — FYI, not a failure to
+# act on right now — via a second, independent field rather than folding
+# it into ``kind`` (which would make the record lie about what happened).
+def _counted_notices(notices: list) -> list:
+    """The subset of *notices* that represent a refusal or a drop.
+
+    A record with no ``kind`` key, no ``lifetime`` key, or neither, is a
+    legacy entry — written by a daemon generation before #1002 or #716,
+    possibly still sitting in a live ``portal-state.json`` across a daemon
+    restart. It counts as refusing: the pessimistic direction, chosen
+    deliberately, because a real refusal hidden by an under-count costs far
+    more than one stale advisory or standing notice over-counted. Only an
+    entry explicitly marked ``kind == "advisory"`` or
+    ``lifetime == "standing"`` is excluded.
+    """
+    if not isinstance(notices, list):
+        return []
+    return [
+        n for n in notices
+        if not (
+            isinstance(n, dict)
+            and (n.get("kind") == "advisory" or n.get("lifetime") == "standing")
+        )
+    ]
+
+
+def _gate_chip(receipt: dict[str, Any] | None) -> str | None:
+    """``gate GREEN@e59f527`` — the verdict, and the tree it was earned on.
+
+    `.gate-receipt.json` decides whether a run may merge — ``workflow.md``
+    self-merge condition 1 is, operationally, a question about this file —
+    and until now it was the only control file in the outbox with no chip
+    (#1048). Reaching the verdict meant grepping a log, which is exactly the
+    habit *the gate's verdict is the receipt line, never the exit code a
+    pipe hands you* exists to force. A chip removes the need to remember it.
+
+    **The sha is not decoration; it is the honesty.** The tree a run gates
+    is frequently not the tree it is checked out in — a gate run inside
+    ``/tmp/brr-wt-<slug>`` writes its receipt into the run's outbox while
+    the checkout sits on ``main``. Carrying the head the verdict was earned
+    on lets a reader see that a receipt describes *another* tree instead of
+    silently mistaking it for this one.
+
+    Deliberately **not** a staleness verdict. "Passed on a tree that has
+    since moved" needs the tree the receipt names, not the run's checkout,
+    and comparing against the checkout would read STALE on a receipt that is
+    perfectly current — a guard firing constantly for a non-reason. The
+    closeout's own :func:`_gate_closeout_clause` does that comparison where
+    it has the repo dir and the standing to make it; this chip states the
+    fact and lets the reader compare.
+
+    ``tree_moved_during_gate`` is the one qualifier that *is* exact (#917 —
+    the tree moved under the gate while it ran), so it rides along in words
+    rather than as a mark nobody can resolve.
+
+    Absent when there is no receipt: the same differential discipline as
+    ``!N`` and ``owed N``. **A run that has not gated is not a run that
+    failed**, and a chip claiming otherwise would be the pessimistic lie
+    where the honest answer is silence.
+    """
+    if not isinstance(receipt, dict) or not receipt:
+        return None
+    verdict = str(receipt.get("verdict") or "").strip()
+    if not verdict:
+        return None
+    head = str(receipt.get("head") or "").strip()
+    chip = f"gate {verdict}" + (f"@{head[:7]}" if head else "")
+    if receipt.get("tree_moved_during_gate"):
+        chip += " (moved)"
+    return chip
+
+
 def _notices_chip(notices: list) -> str | None:
-    """``!N`` when *notices* is non-empty; absent at zero.
+    """``!N`` when *notices* has a refused/dropped entry; absent at zero.
 
     A refused outbox file is deleted exactly like an accepted one — the only
     thing between a dropped reply and silence is a resident habitually opening
     ``portal-state.json``.  ``!N`` on the bar makes a non-zero refusal count
     visible without demanding that read.  Absent at zero so it earns its ink
-    the same way every other differential segment does.
+    the same way every other differential segment does. An ``advisory``
+    notice never drives this count (#1002), and neither does a ``standing``
+    one (#716 — an environmental fact this run cannot clear, not a fresh
+    refusal) — both stay readable in ``portal-state.json`` and in the
+    seed/stop briefing below, just not here.
     """
-    n = len(notices) if isinstance(notices, list) else 0
+    n = len(_counted_notices(notices))
     return f"!{n}" if n else None
 
 
@@ -1486,6 +1603,43 @@ def _render_armed_rows(armed: list[Any] | None) -> list[str]:
     return rows
 
 
+def _partition_pending_events(
+    payload: dict[str, Any],
+) -> tuple[list[Any], list[dict[str, Any]], int]:
+    """Split actionable events from this run's self-retiring completions.
+
+    A ``spawn_completed`` event dispatched by the current run is an observed
+    fact: the daemon retires it when the parent ends.  Both the boundary
+    renderer and the Stop blocker consume this partition so they cannot call
+    the same event self-retiring and still-pending in one payload (#990).
+    """
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    inbound = (
+        payload.get("inbound")
+        if isinstance(payload.get("inbound"), dict) else {}
+    )
+    attention = (
+        payload.get("attention")
+        if isinstance(payload.get("attention"), dict) else {}
+    )
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    pending = int(attention.get("pending_event_count", 0) or 0)
+    run_id = str(run.get("id") or "")
+
+    def is_finished_spawn(event: Any) -> bool:
+        return (
+            bool(run_id)
+            and isinstance(event, dict)
+            and event.get("source") == "spawn_completed"
+            and event.get("spawn_parent_run_id") == run_id
+        )
+
+    finished_spawns = [event for event in events if is_finished_spawn(event)]
+    action_events = [event for event in events if not is_finished_spawn(event)]
+    action_pending = max(0, pending - len(finished_spawns))
+    return action_events, finished_spawns, action_pending
+
+
 def _render_bar(
     *,
     run: dict[str, Any],
@@ -1509,6 +1663,9 @@ def _render_bar(
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
     armed: list[Any] | None = None,
+    gate_receipt_data: dict[str, Any] | None = None,
+    plan: "promises.Blueprint | None" = None,
+    plan_edge: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -1563,9 +1720,22 @@ def _render_bar(
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(f"⚒{produce_total}")
+    # Beside the produce count, because they are the same fact in two tenses
+    # (#1008). Gateless like `⚒`: an outstanding promise is an obligation,
+    # but the *chip* is its ambient half and must not manufacture a boundary
+    # by itself — the `owed` detail line below does that, once per change.
+    owed_chip = promises.chip(plan) if plan is not None else None
+    if owed_chip:
+        segments.append(owed_chip)
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(notices_chip)
+    # Ambient, like the produce count: it never opens the gate by itself.
+    # A run that just gated already has a boundary; what this buys is that
+    # the verdict is on screen at *every* later boundary without a grep.
+    gate_chip = _gate_chip(gate_receipt_data)
+    if gate_chip:
+        segments.append(gate_chip)
     if mood:
         # Display every boundary (it is the user's window onto the resident's
         # own face); *ask* only on an edge. The old unconditional "·keep?"
@@ -1588,8 +1758,9 @@ def _render_bar(
         # applies *more* here, since a dense bar habituates faster than prose.
         details.append(
             f"{pending} pending event(s), {pending_files} undelivered outbox "
-            "file(s). Address each below — fold in, or say on .card why it "
-            "stays queued — before your next plan boundary or closeout."
+            "file(s). Address each below with an `event:` reply, or retire it "
+            "deliberately with `note:`, before your next plan boundary or "
+            "closeout."
         )
         details.extend(_render_event_rows(events, event_seen, inbox_pointer))
     if finished_spawns:
@@ -1599,6 +1770,16 @@ def _render_bar(
         # pressure.
         details.append(_finished_spawns_line(finished_spawns))
     details.extend(_render_armed_rows(armed))
+    # The blueprint's obligation half. Latched on its own delta by the caller
+    # (`plan_edge`), never rendered per boundary: an owed line that repeats
+    # for as long as it stands is the *fires constantly for a non-reason*
+    # death, and the chip above already carries the standing fact. It speaks
+    # when a promise is made, when one is met or released, and at the
+    # closeout — the three moments the number actually means something new.
+    if plan is not None and plan_edge:
+        owed = promises.owed_line(plan)
+        if owed:
+            details.append(owed)
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -1630,6 +1811,11 @@ def _render_bar(
 
     resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
     any_delivery = bool(delivery_chip)
+    # A blueprint edge opens the gate on its own, for `surprise`'s reason:
+    # writing a promise changes nothing the daemon puts in portal-state, so
+    # gating this on the portal token would leave the one boundary the
+    # signal exists for rendering nothing.
+    plan_laden = bool(plan is not None and plan_edge and plan.owed)
     # A mood edge is laden by definition: something the resident did just came
     # back wrong. Without this clause the caller's gate opens and this one
     # closes again — the ask would still be silent on exactly the boundary it
@@ -1638,6 +1824,7 @@ def _render_bar(
         pending_known and pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
         and not notices_chip and not finished_spawns and not armed
+        and not plan_laden
     ):
         return None
     bar = " │ ".join(segments)
@@ -1716,6 +1903,9 @@ def format_delta(
     note_routing: bool = False,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
+    gate_receipt_data: dict[str, Any] | None = None,
+    plan: "promises.Blueprint | None" = None,
+    plan_edge: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -1772,6 +1962,21 @@ def format_delta(
     both keeps this a pure function of the snapshot — everything renders as
     a first appearance, and elided bodies point at ``inbox.json`` by name.
 
+    ``gate_receipt_data`` is this run's ``.gate-receipt.json``, read by the
+    caller for ``mood``'s reason — it is an outbox artifact, not part of the
+    portal snapshot, and the resident rewrites it mid-run by gating again
+    (#1048). Mid-run bar segment only: at seed there is never a receipt, and
+    at stop :func:`_gate_closeout_clause` already speaks with the repo dir in
+    hand and far more standing than a chip has.
+    ``plan`` is the run's blueprint joined against its produce
+    (:mod:`brr.promises`, #1008) — computed by the caller for ``orient``'s
+    reason: it is read off ``.promises.jsonl``, which is not in the portal
+    snapshot. ``plan_edge`` is its once-per-change latch, owned by the caller
+    like ``note_routing``: mid-run the *chip* carries the standing fact every
+    boundary and the *owed line* speaks only when the blueprint moves. At
+    seed and stop the latch does not apply — the closeout is the moment the
+    whole feature exists for.
+
     The armed dated-letters block (#904, :func:`_render_armed_rows`) reads
     straight off ``payload["schedule"]["armed"]`` — the daemon's own
     projection of still-pending ``at:`` entries — with no caller-owned
@@ -1807,15 +2012,13 @@ def format_delta(
     pending_raw = attention.get("pending_event_count")
     pending_known = pending_raw is not None
     try:
-        pending = int(pending_raw or 0)
+        int(pending_raw or 0)
     except (TypeError, ValueError):
-        pending = 0
         pending_known = False
     try:
         pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
     except (TypeError, ValueError):
         pending_files = 0
-    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     notices = payload.get("notices") if isinstance(payload.get("notices"), list) else []
     schedule_facet = (
         payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
@@ -1825,19 +2028,9 @@ def format_delta(
         if isinstance(schedule_facet.get("armed"), list) else []
     )
 
-    # Partition pending events into obligations vs finished-spawn facts.
-    # spawn_completed events whose spawn_parent_run_id matches this run are
-    # facts — the parent observed them; they will self-retire at run end.
-    # They must not count toward the obligation total or demand an "address".
-    run_id = str(run.get("id") or "")
-    finished_spawns = [
-        e for e in events
-        if isinstance(e, dict)
-        and e.get("source") == "spawn_completed"
-        and e.get("spawn_parent_run_id") == run_id
-    ] if run_id else []
-    action_events = [e for e in events if e not in finished_spawns]
-    action_pending = max(0, pending - len(finished_spawns))
+    action_events, finished_spawns, action_pending = _partition_pending_events(
+        payload
+    )
 
     if not seed and not stop:
         card_stale = bool(card.get("stale"))
@@ -1851,7 +2044,8 @@ def format_delta(
             mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
-            armed=armed,
+            armed=armed, gate_receipt_data=gate_receipt_data,
+            plan=plan, plan_edge=plan_edge,
         )
 
     lines: list[str] = []
@@ -1878,8 +2072,9 @@ def format_delta(
         )
     if action_pending:
         header_line += (
-            " Address each below — fold in, or say on .card why it stays "
-            "queued — before your next plan boundary or closeout."
+            " Address each below with an `event:` reply, or retire it "
+            "deliberately with `note:`, before your next plan boundary or "
+            "closeout."
         )
     lines.append(header_line)
     lines.extend(_render_event_rows(action_events, event_seen, inbox_pointer))
@@ -1917,6 +2112,25 @@ def format_delta(
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
+    # The blueprint, against the produce below it (#1008). At seed and stop
+    # this is never latched: the closeout is the moment the whole feature
+    # exists for, and a promise that went unmet has to be said *there* even
+    # if it was already said mid-run — that is the difference between an
+    # obligation and an ambient line, and it is why this sits outside the
+    # content-dedupe that guards the ambient phases.
+    #
+    # Both directions render here, and only here. Mid-run the kept case is
+    # silence, because "all kept" every boundary is noise; at the closeout it
+    # is the receipt half of the same fact, and the resident is writing a
+    # reply from this block.
+    if plan is not None and plan.any_promises:
+        owed = promises.owed_line(plan)
+        if owed:
+            lines.append(owed)
+        elif stop:
+            lines.append(
+                "- blueprint: every promise this run made is in its manifest."
+            )
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -2103,19 +2317,55 @@ def format_delta(
     # single loss was a 10,229 B analysis, staged and gone two minutes before
     # its run's closeout claimed nothing was outstanding.
     #
-    # Text, not classification. Sorting loss-notices from config-warnings by
-    # matching their prose would be the renderer guessing at something only
-    # the writer knows; that split wants a ``kind:`` field on the record
-    # (#716) and a daemon change, which is a restart away. Rendering the text
-    # is the half that is live in the very next hook subprocess — and it is
-    # also what makes a *standing* notice legible. This account carries one
-    # permanently (a repo-side ``runners.md`` that is ignored by design), so
-    # ``!N`` is never zero here and has stopped carrying information. Four
-    # words of the text tell a reader "that one again" from "that one is
-    # new"; the count cannot, which is precisely why it habituated.
+    # Text, not classification — that *was* true here, and it was the split
+    # #1002 closed: sorting loss-notices from config-warnings by matching
+    # their prose was the renderer guessing at something only the writer
+    # knew. A ``kind:`` field now rides the record itself (daemon.py:5765),
+    # written at the source that actually knows whether a directive was
+    # refused, dropped, or merely advisory — so the header count below
+    # counts only the first two, exactly like the bar's ``!N`` chip
+    # (``_notices_chip``, same filter, ``_counted_notices``). Rendering the
+    # full text stays: it is still the half that is live in the very next
+    # hook subprocess, and it is what makes a *standing* notice legible even
+    # once it stops driving the count.
+    #
+    # #1002's ``kind`` field alone was not enough. This account carries a
+    # standing notice permanently (a repo-side ``runners.md`` that is
+    # ignored by design) — but it is genuinely ``kind="refused"``/
+    # ``"dropped"`` (brnrd really did not honour the input); retagging it
+    # ``advisory`` to keep it out of the count would make the chip honest by
+    # making the record lie about what happened. #716's fix is a second,
+    # orthogonal field: ``lifetime``. A ``"standing"`` record is excluded
+    # from the count below for the same *reason* as an advisory (FYI, not a
+    # fresh failure to act on) without pretending it is one — so the header
+    # now names the two exclusions separately, and a reader sees "standing"
+    # on the environmental notice rather than the wrong-severity "advisory".
+    # Four words of the text still tell a reader "that one again" from
+    # "that one is new"; the count alone cannot, which is why it habituated
+    # before either field existed.
     if (seed or stop) and notices:
         shown = notices[-_NOTICE_LINES:]
-        head = f"- notices: {len(notices)} directive(s) brnrd refused or dropped"
+        counted = len(_counted_notices(notices))
+        advisory_extra = sum(
+            1
+            for n in notices
+            if isinstance(n, dict)
+            and n.get("lifetime") != "standing"
+            and n.get("kind") == "advisory"
+        )
+        standing_extra = sum(
+            1
+            for n in notices
+            if isinstance(n, dict) and n.get("lifetime") == "standing"
+        )
+        head = f"- notices: {counted} directive(s) brnrd refused or dropped"
+        extras = []
+        if advisory_extra:
+            extras.append(f"+{advisory_extra} advisory")
+        if standing_extra:
+            extras.append(f"+{standing_extra} standing")
+        if extras:
+            head += f" ({', '.join(extras)})"
         if stop:
             head += (
                 " — a refused outbox file is deleted exactly like an accepted"
@@ -2127,7 +2377,19 @@ def format_delta(
             if len(text) > _NOTICE_TEXT_CAP:
                 text = text[: _NOTICE_TEXT_CAP - 1].rstrip() + "…"
             if text:
-                lines.append(f"  · {text}")
+                kind = record.get("kind") if isinstance(record, dict) else None
+                lifetime = (
+                    record.get("lifetime") if isinstance(record, dict) else None
+                )
+                # Only "standing" earns a place in the label — it's the
+                # surprising case (an environmental fact, not this run's own
+                # directive) and the one #716 needs legible; "run" is the
+                # default for nearly every record and would just be noise.
+                label_bits = [b for b in (kind,) if b]
+                if lifetime == "standing":
+                    label_bits.append("standing")
+                label = f"[{' · '.join(label_bits)}] " if label_bits else ""
+                lines.append(f"  · {label}{text}")
         if len(notices) > len(shown):
             lines.append(
                 f"  · (+{len(notices) - len(shown)} older — "
@@ -2936,10 +3198,8 @@ def _armed_closeout_block(
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
 
 
-def _first_pending_event(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _first_pending_event(events: list[Any]) -> dict[str, Any] | None:
     """The first foldable pending event (one carrying a body), or None."""
-    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
-    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     for ev in events:
         if isinstance(ev, dict) and str(ev.get("body") or "").strip():
             return ev
@@ -2973,8 +3233,9 @@ def _fold_in_message(
     shown = int((decision or {}).get("shown") or 0)
     if status == "seen":
         return (
-            f"{_event_seen_line(event, shown)} — still pending: fold it in, "
-            "or say on .card why it stays queued."
+            f"{_event_seen_line(event, shown)} — still pending: reply with "
+            f"`event: {event.get('id') or '<id>'}`, or retire it deliberately "
+            f"with `note: {event.get('id') or '<id>'}`."
         )
     if source == "schedule":
         label = "(schedule firing folded in — the entry's spec, not a user message:)"
@@ -3055,11 +3316,42 @@ def compute_neutral(
     # between hook fires, and the whole point is that the face rendered here
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
+    # Re-read every boundary, like `.mood` and `.card`: a resident gates
+    # more than once in a long run, and a cached verdict is exactly the
+    # stale claim this chip exists to make visible. `_read_json` collapses
+    # absent/unreadable/malformed to `{}`, and the chip renders nothing for
+    # all three — a run that has not gated is not a run that failed.
+    gate_receipt_data = _read_json(
+        ctx.outbox_dir / GATE_RECEIPT_NAME if ctx.outbox_dir else None
+    )
+    # The blueprint (#1008), read fresh for `.mood`'s reason: the resident
+    # writes `.promises.jsonl` between hook fires and the point is that the
+    # line rendered here reflects what it just claimed. Joined against the
+    # produce counts the daemon already computed, so nothing re-derives them.
+    #
+    # `plan_edge` is the once-per-change latch. It is *not* a content check:
+    # an owed line and an ambient bar are byte-identical when nothing moved,
+    # and content dedupe eats an unmet obligation exactly as fast as noise
+    # (#818/#963). Keying on the blueprint's own token makes the line speak
+    # when a promise is made, met, or released — and stay quiet in between,
+    # where the `owed N` chip carries the standing fact for seven characters.
+    portal_produce = (
+        portal.get("produce") if isinstance(portal.get("produce"), dict) else {}
+    )
+    produce_counts = (
+        portal_produce.get("counts")
+        if isinstance(portal_produce.get("counts"), dict) else {}
+    )
+    plan = promises.blueprint(promises.read(ctx.outbox_dir), produce_counts)
+    plan_token = promises.token(plan)
+    plan_edge = plan.any_promises and plan_token != state.get("plan_token")
+    state["plan_token"] = plan_token
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
             portal, seed=True, mood=mood,
             event_seen=event_decisions, inbox_pointer=inbox_pointer,
+            plan=plan,
         )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
@@ -3093,6 +3385,7 @@ def compute_neutral(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                plan=plan,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -3133,12 +3426,20 @@ def compute_neutral(
         # changes nothing the daemon writes into portal-state, so the one
         # boundary the ask exists for is exactly the one that would render
         # nothing.
+        # A blueprint edge opens the gate on its own, for the mood edge's
+        # reason: writing `.promises.jsonl` changes nothing the daemon puts
+        # into portal-state, so gating on the portal token alone would leave
+        # the one boundary this signal exists for rendering nothing.
         if portal_unavailable or (
-            token is not None and (token != state.get("last_token") or edge)
+            token is not None and (
+                token != state.get("last_token") or edge or plan_edge
+            )
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                gate_receipt_data=gate_receipt_data,
+                plan=plan, plan_edge=plan_edge,
             )
             state["last_token"] = token
 
@@ -3165,11 +3466,9 @@ def compute_neutral(
         inject = _suppress_unchanged_inject(state, inject)
 
     if phase == PHASE_STOP:
-        attention = (
-            portal.get("attention")
-            if isinstance(portal.get("attention"), dict) else {}
+        action_events, _finished_spawns, action_pending = (
+            _partition_pending_events(portal)
         )
-        pending = int(attention.get("pending_event_count", 0) or 0)
         # Token-scoped, not a one-shot boolean: a plain "blocked once ever"
         # latch (the pre-fix shape) never let a *later*, genuinely new
         # follow-up re-block once the run had folded in any earlier one —
@@ -3181,9 +3480,9 @@ def compute_neutral(
         # repeat block against the *same* unresolved snapshot preserves the
         # existing "second stop must not block forever" guarantee for the
         # unchanged case.
-        if pending > 0 and state.get("stop_blocked_token") != stop_token:
+        if action_pending > 0 and state.get("stop_blocked_token") != stop_token:
             block = True
-            event = _first_pending_event(portal)
+            event = _first_pending_event(action_events)
             if event is not None:
                 # Fold the waiting follow-up in — the resident addresses it
                 # in this same thought. Honest label and letter policy per
@@ -3197,9 +3496,10 @@ def compute_neutral(
                 )
             else:
                 block_reason = (
-                    f"{pending} pending event(s) are still waiting — fold the "
-                    "foldable ones into this wake (read inbox.json) before "
-                    "ending, or say why they should wait."
+                    f"{action_pending} pending event(s) are still waiting — "
+                    "reply with `event: <id>`, or retire deliberately with "
+                    "`note: <id>`, before ending. Read inbox.json for the "
+                    "complete event bodies."
                 )
             state["stop_blocked_token"] = stop_token
 
@@ -3529,6 +3829,111 @@ def record_boundary(
     except OSError:
         return None
     return path
+
+
+# ── Boundary summary (the run node's `boundaries.json`) ──────────────────
+#
+# `boundaries.jsonl` is complete but linear: reading it for one fact (did the
+# closeout guard ever fire? did the run end over a live block?) means
+# scrolling a whole run's transcript. The wake's "## Your last run" block
+# (`prompts._build_prior_run_block`) projects the previous run's node — its
+# frame, its `## Now`, its section shape — and until now that projection
+# dropped the one field that says whether the closeout guard AGREED with the
+# reply it is showing: a run that ended on a false "continuing" claim (the
+# guard fired, and the run ended anyway) reads identical to a clean close.
+# This is the derivation half — pure and read-only over the transcript
+# `record_boundary` already wrote, no schema change to it. The write half
+# (deciding *where* the summary lands) is `daemon._persist_boundaries_summary`;
+# the render half (turning it into the wake's one `guard:` line) is
+# `prompts._guard_line`.
+
+#: Sibling of `BOUNDARIES_NAME`, same run-node directory.
+BOUNDARIES_SUMMARY_NAME = "boundaries.json"
+
+
+def derive_boundaries_summary(path: Path) -> dict[str, Any] | None:
+    """Summarise *path* (a run's `boundaries.jsonl`) into a small flat dict.
+
+    ``None`` — never a zero-valued summary — whenever the transcript cannot
+    be trusted: absent, unreadable, or every line in it failed to parse.
+    That is deliberate and pessimistic: a missing `boundaries.json` must stay
+    distinguishable from one honestly reporting "nothing happened", and the
+    only way to keep that true is to never emit the latter from data this
+    thin. In practice a real transcript always carries at least the
+    unconditional `session-start` record, so an all-malformed file is
+    corruption, not an ordinary empty run.
+
+    Malformed individual lines — a line torn by a crash mid-write, a
+    dict missing the `phase` field — are skipped and counted, not fatal:
+    `record_boundary`'s own append is best-effort, so its reader tolerates
+    exactly the damage the writer already tolerates in itself.
+
+    The "guard fire" this counts is the only signal the transcript can prove:
+    a `phase: stop` record with `block: true`. `compute_neutral` has two
+    sources for that bit at Stop — the pending-event fold-in and
+    `_armed_closeout_block` — and `record_boundary` does not carry which one
+    fired, only the outcome. Rather than guess from `block_reason`'s prose
+    (an assertion-on-a-proxy this codebase specifically avoids elsewhere),
+    this counts every Stop block as a guard verdict: the defect this feature
+    answers is "did the run end over a live objection", not "which clause
+    raised it", and that question the bare `block` bit already answers
+    honestly. The final stop's own verdict — the fact the accepted defect is
+    about — is the last `phase: stop` record in file order, blocked or not.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    total = 0
+    skipped = 0
+    stops = 0
+    guard_fires: list[dict[str, Any]] = []
+    final_stop: dict[str, Any] | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("phase"), str):
+            skipped += 1
+            continue
+        total += 1
+        at = record.get("at")
+        at = at if isinstance(at, str) else None
+        block = bool(record.get("block"))
+        if record["phase"] != PHASE_STOP:
+            continue
+        stops += 1
+        block_reason = record.get("block_reason")
+        final_stop = {
+            "at": at,
+            "block": block,
+            "block_reason": block_reason if isinstance(block_reason, str) else None,
+        }
+        if block:
+            guard_fires.append({"at": at, "blocked": True})
+
+    if total == 0:
+        return None
+
+    return {
+        "total": total,
+        "skipped": skipped,
+        "stops": stops,
+        "guard_fire_count": len(guard_fires),
+        "guard_fires": guard_fires,
+        "final_stop_at": final_stop["at"] if final_stop else None,
+        "final_stop_block": final_stop["block"] if final_stop else False,
+        "final_stop_block_reason": (
+            final_stop["block_reason"] if final_stop else None
+        ),
+    }
 
 
 def _safe_json(text: str) -> dict[str, Any]:

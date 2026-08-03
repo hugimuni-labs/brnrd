@@ -954,6 +954,66 @@ def test_stop_folds_pending_body_verbatim(tmp_path):
     assert "folded-in follow-up" in out["reason"]
 
 
+def test_stop_does_not_nag_for_self_retiring_spawn_completion(tmp_path):
+    """The Stop guard and closeout renderer must classify from one source.
+
+    This is the live #990 path: the daemon reports its own completed child as
+    observed and self-retiring in the injected closeout.  The same Stop fire
+    must not then block on that event as though it were an unmet obligation.
+    """
+    run_id = "run-1"
+    completion_id = "evt-spawn-done"
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": completion_id,
+        "source": "spawn_completed",
+        "spawn_parent_run_id": run_id,
+        "spawned_by_run": "run-child",
+        "spawn_status": "done",
+        "summary": "concurrent spawn run-child finished: status=done",
+        "body": "concurrent spawn run-child finished: status=done",
+    }])
+
+    out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+
+    assert code == 0
+    assert out.get("decision") != "block"
+    assert "0 pending event(s)" in out["hookSpecificOutput"]["additionalContext"]
+    assert "1 finished spawn(s) observed" in (
+        out["hookSpecificOutput"]["additionalContext"]
+    )
+    assert "no address needed; will retire at run end" in (
+        out["hookSpecificOutput"]["additionalContext"]
+    )
+
+
+def test_stop_nag_selects_action_event_beside_finished_spawn(tmp_path):
+    """A finished child cannot mask a real follow-up or become its nag."""
+    _portal(tmp_path, token="t1", pending=2, events=[
+        {
+            "id": "evt-spawn-done",
+            "source": "spawn_completed",
+            "spawn_parent_run_id": "run-1",
+            "spawn_status": "done",
+            "body": "child completion is a self-retiring fact",
+        },
+        {
+            "id": "evt-followup",
+            "source": "telegram",
+            "body": "please answer the actual follow-up",
+        },
+    ])
+
+    out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+
+    assert code == 0
+    assert out["decision"] == "block"
+    assert "please answer the actual follow-up" in out["reason"]
+    assert "child completion is a self-retiring fact" not in out["reason"]
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert "1 pending event(s)" in context
+    assert "1 finished spawn(s) observed" in context
+
+
 # ── Pending-event letter chrome ──────────────────────────────────────────
 #
 # The boundary-injected pending list, reworked after run-260731-1802-j6ke
@@ -3184,6 +3244,192 @@ def test_notices_chip_position_is_after_produce_before_card():
     assert bar.index("⚒") < bar.index("!1") < bar.index("mood") < bar.index("card ok")
 
 
+# ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
+
+
+def _kind_notice(text, kind=None, lifetime=None):
+    record = {"at": "2026-08-02T20:00:00Z", "text": text}
+    if kind is not None:
+        record["kind"] = kind
+    if lifetime is not None:
+        record["lifetime"] = lifetime
+    return record
+
+
+def test_notices_chip_absent_when_every_notice_is_advisory():
+    """Seven advisory notices — the measured #1002 shape (seven working
+    `note:` files) — must drive no `!N` chip at all.
+
+    Drive red: revert `_notices_chip` to `len(notices)` and this fails,
+    reproducing the exact bug the ticket measured (`!7` for zero refusals).
+    """
+    notices = [
+        _kind_notice(f"note: body text ignored — event evt-{i} closed", "advisory")
+        for i in range(7)
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!" not in bar
+
+
+def test_a_redirected_reply_counts_it_reached_the_wrong_correspondent():
+    """`redirected` is not FYI: the reply was delivered to a lane the
+    resident did not address.
+
+    Parent review of #1002. The cross-gate redirect in `_drain_outbox` was
+    filed `advisory` on the reasoning that nothing was refused or dropped —
+    true of the *content* and of the *lifecycle*, false of the *addressing*,
+    which is the one of the three `daemon-substrate.md` tells a run to open
+    `notices` for: did my addressed reply reach who I addressed? A run that
+    reads no `!` believes it did.
+
+    Counting works with no change to the filter, because `_counted_notices`
+    excludes only `advisory` rather than enumerating the kinds that count —
+    the structural property, not the member list.
+    """
+    notices = [
+        _kind_notice(
+            "reply redirected: event evt-9 is owned by gate 'slack', not "
+            "reachable from this run — delivered on this run's own gate instead",
+            "redirected",
+        ),
+        _kind_notice("note: body text ignored — event evt-1 closed", "advisory"),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_notices_chip_counts_only_the_one_refusal_among_advisories():
+    """One real refusal in a pile of six advisories must still read `!1` —
+    the whole point of a `kind` is that the pile no longer drowns it."""
+    notices = [_kind_notice("spawn refused: environment 'host' is not spawnable", "refused")]
+    notices += [
+        _kind_notice(f"note: body text ignored — event evt-{i} closed", "advisory")
+        for i in range(6)
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_legacy_notice_with_no_kind_key_counts_as_refusing():
+    """A record with no ``kind`` at all — written by a daemon generation
+    before #1002, possibly still sitting in a live ``portal-state.json``
+    across a restart — must count. The pessimistic direction: hiding a real
+    refusal behind a silently-dropped legacy entry is the worse failure."""
+    notices = [_kind_notice("reply text staged undeliverable — no gate owns it")]
+    assert "kind" not in notices[0]
+    rendered = hooks.format_delta(_bar_payload(notices=notices), mood="smug_")
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_advisory_notice_is_readable_but_excluded_from_the_seed_briefing_count(
+    tmp_path,
+):
+    """An advisory notice must still render its text at the seed/stop
+    boundary (PR #754's "render, don't just count") while the header count
+    — like the bar's `!N` — excludes it from "refused or dropped"."""
+    notices = [
+        _kind_notice(
+            "note: body text ignored — a note closes event evt-y8lx "
+            "without speaking; use event: to reply",
+            "advisory",
+        ),
+    ]
+    _portal(tmp_path, token="t1", pending=0, notices=notices)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert "+1 advisory" in ctx
+    assert "a note closes event evt-y8lx" in ctx
+
+
+# ── #716: `lifetime` splits standing environmental notices out of `!N` ───────
+
+
+def test_notices_chip_absent_for_a_standing_notice_alone():
+    """A single standing environmental notice (ignored `.brr/config` security
+    key, unreachable `runners.md`, ...) must drive no `!N` chip at all — it
+    is a fact about the environment, not a refused directive.
+
+    Drive red: drop the `lifetime`-aware exclusion from `_counted_notices`
+    and this fails, reproducing #716's measured `!1` baseline for a notice
+    nothing in the run could have cleared.
+    """
+    notices = [
+        _kind_notice(
+            "repo config tried to set security-defining key(s) "
+            "['runner_cmd'] in .brr/config — ignored, not honoured",
+            "refused",
+            "standing",
+        ),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!" not in bar
+
+
+def test_notices_chip_reads_the_zero_to_one_transition_not_one_to_two():
+    """A standing notice plus one real refusal must read `!1`, not `!2` —
+    the exact transition #716 exists to restore. This is the case the whole
+    ticket is about: a fresh refusal must be visible as a delta against
+    zero, not against a nonzero environmental baseline."""
+    notices = [
+        _kind_notice(
+            "custom runner profiles are not being read in this worktree",
+            "dropped",
+            "standing",
+        ),
+        _kind_notice(
+            "spawn refused: environment 'host' is not spawnable",
+            "refused",
+            "run",
+        ),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+    assert "!2" not in bar
+
+
+def test_legacy_notice_with_no_lifetime_key_counts_as_refusing():
+    """A record carrying `kind` but no `lifetime` at all — written by a
+    daemon generation before #716 — must still count. Same pessimistic
+    direction as the missing-`kind` legacy case: a real refusal hidden by
+    an under-count costs more than a stale standing notice over-counted."""
+    notices = [_kind_notice("spawn dropped: no inbox to queue into", "dropped")]
+    assert "lifetime" not in notices[0]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_seed_briefing_renders_the_standing_notice_separately_from_advisory(
+    tmp_path,
+):
+    """The seed/stop briefing must still render a standing notice's text
+    (PR #754's "render, don't just count") and must label it `standing`,
+    not fold it into the `advisory` count — an operator reading `advisory`
+    about an ignored security key learns the wrong severity."""
+    notices = [
+        _kind_notice(
+            "repo-side runner profile file(s) .brr/runners.md — ignored, "
+            "not loaded",
+            "refused",
+            "standing",
+        ),
+    ]
+    _portal(tmp_path, token="t1", pending=0, notices=notices)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert "+1 standing" in ctx
+    assert "advisory" not in ctx
+    assert ".brr/runners.md" in ctx
+
+
 def test_card_chip_meters_the_projection_not_the_file():
     """The chip that said `card ok` all the way through #685.
 
@@ -3762,3 +4008,74 @@ def test_the_transcript_cap_announces_itself(tmp_path, monkeypatch):
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     assert len(_transcript(run_dir)) == before
     assert (run_dir / "boundaries.jsonl").stat().st_size == size
+
+
+# ── Boundary summary (`boundaries.json`) ──────────────────────────────────
+#
+# `derive_boundaries_summary` reads the exact transcript `record_boundary`
+# writes, so these fixtures are driven through the real hook entry point
+# (`hooks.run_hook`) rather than hand-assembled — the same discipline the
+# transcript tests above already keep. Only the malformed-line case appends
+# synthetic damage on top of a real file, because that damage cannot be
+# produced any other way.
+
+
+def test_derive_boundaries_summary_is_none_when_the_file_is_absent(tmp_path):
+    """No transcript, no summary — never a guessed zero-valued one."""
+    assert hooks.derive_boundaries_summary(tmp_path / "boundaries.jsonl") is None
+
+
+def test_derive_boundaries_summary_is_none_when_every_line_is_malformed(tmp_path):
+    """Total corruption reads the same as absence, not as a clean zero run."""
+    path = tmp_path / "boundaries.jsonl"
+    path.write_text(
+        "not json at all\n{\"phase\": \"stop\"\n{\"no_phase_field\": true}\n",
+        encoding="utf-8",
+    )
+    assert hooks.derive_boundaries_summary(path) is None
+
+
+def test_derive_boundaries_summary_counts_stops_and_skips_bad_lines(tmp_path):
+    """Realistic transcript, driven through `run_hook`, plus damage on top."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "body": "one more thing"}])
+    hooks.run_hook(hooks.PHASE_SESSION_START, "{}", env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)  # blocks: pending event unaddressed
+    # A second Stop against the same unresolved snapshot does not re-block
+    # (the token-scoped latch, #981) — this run's last word is clean.
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    path = run_dir / "boundaries.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("{not valid json\n")
+
+    summary = hooks.derive_boundaries_summary(path)
+
+    assert summary is not None
+    assert summary["total"] == 4
+    assert summary["skipped"] == 1
+    assert summary["stops"] == 2
+    assert summary["guard_fire_count"] == 1
+    assert summary["guard_fires"][0]["blocked"] is True
+    assert summary["guard_fires"][0]["at"]
+    # The run's last word was clean, even though an earlier Stop blocked.
+    assert summary["final_stop_block"] is False
+    assert summary["final_stop_block_reason"] is None
+    assert summary["final_stop_at"]
+
+
+def test_derive_boundaries_summary_final_stop_blocked_is_the_case_that_matters(tmp_path):
+    """A run whose *last* Stop was still live under a block — the accepted defect."""
+    env, run_dir = _transcript_env(tmp_path)
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "body": "finish this"}])
+    hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+
+    summary = hooks.derive_boundaries_summary(run_dir / "boundaries.jsonl")
+
+    assert summary["stops"] == 1
+    assert summary["guard_fire_count"] == 1
+    assert summary["final_stop_block"] is True
+    assert "finish this" in summary["final_stop_block_reason"]

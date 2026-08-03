@@ -715,3 +715,216 @@ def test_render_prod_line_omits_app_auth_when_the_server_predates_it():
         _prod_fixture("2026-07-30T10:29:00+00:00"), now=now
     )
     assert "app auth" not in rendered
+
+
+# ── resolution_reason / resolved_pr_lookup (#957) ──────────────────────
+#
+# The live-menu strike join reads these instead of re-deriving PR age math,
+# so they get their own direct coverage; test_live_menu.py pins the actual
+# join through the render callers the defect used.
+
+
+def test_resolution_reason_merged_and_closed():
+    now = 1_700_003_600.0  # exactly 2h after the timestamps below
+    merged = {"number": 1, "state": "MERGED", "merged_at": "2023-11-14T21:13:20Z"}
+    closed = {"number": 2, "state": "CLOSED", "closed_at": "2023-11-14T21:13:20Z"}
+    assert forge_state.resolution_reason(merged, now=now) == "merged 2h ago"
+    assert forge_state.resolution_reason(closed, now=now) == "closed 2h ago"
+
+
+def test_resolution_reason_none_for_open_or_unresolved():
+    assert forge_state.resolution_reason({"number": 1, "state": "OPEN"}) is None
+    # merged/closed with no resolvable timestamp still says *something*
+    # happened, just without an age.
+    assert forge_state.resolution_reason(
+        {"number": 1, "state": "MERGED"}
+    ) == "merged"
+    assert forge_state.resolution_reason({}) is None
+    assert forge_state.resolution_reason(None) is None
+
+
+def test_resolved_pr_lookup_joins_worktree_and_standalone_prs():
+    now = 1_700_003_600.0
+    forge = {
+        "worktrees": [
+            {
+                "run_id": "run-a",
+                "branch": "brr/a",
+                "pr": {
+                    "number": 995,
+                    "state": "MERGED",
+                    "merged_at": "2023-11-14T21:13:20Z",
+                },
+            },
+            {"run_id": "run-b", "branch": "brr/b"},  # no pr attached
+        ],
+        "pr_state": {
+            "standalone": [
+                {
+                    "number": 998,
+                    "state": "MERGED",
+                    "merged_at": "2023-11-14T21:13:20Z",
+                },
+                {"number": 997, "state": "OPEN"},
+            ],
+        },
+    }
+    lookup = forge_state.resolved_pr_lookup(forge, now=now)
+    assert lookup == {995: "merged 2h ago", 998: "merged 2h ago"}
+    assert 997 not in lookup
+
+
+def test_resolved_pr_lookup_empty_for_absent_or_malformed_forge():
+    assert forge_state.resolved_pr_lookup(None) == {}
+    assert forge_state.resolved_pr_lookup({}) == {}
+    assert forge_state.resolved_pr_lookup({"worktrees": "not-a-list"}) == {}
+
+
+# ── prod vs origin/main relationship (#1039 task 2) ──────────────────
+#
+# All four cases driven through build_forge_state — the caller
+# render_prod_line actually has in production — on a real git repo fixture,
+# never by calling the private `_origin_main_relationship` helper directly.
+# A local bare "origin.git" plus a real `git fetch` gives these tests a
+# genuine `refs/remotes/origin/main`, exactly as the daemon's own
+# `sync.refresh_before_run` would leave one, without touching a network.
+
+
+def _repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
+    """``(repo, origin)`` — *origin* is a local bare mirror ``repo`` can
+    fetch from and push to, standing in for the real GitHub remote so
+    ``refs/remotes/origin/main`` is real and network-free."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(origin)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True,
+    )
+    return repo, origin
+
+
+def _push(repo: Path, remote: str, ref: str = "main") -> None:
+    subprocess.run(
+        ["git", "push", remote, ref],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
+def _fetch(repo: Path, remote: str = "origin") -> None:
+    subprocess.run(
+        ["git", "fetch", remote],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+
+def _stub_fingerprint(monkeypatch, commit: str) -> None:
+    """Make the cloud gate report a fingerprint for *commit*, no real gate
+    configured, no network — the daemon's inbox long-poll is out of scope
+    for this facet either way (module docstring)."""
+    from brr.gates import cloud as cloud_gate
+
+    monkeypatch.setattr(cloud_gate, "is_configured", lambda brr_dir: True)
+    monkeypatch.setattr(
+        cloud_gate,
+        "read_server_fingerprint",
+        lambda brr_dir: {
+            "build": {"commit": commit, "built_at": None, "started_at": None},
+            "github": {},
+            "fetched_at": None,
+        },
+    )
+
+
+def _prod_line(repo: Path) -> str:
+    facet = forge_state.build_forge_state(repo, current_run_id="")
+    return forge_state.render_prod_line(facet["prod"])
+
+
+def test_origin_relationship_matches(tmp_path, monkeypatch):
+    repo, origin = _repo_with_origin(tmp_path)
+    sha = commit_files(repo, {"a.txt": "one\n"})
+    _push(repo, "origin")
+    _fetch(repo)
+    _stub_fingerprint(monkeypatch, sha)
+
+    assert "matches origin/main" in _prod_line(repo)
+
+
+def test_origin_relationship_behind(tmp_path, monkeypatch):
+    repo, origin = _repo_with_origin(tmp_path)
+    sha = commit_files(repo, {"a.txt": "one\n"})
+    _push(repo, "origin")
+    commit_files(repo, {"b.txt": "two\n"}, message="second")
+    commit_files(repo, {"c.txt": "three\n"}, message="third")
+    _push(repo, "origin")
+    _fetch(repo)
+    _stub_fingerprint(monkeypatch, sha)
+
+    rendered = _prod_line(repo)
+    assert "2 commits behind origin/main" in rendered
+    assert f"{sha[:8]}.." in rendered
+
+
+def test_origin_relationship_ahead(tmp_path, monkeypatch):
+    repo, origin = _repo_with_origin(tmp_path)
+    commit_files(repo, {"a.txt": "one\n"})
+    _push(repo, "origin")
+    _fetch(repo)
+    sha = commit_files(repo, {"b.txt": "two\n"}, message="local hotfix")
+    _stub_fingerprint(monkeypatch, sha)
+
+    rendered = _prod_line(repo)
+    assert "1 commit ahead of origin/main" in rendered
+
+
+def test_origin_relationship_diverged(tmp_path, monkeypatch):
+    repo, origin = _repo_with_origin(tmp_path)
+    commit_files(repo, {"a.txt": "one\n"})
+    _push(repo, "origin")
+    # origin moves on...
+    subprocess.run(
+        ["git", "clone", str(origin), str(tmp_path / "clone")],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=clone, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=clone, check=True)
+    commit_files(clone, {"remote-side.txt": "b\n"}, message="on origin only")
+    _push(clone, "origin")
+    # ...while prod's commit is a sibling that never reached origin.
+    sha = commit_files(repo, {"local-side.txt": "c\n"}, message="on prod only")
+    _fetch(repo)
+    _stub_fingerprint(monkeypatch, sha)
+
+    rendered = _prod_line(repo)
+    assert "diverged from origin/main" in rendered
+
+
+def test_origin_relationship_unknown_commit_not_in_checkout(tmp_path, monkeypatch):
+    repo, origin = _repo_with_origin(tmp_path)
+    commit_files(repo, {"a.txt": "one\n"})
+    _push(repo, "origin")
+    _fetch(repo)
+    # A well-formed sha this checkout has never seen.
+    phantom = "a" * 40
+    _stub_fingerprint(monkeypatch, phantom)
+
+    rendered = _prod_line(repo)
+    assert f"relationship unknown — {phantom[:8]} not in this checkout" in rendered
+    assert "behind" not in rendered
+    assert "ahead" not in rendered
+
+
+def test_origin_relationship_unknown_origin_main_missing(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    sha = commit_files(repo, {"a.txt": "one\n"})
+    # No `origin` remote at all — nothing has ever named it, let alone fetched.
+    _stub_fingerprint(monkeypatch, sha)
+
+    rendered = _prod_line(repo)
+    assert f"relationship unknown — {sha[:8]} not in this checkout" in rendered

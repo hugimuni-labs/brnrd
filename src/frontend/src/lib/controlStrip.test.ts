@@ -6,7 +6,10 @@ import {
 	dialDasharray,
 	fuelRows,
 	quotaWindowCountLabel,
-	runnerBlocks
+	railIsSlim,
+	railScrollVerdict,
+	runnerBlocks,
+	slotChip
 } from './controlStrip.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners.ts';
@@ -246,4 +249,104 @@ test('dialDasharray draws the elapsed wedge proportionally and clamps', () => {
 	// Out-of-range fractions clamp instead of drawing an impossible arc.
 	assert.equal(dialDasharray(1.7), dialDasharray(1));
 	assert.equal(dialDasharray(-0.3), dialDasharray(0));
+});
+
+// ── the spawn-slot capacity chip (#972: LIMITS folds into the rail) ────────
+
+test('slotChip stays neutral chrome below 80% utilization', () => {
+	const chip = slotChip(1, 4);
+	assert.equal(chip.label, '1/4 slots');
+	assert.equal(chip.level, null);
+	assert.match(chip.title, /spawn\.max_concurrent/);
+});
+
+test('slotChip speaks the quota vocabulary at contention', () => {
+	// 4/5 in use → 80% utilization, 20% headroom → cooling; full → spent.
+	assert.equal(slotChip(4, 5).level, 'cooling');
+	assert.equal(slotChip(4, 4).level, 'spent');
+	// 3/4 is 75% — still merely a configured ceiling, not contention.
+	assert.equal(slotChip(3, 4).level, null);
+});
+
+test('slotChip renders an unpublished ceiling as a question, not a guess', () => {
+	assert.equal(slotChip(2, null).label, '2/? slots');
+	assert.equal(slotChip(2, null).level, null);
+	assert.equal(slotChip(2, 0).label, '2/? slots');
+});
+
+// THE PICKER YOU CANNOT REACH (2026-08-02). The rail's form has two inputs the
+// reader controls and one the page controls, and the bug was that only one of
+// the reader's two counted. These pin the rule that replaced it: scrolling may
+// condense a rail nobody touched; it may never take back a panel the reader
+// opened.
+
+test('at the top of the page the rail is never slim, whatever the reader opened', () => {
+	for (const pinnedOpen of [false, true]) {
+		for (const expanded of [false, true]) {
+			assert.equal(railIsSlim({ condensed: false, pinnedOpen, expanded }), false);
+		}
+	}
+});
+
+test('scrolled past an untouched rail, it condenses to the slim bar', () => {
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: false }), true);
+});
+
+test('an expanded rack survives the scroll verdict — the bug that hid the last spool', () => {
+	// He could not select `claude-fable`: it is the last row of the rack, the
+	// rack is the last block of the rail, and reaching it took the page scroll
+	// that used to unmount the whole panel.
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: false, expanded: true }), false);
+});
+
+test('pinning the slim bar open survives the scroll verdict too', () => {
+	assert.equal(railIsSlim({ condensed: true, pinnedOpen: true, expanded: false }), false);
+});
+
+// THE BOUNDARY THAT FLICKERED — the condense verdict has a dead band, and
+// the two thresholds are asymmetric on purpose: condensing waits for the
+// whole full rail to scroll past; un-condensing waits for the return to the
+// rail's natural top. A reader parked anywhere between them (which is where
+// a slow touchpad scroll lives) must see no form change in either direction.
+const RAIL = { railTop: 100, railFullHeight: 180 };
+
+test('the rail does not condense while any of its full form is still on screen', () => {
+	// Old trigger fired at scrollY > railTop (101). That inflated the spacer
+	// while the freed band was still visible, and 1px of jitter toggled it.
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 101, condensed: false }), false);
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 279, condensed: false }), false);
+});
+
+test('the rail condenses once the reader has scrolled past the whole of it', () => {
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 281, condensed: true }), true);
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 281, condensed: false }), true);
+});
+
+test('a condensed rail stays condensed through the dead band — no flicker on the way up', () => {
+	// Same scroll positions as the first test, opposite prior state: the
+	// verdict must hold, not toggle. This pair IS the hysteresis.
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 279, condensed: true }), true);
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 120, condensed: true }), true);
+});
+
+test('the rail un-condenses only back at its natural top', () => {
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 107, condensed: true }), false);
+	assert.equal(railScrollVerdict({ ...RAIL, scrollY: 0, condensed: true }), false);
+});
+
+test('an unmeasured full height still gets a minimum dead band, not a zero one', () => {
+	// Before the first measurement railFullHeight is 0; a zero band would
+	// reintroduce the single shared boundary this function exists to remove.
+	assert.equal(
+		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 120, condensed: false }),
+		false
+	);
+	assert.equal(
+		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 148, condensed: false }),
+		false
+	);
+	assert.equal(
+		railScrollVerdict({ railTop: 100, railFullHeight: 0, scrollY: 149, condensed: false }),
+		true
+	);
 });

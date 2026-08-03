@@ -165,6 +165,36 @@ def test_dashboard_repos_api_returns_repo_management_payload():
     assert body["oauth_ready"] is True
 
 
+def test_dashboard_repos_api_serves_one_pairing_command_to_a_cold_account():
+    """The cold-start block's command and a repo's ``setup_command`` are one string.
+
+    The dashboard's cold-start block prints the pairing lines to an account
+    with *no* repos — which is precisely when there is no repo row to read
+    ``setup_command`` off, so the payload carries an account-level spelling
+    with a ``<repo>`` placeholder. Both come from ``_session.pairing_command``
+    and this pins that they stay one fact: they may differ in the ``cd``
+    target and in nothing else. Two hand-typed copies of a command line drift
+    apart the first time the CLI renames a verb, and the copy on the surface
+    a brand-new reader sees is the worse one to have gone stale.
+    """
+    client = _client()
+    token = _login(client, login="Gurio")
+
+    cold = client.get("/v1/dashboard/repos").json()
+    assert cold["connected_repos"] == []
+    assert cold["pairing_command"].splitlines() == [
+        "cd <repo>",
+        "brnrd account connect https://brnrd.dev",
+        "brnrd up",
+    ]
+
+    _create_repo(client, token, repo="Gurio/brr")
+    warm = client.get("/v1/dashboard/repos").json()
+    setup = warm["connected_repos"][0]["setup_command"].splitlines()
+    assert setup[0] == "cd brr"
+    assert setup[1:] == cold["pairing_command"].splitlines()[1:]
+
+
 def test_dashboard_repos_api_returns_latest_daemon_gate_health():
     import json
 
@@ -951,9 +981,11 @@ def test_dashboard_run_ledger_span_filters_before_limit():
     one_day = client.get("/v1/dashboard/run-ledger?limit=1&span_seconds=86400")
     assert one_day.status_code == 200
     assert [row["run_id"] for row in one_day.json()["rows"]] == ["recent"]
+    assert one_day.json()["span_seconds_served"] == 86400
 
     seven_days = client.get("/v1/dashboard/run-ledger?limit=10&span_seconds=604800")
     assert [row["run_id"] for row in seven_days.json()["rows"]] == ["recent", "older"]
+    assert seven_days.json()["span_seconds_served"] == 604800
 
 
 def test_dashboard_config_requests_api_returns_pending_oldest_first():

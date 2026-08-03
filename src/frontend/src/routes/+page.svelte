@@ -3,14 +3,14 @@
 	import { resolve } from '$app/paths';
 	import AccountDeletion from '$lib/AccountDeletion.svelte';
 	import BillingPanel from '$lib/BillingPanel.svelte';
-	import LoomBand from '$lib/LoomBand.svelte';
+	import PickLane from '$lib/PickLane.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
-	import Limits from '$lib/Limits.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
-	import { quotaWindowCountLabel } from '$lib/controlStrip';
+	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
+	import { DOCS_URL } from '$lib/publicStats';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
@@ -53,23 +53,34 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
-	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		RunLedgerAuthError,
+		fetchRunLedger,
+		servedWindowMs,
+		type RunLedgerRow
+	} from '$lib/runLedger';
 	import { parseBackchannelPage } from '$lib/backchannelPage';
-	import { buildWarpLayers, emberCount } from '$lib/warp';
+	import { buildWarpLayers, emberCount, restingLayers, weavingRows } from '$lib/warp';
+	import ThreadLegend from '$lib/ThreadLegend.svelte';
+	import { buildCrossingIndex, crossingCells, crossingThreads } from '$lib/crossing';
+	import { pickRows } from '$lib/pickLane';
 	import WarpBand from '$lib/WarpBand.svelte';
 	import { PRODUCE_GAUGE_LEDGER_LIMIT } from '$lib/produceGauge';
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
-	import FutureShelf from '$lib/FutureShelf.svelte';
+	import { loomPastWindowLabel } from '$lib/loomBand';
 	import WorkSurface from '$lib/WorkSurface.svelte';
 	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
-	import { typeReveal } from '$lib/transitions';
+	import { glitchReveal, typeReveal } from '$lib/transitions';
+	import RunBlock from '$lib/RunBlock.svelte';
 	import {
 		ConfigRequestsAuthError,
 		fetchConfigRequests,
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
+	import { railScrollVerdict } from '$lib/controlStrip';
+	import { machineDockTop, machineDockVerdict, machineTapVerdict } from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -103,6 +114,11 @@
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
+	// Backend-owned pairing lines for the cold start, from the same
+	// `/v1/dashboard/repos` fetch — an account with no repos has no repo row
+	// to read `setup_command` off, so the account-level spelling comes with
+	// the list itself.
+	let pairingCommand = $state<string | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -216,6 +232,7 @@
 	let runLedgerWithheld = $state<WithheldLane | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
+	let runLedgerWindowMs = $state(CLOTH_WINDOW_MS);
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
@@ -245,6 +262,83 @@
 	// not a hidden section (the §1 empty-queue precedent).
 	let warpLayers = $derived(surfaceData ? buildWarpLayers(surfaceData.files) : []);
 	let warpEmberCount = $derived(emberCount(warpLayers));
+	// The ignition crossing, render half (#972 machine round): while an
+	// ignited item's `taken:` run is live, the item rides the machine block's
+	// weaving lane and the warp stack rests it — one item space, moved by
+	// tense. Heat counts in the warp header stay authored (they describe the
+	// file), so a header may count one more ember than the stack shows while
+	// it burns.
+	// The machine's fold (his 08-02 steer: the parked machine is a one-line
+	// run block on top; tapping it unfolds the lane), and the one selection
+	// the whole loom answers to (promote composition, 2026-07-16, amended by
+	// the dissolution — the detail sheet serves every tense from this one
+	// selection). The expanded verdict reads the reader's own acts only —
+	// deliberately NOT `focusRunId`, which auto-focuses the sole live run:
+	// keying the fold on it would auto-expand the machine whenever anything
+	// burns, which is exactly the parked run block's job to prevent (his
+	// steer: the block IS the pulse; the lane is one tap away).
+	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
+	let loomSelection = $state<LoomSelection>(null);
+	// Open on arrival (his 2026-08-03 read: "it is collapsed when I just fresh
+	// load the page, and I think it should be expanded by default").
+	//
+	// A *constant*, deliberately, and this is the whole distinction the comment
+	// above draws: keying the default on state — anything burning, a run
+	// focused — makes the page's first shape depend on something the reader
+	// cannot see before it paints, so the block is expanded some mornings and
+	// parked others and nobody ever learns the rule. `focusRunId` stays out of
+	// the verdict for exactly that reason; a constant is not that failure, it
+	// is the opposite of it.
+	//
+	// The second half of his read — "and then collapsed when we scroll past
+	// it" — needs no code and must not get any: the dock already draws the
+	// short pointer form once the head sticks, with the body left open at its
+	// home in the document. Making a scroll position fold `machineOpen` is THE
+	// PICKER YOU CANNOT REACH (#1011), the bug he reported on the rail, and
+	// `machineDock.ts` refuses it in as many words.
+	let machineOpen = $state(true);
+	let machineExpanded = $derived(machineOpen || loomSelection !== null);
+	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
+	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
+	// One item space, moved by tense — but only when the machine is open to
+	// receive it. Parked, the machine is a single line: a weaving item
+	// resting out of the warp would render *nowhere*. So the item leaves the
+	// warp stack only while the lane that carries it is actually on screen;
+	// parked, it stays in the warp, lit by the legend's weaving bolt.
+	let warpStackLayers = $derived(
+		machineExpanded ? restingLayers(warpLayers, liveRunIds) : warpLayers
+	);
+	// THE CROSSING (`crossing.ts`): the warp threads in authored order, and
+	// run id → the ones each run lifted, read off the `taken:` rows the weld
+	// already writes. One index, three readers — the warp header's legend, the
+	// pick lane's rows, the cloth's lines — so one alphabet travels the whole
+	// page: same threads, same cells, same width, wherever a strip is drawn.
+	// That shared vocabulary is the answer to "temporal repeating instead of
+	// referencing": a run and the intent it served point at each other through
+	// the strip, and neither re-lists the other. (The strips also share an x
+	// *within* the lane; the cloth's rows wrap, so there they do not — the
+	// alphabet is the claim, not the column.)
+	// The machine's own row set. Same `pickRows` the lane draws from — one
+	// computation, three readers (the rail's slim line, the parked run block,
+	// the lane), so no two surfaces can disagree about which pick is burning.
+	let machineRows = $derived(pickRows({ liveRuns, scheduledWakes, now }));
+	let burningRows = $derived(machineRows.filter((row) => row.phase === 'picking'));
+	let armedRows = $derived(machineRows.filter((row) => row.phase === 'armed'));
+	// The rail's one line about the now.
+	let livePick = $derived.by(() => {
+		if (burningRows.length === 0) return null;
+		return {
+			label: burningRows[0].label,
+			clock: burningRows[0].clock,
+			extra: burningRows.length - 1
+		};
+	});
+	let threads = $derived(crossingThreads(warpLayers));
+	// Which layers have an item weaving right now — the answer to "which one is
+	// being worked", rendered on the warp where the question gets asked rather
+	// than only on the run that is doing it.
+	let weavingCallSigns = $derived(new Set(weaving.map((row) => row.callSign)));
+	let crossingIndex = $derived(buildCrossingIndex(warpLayers));
 	// All three feeds resolved (loaded or errored) — until then the needs
 	// strip's sum is a partial read, and rendering it as a verdict is the
 	// measured 20 → "clear" → 4 flicker. `authoredBackchannelItems.length
@@ -261,11 +355,171 @@
 	// The cloth owns its window constant (30d by design); the ledger fetch's
 	// row limit still caps the payload, so the cloth reads its rows as
 	// "latest N", not "all of 30d".
-	// Live layout (his "wild thought", 08-01): when something burns, the shed
-	// floats to the top and the warp leads only at rest. CSS order over a
-	// stable DOM — the sections keep their identity and animations; only the
-	// reading order answers the state.
-	let loomLive = $derived((liveRuns?.length ?? 0) > 0);
+	//
+	// The float is dead (his 08-02 steer: "unreliable and too flashy… against
+	// good user experience"). Nothing reorders on liveness any more: the rail
+	// is sticky on top, the machine sits directly under it and is almost
+	// nothing while idle, and ignition *reveals* the machine in place instead
+	// of moving sections around the reader.
+
+	// The sticky rail's scroll verdict, with hysteresis (THE BOUNDARY THAT
+	// FLICKERED — the rule and its history live on `railScrollVerdict`).
+	// Condense only once the reader has scrolled past the whole full rail;
+	// un-condense only back near its natural top. A slow touchpad scroll can
+	// sit between the two thresholds for as long as it likes — there is
+	// nothing there to toggle.
+	let railSentinel = $state<HTMLElement | null>(null);
+	let railCondensed = $state(false);
+	// Whether the machine's one line is stuck to the top with the lane it
+	// belongs to left behind at the block's home. Measured off the block's own
+	// sentinel rather than inferred from `railCondensed`: the two boundaries sit
+	// about sixteen pixels apart, and this one decides what the head *says* and
+	// what a tap on it *does*, so it has to be the geometric fact and not a
+	// neighbour's proxy. Verdict, dead band, and why travel terminates against
+	// it: `machineDock.machineDockVerdict`.
+	let machineDocked = $state(false);
+	$effect(() => {
+		const sentinel = railSentinel;
+		if (!sentinel || typeof window === 'undefined') return;
+		const read = () => {
+			const railTop = sentinel.getBoundingClientRect().top + window.scrollY;
+			railCondensed = railScrollVerdict({
+				scrollY: window.scrollY,
+				railTop,
+				railFullHeight,
+				condensed: railCondensed
+			});
+			// The sentinel's *bottom*: it carries the seam above the block as a
+			// real box, so its bottom edge and the dock's in-flow top are the
+			// same line. Its top is 24px higher, and that gap is the trip's
+			// landing margin below — two different numbers off one element, so
+			// neither is a constant nudged until it looked right.
+			machineDocked = machineSentinel
+				? machineDockVerdict({
+						home: machineSentinel.getBoundingClientRect().bottom,
+						dockTop: machineDockTop(railHeight, railCondensed),
+						docked: machineDocked
+					})
+				: false;
+		};
+		read();
+		window.addEventListener('scroll', read, { passive: true });
+		window.addEventListener('resize', read, { passive: true });
+		return () => {
+			window.removeEventListener('scroll', read);
+			window.removeEventListener('resize', read);
+		};
+	});
+
+	// The rail's flow footprint stays constant while its painted height changes
+	// (2026-08-02, his "the collapsing should be more natural with the
+	// scrolling"). A sticky element still occupies its own box in flow, and that
+	// box sits at the very top of the document — off-screen for any reader who
+	// has scrolled far enough to condense it. So when the rail shrinks by 100px,
+	// the browser holds `scrollY` and every section below rises 100px under the
+	// reader's eyes: the "glitch" is the page moving, not the rail.
+	//
+	// The spacer below the rail absorbs exactly the difference, so the document
+	// height never changes with the rail's form. It is only ever non-zero while
+	// the rail is condensed, and the hysteresis above guarantees condensing
+	// happens only once the *whole* full rail has scrolled past — so the
+	// reserved space genuinely never enters the viewport (at the old
+	// single-threshold trigger it inflated while still on screen: a blank band
+	// right where the rail had been). `railFullHeight` is sampled only in the
+	// resting full form: an expanded rack is a panel, not the rail's own height.
+	let railHeight = $state(0);
+	let railFullHeight = $state(0);
+	let machineSentinel = $state<HTMLDivElement | null>(null);
+	let railOpen = $state(false);
+	$effect(() => {
+		if (!railCondensed && !railOpen && railHeight > 0) railFullHeight = railHeight;
+	});
+	let railReserve = $derived(Math.max(0, railFullHeight - railHeight));
+
+	// His proposal, verbatim: "when it's expanded, it should just somehow go to
+	// the top of the page. And when it's collapsed, go back if it's possible."
+	// Opening the rack while scrolled would otherwise leave a panel taller than
+	// the viewport pinned at `top-0` with its own bottom unreachable — the shape
+	// that made the last spool in the rack impossible to tap. Returning the
+	// reader to where they were is what makes the trip cheap enough to take.
+	let railReturnY: number | null = null;
+	function onRackChange(open: boolean) {
+		railOpen = open;
+		if (typeof window === 'undefined') return;
+		if (open) {
+			if (window.scrollY > 0) {
+				railReturnY = window.scrollY;
+				window.scrollTo({ top: 0, behavior: 'smooth' });
+			}
+		} else if (railReturnY !== null) {
+			const back = railReturnY;
+			railReturnY = null;
+			window.scrollTo({ top: back, behavior: 'smooth' });
+		}
+	}
+
+	// THE DOCKED TAP (his 2026-08-03 read: "pressing on the collapsed machine
+	// block doesn't really expand it, just bugs out, and stays as it was — as
+	// opposed to the collapsed rack block, which expands on tap").
+	//
+	// The tap always worked. Only the machine's *head* is sticky, so the lane
+	// it opens appears where the section actually lives in the document —
+	// screens above a reader who has scrolled. Press, nothing visible, and the
+	// head's `glitchReveal` redraw reads as the bug.
+	//
+	// Same answer the rack already gives, and deliberately not a second idiom:
+	// go to the block, remember where you were, and give it back on fold (his
+	// 08-02 steer for the rack, verbatim — "when it's expanded it should just
+	// go to the top of the page, and when it's collapsed, go back"). Not taken:
+	// docking the body as well. An expanded lane pinned to the top of a phone
+	// is chrome eating the page, and it rebuilds THE PICKER YOU CANNOT REACH.
+	//
+	// Amended 2026-08-03 (THE DOCK THAT TAPPED WRONG, his "when the machine
+	// block is scrolled up it is not collapsed, so pressing it the first time
+	// doesn't expand it"): the trip above only ever ran when the tap happened
+	// to be an *opening* one. Docked with the block already open, the same tap
+	// was a fold — of a lane the reader could not see, at a position above
+	// them, so the page below rose by exactly one lane's height ("the menu hits
+	// scrolled randomly a bit"). Docked, the head is a pointer and every tap on
+	// it travels; only a tap taken with the lane on screen may fold. The
+	// verdict is `machineTapVerdict`, and the whole argument lives with it.
+	let machineReturnY = $state<number | null>(null);
+	function onMachineToggle() {
+		const tap = machineTapVerdict(machineExpanded, machineDocked);
+		if (tap.open === true) {
+			machineOpen = true;
+		} else if (tap.open === false) {
+			machineOpen = false;
+			loomSelection = null;
+		}
+		if (typeof window === 'undefined') return;
+		if (tap.travel) {
+			if (!machineSentinel) return;
+			// The sentinel, never the dock itself. A stuck `sticky` element
+			// reports its *stuck* viewport position, so measuring it gives
+			// back the offset it is already at — the first build did exactly
+			// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
+			// sibling in normal flow is the only thing on the page that
+			// still knows where the block lives. Same trick `railSentinel`
+			// already plays one section above.
+			machineReturnY = window.scrollY;
+			const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
+			window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
+		} else if (tap.open === false && machineReturnY !== null) {
+			const back = machineReturnY;
+			machineReturnY = null;
+			window.scrollTo({ top: back, behavior: 'smooth' });
+		}
+	}
+
+	// The library open ask (the warp's "page →", 08-02): the token
+	// distinguishes repeat asks for one path from a stale request riding a
+	// re-render; the corpus browser answers, this page scrolls to it.
+	let libraryRequest = $state<{ path: string; token: number }>({ path: '', token: 0 });
+	function openInLibrary(path: string) {
+		libraryRequest = { path, token: libraryRequest.token + 1 };
+		document.getElementById('corpus-heading')?.scrollIntoView({ behavior: 'smooth' });
+	}
 
 	// Promote composition (2026-07-16, "A - promote: lets do it"), amended
 	// by the dissolution (2026-08-02): the page's tenses are the spine now —
@@ -275,8 +529,8 @@
 	// existing component (node panel, LiveRuns card, receipt rows, schedule
 	// row) for just that selection. No selection = the "now" default, all
 	// live runs.
-	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
-	let loomSelection = $state<LoomSelection>(null);
+	// (`loomSelection` itself is declared above the machine derivations it
+	// participates in.)
 
 	// The lens (wyrd §4 band 2) lived here as page state while the band wore
 	// the chips. The dissolution moved the rail into the cloth — the chips
@@ -300,6 +554,7 @@
 			runLedgerRows = receipts.rows;
 			runLedgerWithheld = receipts.withheld ?? null;
 			runLedgerStale = receipts.stale;
+			runLedgerWindowMs = servedWindowMs(receipts.span_seconds_served, CLOTH_WINDOW_MS);
 			runLedgerError = null;
 		} catch (e) {
 			if (!(e instanceof RunLedgerAuthError)) {
@@ -476,6 +731,14 @@
 			: []
 	);
 
+	// The cold-start block's own cadence — see refreshOnce(). `0` means the
+	// list has never landed, so the first pass is never throttled.
+	const COLD_REPO_POLL_MS = 15_000;
+	let coldRepoCheckAt = 0;
+	function coldRefetchDue(): boolean {
+		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
+	}
+
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -526,10 +789,27 @@
 				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
-		if (connectedRepos === null) {
+		// Once, normally — the repo list is not a live surface. The one
+		// exception is a cold account: while it has *no* repos the page is
+		// showing the cold-start block, and that block has to leave on its
+		// own the moment a repo is enabled (in the other tab this very
+		// block sends the reader to). A first-run panel that outstays its
+		// state is a worse bug than the blank page it replaced.
+		//
+		// On its own clock, though. This loop runs at POLL_MS = 2s, and the
+		// state it is watching for changes at human speed: the reader has to
+		// reach another page, install a GitHub App, and come back. Riding the
+		// 2s tick would spend thirty GETs a minute, for as long as a tab
+		// stays open, on precisely the accounts that have nothing — and the
+		// answer arrives no sooner. So: a slow interval, plus a refetch the
+		// moment the tab regains focus, which is the *actual* signal that the
+		// reader has come back from doing the thing.
+		if (connectedRepos === null || (connectedRepos.length === 0 && coldRefetchDue())) {
 			try {
+				coldRepoCheckAt = Date.now();
 				const repos = await fetchRepos();
 				connectedRepos = repos.connected_repos;
+				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
@@ -594,17 +874,30 @@
 		}
 	}
 
+	// Coming back to this tab is the one honest event that says "I may have
+	// just enabled a repo". Cheaper than any interval and strictly faster
+	// than all of them, so the throttle above never costs the reader a wait
+	// they can perceive.
+	function onFocus() {
+		if (connectedRepos !== null && connectedRepos.length === 0) {
+			coldRepoCheckAt = 0;
+			refresh();
+		}
+	}
+
 	onMount(() => {
 		refresh();
 		pollHandle = setInterval(refresh, POLL_MS);
 		tickHandle = setInterval(() => {
 			now = Date.now();
 		}, TICK_MS);
+		window.addEventListener('focus', onFocus);
 	});
 
 	onDestroy(() => {
 		if (pollHandle) clearInterval(pollHandle);
 		if (tickHandle) clearInterval(tickHandle);
+		window.removeEventListener('focus', onFocus);
 	});
 </script>
 
@@ -647,6 +940,19 @@
 				     long as a page mostly because it was reporting 279 phantom
 				     running runs; once #486 reaped those it rendered about
 				     three rows. Folded, not re-fitted. -->
+					<!-- Docs, on a signed-in surface at last (2026-08-03). The only
+				     docs link in the product lived on the landing, which means it
+				     vanished at the exact moment a reader acquired questions: he
+				     signed up and reported "no docs link or like install it like
+				     this line or anything clear you know?". A third entry beside
+				     the two already here, in their grammar — still not the nav bar
+				     the note above declines to build. -->
+					<a
+						href={DOCS_URL}
+						rel="external"
+						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>docs</a
+					>
 					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 					<a
@@ -675,27 +981,261 @@
 			</h1>
 		</header>
 
+		<!-- The cold start, directly under the title and above everything
+		     else: for an account with nothing connected every section below
+		     is an empty state, so anything under the fold is under the
+		     horizon. It renders only while `connectedRepos` is a landed,
+		     empty list — the same source the rail and the consent notice
+		     read, never a second notion of "empty" — and leaves by itself
+		     when the first repo appears. -->
+		<ColdStart repos={connectedRepos} pairCommand={pairingCommand} />
+
 		<PublishConsentNotice repos={connectedRepos} />
 
-		<!-- the warp · future (#972: the loom is the page). The standing
-		     intent surface leads at rest; the backchannel is not a sibling
-		     section anymore but this band's needs-you strip — the center
-		     element by construction (his 07-31 read: "it should be one of
-		     the center elements"), a compact count-and-top-asks line above
-		     the stack because a returning reader asks "what does the
-		     resident need from me?" first — answered without ever hiding
-		     the layers. The dispatch rack + fuel close the band as
-		     capacity-to-string-new-threads. -->
-		<section
-			class="ignite mt-4 {loomLive ? 'order-2' : 'order-1'}"
+		<!-- the rail, sticky (his 08-02 steer): resource truth — fuel, tank,
+		     slots, the next pick — stays on top at every scroll position and
+		     condenses to one line once the reader scrolls past it. This is
+		     where the old order-flip died: nothing jumps when a run ignites. -->
+		<div bind:this={railSentinel} aria-hidden="true"></div>
+		<div
+			bind:clientHeight={railHeight}
+			class="ignite sticky top-0 z-40 -mx-6 max-h-[100svh] overflow-y-auto bg-stone-950/95 px-6 pt-3 pb-2 backdrop-blur-sm {railOpen
+				? 'overscroll-contain'
+				: ''}"
 			style="--ignite-delay: 120ms"
-			aria-labelledby="warp-heading"
 		>
+			{#if runnersData?.profiles.length === 0 && runnersWithheld}
+				<WithheldNotice withheld={runnersWithheld} class="mb-2 text-sm text-amber-200" />
+			{/if}
+			{#if shells?.length === 0 && quotaWithheld}
+				<WithheldNotice withheld={quotaWithheld} class="mb-2 text-sm text-amber-200" />
+			{/if}
+			<ControlStrip
+				runners={runnersData}
+				repos={connectedRepos}
+				{shells}
+				{runnersError}
+				{runnersNote}
+				onTap={tapWakeRunner}
+				ledgerRows={runLedgerRows}
+				{scheduledWakes}
+				{now}
+				activeSpawns={liveRuns === null ? null : activeSpawns}
+				maxSpawns={spawnMaxConcurrent}
+				condensed={railCondensed}
+				{onRackChange}
+				{livePick}
+				machineDocks={true}
+			/>
+		</div>
+		<!-- The rail's missing height, held in flow so the page below never
+		     moves when the rail changes form. Non-zero only while condensed,
+		     which is only while this part of the document is off-screen. -->
+		<div style={`height: ${railReserve}px`} aria-hidden="true"></div>
+
+		<!-- the machine · the now (his 08-02 steer: "practically I think it
+		     should be on top… it's the user-facing surface — looking what run is
+		     doing at the moment and an overview of all of the runs"). The fall
+		     (#1013: warp → machine → cloth as a run's biography) survives in the
+		     tenses below, but the pulse outranks the biography at the top of the
+		     page: the first question a returning reader asks is "what is
+		     happening right now", and while parked the machine costs one line,
+		     so the answer is free even when it is "nothing".
+
+		     Parked, the machine is RunBlock's single line — the burning run's
+		     name with its face watermarked behind it (A RUN HAS NO FACE,
+		     answered where he asked it: "the face appears in the middle of the
+		     block and kinda shadows the name"). Tapping the line unfolds the
+		     lane in place; folding it returns the weaving items to the warp
+		     stack below, where they render lit instead of resting. -->
+		<!-- THE DOCK (his 2026-08-02 magnet steer, in his own correction:
+			     "not the collapsed rack + oneline main runner info, as it is
+			     now, but a collapsed fuel + collapsed oneline machine stuck to
+			     it"). Fuel on top, the machine's one line flush beneath it, and
+			     the rail's borrowed live-pick row deleted — one fact, one
+			     surface.
+
+			     Only the *head* sticks. The lane below stays in normal flow: a
+			     tall panel pinned to the top of a phone is chrome eating the
+			     page, and it would re-raise THE PICKER YOU CANNOT REACH (#1011)
+			     by making an opened panel's own scroll position fight the dock.
+			     Nothing here reads the scroll verdict to change what is open —
+			     docking is visual, and the reader's expansion survives every
+			     offset.
+
+			     `top` is the rail's *live* height because the rail changes form
+			     as it condenses; a pinned constant would either gap or hide the
+			     head behind it, and a head hidden behind the rail reads as the
+			     block having vanished, which is the complaint this answers. -->
+		<!-- Sticky travels only inside its own parent's box, so this dock is a
+		     direct child of the page column — a sibling of the rail, exactly as
+		     the rail is. Nested one level into the machine's own `<section>` it
+		     stuck for the height of that section and then left with it, which
+		     is precisely the behaviour being fixed and looked identical in a
+		     static screenshot. Driven, not reasoned: the first build shipped
+		     the nested version and the phone shot showed the rail alone. -->
+		<!-- The seam above the block, held by the sentinel as a real box rather
+		     than written as the dock's own `mt-6`. A stuck sticky box parks its
+		     border box at `top` exactly — the margin goes with it — so a seam
+		     living on the dock would leave the marker 24px adrift from the thing
+		     it marks, and `machineDockVerdict` reads that edge to decide what a
+		     tap means. Marker and gap in one element: the two edges cannot
+		     disagree. -->
+		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
+		<div
+			class="ignite machine-dock sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
+			aria-label="the machine"
+		>
+			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
+			     this line's form — pointer or disclosure — so it is what the
+			     redraw should mark. -->
+			{#key machineDocked}
+				<div in:glitchReveal={{ duration: 200 }}>
+					<RunBlock
+						burning={burningRows}
+						armed={armedRows}
+						open={machineExpanded}
+						docked={machineDocked}
+						error={liveRunsError}
+						stale={liveRunsStale}
+						onToggle={onMachineToggle}
+					/>
+				</div>
+			{/key}
+		</div>
+		<section class="ignite" style="--ignite-delay: 260ms" aria-label="the machine's lane">
+			{#if machineExpanded}
+				<div in:glitchReveal={{ duration: 240 }}>
+					<!-- The lane: armed picks falling toward the seam, the burning ones
+				     sitting on it, the warp items each pick lifted carried as chips
+				     on the pick itself. One tap unfolds any of them below, in the
+				     same frame, in the same grammar. -->
+					<div class="mt-3">
+						<PickLane
+							{liveRuns}
+							{scheduledWakes}
+							{weaving}
+							{threads}
+							{crossingIndex}
+							{now}
+							onSelect={selectFromLoom}
+							{daemonMood}
+							selectedId={loomSelection?.kind === 'wake' ? loomSelection.id : focusRunId}
+						/>
+					</div>
+					{#if scheduledWakes?.length === 0 && activityWithheld}
+						<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
+					{/if}
+
+					<!-- The unfold: a selected strand (or the sole live one) expands in
+				     place into its run node; a selected wake into its schedule row.
+				     No sibling section, no second NOW eyebrow — the stem ties the
+				     panel to the seam it dropped from (the machine round:
+				     `NOW · NODE` as a separate section dies). -->
+					{#if loomSelection !== null || focusRunId !== null || (liveRuns?.length ?? 0) > 1}
+						<div class="ignite" style="--ignite-delay: 600ms">
+							<div class="mx-auto h-2 w-px bg-amber-700/60" aria-hidden="true"></div>
+							{#if loomSelection !== null}
+								<div class="flex justify-end">
+									<button
+										type="button"
+										class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+										onclick={() => (loomSelection = null)}
+									>
+										✕ fold
+									</button>
+								</div>
+							{/if}
+							<div class="mt-1">
+								{#if loomSelection?.kind === 'wake'}
+									{#if scheduledWakesError}
+										<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
+									{/if}
+									{#if selectedWakes.length > 0}
+										<ScheduleLane wakes={selectedWakes} {now} />
+									{:else}
+										<p class="text-sm text-ink-quiet">
+											that wake left the schedule — it likely fired.
+										</p>
+									{/if}
+								{:else if loomSelection?.kind === 'run' || focusRunId !== null}
+									<!-- The loom stays the spine: a selected run fills this frame with
+					     its own node instead of sending the reader to a page and
+					     costing them their place in the band. One panel, not three —
+					     the node speaks, with the live/receipt vitals folded into its
+					     header and everything heavier behind its own expand. -->
+									{#if selectedNode && selectedNodeAnswers}
+										<RunNodeInline
+											data={surfaceData}
+											repoSlug={selectedNode.repoSlug}
+											runId={selectedNode.runId}
+											href={selectedNode.href}
+											vitals={selectedVitals}
+											liveLevel={selectedLiveLevel}
+											identity={selectedIdentity}
+										/>
+									{:else if selectedLiveRuns.length > 0}
+										<LiveRuns
+											runs={selectedLiveRuns}
+											stale={liveRunsStale}
+											{now}
+											withheld={liveRunsWithheld}
+										/>
+									{:else if selectedLedgerRows.length > 0}
+										<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
+									{:else}
+										<p class="text-sm text-ink-quiet">
+											no receipt rows for that run in the current window.
+										</p>
+									{/if}
+								{:else}
+									<!-- Multi-run now, nothing unfolded: tapping a card *selects*
+							     it, and this same frame answers with the node panel — the
+							     identical grammar a seam tap speaks. The card's old inline
+							     expansion was a third rendering of the run (2026-07-20:
+							     "3 visual elements for a run"); it survives only in the
+							     fallbacks above, where no node can answer. -->
+									<LiveRuns
+										runs={liveRuns ?? []}
+										stale={liveRunsStale}
+										{now}
+										withheld={liveRunsWithheld}
+										onSelect={(id) => selectFromLoom('run', id)}
+									/>
+								{/if}
+							</div>
+						</div>
+					{/if}
+					{#if liveRunsError}
+						<p class="mt-2 text-sm text-red-400">{liveRunsError}</p>
+					{/if}
+				</div>
+			{/if}
+		</section>
+
+		<!-- the warp · intent (#972: the loom is the page). The fall (THE PICK,
+		     2026-08-02) ordered the page as a run's biography — warp → machine
+		     → cloth; the same evening's later steer amended it: the pulse
+		     outranks the biography, so the machine sits above and the warp is
+		     the page's second word. The warp is still intent: heat, no clock.
+		     Everything with a clock — the next pick, fuel, scheduled picks,
+		     live picks — is the machine's, one section above. The two futures
+		     are different axes, not one store; welding them is
+		     `serves:`/`taken:` references, never a merge, and the crossing
+		     strip is that weld drawn.
+
+		     The backchannel is not a sibling section but this band's needs-you
+		     strip — the center element by construction (his 07-31 read: "it
+		     should be one of the center elements"), because a returning reader
+		     asks "what does the resident need from me?" first, and it is
+		     answered without ever hiding the layers. -->
+		<section class="ignite mt-6" style="--ignite-delay: 400ms" aria-labelledby="warp-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
-					<p class="eyebrow">the warp · future</p>
+					<p class="eyebrow">the warp · intent</p>
 					<h2 id="warp-heading" class="font-mono text-sm font-semibold text-amber-100">
-						standing intent
+						what is asked
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] text-ink-quiet">
@@ -703,6 +1243,13 @@
 						? 'stringing…'
 						: `${warpLayers.length} ${warpLayers.length === 1 ? 'layer' : 'layers'} · ${warpEmberCount} ember`}
 				</p>
+			</div>
+			<!-- The threads, named and coloured: the legend for every crossing strip
+			     drawn below it, and what turns a lit tick from countable into
+			     identifiable. A layer with something weaving wears its own hue and
+			     a bolt — his ask, answered where he asked it. -->
+			<div class="mt-1.5">
+				<ThreadLegend cells={crossingCells(threads, threads)} weaving={weavingCallSigns} />
 			</div>
 			<!-- The flip is dead (2026-08-02): the layer stack is the standing
 			     body and renders always — the old needs-you heddle *replaced*
@@ -713,12 +1260,13 @@
 			<div class="mt-2">
 				<WarpBand
 					surfaceLoaded={surfaceData !== null}
-					layers={warpLayers}
+					layers={warpStackLayers}
 					knownPaths={surfaceKnownPaths}
 					authoredItems={authoredBackchannelItems}
 					prs={prReviewQueue}
 					requests={configRequests}
 					feedsResolved={backchannelFeedsResolved}
+					onOpenPage={openInLibrary}
 					stale={prReviewQueueStale}
 					{now}
 					withheld={prReviewQueueWithheld}
@@ -726,213 +1274,16 @@
 					configError={configRequestsError}
 				/>
 			</div>
-
-			<!-- The rack: capacity to string new threads — dispatch + fuel are
-			     warp properties, not a sibling section (#972). -->
-			<div class="mt-6">
-				<div class="flex items-baseline justify-between gap-3">
-					<p class="eyebrow">the rack · next wake + fuel</p>
-					<p class="font-mono text-[10px] text-ink-quiet">
-						{runnersError ?? (shells === null ? 'report loading' : quotaWindowCountLabel(shells))}
-					</p>
-				</div>
-				{#if runnersData?.profiles.length === 0 && runnersWithheld}
-					<WithheldNotice withheld={runnersWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-				{#if shells?.length === 0 && quotaWithheld}
-					<WithheldNotice withheld={quotaWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-				<ControlStrip
-					runners={runnersData}
-					repos={connectedRepos}
-					{shells}
-					{runnersError}
-					{runnersNote}
-					onTap={tapWakeRunner}
-					ledgerRows={runLedgerRows}
-					{scheduledWakes}
-					{now}
-				/>
-				<!-- The future's one object (the dissolution): the scheduled
-				     wakes with their ETA bars, dissolved out of the loom band.
-				     The strip above answers "where does the next wake run";
-				     this shelf answers "what is queued and when it fires". A
-				     tap opens the wake in the shed's detail sheet, exactly as
-				     a band tap did. -->
-				<div class="mt-3">
-					<FutureShelf
-						{scheduledWakes}
-						{now}
-						onSelect={selectFromLoom}
-						selectedId={loomSelection?.id ?? null}
-					/>
-				</div>
-				{#if scheduledWakes?.length === 0 && activityWithheld}
-					<WithheldNotice withheld={activityWithheld} class="mt-2 text-sm text-amber-200" />
-				{/if}
-			</div>
-		</section>
-
-		<!-- the shed · now (#972): the opening where work is passing — the
-		     band, the run node, the spawn slots. When something burns this
-		     section floats to the top (see loomLive); the warp leads only
-		     at rest. -->
-		<section
-			class="ignite mt-8 {loomLive ? 'order-1' : 'order-2'}"
-			style="--ignite-delay: 250ms"
-			aria-labelledby="shed-heading"
-		>
-			<div class="flex items-baseline justify-between gap-3">
-				<div>
-					<p class="eyebrow">the shed · now</p>
-					<h2 id="shed-heading" class="font-mono text-sm font-semibold text-amber-100">
-						{liveRuns === null
-							? 'reading the run field'
-							: `${liveRuns.length} live run${liveRuns.length === 1 ? '' : 's'}`}
-					</h2>
-				</div>
-				<p
-					class="font-mono text-[10px] {liveRunsError
-						? 'text-red-400'
-						: liveRunsStale
-							? 'text-amber-400'
-							: 'text-ink-quiet'}"
-				>
-					{liveRunsError ?? (liveRunsStale ? 'stale report' : 'live')}
-				</p>
-			</div>
-			<!-- The dissolution (2026-08-02): the band keeps only the now. Its
-			     past shelf renders as the cloth (with the lens rail), its
-			     future shelf as the rack's FutureShelf — each tense owns
-			     exactly one object. -->
-			<div class="mt-2">
-				<LoomBand {liveRuns} {scheduledWakes} {now} onSelect={selectFromLoom} {daemonMood} />
-			</div>
 			{#if prReviewQueue?.length === 0 && prReviewQueueWithheld}
 				<WithheldNotice withheld={prReviewQueueWithheld} class="mt-2 text-sm text-amber-200" />
 			{/if}
-
-			<!-- The detail sheet: the band's other half. Everything the dissolved
-	     live-runs / scheduled-wakes / run-receipts sections used to say is
-	     said here, for the selected thread of time only. -->
-			<div class="ignite" style="--ignite-delay: 600ms">
-				<div class="mt-4 flex items-baseline justify-between gap-3">
-					<!-- The label names the panel that actually renders. It used to say
-				     "· receipt" for any closed run, which stopped being true the
-				     moment the node became the single answer. -->
-					<p class="eyebrow">
-						{loomSelection === null
-							? focusRunId === null
-								? 'now'
-								: selectedNode && selectedNodeAnswers
-									? 'now · node'
-									: 'now'
-							: loomSelection.kind === 'wake'
-								? 'selected wake'
-								: selectedNode && selectedNodeAnswers
-									? 'selected run · node'
-									: selectedLiveRuns.length > 0
-										? 'selected run · live'
-										: 'selected run · receipt'}
-					</p>
-					{#if loomSelection !== null}
-						<div class="flex shrink-0 items-baseline gap-3">
-							<button
-								type="button"
-								class="cursor-pointer font-mono text-[10px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-								onclick={() => (loomSelection = null)}
-							>
-								✕ back to now
-							</button>
-						</div>
-					{/if}
-				</div>
-				<div class="mt-2">
-					{#if loomSelection?.kind === 'wake'}
-						{#if scheduledWakesError}
-							<p class="mb-2 text-sm text-red-400">{scheduledWakesError}</p>
-						{/if}
-						{#if selectedWakes.length > 0}
-							<ScheduleLane wakes={selectedWakes} {now} />
-						{:else}
-							<p class="text-sm text-ink-quiet">that wake left the schedule — it likely fired.</p>
-						{/if}
-					{:else if loomSelection?.kind === 'run' || focusRunId !== null}
-						<!-- The loom stays the spine: a selected run fills this frame with
-				     its own node instead of sending the reader to a page and
-				     costing them their place in the band. One panel, not three —
-				     the node speaks, with the live/receipt vitals folded into its
-				     header and everything heavier behind its own expand. -->
-						{#if selectedNode && selectedNodeAnswers}
-							<RunNodeInline
-								data={surfaceData}
-								repoSlug={selectedNode.repoSlug}
-								runId={selectedNode.runId}
-								href={selectedNode.href}
-								vitals={selectedVitals}
-								liveLevel={selectedLiveLevel}
-								identity={selectedIdentity}
-							/>
-						{:else if selectedLiveRuns.length > 0}
-							<LiveRuns
-								runs={selectedLiveRuns}
-								stale={liveRunsStale}
-								{now}
-								withheld={liveRunsWithheld}
-							/>
-						{:else if selectedLedgerRows.length > 0}
-							<RunLedgerReceipt rows={selectedLedgerRows} stale={runLedgerStale} />
-						{:else}
-							<p class="text-sm text-ink-quiet">
-								no receipt rows for that run in the current window.
-							</p>
-						{/if}
-					{:else if liveRunsError}
-						<p class="text-sm text-red-400">{liveRunsError}</p>
-					{:else if liveRuns === null}
-						<p class="text-sm text-ink-quiet">Loading…</p>
-					{:else}
-						<!-- Multi-run "now": tapping a card *selects* it, and this same
-					     sheet answers with the node panel — the identical grammar a
-					     loom tap speaks. The card's old inline expansion was a third
-					     rendering of the run (2026-07-20: "3 visual elements for a
-					     run"); it survives only in the fallbacks above, where no
-					     node can answer. -->
-						<LiveRuns
-							runs={liveRuns}
-							stale={liveRunsStale}
-							{now}
-							withheld={liveRunsWithheld}
-							onSelect={(id) => selectFromLoom('run', id)}
-						/>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Spawn slots are a shed property: how much more can pass through
-			     the opening right now. The "last 24h" instruments section died
-			     here (his 08-01 call: "should have gone completely") — its
-			     numbers survive as the cloth's selvage below. -->
-			<div class="ignite mt-4" style="--ignite-delay: 1000ms">
-				{#if liveRunsError}
-					<p class="text-sm text-red-400">{liveRunsError}</p>
-				{:else if liveRuns === null}
-					<p class="text-sm text-ink-quiet">Loading…</p>
-				{:else}
-					<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
-				{/if}
-			</div>
 		</section>
 
 		<!-- the cloth · past (#972): what has become — the wyrd's take-up.
 		     Runs as root nodes of collapsed trees over a sliding window; the
 		     selvage (the cloth's self-finished edge) carries the spend→produce
 		     aggregates the retired instruments section used to hold. -->
-		<section
-			class="ignite order-3 mt-10"
-			style="--ignite-delay: 1400ms"
-			aria-labelledby="cloth-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 900ms" aria-labelledby="cloth-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the cloth · past</p>
@@ -941,23 +1292,28 @@
 					</h2>
 				</div>
 				<p class="font-mono text-[10px] {runLedgerError ? 'text-red-400' : 'text-ink-quiet'}">
-					{runLedgerError ?? (runLedgerStale ? 'stale report' : '30d window')}
+					{runLedgerError ??
+						(runLedgerStale ? 'stale report' : `${loomPastWindowLabel(runLedgerWindowMs)} window`)}
 				</p>
 			</div>
 			<div class="mt-2">
 				{#if runLedgerRows !== null && runLedgerRows.length === 0 && runLedgerWithheld}
 					<WithheldNotice withheld={runLedgerWithheld} />
 				{:else}
-					<Cloth rows={runLedgerRows} {now} windowMs={CLOTH_WINDOW_MS} stale={runLedgerStale} />
+					<Cloth
+						rows={runLedgerRows}
+						{now}
+						windowMs={runLedgerWindowMs}
+						stale={runLedgerStale}
+						surface={surfaceData}
+						{threads}
+						{crossingIndex}
+					/>
 				{/if}
 			</div>
 		</section>
 
-		<section
-			class="ignite order-4 mt-10"
-			style="--ignite-delay: 2700ms"
-			aria-labelledby="corpus-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 1600ms" aria-labelledby="corpus-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">the library</p>
@@ -979,16 +1335,12 @@
 				{:else if surfaceData === null}
 					<p class="text-sm text-ink-quiet">Loading…</p>
 				{:else}
-					<WorkSurface data={surfaceData} />
+					<WorkSurface data={surfaceData} openRequest={libraryRequest} />
 				{/if}
 			</div>
 		</section>
 
-		<section
-			class="ignite order-5 mt-10"
-			style="--ignite-delay: 3200ms"
-			aria-labelledby="billing-heading"
-		>
+		<section class="ignite mt-10" style="--ignite-delay: 2100ms" aria-labelledby="billing-heading">
 			<div class="flex items-baseline justify-between gap-3">
 				<div>
 					<p class="eyebrow">account</p>
