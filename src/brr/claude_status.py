@@ -577,8 +577,56 @@ def capture_stdout_with_model(
     if not isinstance(payload, dict):
         return stdout, None
     levels = parse_result(payload)
+    # Provenance for the shared copy: without this, a reading served across a
+    # run boundary (see :func:`mark_cross_run`) has no honest way to say
+    # whose it was. Stamped on both copies rather than only the shared one —
+    # cheap, and a fact worth knowing on either.
+    run_id = str(resolved_env.get("BRR_RUN_ID") or "").strip()
+    if run_id:
+        levels["run_id"] = run_id
     write_snapshot(_outbox_dir(resolved_env), levels)
     shared_dir = _shared_dir(resolved_env)
     if shared_dir is not None:
         write_snapshot(shared_dir, levels)
     return result_text(payload, stdout), resolved_model_id(levels)
+
+
+def mark_cross_run(levels: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Rewrite a snapshot's summaries to name whose run they describe.
+
+    ``levels["spend"]["summary"]``/``levels["context_window"]["summary"]``
+    are written as "...this session (estimated)" — true when a run reads its
+    *own* outbox copy, false the moment a caller serves the same dict as a
+    *different* run's fallback (the account-shared copy, #1027 — one mutable
+    slot every claude run overwrites, so "the shared reading" can be a
+    worker's spend seconds after it ran, read by the very next resident
+    turn). Rendering that text unchanged in the fallback case would move the
+    lie #1027 named one layer down rather than removing it: a wake reading
+    "$12.58 this session" when the $12.58 belongs to someone else's session
+    is exactly a structural absence dressed as a known fact.
+
+    Returns *levels* unchanged (including ``None``) when there is no
+    ``run_id`` to attribute to (an older snapshot written before this field
+    existed) or no summary text to rewrite — a caller should still prefer
+    calling this only on a reading it knows is being served cross-run;
+    calling it on a run's own fresh reading would misattribute a true
+    "this session" claim as a carried one.
+    """
+    if not isinstance(levels, dict):
+        return levels
+    run_id = str(levels.get("run_id") or "").strip()
+    if not run_id:
+        return levels
+    marked = dict(levels)
+    for key in ("spend", "context_window"):
+        slot = levels.get(key)
+        if not isinstance(slot, dict):
+            continue
+        summary = str(slot.get("summary") or "").strip()
+        if not summary:
+            continue
+        marked[key] = {
+            **slot,
+            "summary": f"{summary} — {run_id}'s reading, carried (not this run's)",
+        }
+    return marked

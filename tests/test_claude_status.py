@@ -138,6 +138,59 @@ def test_capture_stdout_empty_env_dict_does_not_fall_back_to_process_environ(
     assert not stray_dir.exists()
 
 
+def test_capture_stdout_stamps_run_id_when_the_caller_names_one(tmp_path):
+    """#1027 follow-up (maintainer review): a snapshot served across a run
+    boundary needs to say whose run it is, or the honest-looking summary
+    text becomes a misattributed one. ``BRR_RUN_ID`` is the provenance."""
+    claude_status.capture_stdout(
+        json.dumps(_RESULT),
+        {"BRR_OUTBOX_DIR": str(tmp_path), "BRR_RUN_ID": "run-example-abcd"},
+    )
+    assert claude_status.load_snapshot(tmp_path)["run_id"] == "run-example-abcd"
+
+
+def test_capture_stdout_no_run_id_key_when_caller_names_none(tmp_path):
+    claude_status.capture_stdout(
+        json.dumps(_RESULT), {"BRR_OUTBOX_DIR": str(tmp_path)},
+    )
+    assert "run_id" not in claude_status.load_snapshot(tmp_path)
+
+
+def test_mark_cross_run_attributes_the_carried_reading():
+    levels = {
+        "run_id": "run-earlier-abcd",
+        "spend": {"summary": "$1.23 this session (estimated)", "total_cost_usd": 1.23},
+        "context_window": {"summary": "40% context left (est)"},
+    }
+
+    marked = claude_status.mark_cross_run(levels)
+
+    assert marked["spend"]["summary"] == (
+        "$1.23 this session (estimated) — run-earlier-abcd's reading, "
+        "carried (not this run's)"
+    )
+    assert marked["context_window"]["summary"] == (
+        "40% context left (est) — run-earlier-abcd's reading, "
+        "carried (not this run's)"
+    )
+    # The numeric field a reader might still aggregate on is untouched.
+    assert marked["spend"]["total_cost_usd"] == 1.23
+    # The original dict is not mutated in place.
+    assert levels["spend"]["summary"] == "$1.23 this session (estimated)"
+
+
+def test_mark_cross_run_is_a_noop_without_a_run_id():
+    """An older snapshot written before ``run_id`` existed has nothing to
+    attribute to — passed through exactly as it would have rendered before
+    this fix, rather than inventing an "unknown run" label."""
+    levels = {"spend": {"summary": "$1.23 this session (estimated)"}}
+    assert claude_status.mark_cross_run(levels) is levels
+
+
+def test_mark_cross_run_tolerates_none():
+    assert claude_status.mark_cross_run(None) is None
+
+
 def test_result_error_text_uses_errors_when_result_absent():
     payload = {"type": "result", "is_error": True, "errors": ["Reached budget"]}
     assert claude_status.result_text(payload, "{}") == "Reached budget\n"
