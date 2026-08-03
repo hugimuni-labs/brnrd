@@ -218,3 +218,47 @@ def test_status_and_logs_use_systemd_user_commands(monkeypatch):
         (["systemctl", "--user", "status", linux.SERVICE_UNIT, "--no-pager"], False),
         (["journalctl", "--user", "-u", "brr", "-n", "50"], False),
     ]
+
+
+# ── The spelling the launcher earned (npx) ──────────────────────────
+#
+# `brnrd account connect` ends by installing the service, so this "next:"
+# line is the closing line of the *second* session a new install has —
+# the direct sibling of `brnrd init`'s own closing line. An npx user has
+# no `brnrd` on PATH, so all three verbs it names must carry the prefix.
+
+
+def _install_stubbed(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setattr(linux, "supported", lambda: True)
+    monkeypatch.setattr(linux, "linger_enabled", lambda _user: True)
+    monkeypatch.setattr(
+        linux, "_run",
+        lambda command, *, check=True: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(linux, "resolve_brr_bin", lambda: "/opt/venv/bin/brnrd")
+    monkeypatch.setattr(linux, "resolve_workdir", lambda: Path("/home/ada/src/proj"))
+    linux.install(no_start=True, prompt_linger=False)
+
+
+def test_install_next_steps_are_npx_spelled(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+
+    _install_stubbed(tmp_path, monkeypatch)
+
+    out = capsys.readouterr().out
+    assert "next: `npx brnrd daemon status`" in out
+    assert "`npx brnrd daemon logs`" in out
+    assert "`npx brnrd daemon uninstall`" in out
+
+
+def test_install_next_steps_stay_bare_for_a_path_install(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+
+    _install_stubbed(tmp_path, monkeypatch)
+
+    out = capsys.readouterr().out
+    assert "next: `brnrd daemon status`" in out
+    assert "npx" not in out

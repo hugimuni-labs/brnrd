@@ -31,6 +31,7 @@ from . import dominion
 from . import gitops
 from . import prompts
 from . import runner
+from .cli import brnrd_cmd
 
 
 _DEFAULT_DOCKER_IMAGE = "brr-runner:local"
@@ -132,7 +133,7 @@ def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
             raise SystemExit(
                 f"[brnrd] Git could not clone {url} (exit {exc.returncode}). "
                 "Check that the URL exists and that you have access, then "
-                "re-run `brnrd init`."
+                f"re-run `{brnrd_cmd()} init`."
             ) from None
         os.chdir(name)
 
@@ -219,7 +220,7 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
         print(
             "\n[brnrd] interrupted. Nothing was rolled back — every artifact "
             "already written is independently useful.\n"
-            "        Re-run `brnrd init` to continue where this left off."
+            f"        Re-run `{brnrd_cmd()} init` to continue where this left off."
         )
         return
     if result.error:
@@ -241,7 +242,7 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
     _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
     if result.gates_configured:
         print(f"[brnrd] gates configured: {', '.join(result.gates_configured)}")
-    print("[brnrd] next: `brnrd up`, then send it work.")
+    print(f"[brnrd] next: `{brnrd_cmd()} up`, then send it work.")
 
 
 def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:
@@ -596,7 +597,7 @@ def _git_missing() -> SystemExit:
     return SystemExit(
         "[brnrd] Git is required to initialize a repository, but `git` was "
         "not found on PATH. Install Git, open a fresh terminal, and re-run "
-        "`brnrd init`."
+        f"`{brnrd_cmd()} init`."
     )
 
 
@@ -715,7 +716,7 @@ def _run_setup(
     if not result.validation_ok:
         missing = ", ".join(artifact.label for artifact in result.missing_artifacts)
         print(f"[brnrd] setup failed: missing required output(s): {missing}")
-        print("[brnrd] re-run `brnrd init` to retry")
+        print(f"[brnrd] re-run `{brnrd_cmd()} init` to retry")
         raise SystemExit(1)
 
     # Structure, not mere existence: an AGENTS.md the runner wrote but left
@@ -731,7 +732,7 @@ def _run_setup(
                 "[brnrd] setup failed: AGENTS.md is present but incomplete "
                 f"({'; '.join(problems)})"
             )
-            print("[brnrd] re-run `brnrd init` to retry")
+            print(f"[brnrd] re-run `{brnrd_cmd()} init` to retry")
             raise SystemExit(1)
 
     if result.output.strip():
@@ -811,4 +812,4 @@ def _verify(
     if ok:
         print("[brnrd] init complete")
     else:
-        print("[brnrd] init incomplete — re-run `brnrd init` to retry")
+        print(f"[brnrd] init incomplete — re-run `{brnrd_cmd()} init` to retry")

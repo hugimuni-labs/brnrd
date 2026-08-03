@@ -21,6 +21,7 @@ import requests
 
 from .. import claude_status, claude_usage, codex_status, codex_usage, emotes, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
 from .. import conversations, dominion, run_stop_request, schedule as schedule_mod, wake_request
+from ..cli import brnrd_cmd
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
@@ -303,7 +304,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         if time.monotonic() > deadline:
             raise TimeoutError(
                 "account pairing was not approved before the timeout. Approve "
-                "the pairing link, then re-run `brnrd account connect`."
+                f"the pairing link, then re-run `{brnrd_cmd()} account connect`."
             )
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
@@ -384,7 +385,10 @@ def disconnect(brr_dir: Path) -> bool:
 
 
 def setup(brr_dir: Path) -> None:
-    print("[brnrd] Run `brnrd account connect` to link this daemon to a brnrd repo.")
+    print(
+        f"[brnrd] Run `{brnrd_cmd()} account connect` to link this daemon "
+        "to a brnrd repo."
+    )
 
 
 def auth(brr_dir: Path) -> None:

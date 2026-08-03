@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import runner_failures
+from .cli import brnrd_cmd
 
 
 _profiles_cache: dict[str, dict[str, Any]] | None = None
@@ -1146,7 +1147,7 @@ def render_runner_doctor(
     *,
     attempted: str | None = None,
     error: str | None = None,
-    resume_command: str = "brnrd init",
+    resume_command: str | None = None,
 ) -> str:
     """The shared install/PATH/auth/verify ladder, as terminal text.
 
@@ -1155,7 +1156,16 @@ def render_runner_doctor(
     exact profile that failed and its bounded error. The only return path
     offered is re-running init: every other route needs a Runner too, and
     naming one would just move this same failure behind less guidance.
+
+    This is a *first-session* screen — the one failure a fresh install hits
+    before it has ever had a working Runner — so every command it names is
+    spelled the way this machine's launcher makes it runnable
+    (:func:`~brr.cli.brnrd_cmd`). ``resume_command`` defaults to ``None``
+    rather than a literal so the spelling is resolved per call, not frozen
+    into a signature at import.
     """
+    if resume_command is None:
+        resume_command = f"{brnrd_cmd()} init"
     lines: list[str] = []
     if attempted:
         lines.append(f"[brnrd] runner {attempted!r} failed to run.")
@@ -1188,7 +1198,7 @@ def render_runner_doctor(
         "        If an installer just changed your PATH, open a fresh "
         "terminal first."
     )
-    lines.append("        Full profile table: brnrd runners list --all")
+    lines.append(f"        Full profile table: {brnrd_cmd()} runners list --all")
 
     lines.append("")
     lines.append("[brnrd] not installed yet? any one of these is enough:")
