@@ -186,7 +186,7 @@
 	     top, maybe in a collapsed way"). -->
 	<button
 		type="button"
-		class="panel flex w-full cursor-pointer flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-1.5 text-left font-mono text-[10px]"
+		class="panel panel--pressable panel--collapsed flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-1.5 text-left font-mono text-[10px]"
 		aria-expanded="false"
 		aria-label="expand the rail"
 		onclick={() => (pinnedOpen = true)}
@@ -248,159 +248,172 @@
 				>
 			</div>
 		{/if}
-		<div class="grid md:grid-cols-[minmax(13rem,0.9fr)_minmax(0,1.1fr)]">
-			<button
-				type="button"
-				class="group min-w-0 cursor-pointer border-b border-stone-800/70 p-2.5 text-left hover:bg-amber-950/20 md:border-r md:border-b-0"
-				aria-expanded={expanded}
-				onclick={() => (expanded = !expanded)}
-			>
-				<div
-					class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
-				>
-					<span>next pick</span>
-					<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
-						>{expanded ? '▾' : '▸'} rack</span
+		<button
+			type="button"
+			class="panel--pressable group block w-full text-left"
+			aria-expanded={expanded}
+			aria-label={expanded ? 'fold the rack' : 'expand the rack'}
+			onclick={() => (expanded = !expanded)}
+		>
+			<!-- The whole surface opens the rack now (2026-08-03, the rack
+			     answers everywhere): fuel and the tank line used to sit inert
+			     beside the one pressable block on the left, so "press to see
+			     more" only covered about a third of the header. Merging the
+			     three regions into one button is also the modest restructure
+			     the ask invited, and it is safe because none of them carries
+			     an interactive child — every chip and row here is a span/div.
+			     The expanded body below *does* have real buttons (repo/env/
+			     core rows) and stays a separate sibling for exactly that
+			     reason: the full-bleed press target belongs to the header,
+			     never to a form with its own controls. -->
+			<div class="grid md:grid-cols-[minmax(13rem,0.9fr)_minmax(0,1.1fr)]">
+				<div class="min-w-0 border-b border-stone-800/70 p-2.5 md:border-r md:border-b-0">
+					<div
+						class="mb-1 flex items-center justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
 					>
-				</div>
-				{#if runners === null}
-					<div class="font-mono text-xs text-ink-quiet">next wake · loading…</div>
-				{:else if blocks.length === 0}
-					<div class="font-mono text-xs text-ink-quiet">next wake · unavailable</div>
-				{:else}
-					<!-- One chip grammar for every slot: value on top, role beneath,
+						<span>next pick</span>
+						<span class="text-ink-mute group-hover:text-stone-400" aria-hidden="true"
+							>{expanded ? '▾' : '▸'} rack</span
+						>
+					</div>
+					{#if runners === null}
+						<div class="font-mono text-xs text-ink-quiet">next wake · loading…</div>
+					{:else if blocks.length === 0}
+						<div class="font-mono text-xs text-ink-quiet">next wake · unavailable</div>
+					{:else}
+						<!-- One chip grammar for every slot: value on top, role beneath,
 				     ▾ on the slots the rack below can change. The old shape — a
 				     flat text line plus styled runner blocks — hid that project
 				     and environment were choices at all (2026-07-22 round). -->
-					<div class="flex min-w-0 flex-wrap items-stretch gap-1.5">
-						<span class="min-w-0 border border-stone-800/60 bg-stone-950/30 px-2 py-1 font-mono">
-							<span class="block truncate text-[11px] font-medium text-stone-300">
-								{selectedRepo?.repo_full_name ?? 'no project'}
-							</span>
-							<span
-								class="mt-0.5 block truncate text-[8px] tracking-[0.11em] text-ink-quiet uppercase"
-								>project ▾</span
-							>
-						</span>
-						<span class="min-w-0 border border-stone-800/60 bg-stone-950/30 px-2 py-1 font-mono">
-							<span class="block truncate text-[11px] font-medium text-stone-300"
-								>{environmentLabel}</span
-							>
-							<span
-								class="mt-0.5 block truncate text-[8px] tracking-[0.11em] text-ink-quiet uppercase"
-								>environment ▾</span
-							>
-						</span>
-						{#each blocks as block (block.kind)}
-							<span
-								title={profileTitle(block.profile.name)}
-								class="min-w-0 border px-2 py-1 font-mono {block.active
-									? 'border-amber-700/70 bg-amber-950/55 text-amber-100'
-									: 'border-stone-800/60 bg-stone-950/30 text-ink-quiet opacity-55'}"
-							>
-								<span class="block truncate text-[11px] font-medium">{block.profile.name}</span>
+						<div class="flex min-w-0 flex-wrap items-stretch gap-1.5">
+							<span class="min-w-0 border border-stone-800/60 bg-stone-950/30 px-2 py-1 font-mono">
+								<span class="block truncate text-[11px] font-medium text-stone-300">
+									{selectedRepo?.repo_full_name ?? 'no project'}
+								</span>
 								<span
-									class="mt-0.5 block truncate text-[8px] tracking-[0.11em] uppercase {block.kind ===
-									'requested'
-										? 'text-amber-300'
-										: 'text-sky-300'}">{block.badge} ▾</span
+									class="mt-0.5 block truncate text-[8px] tracking-[0.11em] text-ink-quiet uppercase"
+									>project ▾</span
 								>
 							</span>
-						{/each}
-					</div>
-				{/if}
-			</button>
-
-			<div class="min-w-0 p-2.5" aria-label="quota fuel">
-				<div
-					class="mb-1 flex items-baseline justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
-				>
-					<span>fuel</span>
-					{#if slots}
-						<!-- Spawn slots as a capacity chip (#972): how much more can pass
-					     through the machine right now. Neutral until ≥80% utilization,
-					     then it speaks the quota vocabulary like any draining window. -->
-						<span
-							title={slots.title}
-							class="normal-case"
-							style={slots.level ? `color: ${LEVEL_COLOR[slots.level]}` : ''}>{slots.label}</span
-						>
+							<span class="min-w-0 border border-stone-800/60 bg-stone-950/30 px-2 py-1 font-mono">
+								<span class="block truncate text-[11px] font-medium text-stone-300"
+									>{environmentLabel}</span
+								>
+								<span
+									class="mt-0.5 block truncate text-[8px] tracking-[0.11em] text-ink-quiet uppercase"
+									>environment ▾</span
+								>
+							</span>
+							{#each blocks as block (block.kind)}
+								<span
+									title={profileTitle(block.profile.name)}
+									class="min-w-0 border px-2 py-1 font-mono {block.active
+										? 'border-amber-700/70 bg-amber-950/55 text-amber-100'
+										: 'border-stone-800/60 bg-stone-950/30 text-ink-quiet opacity-55'}"
+								>
+									<span class="block truncate text-[11px] font-medium">{block.profile.name}</span>
+									<span
+										class="mt-0.5 block truncate text-[8px] tracking-[0.11em] uppercase {block.kind ===
+										'requested'
+											? 'text-amber-300'
+											: 'text-sky-300'}">{block.badge} ▾</span
+									>
+								</span>
+							{/each}
+						</div>
 					{/if}
 				</div>
-				{#if shells === null}
-					<div class="font-mono text-[10px] text-ink-mute">loading quota…</div>
-				{:else if fuel.length === 0}
-					<div class="font-mono text-[10px] text-ink-mute">no quota report</div>
-				{:else}
-					<!-- Two columns, period. The page column is max-w-2xl, so this
+
+				<div class="min-w-0 p-2.5" aria-label="quota fuel">
+					<div
+						class="mb-1 flex items-baseline justify-between gap-2 font-mono text-[9px] tracking-[0.13em] text-ink-quiet uppercase"
+					>
+						<span>fuel</span>
+						{#if slots}
+							<!-- Spawn slots as a capacity chip (#972): how much more can pass
+					     through the machine right now. Neutral until ≥80% utilization,
+					     then it speaks the quota vocabulary like any draining window. -->
+							<span
+								title={slots.title}
+								class="normal-case"
+								style={slots.level ? `color: ${LEVEL_COLOR[slots.level]}` : ''}>{slots.label}</span
+							>
+						{/if}
+					</div>
+					{#if shells === null}
+						<div class="font-mono text-[10px] text-ink-mute">loading quota…</div>
+					{:else if fuel.length === 0}
+						<div class="font-mono text-[10px] text-ink-mute">no quota report</div>
+					{:else}
+						<!-- Two columns, period. The page column is max-w-2xl, so this
 				     region is ~370px on desktop; four columns cut each window to
 				     ~90px and made the grid the strip's least legible corner
 				     (2026-07-22 round: "the fuel on the right is the worst"). -->
-					<div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
-						{#each fuel as row (row.id)}
-							{@const level = quotaLevel(row.percent)}
-							<div class="min-w-0" title={row.tooltip}>
-								<div
-									class="mb-0.5 flex items-baseline justify-between gap-1 font-mono text-[9px] {row.stale
-										? 'text-ink-mute'
-										: 'text-stone-400'}"
-								>
-									<span class="truncate">{row.label}</span>
-									<span class="flex items-center gap-1">
-										{#if row.timeFraction !== null}
-											<!-- The window's own clock, drawn as one: a disc
+						<div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+							{#each fuel as row (row.id)}
+								{@const level = quotaLevel(row.percent)}
+								<div class="min-w-0" title={row.tooltip}>
+									<div
+										class="mb-0.5 flex items-baseline justify-between gap-1 font-mono text-[9px] {row.stale
+											? 'text-ink-mute'
+											: 'text-stone-400'}"
+									>
+										<span class="truncate">{row.label}</span>
+										<span class="flex items-center gap-1">
+											{#if row.timeFraction !== null}
+												<!-- The window's own clock, drawn as one: a disc
 										     that fills as the window elapses and resets
 										     full-empty. The previous shape — a second bar
 										     under the fuel bar — borrowed the fuel bar's
 										     grammar while meaning time, and nothing on
 										     screen said so. -->
-											<svg
-												viewBox="0 0 12 12"
-												class="h-[9px] w-[9px] -rotate-90 {row.stale ? 'opacity-40' : ''}"
-												aria-hidden="true"
-											>
-												<circle
-													cx="6"
-													cy="6"
-													r="5.5"
-													fill="none"
-													stroke-width="1"
-													class="stroke-stone-800"
-												/>
-												<circle
-													cx="6"
-													cy="6"
-													r={DIAL_WEDGE_RADIUS}
-													fill="none"
-													stroke-width={DIAL_WEDGE_RADIUS * 2}
-													class="stroke-stone-500"
-													stroke-dasharray={dialDasharray(row.timeFraction)}
-												/>
-											</svg>
-										{/if}
-										{#if row.resetShort}
-											<span class="text-ink-quiet">↻{row.resetShort}</span>
-										{/if}
-										<span style={`color: ${LEVEL_COLOR[level]}`}>{row.percentLabel}</span>
-									</span>
+												<svg
+													viewBox="0 0 12 12"
+													class="h-[9px] w-[9px] -rotate-90 {row.stale ? 'opacity-40' : ''}"
+													aria-hidden="true"
+												>
+													<circle
+														cx="6"
+														cy="6"
+														r="5.5"
+														fill="none"
+														stroke-width="1"
+														class="stroke-stone-800"
+													/>
+													<circle
+														cx="6"
+														cy="6"
+														r={DIAL_WEDGE_RADIUS}
+														fill="none"
+														stroke-width={DIAL_WEDGE_RADIUS * 2}
+														class="stroke-stone-500"
+														stroke-dasharray={dialDasharray(row.timeFraction)}
+													/>
+												</svg>
+											{/if}
+											{#if row.resetShort}
+												<span class="text-ink-quiet">↻{row.resetShort}</span>
+											{/if}
+											<span style={`color: ${LEVEL_COLOR[level]}`}>{row.percentLabel}</span>
+										</span>
+									</div>
+									<div class="h-[3px] w-full bg-stone-900" role="img" aria-label={row.tooltip}>
+										<div
+											class="h-full transition-[width] duration-500 ease-out {row.stale
+												? 'opacity-50'
+												: ''}"
+											style={`width: ${row.percent ?? 0}%; ${statusBarStyle(level, LEVEL_COLOR[level])}`}
+										></div>
+									</div>
 								</div>
-								<div class="h-[3px] w-full bg-stone-900" role="img" aria-label={row.tooltip}>
-									<div
-										class="h-full transition-[width] duration-500 ease-out {row.stale
-											? 'opacity-50'
-											: ''}"
-										style={`width: ${row.percent ?? 0}%; ${statusBarStyle(level, LEVEL_COLOR[level])}`}
-									></div>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
+							{/each}
+						</div>
+					{/if}
+				</div>
 			</div>
-		</div>
 
-		{#if lead}
-			<!-- Slice 2 (design-wyrd §4 band 1). The fuel bars above answer "how
+			{#if lead}
+				<!-- Slice 2 (design-wyrd §4 band 1). The fuel bars above answer "how
 		     much is left"; this answers "does it last", which is the question
 		     the two bars were already carrying between them and making the
 		     reader compute by eye. Measured from the window's own numbers —
@@ -409,50 +422,51 @@
 
 		     Deliberately one line for the leading window only: this is a glance
 		     strip. The per-window detail is the fuel grid; the verdict is here. -->
-			<div
-				class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px]"
-				aria-label="tank forecast"
-			>
-				<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
-				<span class="text-stone-400">{lead.label}</span>
-				<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
-				{#if lead.ratePerHour !== null}
-					<!-- The rate names its source. `measured` is the recent-burn series
+				<div
+					class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-stone-800/70 px-2.5 py-2 font-mono text-[10px]"
+					aria-label="tank forecast"
+				>
+					<span class="tracking-[0.13em] text-ink-quiet uppercase">tank</span>
+					<span class="text-stone-400">{lead.label}</span>
+					<span style={`color: ${VERDICT_COLOR[lead.verdict]}`}>{lead.headline}</span>
+					{#if lead.ratePerHour !== null}
+						<!-- The rate names its source. `measured` is the recent-burn series
 				     (#491/#493) — the current pace, read from sampled levels over
 				     the last few hours; `window avg` is whole-window arithmetic,
 				     which lags the pace by however much of the window already
 				     happened. They answer different questions and the reader
 				     deciding whether to dispatch deserves to know which one is
 				     speaking. -->
-					<span
-						class="text-ink-mute"
-						title={lead.rateSource === 'measured'
-							? `current pace, measured over the last ${Math.round((lead.rateSpanMinutes ?? 0) / 60)}h of samples`
-							: 'average draw across this whole window so far'}
-					>
-						{lead.ratePerHour < 1 ? lead.ratePerHour.toFixed(1) : Math.round(lead.ratePerHour)}%/h
-						{lead.rateSource === 'measured' ? '· measured' : '· window avg'}
-					</span>
-				{/if}
-				{#if lead.committedDraw !== null}
-					<!-- The half the window cannot know: what is already queued to
+						<span
+							class="text-ink-mute"
+							title={lead.rateSource === 'measured'
+								? `current pace, measured over the last ${Math.round((lead.rateSpanMinutes ?? 0) / 60)}h of samples`
+								: 'average draw across this whole window so far'}
+						>
+							{lead.ratePerHour < 1 ? lead.ratePerHour.toFixed(1) : Math.round(lead.ratePerHour)}%/h
+							{lead.rateSource === 'measured' ? '· measured' : '· window avg'}
+						</span>
+					{/if}
+					{#if lead.committedDraw !== null}
+						<!-- The half the window cannot know: what is already queued to
 				     draw on it. Priced from runs the daemon tagged
 				     `source_system=schedule`, never from a self-reported slug. -->
-					<span class="text-ink-quiet" title="scheduled wakes queued before this window resets">
-						· {lead.committedWakes} scheduled ≈ {lead.committedDraw < 1
-							? lead.committedDraw.toFixed(1)
-							: Math.round(lead.committedDraw)}%
-					</span>
-				{:else if lead.committedWakes > 0}
-					<!-- Count without a price: the wakes are real, the per-wake cost
+						<span class="text-ink-quiet" title="scheduled wakes queued before this window resets">
+							· {lead.committedWakes} scheduled ≈ {lead.committedDraw < 1
+								? lead.committedDraw.toFixed(1)
+								: Math.round(lead.committedDraw)}%
+						</span>
+					{:else if lead.committedWakes > 0}
+						<!-- Count without a price: the wakes are real, the per-wake cost
 				     is not yet measurable. Saying so beats inventing a number. -->
-					<span class="text-ink-mute">· {lead.committedWakes} scheduled, cost unmeasured</span>
-				{/if}
-				{#if lead.stale}
-					<span class="text-ink-mute">· stale report</span>
-				{/if}
-			</div>
-		{/if}
+						<span class="text-ink-mute">· {lead.committedWakes} scheduled, cost unmeasured</span>
+					{/if}
+					{#if lead.stale}
+						<span class="text-ink-mute">· stale report</span>
+					{/if}
+				</div>
+			{/if}
+		</button>
 
 		{#if expanded}
 			<div class="border-t border-stone-800/70 p-3" in:glitchReveal={{ duration: 240, delay: 40 }}>

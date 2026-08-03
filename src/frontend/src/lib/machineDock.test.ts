@@ -11,6 +11,7 @@ import {
 	machineTapVerdict,
 	railKeepsLivePick
 } from './machineDock.ts';
+import { tapVerdict } from './collapse.ts';
 
 test('parked, the head carries everything — it is the only line there is', () => {
 	assert.deepEqual(machineHeadFields(false), {
@@ -94,6 +95,18 @@ test('no tap taken from a docked head can ever close what the reader opened', ()
 	// of them or not at all.
 	for (const open of [true, false]) {
 		assert.notEqual(machineTapVerdict(open, true).open, false);
+	}
+});
+
+// `machineTapVerdict` is a thin wrapper over the shared `collapse.tapVerdict`
+// (2026-08-03, the rack answers everywhere) — pin the delegation itself, not
+// just the observed shape, so a future edit that re-derives this locally
+// instead of delegating shows up as a diff.
+test("machineTapVerdict is exactly tapVerdict under the machine's own vocabulary", () => {
+	for (const open of [false, true]) {
+		for (const docked of [false, true]) {
+			assert.deepEqual(machineTapVerdict(open, docked), tapVerdict(open, docked));
+		}
 	}
 });
 
