@@ -2914,6 +2914,7 @@ def _run_worker(
             "security.config; run `brnrd config promote` to migrate them "
             "there).",
             kind="refused",
+            lifetime="standing",
         )
 
     # #693: the *file* half of the same domain. A runner profile carries
@@ -2972,6 +2973,7 @@ def _run_worker(
             "so profiles load only from the daemon-owned home or the "
             f"bundled catalog. {remedy}",
             kind="refused",
+            lifetime="standing",
         )
 
     # #700: the *unreachable* half of the same domain. #693 (above) covers
@@ -3010,6 +3012,7 @@ def _run_worker(
             # decided to ignore the account's profiles, the path just
             # couldn't be resolved from this worktree (#663).
             kind="dropped",
+            lifetime="standing",
         )
 
     print(f"[brnrd] run {task.id} (event {eid}): env={task.env}")
@@ -3508,6 +3511,7 @@ def _run_worker(
             # Nothing refused or dropped — the run adopts the new
             # selection and proceeds. FYI only.
             kind="advisory",
+            lifetime="run",
         )
         runner_choice = reselected
         runner_name = runner_choice.name
@@ -5596,6 +5600,7 @@ def _note_event_closed(
             # this is the ambiguous/unresolved-target case, same shape as
             # an `event:` reply's own refusal (_event_refusal_cause below).
             kind="refused",
+            lifetime="run",
         )
         return None
     if resolved_event is None:
@@ -5603,6 +5608,7 @@ def _note_event_closed(
         _record_outbox_notice(
             outbox_dir, f"note dropped: {cause} — nothing was retired",
             kind="refused",
+            lifetime="run",
         )
         return None
     noted_id = str(resolved_event.get("id") or "")
@@ -5620,6 +5626,7 @@ def _note_event_closed(
             # The target resolved fine; this is a race the write lost,
             # not a policy refusal of a known target.
             kind="dropped",
+            lifetime="run",
         )
         return None
     if body.strip():
@@ -5630,6 +5637,7 @@ def _note_event_closed(
             # #1002's own opening example: the file was accepted and
             # acted on (the event *is* retired noted) — FYI, not a failure.
             kind="advisory",
+            lifetime="run",
         )
     return noted_id
 
@@ -5683,6 +5691,7 @@ def _queue_respawn_request(
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "respawn dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
         )
         return False
     proposed = str(
@@ -5711,6 +5720,7 @@ def _queue_respawn_request(
     if not new_body.strip():
         _record_outbox_notice(
             outbox_dir, "respawn dropped: the request had no body", kind="dropped",
+            lifetime="run",
         )
         return False
     worker = _truthy(fm.get("worker"))
@@ -5810,8 +5820,33 @@ _MAX_NOTICES = 12
 # property ("is this FYI") rather than against a list of members.
 _NOTICE_KINDS = frozenset({"refused", "dropped", "advisory", "redirected"})
 
+# #716: ``kind`` answers *what* happened; it cannot also answer *whose
+# lifetime the record has*, and the two collide at exactly one spot — the
+# environmental writers a few hundred lines up (a repo-side ``.brr/config``
+# security key, a repo-side or account-unreachable ``runners.md``, #533/#693/
+# #700). Those are genuinely ``refused``/``dropped`` by *kind* (brnrd did not
+# honour the input) and genuinely **standing** by *lifetime*: the condition
+# lives in the environment, re-fires identically on every wake, and cannot be
+# cleared by anything the running resident does — only a human editing the
+# tree or running ``brnrd config promote`` retires it. Counting a standing
+# notice the same way as a run-scoped refusal pins ``!N`` at a nonzero
+# baseline from t=0, so a genuinely new refusal reads as a delta against
+# noise (``!1`` -> ``!2``) instead of the zero-to-one transition the whole
+# chip design assumes — #716, measured twice.
+#
+# ``lifetime`` is the fix: a second, orthogonal dimension, not a fifth
+# ``kind``. Retagging the environmental writers ``advisory`` was considered
+# and rejected — ``advisory`` means "this run's directive was accepted and
+# acted on", which is false of an ignored security key; making the chip
+# honest by making the record lie is not the fix. ``_counted_notices``
+# excludes a record from ``!N`` when it is ``advisory`` **or** standing —
+# two independent reasons to be FYI-only, not one collapsed into the other.
+_NOTICE_LIFETIMES = frozenset({"run", "standing"})
 
-def _record_outbox_notice(outbox_dir: Path | None, text: str, *, kind: str) -> None:
+
+def _record_outbox_notice(
+    outbox_dir: Path | None, text: str, *, kind: str, lifetime: str
+) -> None:
     """Tell the *running resident* brr refused/dropped a directive, or FYI.
 
     Every drop path in the outbox drain used to end at a ``print()`` — and
@@ -5828,12 +5863,23 @@ def _record_outbox_notice(outbox_dir: Path | None, text: str, *, kind: str) -> N
     :func:`_read_outbox_notices` callers / ``hooks._notices_chip`` for the
     read side of that back-compat case) — never from here going forward.
 
+    *lifetime* is required for the same reason (#716's follow-on to #1002):
+    ``"run"`` for a directive this run issued and brnrd would not carry out
+    — clearable, a transition worth an alarm. ``"standing"`` for a fact
+    about the environment this run cannot change — re-fires every wake by
+    construction, and must not count toward ``!N`` or it drowns the signal
+    that chip exists to carry. A record with no ``lifetime`` at all is the
+    same back-compat case as a missing ``kind``: a prior daemon generation's
+    write, read pessimistically (counted) by ``hooks._counted_notices``.
+
     Notices land in the run's own outbox dir and are surfaced in
     ``portal-state.json`` (``notices``), which residents re-read at plan
     boundaries and before closeout. Control file, never delivered.
     """
     if kind not in _NOTICE_KINDS:
         raise ValueError(f"_record_outbox_notice: invalid kind {kind!r}")
+    if lifetime not in _NOTICE_LIFETIMES:
+        raise ValueError(f"_record_outbox_notice: invalid lifetime {lifetime!r}")
     print(f"[brnrd] outbox: {text}")
     if outbox_dir is None:
         return
@@ -5844,6 +5890,7 @@ def _record_outbox_notice(outbox_dir: Path | None, text: str, *, kind: str) -> N
                 "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "text": text,
                 "kind": kind,
+                "lifetime": lifetime,
             },
             ensure_ascii=False,
         )
@@ -6066,11 +6113,13 @@ def _queue_child_message(
     if not target:
         _record_outbox_notice(
             outbox_dir, "message dropped: no target run/event id", kind="dropped",
+            lifetime="run",
         )
         return False
     if not body.strip():
         _record_outbox_notice(
             outbox_dir, f"message to {target!r} dropped: empty body", kind="dropped",
+            lifetime="run",
         )
         return False
     control = _find_run_control(target)
@@ -6080,6 +6129,7 @@ def _queue_child_message(
             f"message refused: {target!r} matches no live concurrent spawn "
             "(already finished, never dispatched here, or the id is wrong)",
             kind="refused",
+            lifetime="run",
         )
         return False
     if str(control.get("parent_run_id")) != task.id:
@@ -6088,6 +6138,7 @@ def _queue_child_message(
             f"message refused: {target!r} was not dispatched by this run — "
             "a run messages only its own dispatchees (kb/design-wyrd.md §3)",
             kind="refused",
+            lifetime="run",
         )
         return False
     if control.get("stopped"):
@@ -6095,11 +6146,13 @@ def _queue_child_message(
             outbox_dir,
             f"message refused: {target!r} is being stopped",
             kind="refused",
+            lifetime="run",
         )
         return False
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "message dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
         )
         return False
     spawn_event_id = str(control["event_id"])
@@ -6208,6 +6261,7 @@ def _queue_stop_request(
     if not target:
         _record_outbox_notice(
             outbox_dir, "stop dropped: no target run/event id", kind="dropped",
+            lifetime="run",
         )
         return False
     control = _find_run_control(target)
@@ -6217,6 +6271,7 @@ def _queue_stop_request(
             f"stop refused: {target!r} matches no live concurrent spawn "
             "(already finished, never dispatched here, or the id is wrong)",
             kind="refused",
+            lifetime="run",
         )
         return False
     parent_run_id = control.get("parent_run_id")
@@ -6232,7 +6287,7 @@ def _queue_stop_request(
                 f"stop refused: {target!r} was dispatched by {parent_run_id!r}, "
                 "not by this run; only its dispatcher may stop it"
             )
-        _record_outbox_notice(outbox_dir, notice, kind="refused")
+        _record_outbox_notice(outbox_dir, notice, kind="refused", lifetime="run")
         return False
     reason = str(fm.get("reason") or "").strip() or body.strip()
     spawn_event_id = str(control["event_id"])
@@ -6289,6 +6344,7 @@ def _queue_spawn_request(
             "spawn refused: the account home is a shared host tree and cannot "
             "provide concurrent worktree isolation.",
             kind="refused",
+            lifetime="run",
         )
         return False
     if bool(task.meta.get("worker")):
@@ -6297,11 +6353,13 @@ def _queue_spawn_request(
             "spawn refused: a worker-stack run cannot spawn (no nested spawns). "
             "Do the work inline, or hand it back to the resident.",
             kind="refused",
+            lifetime="run",
         )
         return False
     if inbox_dir is None:
         _record_outbox_notice(
             outbox_dir, "spawn dropped: no inbox to queue into", kind="dropped",
+            lifetime="run",
         )
         return False
     # ``shell:``/``core:`` are optional — absent, the child dispatches on the
@@ -6327,6 +6385,7 @@ def _queue_spawn_request(
     if not new_body:
         _record_outbox_notice(
             outbox_dir, "spawn dropped: the request had no body", kind="dropped",
+            lifetime="run",
         )
         return False
     source = str(fm.get("source") or "spawn")
@@ -6363,6 +6422,7 @@ def _queue_spawn_request(
             f"spawn refused: environment {requested_env!r} is not spawnable — "
             "worktree is the floor; opt-down to docker/solitary only.",
             kind="refused",
+            lifetime="run",
         )
         return False
     else:
@@ -6737,6 +6797,7 @@ def _drain_outbox(
                 # Text says "dropped"; this is the ambiguous-target
                 # refusal, same shape as `_note_event_closed`'s.
                 kind="refused",
+                lifetime="run",
             )
             _stage_outbound(
                 task,
@@ -6774,6 +6835,7 @@ def _drain_outbox(
                 outbox_dir,
                 f"reply dropped: {cause} — the message was NOT delivered",
                 kind="refused",
+                lifetime="run",
             )
             _stage_outbound(
                 task,
@@ -6837,6 +6899,7 @@ def _drain_outbox(
                 # and possibly a reader who should not have had the text.
                 # Counts, therefore, and says which failed.
                 kind="redirected",
+                lifetime="run",
             )
             summary = _short_event_summary(target_event)
             origin_note = (
@@ -6910,6 +6973,7 @@ def _drain_outbox(
                 # all, so nothing reaches anyone. Not a policy refusal of a
                 # known destination; the plumbing to reach one is absent.
                 kind="dropped",
+                lifetime="run",
             )
         ppath = (
             protocol.write_partial(
@@ -7209,6 +7273,7 @@ def _deliver_out_of_bound(
         _record_outbox_notice(
             outbox_dir, f"gate message dropped: gate {gate!r} had no body/inbox",
             kind="dropped",
+            lifetime="run",
         )
         return False
     if not _gate_can_deliver(emit.brr_dir, gate):
@@ -7225,6 +7290,7 @@ def _deliver_out_of_bound(
                 # Malformed input (a thread string where a bare gate name
                 # was expected), not a policy denial of a real gate.
                 kind="dropped",
+                lifetime="run",
             )
         else:
             configured = _configured_gate_names(emit.brr_dir)
@@ -7237,6 +7303,7 @@ def _deliver_out_of_bound(
                 # Plumbing unavailable (gate not configured/running here),
                 # not a deliberate policy refusal of a known destination.
                 kind="dropped",
+                lifetime="run",
             )
         return False
     refusal = _pr_body_close_keyword_refusal(gate, fm, body)
@@ -7255,6 +7322,7 @@ def _deliver_out_of_bound(
             # Named by its own helper: `_pr_body_close_keyword_refusal` — a
             # deliberate policy denial of a well-formed, resolvable target.
             kind="refused",
+            lifetime="run",
         )
         return False
     # Never let agent-written frontmatter override the reserved event keys
@@ -7422,6 +7490,7 @@ def _drain_live_menu(
             # A policy denial of a well-formed write — workers don't get
             # this authority, full stop.
             kind="refused",
+            lifetime="run",
         )
         return False
 
@@ -7432,6 +7501,7 @@ def _drain_live_menu(
             f"{_LIVE_MENU_NAME} ignored: this run has no conversation thread",
             # No plumbing to attach the menu to — not a policy call.
             kind="dropped",
+            lifetime="run",
         )
         return False
     try:
@@ -7459,6 +7529,7 @@ def _drain_live_menu(
             outbox_dir,
             f"malformed {_LIVE_MENU_NAME} ignored: {exc}",
             kind="dropped",
+            lifetime="run",
         )
         return False
     except OSError as exc:
@@ -7466,6 +7537,7 @@ def _drain_live_menu(
             outbox_dir,
             f"{_LIVE_MENU_NAME} could not be promoted: {exc}",
             kind="dropped",
+            lifetime="run",
         )
         return False
 

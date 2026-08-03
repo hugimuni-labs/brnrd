@@ -3199,10 +3199,12 @@ def test_notices_chip_position_is_after_produce_before_card():
 # ── #1002: a notice carries a `kind`, and only `refused`/`dropped` count ─────
 
 
-def _kind_notice(text, kind=None):
+def _kind_notice(text, kind=None, lifetime=None):
     record = {"at": "2026-08-02T20:00:00Z", "text": text}
     if kind is not None:
         record["kind"] = kind
+    if lifetime is not None:
+        record["lifetime"] = lifetime
     return record
 
 
@@ -3294,6 +3296,90 @@ def test_advisory_notice_is_readable_but_excluded_from_the_seed_briefing_count(
     assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
     assert "+1 advisory" in ctx
     assert "a note closes event evt-y8lx" in ctx
+
+
+# ── #716: `lifetime` splits standing environmental notices out of `!N` ───────
+
+
+def test_notices_chip_absent_for_a_standing_notice_alone():
+    """A single standing environmental notice (ignored `.brr/config` security
+    key, unreachable `runners.md`, ...) must drive no `!N` chip at all — it
+    is a fact about the environment, not a refused directive.
+
+    Drive red: drop the `lifetime`-aware exclusion from `_counted_notices`
+    and this fails, reproducing #716's measured `!1` baseline for a notice
+    nothing in the run could have cleared.
+    """
+    notices = [
+        _kind_notice(
+            "repo config tried to set security-defining key(s) "
+            "['runner_cmd'] in .brr/config — ignored, not honoured",
+            "refused",
+            "standing",
+        ),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!" not in bar
+
+
+def test_notices_chip_reads_the_zero_to_one_transition_not_one_to_two():
+    """A standing notice plus one real refusal must read `!1`, not `!2` —
+    the exact transition #716 exists to restore. This is the case the whole
+    ticket is about: a fresh refusal must be visible as a delta against
+    zero, not against a nonzero environmental baseline."""
+    notices = [
+        _kind_notice(
+            "custom runner profiles are not being read in this worktree",
+            "dropped",
+            "standing",
+        ),
+        _kind_notice(
+            "spawn refused: environment 'host' is not spawnable",
+            "refused",
+            "run",
+        ),
+    ]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+    assert "!2" not in bar
+
+
+def test_legacy_notice_with_no_lifetime_key_counts_as_refusing():
+    """A record carrying `kind` but no `lifetime` at all — written by a
+    daemon generation before #716 — must still count. Same pessimistic
+    direction as the missing-`kind` legacy case: a real refusal hidden by
+    an under-count costs more than a stale standing notice over-counted."""
+    notices = [_kind_notice("spawn dropped: no inbox to queue into", "dropped")]
+    assert "lifetime" not in notices[0]
+    rendered = hooks.format_delta(_bar_payload(notices=notices))
+    bar = rendered.splitlines()[0]
+    assert "!1" in bar
+
+
+def test_seed_briefing_renders_the_standing_notice_separately_from_advisory(
+    tmp_path,
+):
+    """The seed/stop briefing must still render a standing notice's text
+    (PR #754's "render, don't just count") and must label it `standing`,
+    not fold it into the `advisory` count — an operator reading `advisory`
+    about an ignored security key learns the wrong severity."""
+    notices = [
+        _kind_notice(
+            "repo-side runner profile file(s) .brr/runners.md — ignored, "
+            "not loaded",
+            "refused",
+            "standing",
+        ),
+    ]
+    _portal(tmp_path, token="t1", pending=0, notices=notices)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "notices: 0 directive(s) brnrd refused or dropped" in ctx
+    assert "+1 standing" in ctx
+    assert "advisory" not in ctx
+    assert ".brr/runners.md" in ctx
 
 
 def test_card_chip_meters_the_projection_not_the_file():
