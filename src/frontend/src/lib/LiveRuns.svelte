@@ -12,7 +12,7 @@
 		moodFace,
 		type LiveRun
 	} from './liveRuns';
-	import { runFace } from './runFace';
+	import { runFacesInWindow } from './runFace';
 	import { relicIcon } from './runLedger';
 	import { runNodeHref } from './runNode';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN, statusDotStyle } from './statusPalette';
@@ -95,6 +95,14 @@
 		unknown: 'unknown'
 	};
 
+	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll. This
+	// grid is exactly the surface the maintainer named — several runs sharing
+	// one screen — so the glyph now comes from the *window* (this render's
+	// `runs`, in the order the grid draws them) rather than a fresh hash per
+	// card. Recomputed whenever the run list changes; a run that drops off the
+	// board simply leaves the map on the next poll.
+	let faceWindow = $derived(runFacesInWindow(runs.map((run) => run.run_id || run.id)));
+
 	// Heartbeat freshness lives in `liveRuns.ts::heartbeatLevel` now, shared
 	// with the inline node panel so two renderings of one run cannot disagree
 	// about whether it is alive.
@@ -156,7 +164,7 @@
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}
 				{@const isOpen = expanded.has(run.id)}
-				{@const face = runFace(run.run_id || run.id)}
+				{@const face = faceWindow.get(run.run_id || run.id)}
 				{@const runner = runnerLabel(run)}
 				{@const mood = moodFace(
 					run.mood,
@@ -202,11 +210,15 @@
 						</div>
 						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
 							<!-- The face, beside the name the card is headed by — the same
-							     mark the pick lane and the cloth draw for this run, hashed
-							     from the same id the card already keys its node link on. -->
-							<span class="shrink-0 text-sm" aria-hidden="true" style={`color: ${face.color}`}
-								>{face.glyph}</span
-							>
+							     mark the pick lane and the cloth draw for this run, looked up
+							     in this grid's rendered window (piece 2: `runFacesInWindow`)
+							     rather than hashed fresh, so two cards on one board never
+							     share a rune while their ids both still fit the alphabet. -->
+							{#if face}
+								<span class="shrink-0 text-sm" aria-hidden="true" style={`color: ${face.color}`}
+									>{face.glyph}</span
+								>
+							{/if}
 							<span
 								class="truncate text-sm font-medium text-amber-100"
 								use:typeReveal={{ text: primary }}>{primary}</span

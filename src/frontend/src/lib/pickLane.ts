@@ -35,8 +35,8 @@
  * already document.
  */
 
-import type { LiveRun } from './liveRuns.ts';
-import { liveRunDisplayName } from './liveRuns.ts';
+import type { LiveRun, MoodFace } from './liveRuns.ts';
+import { liveRunDisplayName, moodFace } from './liveRuns.ts';
 import type { ScheduledWake } from './scheduledWakes.ts';
 import type { WeavingRow } from './warp.ts';
 import { futureEtaLabel, futureShelfRows } from './futureShelf.ts';
@@ -80,6 +80,15 @@ export interface PickRow {
 	note: string | null;
 	color: string;
 	urgency: GlowUrgency;
+	/**
+	 * The resident's mood (#566), picking rows only — an armed wake has never
+	 * run and so has never felt anything (THE FACE IN THREE TENSES, piece 1's
+	 * own constraint: a future run gets no face). Same `moodFace` normalizer
+	 * every other surface uses, so an unknown handle degrades to name-only
+	 * here exactly as it does on the LiveRuns card — this file adds no second
+	 * opinion about what a mood is.
+	 */
+	mood: MoodFace | null;
 	/** Imminence as geometry, 0..1. Always 1 while picking: a burning run has
 	 *  arrived, and a shrinking bar under it would read as a countdown to
 	 *  nothing. */
@@ -193,7 +202,10 @@ export function pickRows(input: {
 			// days out recedes to a stub instead of dominating the lane.
 			barFraction: 1 - row.barFraction,
 			serves: [],
-			crosses: servesThreads(row.wake)
+			crosses: servesThreads(row.wake),
+			// Armed: not yet fired, nothing to have felt. See the field's own
+			// doc — the future gets no face, by construction.
+			mood: null
 		}))
 		.slice(0, ARMED_ROW_CAP);
 
@@ -212,7 +224,8 @@ export function pickRows(input: {
 			serves: servesByRun.get(id) ?? [],
 			// A live run's threads come from the page's `taken:` index, which is
 			// authoritative for a run that exists. Nothing to add here.
-			crosses: []
+			crosses: [],
+			mood: moodFace(run.mood, run.mood_glyph, run.mood_pitch, run.mood_frames, run.mood_rest)
 		};
 	});
 
