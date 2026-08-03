@@ -6,10 +6,12 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,6 +28,7 @@ from .. import (
 from ..models import Account, ChannelRoute, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
+from ..platforms import whatsapp as wa
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 logger = logging.getLogger(__name__)
@@ -37,6 +40,11 @@ logger = logging.getLogger(__name__)
 _AUTHORIZED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
+# WhatsApp has no slash-command surface (`_handle_command`'s /repo, /repos,
+# /status are Telegram-only, see the WhatsApp section below) — pointing a
+# WhatsApp user at commands that don't work on this channel would be a
+# worse answer than a plain one.
+_WA_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then text the pair code here."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
 _BACKLOG_GRACE = timedelta(seconds=1)
 
@@ -70,7 +78,7 @@ def _channel_route(db: Session, parsed: tg.ParsedMessage) -> ChannelRoute | None
     return db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id.is_(None))).scalar_one_or_none()
 
 
-def _message_precedes_route(parsed: tg.ParsedMessage, route: ChannelRoute) -> bool:
+def _message_precedes_route(parsed: "tg.ParsedMessage | wa.ParsedMessage", route: ChannelRoute) -> bool:
     if parsed.message_date is None:
         return False
     created = route.created_at
@@ -130,7 +138,10 @@ def _github_trigger(settings, body: str) -> tuple[str, str] | None:
     return None
 
 
-def _github_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
+def _hub_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
+    """``X-Hub-Signature-256`` check — the same HMAC-SHA256-over-the-raw-
+    body scheme GitHub and Meta's WhatsApp Cloud API both use (Meta's docs
+    name the header identically), so one check serves both webhooks."""
     if not secret or not signature:
         return False
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
@@ -510,6 +521,174 @@ def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: st
     return True
 
 
+# ── WhatsApp (Meta Business Cloud API) ───────────────────────────────
+#
+# Deliberately *not* a byte-for-byte mirror of the Telegram helpers above —
+# two real differences in the platform shape:
+#
+# 1. Pairing has no ``/start <code>`` deep-link convention (WhatsApp has no
+#    bot-command syntax), so a chat pairs by texting the bare code. It
+#    reuses the *same* ``TgPairCode`` table Telegram pairing already writes
+#    (that table has no platform column — a code is valid wherever it's
+#    typed); minting a WhatsApp-specific code from the dashboard is
+#    frontend work, out of scope here (see the PR body).
+# 2. There is no default-closed authz gate mirroring Telegram's
+#    ``_authorized``/``paired_user_id``. A WhatsApp "chat" *is* one
+#    customer's own number (``ParsedMessage.chat_id == wa_id``, no
+#    group-chat concept, no forwarded-message spoofing surface) — the
+#    channel-route lookup below is keyed on that same number, so a route
+#    match already proves the sender is the one who paired it. Adding a
+#    second principal check would be a check with nothing left to catch.
+
+_WA_PAIR_CODE_RE = re.compile(r"^TG-[A-Z0-9]{4}$")
+
+
+def _wa_reply(settings, parsed: "wa.ParsedMessage", text: str) -> None:
+    if not (settings.whatsapp_access_token and settings.whatsapp_phone_number_id):
+        return
+    try:
+        wa.send_message(
+            settings.whatsapp_access_token,
+            settings.whatsapp_phone_number_id,
+            parsed.chat_id,
+            text,
+            api_base_url=settings.whatsapp_api_base_url,
+            api_version=settings.whatsapp_api_version,
+            reply_to_message_id=parsed.message_id,
+        )
+    except Exception as e:
+        print(f"[brnrd] whatsapp reply failed: {e}")
+
+
+def _wa_pair_code_from_text(text: str) -> str | None:
+    """The bare pair code a WhatsApp user texts in, or None.
+
+    Matched against the exact shape ``ids.tg_pair_code`` produces
+    (``TG-`` + 4 alphabet chars), case-insensitively — anything else is an
+    ordinary task message, not a pairing attempt.
+    """
+    candidate = (text or "").strip().upper()
+    return candidate if _WA_PAIR_CODE_RE.match(candidate) else None
+
+
+def _wa_channel_route(db: Session, parsed: "wa.ParsedMessage") -> ChannelRoute | None:
+    return db.execute(
+        select(ChannelRoute).where(
+            ChannelRoute.platform == "whatsapp",
+            ChannelRoute.channel_id == parsed.chat_id,
+        )
+    ).scalar_one_or_none()
+
+
+def _enqueue_whatsapp_event(db: Session, parsed: "wa.ParsedMessage", *, repo_id: str, body: str) -> None:
+    inbox_service.enqueue(
+        db,
+        repo_id=repo_id,
+        body=body,
+        source="whatsapp",
+        reply_to={"platform": "whatsapp", "chat_id": parsed.chat_id, "message_id": parsed.message_id},
+    )
+
+
+def _handle_whatsapp_pair(db: Session, settings, parsed: "wa.ParsedMessage", code: str) -> None:
+    pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one_or_none()
+    expires = pc.expires_at if pc else None
+    if expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if pc is None or pc.consumed or (expires and expires < datetime.now(timezone.utc)):
+        _wa_reply(settings, parsed, "Invalid or expired pair code.")
+        return
+    existing = _wa_channel_route(db, parsed)
+    if existing is not None and existing.account_id != pc.account_id:
+        _wa_reply(settings, parsed, "This chat is already paired to another account.")
+        return
+    if existing is None:
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="whatsapp", channel_id=parsed.chat_id, topic_id=None, account_id=pc.account_id, repo_id=pc.repo_id)
+        db.add(existing)
+    else:
+        existing.account_id = pc.account_id
+        existing.repo_id = pc.repo_id
+    pc.consumed = True
+    repo = db.get(Repo, pc.repo_id)
+    db.commit()
+    _wa_reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
+
+
+@router.get("/whatsapp")
+def whatsapp_webhook_verify(request: Request):
+    """Meta's subscription handshake — ``GET`` with ``hub.*`` query params,
+    answered by echoing ``hub.challenge`` back as plain text iff the mode
+    and verify token match what's configured (see ``whatsapp.verify_subscription``).
+    """
+    settings = request.app.state.settings
+    params = request.query_params
+    challenge = wa.verify_subscription(
+        mode=params.get("hub.mode"),
+        verify_token=params.get("hub.verify_token"),
+        challenge=params.get("hub.challenge"),
+        configured_verify_token=settings.whatsapp_verify_token,
+    )
+    if challenge is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad verify token")
+    return PlainTextResponse(challenge)
+
+
+@router.post("/whatsapp")
+async def whatsapp_webhook(request: Request, x_hub_signature_256: str | None = Header(default=None)):
+    settings = request.app.state.settings
+    raw = await request.body()
+    if not _hub_signature_ok(settings.whatsapp_app_secret, raw, x_hub_signature_256):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad signature")
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": True}
+    if not isinstance(payload, dict):
+        return {"ok": True}
+    # ``statuses`` deliveries (sent/delivered/read receipts for our own
+    # outbound sends) and any payload with no inbound message parse to
+    # None here — never a trigger, same as a captionless-and-textless
+    # Telegram update falling out of ``tg.parse_update``.
+    parsed = wa.parse_update(payload)
+    if parsed is None:
+        return {"ok": True}
+    with request.app.state.SessionLocal() as db:
+        code = _wa_pair_code_from_text(parsed.text)
+        if code:
+            _handle_whatsapp_pair(db, settings, parsed, code)
+            return {"ok": True}
+        route = _wa_channel_route(db, parsed)
+        if route is not None and _message_precedes_route(parsed, route):
+            return {"ok": True}
+        if route is None:
+            _wa_reply(settings, parsed, _WA_UNPAIRED_TEXT)
+            return {"ok": True}
+        repo = db.get(Repo, route.repo_id)
+        if repo is None:
+            _wa_reply(settings, parsed, "This chat's active repo no longer exists. Pair again from the dashboard.")
+            return {"ok": True}
+        if not parsed.text and not parsed.attachments:
+            # v1 doesn't ingest WhatsApp media at all (no attachment
+            # pointers, unlike Telegram's image path) — a media message
+            # with no text carries nothing brnrd can act on.
+            _wa_reply(settings, parsed, "I can't see attached media yet — that message had no text I can read. Send it as words.")
+            return {"ok": True}
+        body = parsed.text
+        if parsed.has_media:
+            body += "\n\n[attached media not ingested — brnrd received the text only]"
+        decision = limits.check_event_admission(
+            db,
+            settings,
+            db.get(Account, route.account_id),
+            body=body,
+        )
+        if not decision.allowed:
+            _wa_reply(settings, parsed, decision.message)
+            return {"ok": True}
+        _enqueue_whatsapp_event(db, parsed, repo_id=route.repo_id, body=body)
+    return {"ok": True}
+
+
 @router.post("/telegram")
 def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     settings = request.app.state.settings
@@ -620,7 +799,7 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
 async def github_webhook(request: Request, x_hub_signature_256: str | None = Header(default=None), x_github_event: str | None = Header(default=None)):
     settings = request.app.state.settings
     raw = await request.body()
-    if not _github_signature_ok(settings.github_webhook_secret, raw, x_hub_signature_256):
+    if not _hub_signature_ok(settings.github_webhook_secret, raw, x_hub_signature_256):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
     try:
         payload = await request.json()
