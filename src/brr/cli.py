@@ -69,7 +69,7 @@ PUBLIC_COMMANDS = (
 # list is at its ceiling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic", "gate-run", "close-check", "promise",
+    "relic", "gate-run", "close-check", "promise", "do",
 )
 
 #: What ``brnrd promise`` accepts, spelled here so building the parser costs
@@ -113,6 +113,28 @@ def brnrd_cmd() -> str:
     if os.environ.get(LAUNCHER_ENV) == "npx":
         return "npx brnrd"
     return "brnrd"
+
+
+class _OrderedAppend(argparse.Action):
+    """Append ``(dest, value)`` to one shared, command-line-ordered list.
+
+    ``brnrd do``'s ``--reply``/``--gate`` verbs each need the *next*
+    ``--body-file``/``--body`` on the command line, not any later one — and
+    ``--body-file`` is legitimately reused by both verbs. Plain
+    ``action="append"`` gives four independent lists with the cross-verb
+    ordering thrown away; routing all four options through this one action
+    (into ``namespace._do_ops``) preserves command-line order so
+    ``cli._reconstruct_do_ops`` can pair each body to the verb that
+    immediately preceded it, the same way a shell reads the flags left to
+    right.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        items = getattr(namespace, "_do_ops", None)
+        if items is None:
+            items = []
+            namespace._do_ops = items
+        items.append((self.dest, values))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -488,6 +510,59 @@ def build_parser() -> argparse.ArgumentParser:
              "surface/layers/<layer>.md, e.g. the-loom#gate-chips-row-on-repos)")
     p.set_defaults(func=cmd_relic_item)
 
+    # Hidden per HIDDEN_COMMANDS — porcelain over the outbox verb grammar
+    # (`docs/portals.md`), meant for the resident's own shell inside a live
+    # wake, not an operator's terminal. `-- <command> [args...]` is split out
+    # of argv before this parser ever sees it (see `main`), so it never
+    # appears as an argparse-level option here.
+    # No `help=`: hidden commands stay off `--help` (see the comment on
+    # `emotes` above) — passing one is exactly what made `do` show up in
+    # `_choices_actions` and fail `test_hidden_commands_parse_but_are_not_listed`.
+    do_p = sub.add_parser("do")
+    do_p.add_argument(
+        "--outbox", default=None, metavar="DIR",
+        help="outbox dir to act on (default: this run's own, via "
+             "BRR_OUTBOX_DIR / BRR_PORTAL_STATE)")
+    do_p.add_argument(
+        "--timeout", type=float, default=None, metavar="SECONDS",
+        help="how long to wait for a staged directive to drain "
+             "(default 30s)")
+    do_p.add_argument(
+        "--mood", default=None, metavar="FEELING-OR-HANDLE",
+        help="resolve a feeling or handle through the emotes index and "
+             "write .mood")
+    do_p.add_argument(
+        "--mood-note", default=None, metavar="TEXT",
+        help="narration after the resolved mood handle (only with --mood)")
+    do_p.add_argument(
+        "--note", dest="note", action="append", default=None,
+        metavar="EVENT-ID",
+        help="retire a pending event deliberately, no message goes out "
+             "(repeatable)")
+    do_p.add_argument(
+        "--reply", dest="reply", action=_OrderedAppend, default=None,
+        metavar="EVENT-ID",
+        help="reply to a pending event; pair with --body-file/--body "
+             "(repeatable)")
+    do_p.add_argument(
+        "--gate", dest="gate", action=_OrderedAppend, default=None,
+        metavar="NAME",
+        help="send to a destination with no waiting event; pair with "
+             "--body-file (repeatable)")
+    do_p.add_argument(
+        "--body-file", dest="body_file", action=_OrderedAppend, default=None,
+        metavar="FILE",
+        help="body for the immediately preceding --reply or --gate")
+    do_p.add_argument(
+        "--body", dest="body", action=_OrderedAppend, default=None,
+        metavar="TEXT",
+        help="inline body for the immediately preceding --reply "
+             "(--gate takes --body-file only)")
+    do_p.add_argument(
+        "--card", default=None, metavar="FILE",
+        help="overwrite .card with this file's contents")
+    do_p.set_defaults(func=cmd_do)
+
     p = sub.add_parser("kb", help="search home/repo knowledge; omit query to print graph shape")
     p.add_argument("query", nargs="?", default=None,
                    help="search term (omit to print the kb graph shape)")
@@ -710,7 +785,23 @@ def _drop_inherited_git_pin() -> None:
 
 def main(argv: list[str] | None = None) -> None:
     _drop_inherited_git_pin()
-    args = build_parser().parse_args(argv)
+    import sys
+
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # `brnrd do [verbs…] -- <command> [args…]` — split the passthrough command
+    # out of argv before argparse ever sees it, rather than fighting
+    # argparse's own (subparser-inconsistent) `--` handling with
+    # `nargs=REMAINDER`. Only "do" gets this treatment; every other
+    # subcommand's own `--` (if it ever has one) is untouched. `args.passthrough`
+    # is always set on the parsed namespace, `None` when there was no `--`, so
+    # `cmd_do` never has to special-case a missing attribute.
+    passthrough: list[str] | None = None
+    if raw[:1] == ["do"] and "--" in raw:
+        idx = raw.index("--")
+        passthrough = raw[idx + 1:]
+        raw = raw[:idx]
+    args = build_parser().parse_args(raw)
+    args.passthrough = passthrough
     return args.func(args)
 
 
@@ -1611,6 +1702,246 @@ def cmd_relic_item(args):
         return 1
     print(f"[brnrd relic] item {address}")
     return 0
+
+
+def _reconstruct_do_ops(ordered_ops):
+    """Pair ``--reply``/``--gate`` with the ``--body-file``/``--body`` that
+    immediately follows them in ``ordered_ops`` (command-line order, from
+    ``_OrderedAppend`` — only ``reply``/``gate``/``body_file``/``body``
+    entries, ``--note`` is not routed through this list).
+
+    Returns ``(replies, gates, error)``: ``replies``/``gates`` are lists of
+    ``(target, body_text)``; ``error`` is a human string naming the first
+    unpaired flag, or ``None``. A ``--body-file`` reads its file eagerly here
+    so a bad path fails before anything is staged, not mid-batch.
+    """
+    replies: list[tuple[str, str]] = []
+    gates: list[tuple[str, str]] = []
+    pending: tuple[str, str] | None = None
+    for dest, value in ordered_ops:
+        if dest in ("reply", "gate"):
+            if pending is not None:
+                kind, target = pending
+                return replies, gates, (
+                    f"--{kind} {target} has no --body-file/--body before "
+                    f"the next --{dest}"
+                )
+            pending = (dest, value)
+            continue
+        # dest in ("body_file", "body")
+        if pending is None:
+            flag = "--body-file" if dest == "body_file" else "--body"
+            return replies, gates, f"{flag} given with no preceding --reply/--gate"
+        kind, target = pending
+        if dest == "body_file":
+            try:
+                text = Path(value).read_text(encoding="utf-8")
+            except OSError as exc:
+                return replies, gates, f"could not read {value!r}: {exc}"
+        else:
+            if kind == "gate":
+                return replies, gates, "--gate only pairs with --body-file, not --body"
+            text = value
+        (replies if kind == "reply" else gates).append((target, text))
+        pending = None
+    if pending is not None:
+        kind, target = pending
+        return replies, gates, f"--{kind} {target} has no --body-file/--body"
+    return replies, gates, None
+
+
+def _do_render(verb: str, label: str, status: str, detail: str) -> tuple[str, bool]:
+    from . import do as do_mod
+
+    if status == do_mod.OK:
+        return f"{verb} {label} ✓", True
+    if status == do_mod.QUEUED:
+        return f"{verb} {label} ? still queued", False
+    return f"{verb} {label} ✗ {detail}", False
+
+
+def _do_mood(do_mod, emo, outbox_dir: Path, feeling: str, note: str | None) -> tuple[str, bool]:
+    resolved = emo.lookup(feeling)
+    if resolved is None:
+        misses = emo.near_misses(feeling)
+        tail = (
+            " — try: " + ", ".join(e.name for e in misses)
+            if misses else ""
+        )
+        return f"mood {feeling} ✗ no match{tail}", False
+    do_mod.write_mood(outbox_dir, resolved.name, note)
+    glyph = resolved.frames[0] if resolved.frames else resolved.name
+    return f"mood {glyph} {resolved.name} ✓", True
+
+
+def _do_note(do_mod, outbox_dir: Path, event_id: str, index: int, timeout: float) -> tuple[str, bool]:
+    from . import hooks as hooks_mod
+
+    short = hooks_mod._short_event_id(event_id)
+    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+    path = do_mod.stage_note(outbox_dir, event_id, index=index)
+    status, detail = do_mod.await_verdict(
+        outbox_dir, path, before, ("note", event_id), timeout_seconds=timeout,
+    )
+    return _do_render("note", short, status, detail)
+
+
+def _do_reply(
+    do_mod, outbox_dir: Path, event_id: str, body: str, index: int, timeout: float,
+) -> tuple[str, bool]:
+    from . import hooks as hooks_mod
+
+    short = hooks_mod._short_event_id(event_id)
+    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+    path = do_mod.stage_reply(outbox_dir, event_id, body, index=index)
+    status, detail = do_mod.await_verdict(
+        outbox_dir, path, before, ("reply", event_id), timeout_seconds=timeout,
+    )
+    return _do_render("reply", short, status, detail)
+
+
+def _do_gate(
+    do_mod, outbox_dir: Path, gate_name: str, body: str, index: int, timeout: float,
+) -> tuple[str, bool]:
+    before = do_mod.notices_of(do_mod.read_portal_state(outbox_dir))
+    path = do_mod.stage_gate(outbox_dir, gate_name, body, index=index)
+    status, detail = do_mod.await_verdict(
+        outbox_dir, path, before, ("gate", gate_name), timeout_seconds=timeout,
+    )
+    return _do_render("gate", gate_name, status, detail)
+
+
+def _do_card(do_mod, outbox_dir: Path, filename: str) -> tuple[str, bool]:
+    try:
+        text = Path(filename).read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"card ✗ could not read {filename}: {exc}", False
+    do_mod.write_card(outbox_dir, text)
+    return "card ✓", True
+
+
+def cmd_do(args):
+    """``brnrd do`` — stage outbox verbs, read the daemon's verdict back in
+    the same boundary as the act (`kb/design-...`, evts dt2m/khiw/nkq5).
+
+    Porcelain over the existing outbox grammar (``docs/portals.md``), not a
+    new channel: every verb here stages exactly the file a resident would
+    stage by hand, then waits for the daemon's own drain to consume it and
+    diffs ``portal-state.json`` -> ``notices`` for a refusal it names. See
+    ``brr.do``'s module docstring for the verdict-observation contract per
+    verb and its one named daemon-side gap (a notice carries no
+    per-directive source id, so correlation is a text-substring heuristic).
+
+    ``-- <command> [args…]`` (split out of argv in ``main`` before this
+    parser ever sees it) runs after the verbs are staged: verdict lines move
+    to stderr (so the command's own stdout stays pipeable) and the command
+    replaces this process via ``os.execvp`` — argv passthrough, execvp
+    semantics, never ``sh -c`` — so its stdout/stderr/exit code become
+    ``brnrd do``'s own. No ``--`` -> the verdict lines are the only output,
+    same as before this existed.
+    """
+    import os
+    import sys
+
+    from . import do as do_mod
+    from . import emotes as emo
+
+    passthrough = getattr(args, "passthrough", None)
+    out = sys.stderr if passthrough else sys.stdout
+    timeout = args.timeout if args.timeout is not None else do_mod.DEFAULT_TIMEOUT_SECONDS
+
+    if args.mood_note and not args.mood:
+        print("[brnrd do] --mood-note only applies with --mood", file=sys.stderr)
+        return 1
+
+    ordered_ops = getattr(args, "_do_ops", None) or []
+    replies, gates, pairing_error = _reconstruct_do_ops(ordered_ops)
+    if pairing_error:
+        print(f"[brnrd do] {pairing_error}. Nothing was staged.", file=sys.stderr)
+        return 1
+
+    notes = args.note or []
+    has_verbs = bool(args.mood or notes or replies or gates or args.card)
+
+    outbox_dir = Path(args.outbox) if args.outbox else _wake_outbox_dir()
+
+    if not has_verbs:
+        if outbox_dir is None:
+            print(
+                "[brnrd do] no run outbox in this environment — pass "
+                "--outbox, or run inside a daemon wake.",
+                file=sys.stderr,
+            )
+            return 1
+        payload = do_mod.read_portal_state(outbox_dir)
+        if not payload:
+            print(
+                f"[brnrd do] no live portal-state.json under {outbox_dir}",
+                file=sys.stderr,
+            )
+            return 1
+        print(do_mod.format_snapshot(payload), file=out)
+        if not passthrough:
+            return 0
+    else:
+        if outbox_dir is None:
+            print(
+                "[brnrd do] no run outbox in this environment — `brnrd do` "
+                "stages directives into a live run's outbox; pass "
+                "--outbox, or run inside a daemon wake. Nothing was "
+                "written.",
+                file=sys.stderr,
+            )
+            return 1
+
+        segments: list[str] = []
+        any_failed = False
+
+        if args.mood:
+            seg, ok = _do_mood(do_mod, emo, outbox_dir, args.mood, args.mood_note)
+            segments.append(seg)
+            any_failed = any_failed or not ok
+
+        for i, event_id in enumerate(notes):
+            seg, ok = _do_note(do_mod, outbox_dir, event_id, i, timeout)
+            segments.append(seg)
+            any_failed = any_failed or not ok
+
+        for i, (event_id, body) in enumerate(replies):
+            seg, ok = _do_reply(do_mod, outbox_dir, event_id, body, i, timeout)
+            segments.append(seg)
+            any_failed = any_failed or not ok
+
+        for i, (gate_name, body) in enumerate(gates):
+            seg, ok = _do_gate(do_mod, outbox_dir, gate_name, body, i, timeout)
+            segments.append(seg)
+            any_failed = any_failed or not ok
+
+        if args.card:
+            seg, ok = _do_card(do_mod, outbox_dir, args.card)
+            segments.append(seg)
+            any_failed = any_failed or not ok
+
+        print(" · ".join(segments), file=out)
+
+        if not passthrough:
+            return 1 if any_failed else 0
+
+    # passthrough present (verbs or not): argv replacement, not a subprocess
+    # spawn — this process becomes the command, so its stdout/stderr/exit
+    # code are structurally "brnrd do's own" rather than something this
+    # function has to relay.
+    out.flush()
+    try:
+        os.execvp(passthrough[0], passthrough)
+    except OSError as exc:
+        print(
+            f"[brnrd do] passthrough command not found: {passthrough[0]!r} "
+            f"({exc})",
+            file=sys.stderr,
+        )
+        return 127
+    return 0  # pragma: no cover — unreachable: execvp never returns on success
 
 
 def cmd_kb(args):
