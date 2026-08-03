@@ -174,21 +174,51 @@ def test_server_fingerprint_corrupt_file_reads_as_absent(tmp_path):
     assert runtime.load_server_fingerprint(brr_dir, "cloud") is None
 
 
+#: Stands in for "a poll that just succeeded" inside the parametrize table
+#: below, and is replaced with a real timestamp *when the test runs*.
+#:
+#: It has to be a marker rather than a literal, because a `parametrize`
+#: argument is evaluated once at **module import** — collection time — while
+#: the assertion it feeds is about *freshness* against
+#: `GATE_HEALTH_DEGRADED_AFTER_S` (300 s), measured at call time. The gap
+#: between those two moments is however long the suite takes to get here, so
+#: a literal `datetime.now()` in the table is a timebomb armed by suite
+#: runtime: green in isolation, green in a fast CI run, and red the first
+#: time the backend leg needs more than five minutes to reach this file.
+#:
+#: It went off on 2026-08-03 — a 535 s backend leg reached this test at
+#: 354 s and read `telegram: degraded; last successful poll 354s ago` where
+#: the case says `telegram: ok`. A fixture picks a moment; this one picked
+#: the wrong one, and nothing about the failure named the clock.
+_NOW = "<now>"
+
+
+def _with_current_timestamps(health: dict) -> dict:
+    """Replace every :data:`_NOW` marker with the time *right now*."""
+    return {
+        gate: {
+            key: (datetime.now(timezone.utc).isoformat() if value is _NOW else value)
+            for key, value in payload.items()
+        }
+        for gate, payload in health.items()
+    }
+
+
 @pytest.mark.parametrize(
     ("health", "expected"),
     [
         ({}, ["telegram: never", "slack: never"]),
         (
-            {"telegram": {"last_poll_ok": datetime.now(timezone.utc).isoformat()}},
+            {"telegram": {"last_poll_ok": _NOW}},
             ["telegram: ok", "slack: never"],
         ),
         (
             {
-                "telegram": {"last_poll_ok": datetime.now(timezone.utc).isoformat()},
+                "telegram": {"last_poll_ok": _NOW},
                 "slack": {
                     "last_poll_ok": None,
                     "last_error": "bad auth",
-                    "last_error_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error_at": _NOW,
                 },
             },
             ["telegram: ok", "slack: never", "last error: bad auth"],
@@ -201,7 +231,7 @@ def test_local_status_renders_configured_gate_health(
 ):
     brr_dir = tmp_path / ".brr"
     monkeypatch.setattr(runtime, "configured_gates", lambda _brr: ["telegram", "slack"])
-    for gate, payload in health.items():
+    for gate, payload in _with_current_timestamps(health).items():
         path = runtime.health_path(brr_dir, gate)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -211,3 +241,43 @@ def test_local_status_renders_configured_gate_health(
     output = capsys.readouterr().out
     for text in expected:
         assert text in output
+
+
+def test_the_health_table_never_freezes_a_clock_reading_at_collection_time():
+    """The guard for the class, not for the instance.
+
+    Re-introducing a literal ``datetime.now(...)`` into the parametrize table
+    above is invisible in review and green in isolation; it only fails once
+    the suite is slow enough to age past ``GATE_HEALTH_DEGRADED_AFTER_S``,
+    which is a property of *the rest of the suite*, not of this file. So the
+    thing to assert is the shape: a case that means "just polled" says
+    :data:`_NOW`, and the clock is read when the test runs.
+
+    Reads the marks off the test function rather than re-declaring the table,
+    so it cannot drift out of step with what actually runs.
+    """
+    cases = [
+        mark.args[1]
+        for mark in test_local_status_renders_configured_gate_health.pytestmark
+        if mark.name == "parametrize"
+    ][0]
+    for health, _expected in cases:
+        for payload in health.values():
+            for key, value in payload.items():
+                if not isinstance(value, str) or value is _NOW:
+                    continue
+                try:
+                    datetime.fromisoformat(value)
+                except ValueError:
+                    continue  # a plain string like an error message — fine
+                raise AssertionError(
+                    f"{key}={value!r} freezes a clock reading at collection "
+                    f"time; use the _NOW marker instead"
+                )
+
+    stamped = _with_current_timestamps({"telegram": {"last_poll_ok": _NOW}})
+    age = (
+        datetime.now(timezone.utc)
+        - datetime.fromisoformat(stamped["telegram"]["last_poll_ok"])
+    ).total_seconds()
+    assert 0 <= age < 5
