@@ -21,6 +21,7 @@ branch and the stale claim dies at read time.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -626,6 +627,78 @@ def worktree_label(worktree_entry: dict[str, Any]) -> str:
     return run_id or str(worktree_entry.get("path") or "").strip()
 
 
+def _rev_list_count(repo_root: Path, ancestor: str, descendant: str) -> int | None:
+    """``git rev-list --count <ancestor>..<descendant>``, or ``None`` on failure.
+
+    Local object-store read only (#1039 task 2) — no fetch, no network.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", f"{ancestor}..{descendant}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _origin_main_relationship(repo_root: Path, commit: str) -> dict[str, Any]:
+    """How *commit* (prod's reported build) relates to local ``origin/main``.
+
+    Entirely from the local object store (#1039 task 2 — the forge-state
+    facet promises "local, network-free" in its own rendered header, so this
+    reads refs and objects already on disk and never fetches). The daemon's
+    own ``sync.refresh_before_run`` keeps ``origin/main`` current on its own
+    schedule; this function does not try to.
+
+    Five cases, and the boundary between "behind" and "unknown" is the part
+    worth being careful about: a remedy ("N commits behind") is itself a
+    truth claim, and asserting it when the commit isn't even resolvable
+    locally would be a lie in the optimistic direction.
+
+    - ``matches`` — prod's commit *is* ``origin/main``'s tip.
+    - ``behind`` — prod's commit is an ancestor of the tip; ``count`` is how
+      many commits separate them.
+    - ``ahead`` — the tip is an ancestor of prod's commit (prod is a
+      descendant — a local push, a hotfix, a rollback target).
+    - ``diverged`` — neither is an ancestor of the other.
+    - ``unknown`` — ``origin/main`` has no local ref, or prod's commit isn't
+      in this checkout's object store (shallow clone, pruned history, a
+      fingerprint from a different repo). Never guessed past this point.
+    """
+    try:
+        origin_sha = gitops.rev_parse(repo_root, "origin/main")
+        if not origin_sha:
+            return {"status": "unknown", "commit": commit}
+        resolved = gitops.rev_parse(repo_root, commit)
+        if not resolved:
+            return {"status": "unknown", "commit": commit}
+        if resolved == origin_sha:
+            return {"status": "matches", "commit": resolved, "origin_sha": origin_sha}
+        if gitops.is_ancestor(repo_root, resolved, origin_sha):
+            return {
+                "status": "behind",
+                "commit": resolved,
+                "origin_sha": origin_sha,
+                "count": _rev_list_count(repo_root, resolved, origin_sha),
+            }
+        if gitops.is_ancestor(repo_root, origin_sha, resolved):
+            return {
+                "status": "ahead",
+                "commit": resolved,
+                "origin_sha": origin_sha,
+                "count": _rev_list_count(repo_root, origin_sha, resolved),
+            }
+        return {"status": "diverged", "commit": resolved, "origin_sha": origin_sha}
+    except Exception:
+        return {"status": "unknown", "commit": commit}
+
+
 def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     """What prod last reported, read locally — never a network call.
 
@@ -635,6 +708,15 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     task exists to fix (an absent fingerprint rendering as nothing, not as
     "absent"). Any import or lookup failure collapses to the same
     not-configured shape rather than raising out of a wake-build path.
+
+    When the fingerprint carries a commit, this also folds in its
+    relationship to local ``origin/main`` (#1039 task 2 — "merged is not
+    deployed, and the tell is built_at" needed a second tell: prod can be
+    honestly built and honestly stale at once, and nothing compared the two
+    before this). Computed here, once, at facet-build time — the same
+    repo_root :func:`build_forge_state` already has — so
+    :func:`render_prod_line` stays a pure formatter over data that's already
+    resolved, exactly like every other field on this fingerprint.
     """
     try:
         from .gates import import_gate
@@ -643,9 +725,18 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
         brr_dir = gitops.shared_brr_dir(repo_root)
         if not cloud.is_configured(brr_dir):
             return {"configured": False}
+        fingerprint = cloud.read_server_fingerprint(brr_dir)
+        if isinstance(fingerprint, dict):
+            build = fingerprint.get("build")
+            commit = str(build.get("commit") or "").strip() if isinstance(build, dict) else ""
+            if commit:
+                fingerprint = dict(fingerprint)
+                fingerprint["origin_main_relationship"] = _origin_main_relationship(
+                    repo_root, commit
+                )
         return {
             "configured": True,
-            "fingerprint": cloud.read_server_fingerprint(brr_dir),
+            "fingerprint": fingerprint,
         }
     except Exception:
         return {"configured": False}
@@ -682,6 +773,41 @@ def _format_age(age_s: int) -> str:
     return f"{hours}h{rem:02d}m" if rem else f"{hours}h"
 
 
+def _render_origin_relationship(relationship: Any) -> str:
+    """The clause naming how prod's commit relates to local ``origin/main``.
+
+    Pure formatting over :func:`_origin_main_relationship`'s already-resolved
+    verdict — the git reads happened once, at facet-build time. ``""`` for
+    anything this function doesn't recognise, so a facet built before this
+    field existed (or a hand-built test fixture) renders exactly as it did
+    before rather than growing a stray bit.
+    """
+    if not isinstance(relationship, dict):
+        return ""
+    status = str(relationship.get("status") or "").strip()
+    commit = str(relationship.get("commit") or "").strip()
+    origin_sha = str(relationship.get("origin_sha") or "").strip()
+    if status == "matches":
+        return "matches origin/main"
+    if status == "unknown":
+        sha = commit[:8] if commit else "commit"
+        return f"relationship unknown — {sha} not in this checkout"
+    if status == "diverged":
+        span = f" ({commit[:8]} vs {origin_sha[:8]})" if commit and origin_sha else ""
+        return f"diverged from origin/main{span}"
+    if status in ("behind", "ahead"):
+        count = relationship.get("count")
+        has_count = isinstance(count, int)
+        noun = "commit" if has_count and count == 1 else "commits"
+        count_bit = f"{count} " if has_count else ""
+        if status == "behind":
+            span = f" ({commit[:8]}..{origin_sha[:8]})" if commit and origin_sha else ""
+            return f"{count_bit}{noun} behind origin/main{span}"
+        span = f" ({origin_sha[:8]}..{commit[:8]})" if commit and origin_sha else ""
+        return f"{count_bit}{noun} ahead of origin/main{span}"
+    return ""
+
+
 def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     """The one-line prod fingerprint, its own absence or staleness included.
 
@@ -696,6 +822,14 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
       fall back to ``tree <id>``, the exported build-tree id of the PaaS this
       backend ran on before 2026-07-31; that field is gone with the host, and
       an older backend still sending it is ignored rather than rendered.)
+    - a fingerprint carrying ``origin_main_relationship`` (set by
+      :func:`_prod_fingerprint_facet` when a commit is present) renders that
+      relationship right after the build identity — ``matches origin/main``
+      / ``N commits behind origin/main (…)`` / ``… ahead of …`` /
+      ``diverged from …`` / ``relationship unknown — … not in this
+      checkout`` (#1039 task 2). A fingerprint with no such key (an older
+      cache, or a hand-built fixture) simply omits the bit — never a guessed
+      relationship for data this function didn't compute itself.
     """
     if not isinstance(prod, dict):
         return "prod: unknown — no cloud fingerprint yet"
@@ -719,6 +853,11 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     up = _short_time(build.get("started_at"))
     if up:
         bits.append(f"up {up}")
+    relationship_bit = _render_origin_relationship(
+        fingerprint.get("origin_main_relationship")
+    )
+    if relationship_bit:
+        bits.append(relationship_bit)
     bot_login = str(github.get("bot_login") or "").strip()
     if bot_login:
         bits.append(f"call sign {bot_login}")
