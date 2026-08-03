@@ -27,6 +27,11 @@
  * reader's expansion survives every scroll position, and the body it opened
  * stays exactly where the document put it.
  *
+ * Shared with the rail (2026-08-03, the rack answers everywhere): the tap
+ * logic below is a thin wrapper over `collapse.tapVerdict`, which names the
+ * rule generically for both blocks. Keep reading here for the reasoning; the
+ * generic file states only the rule.
+ *
  * ---
  *
  * THE DOCK THAT TAPPED WRONG (his 2026-08-03 report: "when the machine block
@@ -67,6 +72,8 @@
  * there would leave its bottom unreachable — THE PICKER YOU CANNOT REACH, in
  * the shape it was first reported.
  */
+
+import { tapVerdict } from './collapse.ts';
 
 export interface MachineHeadFields {
 	/** The lead run's identity — face and name. Always allowed: the dock has to
@@ -174,8 +181,7 @@ export interface MachineTapVerdict {
 }
 
 export function machineTapVerdict(open: boolean, docked: boolean): MachineTapVerdict {
-	if (!docked) return { open: !open, travel: false };
-	return { open: open ? null : true, travel: true };
+	return tapVerdict(open, docked);
 }
 
 /**
