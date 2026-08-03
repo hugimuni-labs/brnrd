@@ -4102,6 +4102,17 @@ def _format_forge_state(forge: Any) -> str:
         # empty facet still renders as nothing.
         lines.extend(_format_pr_state(forge.get("pr_state")))
 
+    # Beside the PR rows, not gated on them: an issue can be stale-open with
+    # no worktree or thread live for it at all (#1021), and the line is
+    # already silent at zero on its own.
+    stale_shown, stale_omitted = forge_state.capped_stale_opens(forge.get("stale_opens"))
+    stale_line = forge_state.render_stale_opens(stale_shown)
+    if stale_line:
+        lines.append(f"- {stale_line}")
+        if stale_omitted:
+            noun = "candidate" if stale_omitted == 1 else "candidates"
+            lines.append(f"  - {stale_omitted} more possible stale-open {noun} omitted")
+
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
         for th in threads:

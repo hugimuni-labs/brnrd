@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-from brr import forge_state, forges, prompts, run_context, worktree
+from brr import forge_issue_cache, forge_state, forges, prompts, run_context, worktree
 from brr.run import Run
 
 from _helpers import commit_files, init_git_repo
@@ -778,3 +780,221 @@ def test_resolved_pr_lookup_empty_for_absent_or_malformed_forge():
     assert forge_state.resolved_pr_lookup(None) == {}
     assert forge_state.resolved_pr_lookup({}) == {}
     assert forge_state.resolved_pr_lookup({"worktrees": "not-a-list"}) == {}
+
+
+# ── stale-open candidates (#1021) ─────────────────────────────────────
+#
+# Every case below runs through build_forge_state (and, for rendering,
+# prompts._format_forge_state) — never through stale_open_candidates or
+# _open_issue_numbers directly. Those are private-shaped helpers extracted
+# for readability, not the caller the ticket's defect used; a fixture that
+# only exercises them would stop being coverage the moment build_forge_state
+# wired them up differently.
+
+
+def _iso_issue(offset_seconds: float = 0.0) -> str:
+    return time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset_seconds)
+    )
+
+
+def _write_issue_cache(repo: Path, numbers, *, error: str | None = None) -> Path:
+    path = forge_issue_cache.cache_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"fetched_at": _iso_issue(), "numbers": numbers, "error": error}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _bare_repo(tmp_path: Path) -> Path:
+    """A plain ``main``-branch repo with no remote — the stale-open walk
+    needs nothing but local commit history."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    return repo
+
+
+def test_build_forge_state_stale_opens_silent_at_zero(tmp_path):
+    """A fresh, populated cache with nothing referencing it renders nothing —
+    the whole value of the line is that a reader sees it rarely (#1021)."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    commit_files(repo, {"b.txt": "2\n"}, message="unrelated change, no issue refs")
+    _write_issue_cache(repo, [1002])
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    assert "stale_opens" not in facet
+    rendered = prompts._format_forge_state(facet)
+    assert "possible stale-opens" not in rendered
+
+
+def test_build_forge_state_stale_opens_populated(tmp_path):
+    """The populated case, driven through the real producer end to end."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    sha_957 = commit_files(
+        repo, {"b.txt": "2\n"},
+        message="fix: tidy a loose end\n\nRelates to #957, not the fix itself.",
+    )
+    sha_1002 = commit_files(
+        repo, {"c.txt": "3\n"}, message="fix: address review feedback (#1002)",
+    )
+    _write_issue_cache(repo, [1002, 957])
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    candidates = {c["number"]: c["sha"] for c in facet["stale_opens"]}
+    assert candidates == {1002: sha_1002[:7], 957: sha_957[:7]}
+
+    rendered = prompts._format_forge_state(facet)
+    assert (
+        f"possible stale-opens: #1002 ({sha_1002[:7]}) · #957 ({sha_957[:7]})"
+        in rendered
+    )
+    # Both renderers (the wake prompt and the recovery context file) must
+    # agree — the same defect class as PR state's standalone_prs sharing.
+    ctx_rendered = run_context._render_forge_state(facet)
+    assert f"possible stale-opens: #1002 ({sha_1002[:7]})" in ctx_rendered
+
+
+def test_build_forge_state_stale_opens_silent_when_issue_cache_unavailable(tmp_path):
+    """No local issue cache at all — unknown, never rendered as zero.
+
+    The commit below genuinely mentions an issue that *would* be a candidate
+    if the cache said it was open (proved by the populated case above); the
+    only difference here is the missing cache, and that alone must suppress
+    the line rather than quietly falling back to "found nothing" — an
+    unqualified silence here would be indistinguishable from a real zero,
+    which is exactly the confusion #1000 and #770 already filed twice.
+    """
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    commit_files(
+        repo, {"b.txt": "2\n"}, message="fix: address review feedback (#1002)",
+    )
+    # Deliberately no _write_issue_cache call: the cache has never refreshed.
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    assert "stale_opens" not in facet
+    rendered = prompts._format_forge_state(facet)
+    assert "possible stale-opens" not in rendered
+
+
+def test_build_forge_state_stale_opens_excludes_close_keyword(tmp_path):
+    """A commit that cleanly closes an open issue is a different, more
+    interesting defect than a stale-open candidate — it must not appear in
+    this list at all (#1021's own "Exclude what a close keyword already
+    closed")."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    commit_files(
+        repo, {"b.txt": "2\n"}, message="Fixes #42\n\nActually lands the fix.",
+    )
+    _write_issue_cache(repo, [42])
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    assert "stale_opens" not in facet
+
+
+def test_build_forge_state_stale_opens_close_keyword_excludes_across_commits(tmp_path):
+    """An issue closed cleanly by *any* commit is excluded everywhere, even
+    when an older commit also bare-mentioned it first."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    commit_files(repo, {"b.txt": "2\n"}, message="touching on #42 while here")
+    commit_files(repo, {"c.txt": "3\n"}, message="Fixes #42")
+    _write_issue_cache(repo, [42])
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    assert "stale_opens" not in facet
+
+
+def test_build_forge_state_stale_opens_does_not_shell_out_to_gh(tmp_path, monkeypatch):
+    """The same network-free promise the PR-state facet already carries: this
+    line's own git walk must not hide a `gh` call anywhere on the path."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"a.txt": "1\n"}, message="init")
+    commit_files(
+        repo, {"b.txt": "2\n"}, message="fix: address review feedback (#1002)",
+    )
+    _write_issue_cache(repo, [1002])
+
+    real_run = subprocess.run
+
+    def dispatch(cmd, *args, **kwargs):
+        argv = list(cmd) if isinstance(cmd, (list, tuple)) else [cmd]
+        if argv[:1] == ["gh"]:
+            pytest.fail(f"stale-opens facet shelled out to gh: {cmd}")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", dispatch)
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+    assert facet["stale_opens"][0]["number"] == 1002
+
+
+def test_render_stale_opens_formatting():
+    assert forge_state.render_stale_opens([]) == ""
+    assert forge_state.render_stale_opens(None) == ""
+    assert forge_state.render_stale_opens("not-a-list") == ""
+    assert forge_state.render_stale_opens([{"number": 1002, "sha": "4a1b2c3"}]) == (
+        "possible stale-opens: #1002 (4a1b2c3)"
+    )
+    # Malformed entries drop out rather than corrupting the line.
+    assert forge_state.render_stale_opens([{"number": None, "sha": "x"}]) == ""
+    assert forge_state.render_stale_opens([{"sha": ""}]) == ""
+
+
+def test_build_forge_state_stale_opens_caps_a_noisy_repo(tmp_path):
+    """Driven over the real repo's history (2026-08-03), an uncapped line
+    ran to 67 entries against 189 open issues — commits here routinely name
+    an unrelated open issue in passing. The cap keeps the wake line
+    "rare enough to read" (#1021's own design goal) regardless of how noisy
+    a repo's history gets, and names what it dropped rather than silently
+    truncating."""
+    repo = _bare_repo(tmp_path)
+    commit_files(repo, {"seed.txt": "0\n"}, message="init")
+    numbers = list(range(100, 112))  # 12 distinct issues, one commit each
+    shas = {}
+    for n in numbers:
+        shas[n] = commit_files(
+            repo, {f"f{n}.txt": "x\n"}, message=f"touch on #{n} in passing",
+        )
+    _write_issue_cache(repo, numbers)
+
+    facet = forge_state.build_forge_state(
+        repo, related_threads=[], current_thread="", current_run_id="",
+    )
+
+    assert len(facet["stale_opens"]) == 12  # the raw data stays uncapped
+    shown, omitted = forge_state.capped_stale_opens(facet["stale_opens"])
+    assert len(shown) == forge_state.STALE_OPEN_LIMIT
+    assert omitted == 2
+    # Newest-reference-first: the two oldest commits (#100, #101) are the
+    # ones dropped, never a more recent one.
+    shown_numbers = {c["number"] for c in shown}
+    assert 100 not in shown_numbers
+    assert 101 not in shown_numbers
+
+    rendered = prompts._format_forge_state(facet)
+    assert "2 more possible stale-open candidates omitted" in rendered
+    ctx_rendered = run_context._render_forge_state(facet)
+    assert "2 more possible stale-open candidates omitted" in ctx_rendered

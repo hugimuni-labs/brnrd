@@ -21,12 +21,14 @@ branch and the stale claim dies at read time.
 
 from __future__ import annotations
 
+import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import forge_pr_cache, forges, gitops, worktree
+from . import closekeyword, forge_issue_cache, forge_pr_cache, forges, gitops, worktree
 from .run import Run
 
 # A PR merged/closed within this window is still worth a line even on an
@@ -764,6 +766,210 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     return f"prod: {body}"
 
 
+# ── stale-open candidates (#1021) ────────────────────────────────────
+#
+# Five stale-open tickets surfaced by hand in two days (2026-08-01/02), every
+# one a merged PR that *referenced* the issue's number without a close
+# keyword at line start — the exact shape GitHub does not close on. The fact
+# needed to catch this is entirely local: does any commit reachable from
+# `main` mention an open issue's number? This section answers that with one
+# `git log` walk, never a `gh` call — the open-issue *numbers* come from
+# :mod:`brr.forge_issue_cache`, refreshed by the daemon tick, read here.
+
+_ISSUE_REF_RE = re.compile(r"#(\d+)")
+
+# 1,437 commits total on `main` as of 2026-08-03, walked in ~20ms — small
+# enough that no history bound earns its complexity. An artificial cutoff
+# would need its own staleness story (how far back is "recent enough"?) for
+# a saving this repo's actual history doesn't need yet. Revisit if `git log
+# main` ever gets slow enough to notice.
+_GIT_LOG_TIMEOUT_SECONDS = 30.0
+
+_FIELD_SEP = "\x1f"
+_RECORD_SEP = "\x1e"
+
+
+def _open_issue_numbers(repo_root: Path) -> set[int] | None:
+    """The open-issue-number set from the local cache, or ``None`` when unknown.
+
+    Pure read — mirrors :func:`_pr_state_facet`'s use of
+    :mod:`brr.forge_pr_cache`. ``None`` covers both "never refreshed" and
+    "last refresh failed"; the caller must treat unknown the same as absent,
+    never as "no open issues" — the same ``0`` vs "not checked" confusion
+    #1000 and #770 already filed twice, here on a different cache.
+    """
+    state = forge_issue_cache.read_state(repo_root)
+    numbers = state.get("numbers")
+    if not isinstance(numbers, list):
+        return None
+    out: set[int] = set()
+    for n in numbers:
+        try:
+            out.add(int(n))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+_CLOSE_LEAD_RE = re.compile(
+    r"^\s*(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+"
+    r"((?:#\d+)(?:,\s*#\d+)*)",
+    re.IGNORECASE,
+)
+
+
+def _confirmed_closes(text: str) -> set[int]:
+    """Issue numbers *text* closes via a clean line-start close keyword.
+
+    Reuses :mod:`brr.closekeyword`'s own predicate rather than approximating
+    it: a line only counts when it clears both ``LINESTART`` (the keyword is
+    the first thing on the line) and ``CLEAN`` (nothing but more refs follow
+    it) — precisely the rule GitHub's own closing-keyword scanner applies.
+    A commit that clears this check for #N is not a *candidate* stale-open
+    reference; GitHub already tried to close #N when this commit reached
+    `main`, so #N still being open is a different, more interesting defect
+    than the one this facet reports (see :func:`stale_open_candidates`).
+    """
+    linestart = closekeyword.compile_pattern(closekeyword.LINESTART)
+    clean = closekeyword.compile_pattern(closekeyword.CLEAN)
+    closes: set[int] = set()
+    for line in text.splitlines():
+        if linestart.search(line) is None or clean.search(line) is None:
+            continue
+        match = _CLOSE_LEAD_RE.match(line)
+        if match:
+            closes.update(int(n) for n in _ISSUE_REF_RE.findall(match.group(1)))
+    return closes
+
+
+def stale_open_candidates(
+    repo_root: Path,
+    open_numbers: set[int] | None,
+    *,
+    ref: str = "main",
+) -> list[dict[str, Any]]:
+    """``[{"number": N, "sha": "abc1234"}, ...]`` — open issues a commit on
+    *ref* mentions without ever cleanly closing.
+
+    One pass over every commit reachable from *ref* (see the module-level
+    comment above for why no history bound is applied): for each commit,
+    every ``#N`` it mentions is intersected against *open_numbers*, and every
+    ``#N`` it *cleanly* closes (:func:`_confirmed_closes`) is recorded
+    separately. An issue that ever gets a clean close anywhere in the walk is
+    excluded from the returned candidates for good — a commit like that
+    means GitHub already tried to close it, which is the more interesting
+    defect the caller should report on its own, never fold into this list
+    (issue #1021's "Exclude what a close keyword already closed").
+
+    Ordered newest-reference-first (the order commits are walked in);
+    the caller renders this as a **candidate** list, never a verdict — a
+    bare ``#N`` mention may be related work, not the fix.
+
+    ``open_numbers`` empty or ``None`` short-circuits to ``[]`` without
+    running git at all: nothing to check, or nothing knowable to check
+    against (the caller must tell those two apart itself via
+    :func:`_open_issue_numbers`'s ``None`` return — this function cannot,
+    since both collapse to the same "no work" input here).
+    """
+    if not open_numbers:
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "log", ref, f"--format=%H{_FIELD_SEP}%B{_RECORD_SEP}"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=gitops.explicit_repo_env(),
+            timeout=_GIT_LOG_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+
+    raw_candidates: dict[int, str] = {}
+    closed_numbers: set[int] = set()
+    for record in result.stdout.split(_RECORD_SEP):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, _, body = record.partition(_FIELD_SEP)
+        sha = sha.strip()
+        if not sha:
+            continue
+        mentioned = {int(n) for n in _ISSUE_REF_RE.findall(body)} & open_numbers
+        if not mentioned:
+            continue
+        short = sha[:7]
+        closed_numbers |= _confirmed_closes(body) & open_numbers
+        for number in mentioned:
+            raw_candidates.setdefault(number, short)
+
+    return [
+        {"number": number, "sha": raw_candidates[number]}
+        for number in raw_candidates
+        if number not in closed_numbers
+    ]
+
+
+# Ten lines is the PR-state block's own budget (:data:`STANDALONE_RESOLVED_LIMIT`),
+# reused here rather than minted fresh — and empirically necessary, not merely
+# tidy. Driven over this repo's actual history (2026-08-03): 189 open issues,
+# 67 raw candidates with no cap at all. This project cross-references ticket
+# numbers constantly in commit prose ("per #23...", "relates to #970...") for
+# ongoing, unrelated work, so an uncapped line would render on nearly every
+# wake with dozens of entries — the opposite of "rare enough to read," #1021's
+# own load-bearing design goal. Newest-reference-first ordering (see
+# :func:`stale_open_candidates`) means the cap keeps exactly the entries most
+# likely to be an acutely fresh miss, not an issue that has been circling in
+# unrelated conversation for months. A recency *window* was the other option
+# considered and rejected: it would silently drop a genuinely old, still-missed
+# close, which is a worse failure than a longer "N more omitted" line.
+STALE_OPEN_LIMIT = 10
+
+
+def capped_stale_opens(candidates: Any) -> tuple[list[dict[str, Any]], int]:
+    """``(candidates to render, count omitted)`` — newest-reference-first, capped.
+
+    Shared by both renderers (see :func:`standalone_prs`'s docstring for why:
+    the wake prompt and the recovery context file render this block from two
+    near-identical copies, and a cap added to one only re-creates the defect
+    it was added to fix).
+    """
+    if not isinstance(candidates, list):
+        return [], 0
+    rows = [c for c in candidates if isinstance(c, dict)]
+    shown = rows[:STALE_OPEN_LIMIT]
+    return shown, len(rows) - len(shown)
+
+
+def render_stale_opens(candidates: Any) -> str:
+    """``possible stale-opens: #1002 (4a1b2c3) · #957 (d4e5f6a)`` — or ``""``.
+
+    Silent at zero (issue #1021's own constraint): the whole value of this
+    line is that a reader sees it rarely enough to actually read it, so an
+    empty or unusable *candidates* renders nothing rather than a bare header.
+    Callers pass the already-:func:`capped_stale_opens`-limited list; this
+    function itself does not cap, so a caller that skips capping gets an
+    uncapped line rather than a silently wrong one.
+    """
+    if not isinstance(candidates, list) or not candidates:
+        return ""
+    parts: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        number = candidate.get("number")
+        sha = str(candidate.get("sha") or "").strip()
+        if number is None or not sha:
+            continue
+        parts.append(f"#{number} ({sha})")
+    if not parts:
+        return ""
+    return "possible stale-opens: " + " · ".join(parts)
+
+
 def build_forge_state(
     repo_root: Path,
     *,
@@ -774,7 +980,7 @@ def build_forge_state(
 ) -> dict[str, Any] | None:
     """Build the forge-state facet, or ``None`` when there is nothing to show.
 
-    Combines four network-free views:
+    Combines five network-free views:
 
     - ``worktrees`` — the resident's brr worktrees, each with its branch,
       unpushed-commit count, dirty flag, a forge branch URL, and (from the
@@ -786,16 +992,27 @@ def build_forge_state(
     - ``prod`` — what prod last reported on the cloud gate's inbox long-poll
       (build identity, effective GitHub-trigger config); always present so
       the "prod:" line can say *why* it's absent rather than not appear.
+    - ``stale_opens`` — open issues some commit reachable from ``main``
+      mentions without a close keyword ever landing for it (#1021); a
+      candidate list, never a verdict. Absent when the local open-issue-
+      number cache (:mod:`brr.forge_issue_cache`) hasn't a fresh-enough
+      answer, or when the walk found nothing — see
+      :func:`stale_open_candidates`.
 
-    Every one of them is a **read**: the ``gh`` call that fills the PR cache
-    belongs to the daemon tick (:mod:`brr.forge_pr_cache`), never to this
-    prompt-build path, and the cloud fingerprint is read from the local file
-    the cloud gate's own poll loop already persisted.
+    Every one of them is a **read**: the ``gh`` calls that fill the PR and
+    issue-number caches belong to the daemon tick (:mod:`brr.forge_pr_cache`,
+    :mod:`brr.forge_issue_cache`), never to this prompt-build path, the
+    "possible stale-opens" line's own git walk touches no network at all, and
+    the cloud fingerprint is read from the local file the cloud gate's own
+    poll loop already persisted.
 
-    Returns ``None`` only when all four are empty so the snapshot can omit
-    the section entirely rather than render a hollow header — ``prod`` is
-    deliberately never the reason for that, since it always has *something*
-    to say (even if that something is "not configured").
+    Returns ``None`` only when all four *always-present* facets are empty so
+    the snapshot can omit the section entirely rather than render a hollow
+    header — ``prod`` is deliberately never the reason for that, since it
+    always has *something* to say (even if that something is "not
+    configured"). ``stale_opens`` never gates this on its own: it is already
+    silent-at-zero by design (#1021), so a run with nothing stale to report
+    must not be the reason the whole facet vanishes.
     """
     remote_url, overrides = _resolve_remote(repo_root)
     worktrees = _worktrees_facet(
@@ -813,6 +1030,7 @@ def build_forge_state(
     )
     pr_state = _pr_state_facet(repo_root, worktrees)
     prod = _prod_fingerprint_facet(repo_root)
+    stale_opens = stale_open_candidates(repo_root, _open_issue_numbers(repo_root))
     if not worktrees and not threads and not prod:
         return None
     facet: dict[str, Any] = {}
@@ -822,4 +1040,6 @@ def build_forge_state(
         facet["threads"] = threads
     facet["pr_state"] = pr_state
     facet["prod"] = prod
+    if stale_opens:
+        facet["stale_opens"] = stale_opens
     return facet
