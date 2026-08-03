@@ -1772,8 +1772,16 @@ def _claude_credits_block(
     before now. ``None`` when no run has ever produced one (cold cache, or a
     Codex-only daemon).
     """
-    outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
-    levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    # ``brr_dir`` is the account-shared dir claude_status now writes its
+    # durable copy into (``BRR_SHARED_DIR``, #1027) — read it directly first.
+    # The glob-over-surviving-outbox-dirs hunt stays as a fallback for the
+    # rollout window before any claude run has produced the shared copy yet;
+    # it is the same hunt that used to be the *only* source and rarely found
+    # anything, since a per-run outbox is swept the moment its run ends.
+    levels = claude_status.load_snapshot(brr_dir)
+    if levels is None:
+        outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
+        levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
     spend = levels.get("spend") if isinstance(levels, dict) else None
     usage = (
         usage_levels.get("usage_credits")
