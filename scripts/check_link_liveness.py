@@ -383,17 +383,25 @@ def main(argv: list[str] | None = None) -> int:
 
     links, templated = gather_links()
     report = build_report(links, templated=templated, first_party_only=args.first_party_only)
-    text = render(report)
-    print(text)
+    failing = report.dead_first_party()
+
+    # The verdict belongs *inside* the report, not only on stdout (added in
+    # review, 2026-08-03). While the CI step runs `continue-on-error`, the
+    # check renders green whatever it found, so ``--report`` is the whole
+    # visible output -- and a summary that ends at "2 DEAD" beside a green
+    # check is worse than silence: the reader cannot tell whether that count
+    # blocked anything. Exit codes do not survive into a job summary; a
+    # sentence does.
+    verdict = (
+        f"FAIL -- {len(failing)} first-party link(s) confirmed dead (HTTP 404/410)."
+        if failing
+        else "PASS -- no first-party link is confirmed dead."
+    )
+    text = f"{render(report)}\n{verdict}\n"
+    print(text, end="")
     if args.report:
         Path(args.report).write_text(text, encoding="utf-8")
-
-    failing = report.dead_first_party()
-    if failing:
-        print(f"FAIL -- {len(failing)} first-party link(s) confirmed dead (HTTP 404/410).")
-        return 1
-    print("PASS -- no first-party link is confirmed dead.")
-    return 0
+    return 1 if failing else 0
 
 
 if __name__ == "__main__":
