@@ -3,13 +3,26 @@ title: Install
 description: Install the brnrd command, and check that it can see a coding-agent Runner.
 ---
 
-Use whichever line matches the tooling you already have. All three install the
-same program and leave you with a `brnrd` command on your `PATH`:
+Use whichever command matches the tooling you already have — just the one;
+all three install the same program and leave you with a `brnrd` command on
+your `PATH`.
+
+If you have Node:
 
 ```bash
-npm install -g brnrd     # if you have Node
-uv tool install brnrd    # if you have uv
-pipx install brnrd       # if you have pipx
+npm install -g brnrd
+```
+
+If you have uv:
+
+```bash
+uv tool install brnrd
+```
+
+If you have pipx:
+
+```bash
+pipx install brnrd
 ```
 
 Check it:

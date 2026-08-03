@@ -12,11 +12,6 @@ ROOT = Path(__file__).parents[1]
 NPM = ROOT / "packaging" / "npm"
 LAUNCHER = NPM / "bin" / "brnrd.js"
 
-# `npx brnrd` and a globally installed `brnrd` both reach `bin/brnrd.js`, and
-# only one of them leaves a command on the user's PATH. npm marks the former
-# with `npm_command=exec` (probed on npm 11.6.1 / node 22 in both directions).
-NPX_ENV = {"npm_command": "exec", "npm_lifecycle_event": "npx"}
-
 
 def test_uv_release_assets_are_pinned_for_supported_node_hosts():
     release = json.loads((NPM / "uv-assets.json").read_text())
@@ -81,7 +76,9 @@ def _fake_home(tmp_path: Path, *, reported_version: str) -> Path:
     return home
 
 
-def _run_launcher(home: Path, tmp_path: Path, extra_env: dict) -> subprocess.CompletedProcess:
+def _run_launcher(
+    home: Path, tmp_path: Path, extra_env: dict, *, launcher: Path = LAUNCHER
+) -> subprocess.CompletedProcess:
     node = shutil.which("node")
     if not node:  # pragma: no cover - environment-dependent
         pytest.skip("node is not installed")
@@ -94,12 +91,31 @@ def _run_launcher(home: Path, tmp_path: Path, extra_env: dict) -> subprocess.Com
     }
     env.update(extra_env)
     return subprocess.run(
-        [node, str(LAUNCHER)],
+        [node, str(launcher)],
         env=env,
         capture_output=True,
         text=True,
         timeout=120,
     )
+
+
+def _npx_launcher(tmp_path: Path) -> Path:
+    """A copy of the launcher living where npx actually puts one.
+
+    `VIA_NPX` reads the physical install location (`_npx/<hash>/` inside the
+    npm cache), not an environment variable — a wrapping shell, direnv, or
+    parent process can leak an env var into a session that never ran npx
+    (#1084), but it can't move where this file itself is running from. Copy
+    the three files the launcher resolves relative to its own directory
+    (`bin/brnrd.js`, `package.json`, `uv-assets.json`) into that shape so the
+    test drives the real signal instead of re-asserting the old one.
+    """
+    pkg_dir = tmp_path / "npm-cache" / "_npx" / "deadbeef" / "node_modules" / "brnrd"
+    (pkg_dir / "bin").mkdir(parents=True, exist_ok=True)
+    shutil.copy(NPM / "package.json", pkg_dir / "package.json")
+    shutil.copy(NPM / "uv-assets.json", pkg_dir / "uv-assets.json")
+    shutil.copy(LAUNCHER, pkg_dir / "bin" / "brnrd.js")
+    return pkg_dir / "bin" / "brnrd.js"
 
 
 def _version() -> str:
@@ -115,7 +131,7 @@ def test_payload_is_told_when_it_was_launched_through_npx(tmp_path):
     """
     home = _fake_home(tmp_path, reported_version=_version())
 
-    result = _run_launcher(home, tmp_path, NPX_ENV)
+    result = _run_launcher(home, tmp_path, {}, launcher=_npx_launcher(tmp_path))
 
     assert "LAUNCHER=npx" in result.stdout, result.stderr
 
@@ -133,6 +149,24 @@ def test_a_path_install_leaves_the_launcher_marker_unset(tmp_path):
     assert "LAUNCHER=unset" in result.stdout, result.stderr
 
 
+def test_a_leaked_npm_command_env_var_does_not_fake_npx(tmp_path):
+    """#1084: a reporter ran `npm install -g brnrd` then `brnrd --version`
+
+    from a real PATH install and still got told they'd used npx. Their shell
+    carried `npm_command=exec` for reasons that had nothing to do with that
+    command — the old detection trusted the environment and got fooled.
+    Reproduce the leak directly: same env the real npx sets, run from a real
+    install location. The physical-path signal must not care.
+    """
+    home = _fake_home(tmp_path, reported_version=_version())
+
+    result = _run_launcher(
+        home, tmp_path, {"npm_command": "exec", "npm_lifecycle_event": "npx"}
+    )
+
+    assert "LAUNCHER=unset" in result.stdout, result.stderr
+
+
 def test_first_npx_bootstrap_says_where_brnrd_went_and_how_to_get_the_command(
     tmp_path,
 ):
@@ -143,7 +177,7 @@ def test_first_npx_bootstrap_says_where_brnrd_went_and_how_to_get_the_command(
     """
     home = _fake_home(tmp_path, reported_version="0.0.0-stale")
 
-    result = _run_launcher(home, tmp_path, NPX_ENV)
+    result = _run_launcher(home, tmp_path, {}, launcher=_npx_launcher(tmp_path))
 
     assert "npm install -g brnrd" in result.stderr, result.stderr
     assert str(home / "venv" / "bin" / "brnrd") in result.stderr
