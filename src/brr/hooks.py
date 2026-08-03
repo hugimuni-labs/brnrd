@@ -1644,6 +1644,7 @@ def _render_bar(
     *,
     run: dict[str, Any],
     pending: int,
+    pending_known: bool,
     pending_files: int,
     events: list[Any],
     budget: dict[str, Any],
@@ -1714,6 +1715,8 @@ def _render_bar(
     delivery_chip = _delivery_chip(outbound)
     if delivery_chip:
         segments.append(delivery_chip)
+    if not pending_known:
+        segments.append("✉?")
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(f"⚒{produce_total}")
@@ -1818,7 +1821,7 @@ def _render_bar(
     # closes again — the ask would still be silent on exactly the boundary it
     # exists for, one layer past where the fix was aimed.
     if (
-        pending == 0 and pending_files == 0 and not any_delivery
+        pending_known and pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
         and not notices_chip and not finished_spawns and not armed
         and not plan_laden
@@ -1915,9 +1918,10 @@ def format_delta(
     seed is the initial capsule, and the stop is the closeout capsule. At
     those moments an explicit "0 pending event(s)" is itself the signal —
     silence is ambiguous, an affirmative "all clear" is not (maintainer's
-    point, 2026-06-23). Stop additionally surfaces the local SCM posture
-    (unpushed commits / modified files) so a wake about to end sees its
-    branch is not yet pushed.
+    point, 2026-06-23). When the capsule is unavailable, the same line says
+    the count is unknown instead of laundering absence into that all-clear.
+    Stop additionally surfaces the local SCM posture (unpushed commits /
+    modified files) so a wake about to end sees its branch is not yet pushed.
 
     Mid-run (``post-tool``) renders as the single compact status bar
     :func:`_render_bar` builds — one line per boundary, working-register
@@ -1927,7 +1931,8 @@ def format_delta(
     staleness (2026-07-05) and non-zero pending events, which always earn a
     detail line: a stale-or-blank ``.card`` or an unaddressed follow-up is a
     mid-run failure, not one that can wait for closeout or be buried in a
-    glyph.
+    glyph. An unavailable count is the compact ``✉?`` chip — neither a false
+    zero nor silence.
 
     ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
@@ -2004,7 +2009,16 @@ def format_delta(
         if isinstance(payload.get("resources"), dict) else {}
     )
 
-    pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
+    pending_raw = attention.get("pending_event_count")
+    pending_known = pending_raw is not None
+    try:
+        int(pending_raw or 0)
+    except (TypeError, ValueError):
+        pending_known = False
+    try:
+        pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
+    except (TypeError, ValueError):
+        pending_files = 0
     notices = payload.get("notices") if isinstance(payload.get("notices"), list) else []
     schedule_facet = (
         payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
@@ -2022,7 +2036,8 @@ def format_delta(
         card_stale = bool(card.get("stale"))
         run_name = payload.get("name") if isinstance(payload.get("name"), dict) else {}
         return _render_bar(
-            run=run, pending=action_pending, pending_files=pending_files,
+            run=run, pending=action_pending, pending_known=pending_known,
+            pending_files=pending_files,
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
@@ -2045,10 +2060,16 @@ def format_delta(
     # something to note; zero stays the plain affirmative-clear line.
     # Finished spawns are excluded from the obligation count — they are facts,
     # not messages with correspondents.
-    header_line = (
-        f"[{header}] {action_pending} pending event(s), "
-        f"{pending_files} undelivered outbox file(s)."
-    )
+    if pending_known:
+        header_line = (
+            f"[{header}] {action_pending} pending event(s), "
+            f"{pending_files} undelivered outbox file(s)."
+        )
+    else:
+        header_line = (
+            f"[{header}] could not count pending event(s) — "
+            "portal state did not provide a count."
+        )
     if action_pending:
         header_line += (
             " Address each below with an `event:` reply, or retire it "
@@ -3251,6 +3272,18 @@ def compute_neutral(
     if phase in (PHASE_POST_TOOL, PHASE_STOP):
         _touch_flush(ctx)
     portal = _read_json(ctx.portal_state_path)
+    portal_unavailable = not portal
+    if portal_unavailable:
+        # A missing, unreadable, malformed, or non-object capsule is not an
+        # all-clear. Carry an explicit unknown into the normal renderer so
+        # seed/closeout can state the measurement failure without inventing
+        # either an event count or a second error-only rendering path.
+        portal = {
+            "attention": {
+                "pending_event_count": None,
+                "pending_outbox_file_count": None,
+            },
+        }
     state = _read_hook_state(ctx)
     _ack_previous_inject(state, phase)
     _record_fired(state, phase)
@@ -3338,7 +3371,10 @@ def compute_neutral(
         # already has this exact text in-context from the prior Stop; a
         # bare ``{}`` result is the actual "nothing to add, stop cleanly"
         # signal.
-        stop_token = portal.get("change_token")
+        stop_token = (
+            "__portal_state_unavailable__"
+            if portal_unavailable else portal.get("change_token")
+        )
         # #728: latch, don't gate. ``format_delta`` is a pure function of the
         # snapshot, so "already said once" has to be decided here — same
         # division of labour as ``orient`` and ``surprise``.
@@ -3394,8 +3430,10 @@ def compute_neutral(
         # reason: writing `.promises.jsonl` changes nothing the daemon puts
         # into portal-state, so gating on the portal token alone would leave
         # the one boundary this signal exists for rendering nothing.
-        if token is not None and (
-            token != state.get("last_token") or edge or plan_edge
+        if portal_unavailable or (
+            token is not None and (
+                token != state.get("last_token") or edge or plan_edge
+            )
         ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
