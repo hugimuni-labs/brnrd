@@ -1264,6 +1264,31 @@ class TestDrainOutboxNote:
         [notice] = daemon._read_outbox_notices(outbox)
         assert "body text ignored" in notice["text"]
 
+    def test_note_body_text_ignored_notice_is_advisory_kind(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1002: the file above was *accepted and acted on* (the event is
+        retired ``noted``) — the notice it logs must carry ``kind:
+        advisory``, not count toward ``!N`` like a real refusal/drop would.
+
+        Asserted through the outbox drain the live defect actually used
+        (``_drain_outbox`` -> ``_note_event_closed`` -> the ``note:``
+        body-ignored branch at daemon.py — not by calling
+        ``_record_outbox_notice`` directly), per the ticket's own measured
+        example: seven of these fired in one run and drove ``!7`` for zero
+        refusals.
+        """
+        inbox = tmp_path / ".brr" / "inbox"
+        protocol.create_event(inbox, source="telegram", body="ping")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        n, responses, inbox, outbox, _emitted = self._drain(
+            tmp_path, monkeypatch,
+            [("close.md", f"---\nnote: {bid}\n---\nsome words anyway\n")],
+        )
+        assert n == 1
+        [notice] = daemon._read_outbox_notices(outbox)
+        assert notice["kind"] == "advisory"
+
 
 class TestDrainAgentCard:
     """The agent-owned card composition seam (issue #114).

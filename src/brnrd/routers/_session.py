@@ -168,6 +168,29 @@ def _telegram_paired_repo_ids(db: Session, repo_ids: list[str]) -> set[str]:
     )
 
 
+# The daemon-pairing command, spelled once (2026-08-03). It is printed on
+# two surfaces now — per-repo behind `setup command` on /repos, and in the
+# dashboard's cold-start block, which an account with nothing connected sees
+# and which therefore has no repo row to carry a `setup_command`. Two copies
+# of one command line drift apart the first time the CLI renames a verb, so
+# the zero-repo spelling is served from here too (`pairing_command` on
+# `GET /v1/dashboard/repos`) rather than re-typed in the frontend.
+#
+# The endpoint stays the literal it has always been rather than
+# `settings.public_base_url`: that default is `http://localhost:8000`, and a
+# self-hosted control plane printing its own loopback address as the thing to
+# pair against would be a regression on the one string that has to be right.
+_PAIR_ENDPOINT = "https://brnrd.dev"
+
+# What the cold-start block puts where a real checkout's name would go.
+PAIR_REPO_PLACEHOLDER = "<repo>"
+
+
+def pairing_command(repo_dir: str) -> str:
+    """The three lines that pair a local daemon to this control plane."""
+    return f"cd {repo_dir}\nbrnrd account connect {_PAIR_ENDPOINT}\nbrnrd up"
+
+
 def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
     import json
 
@@ -236,7 +259,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "gates": gate_health,
                 "environment_default": latest.environment_default if latest else None,
                 "environments": environments,
-                "setup_command": f"cd {repo.repo_name}\nbrnrd account connect https://brnrd.dev\nbrnrd up",
+                "setup_command": pairing_command(repo.repo_name),
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
         )

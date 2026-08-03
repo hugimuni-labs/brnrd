@@ -7,6 +7,7 @@
 		approveConnect,
 		canApprove,
 		fetchConnectContext,
+		needsRepoEnable,
 		statusNotice,
 		type ApproveResult,
 		type ConnectContext
@@ -101,6 +102,17 @@
 
 			{#if notice}
 				<p class="mt-4 text-sm text-stone-300">{notice}</p>
+				<!-- The one terminal notice with somewhere to go: enabling a repo
+				     is a page, not a command, and this reader has no reason to
+				     know which page. Every other status here is genuinely
+				     terminal and gets no affordance it can't honour. -->
+				{#if needsRepoEnable(context)}
+					<a
+						href={resolve('/repos')}
+						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
+						>enable a repository</a
+					>
+				{/if}
 			{:else if canApprove(context)}
 				<div class="subpanel mt-4 p-4">
 					<label

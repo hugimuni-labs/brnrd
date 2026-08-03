@@ -21,6 +21,7 @@ import requests
 
 from .. import claude_status, claude_usage, codex_status, codex_usage, emotes, gitops, presence, protocol, run_ledger, run_progress, runner_quota, usage_samples
 from .. import conversations, dominion, run_stop_request, schedule as schedule_mod, wake_request
+from ..cli import brnrd_cmd
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
@@ -303,7 +304,7 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         if time.monotonic() > deadline:
             raise TimeoutError(
                 "account pairing was not approved before the timeout. Approve "
-                "the pairing link, then re-run `brnrd account connect`."
+                f"the pairing link, then re-run `{brnrd_cmd()} account connect`."
             )
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
@@ -384,7 +385,10 @@ def disconnect(brr_dir: Path) -> bool:
 
 
 def setup(brr_dir: Path) -> None:
-    print("[brnrd] Run `brnrd account connect` to link this daemon to a brnrd repo.")
+    print(
+        f"[brnrd] Run `{brnrd_cmd()} account connect` to link this daemon "
+        "to a brnrd repo."
+    )
 
 
 def auth(brr_dir: Path) -> None:
@@ -1223,7 +1227,15 @@ def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
                 "status": status,
                 "phase": entry.kind,
                 "scheduled_for": _iso_from_epoch(scheduled_for),
-                "links": {},
+                # THE FORWARD WELD: the warp threads this entry's firings are
+                # meant to serve, so the dashboard's lane can draw an armed
+                # pick's crossing the same way it draws a burning one's. Rides
+                # `links` — already free-form JSON on the activity record and
+                # already served back — so this needs no schema, no migration,
+                # and no new endpoint. Call signs only (`schedule.parse_serves`
+                # drops anything else), which are already public as corpus; the
+                # entry's body stays behind, per #502.
+                "links": {"serves": list(entry.serves)} if entry.serves else {},
             }
         )
     return records
@@ -1760,8 +1772,16 @@ def _claude_credits_block(
     before now. ``None`` when no run has ever produced one (cold cache, or a
     Codex-only daemon).
     """
-    outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
-    levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    # ``brr_dir`` is the account-shared dir claude_status now writes its
+    # durable copy into (``BRR_SHARED_DIR``, #1027) — read it directly first.
+    # The glob-over-surviving-outbox-dirs hunt stays as a fallback for the
+    # rollout window before any claude run has produced the shared copy yet;
+    # it is the same hunt that used to be the *only* source and rarely found
+    # anything, since a per-run outbox is swept the moment its run ends.
+    levels = claude_status.load_snapshot(brr_dir)
+    if levels is None:
+        outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
+        levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
     spend = levels.get("spend") if isinstance(levels, dict) else None
     usage = (
         usage_levels.get("usage_credits")

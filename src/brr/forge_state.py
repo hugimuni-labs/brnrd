@@ -21,6 +21,7 @@ branch and the stale claim dies at read time.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -253,7 +254,10 @@ def _pr_state_facet(
     state = forge_pr_cache.read_state(repo_root, now=now)
     prs = state.get("prs")
     if not isinstance(prs, list):
-        # absent / error: unknown, and unknown is not "no PRs".
+        # absent / error / unsupported: unknown, and unknown is not "no PRs".
+        # ``forge_kind`` only ever carries a value on the ``unsupported``
+        # status (see :func:`forge_pr_cache.read_state`); it rides along here
+        # so :func:`pr_state_note` can name the forge without a second read.
         return {
             "status": state.get("status") or "absent",
             "fetched_at": state.get("fetched_at"),
@@ -261,6 +265,7 @@ def _pr_state_facet(
             "error": state.get("error"),
             "has_rows": False,
             "standalone": [],
+            "forge_kind": state.get("forge_kind"),
         }
 
     by_branch: dict[str, dict[str, Any]] = {}
@@ -347,12 +352,87 @@ def format_pr(pr: dict[str, Any], *, now: float | None = None) -> str:
     text = f"#{number} {state}"
     if pr.get("draft") and state == "OPEN":
         text += " (draft)"
-    resolved = forge_pr_cache.parse_iso(pr.get("merged_at") or pr.get("closed_at"))
-    if resolved is not None and state in ("MERGED", "CLOSED"):
-        age = (time.time() if now is None else now) - resolved
-        if age >= 0:
-            text += f" {format_age(age)} ago"
+    text += _resolution_age_suffix(pr, state, now=now)
     return text
+
+
+def _resolution_age_suffix(
+    pr: dict[str, Any], state: str, *, now: float | None = None,
+) -> str:
+    """`` 3h ago`` for a merged/closed PR with a known resolution time.
+
+    Shared by :func:`format_pr` and :func:`resolution_reason` so the two
+    "how long ago did this resolve" phrasings can never drift apart.
+    """
+    if state not in ("MERGED", "CLOSED"):
+        return ""
+    resolved = forge_pr_cache.parse_iso(pr.get("merged_at") or pr.get("closed_at"))
+    if resolved is None:
+        return ""
+    age = (time.time() if now is None else now) - resolved
+    if age < 0:
+        return ""
+    return f" {format_age(age)} ago"
+
+
+def resolution_reason(pr: dict[str, Any], *, now: float | None = None) -> str | None:
+    """``merged 35m ago`` / ``closed 2d ago``, or ``None`` when not resolved.
+
+    ``None`` covers everything a caller must leave alone: an open PR, or a
+    PR dict this cache does not carry a recognised state for — see
+    :func:`resolved_pr_lookup`.
+    """
+    if not isinstance(pr, dict):
+        return None
+    state = str(pr.get("state") or "").upper()
+    if state not in ("MERGED", "CLOSED"):
+        return None
+    verb = "merged" if state == "MERGED" else "closed"
+    return f"{verb}{_resolution_age_suffix(pr, state, now=now)}"
+
+
+def resolved_pr_lookup(forge: Any, *, now: float | None = None) -> dict[int, str]:
+    """``{382: "merged 3h ago"}`` for every merged/closed PR this wake's
+    forge-state facet already resolved (issue #957).
+
+    Feeds the live-menu join: an option whose text names a PR number this
+    same daemon pass already knows is done should not render as if the work
+    were still open. Deliberately narrow — only PRs the facet already
+    carries (worktree-attached, or the standalone recently-resolved list)
+    are included; a PR this cache has no opinion on is simply absent from
+    the returned mapping, which is what lets the caller leave it alone
+    rather than guess. No network call: this only reads the facet already
+    built for this wake.
+    """
+    lookup: dict[int, str] = {}
+    if not isinstance(forge, dict):
+        return lookup
+
+    candidates: list[dict[str, Any]] = []
+    worktrees = forge.get("worktrees")
+    if isinstance(worktrees, list):
+        for wt in worktrees:
+            pr = wt.get("pr") if isinstance(wt, dict) else None
+            if isinstance(pr, dict):
+                candidates.append(pr)
+    pr_state = forge.get("pr_state")
+    if isinstance(pr_state, dict):
+        standalone = pr_state.get("standalone")
+        if isinstance(standalone, list):
+            candidates.extend(pr for pr in standalone if isinstance(pr, dict))
+
+    for pr in candidates:
+        number = pr.get("number")
+        if number is None:
+            continue
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            continue
+        reason = resolution_reason(pr, now=now)
+        if reason is not None:
+            lookup.setdefault(number, reason)
+    return lookup
 
 
 def format_age(seconds: float | None) -> str:
@@ -415,6 +495,23 @@ def pr_state_note(pr_state: Any) -> str:
         return ""
     if status == "absent":
         return "PR state: unknown (no local cache yet — the daemon refreshes it on its tick)"
+    if status == "unsupported":
+        # Not "unknown" — the ``absent ≠ unknown ≠ none`` doctrine gets a
+        # fourth member here (#852): we *know* ``gh`` is never queried while
+        # this holds ("we asked and it failed" would wrongly imply a retry
+        # might help), so the sentence says so plainly instead of wearing
+        # the ``error``/``stale`` phrasing that would call it unknown or
+        # imply a refresh is due. Deliberately not "permanent" or "never
+        # retried" — forge_pr_cache.refresh_if_stale re-derives the kind on
+        # the normal TTL cadence, so a remote change or a `.brr/config
+        # forge.kind` fix is picked up on its own; this line just never
+        # promises a `gh` call is what will do the noticing.
+        kind = str(pr_state.get("forge_kind") or "").strip()
+        forge = f" ({kind})" if kind else ""
+        return (
+            f"PR state: unsupported{forge} — this remote isn't GitHub, and "
+            "`gh` is never queried for it"
+        )
     if status == "error":
         error = str(pr_state.get("error") or "").strip() or "refresh failed"
         # A failed refresh may still be showing rows kept from an earlier good
@@ -551,6 +648,78 @@ def worktree_label(worktree_entry: dict[str, Any]) -> str:
     return run_id or str(worktree_entry.get("path") or "").strip()
 
 
+def _rev_list_count(repo_root: Path, ancestor: str, descendant: str) -> int | None:
+    """``git rev-list --count <ancestor>..<descendant>``, or ``None`` on failure.
+
+    Local object-store read only (#1039 task 2) — no fetch, no network.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", f"{ancestor}..{descendant}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _origin_main_relationship(repo_root: Path, commit: str) -> dict[str, Any]:
+    """How *commit* (prod's reported build) relates to local ``origin/main``.
+
+    Entirely from the local object store (#1039 task 2 — the forge-state
+    facet promises "local, network-free" in its own rendered header, so this
+    reads refs and objects already on disk and never fetches). The daemon's
+    own ``sync.refresh_before_run`` keeps ``origin/main`` current on its own
+    schedule; this function does not try to.
+
+    Five cases, and the boundary between "behind" and "unknown" is the part
+    worth being careful about: a remedy ("N commits behind") is itself a
+    truth claim, and asserting it when the commit isn't even resolvable
+    locally would be a lie in the optimistic direction.
+
+    - ``matches`` — prod's commit *is* ``origin/main``'s tip.
+    - ``behind`` — prod's commit is an ancestor of the tip; ``count`` is how
+      many commits separate them.
+    - ``ahead`` — the tip is an ancestor of prod's commit (prod is a
+      descendant — a local push, a hotfix, a rollback target).
+    - ``diverged`` — neither is an ancestor of the other.
+    - ``unknown`` — ``origin/main`` has no local ref, or prod's commit isn't
+      in this checkout's object store (shallow clone, pruned history, a
+      fingerprint from a different repo). Never guessed past this point.
+    """
+    try:
+        origin_sha = gitops.rev_parse(repo_root, "origin/main")
+        if not origin_sha:
+            return {"status": "unknown", "commit": commit}
+        resolved = gitops.rev_parse(repo_root, commit)
+        if not resolved:
+            return {"status": "unknown", "commit": commit}
+        if resolved == origin_sha:
+            return {"status": "matches", "commit": resolved, "origin_sha": origin_sha}
+        if gitops.is_ancestor(repo_root, resolved, origin_sha):
+            return {
+                "status": "behind",
+                "commit": resolved,
+                "origin_sha": origin_sha,
+                "count": _rev_list_count(repo_root, resolved, origin_sha),
+            }
+        if gitops.is_ancestor(repo_root, origin_sha, resolved):
+            return {
+                "status": "ahead",
+                "commit": resolved,
+                "origin_sha": origin_sha,
+                "count": _rev_list_count(repo_root, origin_sha, resolved),
+            }
+        return {"status": "diverged", "commit": resolved, "origin_sha": origin_sha}
+    except Exception:
+        return {"status": "unknown", "commit": commit}
+
+
 def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     """What prod last reported, read locally — never a network call.
 
@@ -560,6 +729,15 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
     task exists to fix (an absent fingerprint rendering as nothing, not as
     "absent"). Any import or lookup failure collapses to the same
     not-configured shape rather than raising out of a wake-build path.
+
+    When the fingerprint carries a commit, this also folds in its
+    relationship to local ``origin/main`` (#1039 task 2 — "merged is not
+    deployed, and the tell is built_at" needed a second tell: prod can be
+    honestly built and honestly stale at once, and nothing compared the two
+    before this). Computed here, once, at facet-build time — the same
+    repo_root :func:`build_forge_state` already has — so
+    :func:`render_prod_line` stays a pure formatter over data that's already
+    resolved, exactly like every other field on this fingerprint.
     """
     try:
         from .gates import import_gate
@@ -568,9 +746,18 @@ def _prod_fingerprint_facet(repo_root: Path) -> dict[str, Any]:
         brr_dir = gitops.shared_brr_dir(repo_root)
         if not cloud.is_configured(brr_dir):
             return {"configured": False}
+        fingerprint = cloud.read_server_fingerprint(brr_dir)
+        if isinstance(fingerprint, dict):
+            build = fingerprint.get("build")
+            commit = str(build.get("commit") or "").strip() if isinstance(build, dict) else ""
+            if commit:
+                fingerprint = dict(fingerprint)
+                fingerprint["origin_main_relationship"] = _origin_main_relationship(
+                    repo_root, commit
+                )
         return {
             "configured": True,
-            "fingerprint": cloud.read_server_fingerprint(brr_dir),
+            "fingerprint": fingerprint,
         }
     except Exception:
         return {"configured": False}
@@ -607,6 +794,41 @@ def _format_age(age_s: int) -> str:
     return f"{hours}h{rem:02d}m" if rem else f"{hours}h"
 
 
+def _render_origin_relationship(relationship: Any) -> str:
+    """The clause naming how prod's commit relates to local ``origin/main``.
+
+    Pure formatting over :func:`_origin_main_relationship`'s already-resolved
+    verdict — the git reads happened once, at facet-build time. ``""`` for
+    anything this function doesn't recognise, so a facet built before this
+    field existed (or a hand-built test fixture) renders exactly as it did
+    before rather than growing a stray bit.
+    """
+    if not isinstance(relationship, dict):
+        return ""
+    status = str(relationship.get("status") or "").strip()
+    commit = str(relationship.get("commit") or "").strip()
+    origin_sha = str(relationship.get("origin_sha") or "").strip()
+    if status == "matches":
+        return "matches origin/main"
+    if status == "unknown":
+        sha = commit[:8] if commit else "commit"
+        return f"relationship unknown — {sha} not in this checkout"
+    if status == "diverged":
+        span = f" ({commit[:8]} vs {origin_sha[:8]})" if commit and origin_sha else ""
+        return f"diverged from origin/main{span}"
+    if status in ("behind", "ahead"):
+        count = relationship.get("count")
+        has_count = isinstance(count, int)
+        noun = "commit" if has_count and count == 1 else "commits"
+        count_bit = f"{count} " if has_count else ""
+        if status == "behind":
+            span = f" ({commit[:8]}..{origin_sha[:8]})" if commit and origin_sha else ""
+            return f"{count_bit}{noun} behind origin/main{span}"
+        span = f" ({origin_sha[:8]}..{commit[:8]})" if commit and origin_sha else ""
+        return f"{count_bit}{noun} ahead of origin/main{span}"
+    return ""
+
+
 def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     """The one-line prod fingerprint, its own absence or staleness included.
 
@@ -621,6 +843,14 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
       fall back to ``tree <id>``, the exported build-tree id of the PaaS this
       backend ran on before 2026-07-31; that field is gone with the host, and
       an older backend still sending it is ignored rather than rendered.)
+    - a fingerprint carrying ``origin_main_relationship`` (set by
+      :func:`_prod_fingerprint_facet` when a commit is present) renders that
+      relationship right after the build identity — ``matches origin/main``
+      / ``N commits behind origin/main (…)`` / ``… ahead of …`` /
+      ``diverged from …`` / ``relationship unknown — … not in this
+      checkout`` (#1039 task 2). A fingerprint with no such key (an older
+      cache, or a hand-built fixture) simply omits the bit — never a guessed
+      relationship for data this function didn't compute itself.
     """
     if not isinstance(prod, dict):
         return "prod: unknown — no cloud fingerprint yet"
@@ -644,6 +874,11 @@ def render_prod_line(prod: Any, *, now: datetime | None = None) -> str:
     up = _short_time(build.get("started_at"))
     if up:
         bits.append(f"up {up}")
+    relationship_bit = _render_origin_relationship(
+        fingerprint.get("origin_main_relationship")
+    )
+    if relationship_bit:
+        bits.append(relationship_bit)
     bot_login = str(github.get("bot_login") or "").strip()
     if bot_login:
         bits.append(f"call sign {bot_login}")

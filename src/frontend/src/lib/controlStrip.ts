@@ -1,4 +1,10 @@
-import { quotaWindowReading, type QuotaShell, type QuotaWindow } from './quota.ts';
+import {
+	quotaLevel,
+	quotaWindowReading,
+	type QuotaLevel,
+	type QuotaShell,
+	type QuotaWindow
+} from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners';
 
 export type RunnerBlockKind = 'requested' | 'default';
@@ -36,6 +42,35 @@ const WINDOW_DURATION_S: Record<string, number> = {
  *  and nothing on screen said so; a filling disc reads as a clock natively. */
 export const DIAL_WEDGE_RADIUS = 2.75;
 const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
+
+export interface SlotChip {
+	/** `1/4 slots` — active over configured ceiling; `1/? slots` when the
+	 *  daemon published no ceiling (a fact worth a character, not a guess). */
+	label: string;
+	/** Quota-level word for the headroom left, or null while the reading is
+	 *  merely a configured ceiling (utilization < 80%) — neutral chrome, the
+	 *  same convention Limits.svelte carried before it folded in here. */
+	level: QuotaLevel | null;
+	title: string;
+}
+
+/** The spawn-slot capacity chip (#972 machine round: LIMITS stops being a
+ * section). Same reading the section made — headroom, contention at ≥80%
+ * utilization — compressed to a chip beside fuel; the raw config key demotes
+ * from caption to tooltip. */
+export function slotChip(activeSpawns: number, maxSpawns: number | null): SlotChip {
+	const title = 'spawn slots — concurrent worker-stack children (spawn.max_concurrent)';
+	if (maxSpawns === null || maxSpawns <= 0) {
+		return { label: `${activeSpawns}/? slots`, level: null, title };
+	}
+	const headroomPct = Math.max(0, ((maxSpawns - activeSpawns) / maxSpawns) * 100);
+	const contention = activeSpawns / maxSpawns >= 0.8;
+	return {
+		label: `${activeSpawns}/${maxSpawns} slots`,
+		level: contention ? quotaLevel(headroomPct) : null,
+		title
+	};
+}
 
 export function dialDasharray(fraction: number): string {
 	const clamped = Math.max(0, Math.min(1, fraction));
@@ -159,4 +194,68 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 			};
 		})
 	);
+}
+
+/**
+ * Does the rail render as its one-line slim bar?
+ *
+ * THE PICKER YOU CANNOT REACH (2026-08-02). This used to be
+ * `condensed && !pinnedOpen`, spelled inline in the component — and it let the
+ * page's *scroll verdict* take back a panel the reader had opened by hand.
+ * Expanding the rack and scrolling one pixel past the sentinel unmounted the
+ * whole strip, spool rack included; since the rack is the last block of that
+ * panel and the strong cores are its last rows, the bottom spool could not be
+ * tapped at all. Reaching it needed the page scroll that deleted it.
+ *
+ * The rule, and the reason this is a function rather than an expression: a
+ * reader's own open outranks the scroll verdict, and both ways of opening —
+ * pinning the slim bar, or expanding the rack — are equally the reader's.
+ * Enumerating them inline is how the second one got left out.
+ */
+export function railIsSlim(state: {
+	condensed: boolean;
+	pinnedOpen: boolean;
+	expanded: boolean;
+}): boolean {
+	return state.condensed && !state.pinnedOpen && !state.expanded;
+}
+
+/**
+ * The rail's condense verdict, with hysteresis.
+ *
+ * THE BOUNDARY THAT FLICKERED (2026-08-02, his touchpad report: "it glitches
+ * real hard between the collapsed and normal unless I scroll fast enough to
+ * go past the head of the warp"). The old verdict was a single
+ * IntersectionObserver threshold on the sentinel above the rail: one shared
+ * boundary for condensing and un-condensing. A slow touchpad scroll sits *at*
+ * that boundary for many frames, and every 1px of jitter toggled a ~140px
+ * layout change plus a 260ms glitch reveal — the flicker was the trigger's
+ * geometry, not the animation's.
+ *
+ * Second defect, same boundary: the spacer that holds the rail's flow
+ * footprint is documented as "only ever non-zero while off-screen", but at
+ * the old threshold the rail condensed the moment its *top* left the
+ * viewport — inflating the spacer while the freed area was still on screen,
+ * a visible blank band exactly where the rail had been.
+ *
+ * The rule: a form change earns a dead band at least as tall as the form
+ * change itself. Condense only once the reader has scrolled past the whole
+ * full rail (the freed space is then provably off-screen; the sticky slim
+ * bar takes over seamlessly). Un-condense only back near the rail's natural
+ * top, where the full form belongs. Between the two thresholds the verdict
+ * holds its last state — jitter has nothing to toggle.
+ */
+export const RAIL_UNCONDENSE_SLACK_PX = 8;
+export const RAIL_CONDENSE_FLOOR_PX = 48;
+
+export function railScrollVerdict(state: {
+	scrollY: number;
+	railTop: number;
+	railFullHeight: number;
+	condensed: boolean;
+}): boolean {
+	const condenseAt = state.railTop + Math.max(state.railFullHeight, RAIL_CONDENSE_FLOOR_PX);
+	const releaseAt = state.railTop + RAIL_UNCONDENSE_SLACK_PX;
+	if (!state.condensed) return state.scrollY > condenseAt;
+	return state.scrollY >= releaseAt;
 }

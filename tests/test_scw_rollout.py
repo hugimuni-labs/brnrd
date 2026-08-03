@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
+
+from _helpers import commit_files, init_git_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "scw_rollout.py"
@@ -218,6 +221,254 @@ def test_missing_credentials_are_named_before_any_request(monkeypatch):
     monkeypatch.setattr(mod, "request", lambda *a, **k: called.append(a))
     assert mod.main(["scw_rollout.py", "rg.fr-par.scw.cloud/ns/img:tag"]) == 2
     assert called == []
+
+
+# ── commit ordering: refuse a rollout that isn't a descendant (#1045) ─
+#
+# Real temporary git repositories throughout, not mocks — the thing being
+# tested is what `git merge-base --is-ancestor` actually answers, including
+# the one answer a mock would have to be told to give rather than earn: a
+# shallow clone that genuinely cannot resolve the deployed commit.
+
+
+def _bare_origin(tmp_path: Path) -> Path:
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(origin)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return origin
+
+
+def test_deployed_sha_tag_reads_the_workflows_own_tag_shape():
+    assert mod._deployed_sha_tag(
+        {"registry_image": "rg.fr-par.scw.cloud/ns/brnrd:sha-abc1234"}
+    ) == "abc1234"
+
+
+def test_deployed_sha_tag_none_when_no_image_on_record():
+    assert mod._deployed_sha_tag({}) is None
+    assert mod._deployed_sha_tag({"registry_image": ""}) is None
+
+
+def test_deployed_sha_tag_none_for_a_foreign_tag_shape():
+    # A container pointed somewhere by hand ("latest", a manual tag) is not
+    # evidence of "no ancestor" — it's evidence this check can't speak to
+    # the image at all, and must fall through to unknown rather than lie.
+    assert mod._deployed_sha_tag(
+        {"registry_image": "rg.fr-par.scw.cloud/ns/brnrd:latest"}
+    ) is None
+
+
+def test_read_deployed_commit_delegates_to_a_single_get(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mod, "request", lambda *a, **k: (calls.append(a), {
+        "registry_image": "rg.fr-par.scw.cloud/ns/brnrd:sha-1234567"
+    })[1])
+    assert mod.read_deployed_commit("https://api/x", "tok") == "1234567"
+    assert len(calls) == 1
+    assert calls[0][:2] == ("GET", "https://api/x")
+
+
+# ── ancestry_status: the three outcomes, on real git repos ────────────
+
+
+def test_ancestry_status_ancestor_when_deployed_is_a_true_ancestor(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    deployed = commit_files(repo, {"a.txt": "one\n"})
+    commit_files(repo, {"b.txt": "two\n"}, message="second")  # HEAD moves on
+
+    status, deployed_sha, candidate_sha = mod.ancestry_status(repo, deployed)
+    assert status == "ancestor"
+    assert deployed_sha == deployed
+
+
+def test_ancestry_status_not_ancestor_when_deploy_would_go_backwards(tmp_path):
+    # This is #1045's actual regression, reproduced directly: a build for an
+    # OLDER commit finishes and tries to roll out after a NEWER commit is
+    # already deployed. "Deployed" here is the tip; "candidate" (HEAD) is an
+    # earlier commit whose slow build only just finished.
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    older = commit_files(repo, {"a.txt": "one\n"})
+    deployed = commit_files(repo, {"b.txt": "two\n"}, message="second, deployed")
+    subprocess.run(["git", "checkout", older], cwd=repo, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    status, deployed_sha, candidate_sha = mod.ancestry_status(repo, deployed)
+    assert status == "not_ancestor"
+    assert deployed_sha == deployed
+    assert candidate_sha == older
+
+
+def test_ancestry_status_not_ancestor_when_history_diverged(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    base = commit_files(repo, {"a.txt": "one\n"})
+    subprocess.run(["git", "branch", "side", base], cwd=repo, check=True)
+    deployed = commit_files(repo, {"main-only.txt": "m\n"}, message="on main")
+    subprocess.run(["git", "checkout", "side"], cwd=repo, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    commit_files(repo, {"side-only.txt": "s\n"}, message="on side")
+
+    status, _, _ = mod.ancestry_status(repo, deployed)
+    assert status == "not_ancestor"
+
+
+def test_ancestry_status_unknown_when_deployed_revision_is_unresolvable(tmp_path):
+    # The realistic cause named in #1045: actions/checkout defaults to
+    # fetch-depth 1, so a genuinely-older deployed commit simply isn't in
+    # the object store. A shallow clone off a real bare origin reproduces
+    # that honestly rather than asserting it by construction.
+    origin = _bare_origin(tmp_path)
+    seed = tmp_path / "seed"
+    init_git_repo(seed)
+    old = commit_files(seed, {"a.txt": "one\n"})
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=seed, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    commit_files(seed, {"b.txt": "two\n"}, message="second")
+    subprocess.run(["git", "push", "origin", "main"], cwd=seed, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    shallow = tmp_path / "shallow"
+    # `--no-local`: a same-filesystem clone silently ignores `--depth`
+    # ("--depth is ignored in local clones") and hardlinks the full object
+    # store, which would make this fixture assert nothing. `--no-local`
+    # forces the real network-clone codepath so the shallow-ness is genuine.
+    subprocess.run(
+        ["git", "clone", "--no-local", "--depth", "1", str(origin), str(shallow)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    status, deployed_sha, candidate_sha = mod.ancestry_status(shallow, old)
+    assert status == "unknown"
+    assert deployed_sha is None
+    assert candidate_sha is not None  # HEAD itself always resolves
+
+
+def test_ancestry_status_unknown_when_no_deployed_revision():
+    # No API answer at all (first-ever deploy, or the GET failed) — the
+    # caller passes None/"" straight through rather than guessing.
+    status, deployed_sha, candidate_sha = mod.ancestry_status("/nonexistent", None)
+    assert (status, deployed_sha, candidate_sha) == ("unknown", None, None)
+
+
+# ── check_commit_ordering: the decision, and what it prints ───────────
+
+
+def test_check_commit_ordering_proceeds_on_a_true_ancestor(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    deployed = commit_files(repo, {"a.txt": "one\n"})
+    commit_files(repo, {"b.txt": "two\n"}, message="second")
+    monkeypatch.setattr(mod, "request", lambda *a, **k: {
+        "registry_image": f"rg.fr-par.scw.cloud/ns/brnrd:sha-{deployed[:7]}"
+    })
+
+    assert mod.check_commit_ordering("https://api/x", "tok", repo) is True
+    # This assertion used to read `"::notice::" not in out`. It was changed
+    # deliberately, and the distinction matters: it pinned an *accident*, not
+    # a contract. Nothing had decided the success path should be silent, and
+    # nothing documented it — the guard simply fell through.
+    #
+    # It was wrong, and #1045's own first live deploy is the evidence: the
+    # step went straight from the checkout to `container status: ready`, so a
+    # guard that ran and resolved correctly was byte-identical in the log to
+    # a guard that was never called. A no-op and a silent success are the
+    # same shape at a terminal, and a guard whose success is invisible cannot
+    # be confirmed still wired in after the next refactor.
+    out = capsys.readouterr().out
+    assert "::notice::commit ordering ok" in out
+    assert deployed[:8] in out
+    assert "rolling forward" in out
+
+
+def test_check_commit_ordering_declines_and_names_both_shas(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    older = commit_files(repo, {"a.txt": "one\n"})
+    deployed = commit_files(repo, {"b.txt": "two\n"}, message="second, deployed")
+    subprocess.run(["git", "checkout", older], cwd=repo, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    monkeypatch.setattr(mod, "request", lambda *a, **k: {
+        "registry_image": f"rg.fr-par.scw.cloud/ns/brnrd:sha-{deployed[:7]}"
+    })
+
+    assert mod.check_commit_ordering("https://api/x", "tok", repo) is False
+    out = capsys.readouterr().out
+    assert "::notice::" in out
+    assert deployed in out
+    assert older in out
+
+
+def test_check_commit_ordering_rolls_out_when_ordering_is_unknown(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "one\n"})
+    # No image on record yet — first deploy.
+    monkeypatch.setattr(mod, "request", lambda *a, **k: {})
+
+    assert mod.check_commit_ordering("https://api/x", "tok", repo) is True
+    assert "::notice::" in capsys.readouterr().out
+
+
+def test_check_commit_ordering_rolls_out_when_the_scaleway_read_fails(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "one\n"})
+
+    def _boom(*a, **k):
+        raise mod.ApiError(502, "bad gateway")
+
+    monkeypatch.setattr(mod, "request", _boom)
+
+    assert mod.check_commit_ordering("https://api/x", "tok", repo) is True
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+    assert "::notice::" in out
+
+
+# ── neuter check: an out-of-order deploy that goes green is the bug ───
+
+
+def test_a_declined_rollout_never_reaches_the_scaleway_patch(tmp_path, monkeypatch):
+    # A guard that only prints a notice but still calls rollout() would pass
+    # every test above by accident (they only assert the return value and
+    # the printed text). This nails the actual side effect: main() must
+    # short-circuit before rollout() ever calls PATCH.
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    older = commit_files(repo, {"a.txt": "one\n"})
+    deployed = commit_files(repo, {"b.txt": "two\n"}, message="second, deployed")
+    subprocess.run(["git", "checkout", older], cwd=repo, check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    monkeypatch.setenv("SCW_SECRET_KEY", "tok")
+    monkeypatch.setenv("SCW_CONTAINER_ID", "cid")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(repo))
+    calls: list[tuple[str, str]] = []
+
+    def _fake_request(method, url, token, payload=None, **kw):
+        calls.append((method, url))
+        if method == "GET":
+            # "ready" so that IF the guard is broken and rollout() runs for
+            # real, it completes fast and the PATCH assertion below catches
+            # the regression cleanly — instead of wait_settled looping on a
+            # container that never reports a status, which would fail this
+            # test by real-time hang rather than by a readable assertion.
+            return {
+                "status": "ready",
+                "registry_image": f"rg.fr-par.scw.cloud/ns/brnrd:sha-{deployed[:7]}",
+            }
+        return {}
+
+    monkeypatch.setattr(mod, "request", _fake_request)
+
+    rc = mod.main(["scw_rollout.py", "rg.fr-par.scw.cloud/ns/brnrd:sha-whatever"])
+    assert rc == 0
+    assert "PATCH" not in [c[0] for c in calls]
 
 
 # ── the workflow calls it, and calls nothing else ────────────────────

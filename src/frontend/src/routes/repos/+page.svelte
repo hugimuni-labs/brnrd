@@ -28,6 +28,7 @@
 		storedPublishScopeValue,
 		type PublishScopePreset
 	} from '$lib/publishScope';
+	import { DOCS_URL } from '$lib/publicStats';
 	import { STATUS_GOOD, STATUS_UNKNOWN, STATUS_WARN, statusDotStyle } from '$lib/statusPalette';
 	import MarkerNotice from '$lib/MarkerNotice.svelte';
 
@@ -267,11 +268,22 @@
 <div class="mx-auto max-w-4xl p-6">
 	<div class="flex items-start justify-between gap-4">
 		<p class="eyebrow">brnrd · repos</p>
-		<a
-			href={resolve('/')}
-			class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
-			>dashboard</a
-		>
+		<!-- Same third entry as the dashboard header (2026-08-03): this is
+		     the other signed-in screen, and it was the other one with no way
+		     out to the documentation. -->
+		<div class="flex items-center gap-4">
+			<a
+				href={DOCS_URL}
+				rel="external"
+				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+				>docs</a
+			>
+			<a
+				href={resolve('/')}
+				class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+				>dashboard</a
+			>
+		</div>
 	</div>
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
 		repository control

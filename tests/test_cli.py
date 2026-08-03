@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import types
 
 import pytest
@@ -422,6 +423,112 @@ def test_portal_state_errors_without_file(capsys, monkeypatch):
 
     assert main(["portal", "state"]) == 1
     assert "no live portal-state.json" in capsys.readouterr().err
+
+
+# ── portal await (#959) ────────────────────────────────────────────────
+
+
+def test_portal_await_errors_without_file(capsys, monkeypatch):
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
+
+    assert main(["portal", "await"]) == 1
+    assert "no live portal-state.json" in capsys.readouterr().err
+
+
+def test_portal_await_errors_when_nothing_armed(tmp_path, capsys):
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({"version": 1, "await": {"armed": False}}), encoding="utf-8",
+    )
+
+    assert main(["portal", "await", "--path", str(state)]) == 1
+    assert "no await:" in capsys.readouterr().err
+
+
+def test_portal_await_returns_resolved_outcome_without_sleeping(tmp_path, capsys):
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {
+                "armed": True, "resolved": True, "outcome": "condition",
+                "which": "file:/tmp/gate.log", "deadline": "2026-08-03T10:00:00Z",
+                "capped": False,
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert main(["portal", "await", "--path", str(state)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "outcome": "condition", "which": "file:/tmp/gate.log",
+        "deadline": "2026-08-03T10:00:00Z", "capped": False,
+    }
+
+
+def test_portal_await_pending_sleeps_at_most_the_hard_cap_then_reports(
+    tmp_path, capsys, monkeypatch,
+):
+    """The structural bound (#959): whatever ``--tick-seconds`` asks for, one
+    call never blocks past ``_AWAIT_POLL_HARD_CAP_SECONDS``."""
+    from brr import cli
+
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {"armed": True, "resolved": False, "capped": False},
+        }),
+        encoding="utf-8",
+    )
+    slept = []
+    monkeypatch.setattr(time, "sleep", lambda s: slept.append(s))
+
+    assert main([
+        "portal", "await", "--path", str(state), "--tick-seconds", "999",
+    ]) == 0
+
+    assert slept == [cli._AWAIT_POLL_HARD_CAP_SECONDS]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "pending"
+
+
+def test_portal_await_reports_a_resolution_that_landed_during_the_sleep(
+    tmp_path, capsys, monkeypatch,
+):
+    """The daemon's own heartbeat can resolve the wait *during* one poll
+    tick's sleep — the re-read after waking must see it, not the stale
+    pre-sleep snapshot."""
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({
+            "version": 1,
+            "await": {"armed": True, "resolved": False, "capped": False},
+        }),
+        encoding="utf-8",
+    )
+
+    def _resolve_during_sleep(_seconds):
+        state.write_text(
+            json.dumps({
+                "version": 1,
+                "await": {
+                    "armed": True, "resolved": True, "outcome": "timeout",
+                    "which": None, "capped": False,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(time, "sleep", _resolve_during_sleep)
+
+    assert main(["portal", "await", "--path", str(state)]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == "timeout"
 
 
 def test_run_requires_instruction():
@@ -1884,3 +1991,209 @@ def test_close_check_reads_stdin_and_honours_the_channel(monkeypatch, capsys):
 def test_close_check_missing_file_is_a_clean_error(tmp_path, capsys):
     assert main(["close-check", str(tmp_path / "nope.md")]) == 2
     assert "[brnrd close-check]" in capsys.readouterr().out
+
+
+# ── The spelling the launcher earned (npx) ──────────────────────────
+#
+# `npx brnrd` execs a binary inside a managed venv under
+# ~/.local/share/brnrd; it never puts `brnrd` on the user's PATH. The
+# launcher says so with BRNRD_LAUNCHER=npx, and `cli.brnrd_cmd()` is the
+# one place that reads it. Pinned on the *account connect* path (the
+# second thing a new install does) and on the parser itself.
+#
+# Each case carries its absent twin: with the variable unset — pip, uv,
+# pipx, `npm install -g` — the bare spelling must survive untouched.
+
+
+class TestNpxSpelling:
+    def test_brnrd_cmd_reads_the_environment_at_call_time(self, monkeypatch):
+        """Not captured at import: the launcher may set it after we load."""
+        from brr import cli
+
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        assert cli.brnrd_cmd() == "brnrd"
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        assert cli.brnrd_cmd() == "npx brnrd"
+        # An unrecognised launcher is not a licence to invent a spelling.
+        monkeypatch.setenv("BRNRD_LAUNCHER", "somethingelse")
+        assert cli.brnrd_cmd() == "brnrd"
+
+    def test_usage_line_names_the_runnable_command(self, monkeypatch, capsys):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        with pytest.raises(SystemExit):
+            main(["--help"])
+        assert "usage: npx brnrd" in capsys.readouterr().out
+
+    def test_usage_line_stays_bare_for_a_path_install(self, monkeypatch, capsys):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        with pytest.raises(SystemExit):
+            main(["--help"])
+        out = capsys.readouterr().out
+        assert "usage: brnrd" in out
+        assert "npx" not in out
+
+    def _timeout_connect(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        from brr.gates import cloud
+
+        replies = iter([
+            {"pair_code": "BR-TEST", "pair_url": "https://pair",
+             "poll_secret": "secret"},
+            {"status": "pending"},
+        ])
+        ticks = iter([0.0, 601.0])
+        monkeypatch.setattr(cloud, "_request", lambda *_a, **_kw: next(replies))
+        monkeypatch.setattr(cloud.time, "monotonic", lambda: next(ticks))
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["account", "connect", "https://brnrd.example"])
+        return str(excinfo.value)
+
+    def test_pairing_timeout_recovery_is_npx_spelled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        assert "re-run `npx brnrd account connect`" in self._timeout_connect(
+            tmp_path, monkeypatch,
+        )
+
+    def test_pairing_timeout_recovery_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        message = self._timeout_connect(tmp_path, monkeypatch)
+        assert "re-run `brnrd account connect`" in message
+        assert "npx" not in message
+
+    def _connect_no_service(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr("brr.gates.cloud.connect", lambda *_a, **_kw: {})
+        monkeypatch.setattr("brr.daemon_install.install", lambda **_kw: None)
+        main(["account", "connect", "--no-service"])
+
+    def test_foreground_escape_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        self._connect_no_service(tmp_path, monkeypatch)
+        assert "Run `npx brnrd up --foreground`" in capsys.readouterr().out
+
+    def test_foreground_escape_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        self._connect_no_service(tmp_path, monkeypatch)
+        out = capsys.readouterr().out
+        assert "Run `brnrd up --foreground`" in out
+        assert "npx" not in out
+
+    def test_cloud_gate_setup_pointer_is_npx_spelled(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        main(["gate", "setup", "cloud"])
+
+        assert "Run `npx brnrd account connect`" in capsys.readouterr().out
+
+    def test_cloud_gate_setup_pointer_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        main(["gate", "setup", "cloud"])
+
+        out = capsys.readouterr().out
+        assert "Run `brnrd account connect`" in out
+        assert "npx" not in out
+
+    def test_account_add_without_a_connected_home_is_npx_spelled(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["account", "add", str(repo)])
+
+        assert "run `npx brnrd account connect` first" in str(excinfo.value)
+
+    def test_account_add_without_a_connected_home_stays_bare(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["account", "add", str(repo)])
+
+        message = str(excinfo.value)
+        assert "run `brnrd account connect` first" in message
+        assert "npx" not in message
+
+    def test_account_status_project_home_pointer_is_npx_spelled(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        assert main(["account", "status"]) == 0
+
+        assert "`npx brnrd account connect` links it" in capsys.readouterr().out
+
+    def test_account_status_project_home_pointer_stays_bare(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        assert main(["account", "status"]) == 0
+
+        out = capsys.readouterr().out
+        assert "`brnrd account connect` links it" in out
+        assert "npx" not in out
+
+    def _up_before_init(self, tmp_path, monkeypatch):
+        """``brnrd up`` in a repo that was never adopted.
+
+        Driven at ``daemon.start`` rather than through ``main(["up"])``:
+        the CLI verb prefers an *installed service* when one exists, so
+        going through it would have the suite poke the developer's own
+        systemd user manager instead of the code path under test.
+        """
+        from brr import daemon as daemon_mod
+
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        monkeypatch.chdir(repo)
+
+        with pytest.raises(SystemExit) as excinfo:
+            daemon_mod.start(repo)
+        return str(excinfo.value)
+
+    def test_up_before_init_is_npx_spelled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        assert "run `npx brnrd init` first" in self._up_before_init(
+            tmp_path, monkeypatch,
+        )
+
+    def test_up_before_init_stays_bare_for_a_path_install(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        message = self._up_before_init(tmp_path, monkeypatch)
+        assert "run `brnrd init` first" in message
+        assert "npx" not in message

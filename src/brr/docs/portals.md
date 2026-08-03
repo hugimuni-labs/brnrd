@@ -50,12 +50,14 @@ other so they don't drift.
 | `<name>.md` with `stop: <run-or-event-id>` frontmatter | concurrent ✕ worker stop | Stop a concurrent child **this run** dispatched, addressed by its spawn event id or child run id (wyrd §3: a run controls only its own dispatchees — the daemon enforces the ownership check and does the kill; nothing depends on the child reading anything). A child still queued is cancelled before it ever starts; a running child's runner process is killed, its partial branch work is salvaged, and it finalizes as `stopped` — the completion note (`status=stopped`) returns to this run as a pending event. Optional `reason:` (or the body) is recorded on the child. A refused stop (unknown id, not your dispatchee, already finished) lands in `portal-state.json` → `notices`. |
 | `<name>.md` with `to: <run-or-event-id>` frontmatter | concurrent ▸ worker steer | Message a concurrent child **this run** dispatched (same ownership check as `stop:`). The body lands as a `dispatch_message` event that **only the addressed worker's** `inbox.json` / portal-state surfaces — it never dispatches a run of its own, other runs never see it, and whatever the child has not folded in is retired when the child ends. A steer, not a new contract: the child folds it into its existing work and should not `event:`-address it. Workers are thread-isolated (they get their contract and these edge messages, not the user thread's recent turns or pending events), so this verb is the *only* way words reach a running worker. Refusals land in `notices`. |
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
+| `<name>.md` with `await: <condition> \| ...` + `timeout: <duration>` frontmatter | inbound ◂ armed hold | **A select, not a sleep** (#959). Declare what you're waiting on once; the daemon evaluates it on its own heartbeat, not on your say-so. See §`await:` below. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Maintain the run body** — resident-owned Markdown, reconciled in place. Keep `## Now` current; only that section projects onto the compact live card. Preserve the arc, findings, and decisions in later sections. At closeout the daemon copies the full write-head to `runs/<repo>/<run>/body.md` beside its separately attested `state.md`; empty/delete leaves a frame-only run. |
 | `menu.json` | outbound ▸ desired-state | **Maintain the thread's one live menu.** Write one JSON object atomically with `menu_id`, `thread`, and `options` (`handle`, `label`, optional `detail`, optional `rec: true`); `expires_at` is optional. The daemon validates and archives the generation, supersedes the prior one, and renders the same stored menu at gates and at the next resident boundary. Malformed menus land in `portal-state.json` → `notices`. A worker child has no v1 menu transport; its parent composes. |
 | `.mood` | slot control | **Your own resident-authored mood** — an almost-free meta-channel from resident to user (#566 layer 2). First line only: an emote name or a free glyph string. The hook boundary re-reads it fresh and folds it into the live delta every boundary — a bar segment mid-run, a plain line at seed/stop. It **displays** every boundary and **asks** only on an edge: when a tool in the batch just came back wrong, the chip renders as `mood fo.cus ← Bash ✗`, setting the face you claimed beside the thing that broke. Transition-stamped, so a run debugging a red test is asked once, not at every pass. A control file, never delivered. |
 | `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
+| `.promises.jsonl` | slot control | This run's **blueprint** — the produce manifest in the opposite tense: what you said you would make. Written through `brnrd promise <what>`; see §The blueprint below. Drives the `owed N` boundary chip and the closeout's plan-vs-progress line. A control file, never delivered. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
 | `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
@@ -71,6 +73,140 @@ would be on success.
 they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
 write.** A dropped directive that nobody reads is a request that silently
 never happened.
+
+### `await:` — a select, not a sleep (#959)
+
+The measurement this closes: a resident waiting on a dispatched worker or a
+background gate wrote `until <condition>; do sleep 25; done` as one shell
+call. By the older liveness contract that "survives the closeout" —
+`.keepalive` was armed, the thought never ended — but it emitted **zero tool
+boundaries** for the whole span, and the daemon only ever reaches a resident
+*at* a tool boundary. Three of the maintainer's messages queued behind a
+wait that was doing exactly what it was told. **A wait a correspondent
+cannot interrupt is not a wait. It is a gap.**
+
+```
+---
+await: <condition> [| <condition> ...]
+timeout: <duration>          # required — a wait with no ceiling is a hang
+---
+```
+
+**Conditions** (`|`-separated; the fenced form is required — the value has
+spaces, so the unfenced lenient shortcut other verbs get doesn't apply):
+
+- `file:<path>` — the path exists.
+- `pid:<n>` — the process has exited.
+- `spawn:<run-or-event-id>` — a concurrent child **this run** dispatched has
+  finished (matched against either the child's eventual run id or the
+  `spawn: true` dispatch's own event id — you may only have one of the two
+  on hand, depending on when you wrote the `await:`).
+- `event` — **a new pending event arrived.** Always a member of the set,
+  whether or not you name it — parsing appends it structurally. You cannot
+  construct a blind wait by forgetting to mention "did a message arrive",
+  because forgetting is no longer an available state.
+
+**The condition set is evaluated by the daemon on its own heartbeat tick**
+(every ~10s, independent of whether you call anything at all) — that is
+what makes this a *listening* wait rather than a *sleeping* one. The outcome
+lands in `portal-state.json` → `await`:
+
+```jsonc
+{"armed": true, "conditions": ["file:/tmp/gate.log", "event"],
+ "timeout_seconds": 1200, "deadline": "…", "capped": false,
+ "resolved": true, "outcome": "condition", "which": "file:/tmp/gate.log"}
+```
+
+`resolved` flips to `true` on exactly one of three outcomes — never
+silence:
+
+- `"condition"` — a named `file:`/`pid:`/`spawn:` term fired; `which` names it.
+- `"event"` — some other pending event arrived that no named condition
+  already explains.
+- `"timeout"` — the deadline passed with nothing else firing.
+
+**`.keepalive` is extended for you**, to the timeout deadline (never
+shortened below an existing one you wrote yourself) — you do not also have
+to remember a separate keepalive write on top of the `await:`. If the
+requested `timeout:` would outlive this run's remaining hard budget
+ceiling, the hold is armed for the capped duration instead of the full
+request — silently truncating a promised wait is worse than warning about
+one, so the cap is announced once as an `advisory` notice, not swallowed.
+
+**Poll it with `brnrd portal await`** (or read `portal-state.json` →
+`await` yourself, e.g. from §linger's own poll loop). One call blocks for
+at most **15 seconds** — a small, code-level bound, not a documentation
+convention — before returning `{"outcome": "pending", ...}`; call it again.
+Because the daemon's own evaluation tick runs independently of this call,
+a resolution that lands mid-sleep is still reported the moment you wake up
+and re-read, with no extra round trip. This is the structural fix for the
+measured failure: a wait built from a sequence of short, separately
+boundary-visible tool calls gives the daemon (and anything it wants to
+inject) a seam at least every 15 seconds, for as long as the wait runs —
+never the multi-minute blind stretch a hand-rolled shell loop can produce.
+
+**v1 is the verb and the hold path only.** `await:` never ends this run to
+service a wait — it holds the slot, the way `.keepalive` always has. A
+`worker: true` (concurrent spawn) run may not arm one: the hold is a
+resident-level cost decision, and a worker has no business spending its
+parent's slot on its own wait. Malformed input (no `timeout:`, an
+unrecognised condition) is dropped to `notices`, same as any other verb.
+
+## The blueprint — `.promises.jsonl`
+
+The produce manifest says what a run **made**. This says what it **said it
+would make**, so a boundary can name what is still owed and the closeout
+cannot quietly forget it (#1008).
+
+    brnrd promise pr --count 2 --ref "the rollout split"
+    brnrd promise kb --ref subject-x.md
+    brnrd promise pr --release --why "superseded by #1042"
+
+`<what>` is a produce kind — `commit`, `branch`, `pr`, `merge`, `kb`,
+`issue`, `comment`, `message`, `file`. A promise names something the
+manifest can actually attest; anything else would sit owed forever.
+
+**Count decides; `--ref` speaks.** Matching is on *how many* of a kind
+landed, never on the ref: a promise is made before the thing exists and
+cannot name it, so keying on the ref would report a broken promise every
+time you shipped the right work under a different name. The ref is the
+label the owed line uses — and once part of a kind has landed it renders
+as `one of: …`, because counting cannot say *which*.
+
+**`--release` is the counter, and it needs `--why`.** Without a way out an
+abandoned intent sits owed at every boundary forever, and a nag with no
+counter stops being read. The reason rides the row, so the record of the
+abandonment lives where the abandonment happened.
+
+**A promise cannot be kept by its own past.** Each row records how much of
+its kind the run had already produced when the claim was made, and only the
+surplus over that counts toward it. Without that, a run that had opened one PR
+and then promised two more would read *all kept* the moment nothing further
+happened — the guard failing in the **optimistic** direction, which is the one
+direction a guard may not fail in. A hand-written row with no baseline falls
+back to counting everything, which is the lenient old behaviour.
+
+What it still cannot do: two *unrelated* later PRs satisfy two promised PRs.
+Counting cannot see intent, and matching on `--ref` would cry wolf every time
+the right work shipped under another name.
+
+**What it renders.**
+
+- `owed N` — a bar chip, absent at zero, the same differential discipline
+  as `!N`. Deliberately not a ratio against `⚒`: that count includes things
+  nobody promised, so there is no shared denominator.
+- `- still owed: 2 PRs — the rollout split` — a detail line, latched on the
+  blueprint's *own* delta. It speaks when a promise is made, met, or
+  released, and again at the closeout — not once per boundary, which is how
+  an obligation turns into noise.
+- At the closeout, and only there, a kept blueprint says so.
+
+**An empty blueprint renders nothing at all.** `promised 3 · shipped 1` is
+evidence a promise broke — you wrote the row, so you can be proven wrong
+about it. `promised 0 · shipped 3` is not evidence of a kept run: it is a
+run that wrote no rows, which is byte-identical to a run that had nothing to
+promise. A guard may only assert something the run can be proven wrong
+about.
 
 ## The produce manifest — `.relics.jsonl`
 
@@ -360,6 +496,14 @@ There are two layers:
   thought. That next run is an **unblock, not a restart** — it reads the same
   conversation history, dominion, and kb the first run did; nothing resets,
   only the process does.
+
+**Waiting on a specific named condition** — a gate log file, a pid, a
+concurrent `spawn:` child — is `await:`'s job (above), not this recipe's:
+`await:` gives the daemon's own heartbeat the condition to evaluate and
+bounds each of *your* poll calls at 15s, where the recipe below bounds one
+call at up to 240s. Reach for linger's own backoff only for the generic
+"tell me if *anything at all* changes" case with no specific condition to
+name.
 
 Runner-owned linger is a named contract, not an improvised while-loop:
 

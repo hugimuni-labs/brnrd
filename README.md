@@ -73,9 +73,10 @@ and routes the result back through the gate.
 Install the command:
 
 ```bash
-uv tool install brnrd        # recommended when uv is already present
+npm install -g brnrd         # if you have Node
+# or: uv tool install brnrd
 # or: pipx install brnrd
-# or: npx brnrd init         # bootstraps the Python package; leaves your system Python alone
+brnrd --version
 ```
 
 Self-hosted gates and local execution are free — no brnrd account is needed.
@@ -91,7 +92,6 @@ Then pick your door.
 
 ```bash
 brnrd account connect  # pair + install + start (systemd/launchd)
-# via npx: npx brnrd account connect — bootstraps too, in one line
 brnrd account add .    # add another repo later
 ```
 
@@ -117,11 +117,13 @@ review PR #84 for the auth regression; show me the risky bit before changing it
 > mocked into a terminal — follow [#28](https://github.com/hugimuni-labs/brnrd/issues/28).
 
 <details>
-<summary><code>npx brnrd</code> is not a JavaScript port</summary>
+<summary>The npm package is not a JavaScript port</summary>
 
-It is a bootstrapper for the Python package. It keeps its own environment and
-leaves your system Python alone — a convenience for people who live in an
-npm-shaped world, nothing more.
+brnrd is a Python program; the npm package is a launcher for it. On first run it
+builds a private, durable virtualenv under `~/.local/share/brnrd`, installs brnrd
+into it, and hands over — your system Python is untouched. `npm install -g brnrd`
+leaves you a real `brnrd` command; `npx brnrd <command>` runs the same thing
+without one, so every later command must be `npx brnrd …` too.
 
 </details>
 

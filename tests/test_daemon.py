@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -5454,6 +5455,261 @@ def test_write_live_portal_state_armed_letters_empty_without_brr_dir(tmp_path):
     assert payload["schedule"]["armed"] == []
 
 
+# ── await: — the hold path (#959) ─────────────────────────────────────
+
+
+def test_portal_state_await_absent_when_never_armed(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"] == {"armed": False}
+
+
+def test_portal_state_await_file_condition_fires(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    target = tmp_path / "gate.log"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": [f"file:{target}", "event"],
+        "conditions_detail": [
+            {"kind": "file", "raw": f"file:{target}", "value": str(target)},
+            {"kind": "event", "raw": "event", "value": None},
+        ],
+        "timeout_seconds": 600.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["armed"] is True
+    assert payload["await"]["resolved"] is False
+
+    target.write_text("green\n", encoding="utf-8")
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"] == {
+        "armed": True,
+        "conditions": [f"file:{target}", "event"],
+        "timeout_seconds": 600.0,
+        "deadline": payload["await"]["deadline"],
+        "capped": False,
+        "resolved": True,
+        "outcome": "condition",
+        "which": f"file:{target}",
+    }
+    # Sticky: task.meta itself carries the resolved outcome so a later tick
+    # (or a retry attempt reusing this task) doesn't need to re-derive it.
+    assert task.meta["await"]["resolved"] is True
+    assert task.meta["await"]["outcome"] == "condition"
+
+
+def test_portal_state_await_event_outcome_for_unrelated_pending_event(tmp_path):
+    """No named condition fired, but *some* pending event exists — outcome
+    is the structural ``event`` member, never silence."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    protocol.create_event(inbox_dir, "telegram", "a follow-up question")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 600.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is True
+    assert payload["await"]["outcome"] == "event"
+    assert payload["await"]["which"] is None
+
+
+def test_portal_state_await_times_out(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 1.0,
+        "armed_at": time.time() - 5,  # already elapsed
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is True
+    assert payload["await"]["outcome"] == "timeout"
+    assert payload["await"]["which"] is None
+
+
+def test_portal_state_await_extends_keepalive_to_the_deadline(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    armed_at = time.time()
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 900.0,
+        "armed_at": armed_at,
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+    )
+
+    until = daemon.portals.keepalive_until(keepalive_path)
+    assert until is not None
+    assert until == pytest.approx(armed_at + 900.0, abs=2)
+
+
+def test_portal_state_await_never_shortens_an_existing_keepalive(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    far_future = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 4000)
+    )
+    keepalive_path.write_text(far_future + "\n", encoding="utf-8")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 60.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+    )
+
+    assert keepalive_path.read_text(encoding="utf-8").strip() == far_future
+
+
+def test_portal_state_await_capped_at_hard_budget_ceiling_with_advisory(tmp_path):
+    """#959: 'a wait that outlives the budget must extend the slot or refuse
+    to start' — this run extends, capped at the run's own hard ceiling, and
+    says so as an advisory notice rather than silently truncating."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 7200.0,  # 2h — far past the tiny hard cap below
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+    start_monotonic = time.monotonic() - 10  # 10s already elapsed this attempt
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+        hard_cap_seconds=60.0,
+        start_monotonic=start_monotonic,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["capped"] is True
+    assert payload["await"]["resolved"] is False  # not timed out — just capped
+
+    until = daemon.portals.keepalive_until(keepalive_path)
+    # Capped to roughly (start_monotonic + hard_cap) translated to wall clock
+    # — well short of the requested 2h out.
+    assert until is not None
+    assert until < time.time() + 100
+
+    notices = daemon._read_outbox_notices(outbox_dir)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "advisory"
+    assert "capped" in notices[0]["text"]
+
+    # A second tick must not re-notice — the cap is a one-time fact.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+        hard_cap_seconds=60.0,
+        start_monotonic=start_monotonic,
+    )
+    assert len(daemon._read_outbox_notices(outbox_dir)) == 1
+
+
+def test_portal_state_await_resolved_state_is_sticky_across_ticks(tmp_path):
+    """Once resolved, later ticks reflect the frozen outcome rather than
+    re-evaluating — a ``pid:`` target could be reused by a new process by
+    the next tick, and the first exit is the one that counted."""
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 1.0,
+        "armed_at": time.time() - 5,
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert task.meta["await"]["outcome"] == "timeout"
+
+    # Mutate as if evaluate() would now see something different — sticky
+    # state must not flip.
+    task.meta["await"]["conditions_detail"] = [
+        {"kind": "spawn", "raw": "spawn:nonsense", "value": "nonsense"},
+    ]
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["outcome"] == "timeout"
+
+
 # ── _resources_facet (portal-state work-status posture) ──────────────
 
 
@@ -6958,6 +7214,223 @@ def test_run_body_captures_the_resident_card_without_daemon_prose(tmp_path):
     assert task.meta["run_body_path"] == str(path)
 
 
+def test_persist_boundaries_summary_writes_beside_body_and_state(tmp_path):
+    """The node gets the derived summary, not the raw transcript.
+
+    The source transcript lives in the daemon's own scratch dir
+    (``<brr_dir>/runs/<run-id>/boundaries.jsonl``, where the hook backchannel
+    writes it — see ``hooks._transcript_env`` in test_hooks.py for the same
+    layout), never the account dominion; only ``hooks.derive_boundaries_summary``'s
+    compact projection lands on the node.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-guard", event_id="evt-guard", body="work", source="telegram")
+    brr_dir = tmp_path / "brr-scratch"
+    run_dir = brr_dir / "runs" / "run-guard"
+    run_dir.mkdir(parents=True)
+    lines = [
+        {
+            "at": "2026-08-02T07:30:12Z", "phase": "session-start",
+            "inject": "hi", "block": False, "block_reason": None,
+        },
+        {
+            "at": "2026-08-02T07:31:00Z", "phase": "stop",
+            "inject": "closeout", "block": True, "block_reason": "not done",
+        },
+        {
+            "at": "2026-08-02T07:31:05Z", "phase": "stop",
+            "inject": "closeout again", "block": False, "block_reason": None,
+        },
+    ]
+    (run_dir / "boundaries.jsonl").write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8",
+    )
+
+    path = daemon._persist_boundaries_summary(
+        ctx, task, repo_label="Gurio/brr", brr_dir=brr_dir,
+    )
+
+    assert path == ctx.runs_dir / "Gurio__brr" / "run-guard" / "boundaries.json"
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    assert summary["stops"] == 2
+    assert summary["guard_fire_count"] == 1
+    assert summary["final_stop_block"] is False
+    assert task.meta["run_boundaries_summary_path"] == str(path)
+
+
+def test_persist_boundaries_summary_omits_the_file_when_transcript_absent(tmp_path):
+    """No transcript in the daemon's scratch dir ⇒ no `boundaries.json` on the node.
+
+    Never a guessed, zero-valued summary — same pessimism as its source
+    (`hooks.derive_boundaries_summary`).
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-no-transcript", event_id="evt-x", body="work", source="telegram")
+    brr_dir = tmp_path / "brr-scratch"
+    (brr_dir / "runs" / "run-no-transcript").mkdir(parents=True)
+
+    path = daemon._persist_boundaries_summary(
+        ctx, task, repo_label="Gurio/brr", brr_dir=brr_dir,
+    )
+
+    assert path is None
+    assert not (
+        ctx.runs_dir / "Gurio__brr" / "run-no-transcript" / "boundaries.json"
+    ).exists()
+    assert "run_boundaries_summary_path" not in task.meta
+
+
+def test_capture_control_files_partition_is_total():
+    """Every control-file constant the scanned modules declare is decided.
+
+    ``_discover_control_file_names`` reads the constants back via
+    introspection rather than trusting a hand-copied list — this is the
+    guard that catches the *next* control file somebody adds without
+    deciding its fate. See the test below for proof the mechanism itself
+    fires, not just that today's fixed set happens to be clean.
+    """
+    discovered = daemon._discover_control_file_names()
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    missing = set(discovered) - classified
+    assert not missing, (
+        f"undecided control file(s): {sorted(discovered[n] for n in missing)} "
+        "— add each to daemon.PRESERVED or daemon.NOT_PRESERVED with a reason"
+    )
+    # A partition, not just a total covering: no name is both kept and
+    # dropped depending on which dict a reader happens to check first.
+    assert not (set(daemon.PRESERVED) & set(daemon.NOT_PRESERVED))
+
+
+def test_capture_control_files_partition_catches_an_undecided_constant():
+    """The totality guard actually fires on a new constant, not just today's.
+
+    A fake module carrying one unclassified ``*_NAME`` constant, scanned
+    the same way :func:`daemon._discover_control_file_names` scans the real
+    modules, must come back undecided. Neutering ``PRESERVED``/
+    ``NOT_PRESERVED`` themselves (deleting an entry) would also redden
+    ``test_capture_control_files_partition_is_total`` above — this test
+    instead proves the *discovery* half by construction, independent of
+    whichever real constants happen to exist right now.
+    """
+    fake_module = types.SimpleNamespace(
+        __name__="fake_control_module",
+        TOTALLY_NEW_CONTROL_NAME=".totally-new-control-file",
+    )
+    discovered = {
+        value: f"{fake_module.__name__}.{attr}"
+        for attr, value in vars(fake_module).items()
+        if daemon._CONTROL_NAME_RE.match(attr)
+        and isinstance(value, str) and value
+    }
+    assert discovered == {
+        ".totally-new-control-file": "fake_control_module.TOTALLY_NEW_CONTROL_NAME"
+    }
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    assert set(discovered) - classified == {".totally-new-control-file"}
+
+
+def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
+    """The general case of ``_capture_pr_handle``: outbox -> node, dot stripped.
+
+    Also proves the pessimistic-side-down half by construction: a file in
+    ``NOT_PRESERVED`` (``inbox.json``, carrying what would be another
+    correspondent's pending event in the real shape) sits right next to the
+    preserved files in the source outbox and must not appear on the node.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-ctrl", event_id="evt-ctrl", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".relics.jsonl").write_text(
+        '{"kind": "file", "path": "a.py"}\n', encoding="utf-8",
+    )
+    (outbox / ".mood").write_text("focused\nnarration line\n", encoding="utf-8")
+    (outbox / ".claude-result-levels.json").write_text(
+        '{"spend": {"total_cost_usd": 1.2}}', encoding="utf-8",
+    )
+    # Present in the outbox but NOT_PRESERVED — must survive uncopied.
+    (outbox / "inbox.json").write_text(
+        '{"events": [{"body": "another correspondent said this"}]}',
+        encoding="utf-8",
+    )
+    (outbox / ".card").write_text("## Now\n\nlive\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    run_dir = ctx.runs_dir / "Gurio__brr" / "run-ctrl"
+    assert (
+        run_dir / "relics.jsonl"
+    ).read_text(encoding="utf-8") == '{"kind": "file", "path": "a.py"}\n'
+    assert (run_dir / "mood").read_text(encoding="utf-8") == "focused\nnarration line\n"
+    assert (
+        run_dir / "spend.json"
+    ).read_text(encoding="utf-8") == '{"spend": {"total_cost_usd": 1.2}}'
+    assert not (run_dir / "inbox.json").exists()
+    assert not (run_dir / "card").exists()
+    assert not (run_dir / ".card").exists()
+    assert {p.name for p in written} == {"relics.jsonl", "mood", "spend.json"}
+
+
+def test_capture_control_files_is_silent_when_nothing_present(tmp_path):
+    """No control files in the outbox ⇒ nothing written, no node directory."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-empty", event_id="evt-empty", body="work", source="telegram")
+    outbox = tmp_path / "outbox-empty"
+    outbox.mkdir()
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert written == []
+    assert not (ctx.runs_dir / "Gurio__brr" / "run-empty").exists()
+
+
+def test_capture_control_files_noop_without_outbox_or_disabled_account(tmp_path):
+    """Absence discipline: no outbox, or no enabled account, writes nothing."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-x", event_id="evt-x", body="work", source="telegram")
+
+    assert daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=None,
+    ) == []
+    assert daemon._capture_control_files(
+        None, task, repo_label="Gurio/brr", outbox_dir=tmp_path,
+    ) == []
+
+
 def test_card_now_projection_keeps_the_full_body_off_the_live_card():
     body = "## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story."
 
@@ -7192,6 +7665,89 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["spend"]["summary"] == "$0.0100 this session"
     assert levels["context_window"]["summary"] == "95% context left (est)"
     assert levels["source"] == "claude /usage PTY + claude result JSON"
+
+
+def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is_fresh(
+    monkeypatch, tmp_path,
+):
+    """#1027: a *new* run's own outbox has no result-JSON reading of its own
+    yet — that is exactly the wake-time state ``portal-state.json``'s
+    ``spend``/``context_window`` facets render from. The last claude run's
+    reading, durably written into the account-shared dir (``BRR_SHARED_DIR``,
+    ``claude_status._shared_dir``), is what must be found instead of
+    reporting ``absent`` for a fact that is one run stale, not unknown — and
+    its summary must say whose reading it is: the shared slot is one mutable
+    file every claude run overwrites, so serving its "...this session" text
+    unchanged here would misattribute a different run's cost as this run's
+    own (maintainer review, 2026-08-03 — see ``claude_status.mark_cross_run``).
+    """
+    monkeypatch.setattr(
+        daemon.claude_usage, "load_snapshot", lambda outbox: None,
+    )
+    outbox_dir = tmp_path / "outbox" / "evt-fresh-run"
+    outbox_dir.mkdir(parents=True)
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    daemon.claude_status.write_snapshot(
+        shared_dir,
+        {
+            "source": "claude result JSON",
+            "run_id": "run-earlier-worker",
+            "spend": {"summary": "$0.42 this session (estimated)"},
+            "context_window": {"summary": "80% context left (est)"},
+        },
+    )
+
+    levels, slots = daemon._collect_levels(
+        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
+    )
+
+    assert slots == {"quota", "spend", "context_window"}
+    assert levels["spend"]["summary"] == (
+        "$0.42 this session (estimated) — run-earlier-worker's reading, "
+        "carried (not this run's)"
+    )
+    assert levels["context_window"]["summary"] == (
+        "80% context left (est) — run-earlier-worker's reading, "
+        "carried (not this run's)"
+    )
+
+
+def test_collect_levels_for_claude_prefers_own_fresh_reading_over_shared(
+    monkeypatch, tmp_path,
+):
+    """The current run's own outbox copy — when it has already produced
+    one — wins outright and keeps its unmodified "this session" wording; the
+    cross-run attribution note is only for the shared-slot fallback."""
+    monkeypatch.setattr(
+        daemon.claude_usage, "load_snapshot", lambda outbox: None,
+    )
+    outbox_dir = tmp_path / "outbox" / "evt-this-run"
+    outbox_dir.mkdir(parents=True)
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    daemon.claude_status.write_snapshot(
+        outbox_dir,
+        {
+            "source": "claude result JSON",
+            "run_id": "evt-this-run",
+            "spend": {"summary": "$1.00 this session (estimated)"},
+        },
+    )
+    daemon.claude_status.write_snapshot(
+        shared_dir,
+        {
+            "source": "claude result JSON",
+            "run_id": "run-earlier-worker",
+            "spend": {"summary": "$0.42 this session (estimated)"},
+        },
+    )
+
+    levels, _ = daemon._collect_levels(
+        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
+    )
+
+    assert levels["spend"]["summary"] == "$1.00 this session (estimated)"
 
 
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
@@ -7866,3 +8422,244 @@ def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
     # claude had no reading in this snapshot — unknown stays unknown, and the
     # key must be absent rather than empty so the renderer emits nothing.
     assert "quota_level" not in catalog[2]
+
+
+def _capture_ctx(tmp_path):
+    """The scaffold the `_capture_control_files` tests share."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-sym", event_id="evt-sym", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    return ctx, task, outbox, ctx.runs_dir / "Gurio__brr" / "run-sym"
+
+
+def test_capture_control_files_refuses_a_symlink(tmp_path):
+    """A name is not a file, and this destination is published.
+
+    Everything under `.brr/` rides the repo bind mount, so a run environment
+    can write its own outbox (#518) — including replacing a control file
+    with a symlink. `Path.read_bytes` follows one silently, and
+    `runs/<repo>/<run>/` is mirrored to brnrd.dev unredacted. So a one-line
+    `.pr` nobody would ever inspect is enough to publish an ssh key or the
+    account's `security.config`.
+
+    Driven before it was fixed: `read_bytes` on a symlink returned the
+    target's contents and the copy published them.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    secret = tmp_path / "security.config"
+    secret.write_text("runner_cmd: /bin/anything\n", encoding="utf-8")
+    (outbox / ".mood").symlink_to(secret)
+    # A real file beside it, so the refusal is per-file and not a bail-out.
+    (outbox / ".name").write_text("a-run-name\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "mood").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "a-run-name\n"
+    assert all(p.name != "mood" for p in written)
+
+
+def test_capture_control_files_refuses_a_symlink_to_a_directory(tmp_path):
+    """The same class, in the shape a `read_bytes` guard alone would miss."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (outbox / ".relics.jsonl").symlink_to(target)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert not (run_dir / "relics.jsonl").exists()
+
+
+def test_capture_control_files_skips_a_file_over_the_cap(tmp_path):
+    """The readers cap what they *parse*; nothing capped what a run writes.
+
+    `relics._MAX_RECORDS` bounds parsing, not the file. Without a cap here
+    an unbounded control file is read whole into the daemon's memory at
+    closeout and then committed to the account git repo, where it is
+    permanent.
+
+    Skipped, not truncated: half a JSONL file is a file that parses and lies.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(
+        b"x" * (daemon._MAX_PRESERVED_BYTES + 1)
+    )
+    (outbox / ".name").write_text("still-copied\n", encoding="utf-8")
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "relics.jsonl").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "still-copied\n"
+
+
+def test_capture_control_files_keeps_a_file_at_exactly_the_cap(tmp_path):
+    """The boundary is inclusive — the guard rejects *over*, not *at*."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(b"x" * daemon._MAX_PRESERVED_BYTES)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert (run_dir / "relics.jsonl").stat().st_size == daemon._MAX_PRESERVED_BYTES
+
+
+# ── _drain_outbox: await: (#959) ───────────────────────────────────────
+
+
+def test_drain_outbox_arms_await_request(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\n"
+        "await: file:/tmp/brr-await-test-gate.log | pid:999999\n"
+        "timeout: 20m\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original task", source="telegram")
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"await": 1}
+    armed = task.meta["await"]
+    assert armed["conditions"] == [
+        "file:/tmp/brr-await-test-gate.log", "pid:999999", "event",
+    ]
+    assert armed["timeout_seconds"] == 1200.0
+    assert armed["resolved"] is False
+    # The staged file is retired like every other drained verb — an armed
+    # await isn't left sitting in the outbox to be misread as an
+    # undelivered plain message.
+    assert not list(outbox.glob("await*.md"))
+
+
+def test_drain_outbox_await_missing_timeout_is_dropped_with_a_notice(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: event\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "dropped"
+    assert "timeout" in notices[0]["text"]
+
+
+def test_drain_outbox_await_unparseable_condition_is_dropped_with_a_notice(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: carrier-pigeon:42\ntimeout: 5m\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "dropped"
+    assert "unrecognised condition" in notices[0]["text"]
+
+
+def test_drain_outbox_await_refuses_from_a_worker_run(tmp_path):
+    """v1 scope: only the resident may arm a hold — a worker-stack run has
+    no business spending the parent's slot on its own wait."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: event\ntimeout: 5m\n---\n", encoding="utf-8",
+    )
+    task = Run(
+        id="run-worker", event_id=event_id, body="original", source="telegram",
+        meta={"worker": True},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert "worker-stack run" in notices[0]["text"]
+
+
+def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):
+    """An ``await:`` with an empty (blank) condition list is not a refusal —
+    the structural ``event`` member alone is a legitimate, non-blind wait
+    ('just tell me if anything comes in, or after N minutes')."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait:\ntimeout: 10m\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["conditions"] == ["event"]
