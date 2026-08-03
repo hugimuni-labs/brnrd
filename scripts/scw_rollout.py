@@ -37,12 +37,50 @@ bare integer.
 Reads ``SCW_SECRET_KEY`` and ``SCW_CONTAINER_ID`` from the environment; takes
 the fully-tagged target image as its one argument and derives the region from
 its registry host (``rg.<region>.scw.cloud``), so that fact has one copy.
+
+## Commit ordering (#1045)
+
+#1044 gave ``deploy`` its own ``concurrency`` group, so two rollouts that
+genuinely overlap no longer race — the newer one cancels the older. That
+does not order anything: ``deploy`` starts when *its own* ``build`` job
+finishes, and build durations vary by minutes (cold vs warm layer cache), so
+two pushes far enough apart to never overlap can still land their deploys
+out of commit order. #1039's direction 2 is the fix actually shipped here:
+refuse a rollout whose commit is not a descendant of what is already
+running.
+
+**Where "what is already running" comes from.** The container's own
+``registry_image`` field (:func:`read_deployed_commit`), not
+``GET https://brnrd.dev/v1/stats/version`` (the endpoint #1039 used to
+*measure* the original defect). The version endpoint depends on the app
+being up to answer — exactly the condition least likely to hold during the
+kind of incident this guard exists to prevent from compounding. The
+Scaleway API is a dependency this script already has for the PATCH itself;
+reading its answer to "what image are you serving" adds no new trust
+boundary.
+
+**Three outcomes, not two** (:func:`ancestry_status`). A shallow checkout —
+``actions/checkout`` defaults to ``fetch-depth: 1`` — cannot resolve a
+commit outside its single fetched commit, and neither can an unresolvable
+or missing deployed-image tag. That is ``"unknown"``, and it is handled
+differently from ``"not_ancestor"``: refusing a rollout because the check
+*could not run* would turn a cold cache or a momentary API miss into a
+deploy freeze, so ``"unknown"`` rolls out anyway, loudly. Only a *confident*
+``"not_ancestor"`` — both commits resolved locally, neither is the other's
+ancestor — declines, and it declines as a ``::notice::``, not a failure: an
+out-of-order deploy that backs off is the correct outcome, because a newer
+commit is already deployed.
+
+The publish workflow's ``deploy`` job checks out with ``fetch-depth: 0``
+(full history) specifically so this check resolves more often than
+``"unknown"`` — see the comment there for the cost/benefit.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -124,6 +162,99 @@ def container_status(base: str, token: str) -> tuple[str, str]:
     """Return ``(status, error_message)`` for the container."""
     body = request("GET", base, token)
     return str(body.get("status") or ""), str(body.get("error_message") or "")
+
+
+def _deployed_sha_tag(container_info: dict) -> str | None:
+    """Pull the ``sha-<7>`` tag out of a container's ``registry_image``.
+
+    Pure function over an already-fetched body, kept separate from the
+    network call so the parsing rule (only *this* shape is a commit
+    reference) is testable without an API double. ``None`` for a container
+    with no image on record yet (first-ever deploy), or one whose image
+    tag doesn't look like the tag this workflow mints (#848) — a foreign
+    tag is not evidence of "no ancestor", it is evidence this check cannot
+    speak to the image at all.
+    """
+    image = str(container_info.get("registry_image") or "")
+    _, _, tag = image.rpartition(":")
+    if tag.startswith("sha-") and len(tag) > len("sha-"):
+        return tag[len("sha-"):]
+    return None
+
+
+def read_deployed_commit(base: str, token: str) -> str | None:
+    """The short sha this container reports running, right now.
+
+    A dedicated ``GET``, asked once before the settle/patch loop in
+    :func:`rollout` even starts — the question "what was deployed before
+    this rollout touched anything" must not be answered from a read that
+    happens after a PATCH has already landed.
+    """
+    return _deployed_sha_tag(request("GET", base, token))
+
+
+def _resolve_commit(repo_root, rev: str) -> str | None:
+    """``git rev-parse --verify <rev>^{commit}``, or ``None`` when it can't resolve.
+
+    A missing ref and a shallow checkout that never fetched the object are
+    indistinguishable to this call, and #1045 treats them identically:
+    "not resolvable in this checkout" is not a claim that the commit
+    doesn't exist anywhere.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{rev}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def ancestry_status(
+    repo_root, deployed_rev: str | None, candidate_rev: str = "HEAD",
+) -> tuple[str, str | None, str | None]:
+    """Is *candidate_rev* a descendant of *deployed_rev*?
+
+    Returns ``(status, deployed_sha, candidate_sha)``. ``status`` is one of:
+
+    - ``"ancestor"`` — *deployed_rev* is reachable from *candidate_rev*;
+      rolling out moves the container forward.
+    - ``"not_ancestor"`` — both resolved locally, and neither is the
+      other's ancestor (or *candidate_rev* is actually the older one).
+      Confident, and confidently a decline.
+    - ``"unknown"`` — *deployed_rev* is empty, or either revision could not
+      be resolved in this checkout (shallow history, a foreign tag, an
+      object never fetched). Never guessed past this point — the caller
+      rolls out rather than freezing on an unresolvable check.
+
+    The resolved shas ride along even on ``"unknown"`` (whichever side did
+    resolve) so a caller's notice can be as specific as the checkout allows.
+    """
+    if not deployed_rev:
+        return "unknown", None, None
+    deployed_sha = _resolve_commit(repo_root, deployed_rev)
+    candidate_sha = _resolve_commit(repo_root, candidate_rev)
+    if deployed_sha is None or candidate_sha is None:
+        return "unknown", deployed_sha, candidate_sha
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", deployed_sha, candidate_sha],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return "ancestor", deployed_sha, candidate_sha
+    if result.returncode == 1:
+        return "not_ancestor", deployed_sha, candidate_sha
+    # >1 is a genuine git error (bad object, corrupt repo) on revisions this
+    # function itself just resolved — should not happen, but "unknown" is
+    # the only honest answer for a code path with no test coverage of its
+    # own git failing after the fact.
+    return "unknown", deployed_sha, candidate_sha
 
 
 def wait_settled(
@@ -213,6 +344,51 @@ def rollout(image: str, container_id: str, token: str) -> int:
     return 0
 
 
+def check_commit_ordering(base: str, token: str, repo_root) -> bool:
+    """Should this rollout proceed? Prints its own reasoning either way.
+
+    ``True`` for "go ahead" — either this commit is a confirmed descendant
+    of what's deployed, or the check could not resolve an answer and the
+    honest default is to roll out (#1045's `unknown` branch). ``False``
+    only for a confident ``not_ancestor``: a newer commit is already
+    running, so declining is the whole behaviour, not a failure.
+
+    Split from :func:`main` so a test can drive the ordering decision
+    without also exercising argv/credential parsing.
+    """
+    deployed_tag: str | None = None
+    try:
+        deployed_tag = read_deployed_commit(base, token)
+    except ApiError as exc:
+        print(
+            f"::warning::could not read the currently deployed image ({exc}); "
+            "commit ordering will read as unknown",
+            flush=True,
+        )
+
+    status, deployed_sha, candidate_sha = ancestry_status(repo_root, deployed_tag)
+    if status == "not_ancestor":
+        print(
+            "::notice::declining rollout — deployed commit "
+            f"{deployed_sha or deployed_tag} is not an ancestor of "
+            f"{candidate_sha or 'HEAD'}; a newer commit is already running, "
+            "which is the desired end state",
+            flush=True,
+        )
+        return False
+    if status == "unknown":
+        reason = (
+            f"tag {deployed_tag!r} not resolvable in this checkout"
+            if deployed_tag
+            else "no deployed commit on record (first deploy?)"
+        )
+        print(
+            f"::notice::commit ordering unknown ({reason}); rolling out anyway",
+            flush=True,
+        )
+    return True
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: scw_rollout.py <registry-image:tag>", file=sys.stderr)
@@ -225,7 +401,12 @@ def main(argv: list[str]) -> int:
             flush=True,
         )
         return 2
-    return rollout(argv[1], container_id, token)
+    image = argv[1]
+    base = f"{API_ROOT}/regions/{region_of(image)}/containers/{container_id}"
+    repo_root = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+    if not check_commit_ordering(base, token, repo_root):
+        return 0
+    return rollout(image, container_id, token)
 
 
 if __name__ == "__main__":  # pragma: no cover
