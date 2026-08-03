@@ -1806,6 +1806,55 @@ def test_drain_preserves_telegram_origin_identity(tmp_path, monkeypatch):
     assert ev["cloud_username"] == "ada_l"
 
 
+def test_drain_preserves_whatsapp_origin_identity(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid,
+            "body": "fix from whatsapp",
+            "source": "whatsapp",
+            "reply_to": {
+                "platform": "whatsapp",
+                "chat_id": "15551234567",
+                "message_id": "wamid.abc",
+            },
+        },
+        headers=acc,
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = protocol.list_pending(inbox_dir)
+    assert len(pending) == 1
+    ev = pending[0]
+    assert ev["source"] == "cloud"
+    assert ev["cloud_platform"] == "whatsapp"
+    # The frontmatter round-trip auto-types a digits-only string as an int
+    # (same as the telegram case above, whose ``chat_id`` posts as JSON 555
+    # and reads back as bare 555) — a WhatsApp wa_id is digits-only too.
+    assert ev["cloud_chat_id"] == 15551234567
+    assert ev["cloud_message_id"] == "wamid.abc"
+
+
+def test_response_limit_registered_for_whatsapp():
+    """#the-forwarder-learns-a-table — WhatsApp's overflow ceiling sits
+    (like Telegram's) safely under the platform's hard 4096-char cap, so
+    ``delivery.resolve_overflow`` gets a chance to gist/truncate before the
+    send itself would reject the body."""
+    assert cloud._RESPONSE_LIMITS["whatsapp"] < 4096
+
+
 def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
     # A foreign event (no cloud_event_id) must not be posted to brnrd;
     # it is logged + skipped, leaving its files in place for triage.

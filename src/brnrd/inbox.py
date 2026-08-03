@@ -84,36 +84,75 @@ def make_default_forwarder(settings) -> Forwarder:
             return credential["token"]
         return settings.github_bot_token
 
+    def forward_telegram(item: ForwardItem, reply_to: dict) -> None:
+        if not settings.telegram_bot_token:
+            return
+        from .platforms import telegram
+        telegram.send_message(
+            settings.telegram_bot_token,
+            reply_to["chat_id"],
+            item.body,
+            topic_id=reply_to.get("topic_id") or None,
+            reply_to_message_id=reply_to.get("message_id") or None,
+        )
+
+    def forward_github(item: ForwardItem, reply_to: dict) -> None:
+        from .platforms import github
+        repo = str(reply_to.get("repo") or "")
+        issue_number = coerce_int(reply_to.get("issue_number"))
+        if not repo or issue_number is None:
+            return
+        token = github_token(reply_to)
+        if not token:
+            return
+        kind = str(reply_to.get("kind") or "")
+        comment_id = coerce_int(reply_to.get("comment_id"))
+        pr_number = coerce_int(reply_to.get("pr_number") or reply_to.get("issue_number"))
+        body = github_body(reply_to, item.body)
+        if kind == "pr-review-comment" and comment_id and pr_number:
+            github.post_review_reply(token, settings.github_api_base_url, settings.github_api_version, repo, pr_number, comment_id, body)
+        else:
+            github.post_issue_comment(token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, body)
+
+    def forward_whatsapp(item: ForwardItem, reply_to: dict) -> None:
+        if not (settings.whatsapp_access_token and settings.whatsapp_phone_number_id):
+            return
+        from .platforms import whatsapp
+        chat_id = reply_to.get("chat_id")
+        if not chat_id:
+            return
+        whatsapp.send_message(
+            settings.whatsapp_access_token,
+            settings.whatsapp_phone_number_id,
+            str(chat_id),
+            item.body,
+            api_base_url=settings.whatsapp_api_base_url,
+            api_version=settings.whatsapp_api_version,
+            reply_to_message_id=reply_to.get("message_id") or None,
+        )
+
+    # The routing table this refactor exists to introduce (#the-forwarder-
+    # learns-a-table): one platform name -> handler mapping, replacing what
+    # used to be an if/elif chain that grew by one clause per platform. The
+    # table lives here rather than in ``platforms/__init__.py`` because each
+    # handler closes over ``settings`` (credential lookup, API base URLs,
+    # even a per-installation GitHub token) — the platform modules
+    # themselves stay transport-only (see their own docstrings), so the
+    # thing doing the *dispatching* is the thing already holding the
+    # settings closure. Adding a platform is adding one entry here plus its
+    # ``platforms/<name>.py`` transport module — no other call site knows
+    # this table exists.
+    handlers: dict[str, Callable[[ForwardItem, dict], None]] = {
+        "telegram": forward_telegram,
+        "github": forward_github,
+        "whatsapp": forward_whatsapp,
+    }
+
     def forward(item: ForwardItem) -> None:
         reply_to = item.reply_to or {}
-        if reply_to.get("platform") == "telegram" and settings.telegram_bot_token:
-            from .platforms import telegram
-            telegram.send_message(
-                settings.telegram_bot_token,
-                reply_to["chat_id"],
-                item.body,
-                topic_id=reply_to.get("topic_id") or None,
-                reply_to_message_id=reply_to.get("message_id") or None,
-            )
-            return
-
-        if reply_to.get("platform") == "github":
-            from .platforms import github
-            repo = str(reply_to.get("repo") or "")
-            issue_number = coerce_int(reply_to.get("issue_number"))
-            if not repo or issue_number is None:
-                return
-            token = github_token(reply_to)
-            if not token:
-                return
-            kind = str(reply_to.get("kind") or "")
-            comment_id = coerce_int(reply_to.get("comment_id"))
-            pr_number = coerce_int(reply_to.get("pr_number") or reply_to.get("issue_number"))
-            body = github_body(reply_to, item.body)
-            if kind == "pr-review-comment" and comment_id and pr_number:
-                github.post_review_reply(token, settings.github_api_base_url, settings.github_api_version, repo, pr_number, comment_id, body)
-            else:
-                github.post_issue_comment(token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, body)
+        handler = handlers.get(reply_to.get("platform"))
+        if handler is not None:
+            handler(item, reply_to)
 
     return forward
 
