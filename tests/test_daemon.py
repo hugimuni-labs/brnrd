@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -7036,6 +7037,145 @@ def test_persist_boundaries_summary_omits_the_file_when_transcript_absent(tmp_pa
     assert "run_boundaries_summary_path" not in task.meta
 
 
+def test_capture_control_files_partition_is_total():
+    """Every control-file constant the scanned modules declare is decided.
+
+    ``_discover_control_file_names`` reads the constants back via
+    introspection rather than trusting a hand-copied list — this is the
+    guard that catches the *next* control file somebody adds without
+    deciding its fate. See the test below for proof the mechanism itself
+    fires, not just that today's fixed set happens to be clean.
+    """
+    discovered = daemon._discover_control_file_names()
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    missing = set(discovered) - classified
+    assert not missing, (
+        f"undecided control file(s): {sorted(discovered[n] for n in missing)} "
+        "— add each to daemon.PRESERVED or daemon.NOT_PRESERVED with a reason"
+    )
+    # A partition, not just a total covering: no name is both kept and
+    # dropped depending on which dict a reader happens to check first.
+    assert not (set(daemon.PRESERVED) & set(daemon.NOT_PRESERVED))
+
+
+def test_capture_control_files_partition_catches_an_undecided_constant():
+    """The totality guard actually fires on a new constant, not just today's.
+
+    A fake module carrying one unclassified ``*_NAME`` constant, scanned
+    the same way :func:`daemon._discover_control_file_names` scans the real
+    modules, must come back undecided. Neutering ``PRESERVED``/
+    ``NOT_PRESERVED`` themselves (deleting an entry) would also redden
+    ``test_capture_control_files_partition_is_total`` above — this test
+    instead proves the *discovery* half by construction, independent of
+    whichever real constants happen to exist right now.
+    """
+    fake_module = types.SimpleNamespace(
+        __name__="fake_control_module",
+        TOTALLY_NEW_CONTROL_NAME=".totally-new-control-file",
+    )
+    discovered = {
+        value: f"{fake_module.__name__}.{attr}"
+        for attr, value in vars(fake_module).items()
+        if daemon._CONTROL_NAME_RE.match(attr)
+        and isinstance(value, str) and value
+    }
+    assert discovered == {
+        ".totally-new-control-file": "fake_control_module.TOTALLY_NEW_CONTROL_NAME"
+    }
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    assert set(discovered) - classified == {".totally-new-control-file"}
+
+
+def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
+    """The general case of ``_capture_pr_handle``: outbox -> node, dot stripped.
+
+    Also proves the pessimistic-side-down half by construction: a file in
+    ``NOT_PRESERVED`` (``inbox.json``, carrying what would be another
+    correspondent's pending event in the real shape) sits right next to the
+    preserved files in the source outbox and must not appear on the node.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-ctrl", event_id="evt-ctrl", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".relics.jsonl").write_text(
+        '{"kind": "file", "path": "a.py"}\n', encoding="utf-8",
+    )
+    (outbox / ".mood").write_text("focused\nnarration line\n", encoding="utf-8")
+    (outbox / ".claude-result-levels.json").write_text(
+        '{"spend": {"total_cost_usd": 1.2}}', encoding="utf-8",
+    )
+    # Present in the outbox but NOT_PRESERVED — must survive uncopied.
+    (outbox / "inbox.json").write_text(
+        '{"events": [{"body": "another correspondent said this"}]}',
+        encoding="utf-8",
+    )
+    (outbox / ".card").write_text("## Now\n\nlive\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    run_dir = ctx.runs_dir / "Gurio__brr" / "run-ctrl"
+    assert (
+        run_dir / "relics.jsonl"
+    ).read_text(encoding="utf-8") == '{"kind": "file", "path": "a.py"}\n'
+    assert (run_dir / "mood").read_text(encoding="utf-8") == "focused\nnarration line\n"
+    assert (
+        run_dir / "spend.json"
+    ).read_text(encoding="utf-8") == '{"spend": {"total_cost_usd": 1.2}}'
+    assert not (run_dir / "inbox.json").exists()
+    assert not (run_dir / "card").exists()
+    assert not (run_dir / ".card").exists()
+    assert {p.name for p in written} == {"relics.jsonl", "mood", "spend.json"}
+
+
+def test_capture_control_files_is_silent_when_nothing_present(tmp_path):
+    """No control files in the outbox ⇒ nothing written, no node directory."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-empty", event_id="evt-empty", body="work", source="telegram")
+    outbox = tmp_path / "outbox-empty"
+    outbox.mkdir()
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert written == []
+    assert not (ctx.runs_dir / "Gurio__brr" / "run-empty").exists()
+
+
+def test_capture_control_files_noop_without_outbox_or_disabled_account(tmp_path):
+    """Absence discipline: no outbox, or no enabled account, writes nothing."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-x", event_id="evt-x", body="work", source="telegram")
+
+    assert daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=None,
+    ) == []
+    assert daemon._capture_control_files(
+        None, task, repo_label="Gurio/brr", outbox_dir=tmp_path,
+    ) == []
+
+
 def test_card_now_projection_keeps_the_full_body_off_the_live_card():
     body = "## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story."
 
@@ -7944,3 +8084,95 @@ def test_enrich_catalog_quota_stamps_every_row_and_skips_unknown_pools(
     # claude had no reading in this snapshot — unknown stays unknown, and the
     # key must be absent rather than empty so the renderer emits nothing.
     assert "quota_level" not in catalog[2]
+
+
+def _capture_ctx(tmp_path):
+    """The scaffold the `_capture_control_files` tests share."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-sym", event_id="evt-sym", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    return ctx, task, outbox, ctx.runs_dir / "Gurio__brr" / "run-sym"
+
+
+def test_capture_control_files_refuses_a_symlink(tmp_path):
+    """A name is not a file, and this destination is published.
+
+    Everything under `.brr/` rides the repo bind mount, so a run environment
+    can write its own outbox (#518) — including replacing a control file
+    with a symlink. `Path.read_bytes` follows one silently, and
+    `runs/<repo>/<run>/` is mirrored to brnrd.dev unredacted. So a one-line
+    `.pr` nobody would ever inspect is enough to publish an ssh key or the
+    account's `security.config`.
+
+    Driven before it was fixed: `read_bytes` on a symlink returned the
+    target's contents and the copy published them.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    secret = tmp_path / "security.config"
+    secret.write_text("runner_cmd: /bin/anything\n", encoding="utf-8")
+    (outbox / ".mood").symlink_to(secret)
+    # A real file beside it, so the refusal is per-file and not a bail-out.
+    (outbox / ".name").write_text("a-run-name\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "mood").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "a-run-name\n"
+    assert all(p.name != "mood" for p in written)
+
+
+def test_capture_control_files_refuses_a_symlink_to_a_directory(tmp_path):
+    """The same class, in the shape a `read_bytes` guard alone would miss."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (outbox / ".relics.jsonl").symlink_to(target)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert not (run_dir / "relics.jsonl").exists()
+
+
+def test_capture_control_files_skips_a_file_over_the_cap(tmp_path):
+    """The readers cap what they *parse*; nothing capped what a run writes.
+
+    `relics._MAX_RECORDS` bounds parsing, not the file. Without a cap here
+    an unbounded control file is read whole into the daemon's memory at
+    closeout and then committed to the account git repo, where it is
+    permanent.
+
+    Skipped, not truncated: half a JSONL file is a file that parses and lies.
+    """
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(
+        b"x" * (daemon._MAX_PRESERVED_BYTES + 1)
+    )
+    (outbox / ".name").write_text("still-copied\n", encoding="utf-8")
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert not (run_dir / "relics.jsonl").exists()
+    assert (run_dir / "name").read_text(encoding="utf-8") == "still-copied\n"
+
+
+def test_capture_control_files_keeps_a_file_at_exactly_the_cap(tmp_path):
+    """The boundary is inclusive — the guard rejects *over*, not *at*."""
+    ctx, task, outbox, run_dir = _capture_ctx(tmp_path)
+    (outbox / ".relics.jsonl").write_bytes(b"x" * daemon._MAX_PRESERVED_BYTES)
+
+    daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+    assert (run_dir / "relics.jsonl").stat().st_size == daemon._MAX_PRESERVED_BYTES
