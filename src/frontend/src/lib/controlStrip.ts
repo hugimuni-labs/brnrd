@@ -5,6 +5,7 @@ import {
 	type QuotaShell,
 	type QuotaWindow
 } from './quota.ts';
+import { isCollapsed } from './collapse.ts';
 import type { RunnerProfile, WakeRequest } from './runners';
 
 export type RunnerBlockKind = 'requested' | 'default';
@@ -211,13 +212,23 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
  * reader's own open outranks the scroll verdict, and both ways of opening —
  * pinning the slim bar, or expanding the rack — are equally the reader's.
  * Enumerating them inline is how the second one got left out.
+ *
+ * A thin wrapper over `collapse.isCollapsed` (2026-08-03, the rack answers
+ * everywhere): the rule above generalises past this component — it is the
+ * same one the machine's dock answers — so the verdict itself now lives in
+ * `collapse.ts` and this function only translates the rail's own vocabulary
+ * into it.
  */
 export function railIsSlim(state: {
 	condensed: boolean;
 	pinnedOpen: boolean;
 	expanded: boolean;
 }): boolean {
-	return state.condensed && !state.pinnedOpen && !state.expanded;
+	return isCollapsed({
+		open: state.expanded,
+		scrolledPast: state.condensed,
+		pinnedOpen: state.pinnedOpen
+	});
 }
 
 /**
