@@ -1083,7 +1083,7 @@
 		     disagree. -->
 		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
-			class="ignite sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			class="ignite machine-dock sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
 			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
 			aria-label="the machine"
 		>
