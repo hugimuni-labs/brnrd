@@ -4175,9 +4175,38 @@ def _run_worker(
                     spawn_parent_run_id=str(
                         task.meta.get("spawn_parent_run_id") or ""),
                 )
+                # #562's residual: "unowned" is not automatically "unheard".
+                # `notify.gate` (explicit config key, or single-gate
+                # inference — `_resolve_notify_gate`) names a configured
+                # chat gate to carry the terminal text out-of-bound instead
+                # of staging it undeliverable. Never attempted for a
+                # duplicate (nothing new to say) or when the source is
+                # already owned (the existing channel already carries it) —
+                # the single-delivery invariant lives in that ordering, not
+                # in a check inside this block.
+                notify_gate = (
+                    _resolve_notify_gate(cfg, emit.brr_dir)
+                    if unowned and not terminal_duplicate
+                    else ""
+                )
+                gate_fallback_delivered = False
+                if notify_gate:
+                    fallback_body = protocol.read_response(responses_dir, eid) or ""
+                    gate_fallback_delivered = _deliver_out_of_bound(
+                        emit, task, responses_dir, inbox_dir, eid,
+                        notify_gate, {}, fallback_body, outbox_dir=outbox_dir,
+                    )
+                    if gate_fallback_delivered:
+                        output_stats["outbound"] = output_stats.get("outbound", 0) + 1
+                        output_stats["delivered"] = output_stats.get("delivered", 0) + 1
+                undeliverable = (
+                    unowned and not terminal_duplicate and not gate_fallback_delivered
+                )
                 suppression_reason = (
                     "duplicate of a delivered reply"
                     if terminal_duplicate
+                    else f"delivered out-of-bound via notify.gate={notify_gate!r}"
+                    if gate_fallback_delivered
                     else f"no gate owns {source or 'unknown'} events"
                     if unowned
                     else ""
@@ -4187,8 +4216,9 @@ def _run_worker(
                     spawn_parent_run_id=str(
                         task.meta.get("spawn_parent_run_id") or ""),
                     duplicate=terminal_duplicate,
-                    undeliverable=unowned and not terminal_duplicate,
+                    undeliverable=undeliverable,
                     delivered_elsewhere=bool(output_stats.get("delivered", 0)),
+                    gate_fallback=gate_fallback_delivered,
                 )
                 task.meta["terminal_route"] = route
                 _stage_terminal_response(
@@ -4197,7 +4227,8 @@ def _run_worker(
                     event,
                     resp_path,
                     suppressed_reason=suppression_reason,
-                    undeliverable=unowned and not terminal_duplicate,
+                    undeliverable=undeliverable,
+                    delivered_gate=notify_gate if gate_fallback_delivered else "",
                 )
                 if terminal_duplicate:
                     # Static dispatch call: the terminal stream is an exact
@@ -4209,6 +4240,18 @@ def _run_worker(
                     print(
                         f"[brnrd] worker {eid}: terminal stream suppressed "
                         "(duplicate of a delivered reply)"
+                    )
+                elif gate_fallback_delivered:
+                    # Run-type-agnostic delivery (the point of this whole
+                    # block): nobody owned the waking event's source, but
+                    # `notify.gate` did, so the closing message still reaches
+                    # a chat instead of sitting readable only on the run
+                    # node. Printed like `gate-sole` — the net caught this
+                    # one too, just via a gate the event never addressed.
+                    print(
+                        f"[brnrd] worker {eid}: terminal stream had no owning "
+                        f"gate — delivered via notify.gate={notify_gate!r} "
+                        "instead of staging undeliverable"
                     )
                 elif not unowned:
                     _record_response_artifact(emit, task, resp_path)
@@ -6198,14 +6241,22 @@ def _stage_terminal_response(
     *,
     suppressed_reason: str = "",
     undeliverable: bool = False,
+    delivered_gate: str = "",
 ) -> Path | None:
     # The terminal stream is always *captured* here, deliverability aside.
     # When *undeliverable* (no gate owns the source — a ``schedule`` wake
-    # with no spawning parent), the capture is the whole story: the text is
-    # kept as the run's body / message-store record and is dispatched
-    # nowhere. That is deliberate — there is no fallback gate to invent one
-    # for (#562). A schedule-woken run with something to say must route it
-    # to a configured user gate itself (`gate: telegram`).
+    # with no spawning parent, and no ``notify.gate`` fallback resolved
+    # either) the capture is the whole story: the text is kept as the run's
+    # body / message-store record and is dispatched nowhere. A schedule-
+    # woken run can still always route out-of-bound itself (`gate:
+    # telegram`); `notify.gate` (see `_resolve_notify_gate`) is what closes
+    # the gap for the run that never got the chance to (#562's residual —
+    # the terminal reply of a run that produced no other output).
+    #
+    # *delivered_gate* names the fallback gate when the caller already
+    # queued this text there via `_deliver_out_of_bound` — the capture
+    # record below must not *also* sit pending, or the two would double-
+    # send the same text down two channels.
     body = protocol.read_response(response_path.parent, str(event.get("id") or "")) or ""
     status = (
         message_store.UNDELIVERABLE if undeliverable else message_store.PENDING
@@ -6228,7 +6279,7 @@ def _stage_terminal_response(
             message_store.transition(
                 path,
                 message_store.DELIVERED,
-                gate="deduplicated",
+                gate=delivered_gate or "deduplicated",
                 platform_message_id="already-delivered",
             )
     if suppressed_reason:
@@ -7382,6 +7433,48 @@ def _configured_gate_names(brr_dir: Path) -> list[str]:
     return [name for name in _BUILTIN_GATES if _gate_is_configured(brr_dir, name)]
 
 
+# ``github`` excluded deliberately: a forge PR/issue thread is not the
+# correspondent who scheduled the wake or is waiting in a chat, so it is
+# never a candidate for the *inferred* ``notify.gate`` fallback below (an
+# explicit ``notify.gate=github`` still goes through — that is the operator
+# saying so, not brr guessing).
+_NOTIFY_GATE_FALLBACK_CANDIDATES = tuple(g for g in _BUILTIN_GATES if g != "github")
+
+
+def _resolve_notify_gate(cfg: dict, brr_dir: Path) -> str:
+    """Resolve the ``notify.gate`` fallback target, or ``""`` when none applies.
+
+    This is the "no run left unheard" config surface: which gate carries a
+    terminal reply when *no* gate owns the waking event's source (a
+    ``schedule`` fire chief among them) and the run has something to say.
+    Resolution order:
+
+    1. **Explicit** ``notify.gate`` in ``.brr/config`` wins outright. An
+       explicit key naming a gate that isn't actually deliverable here
+       (typo, not configured) resolves to ``""`` — the caller then treats
+       it exactly like "nothing resolved" (current undeliverable staging),
+       never a crash and never a silent fall-through to inference, which
+       would surprise an operator who deliberately named a gate.
+    2. **Single-gate inference**, only when unset: exactly *one* user-chat
+       gate (:data:`_NOTIFY_GATE_FALLBACK_CANDIDATES` — telegram / slack /
+       cloud) is configured on this account. Zero or several configured
+       candidates is ambiguous or already covered, so it keeps the prior
+       behavior (undeliverable) rather than guessing which correspondent
+       the operator meant. This is what kills the "toxic segregation"
+       between schedule-woken runs and everything else with no config
+       migration required for the overwhelmingly common one-chat-gate
+       account.
+    """
+    explicit = str(cfg.get("notify.gate") or "").strip()
+    if explicit:
+        return explicit if _gate_can_deliver(brr_dir, explicit) else ""
+    candidates = [
+        gate for gate in _NOTIFY_GATE_FALLBACK_CANDIDATES
+        if _gate_can_deliver(brr_dir, gate)
+    ]
+    return candidates[0] if len(candidates) == 1 else ""
+
+
 def _gate_owns_source(source: str) -> bool:
     """True when some gate's delivery loop claims events of *source*.
 
@@ -7427,6 +7520,7 @@ _TERMINAL_ROUTE_UNDELIVERABLE = "undeliverable"
 _TERMINAL_ROUTE_DISPATCH_EDGE = "dispatch-edge"
 _TERMINAL_ROUTE_GATE_EXTRA = "gate-extra"
 _TERMINAL_ROUTE_GATE_SOLE = "gate-sole"
+_TERMINAL_ROUTE_GATE_FALLBACK = "gate-fallback"
 _TERMINAL_ROUTE_UNKNOWN = "unknown"
 
 
@@ -7437,6 +7531,7 @@ def _terminal_route(
     duplicate: bool = False,
     undeliverable: bool = False,
     delivered_elsewhere: bool = False,
+    gate_fallback: bool = False,
 ) -> str:
     """Name what carried this run's terminal stream, at the moment it was decided.
 
@@ -7464,6 +7559,14 @@ def _terminal_route(
     - ``gate-sole`` — a gate delivered it and it was the run's *only*
       delivery. This is the net catching: without the static dispatch this
       run reaches its correspondent with nothing at all.
+    - ``gate-fallback`` — nobody owns *source* (the ``undeliverable`` shape
+      above), but :func:`_resolve_notify_gate` found a configured
+      ``notify.gate`` target and :func:`_deliver_out_of_bound` queued the
+      terminal text there instead. Distinct from ``gate-sole``: the gate
+      here was never addressed by the waking event at all, it was chosen
+      *after the fact* as the "somebody should still hear this" fallback —
+      a schedule-woken run's closing message reaching the account's one
+      configured chat gate is this route, every time.
 
     ``unknown`` covers an absent source, which :func:`_terminal_reply_lands`
     treats as landing rather than as impossible. Naming it beats an empty
@@ -7471,6 +7574,8 @@ def _terminal_route(
     """
     if duplicate:
         return _TERMINAL_ROUTE_DUPLICATE
+    if gate_fallback:
+        return _TERMINAL_ROUTE_GATE_FALLBACK
     if undeliverable:
         return _TERMINAL_ROUTE_UNDELIVERABLE
     if _gate_owns_source(source):
