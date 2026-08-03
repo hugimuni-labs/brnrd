@@ -8,6 +8,7 @@ import {
 	machineDockTop,
 	machineDockVerdict,
 	machineHeadFields,
+	machineHeadRun,
 	machineTapVerdict,
 	railKeepsLivePick
 } from './machineDock.ts';
@@ -220,4 +221,30 @@ test('the rail drops its live-pick row once the machine docks beneath it', () =>
 
 test('a rail with no machine beneath it keeps the row', () => {
 	assert.equal(railKeepsLivePick(false), true);
+});
+
+// One frame, two moods: the machine block borrows the selection.
+
+test('nothing selected — pulse — the head wears the lead, exactly as before', () => {
+	assert.equal(machineHeadRun('run-a', null), 'run-a');
+	assert.equal(machineHeadRun(null, null), null);
+});
+
+test('a run selected anywhere on the page — inspection — the head wears it, not the lead', () => {
+	assert.equal(machineHeadRun('run-a', 'run-b'), 'run-b');
+});
+
+test('selecting the lead itself is not a distinct mood — same id either way', () => {
+	assert.equal(machineHeadRun('run-a', 'run-a'), 'run-a');
+});
+
+test('a selection outlives the lead — nothing burning, a run still picked from elsewhere', () => {
+	// Not reachable from a live run today (`selectFromLoom`'s two call sites
+	// both name a live id), but the ranking holds regardless: a selection
+	// this file is handed always outranks an absent lead.
+	assert.equal(machineHeadRun(null, 'run-b'), 'run-b');
+});
+
+test('deselect falls straight back to pulse — no memory of the last pick', () => {
+	assert.equal(machineHeadRun('run-a', null), machineHeadRun('run-a', null));
 });
