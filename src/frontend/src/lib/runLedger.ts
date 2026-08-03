@@ -173,6 +173,22 @@ export interface RunLedgerRow {
 	repo_label: string | null;
 	source_system: string | null;
 	name: string | null;
+	// THE FACE IN THREE TENSES piece 3 (2026-08-03): a closed run's final
+	// mood, mirroring `LiveRun`'s `mood*` fields (`liveRuns.ts`) so a shared
+	// `moodFace()` call reads a ledger row exactly as it reads a live one.
+	// Optional and currently always-absent on the wire: `run_ledger.py`'s
+	// `_ROW_FIELDS` tuple and `build_closed_run_row`'s row dict never call
+	// the already-existing `read_run_mood_control()` helper the way they
+	// call `read_run_name_control()` for `name` — named as the missing
+	// backend lane rather than built here (out of this frontend-only
+	// change's scope). These fields are forward-compatible stubs: the day
+	// that lane ships, `curatedLine` below starts rendering a face with no
+	// further frontend change.
+	mood?: string | null;
+	mood_glyph?: string | null;
+	mood_frames?: string[][] | null;
+	mood_rest?: string | null;
+	mood_pitch?: number | null;
 	external_refs: RelicRecord[] | null;
 	parent_run_id: string | null;
 	is_subspawn: boolean | null;

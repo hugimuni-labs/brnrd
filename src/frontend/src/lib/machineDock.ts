@@ -259,6 +259,33 @@ export function machineDockVerdict(state: {
 }
 
 /**
+ * One frame, two moods (the machine block borrows the selection).
+ *
+ * **Pulse** — nothing selected: the head wears the lead live run's face and
+ * name, exactly as it always has. **Inspection** — a run selected anywhere
+ * on the page: the head wears *that* run's face and name instead, so a
+ * reader scrolled down to the dock still sees which run their selection
+ * holds, without scrolling back up to the lane to be reminded.
+ *
+ * `selectedId` is the page's own `loomSelection`, narrowed to the `'run'`
+ * kind before it reaches here — a *wake* selection is not a run and leaves
+ * the head in pulse mood. Selection wins whenever it names one at all;
+ * `null` (deselect) falls straight back to the lead, no memory of the last
+ * pick. The one-line rule generalises past this component: a reader's own
+ * selection always outranks a computed default, the same ranking
+ * `collapse.isCollapsed` gives `open`/`pinnedOpen` over `scrolledPast`.
+ *
+ * Deliberately just the id: which *fields* the identity renders with (face,
+ * label) is a lookup the caller already owns — every selectable run lives in
+ * the same `PickRow[]` the lead is drawn from (`selectFromLoom`'s two call
+ * sites both select live runs), so the component resolves the id against
+ * that array rather than this file inventing a second run-lookup surface.
+ */
+export function machineHeadRun(leadId: string | null, selectedId: string | null): string | null {
+	return selectedId ?? leadId;
+}
+
+/**
  * Whether the condensed rail should still draw its own live-pick row.
  *
  * It should not, once the machine docks beneath it. That row existed because
