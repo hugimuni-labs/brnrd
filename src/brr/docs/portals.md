@@ -99,6 +99,18 @@ abandoned intent sits owed at every boundary forever, and a nag with no
 counter stops being read. The reason rides the row, so the record of the
 abandonment lives where the abandonment happened.
 
+**A promise cannot be kept by its own past.** Each row records how much of
+its kind the run had already produced when the claim was made, and only the
+surplus over that counts toward it. Without that, a run that had opened one PR
+and then promised two more would read *all kept* the moment nothing further
+happened — the guard failing in the **optimistic** direction, which is the one
+direction a guard may not fail in. A hand-written row with no baseline falls
+back to counting everything, which is the lenient old behaviour.
+
+What it still cannot do: two *unrelated* later PRs satisfy two promised PRs.
+Counting cannot see intent, and matching on `--ref` would cry wolf every time
+the right work shipped under another name.
+
 **What it renders.**
 
 - `owed N` — a bar chip, absent at zero, the same differential discipline

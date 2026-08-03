@@ -302,3 +302,91 @@ def test_a_run_that_promised_nothing_gets_no_blueprint_line_at_the_closeout(
     assert "blueprint" not in inject
     assert "still owed" not in inject
     assert "owed " not in inject
+
+
+# ── The baseline: a promise cannot be kept by its own past ───────────────
+
+
+def test_a_promise_is_not_satisfied_by_produce_that_predates_it():
+    """Found by driving the feature on the run that wrote it.
+
+    The run had already opened one PR, then promised two more, and the
+    blueprint read *all kept* — counting alone cannot tell produce that
+    answers a promise from produce that merely predates it. Without the
+    baseline the guard fails in the **optimistic** direction: silent while a
+    promise is outstanding.
+    """
+    rows = [{"what": "pr", "count": 2, "baseline": 1}]
+    plan = promises.blueprint(rows, {"pr": 2})
+    assert plan.owed == {"pr": 1}
+    assert promises.chip(plan) == "owed 1"
+
+    # And it clears the moment the promised work actually lands.
+    assert promises.blueprint(rows, {"pr": 3}).owed == {}
+
+
+def test_a_row_without_a_baseline_keeps_the_old_lenient_behaviour():
+    """Hand-written rows, and rows from before the field existed.
+
+    Stated rather than hidden: the fallback is the lenient one, so an
+    un-baselined promise behaves exactly as it did before.
+    """
+    plan = promises.blueprint([{"what": "pr", "count": 2}], {"pr": 2})
+    assert plan.owed == {}
+
+
+def test_the_highest_baseline_of_a_kind_wins():
+    """A later promise must not be answered by work that preceded it.
+
+    Two promises for the same kind, made at different times: taking the
+    first or the minimum baseline would let the second be satisfied by the
+    work that landed between them — the optimistic direction again.
+    """
+    rows = [
+        {"what": "pr", "count": 1, "baseline": 0},
+        {"what": "pr", "count": 1, "baseline": 3},
+    ]
+    plan = promises.blueprint(rows, {"pr": 3})
+    assert plan.owed == {"pr": 2}
+
+
+def test_a_released_row_carries_no_baseline(monkeypatch, tmp_path, capsys):
+    """Releasing subtracts a promise; it does not make a claim about produce."""
+    (tmp_path / "portal-state.json").write_text(
+        json.dumps({"produce": {"counts": {"pr": 7}}}), encoding="utf-8"
+    )
+    assert _run_cli(
+        monkeypatch, tmp_path,
+        ["promise", "pr", "--release", "--why", "superseded"],
+    ) == 0
+    row = json.loads((tmp_path / promises.CONTROL_NAME).read_text().splitlines()[0])
+    assert "baseline" not in row
+
+
+def test_the_front_door_stamps_the_baseline_off_the_live_snapshot(
+    monkeypatch, tmp_path, capsys
+):
+    (tmp_path / "portal-state.json").write_text(
+        json.dumps({"produce": {"counts": {"pr": 4, "kb": 1}}}), encoding="utf-8"
+    )
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "pr"]) == 0
+    row = json.loads((tmp_path / promises.CONTROL_NAME).read_text().splitlines()[0])
+    assert row["baseline"] == 4
+    # And the chip agrees: 4 already there, 1 promised, nothing new yet.
+    plan = promises.blueprint(promises.read(tmp_path), {"pr": 4})
+    assert promises.chip(plan) == "owed 1"
+
+
+def test_an_unreadable_snapshot_stamps_no_baseline_rather_than_guessing(
+    monkeypatch, tmp_path, capsys
+):
+    """No snapshot is not a baseline of zero.
+
+    Zero would be a *pessimistic* guess and would look correct — which is
+    worse than the lenient fallback, because it would report promises owed
+    on runs that had kept them.
+    """
+    (tmp_path / "portal-state.json").write_text("{not json", encoding="utf-8")
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "pr"]) == 0
+    row = json.loads((tmp_path / promises.CONTROL_NAME).read_text().splitlines()[0])
+    assert "baseline" not in row
