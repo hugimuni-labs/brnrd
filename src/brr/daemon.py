@@ -42,6 +42,7 @@ import json
 import os
 import re
 import shutil
+import stat as stat_module
 import signal
 import subprocess
 import tempfile
@@ -68,6 +69,7 @@ from . import forge_pr_cache
 from . import forge_state
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
+from . import gate_receipt
 from . import claude_status
 from . import claude_usage
 from . import gitops
@@ -91,6 +93,7 @@ from . import wake_request as wake_request_mod
 from . import runner_select
 from . import schedule as schedule_mod
 from . import spending_plan
+from . import statusline
 from . import sync
 from . import transcript
 from . import trust
@@ -9475,6 +9478,287 @@ def _persist_run_body(
     return path
 
 
+# ── Control-file preservation (#1027, #1017) ────────────────────────────
+#
+# Closeout used to *render* the run's outbox — ``.card`` into ``body.md``,
+# ``.relics.jsonl`` into the node's ``## Produce`` section — and sweep
+# everything else when the outbox directory was deleted a few lines below
+# in ``_run_worker``'s ``finally:``. ``.brr/outbox/`` holds a couple dozen
+# live directories against hundreds of finished runs, so "swept" was
+# permanent. The measured cost is #1027: ``claude_status`` writes a
+# complete, correct spend reading every claude run, and exactly one had
+# survived on this account since April. The maintainer's framing: the run
+# should **be** its folder, preserved, not a rendering of it.
+#
+# The modules below each declare the control files they own as a module
+# constant (``relics.CONTROL_NAME``, ``gate_receipt.RECEIPT_NAME``, the
+# various ``SNAPSHOT_NAME``s, ...). ``_discover_control_file_names`` reads
+# that constant set back via introspection instead of a hand-copied list,
+# so a module that grows a new ``*_NAME`` control-file constant is caught
+# by ``test_capture_control_files_partition_is_total`` (a class defined by
+# listing its members meets the member nobody listed).
+_CONTROL_FILE_MODULES = (
+    relics, gate_receipt, claude_status, codex_usage, claude_usage,
+    statusline, run_ledger, hooks_mod, portals, menus,
+)
+# Matches a public (no leading underscore) module-level constant ending in
+# ``NAME`` — ``SNAPSHOT_NAME``, ``CONTROL_NAME``, ``RECEIPT_NAME``,
+# ``RUN_MOOD_CONTROL_NAME``, ``CARD_NAME``, ... — every shape the modules
+# above actually use for a control-file constant. Deliberately ``NAME$``,
+# not ``NAMES?$``: ``portals.CONTROL_NAMES`` is a *collection* of names,
+# not a single file, and must not be mistaken for one.
+_CONTROL_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*NAME$")
+
+
+def _discover_control_file_names() -> dict[str, str]:
+    """Every ``*_NAME`` string constant on :data:`_CONTROL_FILE_MODULES`.
+
+    Keyed by *value* (the literal filename actually written to disk), not
+    by the Python identifier: several modules re-export the same file under
+    a second name for their own import-cycle reasons
+    (``hooks.GATE_RECEIPT_NAME`` mirrors ``gate_receipt.RECEIPT_NAME``,
+    ``hooks.MOOD_NAME`` mirrors ``run_ledger.RUN_MOOD_CONTROL_NAME``,
+    ``menus.MENU_NAME`` mirrors ``portals.LIVE_MENU_NAME``) — a partition
+    keyed on the identifier would ask the same question twice under two
+    names and could answer it two different ways by accident.
+
+    This does not claim every discovered name is a *per-run outbox* file —
+    ``run_ledger.LEDGER_NAME`` names the repo-shared ledger,
+    ``hooks.BOUNDARIES_NAME``/``BOUNDARIES_SUMMARY_NAME`` name files that
+    live in the daemon's own scratch dir or are written straight onto the
+    run node, and ``menus.STORE_NAME`` is a directory, not a file. Deciding
+    *that* is exactly what :data:`PRESERVED` / :data:`NOT_PRESERVED` are
+    for — see their reasons below — the discovery step's only job is to
+    make sure nothing shaped like a control-file constant goes undecided.
+    """
+    found: dict[str, str] = {}
+    for module in _CONTROL_FILE_MODULES:
+        for attr, value in vars(module).items():
+            if not _CONTROL_NAME_RE.match(attr):
+                continue
+            if not isinstance(value, str) or not value:
+                continue
+            found.setdefault(value, f"{module.__name__}.{attr}")
+    return found
+
+
+#: Control files copied onto the run node at closeout, dot stripped —
+#: ``source name in the outbox`` -> ``dest name beside body.md``. Every
+#: entry earns its line with a reason a reviewer can check against the
+#: writer's own source, because ``runs/<repo>/<run>/`` is a **published**
+#: surface (the dashboard mirrors it within seconds, unredacted) — this is
+#: a publish decision, not a copy, and the pessimistic direction wins ties.
+PRESERVED: dict[str, str] = {
+    # The raw produce manifest, beside the rendered ``## Produce`` section
+    # ``_run_state_produce_lines`` already writes — a reader who wants the
+    # exact relic records (not the human summary) gets them.
+    relics.CONTROL_NAME: "relics.jsonl",
+    # Resident narration. Already mirrors to the dashboard by existing
+    # design (``daemon-substrate.md``'s ``.mood`` row says so in as many
+    # words), so preserving it on the node adds no new exposure.
+    run_ledger.RUN_MOOD_CONTROL_NAME: "mood",
+    # The resident-authored run name — one line, no privacy surface.
+    run_ledger.RUN_NAME_CONTROL_NAME: "name",
+    # The PR this run created — one line (a number or a URL), no privacy
+    # surface. Read *before* ``_remove_outbox`` deletes the file the same
+    # as ``_capture_pr_handle`` already does (see the ``finally:`` note
+    # below it) — private to this module because it names the daemon's own
+    # in-run handshake file, not a shape other modules declare.
+    _PR_CONTROL_NAME: "pr",
+    # Checked, not assumed: the receipt's referents are ``git rev-parse
+    # HEAD``, ``git status --porcelain`` (repo-relative paths only),
+    # sha256 digests, the configured gate command, and timestamps — no
+    # absolute host path in any field ``gate_receipt.write_receipt``
+    # writes. See the report for the one residual case (a ``gate_command``
+    # an operator configured as an absolute path) this can't rule out.
+    gate_receipt.RECEIPT_NAME: "gate-receipt.json",
+    # #1027's whole retention gap: a complete, correct spend reading that
+    # today survives nowhere. Renamed for the reader, not just dot-stripped
+    # — "spend" is the word #1027 and the maintainer both used.
+    claude_status.SNAPSHOT_NAME: "spend.json",
+    # Same shape and same no-privacy-surface argument as ``spend.json`` —
+    # the daemon-side PTY scrape of Claude's subscription quota windows.
+    # Usually absent from *this* directory in normal daemon operation
+    # (``usage_samples.record`` samples it into the account-shared dir, not
+    # the per-run outbox — see ``_collect_probe``'s ``claude`` branch), so
+    # the copy is a no-op on most runs and a real record on the runs where
+    # it isn't.
+    claude_usage.SNAPSHOT_NAME: "claude-usage-levels.json",
+    # Codex's quota is account state by design (``_collect_probe``'s
+    # ``codex`` branch: "one cache every reader shares, warm across runs
+    # and daemon restarts" — its ``cache_dir`` is the account-shared dir
+    # when one exists), so this is nearly always absent from a run's own
+    # outbox and the copy nearly always a no-op; preserved for the same
+    # reason as its Claude sibling on the runs where it is not.
+    codex_usage.SNAPSHOT_NAME: "codex-usage-levels.json",
+    # Vestigial in daemon mode today (``statusline.py``'s own docstring:
+    # "the daemon no longer registers this command" under headless
+    # ``claude --print``) but the same content shape and the same
+    # no-privacy-surface argument as its siblings — preserved rather than
+    # silently dropped in case an operator wires the interactive helper in
+    # by hand.
+    statusline.SNAPSHOT_NAME: "statusline.json",
+    # Resident-authored, thread-scoped — the live menu this run offered its
+    # own correspondent. Same privacy class as ``.mood``: it is *this*
+    # run's own thread, never another correspondent's pending state (that
+    # is exactly what makes ``inbox.json``/``portal-state.json`` below
+    # unsafe and this safe). The task framed it as "outlives the run
+    # conceptually" — a record of what was offered is worth keeping.
+    portals.LIVE_MENU_NAME: "menu.json",
+    # ``brr/the-promise-and-the-produce`` (#1046, promise manifest) is not
+    # on ``main`` as of this change, so there is no ``promises.CONTROL_NAME``
+    # to import — literal name, on purpose; per the task spec, said here
+    # rather than silently assumed. Once #1046 lands, ``promises.CONTROL_NAME``
+    # will resolve to this same literal and ``_discover_control_file_names``
+    # will find it already classified — no red test, no forgotten decision.
+    ".promises.jsonl": "promises.jsonl",
+}
+
+#: Control files deliberately *not* copied, each with the reason. Every
+#: name :func:`_discover_control_file_names` can find must resolve here or
+#: in :data:`PRESERVED` — see ``test_capture_control_files_partition_is_total``.
+#: Byte ceiling for one preserved control file. Generous against every real
+#: artifact here (the largest, a busy run's ``.relics.jsonl``, is kilobytes)
+#: and small against the failure it exists for: the run writes these files,
+#: the destination is a git repo that is committed and pushed, and nothing
+#: downstream bounds them. `relics._MAX_RECORDS` caps what a reader
+#: *parses*, never what a writer can *write*.
+_MAX_PRESERVED_BYTES = 1_000_000
+
+
+NOT_PRESERVED: dict[str, str] = {
+    portals.KEEPALIVE_NAME: (
+        "transient slot control, meaningless after the run"
+    ),
+    hooks_mod.HOOK_STATE_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    hooks_mod.FLUSH_SIGNAL_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    hooks_mod.FLUSH_ACK_NAME: (
+        "daemon/hook diagnostics, not the resident's"
+    ),
+    portals.LIVE_INBOX_NAME: (
+        "daemon-owned inbound snapshot of OTHER runs' pending events — "
+        "publishing it would put another correspondent's event body on a "
+        "mirrored, unredacted surface"
+    ),
+    portals.LIVE_PORTAL_STATE_NAME: (
+        "same reason as inbox.json — a daemon-owned inbound snapshot of "
+        "other runs'/events' state, not this run's own"
+    ),
+    hooks_mod.CARD_NAME: (
+        "already captured as body.md by _persist_run_body; copying it here "
+        "too would duplicate the same text under two names on the node"
+    ),
+    hooks_mod.FORGE_HANDOFF_NAME: (
+        "a daemon/agent handshake marker naming an internal event id — "
+        "meaningless once the run node is read after the fact, same class "
+        "as .hook-state.json"
+    ),
+    hooks_mod.BOUNDARIES_NAME: (
+        "lives in the daemon's own per-run scratch dir, never the outbox "
+        "(see _persist_boundaries_summary's docstring); the node already "
+        "gets the derived boundaries.json summary through that separate path"
+    ),
+    hooks_mod.BOUNDARIES_SUMMARY_NAME: (
+        "the *destination* name _persist_boundaries_summary already writes "
+        "straight onto the run node — nothing in the outbox is ever named "
+        "this, so there is nothing here to copy; classified for totality, "
+        "not because a copy would do anything"
+    ),
+    run_ledger.LEDGER_NAME: (
+        "the repo-shared ledger file (shared_brr_dir()/run-ledger.jsonl), "
+        "one file for the whole repo across every run — not a per-run "
+        "outbox artifact"
+    ),
+    menus.STORE_NAME: (
+        "not a control filename at all — the cross-run menu-generation-"
+        "archive subdirectory name (menus.STORE_NAME), never a file in a "
+        "run's own outbox"
+    ),
+}
+
+
+def _capture_control_files(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    outbox_dir: Path | None,
+) -> list[Path]:
+    """Copy this run's :data:`PRESERVED` control files onto its node.
+
+    Beside ``_capture_pr_handle``'s prose: this is the general case of the
+    same idea. Called from the same try-block that still has ``outbox_dir``
+    on disk — the outbox is removed in ``_run_worker``'s ``finally:``,
+    after this runs. Silent per-file: a run legitimately lacks most of
+    these (no PR, no gate run yet, Codex/statusline usually caches
+    elsewhere — see :data:`PRESERVED`'s comments), and an absent source is
+    not a failure to report, matching every other closeout capture step's
+    absence discipline.
+    """
+    if account_context is None or not account_context.enabled or outbox_dir is None:
+        return []
+    run_dir = account.run_dir(account_context, repo_label, task.id)
+    written: list[Path] = []
+    for source_name, dest_name in PRESERVED.items():
+        source = outbox_dir / source_name
+        # A name is not a file, and this is a *publish*. Everything under
+        # `.brr/` rides the repo bind mount, so it is writable from inside
+        # every run environment (#518) — which means the thing at one of
+        # these paths is whatever the run put there, and a symlink resolves
+        # wherever the run pointed it. `read_bytes` follows one silently
+        # (driven, not reasoned: it hands back the target's contents), and
+        # the destination is `runs/<repo>/<run>/`, which the dashboard
+        # mirrors to brnrd.dev **unredacted**. So a one-line `.pr` nobody
+        # would ever inspect is enough to publish `security.config` or an
+        # ssh key.
+        #
+        # Refuse the whole class rather than resolve-and-compare: "is it
+        # inside the outbox" invites a TOCTOU race and a symlink here is
+        # never legitimate anyway. Loud, because unlike an absent file this
+        # is not a normal shape.
+        try:
+            if source.is_symlink():
+                print(
+                    f"[brnrd] capture: refusing {source_name} on run "
+                    f"{task.id} — it is a symlink, and this destination is "
+                    "published"
+                )
+                continue
+            stat = source.stat()
+            if not stat_module.S_ISREG(stat.st_mode):
+                continue
+            # The readers of these files cap what they *parse*
+            # (`relics._MAX_RECORDS`), never what a run can *write*. Without
+            # a cap here an unbounded control file is read whole into the
+            # daemon's memory at closeout and then committed to the account
+            # git repo, where it is permanent. Skipping loudly beats
+            # truncating: half a JSONL file is a file that parses and lies.
+            if stat.st_size > _MAX_PRESERVED_BYTES:
+                print(
+                    f"[brnrd] capture: skipping {source_name} on run "
+                    f"{task.id} — {stat.st_size} B exceeds the "
+                    f"{_MAX_PRESERVED_BYTES} B preserve cap"
+                )
+                continue
+            data = source.read_bytes()
+        except OSError:
+            continue
+        dest = run_dir / dest_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(dest)
+        except OSError:
+            continue
+        written.append(dest)
+    return written
+
+
 def _persist_boundaries_summary(
     account_context: account.AccountContext | None,
     task: Run,
@@ -10744,6 +11028,12 @@ def _run_worker_and_finalize(
             task,
             repo_label=repo_label,
             brr_dir=brr_dir,
+        )
+        _capture_control_files(
+            account_context,
+            task,
+            repo_label=repo_label,
+            outbox_dir=outbox_path,
         )
         _capture_dominion(
             repo_root,
