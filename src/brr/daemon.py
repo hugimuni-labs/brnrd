@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import account
+from . import await_verb
 from . import branching
 from .cli import brnrd_cmd
 from . import closekeyword
@@ -5095,6 +5096,110 @@ def _change_token(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def _extend_keepalive(keepalive_path: Path | None, deadline_epoch: float) -> None:
+    """Arm/extend ``.keepalive`` to at least *deadline_epoch* (#959).
+
+    An ``await:`` that outlives the run's budget must extend the slot, not
+    silently truncate — a resident that armed a 20-minute wait and got killed
+    at minute 12 with no explanation is worse than one that was warned. This
+    never *shortens* an existing keepalive an agent wrote for its own
+    reasons; it only pushes the deadline out when the await needs longer.
+    Best-effort, like every other control-file write on this path.
+    """
+    if keepalive_path is None:
+        return
+    existing = portals.keepalive_until(keepalive_path)
+    if existing is not None and existing >= deadline_epoch:
+        return
+    try:
+        _write_text_atomic(keepalive_path, _iso_utc(deadline_epoch) + "\n")
+    except OSError:
+        pass
+
+
+def _resolve_await_state(
+    task: Run,
+    pending_events: list[dict[str, object]],
+    *,
+    outbox_dir: Path | None,
+    keepalive_path: Path | None,
+    hard_cap_seconds: float | None,
+    start_monotonic: float | None,
+) -> dict[str, object]:
+    """Evaluate an armed ``await:`` against this tick's pending events.
+
+    Called from the same heartbeat/flush tick that already computed
+    *pending_events* — the daemon's own clock, ticking every
+    ``_HEARTBEAT_INTERVAL`` regardless of whether the resident calls
+    anything, is what makes this a listening wait rather than a sleeping
+    one. Mutates ``task.meta["await"]`` in place so the outcome, once
+    reached, is sticky across later ticks instead of being re-derived (a
+    ``pid:`` condition's target may be reused by a new process by the next
+    tick; the first exit is the one that counted).
+
+    Returns the projection this tick's ``portal-state.json`` should carry.
+    ``{"armed": False}`` when no ``await:`` was ever staged this run.
+    """
+    armed = task.meta.get("await") if hasattr(task, "meta") else None
+    if not armed:
+        return {"armed": False}
+    if armed.get("resolved"):
+        return {
+            "armed": True,
+            "conditions": armed.get("conditions", []),
+            "timeout_seconds": armed.get("timeout_seconds"),
+            "capped": bool(armed.get("capped")),
+            "resolved": True,
+            "outcome": armed.get("outcome"),
+            "which": armed.get("which"),
+        }
+
+    now = time.time()
+    requested_deadline = float(armed["armed_at"]) + float(armed["timeout_seconds"])
+    effective_deadline = requested_deadline
+    if hard_cap_seconds is not None and start_monotonic is not None:
+        remaining_hard = (start_monotonic + hard_cap_seconds) - time.monotonic()
+        max_deadline = now + max(remaining_hard, 0.0)
+        if requested_deadline > max_deadline:
+            effective_deadline = max_deadline
+            if not armed.get("capped"):
+                armed["capped"] = True
+                _record_outbox_notice(
+                    outbox_dir,
+                    "await capped: the requested timeout would outlive this "
+                    f"run's remaining budget ceiling — armed until "
+                    f"{_iso_utc(effective_deadline)} instead of "
+                    f"{_iso_utc(requested_deadline)}.",
+                    kind="advisory",
+                    lifetime="run",
+                )
+
+    _extend_keepalive(keepalive_path, effective_deadline)
+
+    outcome, which = await_verb.evaluate(
+        armed.get("conditions_detail", []), pending_events,
+    )
+    if outcome is None and now >= effective_deadline:
+        outcome = "timeout"
+        which = None
+
+    result: dict[str, object] = {
+        "armed": True,
+        "conditions": armed.get("conditions", []),
+        "timeout_seconds": armed.get("timeout_seconds"),
+        "deadline": _iso_utc(effective_deadline),
+        "capped": bool(armed.get("capped")),
+        "resolved": outcome is not None,
+    }
+    if outcome is not None:
+        armed["resolved"] = True
+        armed["outcome"] = outcome
+        armed["which"] = which
+        result["outcome"] = outcome
+        result["which"] = which
+    return result
+
+
 def _write_live_portal_state(
     outbox_dir: Path | None,
     inbox_dir: Path,
@@ -5148,6 +5253,13 @@ def _write_live_portal_state(
         events = _pending_events_for_agent(
             inbox_dir, current_event_id,
             worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
+        )
+        await_state = _resolve_await_state(
+            task, events,
+            outbox_dir=outbox_dir,
+            keepalive_path=keepalive_path,
+            hard_cap_seconds=hard_cap_seconds,
+            start_monotonic=start_monotonic,
         )
         stats = output_stats or {}
         card_text = (card_state or {}).get("last", "")
@@ -5305,6 +5417,7 @@ def _write_live_portal_state(
                 ),
                 "keepalive": _keepalive_state(keepalive_path),
             },
+            "await": await_state,
             "scm": scm_facet,
             "produce": produce_facet,
             # #904's armed dated-letters projection: the still-armed `at:`
@@ -6737,6 +6850,51 @@ def _drain_outbox(
                     event_id=event_id,
                     target_event=noted_id,
                 )
+            _retire_outbox_staging(fpath)
+            continue
+        if "await" in fm:
+            # A select, not a sleep (#959): declare the condition set once
+            # instead of hand-rolling a poll loop that can collapse into one
+            # boundary-free shell call. Refusals below are deliberately
+            # `kind="refused"` (a well-formed directive brnrd declines) except
+            # the malformed-input cases, which are `"dropped"` (nothing
+            # resolvable was there to refuse).
+            if bool(task.meta.get("worker")):
+                _record_outbox_notice(
+                    outbox_dir,
+                    "await refused: a worker-stack run cannot arm a wait — "
+                    "hold happens in the resident that dispatched it.",
+                    kind="refused",
+                    lifetime="run",
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            conditions, timeout_seconds, error = await_verb.parse_await(fm)
+            if error:
+                _record_outbox_notice(
+                    outbox_dir, f"await dropped: {error}", kind="dropped",
+                    lifetime="run",
+                )
+                _retire_outbox_staging(fpath)
+                continue
+            task.meta["await"] = {
+                "conditions": [c["raw"] for c in conditions],
+                "conditions_detail": conditions,
+                "timeout_seconds": timeout_seconds,
+                "armed_at": time.time(),
+                "resolved": False,
+                "capped": False,
+            }
+            promoted += 1
+            if stats is not None:
+                stats["await"] = stats.get("await", 0) + 1
+            emit(
+                "await_armed",
+                run_id=task.id,
+                event_id=event_id,
+                conditions=[c["raw"] for c in conditions],
+                timeout_seconds=timeout_seconds,
+            )
             _retire_outbox_staging(fpath)
             continue
         gate = str(fm.get("gate") or "").strip()
@@ -8657,6 +8815,13 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             summary,
             conversation_key=conv,
             spawned_by_run=task.id,
+            # Carried alongside the run id (#959): a resident's `await:
+            # spawn:<id>` may only have the *dispatch* event id on hand (the
+            # `spawn_event_id` its own `spawn: true` write was told), not the
+            # run id this child was eventually assigned — the other two
+            # spawn_completed sites (stop-cancelled, crashed) already only
+            # ever have the event id, never a run id.
+            spawned_by_event=str(getattr(task, "event_id", "") or ""),
             spawn_parent_run_id=parent_run_id,
             **contract_kwargs,
             **produce_kwargs,

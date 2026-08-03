@@ -5455,6 +5455,261 @@ def test_write_live_portal_state_armed_letters_empty_without_brr_dir(tmp_path):
     assert payload["schedule"]["armed"] == []
 
 
+# ── await: — the hold path (#959) ─────────────────────────────────────
+
+
+def test_portal_state_await_absent_when_never_armed(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"] == {"armed": False}
+
+
+def test_portal_state_await_file_condition_fires(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    target = tmp_path / "gate.log"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": [f"file:{target}", "event"],
+        "conditions_detail": [
+            {"kind": "file", "raw": f"file:{target}", "value": str(target)},
+            {"kind": "event", "raw": "event", "value": None},
+        ],
+        "timeout_seconds": 600.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["armed"] is True
+    assert payload["await"]["resolved"] is False
+
+    target.write_text("green\n", encoding="utf-8")
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"] == {
+        "armed": True,
+        "conditions": [f"file:{target}", "event"],
+        "timeout_seconds": 600.0,
+        "deadline": payload["await"]["deadline"],
+        "capped": False,
+        "resolved": True,
+        "outcome": "condition",
+        "which": f"file:{target}",
+    }
+    # Sticky: task.meta itself carries the resolved outcome so a later tick
+    # (or a retry attempt reusing this task) doesn't need to re-derive it.
+    assert task.meta["await"]["resolved"] is True
+    assert task.meta["await"]["outcome"] == "condition"
+
+
+def test_portal_state_await_event_outcome_for_unrelated_pending_event(tmp_path):
+    """No named condition fired, but *some* pending event exists — outcome
+    is the structural ``event`` member, never silence."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    protocol.create_event(inbox_dir, "telegram", "a follow-up question")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 600.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is True
+    assert payload["await"]["outcome"] == "event"
+    assert payload["await"]["which"] is None
+
+
+def test_portal_state_await_times_out(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 1.0,
+        "armed_at": time.time() - 5,  # already elapsed
+        "resolved": False,
+        "capped": False,
+    }
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["resolved"] is True
+    assert payload["await"]["outcome"] == "timeout"
+    assert payload["await"]["which"] is None
+
+
+def test_portal_state_await_extends_keepalive_to_the_deadline(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    armed_at = time.time()
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 900.0,
+        "armed_at": armed_at,
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+    )
+
+    until = daemon.portals.keepalive_until(keepalive_path)
+    assert until is not None
+    assert until == pytest.approx(armed_at + 900.0, abs=2)
+
+
+def test_portal_state_await_never_shortens_an_existing_keepalive(tmp_path):
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    far_future = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 4000)
+    )
+    keepalive_path.write_text(far_future + "\n", encoding="utf-8")
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 60.0,
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+    )
+
+    assert keepalive_path.read_text(encoding="utf-8").strip() == far_future
+
+
+def test_portal_state_await_capped_at_hard_budget_ceiling_with_advisory(tmp_path):
+    """#959: 'a wait that outlives the budget must extend the slot or refuse
+    to start' — this run extends, capped at the run's own hard ceiling, and
+    says so as an advisory notice rather than silently truncating."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True)
+    outbox_dir.mkdir(parents=True)
+    keepalive_path = outbox_dir / ".keepalive"
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 7200.0,  # 2h — far past the tiny hard cap below
+        "armed_at": time.time(),
+        "resolved": False,
+        "capped": False,
+    }
+    start_monotonic = time.monotonic() - 10  # 10s already elapsed this attempt
+
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+        hard_cap_seconds=60.0,
+        start_monotonic=start_monotonic,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["capped"] is True
+    assert payload["await"]["resolved"] is False  # not timed out — just capped
+
+    until = daemon.portals.keepalive_until(keepalive_path)
+    # Capped to roughly (start_monotonic + hard_cap) translated to wall clock
+    # — well short of the requested 2h out.
+    assert until is not None
+    assert until < time.time() + 100
+
+    notices = daemon._read_outbox_notices(outbox_dir)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "advisory"
+    assert "capped" in notices[0]["text"]
+
+    # A second tick must not re-notice — the cap is a one-time fact.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        keepalive_path=keepalive_path,
+        hard_cap_seconds=60.0,
+        start_monotonic=start_monotonic,
+    )
+    assert len(daemon._read_outbox_notices(outbox_dir)) == 1
+
+
+def test_portal_state_await_resolved_state_is_sticky_across_ticks(tmp_path):
+    """Once resolved, later ticks reflect the frozen outcome rather than
+    re-evaluating — a ``pid:`` target could be reused by a new process by
+    the next tick, and the first exit is the one that counted."""
+    outbox_dir = tmp_path / ".brr" / "outbox" / "evt-1"
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    task = Run(id="run-1", event_id="evt-1", body="", source="telegram")
+    task.meta["await"] = {
+        "conditions": ["event"],
+        "conditions_detail": [dict(daemon.await_verb.EVENT_CONDITION)],
+        "timeout_seconds": 1.0,
+        "armed_at": time.time() - 5,
+        "resolved": False,
+        "capped": False,
+    }
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert task.meta["await"]["outcome"] == "timeout"
+
+    # Mutate as if evaluate() would now see something different — sticky
+    # state must not flip.
+    task.meta["await"]["conditions_detail"] = [
+        {"kind": "spawn", "raw": "spawn:nonsense", "value": "nonsense"},
+    ]
+    path = daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["await"]["outcome"] == "timeout"
+
+
 # ── _resources_facet (portal-state work-status posture) ──────────────
 
 
@@ -8176,3 +8431,152 @@ def test_capture_control_files_keeps_a_file_at_exactly_the_cap(tmp_path):
         ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
     )
     assert (run_dir / "relics.jsonl").stat().st_size == daemon._MAX_PRESERVED_BYTES
+
+
+# ── _drain_outbox: await: (#959) ───────────────────────────────────────
+
+
+def test_drain_outbox_arms_await_request(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\n"
+        "await: file:/tmp/brr-await-test-gate.log | pid:999999\n"
+        "timeout: 20m\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original task", source="telegram")
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"await": 1}
+    armed = task.meta["await"]
+    assert armed["conditions"] == [
+        "file:/tmp/brr-await-test-gate.log", "pid:999999", "event",
+    ]
+    assert armed["timeout_seconds"] == 1200.0
+    assert armed["resolved"] is False
+    # The staged file is retired like every other drained verb — an armed
+    # await isn't left sitting in the outbox to be misread as an
+    # undelivered plain message.
+    assert not list(outbox.glob("await*.md"))
+
+
+def test_drain_outbox_await_missing_timeout_is_dropped_with_a_notice(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: event\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "dropped"
+    assert "timeout" in notices[0]["text"]
+
+
+def test_drain_outbox_await_unparseable_condition_is_dropped_with_a_notice(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: carrier-pigeon:42\ntimeout: 5m\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "dropped"
+    assert "unrecognised condition" in notices[0]["text"]
+
+
+def test_drain_outbox_await_refuses_from_a_worker_run(tmp_path):
+    """v1 scope: only the resident may arm a hold — a worker-stack run has
+    no business spending the parent's slot on its own wait."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait: event\ntimeout: 5m\n---\n", encoding="utf-8",
+    )
+    task = Run(
+        id="run-worker", event_id=event_id, body="original", source="telegram",
+        meta={"worker": True},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert "await" not in task.meta
+    notices = daemon._read_outbox_notices(outbox)
+    assert len(notices) == 1
+    assert notices[0]["kind"] == "refused"
+    assert "worker-stack run" in notices[0]["text"]
+
+
+def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):
+    """An ``await:`` with an empty (blank) condition list is not a refusal —
+    the structural ``event`` member alone is a legitimate, non-blind wait
+    ('just tell me if anything comes in, or after N minutes')."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original", status="processing")
+    event_id = path.stem
+    (outbox / "await.md").write_text(
+        "---\nawait:\ntimeout: 10m\n---\n", encoding="utf-8",
+    )
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 1
+    assert task.meta["await"]["conditions"] == ["event"]
