@@ -2,7 +2,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import MarkdownContent from './MarkdownContent.svelte';
-	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN } from './statusPalette';
+	import { STATUS_BURNING, STATUS_COOLING, STATUS_UNKNOWN, threadColor } from './statusPalette';
 	import { ignitionPayload, type WarpLayer, type WarpHeat } from './warp';
 	import type { AuthoredBackchannelItem } from './backchannelPage';
 
@@ -87,12 +87,30 @@
 	}
 </script>
 
-{#snippet itemRow(layer: WarpLayer, item: AuthoredBackchannelItem, layerOpen: boolean)}
+{#snippet itemRow(
+	layer: WarpLayer,
+	item: AuthoredBackchannelItem,
+	layerOpen: boolean,
+	layerHue: string
+)}
 	{@const heat = item.state}
 	{@const heatColor = heat ? HEAT_COLOR[heat] : STATUS_UNKNOWN}
 	{@const itemOpen = openItemKey === item.key}
 	{@const foldId = `warp-item-${layer.callSign}-${item.key}`}
-	<li class="border border-stone-900/70 bg-stone-950/30 px-2.5 py-1.5">
+	<!-- The maintainer's fourth ask (evt-…-xkha, 2026-08-03): the layer's own
+	     hue, quiet, on every item row it holds — not opacity, not the rune
+	     palette (`runFace.ts`'s alphabet answers a different question:
+	     *which run*, not *which layer*). `threadColor(layerIndex)` is the
+	     exact identity palette the crossing strip already assigns per layer
+	     (`statusPalette.ts`, `crossing.ts::crossingThreads` — same authored-
+	     order index, reused rather than a second hue scheme minted here), so
+	     a layer's colour on this row and on the strip that names its
+	     crossings agree. A 3px left border is the "tick": a corner, not a
+	     wash — every other pixel of the row keeps reading exactly as it did. -->
+	<li
+		class="border border-stone-900/70 bg-stone-950/30 px-2.5 py-1.5"
+		style={`border-left-width: 3px; border-left-color: ${layerHue}`}
+	>
 		<button
 			type="button"
 			class="flex w-full cursor-pointer flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
@@ -236,11 +254,12 @@
 		</p>
 	{:else}
 		<ul class="space-y-1.5">
-			{#each layers as layer (layer.callSign)}
+			{#each layers as layer, layerIndex (layer.callSign)}
 				{@const open = openCallSign === layer.callSign}
 				{@const bandId = `warp-band-${layer.callSign}`}
 				{@const embers = emberItems(layer)}
 				{@const held = heldItems(layer)}
+				{@const layerHue = threadColor(layerIndex)}
 				<li
 					class="subpanel px-3 py-2 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
@@ -296,7 +315,7 @@
 						     count is visible work, not a number behind a click. -->
 						<ul class="mt-1.5 space-y-1">
 							{#each embers as item (item.key)}
-								{@render itemRow(layer, item, open)}
+								{@render itemRow(layer, item, open, layerHue)}
 							{/each}
 						</ul>
 					{/if}
@@ -316,7 +335,7 @@
 							{#if held.length > 0}
 								<ul class="space-y-1">
 									{#each held as item (item.key)}
-										{@render itemRow(layer, item, open)}
+										{@render itemRow(layer, item, open, layerHue)}
 									{/each}
 								</ul>
 							{:else if !layer.definitionMarkdown}

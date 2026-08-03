@@ -16,6 +16,7 @@ import { loomBarFraction, loomPastStop } from './loomBand.ts';
 import { LENS_ALL, applyLens, availableLenses, reconcileLens } from './loomLens.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
 import type { RunLedgerRow } from './runLedger.ts';
+import { moodFace } from './liveRuns.ts';
 
 const NOW = Date.parse('2026-08-01T12:00:00Z');
 
@@ -724,4 +725,70 @@ test('runner identity rides the line, first-known across re-reports — the in-p
 	);
 	assert.equal(weave.trees[0].root.runnerShell, 'claude');
 	assert.equal(weave.trees[0].root.runnerCore, 'fable');
+});
+
+// ── THE FACE IN THREE TENSES, piece 3 — a closed run's final mood ──────
+//
+// `row()`'s fixture omits the `mood*` fields entirely (they're optional —
+// the backend doesn't publish them yet), so every existing test above
+// already covers "absent ⇒ `line.mood` is null" implicitly. These add the
+// one case that fixture can't reach on its own: a row that *does* carry
+// mood wire fields (forward-compatible with the day the ledger lane ships).
+
+test('mood: absent on the row (the standing case — the ledger lane is not built) renders no face', () => {
+	const weave = weaveCloth(
+		[row({ run_id: 'bare', ended_at: endedAgo(HOUR) })],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.equal(weave.trees[0].root.mood, null);
+});
+
+test('mood: a row carrying wire fields resolves through the same moodFace() every live surface uses', () => {
+	const weave = weaveCloth(
+		[
+			row({
+				run_id: 'moody',
+				ended_at: endedAgo(HOUR),
+				mood: 'calld',
+				mood_glyph: '(-_-)',
+				mood_rest: '(-_-)',
+				mood_pitch: 0.4,
+				mood_frames: [['(-_-)', '(^_^)', '(-_-)']]
+			})
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.deepEqual(
+		weave.trees[0].root.mood,
+		moodFace('calld', '(-_-)', 0.4, [['(-_-)', '(^_^)', '(-_-)']], '(-_-)')
+	);
+});
+
+test('mood: a later re-report fills a hole the first report left empty', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), mood: null }),
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), mood: 'calld', mood_rest: '(-_-)' })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	// `??=` only fills a hole, never overwrites — the first report here
+	// carried no mood at all, so there was nothing to keep and the later
+	// report's mood wins.
+	assert.deepEqual(weave.trees[0].root.mood, moodFace('calld', null, null, null, '(-_-)'));
+});
+
+test('mood: first-known wins — a later re-report never clobbers an already-known mood', () => {
+	const weave = weaveCloth(
+		[
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), mood: 'calld', mood_rest: '(-_-)' }),
+			row({ run_id: 'r1', ended_at: endedAgo(HOUR), mood: 'spent', mood_rest: '(x_x)' })
+		],
+		NOW,
+		CLOTH_WINDOW_MS
+	);
+	assert.deepEqual(weave.trees[0].root.mood, moodFace('calld', null, null, null, '(-_-)'));
 });

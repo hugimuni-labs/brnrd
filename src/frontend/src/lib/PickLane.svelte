@@ -4,7 +4,7 @@
 	import type { ScheduledWake } from './scheduledWakes';
 	import type { WeavingRow } from './warp';
 	import { armedOverflow, pickRows, PICKING_ROW_CAP, type PickRow } from './pickLane';
-	import { runFace } from './runFace';
+	import { runFacesInWindow } from './runFace';
 	import Crossing from './Crossing.svelte';
 	import { crossingCells } from './crossing';
 	import { statusDotStyle, glowFor, STATUS_BURNING } from './statusPalette';
@@ -64,6 +64,12 @@
 	let picking = $derived(rows.filter((row) => row.phase === 'picking'));
 	let armed = $derived(rows.filter((row) => row.phase === 'armed'));
 	let shownPicking = $derived(picking.slice(0, PICKING_ROW_CAP));
+	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll, over
+	// exactly the rows this lane draws (`shownPicking`, not `picking` — the
+	// folded-past-the-cap rows never render, so they shouldn't spend a probe
+	// slot). Armed rows carry no face at all (see the comment at the render
+	// site below), so the window is picking-only.
+	let faceWindow = $derived(runFacesInWindow(shownPicking.map((row) => row.id)));
 	let restingFace = $derived(daemonMood ? moodFace(daemonMood.name, daemonMood.glyph) : null);
 	let clockLabel = $derived(
 		new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -106,7 +112,7 @@
 					     while an armed row's is a schedule entry's — a wake is not a
 					     run, and a mark drawn on one would claim an identity that has
 					     no other surface to travel to. -->
-					{@const face = runFace(row.id)}
+					{@const face = faceWindow.get(row.id)}
 					<!-- Picking: the same object, lit. `|global` (#970) because the
 					     0→1 case creates this whole branch, and a local intro inside
 					     a freshly-born each block never fires — the most common
@@ -135,9 +141,11 @@
 								aria-hidden="true">↯</span
 							>
 							<Crossing cells={crossingCells(threads, crossingIndex.get(row.id))} />
-							<span class="shrink-0 text-[9px]" aria-hidden="true" style={`color: ${face.color}`}
-								>{face.glyph}</span
-							>
+							{#if face}
+								<span class="shrink-0 text-[9px]" aria-hidden="true" style={`color: ${face.color}`}
+									>{face.glyph}</span
+								>
+							{/if}
 							<span class="min-w-0 flex-1 truncate text-[9px]">{row.label}</span>
 							{#if row.clock || row.note}
 								<span class="shrink-0 text-[8px] text-amber-500/80">{row.note ?? row.clock}</span>

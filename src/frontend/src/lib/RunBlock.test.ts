@@ -17,6 +17,10 @@ function pick(overrides: Partial<PickRow> & Pick<PickRow, 'id' | 'label'>): Pick
 	return {
 		kind: 'run',
 		phase: 'picking',
+		// `mood` joined PickRow required-with-null via THE FACE IN THREE
+		// TENSES (merged alongside this file's own branch, 2026-08-03) —
+		// the fixture defaults it like every other nullable field.
+		mood: null,
 		clock: null,
 		note: null,
 		color: '#f59e0b',

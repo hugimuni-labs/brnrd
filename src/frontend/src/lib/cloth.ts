@@ -19,6 +19,7 @@ import { runNodeHref } from './runNode.ts';
 import { loomBarFraction, loomPastStop, nestShelfChildren } from './loomBand.ts';
 import { THERMAL_STOPS } from './statusPalette.ts';
 import { rollupProduceGauge, type ProduceGaugeSummary } from './produceGauge.ts';
+import { moodFace, type MoodFace } from './liveRuns.ts';
 
 /** The cloth's default sliding window: 30 days of done work. */
 export const CLOTH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -85,6 +86,15 @@ export interface ClothLine {
 	 * per day, so bars compare across day rules. Carries the band's floor:
 	 * a zero-second run is still visibly a bar, not a dot. */
 	barFraction: number;
+	/** THE FACE IN THREE TENSES piece 3: the run's final mood, the biography
+	 * half of identity — resolved through the same `moodFace()` every live
+	 * surface uses, straight off `RunLedgerRow`'s (currently always-absent)
+	 * `mood*` fields. Null for the ordinary reason (no mood set) and for the
+	 * standing one (the backend lane doesn't publish it yet, `runLedger.ts`'s
+	 * own comment on those fields names the gap) — this row can't and
+	 * doesn't tell the two apart, which is exactly why it renders nothing
+	 * rather than guessing. */
+	mood: MoodFace | null;
 }
 
 /** A root run with its worker subruns collapsed beneath it. */
@@ -192,6 +202,11 @@ interface MergedRun {
 	wallSeconds: number;
 	relics: RelicRecord[];
 	ageMs: number;
+	mood: string | null;
+	moodGlyph: string | null;
+	moodFrames: string[][] | null;
+	moodRest: string | null;
+	moodPitch: number | null;
 }
 
 function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedRun[] {
@@ -214,6 +229,14 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 			current.endedAt = Math.max(current.endedAt, endedAt);
 			current.wallSeconds = Math.max(current.wallSeconds, row.wall_clock_seconds ?? 0);
 			current.relics.push(...(row.external_refs ?? []));
+			// First-known wins, same rule runner identity follows above — a
+			// mood set on one re-report shouldn't be clobbered by a later
+			// report that (today) never carries one at all.
+			current.mood ??= row.mood ?? null;
+			current.moodGlyph ??= row.mood_glyph ?? null;
+			current.moodFrames ??= row.mood_frames ?? null;
+			current.moodRest ??= row.mood_rest ?? null;
+			current.moodPitch ??= row.mood_pitch ?? null;
 		} else {
 			const entry: MergedRun = {
 				id,
@@ -227,6 +250,11 @@ function mergeRuns(rows: RunLedgerRow[], now: number, windowMs: number): MergedR
 				endedAt,
 				wallSeconds: row.wall_clock_seconds ?? 0,
 				relics: [...(row.external_refs ?? [])],
+				mood: row.mood ?? null,
+				moodGlyph: row.mood_glyph ?? null,
+				moodFrames: row.mood_frames ?? null,
+				moodRest: row.mood_rest ?? null,
+				moodPitch: row.mood_pitch ?? null,
 				ageMs: 0
 			};
 			byId.set(id, entry);
@@ -259,7 +287,8 @@ function curatedLine(run: MergedRun): ClothLine {
 		ageMs: run.ageMs,
 		endedAt: run.endedAt,
 		color: THERMAL_STOPS[loomPastStop(run.ageMs)],
-		barFraction: 0
+		barFraction: 0,
+		mood: moodFace(run.mood, run.moodGlyph, run.moodPitch, run.moodFrames, run.moodRest)
 	};
 }
 
