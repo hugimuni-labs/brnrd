@@ -13,14 +13,16 @@ hostile tasks.
 
 ## Who can trigger work
 
-GitHub and Telegram authorize the individual sender before enqueue. The
+GitHub, Telegram, and Signal authorize the individual sender before enqueue. The
 self-hosted GitHub gate verifies `write`, `maintain`, or `admin` permission; the
 managed webhook requires GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR`
 association; both also accept explicitly allowlisted logins. Telegram accepts the
-paired user plus explicitly allowlisted user ids. Anonymous admins, channel posts,
-public commenters, read-only self-hosted GitHub users, and other group members are
-denied by default. Slack remains channel-scoped, so every member of its configured
-channel can submit work.
+paired user plus explicitly allowlisted user ids; Signal accepts the paired
+number plus explicitly allowlisted numbers, and every group message is denied
+outright (the self-hosted Signal gate is direct-message only). Anonymous admins,
+channel posts, public commenters, read-only self-hosted GitHub users, and other
+group members are denied by default. Slack remains channel-scoped, so every
+member of its configured channel can submit work.
 
 Authorization says who may instruct the agent; it does not make their text safe.
 Keep principal lists narrow. For people who may submit work but should not inherit

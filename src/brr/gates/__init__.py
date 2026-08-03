@@ -15,7 +15,7 @@ import importlib
 #: truth for what was previously the same literal hardcoded three times
 #: (``gates/runtime.py``, ``daemon.py``, ``updates.py`` — kb/design-
 #: the-post.md's free-deletions list).
-BUILTIN_GATES: tuple[str, ...] = ("telegram", "slack", "github", "cloud")
+BUILTIN_GATES: tuple[str, ...] = ("telegram", "slack", "github", "cloud", "signal")
 
 
 def import_gate(name: str):

@@ -4,8 +4,9 @@ description: Understand how channels reach the daemon and who can trigger work t
 ---
 
 A gate is the door between a channel and the daemon on your machine. Telegram,
-Slack, GitHub, and the managed cloud path carry requests in and replies out.
-The dashboard is another way to watch and steer the same local work.
+Slack, GitHub, Signal, and the managed cloud path carry requests in and
+replies out. The dashboard is another way to watch and steer the same local
+work.
 
 While a run is active, its portals carry the live progress card, interim
 replies, follow-up messages, and final handoffs. That makes a long task
@@ -13,19 +14,20 @@ observable and correctable instead of silent.
 
 ## Authorization today
 
-Authorization happens before enqueue. GitHub and Telegram bind it to a person;
-Slack still binds it to the configured channel.
+Authorization happens before enqueue. GitHub, Telegram, and Signal bind it to
+a person; Slack still binds it to the configured channel.
 
 | Gate | Who can trigger a run today |
 |---|---|
 | Managed or self-hosted Telegram | The paired user plus explicitly allowlisted user ids. Other group members and unattributed senders are denied. |
 | Self-hosted Slack | Any member of the polled channel. |
+| Self-hosted Signal | The paired number plus explicitly allowlisted numbers. Any other sender, and every group message, is denied. |
 | GitHub (self-hosted) | Logins with `write`, `maintain`, or `admin` permission, plus explicitly allowlisted logins. Public commenters and read-only users are denied. |
 | GitHub (managed) | Addressed comments require GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` author association, or an explicitly allowlisted login. Applying the `brnrd` label is the universal assignment signal. Assigning an issue or pull request to the optional marker account is also a summon, and so is requesting a review from it on a pull request. |
 
 The operating rules follow from that boundary:
 
-- keep GitHub and Telegram allowlists narrow;
+- keep GitHub, Telegram, and Signal allowlists narrow;
 - remember that a Telegram group does not authorize its whole membership by default;
 - use Slack only when every member of the configured channel may drive the daemon;
 - set `trust.collaborator_env=solitary` when authorized collaborators should not
@@ -35,6 +37,45 @@ The operating rules follow from that boundary:
 
 See [Connect](../../getting-started/connect/) for setup commands and
 [Security & privacy](../../security/) for the full trust posture.
+
+## Signal (self-hosted)
+
+The Signal gate speaks to a locally running
+[signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api)
+container — a REST wrapper around `signal-cli` — rather than to Signal's own
+servers directly. You run that container yourself and either link it as a
+secondary device from the Signal app or register a dedicated number for it;
+brnrd only ever talks to the local API.
+
+1. Start a signal-cli-rest-api container (`json-rpc` mode is recommended — it
+   lets the gate's poll hold open briefly instead of hammering the
+   container; `normal`/`native` modes work too, just poll on a fixed
+   interval instead).
+2. Link or register a number against that container, following
+   signal-cli-rest-api's own linking flow.
+3. Run `brnrd gate setup signal` in this repo. It asks for the container's
+   URL (e.g. `http://127.0.0.1:8080`), the gate's own number, and your
+   number as the paired principal — the same default-closed shape Telegram
+   uses (`gates/telegram.py`'s `_sender_tier`): the paired number and any
+   number added to `.brr/gates/signal.json`'s `allowlist` may trigger a run;
+   everyone else is silently denied.
+4. Message the gate's number from your paired number to start a run.
+
+**v1 cuts, named plainly:**
+
+- **Direct messages only.** A group message is recognised and skipped
+  rather than misrouted to whichever number happens to be in it — this is
+  *the Signal direct gate*, not a Signal group gate.
+- **No attachments.** An inbound image or file is not downloaded (unlike
+  Telegram's photo/document support); a caption-only or text-only message
+  still triggers a run.
+- **No live progress card.** Telegram and Slack edit a single message in
+  place as a run progresses; Signal only gets the final reply for now,
+  because message editing isn't part of the request shape this gate uses.
+  The interim/final reply stream itself works normally.
+- **No interactive menus.** The inline-keyboard menu flow Telegram renders
+  has no Signal equivalent yet; a menu-bearing reply still arrives as plain
+  numbered text.
 
 ## Separate the door from the author
 

@@ -21,7 +21,7 @@ This page reflects the public command tree printed by the installed CLI on
 | Command | Purpose |
 |---|---|
 | `brnrd gate setup <gate>` | Authenticate and bind a gate in one flow. |
-| `brnrd gate auth <gate>` | Authenticate `telegram`, `slack`, `github`, or `cloud`. |
+| `brnrd gate auth <gate>` | Authenticate `telegram`, `slack`, `github`, `signal`, or `cloud`. |
 | `brnrd gate bind <repo> <gate>` | Bind a repo-local gate. |
 | `brnrd gate list [--json]` | Show gates configured here. |
 | `brnrd account connect [url]` | Pair with brnrd, then install and start the native user service; accepts `--daemon-name`, `--no-service`, and Linux linger controls. |
