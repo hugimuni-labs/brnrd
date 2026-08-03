@@ -279,7 +279,24 @@
 	// steer: the block IS the pulse; the lane is one tap away).
 	type LoomSelection = { kind: 'run' | 'wake'; id: string } | null;
 	let loomSelection = $state<LoomSelection>(null);
-	let machineOpen = $state(false);
+	// Open on arrival (his 2026-08-03 read: "it is collapsed when I just fresh
+	// load the page, and I think it should be expanded by default").
+	//
+	// A *constant*, deliberately, and this is the whole distinction the comment
+	// above draws: keying the default on state — anything burning, a run
+	// focused — makes the page's first shape depend on something the reader
+	// cannot see before it paints, so the block is expanded some mornings and
+	// parked others and nobody ever learns the rule. `focusRunId` stays out of
+	// the verdict for exactly that reason; a constant is not that failure, it
+	// is the opposite of it.
+	//
+	// The second half of his read — "and then collapsed when we scroll past
+	// it" — needs no code and must not get any: the dock already draws the
+	// short pointer form once the head sticks, with the body left open at its
+	// home in the document. Making a scroll position fold `machineOpen` is THE
+	// PICKER YOU CANNOT REACH (#1011), the bug he reported on the rail, and
+	// `machineDock.ts` refuses it in as many words.
+	let machineOpen = $state(true);
 	let machineExpanded = $derived(machineOpen || loomSelection !== null);
 	let liveRunIds = $derived(new Set((liveRuns ?? []).map((run) => run.run_id || run.id)));
 	let weaving = $derived(weavingRows(warpLayers, liveRunIds));
