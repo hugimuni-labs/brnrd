@@ -2,6 +2,7 @@
 	import { runFace } from './runFace';
 	import { machineBodyOnScreen, machineHeadFields, machineHeadRun } from './machineDock';
 	import type { PickRow } from './pickLane';
+	import { pitchAccent } from './statusPalette';
 
 	/**
 	 * The machine, parked: one line (his 08-02 steer, verbatim intent — "a
@@ -77,6 +78,35 @@
 		burning.find((row) => row.id === machineHeadRun(lead?.id ?? null, selectedId)) ?? lead
 	);
 	let face = $derived(headRun ? runFace(headRun.id) : null);
+	// THE FACE IN THREE TENSES piece 1: the head run's *mood* — how it feels,
+	// distinct from `face` above (*who* it is). `headRun.mood` rides the same
+	// `PickRow.mood` field `pickLane.ts` already resolves through the wire's
+	// `moodFace()` for every picking row. Merge reconciliation with THE
+	// MACHINE BORROWS THE SELECTION (both landed 2026-08-03): the mood
+	// follows whatever run the head is showing — this branch's own comment
+	// said as much before the two met — so during inspection it is the
+	// selected run's feeling, in pulse the lead's. This file never
+	// re-derives identity, only asks the row it's already given.
+	let mood = $derived(headRun?.mood ?? null);
+	// The rest frame (held) and one representative expression frame (the
+	// "blink") — the two states `.dock-mood-rest`/`.dock-mood-blink`
+	// (`layout.css`) alternate between. No sequence, or a one-frame one, has
+	// nothing to alternate *to*: `blinkFrame` stays null and the markup below
+	// renders the rest glyph alone, unanimated (same outcome reduced-motion
+	// produces, arrived at honestly rather than faked).
+	let restFrame = $derived(mood?.rest ?? mood?.sequences?.[0]?.[0] ?? mood?.glyph ?? null);
+	let blinkFrame = $derived.by(() => {
+		const seq = mood?.sequences?.[0];
+		if (!seq || seq.length < 2) return null;
+		const mid = seq[Math.floor(seq.length / 2)] ?? null;
+		return mid && mid !== restFrame ? mid : null;
+	});
+	// `mood_pitch` is the gut→crown body axis, a colour, never a tempo
+	// (`statusPalette.pitchAccent` — every other mood consumer reads it the
+	// same way); the alternation's cadence lives in `layout.css` as one fixed
+	// slow beat instead.
+	let moodAccent = $derived(pitchAccent(mood?.pitch ?? null));
+
 	let nextArmed = $derived(armed[0] ?? null);
 	// One predicate, and it is never `open` alone: with the lane on screen the
 	// head keeps identity and drops every measurement that lane draws in full
@@ -115,6 +145,24 @@
 			<span class="flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
 				<span class="max-w-[26ch] truncate text-[11px]">{headRun.label}</span>
+				{#if restFrame}
+					<!-- THE FACE IN THREE TENSES piece 1: the lead's mood, worn beside
+					     its name. Two glyphs share one grid cell so the swap between
+					     them is a hard cut (`layout.css`'s `steps()` keyframes), never a
+					     cross-fade; with no distinct blink frame this is just the rest
+					     glyph, still. -->
+					<span
+						class="relative inline-grid shrink-0 place-items-center font-mono whitespace-pre"
+						style={moodAccent ? `color: ${moodAccent}` : undefined}
+						title={mood ? `mood: ${mood.name}` : undefined}
+						aria-hidden="true"
+					>
+						<span class="[grid-area:1/1] {blinkFrame ? 'dock-mood-rest' : ''}">{restFrame}</span>
+						{#if blinkFrame}
+							<span class="[grid-area:1/1] dock-mood-blink">{blinkFrame}</span>
+						{/if}
+					</span>
+				{/if}
 			</span>
 			<!-- The tail stays the lead's, never the borrowed run's — these are
 			     true of the machine (what's burning, what else is), not of
