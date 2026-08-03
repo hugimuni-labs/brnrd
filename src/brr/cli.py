@@ -20,7 +20,7 @@ from . import closekeyword
 
 #: Every gate brnrd knows how to auth/bind/configure. Single source of truth
 #: for ``_load_gate``, ``brnrd gate list``, and the gate argument help.
-GATES = ("telegram", "slack", "github", "cloud")
+GATES = ("telegram", "slack", "github", "cloud", "signal")
 
 #: Top-level spellings retired by the noun consolidation (#49). Pre-release,
 #: these do not survive as silent aliases — each fails with a one-line pointer
@@ -3067,4 +3067,7 @@ def _load_gate(name: str):
     if name == "slack":
         from .gates import slack
         return slack
+    if name == "signal":
+        from .gates import signal
+        return signal
     raise SystemExit(f"unknown gate: {name} (known: {', '.join(GATES)})")

@@ -44,16 +44,23 @@ brnrd gate setup telegram   # authenticate and bind this repo
 brnrd daemon install
 ```
 
-The CLI also recognizes `slack`, `github`, and `cloud` gate names. Use
-`brnrd gate list` to inspect the gates configured for the current repo.
+The CLI also recognizes `slack`, `github`, `signal`, and `cloud` gate names. Use
+`brnrd gate list` to inspect the gates configured for the current repo. Signal
+needs a locally running
+[signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api)
+container first — see [Gates & authorization](../../concepts/gates/#signal-self-hosted)
+for the linking steps and what v1 does not yet do (groups, attachments, a
+live progress card).
 
 :::caution[Know who can ring the doorbell]
-GitHub and Telegram are default-closed per sender. The self-hosted GitHub gate
-verifies `write`, `maintain`, or `admin` permission; the managed webhook requires
-GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR` association; both also accept
-explicitly allowlisted logins. Telegram accepts the paired user plus explicitly
-allowlisted user ids. A public commenter or another group member cannot trigger a
-run merely by reaching the channel.
+GitHub, Telegram, and Signal are default-closed per sender. The self-hosted
+GitHub gate verifies `write`, `maintain`, or `admin` permission; the managed
+webhook requires GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR`
+association; both also accept explicitly allowlisted logins. Telegram accepts
+the paired user plus explicitly allowlisted user ids; Signal accepts the
+paired number plus explicitly allowlisted numbers. A public commenter,
+another group member, or an unlisted sender cannot trigger a run merely by
+reaching the channel.
 Slack uses its admin-installed app and the configured channel as the boundary:
 ordinary conversation is ignored, and a channel member must explicitly mention
 the app to submit work. Slack senders run as collaborators, never as the owner;
