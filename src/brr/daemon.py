@@ -4890,9 +4890,18 @@ def _collect_levels(
         # was hiding (#1027). ``shared_dir`` is ``None`` for a caller that
         # never wired one (e.g. an ad-hoc test); the outbox-only read still
         # applies then, unchanged from before this fix.
-        result_levels = claude_status.load_snapshot(
-            outbox_dir
-        ) or claude_status.load_snapshot(shared_dir)
+        result_levels = claude_status.load_snapshot(outbox_dir)
+        if result_levels is None:
+            # Falling back to the shared slot: this reading is a *different*
+            # run's session, not this one's — one mutable slot every claude
+            # run overwrites, so it can be a worker's cost seconds old by the
+            # time the next resident turn reads it. Rewrite its summaries to
+            # say so; serving the unmodified "...this session" text here
+            # would move #1027's absent-reading lie one layer down instead
+            # of removing it (see claude_status.mark_cross_run).
+            result_levels = claude_status.mark_cross_run(
+                claude_status.load_snapshot(shared_dir)
+            )
         merged = _merge_level_snapshots(usage_levels, result_levels)
         # The seam that makes burn shell-agnostic. Claude's `/usage` scrape is a
         # *point* reading that forgets itself; sampling it here — into the

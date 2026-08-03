@@ -7675,7 +7675,12 @@ def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is
     ``spend``/``context_window`` facets render from. The last claude run's
     reading, durably written into the account-shared dir (``BRR_SHARED_DIR``,
     ``claude_status._shared_dir``), is what must be found instead of
-    reporting ``absent`` for a fact that is one run stale, not unknown."""
+    reporting ``absent`` for a fact that is one run stale, not unknown — and
+    its summary must say whose reading it is: the shared slot is one mutable
+    file every claude run overwrites, so serving its "...this session" text
+    unchanged here would misattribute a different run's cost as this run's
+    own (maintainer review, 2026-08-03 — see ``claude_status.mark_cross_run``).
+    """
     monkeypatch.setattr(
         daemon.claude_usage, "load_snapshot", lambda outbox: None,
     )
@@ -7687,6 +7692,7 @@ def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is
         shared_dir,
         {
             "source": "claude result JSON",
+            "run_id": "run-earlier-worker",
             "spend": {"summary": "$0.42 this session (estimated)"},
             "context_window": {"summary": "80% context left (est)"},
         },
@@ -7697,8 +7703,51 @@ def test_collect_levels_for_claude_falls_back_to_shared_spend_when_own_outbox_is
     )
 
     assert slots == {"quota", "spend", "context_window"}
-    assert levels["spend"]["summary"] == "$0.42 this session (estimated)"
-    assert levels["context_window"]["summary"] == "80% context left (est)"
+    assert levels["spend"]["summary"] == (
+        "$0.42 this session (estimated) — run-earlier-worker's reading, "
+        "carried (not this run's)"
+    )
+    assert levels["context_window"]["summary"] == (
+        "80% context left (est) — run-earlier-worker's reading, "
+        "carried (not this run's)"
+    )
+
+
+def test_collect_levels_for_claude_prefers_own_fresh_reading_over_shared(
+    monkeypatch, tmp_path,
+):
+    """The current run's own outbox copy — when it has already produced
+    one — wins outright and keeps its unmodified "this session" wording; the
+    cross-run attribution note is only for the shared-slot fallback."""
+    monkeypatch.setattr(
+        daemon.claude_usage, "load_snapshot", lambda outbox: None,
+    )
+    outbox_dir = tmp_path / "outbox" / "evt-this-run"
+    outbox_dir.mkdir(parents=True)
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    daemon.claude_status.write_snapshot(
+        outbox_dir,
+        {
+            "source": "claude result JSON",
+            "run_id": "evt-this-run",
+            "spend": {"summary": "$1.00 this session (estimated)"},
+        },
+    )
+    daemon.claude_status.write_snapshot(
+        shared_dir,
+        {
+            "source": "claude result JSON",
+            "run_id": "run-earlier-worker",
+            "spend": {"summary": "$0.42 this session (estimated)"},
+        },
+    )
+
+    levels, _ = daemon._collect_levels(
+        "claude", outbox_dir, tmp_path, refresh=False, shared_dir=shared_dir,
+    )
+
+    assert levels["spend"]["summary"] == "$1.00 this session (estimated)"
 
 
 def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
