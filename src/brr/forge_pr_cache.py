@@ -15,12 +15,30 @@ renderers may only ever *read* a cache. The ``gh`` call lives here, and only the
 Truthfulness contract (the ``absent ≠ unknown ≠ none`` rule this repo has been
 bitten by repeatedly — see ``kb/log.md`` 2026-07-13, the credits panel):
 
-- no cache file yet            → ``status="absent"``, ``prs=None``  (unknown)
-- last refresh failed          → ``status="error"``,  ``prs=None``  (unknown,
+- no cache file yet            → ``status="absent"``,      ``prs=None`` (unknown)
+- last refresh failed          → ``status="error"``,       ``prs=None`` (unknown,
                                  with the last good rows kept if we had any)
-- refresh succeeded, no PRs    → ``prs=[]``                          (a real none)
+- refresh succeeded, no PRs    → ``prs=[]``                             (a real none)
+- remote is not GitHub         → ``status="unsupported"``, ``prs=None`` (known —
+                                 and *no rows carried forward*: unlike ``error``,
+                                 which keeps the last good read of the *same*
+                                 repo, ``unsupported`` means the label now
+                                 names a different forge than whatever the
+                                 rows described, so nothing from before is
+                                 still about this repo — #852)
 
-so a reader can never mistake "we have not looked" for "there is nothing".
+so a reader can never mistake "we have not looked" for "there is nothing",
+nor "we looked and it failed" for "there is nothing here to look at, ever".
+
+The fourth case exists because ``gh pr list --repo OWNER/REPO`` resolves
+``--repo`` against **github.com only** — it has no idea a parsed remote came
+from GitLab/Bitbucket/Gitea. Without the gate, a non-GitHub remote either
+burns a doomed subprocess every tick forever, or — worse — silently renders a
+same-named GitHub repo's PRs as this repo's own state. ``refresh()`` decides
+the forge *kind* before it ever shells out; only ``github`` reaches ``gh``.
+``unsupported`` is not a permanent verdict, though — see
+:func:`refresh_if_stale` — because its inputs (the git remote, a
+``.brr/config`` override) are exactly what an operator edits to fix it.
 """
 
 from __future__ import annotations
@@ -33,10 +51,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import config as conf
 from . import gitops
 
 CACHE_NAME = "forge-pr-state.json"
-SCHEMA = 1
+# Bumped 1 -> 2 for the ``unsupported`` / ``forge_kind`` fields (#852). Purely
+# documentary: nothing in this module reads or validates ``schema`` on load,
+# so an old schema-1 cache on disk (no ``unsupported`` key) still reads
+# correctly under the new code — it just never matches the new branch in
+# :func:`read_state` and falls through to the original absent/error/stale/
+# fresh derivation, exactly as it did before this change.
+SCHEMA = 2
 
 # The cache rides the daemon's scan tick; PR state moves on human timescales
 # (a merge, a review), so a 5-minute TTL keeps the block honest without
@@ -103,8 +128,18 @@ def read_state(
     """Network-free read: the cache plus its own freshness verdict.
 
     Returns ``{"status", "fetched_at", "age_seconds", "prs", "error"}`` where
-    ``status`` is one of ``absent`` | ``error`` | ``stale`` | ``fresh`` and
-    ``prs`` is ``None`` whenever the state is unknown.
+    ``status`` is one of ``absent`` | ``error`` | ``stale`` | ``fresh`` |
+    ``unsupported``, and ``prs`` is ``None`` whenever the state is unknown.
+
+    ``unsupported`` carries one extra key, ``forge_kind`` (the detected kind,
+    or ``None`` when the host matched no known forge at all) — see
+    :func:`refresh`. It never *renders* as ``stale``: a reader should never
+    be told "a refresh is due" about a forge kind, which doesn't shift on
+    its own. But its ``age_seconds`` is not purely informational — a caller
+    deciding whether to re-derive (:func:`refresh_if_stale`) still reads it,
+    because the two facts a kind is computed from (the git remote, a
+    ``.brr/config`` override) are themselves editable, and this state must
+    not be a silent permanent trap on an operator's fix.
     """
     cached = load(repo_root)
     if cached is None:
@@ -121,6 +156,16 @@ def read_state(
     age: float | None = None
     if fetched_epoch is not None:
         age = max(0.0, (time.time() if now is None else now) - fetched_epoch)
+
+    if cached.get("unsupported"):
+        return {
+            "status": "unsupported",
+            "fetched_at": fetched_at if isinstance(fetched_at, str) else None,
+            "age_seconds": age,
+            "prs": None,
+            "error": None,
+            "forge_kind": cached.get("forge_kind"),
+        }
 
     error = cached.get("error")
     error = str(error).strip() if error else None
@@ -149,24 +194,53 @@ def read_state(
     }
 
 
-def _repo_label(repo_root: Path) -> str | None:
-    """``owner/repo`` from the git remote, when it can be read."""
+def _forge_kind_and_label(repo_root: Path) -> tuple[str | None, str | None]:
+    """``(kind, "owner/repo")`` from the git remote, honoring ``[forge]`` overrides.
+
+    One function owns both reads (not a label helper plus a separate kind
+    helper) so a missing/unreadable remote is a single early return instead
+    of two independent git subprocess calls agreeing to fail.
+
+    ``label`` is ``None`` only when the remote itself can't be read or
+    doesn't parse into an ``owner/repo`` shape at all — genuinely nothing to
+    go on, same as before this change, and left to :func:`refresh`'s old
+    cwd-inference fallback rather than folded into ``unsupported``.
+
+    ``kind`` is ``None`` in two shapes callers must **not** tell apart:
+    forge-unresolvable host with a valid label (a self-hosted forge with no
+    ``.brr/config`` override) reads exactly like an explicitly non-GitHub
+    kind (``gitlab`` / ``bitbucket`` / ``gitea``) to :func:`refresh` — both
+    are a labeled remote ``gh --repo OWNER/REPO`` would silently resolve
+    against github.com instead, which is the hazard #852 gates on. Only
+    ``kind == "github"`` is safe to query.
+    """
     from . import forges
 
     try:
         remote = gitops.default_remote(repo_root) or "origin"
         url = gitops.remote_url(repo_root, remote)
     except Exception:  # noqa: BLE001 - a missing remote is not an error here
-        return None
+        return None, None
     if not url:
-        return None
+        return None, None
     parsed = forges.parse_remote(url)
     if not parsed:
-        return None
+        return None, None
     _host, owner, repo = parsed
-    if owner and repo:
-        return f"{owner}/{repo}"
-    return None
+    label = f"{owner}/{repo}" if owner and repo else None
+    if label is None:
+        return None, None
+
+    try:
+        cfg = conf.load_config(repo_root)
+    except Exception:  # noqa: BLE001 - an unreadable config is not fatal here
+        cfg = {}
+    match = forges.detect_forge(
+        url,
+        override_kind=cfg.get("forge.kind") or None,
+        override_url_base=cfg.get("forge.url_base") or None,
+    )
+    return (match.kind if match else None), label
 
 
 def _shape(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -209,9 +283,37 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
     keep saying *unknown* rather than silently reporting "no PRs". A failure
     also preserves the last good rows, which are still worth seeing with their
     true age attached.
+
+    Gated on the forge *kind* before any subprocess runs (#852): ``gh --repo
+    OWNER/REPO`` resolves against github.com only, so a labeled remote whose
+    kind isn't ``github`` never reaches ``gh`` at all — it writes an
+    ``unsupported`` cache and returns. Without the gate this either burns a
+    doomed subprocess every tick forever, or — worse, when
+    ``github.com/OWNER/REPO`` happens to exist — silently renders a foreign
+    repo's PRs as this repo's own state.
+
+    This branch itself is cheap (one local git remote read, one config read,
+    zero subprocesses), so :func:`refresh_if_stale` calls it again on the
+    normal TTL cadence even while ``unsupported`` — re-deriving the kind
+    each time rather than trusting a cached verdict forever, because the
+    verdict's own inputs are user-editable (a ``git remote set-url``, a
+    ``.brr/config`` ``forge.kind`` fix).
     """
-    label = _repo_label(repo_root)
-    payload: dict[str, Any] = {
+    kind, label = _forge_kind_and_label(repo_root)
+    if label is not None and kind != "github":
+        payload: dict[str, Any] = {
+            "schema": SCHEMA,
+            "fetched_at": _utc_now_iso(),
+            "repo": label,
+            "prs": None,
+            "error": None,
+            "unsupported": True,
+            "forge_kind": kind,
+        }
+        _write(repo_root, payload)
+        return payload
+
+    payload = {
         "schema": SCHEMA,
         "fetched_at": _utc_now_iso(),
         "repo": label,
@@ -277,9 +379,25 @@ def refresh_if_stale(
     ttl: float = DEFAULT_TTL_SECONDS,
     now: float | None = None,
 ) -> bool:
-    """Refresh when the cache is older than *ttl*. Returns whether it ran."""
+    """Refresh when the cache is older than *ttl*. Returns whether it ran.
+
+    ``unsupported`` never *renders* as stale (see :func:`read_state`), but it
+    is not a permanent skip either: its two inputs — the git remote and any
+    ``.brr/config`` ``[forge]`` override — are exactly what an operator edits
+    to *fix* an unrecognised host, and ``forge.kind = github`` is the
+    documented remedy for that case. Caching the verdict forever would mean
+    the correct fix silently does nothing until someone finds and deletes a
+    cache file whose existence nothing advertises. So an ``unsupported``
+    cache is re-derived on the same TTL cadence as any other status —
+    cheaply: :func:`refresh` never reaches ``gh`` for a non-``github`` kind,
+    it only re-reads local git + config, so re-checking costs nothing beyond
+    what a normal stale refresh already pays (#852).
+    """
     state = read_state(repo_root, now=now, stale_after=ttl)
-    if state["status"] in ("fresh",):
+    if state["status"] == "fresh":
+        return False
+    age = state["age_seconds"]
+    if state["status"] == "unsupported" and age is not None and age < ttl:
         return False
     refresh(repo_root)
     return True
@@ -299,6 +417,9 @@ def refresh_if_stale_async(repo_root: Path, *, ttl: float = DEFAULT_TTL_SECONDS)
             return False
         state = read_state(repo_root, stale_after=ttl)
         if state["status"] == "fresh":
+            return False
+        age = state["age_seconds"]
+        if state["status"] == "unsupported" and age is not None and age < ttl:
             return False
         _refreshing = True
 
