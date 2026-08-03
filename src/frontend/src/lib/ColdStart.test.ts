@@ -173,7 +173,13 @@ test('no frontend source points at the retired docs host', () => {
 			// dead-host hit anywhere (first tripped on #1076's CI, 2026-08-03).
 			// They are generated from the very sources the sweep already
 			// reads, so excluding them drops no coverage.
-			['-rl', '--exclude=*.test.ts', '--exclude=.*.generated.mjs', 'gurio.github.io', join(here, '..')],
+			[
+				'-rl',
+				'--exclude=*.test.ts',
+				'--exclude=.*.generated.mjs',
+				'gurio.github.io',
+				join(here, '..')
+			],
 			{ encoding: 'utf8' }
 		)
 			.split('\n')
