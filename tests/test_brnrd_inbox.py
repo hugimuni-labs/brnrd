@@ -954,3 +954,131 @@ def test_response_without_conversation_id_stays_compatible(env):
         row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
         assert row.status == Event.STATUS_RESPONDED
         assert row.conversation_id is None
+
+
+# ── the forwarder learns a table ──────────────────────────────────────
+#
+# `make_default_forwarder`'s dispatch table replaced an if/elif chain that
+# grew by one clause per platform. These pin the table's actual routing —
+# each known platform's handler fires with the right arguments, an unknown
+# one is a silent no-op (never an exception) — independent of any HTTP
+# router, so a future platform addition here can't quietly break another
+# platform's dispatch.
+
+
+def test_forwarder_table_routes_telegram(monkeypatch):
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    sent = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_message",
+        lambda token, chat_id, text, **kw: sent.append((token, chat_id, text, kw)),
+    )
+    forwarder = make_default_forwarder(
+        Settings(database_url="sqlite:///:memory:", telegram_bot_token="bot:T")
+    )
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "telegram", "chat_id": "555", "topic_id": 9, "message_id": 42},
+            body="hi",
+            status="done",
+        )
+    )
+    assert sent == [("bot:T", "555", "hi", {"topic_id": 9, "reply_to_message_id": 42})]
+
+
+def test_forwarder_table_skips_telegram_without_token():
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    # No telegram_bot_token configured -> the telegram handler is a no-op,
+    # not an exception (parity with the old if/elif's guard clause).
+    forwarder = make_default_forwarder(Settings(database_url="sqlite:///:memory:"))
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "telegram", "chat_id": "555"},
+            body="hi",
+            status="done",
+        )
+    )  # no exception
+
+
+def test_forwarder_table_routes_github(monkeypatch):
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    posted = []
+    monkeypatch.setattr(
+        "brnrd.platforms.github.post_issue_comment",
+        lambda token, base, version, repo, issue_number, body, **kw: posted.append(
+            (token, repo, issue_number, body)
+        ),
+    )
+    forwarder = make_default_forwarder(
+        Settings(database_url="sqlite:///:memory:", github_bot_token="ghs_tok")
+    )
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "github", "repo": "owner/repo", "issue_number": 17},
+            body="fixed",
+            status="done",
+        )
+    )
+    assert len(posted) == 1
+    assert posted[0][0] == "ghs_tok"
+    assert posted[0][1] == "owner/repo"
+    assert posted[0][2] == 17
+    assert posted[0][3].endswith("fixed")
+
+
+def test_forwarder_table_routes_whatsapp(monkeypatch):
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    sent = []
+    monkeypatch.setattr(
+        "brnrd.platforms.whatsapp.send_message",
+        lambda token, phone_id, to, text, **kw: sent.append((token, phone_id, to, text, kw)),
+    )
+    forwarder = make_default_forwarder(
+        Settings(
+            database_url="sqlite:///:memory:",
+            whatsapp_access_token="wa_tok",
+            whatsapp_phone_number_id="pid1",
+        )
+    )
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "whatsapp", "chat_id": "15551234567", "message_id": "wamid.abc"},
+            body="hi there",
+            status="done",
+        )
+    )
+    assert len(sent) == 1
+    token, phone_id, to, text, kw = sent[0]
+    assert (token, phone_id, to, text) == ("wa_tok", "pid1", "15551234567", "hi there")
+    assert kw["reply_to_message_id"] == "wamid.abc"
+
+
+def test_forwarder_table_skips_whatsapp_without_credentials():
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    forwarder = make_default_forwarder(Settings(database_url="sqlite:///:memory:"))
+    forwarder(
+        ForwardItem(
+            event_id="e1",
+            reply_to={"platform": "whatsapp", "chat_id": "155"},
+            body="hi",
+            status="done",
+        )
+    )  # no exception, no credentials configured
+
+
+def test_forwarder_table_ignores_unknown_platform():
+    from brnrd.inbox import ForwardItem, make_default_forwarder
+
+    forwarder = make_default_forwarder(Settings(database_url="sqlite:///:memory:"))
+    forwarder(
+        ForwardItem(event_id="e1", reply_to={"platform": "slack"}, body="hi", status="done")
+    )  # silently does nothing, same as the old if/elif falling through

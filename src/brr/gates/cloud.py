@@ -29,7 +29,7 @@ from . import delivery, runtime
 _POLL_WAIT_S = 25
 _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
-_RESPONSE_LIMITS = {"telegram": 3900}
+_RESPONSE_LIMITS = {"telegram": 3900, "whatsapp": 4000}
 _SESSION = requests.Session()
 _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
 # Codex's probe is a ~1.5s process spawn against an account-metadata endpoint
@@ -892,6 +892,16 @@ def _origin_meta(reply_to: dict) -> dict:
             value = reply_to.get(src)
             if value not in (None, ""):
                 meta[dst] = value
+        return meta
+    if platform == "whatsapp":
+        # chat_id is the customer's own wa_id (E.164 phone number, no
+        # topic concept) — same identity carries both the conversation key
+        # and the reply-to address (see routers.webhooks's WhatsApp block).
+        chat_id = reply_to.get("chat_id")
+        meta["cloud_chat_id"] = "" if chat_id is None else chat_id
+        message_id = reply_to.get("message_id")
+        if message_id not in (None, ""):
+            meta["cloud_message_id"] = message_id
     return meta
 
 
