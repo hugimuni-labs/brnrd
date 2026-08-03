@@ -25,8 +25,9 @@
 		runNodeFromSurface,
 		type NodeIdentity
 	} from './runNode';
-	import { runFace } from './runFace';
+	import { runFacesInWindow, type RunFace } from './runFace';
 	import type { SurfaceResponse } from './surface';
+	import MoodChip from './MoodChip.svelte';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
 	// done work as root-run trees, one curated line each, worker strands
@@ -96,6 +97,23 @@
 		rows === null ? null : weaveCloth(applyLens(windowRows, activeLens), now, windowMs, rootCap)
 	);
 	let days = $derived(weave === null ? null : groupClothDays(weave.trees));
+	// THE FACE IN THREE TENSES, piece 2: display-time collision re-roll. The
+	// cloth is where the 24-glyph alphabet actually runs out — a 30-day
+	// window routinely draws more roots than there are runes — so this reads
+	// off `runFace` directly no longer; every id in the rendered weave (roots
+	// and worker children, in the weave's own newest-first order) shares one
+	// probe pass instead. Recomputed whenever the weave changes (a re-poll, a
+	// lens switch); ids outside today's weave (a folded-away day, a dropped
+	// root past the cap) simply aren't in the map — nothing reads their face.
+	let faceWindow = $derived.by(() => {
+		if (weave === null) return new Map<string, RunFace>();
+		const ids: string[] = [];
+		for (const tree of weave.trees) {
+			ids.push(tree.root.id);
+			for (const child of tree.children) ids.push(child.id);
+		}
+		return runFacesInWindow(ids);
+	});
 	let selvage = $derived(rows === null ? null : selvageParts(clothSelvage(rows, now, windowMs)));
 	// `weave.dropped` reads 0 once `showOlder` lifts the cap (nothing is
 	// dropped any more) — so the hem needs the *pre-lift* total, not the
@@ -203,7 +221,7 @@
 	</span>
 {/snippet}
 
-{#snippet curatedLine(line: ClothLine, child: boolean)}
+{#snippet curatedLine(line: ClothLine, child: boolean, faces: Map<string, RunFace>)}
 	{#if child}
 		<span class="shrink-0 text-ink-mute" aria-hidden="true">↳</span>
 	{/if}
@@ -226,10 +244,15 @@
 	     pick lane and the node header, so one run reads as one run across the
 	     three surfaces it appears on. Hashed from `line.id`, the key this row
 	     already renders under (`run_id ?? event_id ?? ended_at`); a row that
-	     resolved to none of those gets nothing rather than a fabricated mark. -->
+	     resolved to none of those gets nothing rather than a fabricated mark.
+	     Looked up in `faces` (piece 2: `runFacesInWindow`) rather than hashed
+	     fresh here — the cloth is a multi-run surface, so this row's glyph can
+	     depend on which other ids share its rendered window. -->
 	{#if line.id}
-		{@const face = runFace(line.id)}
-		<span class="shrink-0" aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>
+		{@const face = faces.get(line.id)}
+		{#if face}
+			<span class="shrink-0" aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>
+		{/if}
 	{/if}
 	{#if line.href}
 		<!-- A tap unfolds the node here (his 08-02 steer) — the row stopped
@@ -249,6 +272,15 @@
 			>{line.name}</span
 		>
 	{/if}
+	<!-- THE FACE IN THREE TENSES piece 3: the run's final mood — the
+	     biography half of identity, small, beside the name it belongs to.
+	     `MoodChip` (shared with LiveRuns/PickLane/the run node) so this
+	     surface can never disagree with the others about what a mood looks
+	     like; it already renders nothing when `line.mood` is null, which is
+	     both the ordinary case (no mood set) and today's standing one (the
+	     ledger doesn't publish a closed run's mood yet — see `cloth.ts`'s
+	     `ClothLine.mood` doc and the PR body for the exact backend gap). -->
+	<MoodChip face={line.mood} seed={line.id} class="hidden sm:inline" />
 	<!-- Repo chip only when this row is off the window's dominant repo —
 	     a single-repo window says nothing per row (the whole cloth is that
 	     repo). Short name in the row; the full label rides the hover. -->
@@ -288,7 +320,7 @@
 			class="relative flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 pb-[3px] font-mono text-xs leading-relaxed max-[480px]:gap-x-1.5"
 		>
 			{@render rowBar(tree.root, false)}
-			{@render curatedLine(tree.root, false)}
+			{@render curatedLine(tree.root, false, faceWindow)}
 			{#if tree.children.length > 0}
 				<button
 					type="button"
@@ -310,7 +342,7 @@
 						in:glitchReveal={{ duration: 240, delay: childIndex * 24 }}
 					>
 						{@render rowBar(child, true)}
-						{@render curatedLine(child, true)}
+						{@render curatedLine(child, true, faceWindow)}
 					</div>
 					{@render nodeUnfold(child, true)}
 				{/each}

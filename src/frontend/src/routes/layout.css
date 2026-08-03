@@ -400,3 +400,65 @@ body::before {
 		transition: none;
 	}
 }
+
+/* THE FACE IN THREE TENSES piece 1 (2026-08-03): the docked machine head
+   wears the lead burning run's mood. Two glyphs share one grid cell
+   (RunBlock.svelte's `.dock-mood-rest` / `.dock-mood-blink`), and each
+   layer's own opacity keyframe is driven by `steps(1, jump-none)` so the
+   swap between them is a single hard cut, never a cross-fade — this loom's
+   motion grammar is discrete frames throughout (#970, "TUI stop motion"),
+   same idiom `boot-flicker`/`frame-ignite` above already use.
+
+   `mood_pitch` is a colour axis, not a tempo (`statusPalette.pitchAccent` —
+   every other mood consumer in this codebase reads it the same way), so it
+   tints the glyph rather than setting the cadence here; the alternation
+   itself runs on one fixed slow beat, same register `MoodChip`'s own
+   CALM_MS reads a mood as "resting" on.
+
+   Base opacity values below (1 / 0) are also the reduced-motion answer:
+   with the animation stopped, they simply hold — the rest frame shown,
+   static, forever, per the constraint. */
+@keyframes dock-mood-rest {
+	0%,
+	45% {
+		opacity: 1;
+	}
+	50%,
+	95% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+@keyframes dock-mood-blink {
+	0%,
+	45% {
+		opacity: 0;
+	}
+	50%,
+	95% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
+.dock-mood-rest {
+	opacity: 1;
+	animation: dock-mood-rest 4400ms steps(1, jump-none) infinite;
+}
+
+.dock-mood-blink {
+	opacity: 0;
+	animation: dock-mood-blink 4400ms steps(1, jump-none) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dock-mood-rest,
+	.dock-mood-blink {
+		animation: none;
+	}
+}
