@@ -56,6 +56,7 @@ other so they don't drift.
 | `.mood` | slot control | **Your own resident-authored mood** — an almost-free meta-channel from resident to user (#566 layer 2). First line only: an emote name or a free glyph string. The hook boundary re-reads it fresh and folds it into the live delta every boundary — a bar segment mid-run, a plain line at seed/stop. It **displays** every boundary and **asks** only on an edge: when a tool in the batch just came back wrong, the chip renders as `mood fo.cus ← Bash ✗`, setting the face you claimed beside the thing that broke. Transition-stamped, so a run debugging a red test is asked once, not at every pass. A control file, never delivered. |
 | `.pr` | slot control | The PR number for a PR **this run created itself** — bare, `#`-prefixed, or a full URL. Not needed for a GitHub-sourced task that already arrived with one. `remote_scm` in the live portal is deliberately network-free (run metadata, never a live forge query), so without this file a self-created PR stays invisible to it and the facet keeps reading `absent`. A control file, never delivered. |
 | `.relics.jsonl` | slot control | This run's **produce manifest** — one JSON object per line, append-only. See §The produce manifest below. A control file, never delivered. |
+| `.promises.jsonl` | slot control | This run's **blueprint** — the produce manifest in the opposite tense: what you said you would make. Written through `brnrd promise <what>`; see §The blueprint below. Drives the `owed N` boundary chip and the closeout's plan-vs-progress line. A control file, never delivered. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
 | `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), attested live produce (`produce`: counts plus the latest commit, branch, and PR), a stable `change_token` for attention-relevant changes, and **`notices`** — see below. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
@@ -71,6 +72,50 @@ would be on success.
 they exist. **Read it after any `spawn:` / `respawn:` / `event:`-addressed
 write.** A dropped directive that nobody reads is a request that silently
 never happened.
+
+## The blueprint — `.promises.jsonl`
+
+The produce manifest says what a run **made**. This says what it **said it
+would make**, so a boundary can name what is still owed and the closeout
+cannot quietly forget it (#1008).
+
+    brnrd promise pr --count 2 --ref "the rollout split"
+    brnrd promise kb --ref subject-x.md
+    brnrd promise pr --release --why "superseded by #1042"
+
+`<what>` is a produce kind — `commit`, `branch`, `pr`, `merge`, `kb`,
+`issue`, `comment`, `message`, `file`. A promise names something the
+manifest can actually attest; anything else would sit owed forever.
+
+**Count decides; `--ref` speaks.** Matching is on *how many* of a kind
+landed, never on the ref: a promise is made before the thing exists and
+cannot name it, so keying on the ref would report a broken promise every
+time you shipped the right work under a different name. The ref is the
+label the owed line uses — and once part of a kind has landed it renders
+as `one of: …`, because counting cannot say *which*.
+
+**`--release` is the counter, and it needs `--why`.** Without a way out an
+abandoned intent sits owed at every boundary forever, and a nag with no
+counter stops being read. The reason rides the row, so the record of the
+abandonment lives where the abandonment happened.
+
+**What it renders.**
+
+- `owed N` — a bar chip, absent at zero, the same differential discipline
+  as `!N`. Deliberately not a ratio against `⚒`: that count includes things
+  nobody promised, so there is no shared denominator.
+- `- still owed: 2 PRs — the rollout split` — a detail line, latched on the
+  blueprint's *own* delta. It speaks when a promise is made, met, or
+  released, and again at the closeout — not once per boundary, which is how
+  an obligation turns into noise.
+- At the closeout, and only there, a kept blueprint says so.
+
+**An empty blueprint renders nothing at all.** `promised 3 · shipped 1` is
+evidence a promise broke — you wrote the row, so you can be proven wrong
+about it. `promised 0 · shipped 3` is not evidence of a kept run: it is a
+run that wrote no rows, which is byte-identical to a run that had nothing to
+promise. A guard may only assert something the run can be proven wrong
+about.
 
 ## The produce manifest — `.relics.jsonl`
 

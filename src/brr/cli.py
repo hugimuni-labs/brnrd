@@ -69,7 +69,17 @@ PUBLIC_COMMANDS = (
 # list is at its ceiling.
 HIDDEN_COMMANDS = (
     "prompts", "hook", "statusline", "worktree-hygiene", "config", "emotes",
-    "relic", "gate-run", "close-check",
+    "relic", "gate-run", "close-check", "promise",
+)
+
+#: What ``brnrd promise`` accepts, spelled here so building the parser costs
+#: no import of :mod:`brr.promises` (every verb's help text is built on every
+#: invocation, including ``--help``). Held equal to ``promises.PROMISABLE``
+#: by a test rather than by a comment — the honest form of "keep these in
+#: sync" is one that goes red.
+_PROMISABLE = (
+    "commit", "branch", "pr", "merge", "kb", "issue", "comment", "message",
+    "file",
 )
 
 #: Everything ``brnrd <verb>`` accepts, retired pointers included.
@@ -443,6 +453,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo", default=None, metavar="owner/name",
         help="the issue's project, when it is not this checkout's origin")
     p.set_defaults(func=cmd_relic_issue, action=None)
+
+    # The blueprint's front door — `.promises.jsonl`, the opposite tense of
+    # the relics manifest (#1008). Its own top-level verb rather than a
+    # `relic` subcommand: a promise is not produce, the two live in different
+    # files for that reason, and the whole feature turns on writing a promise
+    # being cheaper than breaking one.
+    promise_p = sub.add_parser("promise")
+    promise_p.add_argument(
+        "what",
+        help="what this run is promising to make: " + ", ".join(_PROMISABLE))
+    promise_p.add_argument(
+        "--count", type=int, default=1, metavar="N",
+        help="how many (default 1)")
+    promise_p.add_argument(
+        "--ref", default=None, metavar="LABEL",
+        help="what to call it when the boundary says it is still owed "
+             "(e.g. --ref 'the rollout split'). A label, never a key: "
+             "matching is on count, so shipping the same work under another "
+             "name still keeps the promise")
+    promise_p.add_argument(
+        "--release", action="store_true",
+        help="withdraw a promise instead of making one; requires --why")
+    promise_p.add_argument(
+        "--why", default=None, metavar="REASON",
+        help="why the promise is being withdrawn (required with --release)")
+    promise_p.set_defaults(func=cmd_promise)
 
     p = relic_sub.add_parser(
         "item", help="record the warp item this run ignited from")
@@ -1345,6 +1381,127 @@ def cmd_relic_issue(args):
         return 1
     where = f" in {repo}" if repo else ""
     print(f"[brnrd relic] issue #{number} {action}{where}")
+    return 0
+
+
+def cmd_promise(args):
+    """Append one row to this run's blueprint — ``.promises.jsonl`` (#1008).
+
+    The opposite tense of ``brnrd relic``: what this run *said it would
+    make*, so the boundary can say what is still owed and the closeout can
+    say what was not. The whole feature turns on one economics — **it works
+    only if writing the promise is cheaper than breaking it** — so this verb
+    is short, takes one required word, and validates nothing it does not
+    have to.
+
+    ``--release`` is the counter, and it requires ``--why``. Without a way
+    out, an abandoned intent sits owed forever and the line becomes a soft
+    nag with no counter — which fires at every boundary for a non-reason and
+    stops being read, the death this whole family is written against.
+    Requiring the reason is what keeps a withdrawal a decision rather than a
+    default, and the reason rides the row so the record of the abandonment
+    lives where the abandonment happened.
+    """
+    import sys
+
+    from . import promises
+
+    outbox_dir = _wake_outbox_dir()
+    if outbox_dir is None:
+        print(
+            "[brnrd promise] no run outbox in this environment — `brnrd "
+            "promise` records the blueprint of a live brnrd run, and the "
+            "daemon names the outbox through BRR_OUTBOX_DIR / "
+            "BRR_PORTAL_STATE. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    what = str(getattr(args, "what", "") or "").strip().lower()
+    if what == "kb_page":
+        what = "kb"
+    if what not in promises.PROMISABLE:
+        print(
+            f"[brnrd promise] not promisable: {what!r} — want one of "
+            + ", ".join(promises.PROMISABLE)
+            + ". A promise names something the run's own manifest can attest;"
+            " anything else would sit owed forever. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    raw_count = getattr(args, "count", 1)
+    # Not `or 1`: `0 or 1` is 1, so the falsy-default idiom silently turns
+    # the one value this check exists to reject into the default. Caught by
+    # `test_cli_rejects_a_nonpositive_count`, which is why it is there.
+    if raw_count is None:
+        raw_count = 1
+    try:
+        count = int(raw_count)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        print(
+            f"[brnrd promise] --count must be a positive integer, got "
+            f"{getattr(args, 'count', None)!r}. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    release = bool(getattr(args, "release", False))
+    why = str(getattr(args, "why", "") or "").strip()
+    if release and not why:
+        print(
+            "[brnrd promise] --release needs --why. Withdrawing a promise is "
+            "a decision, not a default; the reason rides the row so the "
+            "record lives where the abandonment happened. Nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+    if why and not release:
+        print(
+            "[brnrd promise] --why only applies to --release. Use --ref to "
+            "label a promise you are making. Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    ref = str(getattr(args, "ref", "") or "").strip() or None
+
+    # Same confirmed-append posture as `cmd_relic_issue` / `cmd_relic_item`:
+    # `promises.append` is best-effort by design, which is right inside a
+    # closeout and wrong at a prompt — verify the file grew rather than
+    # report the intent. A promise that silently failed to be written is the
+    # one failure this feature cannot tolerate: it would report a clean
+    # blueprint for a run that made a claim.
+    control = outbox_dir / promises.CONTROL_NAME
+    try:
+        before = control.stat().st_size
+    except OSError:
+        before = 0
+    promises.append(
+        outbox_dir, what, count=count, ref=ref,
+        released=release, why=why or None,
+    )
+    try:
+        after = control.stat().st_size
+    except OSError:
+        after = before
+    if after <= before:
+        print(
+            f"[brnrd promise] could not append to {control} — nothing was "
+            "written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    plan = promises.blueprint(promises.read(outbox_dir), None)
+    owed = sum(plan.owed.values())
+    verb = "released" if release else "promised"
+    label = f" ({ref})" if ref else ""
+    reason = f" — {why}" if why else ""
+    print(f"[brnrd promise] {verb} {count} {what}{label}{reason} · owed {owed}")
     return 0
 
 
