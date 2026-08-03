@@ -91,6 +91,37 @@ one exchange unless the user opens it up.
 5. **Execution environment.** Docker vs worktree, only if docker is on
    PATH; offer to build the bundled image. Default: worktree.
 
+## How their answer reaches you
+
+You have no stdin here. The person types at the terminal brnrd owns, and
+brnrd posts what they typed into this wake's inbox as a **new pending
+event** — it appears in the `inbox.json` and `portal-state.json` your
+Delivery contract names, under the standing portal rules (§delivery
+portals). So the next thing you do after asking a question is **wait for
+it**, not proceed. One empty look proves nothing: at that instant your
+message may not even have been printed to them yet.
+
+`portal-state.json` carries `awaiting_reply`. It is true from the moment
+brnrd gives them the floor until their reply is in — that is a person at a
+keyboard, mid-sentence, and it is the answer to "are they still there".
+While it is true you keep waiting, however still the rest of the file
+looks. `change_token` moves when that flag flips and when an event lands,
+so a poll that compares tokens sees both. This is linger at its live end:
+poll every few seconds while the flag is up rather than settling into the
+30s→240s backoff a background conversation uses, and write `.keepalive` if
+a beat outlasts your budget.
+
+There are two ways to learn that nothing is coming, and only one of them is
+a guess. The flag came up and went down with no new event: they pressed
+Enter on an empty prompt, or closed the terminal — either way the beat is
+back with you, so take its default and say which one. The flag never came
+up at all: that is the guess, and it needs a floor — **at least 90
+seconds** of continuous watching after your message before you call it. The
+flag lags your outbox write by however long brnrd takes to drain and print
+the file, and a person reading a question about their own repo, thinking,
+then typing two lines takes tens of seconds on a good day. Below that
+number, "no reply" measures your impatience rather than their absence.
+
 ## The gate walk
 
 For each gate the user chose, emit an outbox file whose frontmatter is
@@ -148,9 +179,11 @@ incomplete, that's yours to fix before the wake ends.
 - A gate that won't authenticate is *parked*, never silently dropped.
 - The selected Runner working + another supported shell absent ⇒ finish
   init normally. Optional redundancy is advice, not a prerequisite.
-- The user vanishing mid-interview (no reply on a beat) ⇒ take defaults
+- A user who is genuinely gone — §How their answer reaches you, so:
+  `awaiting_reply` down, no new event, past the floor — ⇒ take defaults
   for the rest, say so in the final message, and finish the install —
-  a half-configured repo is worse than a default-configured one.
+  a half-configured repo is worse than a default-configured one. This
+  rule ends a wait that has already been served; it never shortens one.
 - No usable contract possible (repo is empty, or the user declines) ⇒ say
   exactly what's missing and what `--auto` would have done; never fake a
   tailored document out of nothing.

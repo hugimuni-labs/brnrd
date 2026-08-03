@@ -88,6 +88,31 @@ def _outbox_dir(repo: Path) -> Path:
     return dirs[0]
 
 
+def _portal(outbox: Path) -> dict:
+    """The portal capsule as a *wake* would see it — read back off disk.
+
+    Never the dict the session built: the claim under test is what a polling
+    model can observe in the file, so every assertion goes through JSON.
+    """
+    for _ in range(50):  # the writer renames into place; a read can lose that race
+        try:
+            return json.loads(
+                (outbox / portals.LIVE_PORTAL_STATE_NAME).read_text()
+            )
+        except (OSError, json.JSONDecodeError):
+            time.sleep(0.01)
+    raise AssertionError("portal-state.json never became readable")
+
+
+def _session(repo: Path, **kwargs) -> "init_wake._Session":
+    """A session with no runner thread started — for driving ``drain_once``."""
+    kwargs.setdefault("cfg", {})
+    kwargs.setdefault("invoke", _scripted_runner(lambda _i: None))
+    kwargs.setdefault("writer", lambda _t: None)
+    kwargs.setdefault("poll_interval", 0.01)
+    return init_wake._Session(repo, "mock-runner", **kwargs)
+
+
 # ── portals ─────────────────────────────────────────────────────────
 
 
@@ -112,6 +137,26 @@ class TestPortals:
         assert payload["events"] == [] and payload["notices"] == []
         assert payload["resources"]["quota"] == "unimplemented"
         assert payload["stage"] == "brnrd init wake"
+
+    def test_change_token_moves_when_only_the_awaiting_flag_flips(self, tmp_path):
+        """The token was ``str(len(events))`` — a token for one field.
+
+        A wake polling the documented cheap check saw no delta when the
+        human took the floor, which is precisely the moment it needed one.
+        """
+        out = tmp_path / "outbox"
+        shape = {"current_event_id": "evt-1", "events": [], "phase": "interview"}
+        portals.write_portal_state(out, portals.init_portal_state(**shape))
+        idle = json.loads((out / "portal-state.json").read_text())
+        portals.write_portal_state(
+            out, portals.init_portal_state(**shape, awaiting_reply=True),
+        )
+        waiting = json.loads((out / "portal-state.json").read_text())
+
+        assert idle["awaiting_reply"] is False
+        assert waiting["awaiting_reply"] is True
+        assert idle["events"] == waiting["events"] == []
+        assert idle["change_token"] != waiting["change_token"]
 
     def test_daemon_still_writes_the_same_file(self, tmp_path):
         """The extraction must not move the daemon's file or its keys."""
@@ -199,6 +244,30 @@ class TestPromptAssembly:
         )
         assert "Init playbook" in prompt
         assert "the first wake" in prompt
+
+    def test_playbook_names_the_channel_a_reply_comes_back_on(self, tmp_path):
+        """The defect's other half: the task never said where to look.
+
+        The only line the playbook had about the human's side was the
+        failure-honesty one ("no reply on a beat ⇒ take defaults"), so a
+        model that asked a question had nowhere to wait and correctly
+        concluded the user had vanished.
+        """
+        repo = _repo(tmp_path)
+        prompt, _ = prompts.build_init_wake_prompt(
+            repo, event_id="e", response_path="r", outbox_path="o",
+        )
+        flat = " ".join(prompt.split())  # the wrapping is prose, not contract
+        # the channel, by the same names the portal vocabulary already uses
+        assert "How their answer reaches you" in flat
+        assert "new pending event" in flat
+        assert "inbox.json" in flat and "portal-state.json" in flat
+        # the fact that replaces the guess, and a floor with a number on it
+        assert "awaiting_reply" in flat
+        assert "90 seconds" in flat
+        # …and the give-up line now points at that floor instead of being
+        # the whole story.
+        assert "past the floor" in flat
 
     def test_daemon_stage_is_unchanged_by_default(self, tmp_path):
         repo = _repo(tmp_path)
@@ -367,6 +436,149 @@ class TestTerminalLoop:
         )
         assert "contract authored" in result.card
         assert result.messages == 0, "the card is control state, never chat"
+
+
+# ── "the human is composing" ────────────────────────────────────────
+
+
+class TestAwaitingReply:
+    """The window the wake could not see into.
+
+    Between the model's question and the human's blank line, nothing used to
+    change on disk: a user typing two lines looked exactly like a user who
+    had walked away, and a well-behaved wake shipped defaults over a reply
+    that was seconds from landing. The flag is that window, published.
+    """
+
+    def test_the_flag_is_on_disk_while_the_reader_blocks(self, tmp_path):
+        repo = _repo(tmp_path)
+        snapshots: list[dict] = []
+        replies = iter(["", "kb/ in the repo\nand pytest is the gate"])
+
+        def reader() -> str:
+            # Read *while blocked* — this is the exact instant the model is
+            # polling in, and the only one that matters.
+            snapshots.append(_portal(session.outbox_dir))
+            return next(replies)
+
+        session = _session(repo, reader=reader)
+        session.refresh_portals("dispatch")
+
+        _write_outbox(session.outbox_dir, "01.md", "where should memory live?")
+        assert session.drain_once() == 1
+        quiet = _portal(session.outbox_dir)
+
+        _write_outbox(session.outbox_dir, "02.md", "and what gates it?")
+        assert session.drain_once() == 1
+        landed = _portal(session.outbox_dir)
+
+        assert snapshots[0]["awaiting_reply"] is True
+        # A skipped beat lowers it again: no event, nobody waiting.
+        assert quiet["awaiting_reply"] is False and quiet["events"] == []
+        # `quiet` and the second blocked snapshot differ in the flag and in
+        # nothing else — same phase, same empty event list — so the token
+        # delta below is the flag's alone, not the event count's.
+        assert snapshots[1]["awaiting_reply"] is True
+        assert snapshots[1]["phase"] == quiet["phase"] == "interview"
+        assert snapshots[1]["events"] == quiet["events"] == []
+        assert snapshots[1]["change_token"] != quiet["change_token"]
+        # …and the reply that landed is a real pending event again.
+        assert landed["awaiting_reply"] is False
+        assert len(landed["events"]) == 1
+        assert landed["change_token"] != snapshots[1]["change_token"]
+
+    def test_a_polling_wake_sees_the_flip_from_its_own_thread(self, tmp_path):
+        """The real shape: the model polls the portal while the TTY blocks."""
+        repo = _repo(tmp_path)
+        observed: list[dict] = []
+        released = threading.Event()
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            before = _portal(outbox)
+            _write_outbox(outbox, "01.md", "which shape for memory?")
+            try:
+                for _ in range(500):
+                    state = _portal(outbox)
+                    if state["awaiting_reply"]:
+                        observed.append((before, state))
+                        return
+                    time.sleep(0.01)
+            finally:
+                released.set()  # never leave the reader blocked on a failure
+
+        def reader() -> str:
+            # Stay on the floor until the wake has had its look, then answer.
+            released.wait(10)
+            return "kb/ in the repo"
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None, reader=reader, poll_interval=0.01,
+        )
+
+        assert observed, "the wake polled and never saw that a human had the floor"
+        before, waiting = observed[0]
+        assert before["awaiting_reply"] is False
+        # A poller keyed on the token — the documented cheap check — sees it.
+        assert waiting["change_token"] != before["change_token"]
+        assert result.replies == 1
+        final = _portal(_outbox_dir(repo))
+        assert final["awaiting_reply"] is False
+        assert final["phase"] == "closed"
+
+    @pytest.mark.parametrize("boom", [EOFError, KeyboardInterrupt])
+    def test_the_flag_clears_when_the_terminal_goes_away(self, tmp_path, boom):
+        """^D and ^C are exits, not perpetual waiting."""
+        repo = _repo(tmp_path / boom.__name__)
+
+        def reader() -> str:
+            raise boom()
+
+        session = _session(repo, reader=reader)
+        session.refresh_portals("dispatch")
+        _write_outbox(session.outbox_dir, "01.md", "still there?")
+        session.drain_once()
+
+        state = _portal(session.outbox_dir)
+        assert state["awaiting_reply"] is False
+        assert state["events"] == []
+
+    def test_the_flag_clears_when_the_reader_itself_breaks(self, tmp_path):
+        """An unexpected error must not strand the portal claiming a listener."""
+        repo = _repo(tmp_path)
+
+        def reader() -> str:
+            raise RuntimeError("the terminal fell over")
+
+        session = _session(repo, reader=reader)
+        _write_outbox(session.outbox_dir, "01.md", "still there?")
+        with pytest.raises(RuntimeError):
+            session.drain_once()
+        assert _portal(session.outbox_dir)["awaiting_reply"] is False
+
+    def test_the_prompt_states_how_to_send(self, tmp_path, monkeypatch, capsys):
+        """He pressed Enter, nothing happened, and pressed Enter again."""
+        repo = _repo(tmp_path)
+        monkeypatch.setattr("builtins.input", lambda: "")
+
+        session = _session(repo, reader=None)  # the real terminal reader
+        _write_outbox(session.outbox_dir, "01.md", "what is this repo?")
+        session.drain_once()
+        _write_outbox(session.outbox_dir, "02.md", "and how is it checked?")
+        session.drain_once()
+
+        out = capsys.readouterr().out
+        first = out.index(init_wake.FIRST_PROMPT)
+        later = out.index(init_wake.NEXT_PROMPT)
+        assert first < later, "the full rule belongs on the first beat"
+        # The rule itself: a blank line sends, i.e. Enter twice.
+        assert "blank line" in init_wake.FIRST_PROMPT
+        assert "Enter twice" in init_wake.FIRST_PROMPT
+        # Every later beat still carries it, without becoming a paragraph.
+        assert "blank line" in init_wake.NEXT_PROMPT
+        assert len(init_wake.NEXT_PROMPT) <= 32
 
 
 # ── the secrets seam ────────────────────────────────────────────────

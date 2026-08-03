@@ -18,6 +18,7 @@ discipline actually reads.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -155,6 +156,28 @@ def write_portal_state(
     return _write_json(Path(outbox_dir) / LIVE_PORTAL_STATE_NAME, body)
 
 
+def content_token(payload: dict[str, Any]) -> str:
+    """A digest of everything in *payload* that is not bookkeeping.
+
+    The daemon's token (``daemon._change_token``) is a hash of its whole
+    capsule minus the fields that tick on their own, precisely so that a
+    poller keyed on the token sees *any* real change. Init used to hand
+    :func:`init_portal_state` ``str(len(events))``, which is a token for one
+    field: everything else about the capsule could move — the phase, and
+    later ``awaiting_reply`` — with the token frozen, so a wake that polls
+    the token instead of diffing the file observed nothing.
+    """
+    stable = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"generated_at", "change_token"}
+    }
+    encoded = json.dumps(
+        stable, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
 def init_portal_state(
     *,
     current_event_id: str,
@@ -162,6 +185,7 @@ def init_portal_state(
     phase: str,
     notices: list[dict[str, Any]] | None = None,
     change_token: str | None = None,
+    awaiting_reply: bool = False,
 ) -> dict[str, Any]:
     """The reduced capsule an init wake gets (spec §3.2).
 
@@ -171,11 +195,22 @@ def init_portal_state(
     explicitly rather than being absent. ``unimplemented`` is an honest
     answer; a missing key reads as "not measured yet" and invites a
     resident to wait for it.
+
+    ``awaiting_reply`` is the one fact init has that no daemon run does: the
+    driver is blocked on this human's keyboard *right now*. It is a boolean
+    on purpose — "is the person still there" must be readable without
+    pattern-matching a phase string, because the phase is prose for humans
+    and this is a branch condition for a model.
+
+    ``change_token`` defaults to a digest of the capsule, so the flip from
+    waiting to not-waiting moves the token even when the event list has not
+    changed at all.
     """
-    return {
+    body = {
         "version": 1,
         "stage": "brnrd init wake",
         "phase": phase,
+        "awaiting_reply": bool(awaiting_reply),
         "current_event": current_event_id,
         "events": events,
         "notices": list(notices or []),
@@ -186,5 +221,6 @@ def init_portal_state(
             "coexisting_runs": "unimplemented",
             "remote_scm": "unimplemented",
         },
-        "change_token": change_token or "",
     }
+    body["change_token"] = change_token or content_token(body)
+    return body
