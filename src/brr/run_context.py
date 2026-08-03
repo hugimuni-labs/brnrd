@@ -418,6 +418,14 @@ def _render_forge_state(forge: Any) -> str:
     if worktree_summary["total"] or (isinstance(threads, list) and threads):
         # Only speak about PR state when the block has a body at all.
         lines.extend(_render_pr_state(forge.get("pr_state")))
+    # Beside the PR rows, not gated on them (#1021) — see prompts._format_forge_state.
+    stale_shown, stale_omitted = forge_state.capped_stale_opens(forge.get("stale_opens"))
+    stale_line = forge_state.render_stale_opens(stale_shown)
+    if stale_line:
+        lines.append(f"- {stale_line}")
+        if stale_omitted:
+            noun = "candidate" if stale_omitted == 1 else "candidates"
+            lines.append(f"  - {stale_omitted} more possible stale-open {noun} omitted")
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
         for th in threads:
