@@ -200,7 +200,10 @@ def _portal(token: str, **extra):
         "change_token": token,
         "run": {"id": "run-260803-0737-4l69"},
         "budget": {"elapsed_seconds": 30, "budget_seconds": 14400},
-        "attention": {"pending_outbox_file_count": 0},
+        # Production always writes both counts (portals.write_portal_state);
+        # a missing pending_event_count now reads as the honest ✉? unknown
+        # (#1000) and would open the bar for the wrong reason in these tests.
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
         "inbound": {"events": []},
         "outbound": {},
         "card": {"stale": False, "state": "ok"},
