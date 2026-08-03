@@ -114,6 +114,12 @@ export interface ReposResponse {
 	github_bot_login: string;
 	notice: string | null;
 	setup_installation_id: string;
+	// The three pairing lines with `<repo>` where a checkout name goes —
+	// the same spelling each connected repo carries as `setup_command`,
+	// served account-level because the surface that prints it (the
+	// dashboard's cold-start block) renders exactly when `connected_repos`
+	// is empty. One source, backend-owned: see `_session.pairing_command`.
+	pairing_command: string;
 }
 
 export interface ConnectRepoPayload {

@@ -707,3 +707,190 @@ class TestSecurityDomainRouting:
         assert cfg.get("environment") == "worktree", (
             f"environment not resolved; got {cfg.get('environment')!r}"
         )
+
+
+# ── The spelling the launcher earned (npx) ──────────────────────────
+#
+# `npx brnrd init` builds a durable venv under ~/.local/share/brnrd and
+# execs the binary inside it. It never puts `brnrd` on PATH — so every
+# line init prints that says "run `brnrd …`" is false for that user, and
+# the first one they meet is the closing line of their first session.
+# The launcher exports BRNRD_LAUNCHER=npx; these pin that init reads it.
+#
+# Every case is paired with its **absent** twin: a pip / uv / `npm i -g`
+# install must keep printing bare `brnrd`, and that is the half a
+# regression would break in silence.
+
+
+class TestNpxSpelling:
+    @staticmethod
+    def _wake_repo(tmp_path, monkeypatch):
+        """A repo where ``init_repo`` takes the *wake* path (the real screen)."""
+        from brr import init_wake
+
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        monkeypatch.setattr(
+            "brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"],
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr(init_wake, "_default_reader", lambda *_a: "")
+
+        def _invoke(runner_name, invocation, cfg=None):
+            (repo / "AGENTS.md").write_text(
+                "## Stewardship\n" + "x" * 200
+                + "\n## Knowledge base\n\n## Guardrails\n",
+                encoding="utf-8",
+            )
+            return RunnerResult(
+                invocation=invocation,
+                runner_name=runner_name,
+                command=["mock"],
+                stdout="",
+                stderr="",
+                returncode=0,
+                trace_dir=None,
+                artifacts=[],
+            )
+
+        monkeypatch.setattr("brr.runner.invoke_runner", _invoke)
+        return repo
+
+    def test_wake_closing_line_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
+        """The exact line the reporter was looking at when `brnrd` 404'd."""
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        self._wake_repo(tmp_path, monkeypatch)
+
+        adopt.init_repo()
+
+        out = capsys.readouterr().out
+        assert "[brnrd] next: `npx brnrd up`, then send it work." in out
+
+    def test_wake_closing_line_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        self._wake_repo(tmp_path, monkeypatch)
+
+        adopt.init_repo()
+
+        out = capsys.readouterr().out
+        assert "[brnrd] next: `brnrd up`, then send it work." in out
+        assert "npx" not in out
+
+    def test_setup_retry_line_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
+        """The runner produced no AGENTS.md — init's own retry instruction."""
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner_writing(monkeypatch, agents_text=None)
+
+        with pytest.raises(SystemExit):
+            adopt.init_repo()
+
+        assert "re-run `npx brnrd init` to retry" in capsys.readouterr().out
+
+    def test_setup_retry_line_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner_writing(monkeypatch, agents_text=None)
+
+        with pytest.raises(SystemExit):
+            adopt.init_repo()
+
+        out = capsys.readouterr().out
+        assert "re-run `brnrd init` to retry" in out
+        assert "npx" not in out
+
+    def test_incomplete_verify_line_is_npx_spelled(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """``_verify``'s closing line — the other end of the same screen."""
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner(monkeypatch)  # asserts the artifact without writing it
+
+        adopt.init_repo()
+
+        out = capsys.readouterr().out
+        assert "init incomplete — re-run `npx brnrd init` to retry" in out
+
+    def test_incomplete_verify_line_stays_bare_for_a_path_install(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
+        _mock_runner(monkeypatch)
+
+        adopt.init_repo()
+
+        out = capsys.readouterr().out
+        assert "init incomplete — re-run `brnrd init` to retry" in out
+        assert "npx" not in out
+
+    def test_runner_doctor_from_init_is_npx_spelled(self, tmp_path, monkeypatch):
+        """No Runner on PATH: the first-session ladder, both commands it names."""
+        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: [])
+
+        with pytest.raises(SystemExit) as excinfo:
+            adopt.init_repo()
+
+        text = str(excinfo.value)
+        assert "re-run `npx brnrd init`" in text
+        assert "Full profile table: npx brnrd runners list --all" in text
+
+    def test_runner_doctor_stays_bare_for_a_path_install(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
+        repo = tmp_path / "repo"
+        _init_git(repo)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: [])
+
+        with pytest.raises(SystemExit) as excinfo:
+            adopt.init_repo()
+
+        text = str(excinfo.value)
+        assert "re-run `brnrd init`" in text
+        assert "Full profile table: brnrd runners list --all" in text
+        assert "npx" not in text
+
+    def test_missing_git_recovery_is_npx_spelled_in_a_real_process(self, tmp_path):
+        """End to end: a real `python -m brr init` carrying the launcher's env."""
+        env = {
+            **os.environ,
+            "PATH": "",
+            "PYTHONPATH": str(REPO / "src"),
+            "BRNRD_LAUNCHER": "npx",
+        }
+
+        result = subprocess.run(
+            [sys.executable, "-m", "brr", "init"],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert "re-run `npx brnrd init`" in output
+        assert "Traceback" not in output

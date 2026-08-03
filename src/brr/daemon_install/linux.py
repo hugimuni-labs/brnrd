@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from ..cli import brnrd_cmd
+
 
 SERVICE_UNIT = "brr.service"
 SYSTEMD_UNIT = """[Unit]
@@ -283,7 +285,11 @@ def install(
         _run(["systemctl", "--user", "start", SERVICE_UNIT])
         verify_started()
 
-    print("[brnrd] next: `brnrd daemon status`, `brnrd daemon logs`, `brnrd daemon uninstall`")
+    brnrd = brnrd_cmd()
+    print(
+        f"[brnrd] next: `{brnrd} daemon status`, `{brnrd} daemon logs`, "
+        f"`{brnrd} daemon uninstall`"
+    )
 
 
 def uninstall(
