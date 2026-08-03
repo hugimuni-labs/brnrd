@@ -497,16 +497,20 @@ def pr_state_note(pr_state: Any) -> str:
         return "PR state: unknown (no local cache yet — the daemon refreshes it on its tick)"
     if status == "unsupported":
         # Not "unknown" — the ``absent ≠ unknown ≠ none`` doctrine gets a
-        # fourth member here (#852): we *know* this forge is not one ``gh``
-        # can answer for ("we asked and it failed" would imply a retry might
-        # help; it never will), so the sentence says so plainly instead of
-        # wearing the ``error``/``stale`` phrasing that would call it unknown
-        # or imply a refresh is still due.
+        # fourth member here (#852): we *know* ``gh`` is never queried while
+        # this holds ("we asked and it failed" would wrongly imply a retry
+        # might help), so the sentence says so plainly instead of wearing
+        # the ``error``/``stale`` phrasing that would call it unknown or
+        # imply a refresh is due. Deliberately not "permanent" or "never
+        # retried" — forge_pr_cache.refresh_if_stale re-derives the kind on
+        # the normal TTL cadence, so a remote change or a `.brr/config
+        # forge.kind` fix is picked up on its own; this line just never
+        # promises a `gh` call is what will do the noticing.
         kind = str(pr_state.get("forge_kind") or "").strip()
         forge = f" ({kind})" if kind else ""
         return (
             f"PR state: unsupported{forge} — this remote isn't GitHub, and "
-            "`gh` only ever queries github.com; not retried"
+            "`gh` is never queried for it"
         )
     if status == "error":
         error = str(pr_state.get("error") or "").strip() or "refresh failed"

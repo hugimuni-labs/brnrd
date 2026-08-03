@@ -277,19 +277,77 @@ def test_refresh_never_shells_out_on_a_non_github_remote(tmp_path, monkeypatch):
     assert state["prs"] is None
 
 
-def test_refresh_if_stale_never_retries_an_unsupported_forge(tmp_path, monkeypatch):
+def test_refresh_drops_stale_rows_when_the_remote_turns_out_unsupported(tmp_path, monkeypatch):
+    """Unlike a failed ``gh`` call, ``unsupported`` must not carry forward
+    rows from a prior good fetch — the label now names a different forge
+    than whatever those rows described, so nothing about them is still true
+    of this repo (module docstring carve-out, parent review of #852).
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+    _write_cache(repo, {"fetched_at": _iso(-60), "prs": [_pr(390, "brr/x")]})
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail("gh called for a non-GitHub remote")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    payload = forge_pr_cache.refresh(repo)
+
+    assert payload["prs"] is None  # not the #390 row carried over from before
+
+
+def test_refresh_if_stale_never_shells_out_for_an_unsupported_forge(tmp_path, monkeypatch):
+    """Re-deriving the kind (cheap: local git + config, no subprocess) must
+    never itself reach ``gh`` — only a *changed* kind may (see the next
+    test). This covers the common case: nothing changed, TTL just elapsed.
+    """
     repo = _repo_with_gitlab_remote(tmp_path)
 
     def forbidden(cmd, **kwargs):
-        pytest.fail("gh called for a cache already known unsupported")
+        pytest.fail("gh called for a repo whose forge kind is still non-github")
 
     monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
     assert forge_pr_cache.refresh(repo)["unsupported"] is True
 
-    # A tick arriving long after the usual TTL must still skip the subprocess
-    # entirely — "unsupported" never ages into "stale".
-    far_future = time.time() + 999999
-    assert forge_pr_cache.refresh_if_stale(repo, now=far_future) is False
+    # Within the TTL window: no re-derivation yet, same cadence as any other
+    # status.
+    assert forge_pr_cache.refresh_if_stale(repo) is False
+
+    # A tick long after the TTL re-derives (cheaply) but the kind is still
+    # gitlab, so gh is still never touched.
+    far_future = time.time() + forge_pr_cache.DEFAULT_TTL_SECONDS + 1
+    forge_pr_cache.refresh_if_stale(repo, now=far_future)
+    assert forge_pr_cache.read_state(repo)["status"] == "unsupported"
+
+
+def test_refresh_if_stale_recovers_once_the_remote_becomes_github(tmp_path, monkeypatch):
+    """The two facts a forge kind is computed from are user-editable — a
+    ``git remote set-url`` fix must not be trapped behind a cached verdict
+    forever (parent review of the initial #852 fix).
+    """
+    repo = _repo_with_gitlab_remote(tmp_path)
+
+    def forbidden(cmd, **kwargs):
+        pytest.fail("gh called before the remote pointed at GitHub")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(forbidden))
+    forge_pr_cache.refresh(repo)
+    assert forge_pr_cache.read_state(repo)["status"] == "unsupported"
+    # Within the TTL window: unchanged, no re-derivation yet.
+    assert forge_pr_cache.refresh_if_stale(repo) is False
+
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "https://github.com/Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    def fake_gh(cmd, **kwargs):
+        assert "--repo" in cmd and "Gurio/brr" in cmd
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    monkeypatch.setattr(forge_pr_cache.subprocess, "run", _gh_only(fake_gh))
+    far_future = time.time() + forge_pr_cache.DEFAULT_TTL_SECONDS + 1
+    assert forge_pr_cache.refresh_if_stale(repo, now=far_future) is True
+    assert forge_pr_cache.read_state(repo)["status"] == "fresh"
 
 
 def test_refresh_still_queries_github_as_before(tmp_path, monkeypatch):
