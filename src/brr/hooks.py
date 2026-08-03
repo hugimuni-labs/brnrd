@@ -47,6 +47,7 @@ from . import card as card_rule
 from . import facets
 from . import gate_receipt
 from . import portals
+from . import promises
 from . import relics
 
 PHASE_POST_TOOL = "post-tool"
@@ -785,6 +786,18 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "total attested produce items this run (commits, branches, PRs, kb "
         "pages, issues, comments, messages, files) (`⚒4`). Renders only "
         "when nonzero.",
+    ),
+    _BarSegment(
+        "owed", "owed",
+        "outstanding promises — rows in `.promises.jsonl` this run has not "
+        "yet matched with produce (`owed 2`). Renders only when the count is "
+        "> 0, the same differential discipline as `!N`: a blueprint with "
+        "nothing outstanding says nothing. Deliberately not a ratio against "
+        "`⚒` — that count includes things nobody promised, so `2/5` would be "
+        "an aggregate over a population with no shared denominator, and a "
+        "chip shaped like a progress bar gets read as one. The chip is the "
+        "ambient half; *which* things are owed rides a detail line, latched "
+        "on the blueprint's own delta (#1008).",
     ),
     _BarSegment(
         "mood", "mood",
@@ -1572,6 +1585,8 @@ def _render_bar(
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
     armed: list[Any] | None = None,
+    plan: "promises.Blueprint | None" = None,
+    plan_edge: bool = False,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -1624,6 +1639,13 @@ def _render_bar(
     produce_total = _produce_total(produce)
     if produce_total:
         segments.append(f"⚒{produce_total}")
+    # Beside the produce count, because they are the same fact in two tenses
+    # (#1008). Gateless like `⚒`: an outstanding promise is an obligation,
+    # but the *chip* is its ambient half and must not manufacture a boundary
+    # by itself — the `owed` detail line below does that, once per change.
+    owed_chip = promises.chip(plan) if plan is not None else None
+    if owed_chip:
+        segments.append(owed_chip)
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(notices_chip)
@@ -1661,6 +1683,16 @@ def _render_bar(
         # pressure.
         details.append(_finished_spawns_line(finished_spawns))
     details.extend(_render_armed_rows(armed))
+    # The blueprint's obligation half. Latched on its own delta by the caller
+    # (`plan_edge`), never rendered per boundary: an owed line that repeats
+    # for as long as it stands is the *fires constantly for a non-reason*
+    # death, and the chip above already carries the standing fact. It speaks
+    # when a promise is made, when one is met or released, and at the
+    # closeout — the three moments the number actually means something new.
+    if plan is not None and plan_edge:
+        owed = promises.owed_line(plan)
+        if owed:
+            details.append(owed)
     if budget.get("long_running"):
         limit = budget.get("budget_seconds")
         details.append(
@@ -1692,6 +1724,11 @@ def _render_bar(
 
     resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
     any_delivery = bool(delivery_chip)
+    # A blueprint edge opens the gate on its own, for `surprise`'s reason:
+    # writing a promise changes nothing the daemon puts in portal-state, so
+    # gating this on the portal token would leave the one boundary the
+    # signal exists for rendering nothing.
+    plan_laden = bool(plan is not None and plan_edge and plan.owed)
     # A mood edge is laden by definition: something the resident did just came
     # back wrong. Without this clause the caller's gate opens and this one
     # closes again — the ask would still be silent on exactly the boundary it
@@ -1700,6 +1737,7 @@ def _render_bar(
         pending == 0 and pending_files == 0 and not any_delivery
         and not resources_laden and not card_stale and not surprise
         and not notices_chip and not finished_spawns and not armed
+        and not plan_laden
     ):
         return None
     bar = " │ ".join(segments)
@@ -1778,6 +1816,8 @@ def format_delta(
     note_routing: bool = False,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
+    plan: "promises.Blueprint | None" = None,
+    plan_edge: bool = False,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -1831,6 +1871,15 @@ def format_delta(
     ``Read`` can open for a body too large to refeed inline. ``None`` for
     both keeps this a pure function of the snapshot — everything renders as
     a first appearance, and elided bodies point at ``inbox.json`` by name.
+
+    ``plan`` is the run's blueprint joined against its produce
+    (:mod:`brr.promises`, #1008) — computed by the caller for ``orient``'s
+    reason: it is read off ``.promises.jsonl``, which is not in the portal
+    snapshot. ``plan_edge`` is its once-per-change latch, owned by the caller
+    like ``note_routing``: mid-run the *chip* carries the standing fact every
+    boundary and the *owed line* speaks only when the blueprint moves. At
+    seed and stop the latch does not apply — the closeout is the moment the
+    whole feature exists for.
 
     The armed dated-letters block (#904, :func:`_render_armed_rows`) reads
     straight off ``payload["schedule"]["armed"]`` — the daemon's own
@@ -1889,7 +1938,7 @@ def format_delta(
             mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
-            armed=armed,
+            armed=armed, plan=plan, plan_edge=plan_edge,
         )
 
     lines: list[str] = []
@@ -1950,6 +1999,25 @@ def format_delta(
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
+    # The blueprint, against the produce below it (#1008). At seed and stop
+    # this is never latched: the closeout is the moment the whole feature
+    # exists for, and a promise that went unmet has to be said *there* even
+    # if it was already said mid-run — that is the difference between an
+    # obligation and an ambient line, and it is why this sits outside the
+    # content-dedupe that guards the ambient phases.
+    #
+    # Both directions render here, and only here. Mid-run the kept case is
+    # silence, because "all kept" every boundary is noise; at the closeout it
+    # is the receipt half of the same fact, and the resident is writing a
+    # reply from this block.
+    if plan is not None and plan.any_promises:
+        owed = promises.owed_line(plan)
+        if owed:
+            lines.append(owed)
+        elif stop:
+            lines.append(
+                "- blueprint: every promise this run made is in its manifest."
+            )
     # Produce is already attested by relics.py; the briefing only compresses
     # it. It rides hook deltas that are rendering for an existing reason and
     # is intentionally absent from the mid-run gate below, so committing work
@@ -3087,11 +3155,34 @@ def compute_neutral(
     # between hook fires, and the whole point is that the face rendered here
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
+    # The blueprint (#1008), read fresh for `.mood`'s reason: the resident
+    # writes `.promises.jsonl` between hook fires and the point is that the
+    # line rendered here reflects what it just claimed. Joined against the
+    # produce counts the daemon already computed, so nothing re-derives them.
+    #
+    # `plan_edge` is the once-per-change latch. It is *not* a content check:
+    # an owed line and an ambient bar are byte-identical when nothing moved,
+    # and content dedupe eats an unmet obligation exactly as fast as noise
+    # (#818/#963). Keying on the blueprint's own token makes the line speak
+    # when a promise is made, met, or released — and stay quiet in between,
+    # where the `owed N` chip carries the standing fact for seven characters.
+    portal_produce = (
+        portal.get("produce") if isinstance(portal.get("produce"), dict) else {}
+    )
+    produce_counts = (
+        portal_produce.get("counts")
+        if isinstance(portal_produce.get("counts"), dict) else {}
+    )
+    plan = promises.blueprint(promises.read(ctx.outbox_dir), produce_counts)
+    plan_token = promises.token(plan)
+    plan_edge = plan.any_promises and plan_token != state.get("plan_token")
+    state["plan_token"] = plan_token
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
             portal, seed=True, mood=mood,
             event_seen=event_decisions, inbox_pointer=inbox_pointer,
+            plan=plan,
         )
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
@@ -3122,6 +3213,7 @@ def compute_neutral(
                 portal, stop=True, run_body=_read_card_body(ctx), mood=mood,
                 note_routing=note_routing,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                plan=plan,
             )
             # Latch on the render, not on the decision: a Stop whose token
             # did not move injects nothing, and burning the one statement on
@@ -3162,10 +3254,17 @@ def compute_neutral(
         # changes nothing the daemon writes into portal-state, so the one
         # boundary the ask exists for is exactly the one that would render
         # nothing.
-        if token is not None and (token != state.get("last_token") or edge):
+        # A blueprint edge opens the gate on its own, for the mood edge's
+        # reason: writing `.promises.jsonl` changes nothing the daemon puts
+        # into portal-state, so gating on the portal token alone would leave
+        # the one boundary this signal exists for rendering nothing.
+        if token is not None and (
+            token != state.get("last_token") or edge or plan_edge
+        ):
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                plan=plan, plan_edge=plan_edge,
             )
             state["last_token"] = token
 

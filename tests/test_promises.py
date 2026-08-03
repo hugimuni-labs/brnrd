@@ -1,0 +1,304 @@
+"""The blueprint: `.promises.jsonl`, its diff, and its boundary rendering.
+
+Every test here drives the caller the defect would reach through — the CLI
+verb, `promises.read` off a real file on disk, `hooks.compute_neutral` with a
+real hook context — rather than a private helper. The three that guard the
+*shape* of the feature (the empty blueprint is silence, the owed line is
+latched, an edge opens the gate) are the ones worth neutering first: each was
+confirmed red against the unfixed code before it was kept.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from brr import cli, hooks, promises
+
+
+# ── The file, and what a promise may name ────────────────────────────────
+
+
+def test_promisable_matches_the_relics_vocabulary():
+    """`promises.PROMISABLE` is spelled twice; a comment cannot hold that."""
+    from brr import relics
+
+    assert set(promises.PROMISABLE) <= relics._LIVE_KINDS
+    assert set(cli._PROMISABLE) == set(promises.PROMISABLE)
+
+
+def test_read_missing_file_is_an_empty_blueprint(tmp_path):
+    assert promises.read(tmp_path) == []
+    assert promises.read(None) == []
+
+
+def test_read_skips_malformed_and_unpromisable_rows(tmp_path):
+    (tmp_path / promises.CONTROL_NAME).write_text(
+        '{"what":"pr","count":2}\n'
+        "not json at all\n"
+        "\n"
+        '{"what":"banana"}\n'
+        '["not","a","dict"]\n'
+        '{"what":"kb_page","count":1}\n',
+        encoding="utf-8",
+    )
+    rows = promises.read(tmp_path)
+    assert [r["what"] for r in rows] == ["pr", "kb"]
+
+
+# ── The diff ─────────────────────────────────────────────────────────────
+
+
+def test_count_decides_and_ref_never_keys(tmp_path):
+    """Shipping the right work under another name still keeps the promise."""
+    rows = [{"what": "pr", "count": 1, "ref": "the rollout split"}]
+    plan = promises.blueprint(rows, {"pr": 1})
+    assert plan.owed == {}
+    assert plan.kept
+
+
+def test_released_rows_subtract_and_can_clear_the_line(tmp_path):
+    rows = [
+        {"what": "pr", "count": 2},
+        {"what": "pr", "count": 2, "released": True, "why": "superseded"},
+    ]
+    plan = promises.blueprint(rows, None)
+    assert plan.promised == {}
+    assert promises.chip(plan) is None
+    assert promises.owed_line(plan) is None
+
+
+def test_empty_blueprint_renders_nothing_even_with_produce():
+    """`promised 0 · shipped 3` must never read as a pass.
+
+    A manifest is a self-report: a run that wrote no rows is byte-identical
+    to a run that had nothing to promise, so there is no claim to make.
+    """
+    plan = promises.blueprint([], {"pr": 3, "commit": 9})
+    assert not plan.any_promises
+    assert plan.kept is False
+    assert promises.chip(plan) is None
+    assert promises.owed_line(plan) is None
+
+
+def test_partial_shipment_will_not_name_which_one_is_owed():
+    """Two promised, one shipped — the labels become candidates.
+
+    Matching is on count, which cannot say *which*. Naming one would be a
+    diagnostic asserting something the run cannot be proven wrong about.
+    """
+    rows = [
+        {"what": "pr", "count": 1, "ref": "the rollout"},
+        {"what": "pr", "count": 1, "ref": "the notices split"},
+    ]
+    line = promises.owed_line(promises.blueprint(rows, {"pr": 1}))
+    assert line is not None
+    assert "one of: the rollout · the notices split" in line
+
+    whole = promises.owed_line(promises.blueprint(rows, {"pr": 0}))
+    assert whole is not None
+    assert "one of:" not in whole
+    assert "the rollout · the notices split" in whole
+
+
+def test_chip_is_a_count_not_a_ratio():
+    rows = [{"what": "pr", "count": 3}]
+    plan = promises.blueprint(rows, {"pr": 1, "commit": 40})
+    # Not "1/3" and not "1/41": the produce count includes things nobody
+    # promised, so there is no shared denominator to render a ratio over.
+    assert promises.chip(plan) == "owed 2"
+
+
+def test_token_moves_on_promise_and_on_fulfilment():
+    rows = [{"what": "pr", "count": 1}]
+    empty = promises.token(promises.blueprint([], None))
+    made = promises.token(promises.blueprint(rows, None))
+    kept = promises.token(promises.blueprint(rows, {"pr": 1}))
+    assert empty != made != kept
+    assert made != kept
+
+
+# ── The front door ───────────────────────────────────────────────────────
+
+
+def _run_cli(monkeypatch, outbox, argv):
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+    return cli.main(argv)
+
+
+def test_cli_writes_a_row_and_reports_the_owed_total(monkeypatch, tmp_path, capsys):
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "pr", "--count", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "owed 2" in out
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / promises.CONTROL_NAME).read_text().splitlines()
+    ]
+    assert rows == [{"what": "pr", "count": 2}]
+
+
+def test_cli_refuses_an_unpromisable_word_and_writes_nothing(
+    monkeypatch, tmp_path, capsys
+):
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "banana"]) == 1
+    assert not (tmp_path / promises.CONTROL_NAME).exists()
+    assert "not promisable" in capsys.readouterr().err
+
+
+def test_cli_release_requires_a_reason(monkeypatch, tmp_path, capsys):
+    """The counter has to exist, and it has to be deliberate.
+
+    Without `--release` the owed line is a soft nag with no counter: it fires
+    at every boundary for as long as an abandoned intent sits there, and a
+    nag with no counter stops being read. Without `--why`, withdrawal is a
+    default rather than a decision.
+    """
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "pr", "--release"]) == 1
+    assert not (tmp_path / promises.CONTROL_NAME).exists()
+    assert "--release needs --why" in capsys.readouterr().err
+
+    assert _run_cli(
+        monkeypatch, tmp_path,
+        ["promise", "pr", "--release", "--why", "superseded by #1042"],
+    ) == 0
+    row = json.loads((tmp_path / promises.CONTROL_NAME).read_text().splitlines()[0])
+    assert row["released"] is True and row["why"] == "superseded by #1042"
+
+
+def test_cli_rejects_a_nonpositive_count(monkeypatch, tmp_path, capsys):
+    assert _run_cli(monkeypatch, tmp_path, ["promise", "pr", "--count", "0"]) == 1
+    assert not (tmp_path / promises.CONTROL_NAME).exists()
+
+
+def test_cli_without_an_outbox_says_so_rather_than_writing_nowhere(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.delenv("BRR_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    assert cli.main(["promise", "pr"]) == 1
+    assert "no run outbox" in capsys.readouterr().err
+
+
+# ── The boundary ─────────────────────────────────────────────────────────
+
+
+def _ctx(tmp_path):
+    outbox = tmp_path / "outbox"
+    outbox.mkdir(exist_ok=True)
+    portal = outbox / "portal-state.json"
+    ctx = hooks.HookContext({
+        "BRR_OUTBOX_DIR": str(outbox),
+        "BRR_PORTAL_STATE": str(portal),
+        "BRR_RUN_ID": "run-260803-0737-4l69",
+    })
+    return ctx, outbox, portal
+
+
+def _portal(token: str, **extra):
+    payload = {
+        "change_token": token,
+        "run": {"id": "run-260803-0737-4l69"},
+        "budget": {"elapsed_seconds": 30, "budget_seconds": 14400},
+        "attention": {"pending_outbox_file_count": 0},
+        "inbound": {"events": []},
+        "outbound": {},
+        "card": {"stale": False, "state": "ok"},
+        "resources": {},
+        "produce": {"known": True, "counts": {}},
+        "name": {"written": True},
+    }
+    payload.update(extra)
+    return payload
+
+
+def test_an_owed_promise_opens_the_gate_on_a_boundary_nothing_else_moved(
+    tmp_path,
+):
+    """The one boundary the signal exists for.
+
+    Writing `.promises.jsonl` changes nothing the daemon puts into
+    portal-state, so a promise line gated on the portal token alone would
+    render at exactly no useful moment.
+    """
+    ctx, outbox, portal = _ctx(tmp_path)
+    portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
+
+    # Boundary 1: nothing to say.
+    first = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    assert first["inject"] is None
+
+    # Boundary 2: same portal token, but a promise now exists.
+    promises.append(outbox, "pr", count=2, ref="the rollout split")
+    second = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    assert second["inject"] is not None
+    assert "owed 2" in second["inject"]
+    assert "still owed: 2 PRs — the rollout split" in second["inject"]
+
+
+def test_the_owed_line_is_latched_but_the_chip_is_not(tmp_path):
+    """An obligation that repeats every boundary trains the reader to skip it.
+
+    The standing fact rides the chip (seven characters, gateless); the line
+    speaks on the blueprint's own delta. This is the #818/#963 split at a
+    smaller scale: content dedupe cannot tell an ambient line from an unmet
+    obligation, so the latch has to be on the *fact*, not on the bytes.
+    """
+    ctx, outbox, portal = _ctx(tmp_path)
+    portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
+    promises.append(outbox, "pr", count=1)
+
+    first = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    assert "still owed" in (first["inject"] or "")
+
+    # A later boundary where something *else* moved: the chip stays, the
+    # line does not repeat.
+    portal.write_text(
+        json.dumps(_portal("t2", card={"stale": True, "state": "stale",
+                                       "age_seconds": 400})),
+        encoding="utf-8",
+    )
+    second = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    assert "owed 1" in (second["inject"] or "")
+    assert "still owed" not in (second["inject"] or "")
+
+
+def test_the_closeout_says_it_whether_or_not_it_was_said_mid_run(tmp_path):
+    """Stop is never latched — it is the moment the feature exists for."""
+    ctx, outbox, portal = _ctx(tmp_path)
+    portal.write_text(json.dumps(_portal("t1")), encoding="utf-8")
+    promises.append(outbox, "pr", count=3, ref="the rollout split")
+
+    mid = hooks.compute_neutral(hooks.PHASE_POST_TOOL, ctx, {})
+    assert "still owed" in (mid["inject"] or "")
+
+    stop = hooks.compute_neutral(hooks.PHASE_STOP, ctx, {})
+    assert "still owed: 3 PRs" in (stop["inject"] or "")
+
+
+def test_the_closeout_confirms_a_blueprint_that_was_kept(tmp_path):
+    ctx, outbox, portal = _ctx(tmp_path)
+    portal.write_text(
+        json.dumps(_portal("t1", produce={"known": True, "counts": {"pr": 2}})),
+        encoding="utf-8",
+    )
+    promises.append(outbox, "pr", count=2)
+    stop = hooks.compute_neutral(hooks.PHASE_STOP, ctx, {})
+    inject = stop["inject"] or ""
+    assert "every promise this run made is in its manifest" in inject
+    assert "still owed" not in inject
+
+
+def test_a_run_that_promised_nothing_gets_no_blueprint_line_at_the_closeout(
+    tmp_path,
+):
+    ctx, outbox, portal = _ctx(tmp_path)
+    portal.write_text(
+        json.dumps(_portal("t1", produce={"known": True, "counts": {"pr": 3}})),
+        encoding="utf-8",
+    )
+    stop = hooks.compute_neutral(hooks.PHASE_STOP, ctx, {})
+    inject = stop["inject"] or ""
+    assert "blueprint" not in inject
+    assert "still owed" not in inject
+    assert "owed " not in inject
