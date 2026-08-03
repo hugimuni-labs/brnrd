@@ -386,6 +386,24 @@ def check_commit_ordering(base: str, token: str, repo_root) -> bool:
             f"::notice::commit ordering unknown ({reason}); rolling out anyway",
             flush=True,
         )
+    else:
+        # The `ancestor` path used to print nothing, which made a guard that
+        # ran and resolved correctly **byte-identical in the log** to a guard
+        # that was never called at all. Observed on this guard's own first
+        # live deploy (#1045, `21e80860`): the step went straight from the
+        # checkout to `container status: ready`, and the only way to tell
+        # the check had happened was to read the source.
+        #
+        # A no-op and a silent success are the same shape at a terminal, and
+        # a guard whose success is invisible is a guard nobody can confirm is
+        # still wired in after the next refactor. One line, and it is the
+        # line that makes the other two branches trustworthy — an operator
+        # who has seen this print knows silence would mean something wrong.
+        print(
+            f"::notice::commit ordering ok — deployed {deployed_sha[:8]} is an "
+            f"ancestor of {candidate_sha[:8]}; rolling forward",
+            flush=True,
+        )
     return True
 
 
