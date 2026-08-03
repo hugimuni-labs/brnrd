@@ -1469,6 +1469,26 @@ def cmd_promise(args):
 
     ref = str(getattr(args, "ref", "") or "").strip() or None
 
+    # How much of this kind the run had *already* produced when the claim
+    # was made. Without it a promise is satisfiable by its own past — driven
+    # and caught on the run that wrote this feature (see
+    # `promises.blueprint`). Read off the live portal snapshot the daemon
+    # already maintains; unreadable snapshot ⇒ no baseline, which falls back
+    # to the lenient old behaviour rather than guessing a number.
+    baseline: int | None = None
+    if not release:
+        try:
+            import json as _json
+
+            state = _json.loads(
+                (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+            )
+            counts = state.get("produce", {}).get("counts", {})
+            if isinstance(counts, dict):
+                baseline = int(counts.get(what, 0) or 0)
+        except Exception:
+            baseline = None
+
     # Same confirmed-append posture as `cmd_relic_issue` / `cmd_relic_item`:
     # `promises.append` is best-effort by design, which is right inside a
     # closeout and wrong at a prompt — verify the file grew rather than
@@ -1482,7 +1502,7 @@ def cmd_promise(args):
         before = 0
     promises.append(
         outbox_dir, what, count=count, ref=ref,
-        released=release, why=why or None,
+        released=release, why=why or None, baseline=baseline,
     )
     try:
         after = control.stat().st_size

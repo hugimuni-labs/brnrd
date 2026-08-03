@@ -144,11 +144,19 @@ def append(
     ref: str | None = None,
     released: bool = False,
     why: str | None = None,
+    baseline: int | None = None,
 ) -> None:
-    """Append one blueprint row. Best-effort, like ``relics.append``."""
+    """Append one blueprint row. Best-effort, like ``relics.append``.
+
+    *baseline* is how much of *what* the run had **already** produced when
+    the promise was made. See :func:`blueprint` for why a promise that does
+    not carry one is satisfiable by work that predates it.
+    """
     if outbox_dir is None:
         return
     record: dict[str, Any] = {"what": what, "count": int(count)}
+    if baseline is not None and not released:
+        record["baseline"] = int(baseline)
     if ref:
         record["ref"] = ref
     if released:
@@ -220,8 +228,30 @@ def blueprint(
     counter, and a nag with no counter fires forever and stops being read.
     The reason rides the row rather than a log, so the record of the
     abandonment lives where the abandonment happened.
+
+    **``baseline`` is why a promise cannot be kept by its own past.** Found
+    by driving this on the run that wrote it: the run had already opened one
+    PR, then promised two more, and the blueprint read *all kept* — because
+    counting alone cannot tell produce that *answers* a promise from produce
+    that merely predates it. Every row therefore records how much of its
+    kind existed when the claim was made, and only the surplus over that
+    baseline counts toward it.
+
+    The direction of the error is the whole point. Without a baseline the
+    guard fails **optimistically** — silent when a promise is outstanding —
+    and a claim has a direction it can be wrong in, so it must be the
+    pessimistic one. A row with no ``baseline`` (hand-written, or from
+    before this existed) falls back to counting everything, which is the old
+    behaviour and the lenient one; that is stated rather than hidden.
+
+    What this still does not do: two *unrelated* later PRs satisfy two
+    promised PRs. Counting cannot see intent, and the alternative — matching
+    on ``ref`` — cries wolf every time the right work ships under another
+    name. This is the coarse-but-quiet corner of the trade, and it is named
+    here rather than papered over.
     """
     promised: dict[str, int] = {}
+    baselines: dict[str, int] = {}
     labels: dict[str, list[str]] = {}
     for record in rows:
         what = str(record.get("what") or "")
@@ -238,12 +268,25 @@ def blueprint(
             promised[what] = promised.get(what, 0) - count
             continue
         promised[what] = promised.get(what, 0) + count
+        raw_baseline = record.get("baseline")
+        if isinstance(raw_baseline, int) and raw_baseline >= 0:
+            # The *highest* baseline among a kind's rows, not the first: a
+            # later promise made after more work landed must not be
+            # answered by that work. Taking the minimum, or the first,
+            # would fail in the optimistic direction again.
+            baselines[what] = max(baselines.get(what, 0), raw_baseline)
         ref = str(record.get("ref") or "").strip()
         if ref:
             labels.setdefault(what, []).append(ref)
     promised = {what: n for what, n in promised.items() if n > 0}
     shipped_counts = dict(shipped or {})
-    landed = {what: int(shipped_counts.get(what, 0) or 0) for what in promised}
+    landed = {
+        what: max(
+            0,
+            int(shipped_counts.get(what, 0) or 0) - baselines.get(what, 0),
+        )
+        for what in promised
+    }
     owed = {
         what: promised[what] - landed[what]
         for what in promised
