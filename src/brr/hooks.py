@@ -787,6 +787,18 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "when nonzero.",
     ),
     _BarSegment(
+        "gate", "gate",
+        "this run's gate receipt: verdict and the head it was earned on "
+        "(`gate GREEN@e59f527`), plus `(moved)` when the tree moved under "
+        "the gate while it ran (#917). Renders only once a receipt exists — "
+        "a run that has not gated is not a run that failed. The sha is the "
+        "honest half: the tree a run gates is often not the tree it is "
+        "checked out in, so a receipt describing another tree is legible as "
+        "such rather than mistaken for this one. Not a staleness verdict — "
+        "that needs the tree the receipt names, and the closeout clause "
+        "makes that comparison where it has the standing to (#1048).",
+    ),
+    _BarSegment(
         "mood", "mood",
         "the resident's own `.mood` control file (#566 layer 2), truncated "
         "to 16 chars, with the emote's base-frame glyph prefixed when "
@@ -1029,6 +1041,52 @@ def _counted_notices(notices: list) -> list:
             and (n.get("kind") == "advisory" or n.get("lifetime") == "standing")
         )
     ]
+
+
+def _gate_chip(receipt: dict[str, Any] | None) -> str | None:
+    """``gate GREEN@e59f527`` — the verdict, and the tree it was earned on.
+
+    `.gate-receipt.json` decides whether a run may merge — ``workflow.md``
+    self-merge condition 1 is, operationally, a question about this file —
+    and until now it was the only control file in the outbox with no chip
+    (#1048). Reaching the verdict meant grepping a log, which is exactly the
+    habit *the gate's verdict is the receipt line, never the exit code a
+    pipe hands you* exists to force. A chip removes the need to remember it.
+
+    **The sha is not decoration; it is the honesty.** The tree a run gates
+    is frequently not the tree it is checked out in — a gate run inside
+    ``/tmp/brr-wt-<slug>`` writes its receipt into the run's outbox while
+    the checkout sits on ``main``. Carrying the head the verdict was earned
+    on lets a reader see that a receipt describes *another* tree instead of
+    silently mistaking it for this one.
+
+    Deliberately **not** a staleness verdict. "Passed on a tree that has
+    since moved" needs the tree the receipt names, not the run's checkout,
+    and comparing against the checkout would read STALE on a receipt that is
+    perfectly current — a guard firing constantly for a non-reason. The
+    closeout's own :func:`_gate_closeout_clause` does that comparison where
+    it has the repo dir and the standing to make it; this chip states the
+    fact and lets the reader compare.
+
+    ``tree_moved_during_gate`` is the one qualifier that *is* exact (#917 —
+    the tree moved under the gate while it ran), so it rides along in words
+    rather than as a mark nobody can resolve.
+
+    Absent when there is no receipt: the same differential discipline as
+    ``!N`` and ``owed N``. **A run that has not gated is not a run that
+    failed**, and a chip claiming otherwise would be the pessimistic lie
+    where the honest answer is silence.
+    """
+    if not isinstance(receipt, dict) or not receipt:
+        return None
+    verdict = str(receipt.get("verdict") or "").strip()
+    if not verdict:
+        return None
+    head = str(receipt.get("head") or "").strip()
+    chip = f"gate {verdict}" + (f"@{head[:7]}" if head else "")
+    if receipt.get("tree_moved_during_gate"):
+        chip += " (moved)"
+    return chip
 
 
 def _notices_chip(notices: list) -> str | None:
@@ -1591,6 +1649,7 @@ def _render_bar(
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
     armed: list[Any] | None = None,
+    gate_receipt_data: dict[str, Any] | None = None,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
 
@@ -1646,6 +1705,12 @@ def _render_bar(
     notices_chip = _notices_chip(notices or [])
     if notices_chip:
         segments.append(notices_chip)
+    # Ambient, like the produce count: it never opens the gate by itself.
+    # A run that just gated already has a boundary; what this buys is that
+    # the verdict is on screen at *every* later boundary without a grep.
+    gate_chip = _gate_chip(gate_receipt_data)
+    if gate_chip:
+        segments.append(gate_chip)
     if mood:
         # Display every boundary (it is the user's window onto the resident's
         # own face); *ask* only on an edge. The old unconditional "·keep?"
@@ -1797,6 +1862,7 @@ def format_delta(
     note_routing: bool = False,
     event_seen: dict[str, dict[str, Any]] | None = None,
     inbox_pointer: str | None = None,
+    gate_receipt_data: dict[str, Any] | None = None,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -1850,6 +1916,13 @@ def format_delta(
     ``Read`` can open for a body too large to refeed inline. ``None`` for
     both keeps this a pure function of the snapshot — everything renders as
     a first appearance, and elided bodies point at ``inbox.json`` by name.
+
+    ``gate_receipt_data`` is this run's ``.gate-receipt.json``, read by the
+    caller for ``mood``'s reason — it is an outbox artifact, not part of the
+    portal snapshot, and the resident rewrites it mid-run by gating again
+    (#1048). Mid-run bar segment only: at seed there is never a receipt, and
+    at stop :func:`_gate_closeout_clause` already speaks with the repo dir in
+    hand and far more standing than a chip has.
 
     The armed dated-letters block (#904, :func:`_render_armed_rows`) reads
     straight off ``payload["schedule"]["armed"]`` — the daemon's own
@@ -1908,7 +1981,7 @@ def format_delta(
             mood=mood, surprise=surprise, orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
-            armed=armed,
+            armed=armed, gate_receipt_data=gate_receipt_data,
         )
 
     lines: list[str] = []
@@ -3142,6 +3215,14 @@ def compute_neutral(
     # between hook fires, and the whole point is that the face rendered here
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
+    # Re-read every boundary, like `.mood` and `.card`: a resident gates
+    # more than once in a long run, and a cached verdict is exactly the
+    # stale claim this chip exists to make visible. `_read_json` collapses
+    # absent/unreadable/malformed to `{}`, and the chip renders nothing for
+    # all three — a run that has not gated is not a run that failed.
+    gate_receipt_data = _read_json(
+        ctx.outbox_dir / GATE_RECEIPT_NAME if ctx.outbox_dir else None
+    )
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(
@@ -3221,6 +3302,7 @@ def compute_neutral(
             inject = format_delta(
                 portal, mood=mood, surprise=edge, orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
+                gate_receipt_data=gate_receipt_data,
             )
             state["last_token"] = token
 
