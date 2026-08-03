@@ -1,0 +1,97 @@
+name: Link liveness
+
+# #1033: an outbound URL is a claim about another system, and nothing else
+# in CI re-checks any of it. scripts/check_link_liveness.py is the guard;
+# see its module docstring for the full "why a script, why not
+# docs/scripts/check-links.mjs" reasoning.
+#
+# Deliberately its own workflow, not a job inside ci.yml:
+#   - ci.yml is what `python scripts/gate.py` runs locally (it parses that
+#     one file's `run:` steps and nothing else -- see gate.py's docstring).
+#     Wiring live network calls into it would make every offline local
+#     `gate.py`/`pytest` run pay a real-network dependency it doesn't have
+#     today. docs.yml already sets this precedent: not every CI workflow is
+#     part of "the gate".
+#   - the two jobs below have genuinely different failure semantics (a
+#     required PR check vs. an advisory sweep) that don't map onto gate.py's
+#     one-binary-verdict-per-leg model anyway.
+#
+# Cost, priced (2026-08-03 snapshot, will drift as content changes -- rerun
+# `python scripts/check_link_liveness.py` to recount): 19 first-party URLs
+# extracted today -> up to 19 HTTP requests per `pr-first-party` run (1 HEAD
+# each, +1 ranged GET only on a 405). 46 URLs total (first- + third-party)
+# -> up to 46 requests per weekly `scheduled-full-sweep` run, so at most
+# ~46*52 ≈ 2,400 requests/year spread across every distinct host in the
+# scope, not concentrated on any one of them.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Monday 06:17 UTC -- links don't change hour to hour; weekly is often
+    # enough to catch drift before it's old news, off the hour to avoid the
+    # scheduler's top-of-hour crowd.
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pr-first-party:
+    # Every PR/push, first-party origins only (brnrd.dev, our own GitHub
+    # org, our GitHub Pages) -- cheap, and per #1033's "first-party origins
+    # can be strict" design note, breaking one of these is always a real
+    # defect, never someone else's outage.
+    name: Link liveness (first-party)
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install "requests>=2.31,<3"
+      # Advisory for now, not a required check: a live run against this
+      # branch (2026-08-03) found two false positives this checker cannot
+      # yet clear on its own --
+      #   - docs/astro.config.mjs's `site:` value alone 404s; it's a URL
+      #     fragment meant to be joined with `base: '/brnrd'`, not a
+      #     standalone claim (the real page, site+base, is 200).
+      #   - the private hugimuni-labs/brnrd-knowledge link in
+      #     document-manifest.md, already caveated by its own author
+      #     ("access may need to be granted"); GitHub returns 404, not 403,
+      #     for a private repo to an unauthenticated request, so this
+      #     checker cannot tell "gone" from "private, no token" without
+      #     authenticating as an org member.
+      # Flip continue-on-error off (and make this a required status check)
+      # once both are cleared -- see the #1033 PR description.
+      - name: Check first-party links
+        continue-on-error: true
+        run: python scripts/check_link_liveness.py --first-party-only
+
+  scheduled-full-sweep:
+    # Weekly (+ manual dispatch), every origin including third-party.
+    # Advisory only, by #1033's design note ("a red build because someone's
+    # marketing page 503'd teaches people to ignore the job") -- a failed
+    # scheduled run is visible in the Actions tab and to anyone watching
+    # this repo without gating any PR.
+    name: Link liveness (full sweep)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install "requests>=2.31,<3"
+      - name: Check every outbound link
+        continue-on-error: true
+        run: python scripts/check_link_liveness.py --report "$GITHUB_STEP_SUMMARY"
