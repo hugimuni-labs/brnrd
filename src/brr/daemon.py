@@ -64,7 +64,7 @@ from . import card
 from . import dominion
 from . import envs
 from . import facets
-from . import forge_pr_cache
+from . import forge_issue_cache, forge_pr_cache
 from . import forge_state
 from . import forges
 from .gates import BUILTIN_GATES as _BUILTIN_GATES
@@ -11207,6 +11207,12 @@ def start(
             # reason to exist). TTL-guarded: at most one `gh` round-trip every
             # few minutes, and never two at once.
             forge_pr_cache.refresh_if_stale_async(repo_root)
+
+            # Same reasoning, for the open-issue-number set the "possible
+            # stale-opens" line (#1021) needs before it can ask git whether any
+            # commit reachable from main mentions one — forge_state.py stays
+            # network-free by only ever reading this cache.
+            forge_issue_cache.refresh_if_stale_async(repo_root)
 
             # This is a daily, background observation; a release endpoint can
             # never delay dispatch or make the daemon unhealthy.
