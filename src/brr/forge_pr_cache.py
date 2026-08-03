@@ -19,8 +19,13 @@ bitten by repeatedly — see ``kb/log.md`` 2026-07-13, the credits panel):
 - last refresh failed          → ``status="error"``,       ``prs=None`` (unknown,
                                  with the last good rows kept if we had any)
 - refresh succeeded, no PRs    → ``prs=[]``                             (a real none)
-- remote is not GitHub         → ``status="unsupported"``, ``prs=None`` (known,
-                                 permanently, and no retry changes that — #852)
+- remote is not GitHub         → ``status="unsupported"``, ``prs=None`` (known —
+                                 and *no rows carried forward*: unlike ``error``,
+                                 which keeps the last good read of the *same*
+                                 repo, ``unsupported`` means the label now
+                                 names a different forge than whatever the
+                                 rows described, so nothing from before is
+                                 still about this repo — #852)
 
 so a reader can never mistake "we have not looked" for "there is nothing",
 nor "we looked and it failed" for "there is nothing here to look at, ever".
@@ -31,6 +36,9 @@ from GitLab/Bitbucket/Gitea. Without the gate, a non-GitHub remote either
 burns a doomed subprocess every tick forever, or — worse — silently renders a
 same-named GitHub repo's PRs as this repo's own state. ``refresh()`` decides
 the forge *kind* before it ever shells out; only ``github`` reaches ``gh``.
+``unsupported`` is not a permanent verdict, though — see
+:func:`refresh_if_stale` — because its inputs (the git remote, a
+``.brr/config`` override) are exactly what an operator edits to fix it.
 """
 
 from __future__ import annotations
@@ -125,9 +133,13 @@ def read_state(
 
     ``unsupported`` carries one extra key, ``forge_kind`` (the detected kind,
     or ``None`` when the host matched no known forge at all) — see
-    :func:`refresh`. It never ages into ``stale``: a non-GitHub remote is not
-    a fact a TTL will change, so the age is informational only, never a
-    reason to retry.
+    :func:`refresh`. It never *renders* as ``stale``: a reader should never
+    be told "a refresh is due" about a forge kind, which doesn't shift on
+    its own. But its ``age_seconds`` is not purely informational — a caller
+    deciding whether to re-derive (:func:`refresh_if_stale`) still reads it,
+    because the two facts a kind is computed from (the git remote, a
+    ``.brr/config`` override) are themselves editable, and this state must
+    not be a silent permanent trap on an operator's fix.
     """
     cached = load(repo_root)
     if cached is None:
@@ -275,10 +287,17 @@ def refresh(repo_root: Path, *, timeout: float = _GH_TIMEOUT_SECONDS) -> dict[st
     Gated on the forge *kind* before any subprocess runs (#852): ``gh --repo
     OWNER/REPO`` resolves against github.com only, so a labeled remote whose
     kind isn't ``github`` never reaches ``gh`` at all — it writes an
-    ``unsupported`` cache once and returns. Without the gate this either
-    burns a doomed subprocess every tick forever, or — worse, when
+    ``unsupported`` cache and returns. Without the gate this either burns a
+    doomed subprocess every tick forever, or — worse, when
     ``github.com/OWNER/REPO`` happens to exist — silently renders a foreign
     repo's PRs as this repo's own state.
+
+    This branch itself is cheap (one local git remote read, one config read,
+    zero subprocesses), so :func:`refresh_if_stale` calls it again on the
+    normal TTL cadence even while ``unsupported`` — re-deriving the kind
+    each time rather than trusting a cached verdict forever, because the
+    verdict's own inputs are user-editable (a ``git remote set-url``, a
+    ``.brr/config`` ``forge.kind`` fix).
     """
     kind, label = _forge_kind_and_label(repo_root)
     if label is not None and kind != "github":
@@ -362,12 +381,23 @@ def refresh_if_stale(
 ) -> bool:
     """Refresh when the cache is older than *ttl*. Returns whether it ran.
 
-    ``unsupported`` is terminal like ``fresh``, never like ``stale``: the
-    forge kind is not going to change between ticks, so once it is known and
-    cached, no TTL should ever schedule another doomed attempt (#852).
+    ``unsupported`` never *renders* as stale (see :func:`read_state`), but it
+    is not a permanent skip either: its two inputs — the git remote and any
+    ``.brr/config`` ``[forge]`` override — are exactly what an operator edits
+    to *fix* an unrecognised host, and ``forge.kind = github`` is the
+    documented remedy for that case. Caching the verdict forever would mean
+    the correct fix silently does nothing until someone finds and deletes a
+    cache file whose existence nothing advertises. So an ``unsupported``
+    cache is re-derived on the same TTL cadence as any other status —
+    cheaply: :func:`refresh` never reaches ``gh`` for a non-``github`` kind,
+    it only re-reads local git + config, so re-checking costs nothing beyond
+    what a normal stale refresh already pays (#852).
     """
     state = read_state(repo_root, now=now, stale_after=ttl)
-    if state["status"] in ("fresh", "unsupported"):
+    if state["status"] == "fresh":
+        return False
+    age = state["age_seconds"]
+    if state["status"] == "unsupported" and age is not None and age < ttl:
         return False
     refresh(repo_root)
     return True
@@ -386,7 +416,10 @@ def refresh_if_stale_async(repo_root: Path, *, ttl: float = DEFAULT_TTL_SECONDS)
         if _refreshing:
             return False
         state = read_state(repo_root, stale_after=ttl)
-        if state["status"] in ("fresh", "unsupported"):
+        if state["status"] == "fresh":
+            return False
+        age = state["age_seconds"]
+        if state["status"] == "unsupported" and age is not None and age < ttl:
             return False
         _refreshing = True
 
