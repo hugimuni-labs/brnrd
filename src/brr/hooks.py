@@ -94,6 +94,25 @@ _BOUNDARIES_MAX_BYTES = 4_000_000
 # obligation. Everything else there (scm, card staleness, pending events) goes
 # quiet when the resident acts, and so re-renders freely.
 GATELESS_ROUTING_KEY = "gateless_routing_noted"
+# The blank-mood boundary nudge (greenlit 2026-08-03, evts w67h/6i1w/2wnq):
+# `card stale`, one tier softer. Unlike `card stale` it never keeps the bar
+# alive (ambient — see `_render_bar`'s `mood_prompt`) and unlike a repeating
+# chip it fires exactly once per run: the condition ("no `.mood` written
+# yet, run old enough to plausibly want one") stays true for the rest of the
+# run's life, so without this latch it would re-render at every boundary the
+# bar happened to open for another reason — #779's "a soft nag has no
+# counter" is precisely that failure. Set the moment the nudge is decided
+# eligible (same discipline as `plan_token` / `GATELESS_ROUTING_KEY`), never
+# cleared — a `.mood` write later is what actually silences it, by making
+# the eligibility check itself go false first.
+MOOD_NUDGE_KEY = "mood_nudge_shown"
+# Whether `.mood` has ever read non-empty this run, tracked independently of
+# the latch above. `_read_mood` answers "does it have content *right now*",
+# and a resident could in principle clear or delete the file after writing
+# it — the constraint is "never renders once any write has happened", not
+# "never renders while the file happens to be empty this boundary", so the
+# disqualification has to survive a mood that later reads blank again.
+MOOD_EVER_WRITTEN_KEY = "mood_ever_written"
 
 # Closeout artifact obligations the armed guard can escalate from the soft
 # `inject` mention (see `format_delta`, which already surfaces a stale card
@@ -117,6 +136,9 @@ GATE_RECEIPT_NAME = gate_receipt.RECEIPT_NAME
 # dotfile beside `.card`, same idiom as `.keepalive`/`.pr`: never delivered,
 # read fresh at every boundary. First line only — see `_read_mood`.
 MOOD_NAME = ".mood"
+# The blank-mood nudge's elapsed floor: a run this young has not necessarily
+# had a moment worth a face yet, so the chip waits rather than firing at t=0.
+_MOOD_NUDGE_ELAPSED_SECONDS = 900  # ~15m
 # The run body rides the closeout delta whole. Capped only against a
 # pathological card: this is the resident's own prose, and truncating it is a
 # worse failure than the tokens it costs at a once-per-run boundary.
@@ -820,7 +842,11 @@ BAR_SEGMENTS: tuple[_BarSegment, ...] = (
         "`← <what happened>`, which is the ask — the mood channel questions "
         "itself on an edge, not on every tick (#604). The older "
         "unconditional `·keep?` suffix this entry used to document was "
-        "removed with that change.",
+        "removed with that change. In its absence, once the run has run "
+        "past ~15m with no `.mood` ever written, the segment renders "
+        "`mood?` instead — a one-shot, latched nudge (never a repeat, and "
+        "never what keeps the bar alive on its own), silenced for good the "
+        "moment any `.mood` write happens, however stale it later goes.",
     ),
     _BarSegment(
         "notices", "!",
@@ -1655,6 +1681,7 @@ def _render_bar(
     resources: dict[str, Any],
     run_name: dict[str, Any],
     mood: str | None,
+    mood_prompt: bool = False,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
     census: str | None = None,
@@ -1682,6 +1709,13 @@ def _render_bar(
     observed; they are facts, not obligations, and are reported separately
     rather than counted against *pending*. *armed* is the #904 armed
     dated-letters projection — see :func:`_render_armed_rows`.
+
+    *mood_prompt* is the blank-mood nudge's once-per-run latch, owned by the
+    caller (:func:`compute_neutral`) for ``plan_edge``'s reason: "has this
+    already fired" is run state, not snapshot state. Renders only in
+    ``mood``'s own absence (a written mood always wins) and is ambient like
+    ``gate`` / ``⚒`` — never added to the gate below, so it cannot keep the
+    bar alive on its own.
     """
     segments: list[str] = []
     id_chip = _run_id_chip(run)
@@ -1749,6 +1783,11 @@ def _render_bar(
             segments.append(f"mood {_mood_chip(mood)} ← {surprise}")
         else:
             segments.append(f"mood {_mood_chip(mood)}")
+    elif mood_prompt:
+        # The blank-mood nudge: ambient, once. See the caller's latch
+        # (`MOOD_NUDGE_KEY`) and the docstring above — this branch only
+        # renders what the caller already decided was this run's one ask.
+        segments.append("mood?")
     segments.append(_card_chip(card, card_stale))
 
     details: list[str] = []
@@ -1897,6 +1936,7 @@ def format_delta(
     stop: bool = False,
     run_body: str | None = None,
     mood: str | None = None,
+    mood_prompt: bool = False,
     surprise: str | None = None,
     orient: tuple[int, int] | None = None,
     census: str | None = None,
@@ -1937,6 +1977,11 @@ def format_delta(
     ``mood`` is the resident's own `.mood` control file (#566 layer 2), read
     fresh by the caller (:func:`_read_mood`) at every boundary — rendered as
     a bar segment mid-run, or its own prose line at seed/stop.
+
+    ``mood_prompt`` is the blank-mood nudge's once-per-run latch (the mood
+    seam's ergonomics ask, 2026-08-03), owned by the caller for
+    ``note_routing``'s reason — a mid-run bar segment only (``mood?``), and
+    only in ``mood``'s absence: a run wearing a face never needs asking.
 
     ``orient`` is the orientation ledger's open value (#513 Slice 9),
     computed by the caller (:func:`_orientation_progress`) — a mid-run bar
@@ -2041,7 +2086,8 @@ def format_delta(
             events=action_events,
             budget=budget, outbound=outbound, produce=produce, card=card,
             card_stale=card_stale, resources=resources, run_name=run_name,
-            mood=mood, surprise=surprise, orient=orient, census=census,
+            mood=mood, mood_prompt=mood_prompt, surprise=surprise,
+            orient=orient, census=census,
             notices=notices, finished_spawns=finished_spawns,
             event_seen=event_seen, inbox_pointer=inbox_pointer,
             armed=armed, gate_receipt_data=gate_receipt_data,
@@ -3290,6 +3336,11 @@ def compute_neutral(
     inject: str | None = None
     block = False
     block_reason: str | None = None
+    # The blank-mood nudge's once-per-run eligibility (piece 1, greenlit
+    # 2026-08-03) — only ever set True in the mid-run branch below; latched
+    # after the fact, once ``inject`` proves this boundary actually rendered
+    # something carrying it (see the commit below the phase dispatch).
+    mood_prompt = False
     # The pending-event seen ledger (letter chrome, see that section): decide
     # once per boundary how each event renders, off the persisted per-run
     # state — hooks are fresh subprocesses, so this is the only memory the
@@ -3316,6 +3367,8 @@ def compute_neutral(
     # between hook fires, and the whole point is that the face rendered here
     # is the face the resident actually just set.
     mood = _read_mood(ctx)
+    if mood is not None:
+        state[MOOD_EVER_WRITTEN_KEY] = True
     # Re-read every boundary, like `.mood` and `.card`: a resident gates
     # more than once in a long run, and a cached verdict is exactly the
     # stale claim this chip exists to make visible. `_read_json` collapses
@@ -3420,6 +3473,23 @@ def compute_neutral(
         # renderer for the same reason `orient` is — `format_delta` stays a
         # function of the portal snapshot, and the score is not in it.
         census = _wake_census(ctx)
+        # The blank-mood nudge (piece 1): eligible only while no `.mood` has
+        # ever been written this run (`MOOD_EVER_WRITTEN_KEY` — survives a
+        # mood that later reads blank again, not just "absent this
+        # boundary"), the run has cleared the elapsed floor, and the nudge
+        # latch has not already fired. Committing `MOOD_NUDGE_KEY` happens
+        # after the render attempt below proves this boundary actually
+        # carried it, not here — eligibility alone is not delivery.
+        if not state.get(MOOD_EVER_WRITTEN_KEY) and not state.get(MOOD_NUDGE_KEY):
+            portal_budget = (
+                portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
+            )
+            elapsed_for_mood = portal_budget.get("elapsed_seconds")
+            mood_prompt = (
+                isinstance(elapsed_for_mood, (int, float))
+                and not isinstance(elapsed_for_mood, bool)
+                and elapsed_for_mood >= _MOOD_NUDGE_ELAPSED_SECONDS
+            )
         token = portal.get("change_token")
         # An edge opens the gate on its own. Gating it on the portal token
         # would be a contract the signal can't keep: a failing tool call
@@ -3436,7 +3506,8 @@ def compute_neutral(
             )
         ):
             inject = format_delta(
-                portal, mood=mood, surprise=edge, orient=orient, census=census,
+                portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
+                orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
@@ -3464,6 +3535,15 @@ def compute_neutral(
     # #818's open residue.
     if phase != PHASE_STOP:
         inject = _suppress_unchanged_inject(state, inject)
+
+    # Latch on the render, not on the decision (#728's rule, same
+    # discipline as `GATELESS_ROUTING_KEY`): `mood_prompt` proves only that
+    # the chip was *offered* to this boundary's bar, not that the bar had
+    # anything else laden to render it alongside. `inject` still non-``None``
+    # here means the boundary produced fresh, undeduplicated content — the
+    # only case the ambient chip could actually have ridden along in.
+    if mood_prompt and inject is not None:
+        state[MOOD_NUDGE_KEY] = True
 
     if phase == PHASE_STOP:
         action_events, _finished_spawns, action_pending = (
