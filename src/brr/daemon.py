@@ -55,6 +55,7 @@ from typing import NamedTuple
 
 from . import account
 from . import branching
+from .cli import brnrd_cmd
 from . import closekeyword
 from . import config as conf
 from . import conversations
@@ -10917,7 +10918,7 @@ def start(
     # executing* — which is the only thing a spawn's boot can honestly claim.
     reload_mod.capture_image_fingerprint()
     if not (repo_root / "AGENTS.md").exists():
-        raise SystemExit("[brnrd] run `brnrd init` first")
+        raise SystemExit(f"[brnrd] run `{brnrd_cmd()} init` first")
 
     _write_pid(brr_dir)
     running = True

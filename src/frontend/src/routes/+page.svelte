@@ -8,7 +8,9 @@
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import Cloth from '$lib/Cloth.svelte';
 	import ControlStrip from '$lib/ControlStrip.svelte';
+	import ColdStart from '$lib/ColdStart.svelte';
 	import PublishConsentNotice from '$lib/PublishConsentNotice.svelte';
+	import { DOCS_URL } from '$lib/publicStats';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import WithheldNotice from '$lib/WithheldNotice.svelte';
 	import type { WithheldLane } from '$lib/withheld';
@@ -78,7 +80,7 @@
 		type ConfigChangeRequestItem
 	} from '$lib/configRequests';
 	import { railScrollVerdict } from '$lib/controlStrip';
-	import { machineDockTop } from '$lib/machineDock';
+	import { machineDockTop, machineDockVerdict, machineTapVerdict } from '$lib/machineDock';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -112,6 +114,11 @@
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
+	// Backend-owned pairing lines for the cold start, from the same
+	// `/v1/dashboard/repos` fetch — an account with no repos has no repo row
+	// to read `setup_command` off, so the account-level spelling comes with
+	// the list itself.
+	let pairingCommand = $state<string | null>(null);
 	// Threaded into AccountDeletion's confirmation label — the same
 	// `/v1/dashboard/repos` fetch that populates connectedRepos already
 	// carries it, so this costs no extra round trip.
@@ -346,6 +353,14 @@
 	// nothing there to toggle.
 	let railSentinel = $state<HTMLElement | null>(null);
 	let railCondensed = $state(false);
+	// Whether the machine's one line is stuck to the top with the lane it
+	// belongs to left behind at the block's home. Measured off the block's own
+	// sentinel rather than inferred from `railCondensed`: the two boundaries sit
+	// about sixteen pixels apart, and this one decides what the head *says* and
+	// what a tap on it *does*, so it has to be the geometric fact and not a
+	// neighbour's proxy. Verdict, dead band, and why travel terminates against
+	// it: `machineDock.machineDockVerdict`.
+	let machineDocked = $state(false);
 	$effect(() => {
 		const sentinel = railSentinel;
 		if (!sentinel || typeof window === 'undefined') return;
@@ -357,6 +372,18 @@
 				railFullHeight,
 				condensed: railCondensed
 			});
+			// The sentinel's *bottom*: it carries the seam above the block as a
+			// real box, so its bottom edge and the dock's in-flow top are the
+			// same line. Its top is 24px higher, and that gap is the trip's
+			// landing margin below — two different numbers off one element, so
+			// neither is a constant nudged until it looked right.
+			machineDocked = machineSentinel
+				? machineDockVerdict({
+						home: machineSentinel.getBoundingClientRect().bottom,
+						dockTop: machineDockTop(railHeight, railCondensed),
+						docked: machineDocked
+					})
+				: false;
 		};
 		read();
 		window.addEventListener('scroll', read, { passive: true });
@@ -429,33 +456,39 @@
 	// go to the top of the page, and when it's collapsed, go back"). Not taken:
 	// docking the body as well. An expanded lane pinned to the top of a phone
 	// is chrome eating the page, and it rebuilds THE PICKER YOU CANNOT REACH.
+	//
+	// Amended 2026-08-03 (THE DOCK THAT TAPPED WRONG, his "when the machine
+	// block is scrolled up it is not collapsed, so pressing it the first time
+	// doesn't expand it"): the trip above only ever ran when the tap happened
+	// to be an *opening* one. Docked with the block already open, the same tap
+	// was a fold — of a lane the reader could not see, at a position above
+	// them, so the page below rose by exactly one lane's height ("the menu hits
+	// scrolled randomly a bit"). Docked, the head is a pointer and every tap on
+	// it travels; only a tap taken with the lane on screen may fold. The
+	// verdict is `machineTapVerdict`, and the whole argument lives with it.
 	let machineReturnY = $state<number | null>(null);
 	function onMachineToggle() {
-		const opening = !machineExpanded;
-		if (opening) {
+		const tap = machineTapVerdict(machineExpanded, machineDocked);
+		if (tap.open === true) {
 			machineOpen = true;
-		} else {
+		} else if (tap.open === false) {
 			machineOpen = false;
 			loomSelection = null;
 		}
 		if (typeof window === 'undefined') return;
-		if (opening) {
-			// Only when the head is docked. At rest the reader is already
-			// looking at the block, and moving them then would cost them their
-			// place to answer a glance they did not ask for.
-			if (railCondensed && machineSentinel) {
-				// The sentinel, never the dock itself. A stuck `sticky` element
-				// reports its *stuck* viewport position, so measuring it gives
-				// back the offset it is already at — the first build did exactly
-				// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
-				// sibling in normal flow is the only thing on the page that
-				// still knows where the block lives. Same trick `railSentinel`
-				// already plays one section above.
-				machineReturnY = window.scrollY;
-				const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
-				window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
-			}
-		} else if (machineReturnY !== null) {
+		if (tap.travel) {
+			if (!machineSentinel) return;
+			// The sentinel, never the dock itself. A stuck `sticky` element
+			// reports its *stuck* viewport position, so measuring it gives
+			// back the offset it is already at — the first build did exactly
+			// that and scrolled 1400 -> 1392, an 8px shrug. A zero-height
+			// sibling in normal flow is the only thing on the page that
+			// still knows where the block lives. Same trick `railSentinel`
+			// already plays one section above.
+			machineReturnY = window.scrollY;
+			const home = window.scrollY + machineSentinel.getBoundingClientRect().top;
+			window.scrollTo({ top: Math.max(0, home - railHeight), behavior: 'smooth' });
+		} else if (tap.open === false && machineReturnY !== null) {
 			const back = machineReturnY;
 			machineReturnY = null;
 			window.scrollTo({ top: back, behavior: 'smooth' });
@@ -681,6 +714,14 @@
 			: []
 	);
 
+	// The cold-start block's own cadence — see refreshOnce(). `0` means the
+	// list has never landed, so the first pass is never throttled.
+	const COLD_REPO_POLL_MS = 15_000;
+	let coldRepoCheckAt = 0;
+	function coldRefetchDue(): boolean {
+		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
+	}
+
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -731,10 +772,27 @@
 				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
-		if (connectedRepos === null) {
+		// Once, normally — the repo list is not a live surface. The one
+		// exception is a cold account: while it has *no* repos the page is
+		// showing the cold-start block, and that block has to leave on its
+		// own the moment a repo is enabled (in the other tab this very
+		// block sends the reader to). A first-run panel that outstays its
+		// state is a worse bug than the blank page it replaced.
+		//
+		// On its own clock, though. This loop runs at POLL_MS = 2s, and the
+		// state it is watching for changes at human speed: the reader has to
+		// reach another page, install a GitHub App, and come back. Riding the
+		// 2s tick would spend thirty GETs a minute, for as long as a tab
+		// stays open, on precisely the accounts that have nothing — and the
+		// answer arrives no sooner. So: a slow interval, plus a refetch the
+		// moment the tab regains focus, which is the *actual* signal that the
+		// reader has come back from doing the thing.
+		if (connectedRepos === null || (connectedRepos.length === 0 && coldRefetchDue())) {
 			try {
+				coldRepoCheckAt = Date.now();
 				const repos = await fetchRepos();
 				connectedRepos = repos.connected_repos;
+				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 			} catch (e) {
 				if (!(e instanceof ReposAuthError)) {
@@ -799,17 +857,30 @@
 		}
 	}
 
+	// Coming back to this tab is the one honest event that says "I may have
+	// just enabled a repo". Cheaper than any interval and strictly faster
+	// than all of them, so the throttle above never costs the reader a wait
+	// they can perceive.
+	function onFocus() {
+		if (connectedRepos !== null && connectedRepos.length === 0) {
+			coldRepoCheckAt = 0;
+			refresh();
+		}
+	}
+
 	onMount(() => {
 		refresh();
 		pollHandle = setInterval(refresh, POLL_MS);
 		tickHandle = setInterval(() => {
 			now = Date.now();
 		}, TICK_MS);
+		window.addEventListener('focus', onFocus);
 	});
 
 	onDestroy(() => {
 		if (pollHandle) clearInterval(pollHandle);
 		if (tickHandle) clearInterval(tickHandle);
+		window.removeEventListener('focus', onFocus);
 	});
 </script>
 
@@ -852,6 +923,19 @@
 				     long as a page mostly because it was reporting 279 phantom
 				     running runs; once #486 reaped those it rendered about
 				     three rows. Folded, not re-fitted. -->
+					<!-- Docs, on a signed-in surface at last (2026-08-03). The only
+				     docs link in the product lived on the landing, which means it
+				     vanished at the exact moment a reader acquired questions: he
+				     signed up and reported "no docs link or like install it like
+				     this line or anything clear you know?". A third entry beside
+				     the two already here, in their grammar — still not the nav bar
+				     the note above declines to build. -->
+					<a
+						href={DOCS_URL}
+						rel="external"
+						class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						>docs</a
+					>
 					<!-- #327: repo management now lives in this same SPA at /repos,
 				     backed by the /v1/dashboard/repos JSON twin. -->
 					<a
@@ -879,6 +963,15 @@
 				resident dashboard
 			</h1>
 		</header>
+
+		<!-- The cold start, directly under the title and above everything
+		     else: for an account with nothing connected every section below
+		     is an empty state, so anything under the fold is under the
+		     horizon. It renders only while `connectedRepos` is a landed,
+		     empty list — the same source the rail and the consent notice
+		     read, never a second notion of "empty" — and leaves by itself
+		     when the first repo appears. -->
+		<ColdStart repos={connectedRepos} pairCommand={pairingCommand} />
 
 		<PublishConsentNotice repos={connectedRepos} />
 
@@ -964,18 +1057,29 @@
 		     is precisely the behaviour being fixed and looked identical in a
 		     static screenshot. Driven, not reasoned: the first build shipped
 		     the nested version and the phone shot showed the rail alone. -->
-		<div bind:this={machineSentinel} aria-hidden="true"></div>
+		<!-- The seam above the block, held by the sentinel as a real box rather
+		     than written as the dock's own `mt-6`. A stuck sticky box parks its
+		     border box at `top` exactly — the margin goes with it — so a seam
+		     living on the dock would leave the marker 24px adrift from the thing
+		     it marks, and `machineDockVerdict` reads that edge to decide what a
+		     tap means. Marker and gap in one element: the two edges cannot
+		     disagree. -->
+		<div bind:this={machineSentinel} class="h-6" aria-hidden="true"></div>
 		<div
-			class="ignite sticky z-30 mt-6 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
+			class="ignite sticky z-30 -mx-6 bg-stone-950/95 px-6 backdrop-blur-sm"
 			style={`--ignite-delay: 250ms; top: ${machineDockTop(railHeight, railCondensed)}px`}
 			aria-label="the machine"
 		>
-			{#key railCondensed}
+			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
+			     this line's form — pointer or disclosure — so it is what the
+			     redraw should mark. -->
+			{#key machineDocked}
 				<div in:glitchReveal={{ duration: 200 }}>
 					<RunBlock
 						burning={burningRows}
 						armed={armedRows}
 						open={machineExpanded}
+						docked={machineDocked}
 						error={liveRunsError}
 						stale={liveRunsStale}
 						onToggle={onMachineToggle}

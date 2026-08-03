@@ -1,39 +1,73 @@
 ---
 title: Install
-description: Install brnrd and verify a local coding-agent Runner.
+description: Install the brnrd command, and check that it can see a coding-agent Runner.
 ---
 
-brnrd needs Python 3.10 or newer, git, and at least one supported coding-agent
-CLI on `PATH`: Claude Code (`claude`) or Codex (`codex`). Authenticate that
-CLI with your own subscription or API key first.
-
-Install brnrd with the tool manager you already use:
+Use whichever line matches the tooling you already have. All three install the
+same program and leave you with a `brnrd` command on your `PATH`:
 
 ```bash
-uv tool install brnrd        # recommended when uv is already present
-# or: pipx install brnrd
-# or: npx brnrd init
+npm install -g brnrd     # if you have Node
+uv tool install brnrd    # if you have uv
+pipx install brnrd       # if you have pipx
 ```
 
-`npx brnrd` is a bootstrapper for the Python package, not a JavaScript port. It
-keeps its own environment and leaves your system Python alone. Going the
-managed route? `npx brnrd account connect` alone bootstraps, pairs, and starts
-the daemon — no separate install step.
-
-Avoid `uvx brnrd` or `pipx run brnrd` here: both run from a disposable,
-per-invocation environment, and `brnrd daemon install` would pin the
-background service to a binary path that disappears with it. Use one of the
-persistent installs above, then install the service.
-
-Self-hosted gates and local execution are free — no brnrd account is needed to
-use them.
-
-Check the installation:
+Check it:
 
 ```bash
 brnrd --version
 brnrd --help
 ```
+
+brnrd also needs **git**, and at least one coding-agent CLI on your `PATH` —
+Claude Code (`claude`) or Codex (`codex`) — authenticated with your own
+subscription or API key. brnrd drives that CLI; it never asks you for a model
+key of its own.
+
+Self-hosted gates and local execution are free. No brnrd account is needed to
+use them.
+
+## Next
+
+Continue to [Connect](../connect/) and choose your door.
+
+## Trying it without installing
+
+```bash
+npx brnrd init
+```
+
+`npx` runs brnrd once without adding anything to your `PATH`, so there is no
+`brnrd` command afterwards — every later command has to be `npx brnrd …` as
+well. Good for a first look; if you keep using it, install it properly with one
+of the lines above.
+
+:::note[Managed account, one line]
+`npx brnrd account connect` bootstraps, pairs, and starts the daemon in a single
+command — no separate install step.
+:::
+
+## The Python part, for when it matters
+
+brnrd is a Python program. The npm package is a launcher: on first run it builds
+a private, durable virtualenv under `~/.local/share/brnrd` (or `$BRNRD_HOME`),
+installs brnrd from PyPI into it, and hands over. Every run after that is just a
+launch. Your system Python is not touched and your `PATH` is not rewritten by
+the launcher itself — only by npm, for the `brnrd` command.
+
+That durability is what makes the npm route a real install: `brnrd daemon
+install` writes a systemd/launchd unit pointing into that virtualenv, and it is
+still there tomorrow.
+
+If no Python is on the machine, the launcher downloads a checksum-pinned
+[uv](https://github.com/astral-sh/uv) release and lets uv provision CPython,
+under the same directory. It never pipes a script into a shell.
+
+:::caution[Not `uvx brnrd` or `pipx run brnrd`]
+Both run from a disposable, per-invocation environment. `brnrd daemon install`
+would pin the background service to a binary path that disappears with it. Use a
+persistent install, then install the service.
+:::
 
 ## Development install
 
@@ -44,14 +78,10 @@ pip install -e ".[dev]"
 pytest
 ```
 
-For remote-assisted brr development — running the daemon against your
-own editable checkout so it re-execs itself between tasks as you change
-brr's own code:
+For remote-assisted brr development — running the daemon against your own
+editable checkout so it re-execs itself between tasks as you change brr's own
+code:
 
 ```bash
 brnrd up --dev-reload
 ```
-
-## Next
-
-Continue to [Connect](../connect/) and choose your door.
