@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { runFace } from './runFace';
-	import { machineHeadFields } from './machineDock';
+	import { machineBodyOnScreen, machineHeadFields } from './machineDock';
 	import type { PickRow } from './pickLane';
 
 	/**
@@ -19,26 +19,44 @@
 		armed: PickRow[];
 		open: boolean;
 		onToggle: () => void;
+		/** True while this line is stuck to the top of the viewport and the lane
+		 *  it belongs to is back at the block's home, screens above. Then the
+		 *  line is a pointer, not a disclosure — it renders exactly as it does
+		 *  parked, because from here that is what it is, and the page's tap
+		 *  handler takes the reader to the block rather than folding a body
+		 *  they cannot see (`machineDock.ts`, THE DOCK THAT TAPPED WRONG). */
+		docked?: boolean;
 		/** The feed's own health — the parked line must not read "parked"
 		 *  over a dead feed as if that were a fact about the machine. */
 		error?: string | null;
 		stale?: boolean;
 	}
-	let { burning, armed, open, onToggle, error = null, stale = false }: Props = $props();
+	let {
+		burning,
+		armed,
+		open,
+		onToggle,
+		docked = false,
+		error = null,
+		stale = false
+	}: Props = $props();
 	let lead = $derived(burning[0] ?? null);
 	let face = $derived(lead ? runFace(lead.id) : null);
 	let nextArmed = $derived(armed[0] ?? null);
-	// Open, the head keeps identity and drops every measurement the lane below
-	// draws in full — his "when it is expanded, it shouldn't repeat the both
-	// collapsed and semi-expanded shape". Rule and reasoning: `machineDock.ts`.
-	let head = $derived(machineHeadFields(open));
+	// One predicate, and it is never `open` alone: with the lane on screen the
+	// head keeps identity and drops every measurement that lane draws in full
+	// (his "when it is expanded, it shouldn't repeat the both collapsed and
+	// semi-expanded shape"); docked, the lane is nowhere near it and the head is
+	// the only line there is. Rule and reasoning: `machineDock.ts`.
+	let bodyOnScreen = $derived(machineBodyOnScreen(open, docked));
+	let head = $derived(machineHeadFields(bodyOnScreen));
 </script>
 
 <button
 	type="button"
 	class="panel relative w-full cursor-pointer overflow-hidden px-3 py-1.5 text-left font-mono"
-	aria-expanded={open}
-	aria-label={open ? 'fold the machine' : 'expand the machine'}
+	aria-expanded={bodyOnScreen}
+	aria-label={docked ? 'go to the machine' : open ? 'fold the machine' : 'expand the machine'}
 	onclick={onToggle}
 >
 	{#if face}
@@ -51,7 +69,11 @@
 		>
 	{/if}
 	<span class="relative flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px]">
-		<span class="tracking-[0.13em] text-ink-quiet uppercase">{open ? '▾' : '▸'} machine</span>
+		<!-- `▸` is the rail's own docked marker, and it means the same thing in
+		     both places: there is more, and it is one tap away. -->
+		<span class="tracking-[0.13em] text-ink-quiet uppercase"
+			>{bodyOnScreen ? '▾' : '▸'} machine</span
+		>
 		{#if lead}
 			<span class="flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
