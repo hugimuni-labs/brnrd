@@ -11,6 +11,7 @@ import {
 	runnerBlocks,
 	slotChip
 } from './controlStrip.ts';
+import { isCollapsed } from './collapse.ts';
 import type { QuotaShell } from './quota.ts';
 import type { RunnerProfile, WakeRequest } from './runners.ts';
 
@@ -301,6 +302,23 @@ test('an expanded rack survives the scroll verdict — the bug that hid the last
 
 test('pinning the slim bar open survives the scroll verdict too', () => {
 	assert.equal(railIsSlim({ condensed: true, pinnedOpen: true, expanded: false }), false);
+});
+
+// `railIsSlim` is a thin wrapper over the shared `collapse.isCollapsed`
+// (2026-08-03, the rack answers everywhere) — pin the translation itself,
+// not just the behaviour, so a future edit that reintroduces its own
+// verdict here instead of delegating shows up as a diff.
+test("railIsSlim is exactly isCollapsed under the rail's own vocabulary", () => {
+	for (const condensed of [false, true]) {
+		for (const pinnedOpen of [false, true]) {
+			for (const expanded of [false, true]) {
+				assert.equal(
+					railIsSlim({ condensed, pinnedOpen, expanded }),
+					isCollapsed({ open: expanded, scrolledPast: condensed, pinnedOpen })
+				);
+			}
+		}
+	}
 });
 
 // THE BOUNDARY THAT FLICKERED — the condense verdict has a dead band, and

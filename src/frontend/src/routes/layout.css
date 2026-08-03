@@ -333,3 +333,70 @@ body::before {
 		transition: none;
 	}
 }
+
+/* Shared collapse chrome (2026-08-03, the rack answers everywhere): the rail
+   and the machine block both grew a pressable disclosure header, and both
+   needed the same two-part choreography — a perimeter cue that a tap is
+   about to fold the block, and a quieter look for the forms that already
+   are the scroll-away compact rendering (the rail's slim bar, the machine's
+   docked head). One variant pair, so a future panel picks up the same rule
+   instead of a third ad-hoc implementation.
+
+   Deliberately NOT applied to the ordinary resting/closed-disclosure look of
+   either block — his 2026-08-03 read, verbatim: "I really like how the top
+   blocks look and behave already, just think it could be even more
+   streamlined." This is the streamlining (one shared rule, fewer seams),
+   not a restyle: the every-day view of both blocks renders exactly as it
+   did before this change.
+
+   `--corner-color` is `.panel`'s own token, so both variants ride the same
+   channel the idle phosphor glow already uses — no new visual language, and
+   nothing here touches `opacity`, which SpoolRack and ControlStrip's own
+   disabled rows already spend on a different meaning ("unavailable"). A
+   collapsed-but-fine panel and an unavailable row must never look like the
+   same fact. */
+.panel--pressable {
+	cursor: pointer;
+	transition: box-shadow 150ms ease-out;
+}
+
+.panel--pressable:hover,
+.panel--pressable:focus-visible,
+.panel:has(> .panel--pressable:hover),
+.panel:has(> .panel--pressable:focus-visible) {
+	--corner-color: rgba(217, 164, 65, 0.78);
+}
+
+/* The stronger tier: hovering a header whose tap *folds* (its disclosure is
+   open) lights the whole perimeter hotter than the plain hover above — the
+   "this whole shape is about to collapse" cue the ask asked for, read
+   straight off `aria-expanded` rather than a second piece of state. */
+.panel--pressable[aria-expanded='true']:hover,
+.panel--pressable[aria-expanded='true']:focus-visible,
+.panel:has(> .panel--pressable[aria-expanded='true']:hover),
+.panel:has(> .panel--pressable[aria-expanded='true']:focus-visible) {
+	--corner-color: rgba(217, 164, 65, 0.95);
+	box-shadow:
+		0 0 22px 0 rgba(217, 164, 65, 0.14),
+		inset 0 0 30px 0 rgba(217, 164, 65, 0.05);
+}
+
+/* The other half: once a block *is* the scroll-away compact rendering
+   (never the ordinary closed-but-on-screen disclosure), its perimeter cools
+   to a desaturated grey instead of the idle amber — "greyed out a bit",
+   read off the frame only. Content-level emphasis (an active runner chip, a
+   burning run's name) lives on its own elements with its own classes and is
+   untouched by this — the frame says "collapsed", the content still says
+   whatever it says. */
+.panel--collapsed {
+	--corner-color: rgba(168, 162, 158, 0.32);
+	box-shadow:
+		0 0 8px 0 rgba(168, 162, 158, 0.03),
+		inset 0 0 16px 0 rgba(168, 162, 158, 0.015);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.panel--pressable {
+		transition: none;
+	}
+}

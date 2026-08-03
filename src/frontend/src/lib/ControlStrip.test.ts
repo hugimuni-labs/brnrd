@@ -65,3 +65,34 @@ test('condensed, the rail is one slim line that expands on demand', async () => 
 	ok(body.includes('rail'), 'named for what it is');
 	ok(!body.includes('next pick'), 'the full strip stays folded');
 });
+
+// The whole surface opens the rack now (2026-08-03, the rack answers
+// everywhere): the header that used to be only the left block is one
+// pressable button wrapping the left block, the fuel grid, and the tank
+// line — never expanded in this SSR harness (there is no interaction to
+// drive `expanded` to true), so what these can pin is the resting/closed
+// shape: one disclosure button, carrying the shared collapse chrome.
+test("the full strip's header is one pressable disclosure over the whole surface", async () => {
+	const body = await renderStrip({ runners: null, shells: null });
+	ok(body.includes('panel--pressable'), 'the shared pressable chrome renders on the header');
+	ok(body.includes('aria-label="expand the rack"'), 'closed, the header names what a tap does');
+	// Exactly one `aria-expanded` in the full form belongs to the rack's own
+	// disclosure — "Keep aria-expanded on exactly one element per disclosure".
+	const expandedAttrs = body.match(/aria-expanded=/g) ?? [];
+	ok(expandedAttrs.length === 1, `expected one aria-expanded, found ${expandedAttrs.length}`);
+});
+
+// "Once fully collapsed, render it like the current collapsed forms: greyed
+// out a bit" — scoped to the forms that are already the scroll-away compact
+// rendering (his 2026-08-03 steer: the ordinary resting/closed look of the
+// full strip stays exactly as it was, so `panel--collapsed` belongs on the
+// slim bar only, never on the full form's own header).
+test('the slim bar is the scroll-away collapsed form and wears the collapsed chrome', async () => {
+	const body = await renderStrip({ runners: null, shells: null, condensed: true });
+	ok(body.includes('panel--collapsed'), 'the slim bar carries the desaturated collapsed variant');
+});
+
+test('the full strip\'s resting header carries no collapsed chrome — his "already liked" steer', async () => {
+	const body = await renderStrip({ runners: null, shells: null });
+	ok(!body.includes('panel--collapsed'), 'the everyday view renders exactly as it did before');
+});

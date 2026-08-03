@@ -442,7 +442,12 @@
 	// the viewport pinned at `top-0` with its own bottom unreachable — the shape
 	// that made the last spool in the rack impossible to tap. Returning the
 	// reader to where they were is what makes the trip cheap enough to take.
-	let railReturnY: number | null = null;
+	// `$state`, matching `machineReturnY` below (2026-08-03, the rack answers
+	// everywhere): neither value drives a template read, so the rune buys no
+	// reactivity either one actually needs — the two were just inconsistent
+	// with each other, one plain `let` and one runed, for the same shape of
+	// job (remember a scroll position across a travel-and-return trip).
+	let railReturnY = $state<number | null>(null);
 	function onRackChange(open: boolean) {
 		railOpen = open;
 		if (typeof window === 'undefined') return;

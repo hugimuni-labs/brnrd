@@ -13,6 +13,14 @@
 	 * Single-flight honesty: one line carries the main run; further burning
 	 * strands are a `+N`, not extra lines — they have real rows in the lane
 	 * one tap away, and the parked form is a pulse, not an inventory.
+	 *
+	 * `panel--pressable` / `panel--collapsed` (`layout.css`, 2026-08-03, the
+	 * rack answers everywhere) are the shared collapse chrome this line has
+	 * in common with the rail: a hover/focus perimeter highlight (stronger
+	 * while `aria-expanded="true"`, since that tap folds rather than opens),
+	 * and a desaturated corner-color once `docked` — the scrolled-away
+	 * pointer form, not the ordinary parked-at-rest look, which stays
+	 * exactly as it already reads.
 	 */
 	interface Props {
 		burning: PickRow[];
@@ -54,7 +62,9 @@
 
 <button
 	type="button"
-	class="panel relative w-full cursor-pointer overflow-hidden px-3 py-1.5 text-left font-mono"
+	class="panel panel--pressable relative w-full overflow-hidden px-3 py-1.5 text-left font-mono {docked
+		? 'panel--collapsed'
+		: ''}"
 	aria-expanded={bodyOnScreen}
 	aria-label={docked ? 'go to the machine' : open ? 'fold the machine' : 'expand the machine'}
 	onclick={onToggle}
