@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { runFace } from './runFace';
-	import { machineBodyOnScreen, machineHeadFields } from './machineDock';
+	import { machineBodyOnScreen, machineHeadFields, machineHeadRun } from './machineDock';
 	import type { PickRow } from './pickLane';
 
 	/**
@@ -13,6 +13,16 @@
 	 * Single-flight honesty: one line carries the main run; further burning
 	 * strands are a `+N`, not extra lines — they have real rows in the lane
 	 * one tap away, and the parked form is a pulse, not an inventory.
+	 *
+	 * One frame, two moods (the machine borrows the selection). Pulse — no
+	 * `selectedId` — is exactly the paragraph above, untouched. Inspection —
+	 * a run selected anywhere on the page — swaps only the face and name for
+	 * the selected run's own (`machineHeadRun`); the clock, note, and `+N`
+	 * stay the lead's, because those are true of *the machine*, not of
+	 * whichever run the reader is currently looking at, and repeating them
+	 * under the wrong name would be worse than not showing them. That tail
+	 * is also the quiet proof the block never stopped being the machine
+	 * while it wears a borrowed face.
 	 *
 	 * `panel--pressable` / `panel--collapsed` (`layout.css`, 2026-08-03, the
 	 * rack answers everywhere) are the shared collapse chrome this line has
@@ -38,6 +48,14 @@
 		 *  over a dead feed as if that were a fact about the machine. */
 		error?: string | null;
 		stale?: boolean;
+		/** The page's `loomSelection`, narrowed to a run id (`null` for no
+		 *  selection or a wake selected) — one frame, two moods. `null` is
+		 *  pulse, exactly today's shape; a run id is inspection, and the head
+		 *  borrows that run's face and name (`machineHeadRun`). Resolved
+		 *  against `burning` rather than carried as its own object: every
+		 *  selectable run already has a row there, so a second run-lookup
+		 *  surface would just be two sources for one name. */
+		selectedId?: string | null;
 	}
 	let {
 		burning,
@@ -46,10 +64,19 @@
 		onToggle,
 		docked = false,
 		error = null,
-		stale = false
+		stale = false,
+		selectedId = null
 	}: Props = $props();
 	let lead = $derived(burning[0] ?? null);
-	let face = $derived(lead ? runFace(lead.id) : null);
+	// The identity the head wears. `machineHeadRun` picks the id; falling back
+	// to `lead` itself (not merely its id) covers the one gap between them —
+	// a selected run that has since dropped out of `burning` (it ended) — the
+	// same way a stale selection graceful-degrades everywhere else on the page
+	// rather than rendering a name from nowhere.
+	let headRun = $derived(
+		burning.find((row) => row.id === machineHeadRun(lead?.id ?? null, selectedId)) ?? lead
+	);
+	let face = $derived(headRun ? runFace(headRun.id) : null);
 	let nextArmed = $derived(armed[0] ?? null);
 	// One predicate, and it is never `open` alone: with the lane on screen the
 	// head keeps identity and drops every measurement that lane draws in full
@@ -84,13 +111,18 @@
 		<span class="tracking-[0.13em] text-ink-quiet uppercase"
 			>{bodyOnScreen ? '▾' : '▸'} machine</span
 		>
-		{#if lead}
+		{#if headRun}
 			<span class="flex min-w-0 items-baseline gap-1.5 text-amber-200">
 				{#if face}<span aria-hidden="true" style={`color: ${face.color}`}>{face.glyph}</span>{/if}
-				<span class="max-w-[26ch] truncate text-[11px]">{lead.label}</span>
+				<span class="max-w-[26ch] truncate text-[11px]">{headRun.label}</span>
 			</span>
-			{#if head.clock && lead.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
-			{#if head.note && lead.note}<span class="text-ink-quiet">{lead.note}</span>{/if}
+			<!-- The tail stays the lead's, never the borrowed run's — these are
+			     true of the machine (what's burning, what else is), not of
+			     whichever run inspection is currently naming, and the machine
+			     must never read as having stopped being the machine underneath
+			     a borrowed face. -->
+			{#if head.clock && lead?.clock}<span class="text-amber-500/80">{lead.clock}</span>{/if}
+			{#if head.note && lead?.note}<span class="text-ink-quiet">{lead.note}</span>{/if}
 			{#if head.extra && burning.length > 1}<span class="text-amber-500/80"
 					>+{burning.length - 1}</span
 				>{/if}

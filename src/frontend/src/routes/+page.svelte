@@ -1095,6 +1095,12 @@
 			<!-- Keyed on the dock verdict, not the rail's: docking is what changes
 			     this line's form — pointer or disclosure — so it is what the
 			     redraw should mark. -->
+			<!-- One frame, two moods: a run selected anywhere on the loom outranks
+			     the lead for the head's face and name (`machineHeadRun`), so a
+			     reader scrolled down to the dock still sees which run their
+			     selection holds. `null` when the selection is a wake, or there is
+			     none — pulse, unchanged. The lane below already renders the
+			     selection inline; this only tells the docked head about it. -->
 			{#key machineDocked}
 				<div in:glitchReveal={{ duration: 200 }}>
 					<RunBlock
@@ -1105,6 +1111,7 @@
 						error={liveRunsError}
 						stale={liveRunsStale}
 						onToggle={onMachineToggle}
+						selectedId={loomSelection?.kind === 'run' ? loomSelection.id : null}
 					/>
 				</div>
 			{/key}
