@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -7034,6 +7035,145 @@ def test_persist_boundaries_summary_omits_the_file_when_transcript_absent(tmp_pa
         ctx.runs_dir / "Gurio__brr" / "run-no-transcript" / "boundaries.json"
     ).exists()
     assert "run_boundaries_summary_path" not in task.meta
+
+
+def test_capture_control_files_partition_is_total():
+    """Every control-file constant the scanned modules declare is decided.
+
+    ``_discover_control_file_names`` reads the constants back via
+    introspection rather than trusting a hand-copied list — this is the
+    guard that catches the *next* control file somebody adds without
+    deciding its fate. See the test below for proof the mechanism itself
+    fires, not just that today's fixed set happens to be clean.
+    """
+    discovered = daemon._discover_control_file_names()
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    missing = set(discovered) - classified
+    assert not missing, (
+        f"undecided control file(s): {sorted(discovered[n] for n in missing)} "
+        "— add each to daemon.PRESERVED or daemon.NOT_PRESERVED with a reason"
+    )
+    # A partition, not just a total covering: no name is both kept and
+    # dropped depending on which dict a reader happens to check first.
+    assert not (set(daemon.PRESERVED) & set(daemon.NOT_PRESERVED))
+
+
+def test_capture_control_files_partition_catches_an_undecided_constant():
+    """The totality guard actually fires on a new constant, not just today's.
+
+    A fake module carrying one unclassified ``*_NAME`` constant, scanned
+    the same way :func:`daemon._discover_control_file_names` scans the real
+    modules, must come back undecided. Neutering ``PRESERVED``/
+    ``NOT_PRESERVED`` themselves (deleting an entry) would also redden
+    ``test_capture_control_files_partition_is_total`` above — this test
+    instead proves the *discovery* half by construction, independent of
+    whichever real constants happen to exist right now.
+    """
+    fake_module = types.SimpleNamespace(
+        __name__="fake_control_module",
+        TOTALLY_NEW_CONTROL_NAME=".totally-new-control-file",
+    )
+    discovered = {
+        value: f"{fake_module.__name__}.{attr}"
+        for attr, value in vars(fake_module).items()
+        if daemon._CONTROL_NAME_RE.match(attr)
+        and isinstance(value, str) and value
+    }
+    assert discovered == {
+        ".totally-new-control-file": "fake_control_module.TOTALLY_NEW_CONTROL_NAME"
+    }
+    classified = set(daemon.PRESERVED) | set(daemon.NOT_PRESERVED)
+    assert set(discovered) - classified == {".totally-new-control-file"}
+
+
+def test_capture_control_files_copies_preserved_names_dot_stripped(tmp_path):
+    """The general case of ``_capture_pr_handle``: outbox -> node, dot stripped.
+
+    Also proves the pessimistic-side-down half by construction: a file in
+    ``NOT_PRESERVED`` (``inbox.json``, carrying what would be another
+    correspondent's pending event in the real shape) sits right next to the
+    preserved files in the source outbox and must not appear on the node.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-ctrl", event_id="evt-ctrl", body="work", source="telegram")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".relics.jsonl").write_text(
+        '{"kind": "file", "path": "a.py"}\n', encoding="utf-8",
+    )
+    (outbox / ".mood").write_text("focused\nnarration line\n", encoding="utf-8")
+    (outbox / ".claude-result-levels.json").write_text(
+        '{"spend": {"total_cost_usd": 1.2}}', encoding="utf-8",
+    )
+    # Present in the outbox but NOT_PRESERVED — must survive uncopied.
+    (outbox / "inbox.json").write_text(
+        '{"events": [{"body": "another correspondent said this"}]}',
+        encoding="utf-8",
+    )
+    (outbox / ".card").write_text("## Now\n\nlive\n", encoding="utf-8")
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    run_dir = ctx.runs_dir / "Gurio__brr" / "run-ctrl"
+    assert (
+        run_dir / "relics.jsonl"
+    ).read_text(encoding="utf-8") == '{"kind": "file", "path": "a.py"}\n'
+    assert (run_dir / "mood").read_text(encoding="utf-8") == "focused\nnarration line\n"
+    assert (
+        run_dir / "spend.json"
+    ).read_text(encoding="utf-8") == '{"spend": {"total_cost_usd": 1.2}}'
+    assert not (run_dir / "inbox.json").exists()
+    assert not (run_dir / "card").exists()
+    assert not (run_dir / ".card").exists()
+    assert {p.name for p in written} == {"relics.jsonl", "mood", "spend.json"}
+
+
+def test_capture_control_files_is_silent_when_nothing_present(tmp_path):
+    """No control files in the outbox ⇒ nothing written, no node directory."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-empty", event_id="evt-empty", body="work", source="telegram")
+    outbox = tmp_path / "outbox-empty"
+    outbox.mkdir()
+
+    written = daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=outbox,
+    )
+
+    assert written == []
+    assert not (ctx.runs_dir / "Gurio__brr" / "run-empty").exists()
+
+
+def test_capture_control_files_noop_without_outbox_or_disabled_account(tmp_path):
+    """Absence discipline: no outbox, or no enabled account, writes nothing."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(id="run-x", event_id="evt-x", body="work", source="telegram")
+
+    assert daemon._capture_control_files(
+        ctx, task, repo_label="Gurio/brr", outbox_dir=None,
+    ) == []
+    assert daemon._capture_control_files(
+        None, task, repo_label="Gurio/brr", outbox_dir=tmp_path,
+    ) == []
 
 
 def test_card_now_projection_keeps_the_full_body_off_the_live_card():
