@@ -445,6 +445,111 @@ starlight-theme-select select,
 }
 
 /* ------------------------------------------------------------------ */
+/* Shells & doors — the market block on the landing page. Reuses       */
+/* Starlight's .card / .card-grid DOM (see user-components/Card.astro) */
+/* hand-written in the markdown source, so it inherits both Starlight's */
+/* grid-stacking breakpoint and this file's corner-tick panel chrome    */
+/* with no new layout code.                                             */
+/* ------------------------------------------------------------------ */
+
+/* Starlight ships `.card-grid` / `.card` layout CSS scoped inside its own
+   `CardGrid.astro` / `Card.astro` components; it only reaches the bundle
+   when a page imports those components. This page writes the same DOM by
+   hand in plain Markdown (no MDX import), so the grid rule below is ours
+   to own — the corner-tick `.card` skin above already is, and stays
+   global on purpose so any future page can reuse either. */
+.card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+@media (min-width: 50rem) {
+  .card-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.brr-shelf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brr-shelf-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.brr-shelf-label {
+  color: var(--sl-color-gray-2);
+}
+
+.brr-shelf-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid var(--brnrd-panel-border);
+  background: var(--brnrd-subpanel-bg);
+  color: var(--sl-color-gray-2);
+}
+
+/* Same light-mode tint as the `.card` panel above — the raw dark-tuned
+   tokens muddy on parchment otherwise. */
+:root[data-theme='light'] .brr-shelf-icon {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
+  border-color: color-mix(in srgb, var(--sl-color-accent) 25%, transparent);
+}
+
+.brr-shelf-icon svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+/* Marks with no clean source to vendor (Slack, Codex/OpenAI both pulled
+   or absent from simple-icons) get a plain mono glyph instead of a
+   fabricated logo — same tile, a text-mark in it. Inherits the tile's
+   `color` (gray-2) rather than a fixed tone, so it stays legible in both
+   themes the same way the real SVG marks do. */
+.brr-shelf-icon--mono {
+  font-family: var(--sl-font-mono);
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+/* "notifications" / "soon" annotations — small caps mono tags, never
+   claiming more support than what's merged. */
+.brr-shelf-tag {
+  margin-inline-start: auto;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--brnrd-panel-border);
+  font-family: var(--sl-font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* gray-3, not the raw ink-mute token: at this size/weight the tag
+     text doesn't clear WCAG's "large text" bar, and ink-mute's light-mode
+     mix falls under 4.5:1. gray-3 is the site's own per-theme-tuned pick
+     that still reads as understated. */
+  color: var(--sl-color-gray-3);
+  white-space: nowrap;
+}
+
+.brr-shelf-tag--soon {
+  color: var(--sl-color-accent);
+  border-color: color-mix(in srgb, var(--sl-color-accent) 40%, transparent);
+}
+
+/* ------------------------------------------------------------------ */
 /* Motion discipline.                                                  */
 /* ------------------------------------------------------------------ */
 
