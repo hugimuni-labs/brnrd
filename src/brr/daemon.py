@@ -3227,14 +3227,25 @@ def _run_worker(
     # 2026-07-18 — a worker's boot prompt listed two of the maintainer's
     # telegram messages while inbox.json correctly showed none.
     pending_events_snapshot = _pending_events_for_agent(
-        inbox_dir, eid, worker=is_worker_run,
+        inbox_dir,
+        eid,
+        worker=is_worker_run,
+        account_context=account_context,
+        repo_label=repo_label,
     )
     if woven_sibling_ids:
         pending_events_snapshot = [
             ev for ev in pending_events_snapshot
             if str(ev.get("id") or "") not in woven_sibling_ids
         ]
-    _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
+    _write_live_inbox(
+        outbox_dir,
+        inbox_dir,
+        eid,
+        worker=is_worker_run,
+        account_context=account_context,
+        repo_label=repo_label,
+    )
 
     # Other thoughts awake right now (presence registry), excluding this
     # one — so the resident knows it may share the dominion with a
@@ -3558,6 +3569,8 @@ def _run_worker(
         quota_summary=quota_summary,
         cfg=cfg,
         brr_dir=brr_dir,
+        account_context=account_context,
+        repo_label=repo_label,
     )
 
     attempt = 0
@@ -3809,6 +3822,8 @@ def _run_worker(
             quota_summary=quota_summary,
             cfg=cfg,
             brr_dir=brr_dir,
+            account_context=account_context,
+            repo_label=repo_label,
         )
 
         def _emit_heartbeat() -> None:
@@ -3855,7 +3870,14 @@ def _run_worker(
                     stage="running", cfg=cfg,
                     work_dir=run_root, outbox_dir=outbox_dir,
                 )
-            _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
+            _write_live_inbox(
+                outbox_dir,
+                inbox_dir,
+                eid,
+                worker=is_worker_run,
+                account_context=account_context,
+                repo_label=repo_label,
+            )
             _write_live_portal_state(
                 outbox_dir,
                 inbox_dir,
@@ -3877,6 +3899,8 @@ def _run_worker(
                 quota_summary=quota_summary,
                 cfg=cfg,
                 brr_dir=brr_dir,
+                account_context=account_context,
+                repo_label=repo_label,
             )
             if presence_id:
                 presence.heartbeat(
@@ -3919,7 +3943,14 @@ def _run_worker(
                 emit, task, menu_path, menu_state, outbox_dir=outbox_dir,
             )
             _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
-            _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
+            _write_live_inbox(
+                outbox_dir,
+                inbox_dir,
+                eid,
+                worker=is_worker_run,
+                account_context=account_context,
+                repo_label=repo_label,
+            )
             _write_live_portal_state(
                 outbox_dir,
                 inbox_dir,
@@ -3941,6 +3972,8 @@ def _run_worker(
                 quota_summary=quota_summary,
                 cfg=cfg,
                 brr_dir=brr_dir,
+                account_context=account_context,
+                repo_label=repo_label,
                 refresh_levels=False,
             )
 
@@ -4017,7 +4050,14 @@ def _run_worker(
             emit, task, menu_path, menu_state, outbox_dir=outbox_dir,
         )
         _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
-        _write_live_inbox(outbox_dir, inbox_dir, eid, worker=is_worker_run)
+        _write_live_inbox(
+            outbox_dir,
+            inbox_dir,
+            eid,
+            worker=is_worker_run,
+            account_context=account_context,
+            repo_label=repo_label,
+        )
         _write_live_portal_state(
             outbox_dir,
             inbox_dir,
@@ -4039,6 +4079,8 @@ def _run_worker(
             quota_summary=quota_summary,
             cfg=cfg,
             brr_dir=brr_dir,
+            account_context=account_context,
+            repo_label=repo_label,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -4204,6 +4246,8 @@ def _run_worker(
                 cfg,
                 signal=signal,
                 attempt=attempt,
+                account_context=account_context,
+                repo_label=repo_label,
             )
             # Payload carries the multi-thread delivery shape so the card
             # can reflect "delivered to N threads" / "sent N out-of-bound"
@@ -4682,8 +4726,18 @@ def _pending_events_for_agent(
     current_event_id: str,
     *,
     worker: bool = False,
+    account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> list[dict[str, object]]:
     """Return other waiting events the resident may fold in.
+
+    An account daemon dispatches from the union returned by
+    :func:`_dispatchable_inbox_sources`, so a live run must read that same
+    union rather than only the drawer its waking event came from. Explicitly
+    addressed events are limited to this run's repository. An unlabeled event
+    in the account dispatch drawer remains visible: it is account-scoped, and
+    edge-targeted traffic relies on the carve-outs below to reach its child.
+    Unlabeled events in a repository drawer inherit that drawer's label.
 
     Excludes respawn-origin events (``respawned_by_run`` / ``respawned_from_event``
     set by :func:`_queue_respawn_request`): those are a system-to-system handoff
@@ -4696,25 +4750,60 @@ def _pending_events_for_agent(
     (found live, 2026-07-06: a codex-shell respawn stuck a run in a
     fold-in-or-explain loop it had already resolved).
     """
-    events: list[dict[str, object]] = []
-    for ev in protocol.list_pending(inbox_dir):
-        if ev.get("id") == current_event_id:
-            continue
-        if ev.get("status") != "pending":
-            continue
-        if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
-            continue
-        # Dispatch-edge traffic (wyrd §3): a `to:` message is visible only
-        # to the child it addresses — never to the resident's own view.
-        edge_target = str(ev.get("spawn_message_for_event") or "")
-        if edge_target and edge_target != current_event_id:
-            continue
-        # A worker-stack run sees only its own edge traffic — the user
-        # thread's pending events belong to its dispatcher, not to it.
-        if worker and not edge_target:
-            continue
-        events.append(_pending_event_record(ev))
-    return events
+    sources: list[tuple[Path, str | None, bool]] = [(inbox_dir, None, False)]
+    if account_context is not None and account_context.enabled and repo_label:
+        seen_sources = {inbox_dir.resolve()}
+        for source_inbox, _responses, _root, source_label in (
+            _dispatchable_inbox_sources(
+                account_context, account_context.default_repo.root,
+            )
+        ):
+            resolved = source_inbox.resolve()
+            if resolved in seen_sources:
+                continue
+            seen_sources.add(resolved)
+            sources.append(
+                (
+                    source_inbox,
+                    source_label,
+                    source_inbox == account_context.dispatch_inbox,
+                )
+            )
+
+    events: list[dict] = []
+    for source_inbox, source_label, account_scoped in sources:
+        for ev in protocol.list_pending(source_inbox):
+            event_label = account.event_repo_label(ev)
+            if repo_label and event_label and event_label != repo_label:
+                continue
+            if (
+                repo_label
+                and not event_label
+                and not account_scoped
+                and source_label is not None
+                and source_label != repo_label
+            ):
+                continue
+            if ev.get("id") == current_event_id:
+                continue
+            if ev.get("status") != "pending":
+                continue
+            if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
+                continue
+            # Dispatch-edge traffic (wyrd §3): a `to:` message is visible only
+            # to the child it addresses — never to the resident's own view.
+            edge_target = str(ev.get("spawn_message_for_event") or "")
+            if edge_target and edge_target != current_event_id:
+                continue
+            # A worker-stack run sees only its own edge traffic — the user
+            # thread's pending events belong to its dispatcher, not to it.
+            if worker and not edge_target:
+                continue
+            events.append(ev)
+    return [
+        _pending_event_record(ev)
+        for ev in sorted(events, key=_event_mtime)
+    ]
 
 
 def _write_live_inbox(
@@ -4723,6 +4812,8 @@ def _write_live_inbox(
     current_event_id: str,
     *,
     worker: bool = False,
+    account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> Path | None:
     """Refresh the live inbox view exposed to the running resident.
 
@@ -4737,7 +4828,13 @@ def _write_live_inbox(
     return portals.write_live_inbox(
         outbox_dir,
         current_event_id,
-        _pending_events_for_agent(inbox_dir, current_event_id, worker=worker),
+        _pending_events_for_agent(
+            inbox_dir,
+            current_event_id,
+            worker=worker,
+            account_context=account_context,
+            repo_label=repo_label,
+        ),
     )
 
 
@@ -5249,6 +5346,8 @@ def _write_live_portal_state(
     refresh_levels: bool = True,
     cfg: dict | None = None,
     brr_dir: Path | None = None,
+    account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -5270,6 +5369,9 @@ def _write_live_portal_state(
     refreshed on every heartbeat/flush instead of frozen at wake time. A
     caller that omits it gets the previous ``unimplemented`` behaviour
     unchanged.
+
+    *repo_label* is the caller's single repository-identity fact, shared with
+    ``inbox.json`` so the two live portals cannot scan different drawers.
     """
     if not outbox_dir:
         return None
@@ -5278,6 +5380,8 @@ def _write_live_portal_state(
         events = _pending_events_for_agent(
             inbox_dir, current_event_id,
             worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
+            account_context=account_context,
+            repo_label=repo_label,
         )
         await_state = _resolve_await_state(
             task, events,
@@ -10802,6 +10906,8 @@ def _post_delivery_attend(
     *,
     signal: str,
     attempt: int,
+    account_context: account.AccountContext | None = None,
+    repo_label: str | None = None,
 ) -> str:
     """Hold the daemon slot briefly after a delivered current-thread reply.
 
@@ -10836,7 +10942,12 @@ def _post_delivery_attend(
     deadline = started + seconds
     next_heartbeat = started + _HEARTBEAT_INTERVAL
     while True:
-        if _pending_events_for_agent(inbox_dir, event_id):
+        if _pending_events_for_agent(
+            inbox_dir,
+            event_id,
+            account_context=account_context,
+            repo_label=repo_label,
+        ):
             # #351 interim guarantee: a follow-up that lands *during* the
             # attendance dwell must reach the normal dispatch path — never be
             # polled here and then silently dropped (the loss the maintainer

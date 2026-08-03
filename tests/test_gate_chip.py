@@ -34,7 +34,10 @@ def _portal(token: str, **extra):
         "change_token": token,
         "run": {"id": "run-260803-0737-4l69"},
         "budget": {"elapsed_seconds": 30, "budget_seconds": 14400},
-        "attention": {"pending_outbox_file_count": 0},
+        # Production always writes both counts (portals.write_portal_state);
+        # omitting pending_event_count now renders the honest ✉? unknown chip
+        # (#1000), which would keep the bar alive for the wrong reason here.
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
         "inbound": {"events": []},
         "outbound": {},
         # Something laden, so the bar renders at all — the chip is ambient

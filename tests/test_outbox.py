@@ -1479,6 +1479,152 @@ def test_live_inbox_file_lists_other_pending_events(tmp_path):
     assert "_path" not in ev
 
 
+def test_schedule_run_live_portals_read_repo_scoped_account_union(tmp_path):
+    """Heartbeat callers see the same cross-drawer events dispatch can wake."""
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    repo_inbox = repo_a / ".brr" / "inbox"
+    other_repo_inbox = repo_b / ".brr" / "inbox"
+    outbox = repo_a / ".brr" / "outbox" / "evt-schedule"
+    outbox.mkdir(parents=True)
+    home = tmp_path / "account-home"
+    account_inbox = home / "dispatch" / "inbox"
+    repo_a_label = "Gurio/a"
+    repo_b_label = "Gurio/b"
+    account_context = account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=account_inbox,
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            repo_a_label: account.AccountRepo(repo_a_label, repo_a),
+            repo_b_label: account.AccountRepo(repo_b_label, repo_b),
+        },
+        default_repo=account.AccountRepo(repo_a_label, repo_a),
+    )
+
+    protocol.create_event(
+        repo_inbox,
+        source="schedule",
+        body="scheduled work",
+        repo_label=repo_a_label,
+    )
+    current = protocol.list_pending(repo_inbox)[0]
+    protocol.set_status(current, "processing")
+    same_repo = protocol.create_event(
+        account_inbox,
+        source="cloud",
+        body="same-repo chat",
+        repo_label=repo_a_label,
+    )
+    other_repo = protocol.create_event(
+        account_inbox,
+        source="cloud",
+        body="other-repo chat",
+        repo_label=repo_b_label,
+    )
+    unlabeled = protocol.create_event(
+        account_inbox,
+        source="dispatch_message",
+        body="account-scoped message",
+    )
+    other_drawer_unlabeled = protocol.create_event(
+        other_repo_inbox,
+        source="schedule",
+        body="other repo's local event",
+    )
+    task = Run(
+        id="run-schedule",
+        event_id=current["id"],
+        body="scheduled work",
+        source="schedule",
+        status="running",
+        env="host",
+        meta={},
+    )
+
+    inbox_path = daemon._write_live_inbox(
+        outbox,
+        repo_inbox,
+        current["id"],
+        account_context=account_context,
+        repo_label=repo_a_label,
+    )
+    portal_path = daemon._write_live_portal_state(
+        outbox,
+        repo_inbox,
+        current["id"],
+        task,
+        phase="running",
+        refresh_levels=False,
+        account_context=account_context,
+        repo_label=repo_a_label,
+    )
+
+    expected_ids = {same_repo.stem, unlabeled.stem}
+    excluded_ids = {other_repo.stem, other_drawer_unlabeled.stem}
+    live_inbox = json.loads(inbox_path.read_text(encoding="utf-8"))
+    portal = json.loads(portal_path.read_text(encoding="utf-8"))
+    inbox_ids = {event["id"] for event in live_inbox["events"]}
+    portal_ids = {event["id"] for event in portal["inbound"]["events"]}
+    assert inbox_ids == expected_ids
+    assert portal_ids == expected_ids
+    assert excluded_ids.isdisjoint(inbox_ids | portal_ids)
+    assert portal["attention"]["pending_event_count"] == 2
+
+
+def test_pending_events_union_keeps_unregistered_run_repo_inbox(tmp_path):
+    """The run drawer survives even when its repo is absent from the account."""
+    run_repo = tmp_path / "run-repo"
+    registered_repo = tmp_path / "registered-repo"
+    run_inbox = run_repo / ".brr" / "inbox"
+    registered_repo.mkdir(parents=True)
+    home = tmp_path / "account-home"
+    account_inbox = home / "dispatch" / "inbox"
+    run_label = "Gurio/unregistered"
+    registered_label = "Gurio/registered"
+    account_context = account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=account_inbox,
+        responses_dir=home / "dispatch" / "responses",
+        runs_dir=home / "runs",
+        repos={
+            registered_label: account.AccountRepo(
+                registered_label, registered_repo,
+            ),
+        },
+        default_repo=account.AccountRepo(registered_label, registered_repo),
+    )
+
+    current_path = protocol.create_event(
+        run_inbox, source="schedule", body="current", repo_label=run_label,
+    )
+    current = protocol.list_pending(run_inbox)[0]
+    protocol.set_status(current, "processing")
+    local = protocol.create_event(
+        run_inbox, source="schedule", body="local follow-up", repo_label=run_label,
+    )
+    account_event = protocol.create_event(
+        account_inbox, source="cloud", body="account follow-up", repo_label=run_label,
+    )
+
+    events = daemon._pending_events_for_agent(
+        run_inbox,
+        current_path.stem,
+        account_context=account_context,
+        repo_label=run_label,
+    )
+
+    assert {event["id"] for event in events} == {
+        local.stem,
+        account_event.stem,
+    }
+
+
 def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
