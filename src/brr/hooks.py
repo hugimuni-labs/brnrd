@@ -113,6 +113,24 @@ MOOD_NUDGE_KEY = "mood_nudge_shown"
 # "never renders while the file happens to be empty this boundary", so the
 # disqualification has to survive a mood that later reads blank again.
 MOOD_EVER_WRITTEN_KEY = "mood_ever_written"
+# Three-class boundary split (#1116): ambient vitals render on the first
+# post-tool boundary and then only when a threshold crosses, never every tick.
+# The keys below are the per-run ambient-state ledger entries.
+#
+# AMBIENT_FIRST_BAR_KEY — True after the first post-tool bar has been emitted.
+# AMBIENT_BUDGET_PCT_KEY — budget % used at the last ambient emission (int).
+# AMBIENT_QUOTA_KEY — {bucket_label: pct_left} at the last ambient emission.
+AMBIENT_FIRST_BAR_KEY = "ambient_first_bar"
+AMBIENT_BUDGET_PCT_KEY = "ambient_budget_pct"
+AMBIENT_QUOTA_KEY = "ambient_quota"
+
+# Budget thresholds (% used) at which the ambient bar re-emits; crossed once
+# each in the ascending direction only.
+_AMBIENT_BUDGET_THRESHOLDS = (25, 50, 75, 90)
+
+# Quota thresholds (% *remaining*) at which the ambient bar re-emits; crossed
+# once each in the descending direction only.
+_AMBIENT_QUOTA_THRESHOLDS = (30.0, 20.0, 10.0, 5.0)
 
 # Closeout artifact obligations the armed guard can escalate from the soft
 # `inject` mention (see `format_delta`, which already surfaces a stale card
@@ -413,6 +431,168 @@ def _suppress_unchanged_inject(
         return None
     state[PENDING_INJECT_KEY] = {"sha256": digest, "text": inject}
     return inject
+
+
+# ── Three-class ambient split (#1116) ────────────────────────────────────────
+
+
+def _has_post_tool_obligations(
+    portal: dict[str, Any],
+    plan: "promises.Blueprint | None",
+    surprise: str | None,
+    plan_edge: bool,
+    portal_unavailable: bool,
+) -> bool:
+    """True when this boundary carries at least one obligation.
+
+    Obligations — pending events, stale card, refused directives, overdue
+    armed letters, unmet blueprint promise edge, running long — all have a
+    discharge condition: the resident can *act* to make them go away.  Pure
+    ambient content (quota %, elapsed time, orientation progress) has none.
+
+    An unavailable portal counts as an obligation: the unknown count cannot
+    be reported as zero, so the resident must not mistake silence for all-clear.
+
+    ``surprise`` (a mood edge — something just failed) and ``plan_edge`` (a
+    blueprint change) are deltas that travel outside the portal token, and
+    therefore cannot ride the ambient gate.
+    """
+    if portal_unavailable:
+        return True
+    if surprise or plan_edge:
+        return True
+    attention = (
+        portal.get("attention") if isinstance(portal.get("attention"), dict) else {}
+    )
+    pending_raw = attention.get("pending_event_count")
+    pending_known = pending_raw is not None
+    try:
+        pending = int(pending_raw or 0)
+    except (TypeError, ValueError):
+        pending_known = False
+        pending = 0
+    if not pending_known or pending > 0:
+        return True
+    try:
+        pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
+    except (TypeError, ValueError):
+        pending_files = 0
+    if pending_files > 0:
+        return True
+    card = portal.get("card") if isinstance(portal.get("card"), dict) else {}
+    if card.get("stale"):
+        return True
+    notices = (
+        portal.get("notices") if isinstance(portal.get("notices"), list) else []
+    )
+    if _counted_notices(notices):
+        return True
+    schedule_facet = (
+        portal.get("schedule") if isinstance(portal.get("schedule"), dict) else {}
+    )
+    armed = (
+        schedule_facet.get("armed")
+        if isinstance(schedule_facet.get("armed"), list) else []
+    )
+    if armed:
+        return True
+    budget = portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
+    if budget.get("long_running"):
+        return True
+    run = portal.get("run") if isinstance(portal.get("run"), dict) else {}
+    run_name = portal.get("name") if isinstance(portal.get("name"), dict) else {}
+    elapsed = budget.get("elapsed_seconds")
+    if (
+        not run_name.get("written")
+        and isinstance(elapsed, (int, float))
+        and elapsed >= 240
+    ):
+        return True
+    if plan is not None and plan_edge and plan.owed:
+        return True
+    return False
+
+
+def _ambient_should_emit(
+    state: dict[str, Any],
+    budget: dict[str, Any],
+    resources: dict[str, Any],
+) -> bool:
+    """True when ambient vitals should emit on this boundary.
+
+    Fires on the first post-tool boundary ever, then only when a meaningful
+    threshold crosses:
+
+    - budget % used crosses any of ``_AMBIENT_BUDGET_THRESHOLDS``
+    - any quota bucket's % remaining crosses any of ``_AMBIENT_QUOTA_THRESHOLDS``
+
+    Between threshold crossings the ambient bar is silent; obligation and delta
+    content still surfaces through a separate path.
+    """
+    if not state.get(AMBIENT_FIRST_BAR_KEY):
+        return True  # very first post-tool boundary
+
+    elapsed = budget.get("elapsed_seconds")
+    limit = budget.get("budget_seconds")
+    if elapsed is not None and limit is not None:
+        try:
+            pct_used = int(int(elapsed) * 100 / int(limit))
+            last_pct = state.get(AMBIENT_BUDGET_PCT_KEY, -1)
+            for threshold in _AMBIENT_BUDGET_THRESHOLDS:
+                if last_pct < threshold <= pct_used:
+                    return True
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    quota = resources.get("quota") if isinstance(resources, dict) else {}
+    if isinstance(quota, dict) and quota.get("status") == "known":
+        summary = str(quota.get("summary") or "")
+        last_quota: dict[str, float] = state.get(AMBIENT_QUOTA_KEY) or {}
+        for match in _QUOTA_BUCKET_RE.finditer(summary):
+            label = match.group("label")
+            try:
+                pct_left = float(match.group("pct"))
+            except (TypeError, ValueError):
+                continue
+            last_left = last_quota.get(label, 100.0)
+            for threshold in _AMBIENT_QUOTA_THRESHOLDS:
+                if last_left > threshold >= pct_left:
+                    return True
+
+    return False
+
+
+def _update_ambient_state(
+    state: dict[str, Any],
+    budget: dict[str, Any],
+    resources: dict[str, Any],
+) -> None:
+    """Persist current ambient vital values after an ambient emission."""
+    state[AMBIENT_FIRST_BAR_KEY] = True
+
+    elapsed = budget.get("elapsed_seconds")
+    limit = budget.get("budget_seconds")
+    if elapsed is not None and limit is not None:
+        try:
+            state[AMBIENT_BUDGET_PCT_KEY] = int(int(elapsed) * 100 / int(limit))
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
+    quota = resources.get("quota") if isinstance(resources, dict) else {}
+    if isinstance(quota, dict) and quota.get("status") == "known":
+        summary = str(quota.get("summary") or "")
+        snapshot: dict[str, float] = {}
+        for match in _QUOTA_BUCKET_RE.finditer(summary):
+            label = match.group("label")
+            try:
+                snapshot[label] = float(match.group("pct"))
+            except (TypeError, ValueError):
+                pass
+        if snapshot:
+            state[AMBIENT_QUOTA_KEY] = snapshot
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _touch_flush(ctx: HookContext) -> None:
@@ -1697,8 +1877,15 @@ def _render_bar(
     gate_receipt_data: dict[str, Any] | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
+    ambient_emit: bool = True,
 ) -> str | None:
     """The mid-run (``post-tool``) status bar: one line + obligation details.
+
+    ``ambient_emit`` controls whether the chip-row bar line is included.
+    When ``False`` (no threshold crossing, not the first boundary), only the
+    obligation detail lines are returned — the compressed form (#1116: "on
+    repeat, compress/collapse rather than re-emit in full").  When ``True``
+    the full bar + details are returned as before.
 
     Builds the fixed :data:`BAR_SEGMENTS` chips left to right, then appends
     detail lines *only* for new obligations — non-zero pending events, a
@@ -1852,7 +2039,6 @@ def _render_bar(
                 "or stale."
             )
 
-    resources_laden = bool(quota_chip or siblings_chip or keepalive_chip)
     any_delivery = bool(delivery_chip)
     # A blueprint edge opens the gate on its own, for `surprise`'s reason:
     # writing a promise changes nothing the daemon puts in portal-state, so
@@ -1863,14 +2049,33 @@ def _render_bar(
     # back wrong. Without this clause the caller's gate opens and this one
     # closes again — the ask would still be silent on exactly the boundary it
     # exists for, one layer past where the fix was aimed.
-    if (
-        pending_known and pending == 0 and pending_files == 0 and not any_delivery
-        and not resources_laden and not card_stale and not surprise
-        and not notices_chip and not finished_spawns and not armed
-        and not plan_laden
-    ):
+    #
+    # ``resources_laden`` (quota chip, siblings chip, keepalive chip) is
+    # deliberately *absent* from the gate below (#1116 three-class split): those
+    # chips are ambient vitals — no discharge condition, no business repeating
+    # every tick.  ``ambient_emit`` (caller-owned: first boundary or threshold
+    # crossing) controls whether the bar line appears; obligation and delta
+    # content surfaces regardless.
+    has_obligations_or_deltas = (
+        (not pending_known) or pending > 0 or pending_files > 0
+        or any_delivery or card_stale or surprise
+        or bool(notices_chip) or bool(finished_spawns) or bool(armed)
+        or plan_laden
+    )
+    if not has_obligations_or_deltas and not ambient_emit:
         return None
+
+    # When not emitting the ambient bar (between threshold crossings), return
+    # only the obligation detail lines — the compressed form.  A pending event
+    # must still surface at every boundary until discharged.
+    if not ambient_emit:
+        if not details:
+            return None
+        return "\n".join(details)
+
     bar = " │ ".join(segments)
+    if not bar and not details:
+        return None
     return bar + ("\n" + "\n".join(details) if details else "")
 
 
@@ -1950,6 +2155,7 @@ def format_delta(
     gate_receipt_data: dict[str, Any] | None = None,
     plan: "promises.Blueprint | None" = None,
     plan_edge: bool = False,
+    ambient_emit: bool = True,
 ) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
@@ -2098,6 +2304,7 @@ def format_delta(
             event_seen=event_seen, inbox_pointer=inbox_pointer,
             armed=armed, gate_receipt_data=gate_receipt_data,
             plan=plan, plan_edge=plan_edge,
+            ambient_emit=ambient_emit,
         )
 
     lines: list[str] = []
@@ -3497,50 +3704,59 @@ def compute_neutral(
                 and elapsed_for_mood >= _MOOD_NUDGE_ELAPSED_SECONDS
             )
         token = portal.get("change_token")
-        # An edge opens the gate on its own. Gating it on the portal token
-        # would be a contract the signal can't keep: a failing tool call
-        # changes nothing the daemon writes into portal-state, so the one
-        # boundary the ask exists for is exactly the one that would render
-        # nothing.
-        # A blueprint edge opens the gate on its own, for the mood edge's
-        # reason: writing `.promises.jsonl` changes nothing the daemon puts
-        # into portal-state, so gating on the portal token alone would leave
-        # the one boundary this signal exists for rendering nothing.
-        if portal_unavailable or (
-            token is not None and (
-                token != state.get("last_token") or edge or plan_edge
-            )
-        ):
+
+        # Three-class split (#1116): obligations, deltas, ambient vitals.
+        #
+        # ``has_obligations`` — content the resident must act to clear (pending
+        # events, stale card, refused notices, armed letters, long-running).
+        # Surfaces regardless of portal token and bypasses content dedup below —
+        # an unmet obligation is *supposed* to repeat until discharged; byte-
+        # identical is the signature of "nothing was done", not "nothing new
+        # happened", and suppressing it recreates the #963 failure on a class of
+        # content that was explicitly excluded from #963's scope.
+        #
+        # ``ambient_emit`` — ambient vitals (quota %, elapsed, orientation bar,
+        # sibling count) have no discharge condition, so they must not repeat
+        # every tick. First boundary always renders; thereafter only at
+        # ``_AMBIENT_BUDGET_THRESHOLDS`` / ``_AMBIENT_QUOTA_THRESHOLDS`` crossings.
+        #
+        # Deltas and edges (delivery, finished spawns, mood edge, plan edge) ride
+        # the token gate or their own edge-detection latches — unchanged from
+        # before.
+        pt_budget = (
+            portal.get("budget") if isinstance(portal.get("budget"), dict) else {}
+        )
+        pt_resources = (
+            portal.get("resources")
+            if isinstance(portal.get("resources"), dict) else {}
+        )
+        has_obligations = _has_post_tool_obligations(
+            portal, plan, surprise=edge, plan_edge=plan_edge,
+            portal_unavailable=portal_unavailable,
+        )
+        ambient_emit = _ambient_should_emit(state, pt_budget, pt_resources)
+
+        # Gate: open when there is something to say.  Obligations bypass the
+        # token check; ambient and deltas use it as before.
+        token_moved = token is not None and token != state.get("last_token")
+        if has_obligations or ambient_emit or edge or plan_edge or token_moved:
             inject = format_delta(
                 portal, mood=mood, mood_prompt=mood_prompt, surprise=edge,
                 orient=orient, census=census,
                 event_seen=event_decisions, inbox_pointer=inbox_pointer,
                 gate_receipt_data=gate_receipt_data,
                 plan=plan, plan_edge=plan_edge,
+                ambient_emit=ambient_emit,
             )
             state["last_token"] = token
+            if ambient_emit and inject is not None:
+                _update_ambient_state(state, pt_budget, pt_resources)
 
-    # The portal token decides whether rendering is worth attempting; exact
-    # rendered content decides whether the runner has anything new to see.
-    # Apply this after every phase has built its complete block, and before
-    # the seen ledger records what was actually delivered.
-    #
-    # **Ambient phases only, and that boundary is the whole correctness
-    # argument.** #818 measured the defect on a *worker's post-tool* channel
-    # — 26 byte-identical status bars in eighteen minutes — and named the
-    # real answer as splitting the channel, because "the statusline and the
-    # actual obligations share one channel". Content dedupe cannot tell the
-    # two apart: an ambient bar repeats because nothing *happened*, while an
-    # obligation repeats because nothing was *done* about it, and
-    # byte-identical is the signature of the second as much as the first.
-    # The closeout render is where the obligations live (the gate-less
-    # delivery warning clears itself the moment the run delivers — see
-    # ``format_delta``'s ``any_delivery`` arm), so it keeps its own
-    # ``stop_last_token`` gate and is never content-suppressed. This is the
-    # cheapest seam the split already has; the finer per-block split stays
-    # #818's open residue.
-    if phase != PHASE_STOP:
-        inject = _suppress_unchanged_inject(state, inject)
+        # Content dedup: ambient-only injections are hash-checked so a content-
+        # stable bar does not re-inject on every token tick.  Obligation-carrying
+        # injections bypass dedup — see the ``has_obligations`` note above.
+        if not has_obligations:
+            inject = _suppress_unchanged_inject(state, inject)
 
     # Latch on the render, not on the decision (#728's rule, same
     # discipline as `GATELESS_ROUTING_KEY`): `mood_prompt` proves only that
