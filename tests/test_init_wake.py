@@ -237,31 +237,6 @@ class TestPromptAssembly:
         assert "Init facts" in prompt
         assert "gh CLI: no" in prompt
 
-    def test_github_identity_fact_renders_when_present(self, tmp_path):
-        """`adopt._state_identity()` resolves this once and passes it in —
-        the facts block is where the wake reads it back, no second `gh`
-        shell-out on its side."""
-        repo = _repo(tmp_path)
-        prompt, _score = prompts.build_init_wake_prompt(
-            repo,
-            event_id="evt-1",
-            response_path=str(repo / ".brr/responses/evt-1.md"),
-            outbox_path=str(repo / ".brr/outbox/evt-1"),
-            facts={"runner_name": "mock", "github_identity": "octocat"},
-        )
-        assert "GitHub identity (via gh): octocat" in prompt
-
-    def test_github_identity_fact_absent_when_not_resolved(self, tmp_path):
-        repo = _repo(tmp_path)
-        prompt, _score = prompts.build_init_wake_prompt(
-            repo,
-            event_id="evt-1",
-            response_path=str(repo / ".brr/responses/evt-1.md"),
-            outbox_path=str(repo / ".brr/outbox/evt-1"),
-            facts={"runner_name": "mock"},
-        )
-        assert "GitHub identity" not in prompt
-
     def test_playbook_is_the_task(self, tmp_path):
         repo = _repo(tmp_path)
         prompt, _ = prompts.build_init_wake_prompt(
@@ -313,37 +288,6 @@ class TestPromptAssembly:
         assert prompts.init_playbook_available(repo)
         monkeypatch.setattr(prompts, "read_prompt", lambda *a, **kw: "")
         assert not prompts.init_playbook_available(repo)
-
-
-# ── facts collection ────────────────────────────────────────────────
-
-
-class TestCollectFacts:
-    def test_github_identity_passthrough_costs_no_extra_gh_call(
-        self, tmp_path, monkeypatch,
-    ):
-        """`collect_facts` takes the identity as a parameter — `adopt`
-        already paid the one `gh api user` round trip stating it on the
-        terminal, and this must not pay it again."""
-        from brr import home_link
-
-        monkeypatch.setattr(home_link, "gh_available", lambda: True)
-        monkeypatch.setattr(
-            home_link, "resolve_owner",
-            lambda *_a, **_kw: (_ for _ in ()).throw(
-                AssertionError("collect_facts must not re-resolve the owner"),
-            ),
-        )
-        repo = _repo(tmp_path)
-        facts = init_wake.collect_facts(
-            repo, runner_name="mock", github_identity="octocat",
-        )
-        assert facts["github_identity"] == "octocat"
-
-    def test_github_identity_omitted_when_none(self, tmp_path):
-        repo = _repo(tmp_path)
-        facts = init_wake.collect_facts(repo, runner_name="mock")
-        assert "github_identity" not in facts
 
 
 # ── the terminal portal loop ────────────────────────────────────────
@@ -823,11 +767,7 @@ class TestWakeDispatchFromInit:
         # brnrd still owns the post-passes: bridges + the structure gate.
         assert "✓ AGENTS.md" in out
         assert "interviewed, authored" in out
-        # the closing channel menu (#1084 family) — points at a door
-        # (account connect / gate setup telegram), then lists upgrades;
-        # see test_adopt.py::TestChannelMenu for the full pin.
-        assert "brnrd account connect" in out
-        assert "brnrd gate setup telegram" in out
+        assert "brnrd up" in out
 
     def test_failed_wake_stops_before_verification_and_next_step(
         self, tmp_path, monkeypatch, capsys,

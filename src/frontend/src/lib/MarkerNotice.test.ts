@@ -41,22 +41,13 @@ test('neither notice renders nothing visible', async () => {
 	ok(!html.includes('not a collaborator'));
 });
 
-// Re-registered 2026-08-04: this used to read as a remediation notice for a
-// broken summons path. It is an optional upgrade — the App-native `brnrd`
-// label already summons the resident regardless — so the copy must say what
-// the invite *adds* (assignment / review requests / @ autocomplete), not
-// imply anything is currently unreachable.
-test('a determined absence renders the optional-upgrade framing, naming the effective login', async () => {
+test('a determined absence renders the class-owned remedy, naming the effective login', async () => {
 	const html = await renderNotice({
 		status: 'not-a-collaborator',
 		botLogin: 'brnrd-bot'
 	});
-	ok(html.includes("brnrd-bot isn't a collaborator"));
-	ok(html.includes('optional, not required'));
-	ok(html.includes('the brnrd label already summons it'));
-	ok(html.includes('assignment, review requests, and @ autocomplete'));
+	ok(html.includes('brnrd-bot not a collaborator'));
 	ok(html.includes('Settings → Collaborators'));
-	ok(!html.includes("won't reach the resident"), 'must not overstate as a broken summons path');
 });
 
 test('unknown renders as unknown rather than guessing yes or no', async () => {

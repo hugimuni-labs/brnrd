@@ -2271,32 +2271,6 @@ def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkey
     assert seen == [None], "an expired cookie attributed the installation to its account"
 
 
-def test_github_setup_lands_on_repos_not_the_bare_dashboard(monkeypatch):
-    """#1084: the Setup URL return used to 303 to `/`, a screen that reads no
-    query params at all and cannot act on a freshly-installed repo. `/repos`
-    is the screen with the enable action — and it is where the SPA can
-    render the `notice` this endpoint already computes.
-    """
-    monkeypatch.setattr(
-        "brnrd.routers.github_app.sync_app_installation_for_account",
-        lambda *a, **k: github_app_router.InstallationSyncResult(synced=1),
-    )
-    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
-
-    r = client.get(
-        "/api/github/setup",
-        params={"installation_id": "42", "setup_action": "install"},
-        follow_redirects=False,
-    )
-
-    assert r.status_code == 303
-    location = r.headers["location"]
-    assert location.startswith("/repos?"), location
-    assert "notice=github-synced" in location
-    assert "installation_id=42" in location
-    assert "setup_action=install" in location
-
-
 def test_github_setup_refuses_an_unproven_installation(
     monkeypatch,
 ):

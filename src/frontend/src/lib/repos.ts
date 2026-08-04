@@ -182,27 +182,8 @@ async function postRepoAction(
 	return payload as unknown as RepoActionResponse;
 }
 
-export interface FetchReposParams {
-	// The GitHub Setup URL's own query params (`routers/github_app.py`'s
-	// `github_app_setup`), forwarded so the backend can echo the mapped
-	// notice text back (`_notice_text` — the same table `/v1/repos/*`
-	// action responses already read) instead of the frontend keeping a
-	// second copy of that mapping.
-	notice?: string | null;
-	installationId?: string | null;
-}
-
-export async function fetchRepos(
-	fetchImpl: typeof fetch = fetch,
-	params?: FetchReposParams
-): Promise<ReposResponse> {
-	const qs = new URLSearchParams();
-	if (params?.notice) qs.set('notice', params.notice);
-	if (params?.installationId) qs.set('installation_id', params.installationId);
-	const suffix = qs.toString();
-	const res = await fetchImpl(`/v1/dashboard/repos${suffix ? `?${suffix}` : ''}`, {
-		credentials: 'include'
-	});
+export async function fetchRepos(fetchImpl: typeof fetch = fetch): Promise<ReposResponse> {
+	const res = await fetchImpl('/v1/dashboard/repos', { credentials: 'include' });
 	if (res.status === 401) {
 		throw new ReposAuthError('not signed in');
 	}

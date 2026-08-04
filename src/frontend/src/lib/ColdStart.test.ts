@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import { compile } from 'svelte/compiler';
 import { render } from 'svelte/server';
 import { DOCS_URL } from './publicStats.ts';
-import type { ConnectedRepo, GitHubInstallation } from './repos.ts';
+import type { ConnectedRepo } from './repos.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const componentPath = join(here, 'ColdStart.svelte');
@@ -18,8 +18,7 @@ const generated = join(here, '.coldStart.generated.mjs');
 // false in the rendered HTML still fails here.
 async function renderColdStart(
 	repos: ConnectedRepo[] | null,
-	pairCommand: string | null = 'cd <repo>\nbrnrd account connect https://brnrd.dev',
-	installations: GitHubInstallation[] | null = null
+	pairCommand: string | null = 'cd <repo>\nbrnrd account connect https://brnrd.dev\nbrnrd up'
 ): Promise<string> {
 	const source = readFileSync(componentPath, 'utf8');
 	const compiled = compile(source, { generate: 'server', runes: true, name: 'ColdStart' });
@@ -29,23 +28,10 @@ async function renderColdStart(
 	writeFileSync(generated, runnable);
 	try {
 		const module = await import(`${generated}?t=${process.pid}`);
-		return render(module.default, { props: { repos, pairCommand, installations } }).body;
+		return render(module.default, { props: { repos, pairCommand } }).body;
 	} finally {
 		rmSync(generated, { force: true });
 	}
-}
-
-function installation(over: Partial<GitHubInstallation> = {}): GitHubInstallation {
-	return {
-		id: 'inst-1',
-		installation_id: '12345',
-		target_login: 'Gurio',
-		target_type: 'User',
-		created_at: null,
-		last_synced_at: null,
-		last_synced_label: '',
-		...over
-	};
 }
 
 after(() => rmSync(generated, { force: true }));
@@ -100,67 +86,13 @@ test('an account with nothing connected is told the three things that have to ha
 	ok(html.includes(`href="${DOCS_URL}"`), 'carries a docs link');
 });
 
-// This inverts the old pin here ("the block is gone the moment the account
-// has a repo") — that assertion *was* the regression (#1084). An enabled
-// repo with no daemon is "connected but not connected": the block has to
-// survive, step 03 has to stay visible, and step 02 should read done rather
-// than repeat itself.
-test('the block survives an enabled repo until a daemon has ever paired', async () => {
-	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
-	ok(html.includes('the cold start'), 'an enabled repo with no daemon is still the cold start');
-	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'step 03 survives — this is exactly what used to vanish');
-	ok(html.includes('brnrd account connect'), 'the pairing command still renders');
-	ok(html.includes('— done'), 'step 02 (enable a repository) reads done, not repeated');
-});
-
-// The failure mode the old pin was actually guarding, restated correctly:
-// a first-run panel that never leaves is worse than the blank page it
-// replaced. It leaves once a daemon has *ever* registered — 'offline' counts
-// (a laptop that's asleep already did this setup step once) — not only
-// 'online'; this is a setup checklist, not a live health monitor.
-for (const daemon_status of ['online', 'offline']) {
-	test(`the block leaves once a daemon has registered (daemon_status=${daemon_status})`, async () => {
-		const html = await renderColdStart([repo({ daemon_status })]);
-		ok(!html.includes('the cold start'));
-		ok(!html.includes('npm install -g brnrd'));
-		ok(!html.includes('nothing is paired yet'));
-	});
-}
-
-// The predicate must be an allowlist of the two known-paired values, not a
-// blocklist of 'missing' — a value the backend never sends (a future status,
-// a malformed payload) is not evidence of pairing, and must not fail open
-// and hide step 03 the same way `!== 'missing'` used to.
-test('an unrecognized daemon_status does not count as paired', async () => {
-	const html = await renderColdStart([repo({ daemon_status: 'weird' })]);
-	ok(html.includes('the cold start'), 'an unknown status is not silently treated as paired');
-	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'step 03 still renders');
-});
-
-// The other half of the regression: an account that already installed the
-// GitHub App must not be told to install it again (#1084's "instructing a
-// user who just installed it to install it").
-test('an installed-but-unenabled App is not told to install the App again', async () => {
-	const html = await renderColdStart([], undefined, [installation()]);
-	ok(html.includes('the cold start'));
-	ok(html.includes('GitHub App is installed'), 'names the fact already true');
-	ok(
-		!html.includes('Install the brnrd GitHub App where the repository lives'),
-		'does not re-ask for an install that already happened'
-	);
-	ok(html.includes('enable a repository'), 'still points at the one thing left to do');
-});
-
-// No installation at all still gets the original two-part instruction —
-// this is the branch the very first test in this file also exercises with
-// `installations` defaulted to `null`, pinned again here explicitly against
-// the same fixture the "already installed" case above uses.
-test('no installation at all still asks to install the App', async () => {
-	const html = await renderColdStart([], undefined, []);
-	ok(html.includes('Install the brnrd GitHub App where the repository lives'));
-	ok(!html.includes('GitHub App is installed'));
+// The failure mode worth a test of its own: a first-run panel that never
+// leaves is worse than the blank page it replaced.
+test('the block is gone the moment the account has a repo', async () => {
+	const html = await renderColdStart([repo()]);
+	ok(!html.includes('the cold start'));
+	ok(!html.includes('npm install -g brnrd'));
+	ok(!html.includes('nothing is paired yet'));
 });
 
 // `null` is "the repos fetch has not landed", not "this account is empty".
@@ -177,7 +109,10 @@ test('an unlanded repo list renders nothing rather than guessing empty', async (
 // it is handed and hold no second copy of its own — a local fallback string
 // is exactly the drift the single source exists to prevent.
 test('the pairing command is rendered from the prop, never restated in the component', async () => {
-	const html = await renderColdStart([], 'cd <repo>\nbrnrd account connect https://elsewhere');
+	const html = await renderColdStart(
+		[],
+		'cd <repo>\nbrnrd account connect https://elsewhere\nbrnrd up'
+	);
 	ok(html.includes('brnrd account connect https://elsewhere'));
 	ok(!html.includes('https://brnrd.dev'), 'no hardcoded endpoint of its own');
 	const source = readFileSync(componentPath, 'utf8');
