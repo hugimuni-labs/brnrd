@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import threading
+import itertools
 import time
 from pathlib import Path
 
@@ -406,6 +407,79 @@ class TestTerminalLoop:
             poll_interval=0.01,
         )
         assert result.ok and result.replies == 0
+
+    def test_a_flooded_stdin_stops_being_asked(self, tmp_path):
+        """#1107: `yes ''` into the interview used to spin at memory speed.
+
+        Found by the 2026-08-04 OOM incident (#1104): a strand verified the
+        interview with `{ printf 'just do defaults\\n\\n'; yes ''; } | script
+        -qec "brnrd init ..."` and the loop consumed empty lines until the
+        kernel killed the host at 10.4 GB. The harness had no timeout, which
+        was the trigger — but a prompt loop that cannot tell a pipe from a
+        person is the defect, and the wall clock cannot see it: no time
+        passes, so the abandoned-prompt ceiling never fires.
+
+        The read here is unbounded on purpose, exactly like the pipe. What
+        is asserted is that it stops being *called*.
+        """
+        repo = _repo(tmp_path)
+        reads = itertools.count()
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            for index in range(12):
+                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None,
+            reader=lambda: (next(reads), "")[1],   # forever empty, never blocks
+            poll_interval=0.01,
+        )
+
+        assert result.ok, result.error
+        assert result.degraded_to_defaults, (
+            "the interview kept asking a pipe that never answers"
+        )
+        # Bounded, and by the constant rather than by a magic number — the
+        # count is what separates "a person skipped a question" from "there
+        # is nobody there", so it is the thing under test.
+        assert next(reads) <= init_wake.EMPTY_READS_BEFORE_DEGRADING, (
+            f"read {next(reads)} times for a cap of "
+            f"{init_wake.EMPTY_READS_BEFORE_DEGRADING}"
+        )
+
+    def test_one_skipped_question_is_still_an_answer(self, tmp_path):
+        """The counter resets, so skipping mid-conversation costs nothing.
+
+        Without this the guard would degrade a real interview: "sending
+        nothing skips the question" is the documented affordance, and three
+        skips spread across a conversation are a person using it, not a
+        pipe. Neutering the reset makes this go red while the test above
+        stays green — which is the pair that pins the distinction.
+        """
+        repo = _repo(tmp_path)
+        replies = iter(["", "yes", "", "no", "", "sure"])
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            for index in range(6):
+                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None,
+            reader=lambda: next(replies, ""),
+            poll_interval=0.01,
+        )
+
+        assert result.ok, result.error
+        assert not result.degraded_to_defaults, (
+            "a person alternating skips with answers was read as a pipe"
+        )
+        assert result.replies == 3
 
     def test_event_is_real_and_retired_at_closeout(self, tmp_path):
         """A real inbox event makes the whole portal grammar work unmodified —
