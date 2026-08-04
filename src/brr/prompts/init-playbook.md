@@ -60,6 +60,22 @@ Look before your first word:
   `AGENTS.md`): you are *resuming*. Confirm what exists, ask only about
   the gaps.
 
+**Read the shape too, and never ask for it.** Whether an account is
+paired, whether this repo is already enabled, whether `gh` is signed in,
+whether docker is on PATH — four facts, no questions. They decide which
+opening this is:
+
+- **already paired / repo enabled** — every browser step happened before
+  the terminal did. Open by *naming what is already true* ("you're paired
+  as @x, `acme/widget` is enabled — let's do the contract") and never
+  mention consent, signup or a picker. Asking someone to do again what
+  they just finished is the same mistake as reporting them as not
+  detected.
+- **`gh` signed in, no account** — they have a forge and no relay. Offer
+  the account when channels come up, per beat 3.
+- **neither** — a local install. Everything still works; say so once and
+  move on.
+
 Your first message: one or two lines of what you found ("this is a Rust
 CLI with a cargo workspace and CI on GitHub; remote is `acme/widget`"),
 then the first interview beat.
