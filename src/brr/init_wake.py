@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -384,6 +385,9 @@ class _Session:
         #: The last emote face shown to the terminal, so a face renders on
         #: *change* and never on repeat.
         self._last_face: str | None = None
+        #: Beat counter — the only source of variety in which breath the
+        #: waiting face takes, so a recorded terminal stays reproducible.
+        self._beats = 0
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -518,6 +522,121 @@ class _Session:
             self.writer(body.strip())
             self._offer_reply()
         return handled
+
+    #: Frame cadence and the pause between breaths, in seconds. Slow on
+    #: purpose: this is a face, not a spinner. A spinner says "I am busy" at
+    #: whatever speed makes the machine look fast; a face at rest that takes
+    #: a breath every few seconds says "someone is here", which is the true
+    #: thing and the one worth saying.
+    _FRAME_SECONDS = 0.16
+    _REST_SECONDS = 3.0
+
+    def _animates(self) -> bool:
+        """Whether this terminal should be breathed at.
+
+        The same discipline that keeps `.card` out of chat: a rendering
+        surface renders only where a person is looking. A pipe, a CI log or
+        a ``TERM=dumb`` session would get carriage returns and frame litter
+        instead of a face, so it gets nothing.
+        """
+        if not self.interactive:
+            return False
+        try:
+            if not sys.stdout.isatty():
+                return False
+        except (AttributeError, ValueError):
+            return False
+        return os.environ.get("TERM", "") not in ("", "dumb")
+
+    def _wait_a_beat(self, thread: threading.Thread) -> None:
+        """Wait one poll interval — breathing, when someone is watching.
+
+        The interview's dead air is the model thinking: five seconds, or
+        forty, with a terminal showing nothing at all. ``emotes`` is not a
+        glyph table but an animation format — ``frames`` (base → expression
+        → base), ``sequences`` so one mood can breathe more than one way, a
+        ``pitch``, and frame rules so a mark never jitters — and every
+        surface that has rendered a face so far threw all of it away. This
+        is the place it was designed for.
+
+        Honest by construction: it breathes only while the runner thread is
+        genuinely working, so it is a liveness signal and not a spinner
+        pretending. It stops when the thread ends, and clears its own line
+        before anything else can print on it.
+        """
+        if not self._animates():
+            thread.join(self.poll_interval)
+            return
+        face = self._current_emote()
+        if face is None:
+            thread.join(self.poll_interval)
+            return
+        deadline = time.monotonic() + self.poll_interval
+        try:
+            while time.monotonic() < deadline and thread.is_alive():
+                self._breathe(face, deadline, thread)
+        finally:
+            self._clear_line()
+
+    def _breathe(self, face, deadline: float, thread: threading.Thread) -> None:
+        """One rest-then-cycle beat of *face*, bounded by *deadline*."""
+        sequences = face.sequences or ((face.resting_frame,),)
+        # Which breath it takes comes off the beat counter, not a random
+        # draw: two runs of the same length then animate identically, and a
+        # recorded terminal stays reproducible.
+        sequence = sequences[self._beats % len(sequences)]
+        self._beats += 1
+        self._paint(face.resting_frame)
+        self._sleep_until(
+            min(deadline, time.monotonic() + self._REST_SECONDS), thread,
+        )
+        for frame in sequence:
+            if time.monotonic() >= deadline or not thread.is_alive():
+                return
+            self._paint(frame)
+            self._sleep_until(
+                min(deadline, time.monotonic() + self._FRAME_SECONDS), thread,
+            )
+
+    def _sleep_until(self, until: float, thread: threading.Thread) -> None:
+        remaining = until - time.monotonic()
+        if remaining > 0:
+            thread.join(remaining)
+
+    def _paint(self, frame: str) -> None:
+        try:
+            sys.stdout.write("\r  " + frame + "  ")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+
+    def _clear_line(self) -> None:
+        try:
+            sys.stdout.write("\r" + " " * 24 + "\r")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+
+    def _current_emote(self):
+        """The resident's own face, or the telemetry face for a working run.
+
+        Never invents one: an unresolved handle falls through to the
+        running-state default rather than being rendered as a word, exactly
+        as :meth:`_show_face` refuses to.
+        """
+        from . import emotes
+
+        try:
+            handle = (
+                (self.outbox_dir / _MOOD_NAME)
+                .read_text(encoding="utf-8").splitlines()[0].strip()
+            )
+        except (OSError, IndexError):
+            handle = ""
+        face = emotes.lookup(handle) if handle else None
+        if face is not None:
+            return face
+        return emotes.lookup(emotes.TELEMETRY_DEFAULTS.get("running", ""))
 
     def _show_face(self) -> None:
         """Put the resident's own face above its message, when it changes.
@@ -689,7 +808,7 @@ class _Session:
                 if self._abort.is_set():
                     break
                 just_replied = self.result.replies > replies_before
-                thread.join(self.poll_interval)
+                self._wait_a_beat(thread)
                 if just_replied:
                     # Rec 3 (#1036): a reply that has just landed is always
                     # processed. Skip the deadline entirely on this tick —
