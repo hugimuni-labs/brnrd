@@ -450,6 +450,44 @@ class TestTerminalLoop:
             f"{init_wake.EMPTY_READS_BEFORE_DEGRADING}"
         )
 
+    def test_a_hand_pressing_enter_is_not_a_pipe(self, tmp_path):
+        """The refutation of #1107's first spelling, found by driving it.
+
+        Count alone fired on a *person*: pressing Enter to accept defaults
+        is the single most normal thing to do at the end of an interview,
+        three beats running, and the guard read them as a pipe and stopped
+        asking. Time is the honest discriminator — `yes ''` returns in
+        microseconds and a hand cannot.
+
+        The sleep here is above ``EMPTY_READ_HUMAN_FLOOR`` and nothing else
+        about this test differs from the flood test, which is the point:
+        same empties, same count, opposite verdict, decided by how fast
+        they came back.
+        """
+        repo = _repo(tmp_path)
+
+        def slow_empty():
+            time.sleep(init_wake.EMPTY_READ_HUMAN_FLOOR * 2)
+            return ""
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            for index in range(6):
+                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None,
+            reader=slow_empty,
+            poll_interval=0.01,
+        )
+
+        assert result.ok, result.error
+        assert not result.degraded_to_defaults, (
+            "a person accepting defaults was read as a pipe"
+        )
+
     def test_one_skipped_question_is_still_an_answer(self, tmp_path):
         """The counter resets, so skipping mid-conversation costs nothing.
 

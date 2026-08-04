@@ -79,6 +79,18 @@ ABANDONED_PROMPT_TIMEOUT_SECONDS = 6 * 3600
 #: reply, so skipping one question mid-conversation costs nothing.
 EMPTY_READS_BEFORE_DEGRADING = 3
 
+#: Seconds below which an empty read cannot have come from a hand. Only
+#: reads faster than this count toward the cap above.
+#:
+#: Found by driving the interview rather than reasoning about it: the
+#: count-only version fired on a *person* who pressed Enter three times to
+#: accept the defaults at the end of an interview, which is the single most
+#: normal thing to do there. A pipe answers in microseconds; the fastest
+#: plausible human double-tap is orders of magnitude slower, so the two
+#: populations do not overlap anywhere near this line and it needs no
+#: tuning.
+EMPTY_READ_HUMAN_FLOOR = 0.15
+
 _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
 _KEEPALIVE_NAME = ".keepalive"
@@ -579,6 +591,7 @@ class _Session:
             return
         self.refresh_portals("interview", awaiting_reply=True)
         self._awaiting_started = time.monotonic()
+        read_started = time.monotonic()
         reply = ""
         try:
             reply = self.reader()
@@ -595,10 +608,22 @@ class _Session:
         if not reply.strip():
             # #1107: an empty read is ambiguous — a person skipping a
             # question, or a pipe with nothing behind it. One of those
-            # repeats forever. The count is what tells them apart, and it
-            # resets on any real answer, so a user who skips a question in
-            # the middle of a conversation never trips it.
-            self._empty_reads += 1
+            # repeats forever.
+            #
+            # Count alone was the first spelling, and driving the interview
+            # end to end refuted it the first time out: pressing Enter to
+            # accept is exactly what a person does at the *end* of an
+            # interview, three beats running, and the guard read them as a
+            # pipe and stopped asking. The honest discriminator is **time**,
+            # not count — `yes ''` returns in microseconds and a hand cannot.
+            # So an empty read only counts toward the cap when it came back
+            # faster than a keystroke, and any read a human plausibly made
+            # resets the tally along with a real answer.
+            instant = (time.monotonic() - read_started) < EMPTY_READ_HUMAN_FLOOR
+            if instant:
+                self._empty_reads += 1
+            else:
+                self._empty_reads = 0
             if self._empty_reads >= EMPTY_READS_BEFORE_DEGRADING:
                 self._degrade_to_defaults()
             return
