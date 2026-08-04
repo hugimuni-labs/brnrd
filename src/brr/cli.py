@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import textwrap
 from pathlib import Path
 
 from . import closekeyword
@@ -1393,7 +1394,31 @@ def cmd_emotes(args):
             rows = [e for e in rows if e.kind == "situational"] or rows
 
     if not rows:
-        print(f"[brnrd emotes] no face matches {query!r} — try a feeling, not a handle")
+        # #1117: a miss is a bridge, not a scold. The old line said "try a
+        # feeling, not a handle" to someone who had just typed `confused`,
+        # which *is* a feeling — it told them to do the thing they did, and
+        # the docs meanwhile promised a miss would name near faces.
+        #
+        # Two honest answers, in order of how likely they are to be the
+        # one wanted. A typo gets the face it was reaching for. A word that
+        # is simply not ours — `confused`, where the family is `puzzled` —
+        # gets the vocabulary, because there is no thesaurus here and a
+        # bridge built by string distance would either miss it or, tuned
+        # looser, confidently offer something unrelated.
+        did_you_mean = emo.nearest(query)
+        if did_you_mean:
+            names = " · ".join(e.name for e in did_you_mean)
+            print(f"[brnrd emotes] no face named {query!r}. Did you mean: {names}")
+        else:
+            print(f"[brnrd emotes] no face named {query!r}.")
+        vocabulary = emo.families()
+        if vocabulary:
+            print(
+                "[brnrd emotes] the palette is organised by these feelings — "
+                "any of them finds its faces:"
+            )
+            for line in textwrap.wrap(" · ".join(vocabulary), width=72):
+                print(f"    {line}")
         return 1
 
     for e in rows:
