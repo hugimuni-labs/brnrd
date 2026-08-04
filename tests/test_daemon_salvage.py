@@ -124,6 +124,89 @@ def test_disabled_via_config_is_noop(tmp_path):
     assert "new.py" in porcelain
 
 
+def test_dirty_on_operator_branch_diverts_to_salvage_branch(tmp_path):
+    """The 2026-08-04 incident: a host-env run dies on the operator's branch.
+
+    The floor commit must not land on the branch the operator was standing
+    on — it diverts to ``brr/salvage-<run-id>``, the operator's branch and
+    working tree come back exactly as they own them, and the salvage branch
+    is armed for publish.
+    """
+    repo, seed = _seed_repo(tmp_path)
+    operator_branch = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+    (repo / "half.py").write_text("print('mid-edit')\n", encoding="utf-8")
+    task, runs_dir = _run(tmp_path)
+    task.meta["host_context_branch"] = operator_branch
+
+    daemon._capture_worktree(task, _Ctx(repo), _Plan(seed), {}, runs_dir)
+
+    # Operator's branch: back where they left it, tip untouched, tree clean.
+    assert subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip() == operator_branch
+    assert subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"], cwd=repo, capture_output=True,
+        text=True,
+    ).stdout.strip() == "seed"
+    assert not (repo / "half.py").exists()
+    # The work lives on the salvage branch, armed for publish.
+    salvage_branch = f"brr/salvage-{task.id}"
+    salvage_tip = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s", salvage_branch],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+    assert "salvage" in salvage_tip and task.id in salvage_tip
+    shown = subprocess.run(
+        ["git", "show", f"{salvage_branch}:half.py"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout
+    assert "mid-edit" in shown
+    assert task.meta["publish_branch"] == salvage_branch
+    assert task.meta["branch_name"] == salvage_branch
+
+
+def test_clean_tree_on_operator_branch_stays_silent(tmp_path):
+    """On the operator's branch with nothing in flight, salvage does nothing."""
+    repo, seed = _seed_repo(tmp_path)
+    operator_branch = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+    task, runs_dir = _run(tmp_path)
+    task.meta["host_context_branch"] = operator_branch
+
+    daemon._capture_worktree(task, _Ctx(repo), _Plan(seed), {}, runs_dir)
+
+    assert "publish_branch" not in task.meta
+    branches = subprocess.run(
+        ["git", "branch", "--list", "brr/salvage-*"],
+        cwd=repo, capture_output=True, text=True,
+    ).stdout.strip()
+    assert branches == ""
+
+
+def test_dirty_on_own_branch_commits_in_place_despite_host_context(tmp_path):
+    """A run that moved off the operator's branch salvages where it stands."""
+    repo, seed = _seed_repo(tmp_path)
+    task, runs_dir = _run(tmp_path)
+    task.meta["host_context_branch"] = "main"
+    _branch(repo, "brr/work")
+    (repo / "new.py").write_text("x\n", encoding="utf-8")
+
+    daemon._capture_worktree(task, _Ctx(repo), _Plan(seed), {}, runs_dir)
+
+    assert task.meta["publish_branch"] == "brr/work"
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"], cwd=repo, capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert "salvage" in log
+
+
 def test_detached_head_is_skipped(tmp_path):
     repo, seed = _seed_repo(tmp_path)
     subprocess.run(["git", "checkout", "--detach"], cwd=repo, check=True,
