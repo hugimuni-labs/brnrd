@@ -16,7 +16,7 @@ Resolution order:
 1. Structured event branch field (``branch_target``, ``target_branch``,
    ``base_branch``, or the legacy ``branch``). When the event names a
    target, the plan seeds from the **remote** tracking ref
-   (``<remote>/<target>``) if present, so the run sprouts from the
+   (``<remote>/<target>``) if present, so the worker sprouts from the
    forge-visible state even when the daemon's local copy of that branch
    diverged and the pre-run ff was refused.
 2. Fallback policy: seed from the repo default branch (falling back to
@@ -51,7 +51,7 @@ _STRUCTURED_BRANCH_KEYS = STRUCTURED_BRANCH_KEYS
 
 @dataclass(frozen=True)
 class PublishPlan:
-    """Pre-run publish plan resolved without asking the run model."""
+    """Pre-run publish plan resolved without asking the worker model."""
 
     seed_ref: str
     target_branch: str | None
@@ -83,7 +83,7 @@ def resolve_publish_plan(
 
     Deliberately does not look at conversation history, parse free-text
     instructions, or run an LLM. Anything beyond a structured event
-    field belongs to the run agent.
+    field belongs to the worker agent.
     """
     host_branch = gitops.current_branch(repo_root)
     host_context = host_branch if host_branch != "HEAD" else None
@@ -123,9 +123,9 @@ def _plan_for_event_target(
 
     The seed prefers ``<remote>/<target>`` when that tracking ref
     exists: the daemon's pre-run sync is ff-only and refuses on
-    diverged history, so without this preference the run would seed
+    diverged history, so without this preference the worker would seed
     from a stale local branch and produce a divergent, unpushable
-    history. Anchoring to the remote ref guarantees the run sprouts
+    history. Anchoring to the remote ref guarantees the worker sprouts
     from the forge-visible state regardless of how stale the host's
     local branch is.
 

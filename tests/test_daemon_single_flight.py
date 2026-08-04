@@ -1,9 +1,9 @@
 """Tests for the single-flight daemon loop.
 
 The local daemon is a thin reflex loop: it runs exactly one *thought* at
-a time. When idle and work is pending it spawns one run; events that
+a time. When idle and work is pending it spawns one worker; events that
 arrive mid-thought wait their turn. (This reshapes the former parallel
-run pool — see ``kb/design-agent-dominion.md`` §4 and
+worker pool — see ``kb/design-agent-dominion.md`` §4 and
 ``kb/subject-daemon.md``.) The cases here exercise the integration: that
 ``daemon.start()`` never runs two thoughts at once, that the legacy
 ``max_workers`` knob no longer buys parallelism, and that a crashing
@@ -52,7 +52,7 @@ def _baseline_patches(monkeypatch):
 def _run_two_events(tmp_path, monkeypatch, cfg):
     """Drive ``daemon.start()`` over two pending events.
 
-    Returns ``(timeline, peak_concurrency)``. The run mock records
+    Returns ``(timeline, peak_concurrency)``. The worker mock records
     when each thought enters and exits and tracks how many run at once,
     so the caller can assert the single-flight invariant directly.
     """
@@ -67,7 +67,7 @@ def _run_two_events(tmp_path, monkeypatch, cfg):
     lock = threading.Lock()
     queue = [a, b]
 
-    def execute_run(event, *_a, **_k):
+    def run_worker(event, *_a, **_k):
         eid = event["id"]
         with lock:
             active["n"] += 1
@@ -80,7 +80,7 @@ def _run_two_events(tmp_path, monkeypatch, cfg):
             queue[:] = [e for e in queue if e["id"] != eid]
         return Run(id=f"task-{eid}", event_id=eid, body="x", status="done")
 
-    monkeypatch.setattr(daemon, "_execute_run", execute_run)
+    monkeypatch.setattr(daemon, "_run_worker", run_worker)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _e, _s: None)
 
     idle_scans = {"n": 0}
@@ -138,7 +138,7 @@ def test_thought_crash_does_not_kill_daemon(tmp_path, monkeypatch):
     queue = [bad, good]
     lock = threading.Lock()
 
-    def execute_run(event, *_a, **_k):
+    def run_worker(event, *_a, **_k):
         eid = event["id"]
         with lock:
             queue[:] = [e for e in queue if e["id"] != eid]
@@ -147,7 +147,7 @@ def test_thought_crash_does_not_kill_daemon(tmp_path, monkeypatch):
         completed.append(eid)
         return Run(id=f"task-{eid}", event_id=eid, body="x", status="done")
 
-    monkeypatch.setattr(daemon, "_execute_run", execute_run)
+    monkeypatch.setattr(daemon, "_run_worker", run_worker)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _e, _s: None)
 
     idle_scans = {"n": 0}

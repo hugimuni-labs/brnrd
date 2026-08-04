@@ -23,7 +23,7 @@ account: ``primary`` and ``secondary`` both ``null``, the entire fact in a
 sibling ``credits`` block (``{"has_credits": false, "unlimited": false,
 "balance": "0"}``). The window reader found nothing to summarize, so the
 ``quota`` slot came back **absent** — and absent renders everywhere as "no
-reading yet", never as "this Shell cannot run". Two dispatched runs died on
+reading yet", never as "this Shell cannot run". Two dispatched workers died on
 their first token while the wake's Runner catalog still offered seven Codex
 profiles as selectable. Same class as the slot-identity bug above, one level
 up: that one assumed which slot a window arrives in, this one assumed the
@@ -50,7 +50,7 @@ proved one — ``runner.py`` captures it from ``codex exec --json``'s
 :func:`_latest_rollout_fallback`'s newest-mtime guess, explicitly named as a
 compatibility path rather than correlation — the assumption that "newest is
 the active run" only holds when exactly one Codex Shell is alive at a time,
-which is not guaranteed the moment a run spawn or a sibling wake runs a
+which is not guaranteed the moment a worker spawn or a sibling wake runs a
 second one concurrently (issue #195).
 
 Returns the shared *levels* snapshot shape
@@ -139,7 +139,7 @@ def _credits_verdict(credits: Any) -> dict[str, Any] | None:
         {"has_credits": false, "unlimited": false, "balance": "0"}
 
     Read live 2026-07-24 on this account, at the moment two dispatched
-    runs died on their first token. The window reader saw two ``null``s,
+    workers died on their first token. The window reader saw two ``null``s,
     produced no summary, and the ``quota`` slot came back **absent** — which
     every downstream surface renders as "no reading yet", never as "this
     Shell cannot run". Seven Codex profiles stayed listed as selectable
@@ -370,7 +370,7 @@ def _latest_rollout_fallback(root: Path) -> Path | None:
     newest-mtime guess was the *only* way brr picked a rollout, on the theory
     that brr is single-flight per dominion so "newest" is "the active run"
     (the same heuristic ``ccusage`` uses). That theory breaks the moment two
-    Codex Shells are alive at once — a run spawn, a sibling wake, a stray
+    Codex Shells are alive at once — a worker spawn, a sibling wake, a stray
     interactive session — since this function has no way to tell whose
     rollout it just picked. :func:`load_levels` now prefers exact
     ``thread_id`` correlation (:func:`_rollout_for_thread`) whenever the

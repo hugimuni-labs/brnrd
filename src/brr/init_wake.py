@@ -8,7 +8,7 @@ one run — drain the outbox to the TTY, feed typed replies back as events,
 and take the terminal back when the wake asks for a secret.
 
 Why not boot a daemon: the wake needs prompt assembly plus portals, not the
-run lifecycle. ``daemon._execute_run`` is ~1400 lines of event weaving,
+run lifecycle. ``daemon._run_worker`` is ~1400 lines of event weaving,
 branch planning, retry, presence, ledger, and delivery threads — a second
 lifecycle to maintain for one invocation. **Delivery pre-gate is the
 terminal**, and that is the only thing init has to implement itself.
@@ -319,7 +319,7 @@ class _Session:
     def _pending_for_wake(self) -> list[dict[str, Any]]:
         """Every pending event that is not the wake's own contract.
 
-        Init has exactly one visibility rule; the daemon's run/respawn/
+        Init has exactly one visibility rule; the daemon's worker/respawn/
         dispatch-edge carveouts describe a lifecycle init does not have.
         """
         return [
