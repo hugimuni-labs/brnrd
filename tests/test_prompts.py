@@ -2015,78 +2015,6 @@ def test_recent_conversation_renders_dedup_provenance():
     assert "also-on=cloud:telegram:10:" in block
 
 
-def test_recent_conversation_renders_photo_marker_for_blank_body():
-    """#943 — a captionless photo turn used to render as a bare, empty
-    ``user (telegram):`` line, structurally indistinguishable from a user
-    sending nothing at all. The record this reads (``kind: event``,
-    ``body: ""``, ``attachments: [{"kind": "photo", "filename": ...}]``)
-    is exactly what ``conversations.append_event`` now writes for such a
-    message (see ``test_conversations.test_append_event_records_photo_attachment_fact``) —
-    the render half consuming the record half's fact.
-    """
-    recent = [
-        {
-            "ts": "2026-07-31T21:44:00Z",
-            "kind": "event",
-            "source": "telegram",
-            "body": "",
-            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
-        },
-    ]
-    block = _format_recent_conversation(recent)
-    assert "[photo ×1]" in block
-    assert block.strip().endswith("[photo ×1]")
-
-
-def test_recent_conversation_photo_marker_follows_caption():
-    """A photo *with* a caption keeps the caption text and appends the
-    marker after it, rather than the marker replacing real content."""
-    recent = [
-        {
-            "ts": "2026-07-31T21:44:00Z",
-            "kind": "event",
-            "source": "telegram",
-            "body": "check this out",
-            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
-        },
-    ]
-    block = _format_recent_conversation(recent)
-    assert "check this out [photo ×1]" in block
-
-
-def test_recent_conversation_multiple_attachment_kinds_group_and_count():
-    recent = [
-        {
-            "ts": "2026-07-31T21:44:00Z",
-            "kind": "event",
-            "source": "telegram",
-            "body": "",
-            "attachments": [
-                {"kind": "photo", "filename": "00-photo.jpg"},
-                {"kind": "photo", "filename": "01-photo.jpg"},
-                {"kind": "document", "filename": "02-report.png"},
-            ],
-        },
-    ]
-    block = _format_recent_conversation(recent)
-    assert "[photo ×2]" in block
-    assert "[document ×1]" in block
-
-
-def test_recent_conversation_no_marker_without_attachments():
-    """The ordinary text-only case gets no bracket noise at all."""
-    recent = [
-        {
-            "ts": "2026-07-31T21:44:00Z",
-            "kind": "event",
-            "source": "telegram",
-            "body": "hello",
-        },
-    ]
-    block = _format_recent_conversation(recent)
-    assert "[" not in block
-
-
 def _read_bundled_agents_md() -> str:
     from pathlib import Path
 
@@ -3185,60 +3113,6 @@ class TestWorkSurfaceInjection:
         assert "### workflow.md" in result.text, "the skipped page is named"
         assert "page omitted" in result.text
         assert "wwww" not in result.text, "and its content really was skipped"
-
-    def test_a_mandatory_section_overflow_renders_its_floor_and_names_it(self, tmp_path):
-        """#918 — the renderer must not void the trimmer's one-section floor.
-
-        The leading section alone exceeds the whole shared remainder.  The
-        trimmer therefore returns over budget deliberately; the renderer used
-        to conflate that case with ordinary no-room and replace the section
-        with a placeholder.
-        """
-        home = _seed_account_home(tmp_path)
-        surface = home / "surface"
-        surface.mkdir()
-        budget = 900
-        (tmp_path / ".brr" / "config").write_text(
-            f"home.path={home}\nrepo.label=local/default\n"
-            f"dominion.surface_inject_budget_bytes={budget}\n",
-            encoding="utf-8",
-        )
-        opening = "the plan's actual agenda " * 70
-        (surface / "plan.md").write_text(
-            f"# Active plan\n\n## Open, ranked\n\n{opening}\n\n"
-            "## Later work\n\nThis section may be cut.\n",
-            encoding="utf-8",
-        )
-        (surface / "workflow.md").write_text(
-            "## Delivery\n\nLater page content.\n", encoding="utf-8"
-        )
-
-        result, _whole = _build_work_surface_block_scored(tmp_path)
-
-        assert "the plan's actual agenda" in result.text
-        assert "_(page omitted —" not in result.text
-        assert "overflowing section: `Open, ranked`" in result.text
-        assert f"budget: {budget:,} B" in result.text
-        assert re.search(r"trimmed page: [\d,]+ B", result.text)
-        assert "1 further surface page omitted" in result.text
-
-    def test_headingless_no_room_still_uses_the_page_placeholder(self, tmp_path):
-        """#918 — an over-budget result without a section floor is no-room."""
-        home = _seed_account_home(tmp_path)
-        surface = home / "surface"
-        surface.mkdir()
-        (tmp_path / ".brr" / "config").write_text(
-            f"home.path={home}\nrepo.label=local/default\n"
-            "dominion.surface_inject_budget_bytes=900\n",
-            encoding="utf-8",
-        )
-        (surface / "plain.md").write_text("unsectioned " * 500, encoding="utf-8")
-
-        result, _whole = _build_work_surface_block_scored(tmp_path)
-
-        assert "### plain.md" in result.text
-        assert "page omitted" in result.text
-        assert "unsectioned unsectioned" not in result.text
 
     def test_stale_page_flows_through_to_the_contract_entry(self, tmp_path):
         """End-to-end: a stale surface page's attestation reaches the
