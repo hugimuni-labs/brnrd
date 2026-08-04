@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -78,6 +79,18 @@ ABANDONED_PROMPT_TIMEOUT_SECONDS = 6 * 3600
 #: must stay one. Three in a row is nobody. The counter resets on any real
 #: reply, so skipping one question mid-conversation costs nothing.
 EMPTY_READS_BEFORE_DEGRADING = 3
+
+#: Seconds below which an empty read cannot have come from a hand. Only
+#: reads faster than this count toward the cap above.
+#:
+#: Found by driving the interview rather than reasoning about it: the
+#: count-only version fired on a *person* who pressed Enter three times to
+#: accept the defaults at the end of an interview, which is the single most
+#: normal thing to do there. A pipe answers in microseconds; the fastest
+#: plausible human double-tap is orders of magnitude slower, so the two
+#: populations do not overlap anywhere near this line and it needs no
+#: tuning.
+EMPTY_READ_HUMAN_FLOOR = 0.15
 
 _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
@@ -369,6 +382,12 @@ class _Session:
         self._awaiting_started: float | None = None
         #: #1107: consecutive empty reads, reset by any real reply.
         self._empty_reads = 0
+        #: The last emote face shown to the terminal, so a face renders on
+        #: *change* and never on repeat.
+        self._last_face: str | None = None
+        #: Beat counter — the only source of variety in which breath the
+        #: waiting face takes, so a recorded terminal stays reproducible.
+        self._beats = 0
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -499,9 +518,175 @@ class _Session:
                 self._handle_control(verb)
                 continue
             self.result.messages += 1
+            self._clear_line()
+            self._show_face()
             self.writer(body.strip())
             self._offer_reply()
         return handled
+
+    #: Frame cadence and the pause between breaths, in seconds. Slow on
+    #: purpose: this is a face, not a spinner. A spinner says "I am busy" at
+    #: whatever speed makes the machine look fast; a face at rest that takes
+    #: a breath every few seconds says "someone is here", which is the true
+    #: thing and the one worth saying.
+    _FRAME_SECONDS = 0.16
+    _REST_SECONDS = 3.0
+
+    def _animates(self) -> bool:
+        """Whether this terminal should be breathed at.
+
+        The same discipline that keeps `.card` out of chat: a rendering
+        surface renders only where a person is looking. A pipe, a CI log or
+        a ``TERM=dumb`` session would get carriage returns and frame litter
+        instead of a face, so it gets nothing.
+        """
+        if not self.interactive:
+            return False
+        try:
+            if not sys.stdout.isatty():
+                return False
+        except (AttributeError, ValueError):
+            return False
+        return os.environ.get("TERM", "") not in ("", "dumb")
+
+    def _wait_a_beat(self, thread: threading.Thread) -> None:
+        """Wait one poll interval — breathing, when someone is watching.
+
+        The interview's dead air is the model thinking: five seconds, or
+        forty, with a terminal showing nothing at all. ``emotes`` is not a
+        glyph table but an animation format — ``frames`` (base → expression
+        → base), ``sequences`` so one mood can breathe more than one way, a
+        ``pitch``, and frame rules so a mark never jitters — and every
+        surface that has rendered a face so far threw all of it away. This
+        is the place it was designed for.
+
+        **The cycle lives on the session, not on the call.** Driving it
+        found the obvious-looking version — build a breath, play it,
+        clear — never animated at all: one poll interval is a second, the
+        rest between breaths is three, so the rest consumed every beat, the
+        expression frames never played, and the clear at the end of each
+        call made the resting face flicker once a second. The animation is
+        longer than the tick that renders it, so its position has to
+        outlive the tick.
+
+        Honest by construction: it breathes only while the runner thread is
+        genuinely working, so it is a liveness signal and not a spinner
+        pretending. The line is cleared when the wait ends because the
+        thread died, and by :meth:`_drain_once` before anything prints.
+        """
+        if not self._animates():
+            thread.join(self.poll_interval)
+            return
+        face = self._current_emote()
+        if face is None:
+            thread.join(self.poll_interval)
+            return
+        cycle = self._breath_cycle(face)
+        deadline = time.monotonic() + self.poll_interval
+        while time.monotonic() < deadline and thread.is_alive():
+            self._paint(cycle[self._beats % len(cycle)])
+            self._beats += 1
+            remaining = min(deadline, time.monotonic() + self._FRAME_SECONDS)
+            wait = remaining - time.monotonic()
+            if wait > 0:
+                thread.join(wait)
+        if not thread.is_alive():
+            self._clear_line()
+
+    def _breath_cycle(self, face) -> tuple[str, ...]:
+        """Rest, held, then one breath — as a flat list of frames.
+
+        Flattened rather than played as a nested loop because the caller
+        renders *one frame per tick* and must be resumable at any index:
+        the whole point is that the cycle survives the poll interval that
+        interrupts it.
+
+        Which breath follows the rest comes off the beat counter rather
+        than a random draw, so a recorded terminal stays reproducible and
+        two runs of the same length animate the same way.
+        """
+        sequences = face.sequences or ((face.resting_frame,),)
+        sequence = sequences[
+            (self._beats // max(len(sequences), 1)) % len(sequences)
+        ]
+        rest_ticks = max(1, int(self._REST_SECONDS / self._FRAME_SECONDS))
+        return (face.resting_frame,) * rest_ticks + tuple(sequence)
+
+    def _paint(self, frame: str) -> None:
+        """One frame, in place. Carriage return only — no escape codes, so
+        a terminal that lies about its capabilities still degrades to
+        legible text rather than to mojibake."""
+        try:
+            sys.stdout.write("\r  " + frame + "  ")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+
+    def _clear_line(self) -> None:
+        """Take the line back before anything else claims it."""
+        try:
+            sys.stdout.write("\r" + " " * 24 + "\r")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+
+    def _current_emote(self):
+        """The resident's own face, or the telemetry face for a working run.
+
+        Never invents one: an unresolved handle falls through to the
+        running-state default rather than being rendered as a word, exactly
+        as :meth:`_show_face` refuses to.
+        """
+        from . import emotes
+
+        try:
+            handle = (
+                (self.outbox_dir / _MOOD_NAME)
+                .read_text(encoding="utf-8").splitlines()[0].strip()
+            )
+        except (OSError, IndexError):
+            handle = ""
+        face = emotes.lookup(handle) if handle else None
+        if face is not None:
+            return face
+        return emotes.lookup(emotes.TELEMETRY_DEFAULTS.get("running", ""))
+
+    def _show_face(self) -> None:
+        """Put the resident's own face above its message, when it changes.
+
+        The wake already writes ``.mood`` — an emote handle plus private
+        narration — and that face rides the statusline, the run node and the
+        dashboard for every other kind of run. In the one conversation that
+        is a person's *first* contact with the resident, it was the only
+        surface that never showed it: brnrd swallowed the file as a control
+        dotfile and printed nothing.
+
+        Rendered on change only, which is the whole design. A face that
+        repeats above every message is decoration and stops being read; a
+        face that appears when it *moves* is the resident's expression
+        changing while it works, which is a true thing about what is
+        happening and costs one line to say. Only the glyph goes out — the
+        narration lines under it stay private, exactly as they do everywhere
+        else.
+        """
+        raw = (self.outbox_dir / _MOOD_NAME)
+        try:
+            handle = raw.read_text(encoding="utf-8").splitlines()[0].strip()
+        except (OSError, IndexError):
+            return
+        if not handle:
+            return
+        from . import emotes
+
+        face = emotes.glyph(handle)
+        # An unresolved handle prints nothing rather than the bare word: the
+        # honesty bar for moods is "never claim a face you do not have", and
+        # a stranger reading `satisfied` where a face belongs would learn a
+        # vocabulary that does not exist.
+        if not face or face == self._last_face:
+            return
+        self._last_face = face
+        self.writer(f"\n{face}")
 
     def _handle_control(self, verb: str) -> None:
         """Take the terminal back, run the ceremony, tell the wake what happened."""
@@ -538,6 +723,7 @@ class _Session:
             return
         self.refresh_portals("interview", awaiting_reply=True)
         self._awaiting_started = time.monotonic()
+        read_started = time.monotonic()
         reply = ""
         try:
             reply = self.reader()
@@ -554,10 +740,22 @@ class _Session:
         if not reply.strip():
             # #1107: an empty read is ambiguous — a person skipping a
             # question, or a pipe with nothing behind it. One of those
-            # repeats forever. The count is what tells them apart, and it
-            # resets on any real answer, so a user who skips a question in
-            # the middle of a conversation never trips it.
-            self._empty_reads += 1
+            # repeats forever.
+            #
+            # Count alone was the first spelling, and driving the interview
+            # end to end refuted it the first time out: pressing Enter to
+            # accept is exactly what a person does at the *end* of an
+            # interview, three beats running, and the guard read them as a
+            # pipe and stopped asking. The honest discriminator is **time**,
+            # not count — `yes ''` returns in microseconds and a hand cannot.
+            # So an empty read only counts toward the cap when it came back
+            # faster than a keystroke, and any read a human plausibly made
+            # resets the tally along with a real answer.
+            instant = (time.monotonic() - read_started) < EMPTY_READ_HUMAN_FLOOR
+            if instant:
+                self._empty_reads += 1
+            else:
+                self._empty_reads = 0
             if self._empty_reads >= EMPTY_READS_BEFORE_DEGRADING:
                 self._degrade_to_defaults()
             return
@@ -623,7 +821,7 @@ class _Session:
                 if self._abort.is_set():
                     break
                 just_replied = self.result.replies > replies_before
-                thread.join(self.poll_interval)
+                self._wait_a_beat(thread)
                 if just_replied:
                     # Rec 3 (#1036): a reply that has just landed is always
                     # processed. Skip the deadline entirely on this tick —
