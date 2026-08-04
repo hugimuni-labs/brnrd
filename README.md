@@ -46,21 +46,19 @@ reach when you are away from the terminal.
 ## ✦ The loop
 
 ```text
-you · Telegram / Slack / GitHub / dashboard
-                         │
-                         ▼
-                  a small gate
-                         │
-                         ▼
-        brnrd daemon · your machine · your repo
-                         │
-                 ┌───────┴───────┐
-                 ▼               ▼
-            Claude Code        Codex
-                 │               │
-                 └───────┬───────┘
-                         ▼
-             progress · replies · git
+      you, from anywhere
+Telegram · Slack · GitHub · web
+               │
+               ▼
+  brnrd daemon · your machine
+               │
+          ┌────┴────┐
+          ▼         ▼
+     Claude Code  Codex
+          │         │
+          └────┬────┘
+               ▼
+   progress · replies · git
 ```
 
 The daemon does the boring, load-bearing work around the model: it assembles the
