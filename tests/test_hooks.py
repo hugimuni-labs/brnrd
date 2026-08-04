@@ -4111,3 +4111,42 @@ def test_derive_boundaries_summary_final_stop_blocked_is_the_case_that_matters(t
     assert summary["guard_fire_count"] == 1
     assert summary["final_stop_block"] is True
     assert "finish this" in summary["final_stop_block_reason"]
+
+
+# ── #1113: a row that asks for a reply nobody receives ──────────────────────
+
+
+def test_a_daemon_minted_event_says_a_reply_reaches_nobody():
+    """The instruction above the rows says "address each with an `event:`
+    reply". For a `spawn_completed` or a `schedule` firing that reply is
+    accepted, clears the event, and is delivered **nowhere** — the run
+    learns it from a "NOT delivered" notice, after the decision.
+
+    Observed live in the run that wrote this: a `⚙ spawn_completed` row
+    sitting under the identical generic instruction as a correspondent's
+    message.
+    """
+    minted = {"id": "evt-1", "source": "spawn_completed", "created": None}
+    letter = {"id": "evt-2", "source": "telegram", "created": None}
+
+    assert "no correspondent" in hooks._event_header(minted, size=10)
+    assert "`note:`" in hooks._event_header(minted, size=10)
+    assert "no correspondent" not in hooks._event_header(letter, size=10)
+
+
+def test_the_gateless_set_agrees_with_the_daemons():
+    """The two predicates are derived from different places and must agree.
+
+    `hooks` asks `protocol.INTERNAL_SOURCES` ("brnrd mints this"); the
+    daemon asks `_gate_owns_source` ("some gate delivers this"). They are
+    the same class read from opposite ends, and #1118 is what happens when
+    one list drifts from the thing it claims to describe — so this asserts
+    they never do, over the union of both vocabularies.
+    """
+    from brr import daemon, protocol
+    from brr.gates import BUILTIN_GATES
+
+    for source in set(protocol.INTERNAL_SOURCES) | set(BUILTIN_GATES):
+        assert hooks._reaches_nobody(source) == (
+            not daemon._gate_owns_source(source)
+        ), source
