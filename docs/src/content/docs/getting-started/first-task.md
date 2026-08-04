@@ -3,7 +3,25 @@ title: First task
 description: Send a task, watch the live card, steer the run, and receive a durable receipt.
 ---
 
-With the daemon running, send a message through the gate you connected:
+## Right after `brnrd init`
+
+No gate, no daemon, no account needed — this already works, from the
+terminal:
+
+```bash
+brnrd run "summarize the test layout; do not change files"
+```
+
+It runs synchronously, right here: the same repository contract and runner
+`brnrd init` just set up, driving the same coding-agent CLI, one task at a
+time.
+
+## With a connected channel
+
+[Connecting](../connect/) a channel buys you a persistent resident: send a
+message from your phone or a chat gate instead of a terminal, and get a
+progress card, mid-run steering, and a durable receipt back in the same
+thread.
 
 ```text
 review PR #84 for the auth regression; show me the risky bit before changing it
@@ -22,12 +40,6 @@ Check the daemon if nothing appears:
 ```bash
 brnrd daemon status
 brnrd daemon logs --no-follow
-```
-
-You can also exercise the same runner locally without a remote gate:
-
-```bash
-brnrd run "summarize the test layout; do not change files"
 ```
 
 The first recorded end-to-end demo is tracked in

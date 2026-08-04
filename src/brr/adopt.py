@@ -110,6 +110,33 @@ def _confirm(label: str, default: bool = True, timeout: int = 10) -> bool:
 # ── Init ────────────────────────────────────────────────────────────
 
 
+def _state_identity() -> str | None:
+    """Print the GitHub identity already on this machine, and return it.
+
+    "Which repo" (``git remote``) has always been inferred silently; "who
+    you are" was resolvable the same way — ``home_link.detect_identity()``
+    already wraps the ``gh auth token`` / ``gh api user`` resolution the
+    GitHub gate and ``brnrd home link`` use — but nothing on the init path
+    called it, so it was never stated. No account, no token entry, no new
+    shell-out.
+
+    Degradation, not a branch (mirrors ``wake_path_available``'s reason
+    line): ``gh`` missing or signed out prints why and continues, exactly
+    like the no-TTY fallback. Init must never fail, or even pause, on this.
+    """
+    from . import home_link
+
+    identity = home_link.detect_identity()
+    if identity:
+        print(f"[brnrd] you: @{identity} (from `gh`)")
+    else:
+        print(
+            "[brnrd] you: not detected — `gh` isn't installed or isn't "
+            "signed in; continuing without it"
+        )
+    return identity
+
+
 def bootstrap(url: str | None = None) -> tuple[Path, list[str]]:
     """Phase 1 — the mechanical substrate both init paths share (spec §2).
 
@@ -170,6 +197,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     was skipped.
     """
     repo_root, available = bootstrap(url)
+    identity = _state_identity()
 
     from . import init_wake as init_wake_mod
 
@@ -178,13 +206,19 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
         repo_root, interactive=tty,
     )
     if wake_ok:
-        _init_via_wake(repo_root, available, init_wake_mod)
+        _init_via_wake(repo_root, available, init_wake_mod, identity=identity)
         return
     print(f"[brnrd] {why_not}")
     _init_auto(repo_root, available, interactive=interactive and tty)
 
 
-def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None:
+def _init_via_wake(
+    repo_root: Path,
+    available: list[str],
+    init_wake_mod,
+    *,
+    identity: str | None = None,
+) -> None:
     """Phase 2 — hand the session to the agent, then verify mechanically.
 
     brnrd keeps the two post-passes it already owns (bridges, verify): the
@@ -205,6 +239,7 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
         runner_name=runner_name,
         detected_runners=available,
         detected_shells=_detect_shells(),
+        github_identity=identity,
     )
     result = init_wake_mod.run_init_wake(
         repo_root, runner_name, cfg=cfg, facts=facts,
@@ -242,7 +277,46 @@ def _init_via_wake(repo_root: Path, available: list[str], init_wake_mod) -> None
     _verify(repo_root, knowledge_shape=knowledge_shape, shells=shells)
     if result.gates_configured:
         print(f"[brnrd] gates configured: {', '.join(result.gates_configured)}")
-    print(f"[brnrd] next: `{brnrd_cmd()} up`, then send it work.")
+        print(f"[brnrd] `{brnrd_cmd()} up` makes them live.")
+    _print_channel_menu()
+
+
+def _print_channel_menu() -> None:
+    """Replaces "next: `brnrd up`, then send it work." (#1084 family).
+
+    "Send it work" named no channel. This states one that already works,
+    concretely, then lists upgrades — one line each, framed by what they
+    *buy*, never what they cost (design-onboarding-ladder.md: "the extra
+    rungs are not extra setup for the same thing — they are the thing").
+    Channels compose; only the repo identity is either/or, so nothing here
+    reads as a prerequisite, and every command named is one that exists and
+    does what its line says (the #1084 discipline this whole page is
+    named after).
+    """
+    cmd = brnrd_cmd()
+    print()
+    print(
+        f'[brnrd] this already works — `{cmd} run "<task>"` runs it now, '
+        "right here, nothing else needed."
+    )
+    print("[brnrd] optional, any combination, any time:")
+    print(
+        f"  · a mailbox (`{cmd} account connect`) — reach it from your phone, "
+        "watch it from anywhere"
+    )
+    print(
+        "  · an identity that isn't you — install the brnrd GitHub App from "
+        "brnrd.dev for short-lived repo-scoped tokens instead of your PAT on"
+    )
+    print(
+        "    this laptop; commits and comments read as not-you; revocation "
+        "is one click on github.com"
+    )
+    print(
+        f"  · more doors (`{cmd} gate setup telegram`, `slack`, or `signal`, "
+        f"then `{cmd} daemon install` to keep listening) — additively, any"
+    )
+    print("    number, any time")
 
 
 def runner_mod_doctor(repo_root: Path, *, attempted: str, error: str) -> str:

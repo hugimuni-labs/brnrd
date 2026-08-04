@@ -2955,6 +2955,7 @@ def build_init_wake_facts(facts: dict[str, Any]) -> str:
         ("Shell families not on PATH", "missing_shells"),
         ("Configured gates", "configured_gates"),
         ("gh CLI", "gh_available"),
+        ("GitHub identity (via gh)", "github_identity"),
         ("git remotes", "git_remotes"),
         ("Existing AGENTS.md", "agents_md"),
         ("Knowledge shape (if already chosen)", "knowledge_shape"),
