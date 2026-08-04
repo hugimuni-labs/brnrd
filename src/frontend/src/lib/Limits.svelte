@@ -79,7 +79,7 @@
 			></div>
 		</div>
 		<div class="mt-1 text-right font-mono text-[11px] text-ink-quiet">
-			concurrent strand-stack children, `spawn.max_concurrent`
+			concurrent strands, `spawn.max_concurrent`
 		</div>
 	</div>
 </div>

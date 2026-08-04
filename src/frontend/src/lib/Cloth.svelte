@@ -16,7 +16,7 @@
 	import type { RunLedgerRow } from './runLedger';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
-	// done work as root-run trees, one curated line each, strand strands
+	// done work as root-run trees, one curated line each, strands
 	// folded beneath and expanded on demand; the selvage (the cloth's
 	// self-finished edge) runs across the top as one compact spend→produce
 	// row. The page owns the rows and the window — this component only

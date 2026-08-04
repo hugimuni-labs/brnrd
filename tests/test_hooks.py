@@ -3203,7 +3203,7 @@ def test_closeout_excludes_spawn_completed_from_obligation_count():
                     # outcome-never-determined event, which is exactly the
                     # case that must not read as "no address needed".
                     "spawn_status": "done",
-                    "summary": "concurrent spawn run-child done: status=done",
+                    "summary": "concurrent strand done: status=done",
                 },
             ],
         },

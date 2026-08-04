@@ -178,7 +178,7 @@ class PushResult:
 # pathspec — so a process that inherits them cannot address any repository
 # but the pinned one.
 #
-# #703 pins these into a run run's environment on purpose (see
+# #703 pins these into a strand's environment on purpose (see
 # `daemon._child_git_pin`), which makes the inheritance a hazard for brnrd's
 # own code: every git call in this module names the repository it means, and
 # under an inherited pin each one would silently report the pinned worktree

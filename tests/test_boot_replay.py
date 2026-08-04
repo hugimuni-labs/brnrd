@@ -567,7 +567,7 @@ class TestBootScore:
         assert "run-context-bundle" in keys
 
     def test_strand_prompt_skips_inject_blocks(self, empty_repo):
-        """A run wake omits the inject-stack blocks in its score."""
+        """A strand wake omits the inject-stack blocks in its score."""
         from brr.prompts import build_daemon_prompt_with_score
 
         _, score = build_daemon_prompt_with_score(

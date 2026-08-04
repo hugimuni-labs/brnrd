@@ -51,7 +51,7 @@ _STRUCTURED_BRANCH_KEYS = STRUCTURED_BRANCH_KEYS
 
 @dataclass(frozen=True)
 class PublishPlan:
-    """Pre-run publish plan resolved without asking the run model."""
+    """Pre-run publish plan resolved without asking the agent."""
 
     seed_ref: str
     target_branch: str | None
@@ -83,7 +83,7 @@ def resolve_publish_plan(
 
     Deliberately does not look at conversation history, parse free-text
     instructions, or run an LLM. Anything beyond a structured event
-    field belongs to the run agent.
+    field belongs to the agent.
     """
     host_branch = gitops.current_branch(repo_root)
     host_context = host_branch if host_branch != "HEAD" else None
