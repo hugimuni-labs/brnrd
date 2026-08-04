@@ -2337,8 +2337,23 @@ def _presence_label_for_event(event: dict) -> str:
     conversation key) is itself a handle. ``facets._sibling_handle`` is the
     second guard — a hard length cap at the facet boundary — for when a
     future writer forgets this one.
+
+    ``event.get("title")`` — a dispatcher's declared ``title:`` frontmatter
+    on a ``spawn:`` request, threaded through by ``_queue_spawn_request``
+    (#880 §1b) — is checked first. It is not the free-text ``task.body``
+    #585 guarded against: a frontmatter value is one line by construction
+    (``protocol._validate_meta`` rejects embedded newlines), and it is a
+    label the dispatcher deliberately chose to name this child, the same
+    curated-text contract ``summary`` already had and never got. Until the
+    child names itself (``.name``, read at the next heartbeat), the parent's
+    ``title:`` is the only thing that makes a supervised fleet's presence
+    rows distinguishable from the first heartbeat rather than only once each
+    child has introduced itself — ``facets._sibling_handle`` already prefers
+    a self-authored ``name`` over this ``label`` once one exists, so a
+    child's own claim about itself still wins the moment it's made.
     """
-    return " ".join(str(event.get("summary") or "").split())[:120]
+    raw = str(event.get("title") or event.get("summary") or "")
+    return " ".join(raw.split())[:120]
 
 
 def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
@@ -5649,20 +5664,27 @@ def _write_live_portal_state(
                 }
             )
         # Spawn ownership is only actionable when the resident can see pool
-        # headroom. Presence already tells us which siblings are sub-spawns;
-        # expose that count beside the coexisting-runs facet rather than
-        # making the prompt infer capacity from prose or a hidden config.
+        # headroom. #880 §1: that count comes from dispatch ownership — the
+        # accepted-spawn registry (`_spawn_pool_accepted_count`) — not from
+        # presence. A child `_queue_spawn_request` queued and `_loop`
+        # accepted onto the pool has no presence entry until it starts
+        # (measured: up to the full dispatch→start latency on a saturated
+        # pool, not merely while it's empty), so a presence-derived count
+        # read a queued-but-not-started child as zero — understating load in
+        # exactly the window a resident reads this field to decide whether
+        # it has headroom to dispatch more. Presence stays the source for
+        # *which* siblings are live (the `coexisting` snapshot above);
+        # only *how many the pool has accepted* moves off it.
         coexisting_facet = payload["resources"]["coexisting_runs"]
         spawn_limit = _max_concurrent_spawns(cfg or {})
-        if coexisting_snapshot is None:
+        try:
+            spawn_active = _spawn_pool_accepted_count()
+        except Exception:  # noqa: BLE001 - unknown, never a silent zero
             spawn_active = None
-            spawn_available = None
-        else:
-            spawn_active = sum(
-                1 for entry in coexisting_snapshot
-                if bool(entry.get("is_subspawn"))
-            )
-            spawn_available = max(0, spawn_limit - spawn_active)
+        spawn_available = (
+            max(0, spawn_limit - spawn_active)
+            if spawn_active is not None else None
+        )
         coexisting_facet["spawn_pool"] = {
             "max_concurrent": spawn_limit,
             "active": spawn_active,
@@ -6677,6 +6699,12 @@ def _queue_spawn_request(
     # the same way it already reads `publish_branch`.
     contract_branch = str(fm.get("branch") or "").strip()
     contract_report = str(fm.get("report") or "").strip()
+    # #880 §1b: a short, dispatcher-declared label for this child — read
+    # back as its presence ``label`` (``_presence_label_for_event``) so a
+    # parent supervising several siblings can tell their rows apart from
+    # the first heartbeat, rather than seeing N identical blank rows until
+    # each child gets around to writing its own ``.name``.
+    title = str(fm.get("title") or "").strip()
     new_body = body.strip()
     if not new_body:
         _record_outbox_notice(
@@ -6731,6 +6759,8 @@ def _queue_spawn_request(
         meta["spawn_contract_branch"] = contract_branch
     if contract_report:
         meta["spawn_contract_report"] = contract_report
+    if title:
+        meta["title"] = title
     if task.meta.get("repo_label"):
         meta["repo_label"] = task.meta["repo_label"]
     reason = str(fm.get("reason") or "").strip()
@@ -10886,6 +10916,52 @@ def _max_concurrent_spawns(cfg: dict) -> int:
     return max(1, value)
 
 
+# Accepted-but-not-yet-finalized worker-stack children (#880 §1). ``_loop``'s
+# local ``active_spawns`` list is the real source of truth for *which*
+# children are live, but it's a stack-local variable on the main loop
+# thread — unreachable from ``_write_live_portal_state``, which runs on each
+# thought's own worker thread. This registry mirrors just the *count*,
+# keyed by event id so accept/release are naturally idempotent:
+# ``_spawn_pool_accept`` is called the same tick ``_loop`` appends to
+# ``active_spawns`` (pool.submit's return), ``_spawn_pool_release`` in the
+# same reap block that already runs when a spawn's future completes —
+# wrapped in ``finally`` there so a crash while notifying the parent (or any
+# other exception mid-reap) can never leak a slot the pool believes is still
+# occupied. Presence is unaffected: it still answers "who" (the
+# ``coexisting_runs`` siblings list); this answers "how many the pool has
+# accepted and not yet finalized" — the window presence cannot see, because
+# a child that is queued and accepted but hasn't started yet has no
+# presence entry (up to the full dispatch→start latency on a saturated
+# pool, not merely while it's empty).
+_spawn_pool_lock = threading.Lock()
+_spawn_pool_accepted: set[str] = set()
+
+
+def _spawn_pool_accept(event_id: str) -> None:
+    """Record a spawn as accepted onto the pool. Idempotent."""
+    with _spawn_pool_lock:
+        _spawn_pool_accepted.add(event_id)
+
+
+def _spawn_pool_release(event_id: str) -> None:
+    """Release a spawn's accounted slot at reap. Idempotent."""
+    with _spawn_pool_lock:
+        _spawn_pool_accepted.discard(event_id)
+
+
+def _spawn_pool_accepted_count() -> int:
+    """Live count of accepted-and-not-yet-finalized worker-stack children.
+
+    In-process, main-loop-owned bookkeeping — not a cross-process or
+    filesystem read, so this never legitimately raises today. Callers still
+    wrap it in ``try/except`` (matching the presence-read shape it replaces
+    for capacity) so a future change to this function fails the same
+    honest way: unknown, never a silent zero.
+    """
+    with _spawn_pool_lock:
+        return len(_spawn_pool_accepted)
+
+
 def _post_delivery_attend_seconds(cfg: dict) -> float:
     """Configured daemon-owned dwell after a current-thread delivery.
 
@@ -11921,23 +11997,34 @@ def start(
                     if not future.done():
                         still_running.append(spawn)
                         continue
+                    spawn_eid = (
+                        str(spawn["event"].get("id") or "")
+                        if spawn["event"] is not None else ""
+                    )
                     try:
-                        spawn_task = future.result()
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[brnrd] spawned child crashed: {exc}")
+                        try:
+                            spawn_task = future.result()
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[brnrd] spawned child crashed: {exc}")
+                            if spawn["event"] is not None:
+                                _notify_spawn_parent_of_crash(
+                                    spawn["inbox_dir"], spawn["event"], exc,
+                                )
+                        else:
+                            _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
                         if spawn["event"] is not None:
-                            _notify_spawn_parent_of_crash(
-                                spawn["inbox_dir"], spawn["event"], exc,
-                            )
-                    else:
-                        _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
-                    if spawn["event"] is not None:
-                        # The child is over; its dispatch-edge control (and
-                        # with it, stoppability) retires with it, as does any
-                        # unconsumed parent→child message traffic.
-                        spawn_eid = str(spawn["event"].get("id") or "")
-                        _retire_run_control(spawn_eid)
-                        _retire_child_messages(spawn["inbox_dir"], spawn_eid)
+                            # The child is over; its dispatch-edge control (and
+                            # with it, stoppability) retires with it, as does any
+                            # unconsumed parent→child message traffic.
+                            _retire_run_control(spawn_eid)
+                            _retire_child_messages(spawn["inbox_dir"], spawn_eid)
+                    finally:
+                        # #880 §1: the accounted slot releases regardless of
+                        # how reap went — a crash while notifying the parent
+                        # (or anything else in this block) must never leak a
+                        # slot the pool believes is still occupied.
+                        if spawn_eid:
+                            _spawn_pool_release(spawn_eid)
                 active_spawns = still_running
 
             # Quiescent reload: only re-exec between thoughts, so a
@@ -12122,6 +12209,12 @@ def start(
                         account_context=account_context,
                         inbox_dir=target.inbox_dir,
                     )
+                    # #880 §1: accepted onto the pool *now* — this is the
+                    # moment a queued spawn becomes a child the pool is
+                    # committed to, well before it registers presence (which
+                    # only happens once its own `_run_worker` starts
+                    # executing, on this same future).
+                    _spawn_pool_accept(str(eid))
                     active_spawns.append(
                         {
                             "future": future,
