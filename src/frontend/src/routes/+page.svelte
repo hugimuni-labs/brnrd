@@ -690,20 +690,25 @@
 			// Empty on purpose: the node's own digest speaks for a closed run's
 			// status; the ledger only adds what the node doesn't know.
 			status: '',
-			name: row.name,
+			// The ledger's own `name` first (the resident's self-authored `.name`,
+			// when it wrote one) — falling back to the frame's own `title:`
+			// (#880 §1b's dispatcher-declared label, durable beyond the ledger's
+			// retention window) rather than leaving a run this old nameless.
+			name: row.name || selectedDigest?.title || null,
 			context: row.repo_label,
 			runner: [row.runner_shell, row.runner_core].filter(Boolean).join(' · ') || null,
 			spawn: Boolean(row.is_subspawn),
 			age: row.wall_clock_seconds ? durationLabel(row.wall_clock_seconds) : null,
-			// A closed run's mood comes from its own frame — a text record, so
-			// the handle survives and the glyph does not. The chip renders the
-			// bare name rather than re-resolving a face the frontend can't know.
+			// A closed run's mood comes from its own frame.
 			mood: selectedDigest?.mood || null,
-			// Closed run: the frame kept the handle, never the resolved face.
-			moodGlyph: null,
-			moodFrames: null,
-			moodRest: null,
-			moodPitch: null
+			// #701: the frame now carries the resolved face beside the handle
+			// (`daemon._persist_run_state_doc`), the same fields the live-runs
+			// wire carries — read straight off the node's own digest. Still
+			// null for a frame written before #701.
+			moodGlyph: selectedDigest?.moodGlyph ?? null,
+			moodFrames: selectedDigest?.moodFrames ?? null,
+			moodRest: selectedDigest?.moodRest ?? null,
+			moodPitch: selectedDigest?.moodPitch ?? null
 		};
 	});
 	// What's left for the vitals row once identity travels structured:

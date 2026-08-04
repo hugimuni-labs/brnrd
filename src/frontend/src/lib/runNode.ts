@@ -191,14 +191,19 @@ export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 
 // Rendered elsewhere on the page (run id, repo label; the dispatch edges get
 // their own navigable footer) or host-local noise a remote reader cannot act
-// on (pid, the local reply-archive path).
+// on (pid, the local reply-archive path). `title` gets the run's own heading
+// (#880 §1b's dispatcher-declared label, now also carried into the frame);
+// `mood_frames` is a JSON-encoded cycle list for the mood chip
+// (`nodeDigest.moodFrames`) — a wire format, not a row a reader wants raw.
 const FRAME_SUPPRESSED = [
 	'run_id',
 	'repo_label',
 	'pid',
 	'reply_archive',
 	'parent_run_id',
-	'child_run_ids'
+	'child_run_ids',
+	'title',
+	'mood_frames'
 ];
 
 export interface FrameField {
@@ -535,11 +540,30 @@ export interface NodeDigest {
 	messageCount: number;
 	/**
 	 * The mood handle the run's own frame recorded (#566), '' when it set
-	 * none. Name only: the frame is a text record, so nothing here resolves a
-	 * glyph — and a closed run's chip renders the bare handle rather than
-	 * looking one up, which is the honest answer anyway.
+	 * none.
 	 */
 	mood: string;
+	/**
+	 * The resolved face beside that handle (#701 —
+	 * `daemon._persist_run_state_doc` resolves it against `brr.emotes`, the
+	 * same table the live-runs wire uses, and writes it into the frame at
+	 * every persist). `null` for an unresolved handle and for frames written
+	 * before #701 — never a guessed face.
+	 */
+	moodGlyph: string | null;
+	/** Every breath the face can take, same shape as the live packet's
+	 *  `mood_frames`; `null` under the same conditions as `moodGlyph`. */
+	moodFrames: string[][] | null;
+	moodRest: string | null;
+	moodPitch: number | null;
+	/**
+	 * The dispatcher-declared `title:` the frame recorded (spawn frontmatter,
+	 * `_queue_spawn_request` #880 §1b), '' when none. Durable, unlike a live
+	 * packet's own name or the ledger row's `name` — the frame is the one
+	 * place a spawned strand's name outlives both the presence row and the
+	 * ledger's own retention window.
+	 */
+	title: string;
 	/** True when expanding would actually reveal something more. */
 	hasMore: boolean;
 }
@@ -568,30 +592,51 @@ export interface NodeIdentity {
 	 */
 	mood: string | null;
 	/**
-	 * The glyph the daemon resolved for that handle, and only ever that:
-	 * null for an unknown handle, and null for every closed run (the frame
-	 * records the handle, not the face). A null glyph means the chip renders
-	 * the bare name — it never means "pick a default face".
+	 * The glyph the daemon resolved for that handle: null for an unknown
+	 * handle, and (#701) null for a closed run whose frame predates the
+	 * daemon writing the resolved face at closeout — otherwise the frame
+	 * carries it, the same way the live packet does. A null glyph means the
+	 * chip renders the bare name — it never means "pick a default face".
 	 */
 	moodGlyph: string | null;
 	/**
-	 * The face's cycles and its resting frame, live-packet only. A closed run
-	 * has neither: its frame records the handle the resident wrote and nothing
-	 * the daemon resolved from it, and this frontend owns no emote table by
-	 * design — so a closed run's chip is the bare name. That is honest, not
-	 * good; fixing it means the daemon writing the resolved face into the run
-	 * frame at closeout, which is a daemon-side change, not one this file can
-	 * make by guessing.
+	 * The face's cycles and its resting frame. Live while the run burns; from
+	 * the frame once it has closed (#701 — `daemon._persist_run_state_doc`
+	 * resolves the handle against `brr.emotes`, the same table
+	 * `gates/cloud.py::_mood_payload` uses for the live wire, and writes
+	 * glyph/frames/rest/pitch beside the handle at every persist). This
+	 * frontend still owns no emote table itself — an unresolved handle or a
+	 * frame written before #701 stays null, never a guessed face.
 	 */
 	moodFrames: string[][] | null;
 	moodRest: string | null;
 	moodPitch: number | null;
 }
 
+/**
+ * `mood_frames` rides `state.md` as one JSON-encoded line (`daemon.
+ * _persist_run_state_doc`, #701) rather than a nested frontmatter value —
+ * `frontmatterDocument` is deliberately not a YAML parser (no nesting), so a
+ * `string[][]` has nowhere else flat to live. Absent or malformed (a frame
+ * written before #701, or a hand-edited file) both read as `null`: this is
+ * a resolved-face amenity, not a fact worth failing the whole frame over.
+ */
+function parseMoodFrames(raw: string | undefined): string[][] | null {
+	if (!raw) return null;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed) || !parsed.every((seq) => Array.isArray(seq))) return null;
+		return parsed as string[][];
+	} catch {
+		return null;
+	}
+}
+
 export function nodeDigest(node: RunNode): NodeDigest {
 	const frame = node.state ? frontmatterDocument(node.state.markdown) : null;
 	const body = node.body ? node.body.markdown : '';
 	const now = body ? nowProjection(body) : '';
+	const pitch = frame?.metadata.mood_pitch ? Number(frame.metadata.mood_pitch) : NaN;
 	return {
 		mirrored: node.mirrored,
 		status: frame?.metadata.status ?? '',
@@ -600,6 +645,11 @@ export function nodeDigest(node: RunNode): NodeDigest {
 		now,
 		produce: frame ? bodySection(frame.body, 'Produce') : '',
 		mood: frame?.metadata.mood ?? '',
+		moodGlyph: null,
+		moodFrames: null,
+		moodRest: null,
+		moodPitch: null,
+		title: '',
 		messageCount: node.messages.length,
 		// Only offer the expand when it reveals something the reader cannot
 		// already see. Comparing the projection against the raw body is not

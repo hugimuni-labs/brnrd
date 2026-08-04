@@ -64,6 +64,7 @@ from . import conversations
 from . import dev_reload as reload_mod
 from . import card
 from . import dominion
+from . import emotes
 from . import envs
 from . import facets
 from . import forge_pr_cache
@@ -9760,6 +9761,15 @@ def _persist_run_state_doc(
     # live account, 2026-07-19). The frame reports *execution* instead, which
     # is the question a reader inspecting a live run is actually asking.
     status = "running" if stage == "running" and task.status == "pending" else task.status
+    # A dispatcher's declared ``title:`` (spawn frontmatter, `_queue_spawn_
+    # request` #880 §1b) already reaches the presence row
+    # (`_presence_label_for_event`) — but stopped there. `Run.from_event`
+    # carries every event field not in `_EVENT_META_FIELDS` straight onto
+    # `task.meta`, so the title is already sitting on the run; this document
+    # simply never read it. Without it, a strand reviewed after its presence
+    # row is gone (or after the ledger's own retention window closes) is
+    # nameless again — a bare run id, not the name its dispatcher gave it.
+    title = str(task.meta.get("title") or "").strip()
     lines = [
         "---",
         f"run_id: {task.id}",
@@ -9769,6 +9779,8 @@ def _persist_run_state_doc(
         f"repo_label: {repo_label}",
         f"source: {task.source}",
     ]
+    if title:
+        lines.append(f"title: {title}")
     # The ledger owns both clock readings: ``mark_run_started`` records the
     # start, and ``append_closed_run`` records the end before the finished
     # frame is persisted. Carry only those attested values here. In
@@ -9833,6 +9845,22 @@ def _persist_run_state_doc(
     mood = run_ledger.read_run_mood_control(outbox_dir)
     if mood:
         lines.append(f"mood: {mood}")
+        # #701: resolve the handle into the same wire fields the live
+        # packet carries (`gates/cloud.py::_mood_payload`, via the shared
+        # `emotes.resolve_mood_fields`) so a closed run's face survives —
+        # today this document wrote the raw handle and nothing else, so
+        # the face was unrecoverable the moment the run closed. Absent
+        # resolution stays absent: an unknown handle degrades to
+        # name-only here too, never a guessed face.
+        resolved = emotes.resolve_mood_fields(mood)
+        if resolved["mood_glyph"]:
+            lines.append(f"mood_glyph: {resolved['mood_glyph']}")
+        if resolved["mood_frames"]:
+            lines.append(f"mood_frames: {json.dumps(resolved['mood_frames'])}")
+        if resolved["mood_rest"]:
+            lines.append(f"mood_rest: {resolved['mood_rest']}")
+        if resolved["mood_pitch"] is not None:
+            lines.append(f"mood_pitch: {resolved['mood_pitch']}")
     # The body used to restate status/stage/repo/source/event/runner as a
     # bullet list — every fact a verbatim copy of the frontmatter one screen
     # up, and the node renderer showed both (maintainer, 2026-07-19: the ask
@@ -9841,7 +9869,7 @@ def _persist_run_state_doc(
     # request excerpt and the produce manifest.
     lines.extend([
         "---",
-        f"# Run {task.id}",
+        f"# Run {task.id}" + (f" — {title}" if title else ""),
     ])
     if task.body:
         summary = " ".join(task.body.split())
