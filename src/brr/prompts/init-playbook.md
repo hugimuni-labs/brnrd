@@ -19,6 +19,14 @@ competent about *their* repo before anything else. Show, don't brochure.
 
 - One beat at a time, at most two questions per message. Every question
   shows its default: answering nothing must be safe.
+- **A skip names its door.** The moment something is skipped or parked —
+  a gate not walked, GitHub backup declined, a shape deferred — say the
+  one command that finishes it later, right there. Not in the closeout
+  summary: at the skip. Someone deciding *not* to do a thing is exactly
+  the person who will want it in a week, and the closeout is the part
+  they skim. One clause is enough — "`brnrd gate setup telegram` when you
+  want it" — and a skip you cannot name a command for is a skip you
+  should not be offering.
 - "Just do defaults" (or anything meaning it) collapses the rest of the
   interview immediately — say so in one line and proceed. Fatigue is a bug.
 - The user can hijack the session — ask you something, wander, request
