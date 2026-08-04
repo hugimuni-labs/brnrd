@@ -655,18 +655,60 @@ def test_hygiene_report_resolves_the_forge_kind_once_per_report(tmp_path, monkey
     assert len(calls) == 1
 
 
-def test_hygiene_report_gates_a_forge_it_cannot_even_name(tmp_path, monkeypatch):
-    """The gate is ``kind == "github"``, not a list of known non-GitHub kinds.
+def test_hygiene_report_still_asks_gh_for_a_forge_it_cannot_name(tmp_path, monkeypatch):
+    """``kind is None`` with a valid label stays **queryable** — and this
+    narrows :func:`forge_pr_cache.refresh`'s condition on purpose (#1064).
 
-    ``git.example.com`` matches no host pattern, so ``kind`` is ``None`` with a
-    valid label — the shape ``_forge_kind_and_label``'s docstring says callers
-    must not tell apart from an explicit ``gitlab``. An enumerating gate would
-    let this one through and shell out anyway.
+    ``refresh`` must refuse to tell that shape apart from an explicit
+    ``gitlab``, because it passes ``--repo OWNER/REPO`` and a wrong guess
+    silently answers from a same-named repo on github.com — #852's hazard.
+    **This call site passes no ``--repo``**; ``gh pr list --head`` is
+    cwd-resolved, gh does its own host detection, and the hazard cannot
+    occur. The rule transfers; its justification does not.
+
+    What gating this shape would cost is not the subprocess — it is the
+    sentence. ``git.example.com`` and a GitHub Enterprise host both land
+    here, and ``PR state unsupported — this remote isn't GitHub`` is
+    **false** for the second one, rendered with the ``(kind)`` parenthetical
+    dropped precisely because brr could not name the forge. A diagnostic that
+    cannot tell two cases apart must not pick the confident branch.
+
+    So: one subprocess for the whole report (``__gh_global_error__``
+    short-circuits the rest), and an honest ``PR lookup failed`` if gh cannot
+    answer — never a claim about a forge brr never identified.
     """
     repo = _hygiene_repo(tmp_path, "https://git.example.com/group/proj.git")
+    calls: list[list[str]] = []
+
+    def failing_gh(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "no such host\n")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(failing_gh))
+    rows = _branch_rows(build_worktree_hygiene_report(repo))
+
+    assert len(calls) == 1, "one call for the whole report, not one per branch"
+    assert len(rows) == 2
+    for row in rows:
+        assert row.classification == "unknown"
+        assert row.reason == "PR lookup failed: no such host"
+        # never a claim about a forge brr could not name
+        assert "unsupported" not in row.reason
+
+
+def test_hygiene_report_gates_only_forges_brr_can_name(tmp_path, monkeypatch):
+    """The gate is ``kind is not None and kind != "github"``.
+
+    A self-hosted GitLab that ``forges.py`` *does* pattern-match is named, so
+    it is gated exactly like ``gitlab.com`` — the saving this whole function
+    exists for is kept. Pinned separately from the ``gitlab.com`` test so a
+    future narrowing of ``_HOST_PATTERNS`` cannot silently un-gate the
+    self-hosted case while the hosted one keeps passing.
+    """
+    repo = _hygiene_repo(tmp_path, "https://gitlab.internal.example.com/g/p.git")
 
     def forbidden(cmd, **kwargs):
-        raise AssertionError(f"shelled out to gh for an unnameable forge: {cmd}")
+        raise AssertionError(f"shelled out to gh for a named non-GitHub forge: {cmd}")
 
     monkeypatch.setattr(worktree.subprocess, "run", _gh_only(forbidden))
     rows = _branch_rows(build_worktree_hygiene_report(repo))
@@ -674,33 +716,33 @@ def test_hygiene_report_gates_a_forge_it_cannot_even_name(tmp_path, monkeypatch)
     assert len(rows) == 2
     for row in rows:
         assert row.classification == "unknown"
-        assert row.reason == (
-            "PR state unsupported — this remote isn't GitHub, "
-            "and gh is never queried for it"
-        )
+        assert row.reason.startswith("PR state unsupported (gitlab)")
 
 
 def test_hygiene_report_honours_the_forge_kind_override(tmp_path, monkeypatch):
-    """The escape hatch for the host brr cannot name: ``.brr/config`` ``forge.kind``.
+    """``.brr/config`` ``forge.kind`` moves a host **into** the gated set.
 
-    A GitHub Enterprise remote lands in the gated shape above, and this is what
-    un-gates it — the same override :func:`forge_pr_cache._forge_kind_and_label`
-    already reads, reached through the same call.
+    Re-aimed with the gate (#1064 review). While the gate was
+    ``label is not None and kind != "github"``, the interesting direction was
+    ``forge.kind = github`` rescuing a GHE host from being gated. With the
+    gate narrowed to forges brr can name, that host is queried anyway and the
+    override no longer decides anything there — so the direction worth pinning
+    is the other one: naming an unrecognised self-host as GitLab makes brr stop
+    asking gh about it, exactly as if a pattern had matched.
     """
-    repo = _hygiene_repo(tmp_path, "https://github.corp.example/group/proj.git")
+    repo = _hygiene_repo(tmp_path, "https://code.example.internal/group/proj.git")
     (repo / ".brr").mkdir(exist_ok=True)
-    (repo / ".brr" / "config").write_text("forge.kind=github\n", encoding="utf-8")
-    calls: list[list[str]] = []
+    (repo / ".brr" / "config").write_text("forge.kind=gitlab\n", encoding="utf-8")
 
-    def fake_gh(cmd, **kwargs):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+    def forbidden(cmd, **kwargs):
+        raise AssertionError(f"the forge.kind override did not gate: {cmd}")
 
-    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(fake_gh))
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(forbidden))
     rows = _branch_rows(build_worktree_hygiene_report(repo))
 
-    assert calls, "the override must reach gh"
-    assert all("unsupported" not in row.reason for row in rows)
+    assert len(rows) == 2
+    for row in rows:
+        assert row.reason.startswith("PR state unsupported (gitlab)")
 
 
 def test_hygiene_report_still_queries_a_github_remote(tmp_path, monkeypatch):
