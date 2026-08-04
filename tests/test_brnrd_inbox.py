@@ -358,16 +358,57 @@ def test_long_poll_route_waits_async_and_offloads_each_db_read(monkeypatch):
     assert all(thread_id != caller_thread for thread_id in db_threads)
 
 
-def test_long_poll_wakes_on_enqueue(env):
+def test_long_poll_wakes_on_enqueue(env, monkeypatch):
+    """An enqueue landing *during* a wait must wake the poll that is waiting.
+
+    The ordering here is a barrier, never a sleep (#1081). This thread used
+    to `time.sleep(0.05)` and hope the main thread had reached the poll by
+    then; on a loaded box it had not, and both requests entered FastAPI's
+    router at once. That is a real data race, not a slow start: FastAPI
+    0.139's `_IncludedRouter.effective_candidates()` memoizes lazily and
+    publishes the *empty* list (`self._effective_candidates = []`) before it
+    refills it, setting the version guard only at the end — so two threads
+    materializing the route table on first touch can leave one of them
+    walking a half-built list. The poll then 404s on a URL that works on the
+    very next call, and the test dies on `KeyError: 'events'` (reproduced
+    11/30 with the sleep, pinned to one CPU against 3 burners; 19/30 green).
+
+    So the release signal is the poll's own first DB read: by the time
+    `_fetch_since_many_detached` runs, the GET has been routed, its handler
+    entered, and no router state is touched again for the rest of the wait —
+    the enqueue's own first touch of the dev router therefore races nothing.
+    No wall-clock constant decides any of it. The `timeout=` below is a
+    failure bound, not a schedule: a hung test is worse than a red one, and
+    on the happy path nothing ever waits for it.
+
+    What keeps this a *wake* and not merely a return: that first read is
+    observed, and it must come back empty. The enqueue cannot begin before
+    it, so the row cannot pre-date the poll — the poll can only be holding
+    an event that appeared while it was already waiting.
+    """
     _, client, _ = env
     acc = _account(client)
     rid = _repo(client, acc)
     dmn = _connect(client, acc, rid)
     thread_errors = []
+    poll_reached_db = threading.Event()
+    first_read_row_count = []
 
-    def _enqueue_soon():
+    real_fetch = inbox_service._fetch_since_many_detached
+
+    def observed_fetch(session_factory, repo_ids, since):
+        rows = real_fetch(session_factory, repo_ids, since)
+        if not poll_reached_db.is_set():
+            first_read_row_count.append(len(rows))
+            poll_reached_db.set()
+        return rows
+
+    monkeypatch.setattr(inbox_service, "_fetch_since_many_detached", observed_fetch)
+
+    def _enqueue_once_the_poll_is_waiting():
         try:
-            time.sleep(0.05)
+            if not poll_reached_db.wait(timeout=10.0):
+                raise AssertionError("the long poll never reached its first DB read")
             response = client.post(
                 "/v1/_dev/enqueue",
                 json={"repo_id": rid, "body": "late"},
@@ -377,7 +418,7 @@ def test_long_poll_wakes_on_enqueue(env):
         except BaseException as exc:
             thread_errors.append(exc)
 
-    t = threading.Thread(target=_enqueue_soon)
+    t = threading.Thread(target=_enqueue_once_the_poll_is_waiting)
     t.start()
     try:
         result = client.get(
@@ -387,6 +428,9 @@ def test_long_poll_wakes_on_enqueue(env):
         t.join()
     if thread_errors:
         raise thread_errors[0]
+    # The poll looked and found nothing before the enqueue was allowed to
+    # fire; anything it returns below arrived mid-wait.
+    assert first_read_row_count == [0]
     assert [e["body"] for e in result["events"]] == ["late"]
 
 
