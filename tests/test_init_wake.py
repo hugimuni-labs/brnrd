@@ -320,6 +320,33 @@ class TestPromptAssembly:
 
 
 class TestCollectFacts:
+    def test_facts_carry_the_install_shape(self, tmp_path, monkeypatch):
+        """The playbook opens on the shape; the shape has to be in the bundle.
+
+        A prompt that keys on a fact the facts block never carries is the
+        contract drift #1117 was filed for — a promise the code cannot
+        keep. So the three openings and the keys they read move together.
+
+        Absent means *unknown*, never *no*: an unpaired repo omits the key
+        rather than asserting ``False``, because the openings key on
+        presence and a failed read must degrade to the local opening
+        rather than claim a shape it cannot see.
+        """
+        repo = _repo(tmp_path)
+
+        facts = init_wake.collect_facts(repo, runner_name="mock-runner")
+        assert "account_paired" not in facts, "unpaired must be absent, not False"
+        assert "docker_available" in facts
+
+        from brr import account as account_mod
+
+        monkeypatch.setattr(
+            account_mod, "_connected_account_id", lambda _root: "acc_123",
+        )
+        assert init_wake.collect_facts(repo, runner_name="mock-runner")[
+            "account_paired"
+        ] is True
+
     def test_github_identity_passthrough_costs_no_extra_gh_call(
         self, tmp_path, monkeypatch,
     ):
