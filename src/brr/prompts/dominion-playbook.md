@@ -156,6 +156,23 @@ them before they are believed or resold:
   still never execute where the failure happens. Meeting a guard, ask which
   surfaces it is installed on before trusting the class it claims; writing
   one, walk every channel the same act can arrive on.
+- **A class defined by listing its members meets the member nobody listed.**
+  The literal is right the day it is written; the docstring above it usually
+  describes the class *correctly* while the list below enumerates it wrongly.
+  Membership is almost always an act — a call site, a schema field, a
+  registration — and a set derived from that act cannot be joined without
+  being declared. Tell: a new member arrives with no edit.
+  - **A test derived from the implementation's list cannot catch the list
+    being wrong.** It parametrizes the same members and goes green, every
+    run, on the bug it exists to prevent. Ask the *owning* module what the
+    class contains and assert the consumer answers for every member — and
+    give that guard a sanity assertion, or a rename turns it into a
+    no-op over an empty set.
+  - twin: **a guard keyed on *presence* is not one keyed on *identity*.**
+    *Has one been built* is not *was it built for this* — caches,
+    singletons, anything staged once and reused across attempts. The tell
+    sits one line up: it has usually already recorded the change the guard
+    ignores.
 
 ## Reading economically
 
