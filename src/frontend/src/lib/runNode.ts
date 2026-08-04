@@ -186,7 +186,9 @@ export const FRAME_FIELDS: Array<{ key: string; label: string }> = [
 	{ key: 'branch_name', label: 'branch' },
 	{ key: 'publish_branch', label: 'published' },
 	{ key: 'publish_status', label: 'publish' },
-	{ key: 'success_signal', label: 'signal' }
+	{ key: 'success_signal', label: 'signal' },
+	{ key: 'failure_kind', label: 'failure' },
+	{ key: 'failure_exit_code', label: 'exit code' }
 ];
 
 // Rendered elsewhere on the page (run id, repo label; the dispatch edges get
@@ -225,6 +227,64 @@ export function frameFields(metadata: Record<string, string>): FrameField[] {
 		if (!seen.has(key) && value) fields.push({ label: key, value });
 	}
 	return fields;
+}
+
+// ── Failure explanation ──────────────────────────────────────────────────
+//
+// A run that dies with no body ever written (killed before or mid-`.card`
+// write, crashed before the resident got a turn) used to render the same
+// generic "no body was captured" sentence whether it succeeded quietly or
+// died outright — a bare gap on the one node a reader most wants explained
+// (operator report, 2026-08-04: "there is no run file for those runs …
+// there could be some small explanation that it likely failed"). This is
+// the small, honest fix: when the frame's own `status` names a terminal
+// failure, say what the daemon already knows about *why*, instead of
+// saying nothing.
+
+/** Mirror of `runner_failures.reason_prefix` (src/brr/runner_failures.py) —
+ * the same human phrasing the daemon already writes into a failed run's
+ * chat note, reused here so the values `failure_kind` (§ FRAME_FIELDS)
+ * actually takes render as prose rather than a raw enum member. */
+const FAILURE_REASON_PREFIX: Record<string, string> = {
+	timed_out: 'runner timed out',
+	quota_exhausted: 'runner quota was exhausted',
+	auth_error: 'runner authentication failed',
+	provider_error: 'runner provider failed',
+	transport_error: 'runner connection dropped mid-response',
+	runner_error: 'runner failed',
+	no_output: 'runner produced no reply',
+	core_mismatch: 'runner Core attestation failed',
+	interrupted: 'runner was interrupted (external kill or shell interrupt)',
+	host_interrupted: 'run was interrupted by a host/daemon restart mid-flight'
+};
+
+/** `Run.STATUSES` (src/brr/run.py) that mean the run is done and unhappy —
+ * `conflict` is a publish outcome, not a run outcome, so it stays out. */
+const TERMINAL_FAILURE_STATUSES = new Set(['error']);
+
+/**
+ * A one-line, honest account of why a terminal-failure node has no body,
+ * built only from fields the daemon already persists on the frame:
+ * `failure_kind` / `failure_exit_code` (the give-up path, since 2026-08-04)
+ * or `reap_reason` (the boot-time zombie-run sweep, `_reaped_run_state_text`
+ * in daemon.py — already written, just never read here). Returns '' when
+ * the status isn't a terminal failure, or when it is one but the daemon
+ * recorded no detail to report — the honest "we don't know either" case,
+ * left to the caller's own generic empty-state text rather than invented.
+ */
+export function failureExplanation(metadata: Record<string, string>): string {
+	const status = (metadata.status ?? '').trim();
+	if (!TERMINAL_FAILURE_STATUSES.has(status)) return '';
+	const kind = (metadata.failure_kind ?? '').trim();
+	const exitCode = (metadata.failure_exit_code ?? '').trim();
+	const reapReason = (metadata.reap_reason ?? '').trim();
+	if (kind) {
+		const reason = FAILURE_REASON_PREFIX[kind] ?? `runner failed (${kind})`;
+		const detail = exitCode ? `${reason} (exit ${exitCode})` : reason;
+		return `run failed — ${detail}`;
+	}
+	if (reapReason) return `run interrupted — ${reapReason}`;
+	return '';
 }
 
 // ── Dispatch edges ───────────────────────────────────────────────────────
@@ -542,6 +602,13 @@ export interface NodeDigest {
 	mood: string;
 	/** True when expanding would actually reveal something more. */
 	hasMore: boolean;
+	/**
+	 * `failureExplanation()` over the frame, '' unless this node both ended
+	 * in a terminal failure and the daemon recorded why. A bodyless failed
+	 * run renders this instead of a bare "no body" gap; everything else
+	 * (running, succeeded, failed-with-no-recorded-reason) gets ''.
+	 */
+	failureExplanation: string;
 }
 
 /** Everything the selected frame needs, without composing the full page. */
@@ -606,6 +673,7 @@ export function nodeDigest(node: RunNode): NodeDigest {
 		// that test — a body that is *only* a `## Now` section still differs
 		// from its projection by the heading line, which would arm an expand
 		// that shows the same words twice.
-		hasMore: node.messages.length > 0 || hasSectionsBeyondNow(body)
+		hasMore: node.messages.length > 0 || hasSectionsBeyondNow(body),
+		failureExplanation: frame ? failureExplanation(frame.metadata) : ''
 	};
 }

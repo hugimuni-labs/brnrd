@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
 	bodySection,
 	dispatchEdges,
+	failureExplanation,
 	frameFields,
 	frontmatterDocument,
 	hasSectionsBeyondNow,
@@ -418,4 +419,83 @@ test('nodeDigest carries the frame mood as a bare handle (#566)', () => {
 	assert.equal(node('status: done\nmood: id_l\n').mood, 'id_l');
 	// A run that set no mood reports none — and '' renders nothing at all.
 	assert.equal(node('status: done\n').mood, '');
+});
+
+// A killed/errored run that never got to write a `.card` used to render the
+// same "no body was captured" sentence a run that simply produced nothing
+// did — a bare gap on exactly the node a reader most wants explained
+// (operator report, 2026-08-04). `failureExplanation` is the small, honest
+// fix: a one-line account of *why*, built only from fields the daemon
+// already persists onto the frame.
+test('failureExplanation names the failure kind for a terminal-error frame', () => {
+	assert.equal(
+		failureExplanation({ status: 'error', failure_kind: 'runner_error', failure_exit_code: '-9' }),
+		'run failed — runner failed (exit -9)'
+	);
+	assert.equal(
+		failureExplanation({ status: 'error', failure_kind: 'timed_out' }),
+		'run failed — runner timed out'
+	);
+	// An unrecognised kind still says something rather than nothing — the
+	// classifier's vocabulary can grow without this reader going silent.
+	assert.equal(
+		failureExplanation({ status: 'error', failure_kind: 'a_future_kind' }),
+		'run failed — runner failed (a_future_kind)'
+	);
+});
+
+test('failureExplanation falls back to the boot-sweep reap reason', () => {
+	assert.equal(
+		failureExplanation({
+			status: 'error',
+			reap_reason: 'its dispatching daemon (pid 1234) is gone'
+		}),
+		'run interrupted — its dispatching daemon (pid 1234) is gone'
+	);
+	// failure_kind, when present, is the more specific witness and wins.
+	assert.equal(
+		failureExplanation({
+			status: 'error',
+			failure_kind: 'host_interrupted',
+			reap_reason: 'its dispatching daemon (pid 1234) is gone'
+		}),
+		'run failed — run was interrupted by a host/daemon restart mid-flight'
+	);
+});
+
+test('failureExplanation stays silent outside a terminal failure, or with nothing to report', () => {
+	// Not an error at all — a running or successfully-closed node must not
+	// borrow this line.
+	assert.equal(failureExplanation({ status: 'running', failure_kind: 'runner_error' }), '');
+	assert.equal(failureExplanation({ status: 'done' }), '');
+	// An error frame with neither field is the honest "we don't know either"
+	// case — the caller's own generic empty-state text applies instead.
+	assert.equal(failureExplanation({ status: 'error' }), '');
+});
+
+test('nodeDigest surfaces the failure explanation for a bodyless failed run', () => {
+	const node = (frontmatter: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: `---\n${frontmatter}---\n`,
+						layer: 'runs'
+					}
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	assert.equal(
+		node('status: error\nfailure_kind: runner_error\nfailure_exit_code: -9\n').failureExplanation,
+		'run failed — runner failed (exit -9)'
+	);
+	// A run with no state.md at all has no frame to read a failure out of.
+	assert.equal(
+		nodeDigest(runNodeFromSurface(surface([]), 'Gurio__brr', 'run-1')).failureExplanation,
+		''
+	);
 });

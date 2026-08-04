@@ -16,6 +16,7 @@
 	import {
 		bodySection,
 		dispatchEdges,
+		failureExplanation,
 		frameFields,
 		frontmatterDocument,
 		messageInstant,
@@ -60,6 +61,12 @@
 	let repoLabel = $derived(frame?.metadata.repo_label || repoSlug.replaceAll('__', '/'));
 	let edges = $derived(dispatchEdges(frame?.metadata ?? {}, repoSlug, knownPaths));
 	let running = $derived((frame?.metadata.status ?? '').toLowerCase() === 'running');
+	// '' unless this node both ended in a terminal failure and the daemon
+	// recorded why (see `runNode.ts`'s `failureExplanation`) — the woven-body
+	// panel below falls back to it instead of the generic "no body" sentence,
+	// which used to read identically for a run that failed and one that just
+	// wrote nothing (operator report, 2026-08-04).
+	let bodyFailureExplanation = $derived(frame ? failureExplanation(frame.metadata) : '');
 	// Produce is attested frame content, but it is also the answer to the
 	// question this page mostly gets opened to ask ("what did this run make?"),
 	// so it is lifted out of the frame's prose into its own section rather than
@@ -268,6 +275,10 @@
 				     that never wrote one at all. -->
 				<p class="mt-3 text-sm text-ink-quiet">
 					This run is still going and has not written its card yet.
+				</p>
+			{:else if bodyFailureExplanation}
+				<p class="mt-3 text-sm text-ink-quiet">
+					No body was captured — {bodyFailureExplanation}.
 				</p>
 			{:else}
 				<p class="mt-3 text-sm text-ink-quiet">
