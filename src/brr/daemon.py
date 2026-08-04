@@ -7,7 +7,7 @@ leaves judgement to the agent it wakes. It:
 1. Starts configured gate threads (each gate polls its own channel).
 2. Scans ``.brr/inbox/`` for pending events on a timer.
 3. Runs **single-flight** — one *thought* at a time. When idle and work
-   is pending it spawns one run; new events that arrive mid-thought are
+   is pending it starts one run; new events that arrive mid-thought are
    surfaced to the living agent through
    ``outbox/<event>/portal-state.json`` / ``inbox.json`` and either get
    folded in at plan boundaries or wait for the next spawn.
@@ -2320,7 +2320,7 @@ def _presence_label_for_event(event: dict) -> str:
     ``event`` dict before a run exists (audited for #585:
     ``_pending_event_record`` and ``conversations.append_event`` each build
     a *different*, display-only ``summary`` on a copy of the event/log
-    record, never on this one). That made every spawn run's presence
+    record, never on this one). That made every strand's presence
     label its own task prose, leaked into every sibling's model context at
     every tool-call boundary — the mechanism behind #574's real incident (a
     run read a sibling's leaked spec as a directive and shipped the
@@ -2358,7 +2358,7 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     tree's index, which is a corruption mode the incident never had. Pinning
     both is the only self-consistent setting.
 
-    **Why runs only.** A resident authors knowledge in ``.brnrd-kb/`` — a
+    **Why strands only.** A resident authors knowledge in ``.brnrd-kb/`` — a
     *separate* git repository beside the checkout — and commits there itself.
     Under a pin those commits would land in the run's worktree instead, so
     the pin would break the resident's one durable write path. A run has
@@ -3011,7 +3011,7 @@ def _execute_run(
     task.meta["outbox_path"] = str(outbox_dir)
     task.meta.update(branch_plan.meta_items())
 
-    # Wyrd §3, run thread isolation: a child-run stack child talks to its
+    # Wyrd §3, strand isolation: a spawned run talks to its
     # dispatcher and its dispatchees, nobody else. It gets its contract
     # (the event body) and any parent messages — not the user thread's
     # recent turns, history, or burst siblings. The agenda-lock pitfall
@@ -6191,7 +6191,7 @@ def _queue_spawn_request(
     body: str,
     outbox_dir: Path | None = None,
 ) -> bool:
-    """Queue a concurrent child-run stack child (``spawn:``, slice 1).
+    """Queue a concurrent strand (``spawn:``, slice 1).
 
     Sibling to :func:`_queue_respawn_request`, with one structural
     difference: a respawn only ever starts once *this* run ends (queued
@@ -6201,11 +6201,11 @@ def _queue_spawn_request(
     ``_max_concurrent_spawns`` in the daemon loop). Always ``strand: true`` — never the
     resident stack — a concurrent child does not get dominion write, kb
     governance, or scheduling authority any more than a sequential
-    child-run stack respawn does (`kb/design-director-loop.md` §"Concurrent
+    strand respawn does (`kb/design-director-loop.md` §"Concurrent
     sub-spawns": that's exactly why it doesn't reopen the dominion-
     coherence problem single-flight exists to close).
 
-    A child-run stack run spawning *its own* child is refused — nesting was
+    A strand spawning *its own* child is refused — nesting was
     never part of the slice-1 shape (cap=1, one level), and a run has
     no business creating further daemon-dispatched work anyway.
     """
@@ -6219,7 +6219,7 @@ def _queue_spawn_request(
     if bool(task.meta.get("strand")):
         _record_outbox_notice(
             outbox_dir,
-            "spawn refused: a child-run stack run cannot spawn (no nested spawns). "
+            "spawn refused: a strand cannot spawn (no nested spawns). "
             "Do the work inline, or hand it back to the resident.",
         )
         return False
@@ -7292,7 +7292,7 @@ def _drain_live_menu(
     Like ``.card``, the menu is observed at heartbeat and synchronous runner
     boundaries. Content digests make an unchanged file a no-op and make one
     malformed generation produce one notice rather than a notice per tick.
-    The single-flight owner is the only v1 writer: child-run stack children
+    The single-flight owner is the only v1 writer: strands
     report prose to their parent and do not get a second menu transport.
     """
     if menu_path is None or not menu_path.is_file():
@@ -7309,7 +7309,7 @@ def _drain_live_menu(
     if task.meta.get("strand"):
         _record_outbox_notice(
             outbox_dir,
-            f"{_LIVE_MENU_NAME} ignored: child-run stack children may propose "
+            f"{_LIVE_MENU_NAME} ignored: strands may propose "
             "items in their report, but the single-flight owner composes the "
             "live menu in v1",
         )
@@ -7414,7 +7414,7 @@ def _emit_mirror_cards(
     """
     try:
         if bool(task.meta.get("strand")):
-            # A child-run stack run owns no thread and folds nothing (live
+            # A strand owns no thread and folds nothing (live
             # incident 2026-07-16: two spawn children stamped "folded into a
             # running thought" under the whole backlog of a chat that their
             # parent was actively answering). Strands stay silent here.
@@ -8203,7 +8203,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
 
     # #574: does what the child actually published match the contract it
     # was given? ``task.body`` is the spec text as the child saw it — never
-    # rewoven for a run run (the burst-sibling weave at the top of the
+    # rewoven for a strand (the burst-sibling weave at the top of the
     # dispatch loop is gated `if not is_strand_run`, and a spawned child is
     # always `strand: true`) — so it is safe to read straight off the
     # reaped ``Run`` here, no ``prompt.md`` reread needed. ``spawn_contract_
@@ -9953,7 +9953,7 @@ _MAX_CONCURRENT_SPAWNS_DEFAULT = 4
 
 
 def _max_concurrent_spawns(cfg: dict) -> int:
-    """Configured child-run stack ``spawn:`` pool width.
+    """Configured strand ``spawn:`` pool width.
 
     Slice 1 (kb/design-director-loop.md §"Concurrent sub-spawns") shipped
     this hardcoded at a cap of 1. Generalized to a small configurable pool
@@ -10722,7 +10722,7 @@ def start(
     """Run the daemon main loop (blocking, foreground).
 
     **Single-flight**: one *thought* runs at a time. When idle and work
-    is pending the loop spawns one run; events that arrive mid-thought
+    is pending the loop starts one run; events that arrive mid-thought
     wait their turn (the living agent reconsiders its inbox at plan
     boundaries, or the next spawn picks them up). The run still runs
     off the main thread, so the loop stays responsive to dev-reload,
@@ -10976,7 +10976,7 @@ def start(
                     current_eid = None
                 current = None
 
-            # Reap any concurrent child-run stack children that have finished,
+            # Reap any concurrent strands that have finished,
             # and notify each one's still-running parent thought (or leave a
             # normal pending event behind if the parent already ended —
             # the next dispatch tick picks it up like any other follow-up,
@@ -11010,7 +11010,7 @@ def start(
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
-            # A resident slot is quiescent only when its child-run stack is too.
+            # A resident slot is quiescent only when its strand stack is too.
             # ``pool.shutdown(wait=True)`` joins every run, so re-execing
             # while spawned children remain would turn their whole runtime
             # into latency for a new correspondent despite the executor's
@@ -11063,7 +11063,7 @@ def start(
             ):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
-            # Concurrent child-run stack children (slice 1, generalized past
+            # Concurrent strands (slice 1, generalized past
             # cap-of-1): dispatched independently of the resident's own
             # `current` slot — that's the entire point, a spawn runs
             # *alongside* the still-live parent thought rather than after it

@@ -1,9 +1,9 @@
 """Tests for the single-flight daemon loop.
 
 The local daemon is a thin reflex loop: it runs exactly one *thought* at
-a time. When idle and work is pending it spawns one run; events that
+a time. When idle and work is pending it starts one run; events that
 arrive mid-thought wait their turn. (This reshapes the former parallel
-run pool — see ``kb/design-agent-dominion.md`` §4 and
+executor pool — see ``kb/design-agent-dominion.md`` §4 and
 ``kb/subject-daemon.md``.) The cases here exercise the integration: that
 ``daemon.start()`` never runs two thoughts at once, that the legacy
 ``max_workers`` knob no longer buys parallelism, and that a crashing

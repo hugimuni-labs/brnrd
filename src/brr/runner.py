@@ -39,7 +39,7 @@ _profiles_cache: dict[str, dict[str, Any]] | None = None
 _profiles_cache_key: str | None = None
 
 # Live runner subprocesses, keyed by invocation label. The daemon runs the
-# resident's thought *and* up to ``spawn.max_concurrent`` run children in
+# resident's thought *and* up to ``spawn.max_concurrent`` strands in
 # one process, each invoking its own runner subprocess concurrently — a
 # single module-global handle (the pre-2026-07-18 shape) meant a budget kill
 # for one run could terminate a *different* run's process, and a finishing

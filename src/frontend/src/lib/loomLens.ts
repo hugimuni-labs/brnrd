@@ -161,8 +161,8 @@ export function availableLenses(rows: RunLedgerRow[]): Lens[] {
 	}
 
 	if (strands > 0) {
-		// "Strands" is the loom vocabulary for strand sub-spawn runs (the
-		// maintainer's 08-02 naming steer); the id keeps its mechanical name.
+		// "Strands" is the loom vocabulary for dispatched sub-runs (the
+		// maintainer's 08-02 naming steer); the id follows that surface name.
 		lenses.push({ id: 'stack:strand', label: '↳ strands', facet: 'stack', count: strands });
 	}
 

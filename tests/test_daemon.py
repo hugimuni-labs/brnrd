@@ -856,7 +856,7 @@ def test_presence_label_for_event_never_falls_back_to_task_body():
     """#585: a presence `label` is dashboard chrome, not a content channel.
 
     The pre-fix shape derived the label as
-    ``event.get("summary") or task.body``, so a spawn run's presence
+    ``event.get("summary") or task.body``, so a strand's presence
     label was its own full task spec whenever `summary` was unpopulated —
     which it always was (audited: no writer sets it on this creation-time
     `event` dict). `_presence_label_for_event` must never read `body`
@@ -1220,7 +1220,7 @@ def test_drain_outbox_queues_strand_respawn_request(tmp_path):
         "strand: true\n"
         "shell: codex-mini\n"
         "---\n"
-        "bounded task for a run wake\n",
+        "bounded task for a strand wake\n",
         encoding="utf-8",
     )
     task = Run(
@@ -1368,7 +1368,7 @@ def test_drain_outbox_quality_respawn_resolves_local_escalation(
 
 
 def test_drain_outbox_queues_spawn_request(tmp_path):
-    """``spawn:`` frontmatter queues a cap-1 concurrent run-stack child.
+    """``spawn:`` frontmatter queues a cap-1 concurrent strand.
 
     kb/design-director-loop.md §"Concurrent sub-spawns", slice 1: unlike
     ``respawn:`` (queued for after this run ends), a spawn is meant for the
@@ -1397,7 +1397,7 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
         "shell: codex-mini\n"
         "reason: cheaper core has quota headroom\n"
         "---\n"
-        "bounded task for a concurrent run child\n",
+        "bounded task for a concurrent strand\n",
         encoding="utf-8",
     )
     task = Run(
@@ -1504,7 +1504,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
 
 
 def test_drain_outbox_spawn_refuses_nested_from_strand_run(tmp_path):
-    """A run-stack run must not itself spawn a further child (no nesting)."""
+    """A strand must not itself spawn a further child (no nesting)."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -7368,7 +7368,7 @@ def test_refused_spawn_leaves_a_notice_the_running_resident_can_read(tmp_path):
     (outbox / "spawn.md").write_text(
         "---\nspawn: true\n---\nnested work\n", encoding="utf-8",
     )
-    # A run-stack run: nesting is refused by design.
+    # A strand: nesting is refused by design.
     task = Run(
         id="run-run", event_id=event_id, body="original", source="telegram",
         meta={"strand": True},

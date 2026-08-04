@@ -50,7 +50,7 @@ proved one — ``runner.py`` captures it from ``codex exec --json``'s
 :func:`_latest_rollout_fallback`'s newest-mtime guess, explicitly named as a
 compatibility path rather than correlation — the assumption that "newest is
 the active run" only holds when exactly one Codex Shell is alive at a time,
-which is not guaranteed the moment a run spawn or a sibling wake runs a
+which is not guaranteed the moment a strand or a sibling wake runs a
 second one concurrently (issue #195).
 
 Returns the shared *levels* snapshot shape
@@ -370,7 +370,7 @@ def _latest_rollout_fallback(root: Path) -> Path | None:
     newest-mtime guess was the *only* way brr picked a rollout, on the theory
     that brr is single-flight per dominion so "newest" is "the active run"
     (the same heuristic ``ccusage`` uses). That theory breaks the moment two
-    Codex Shells are alive at once — a run spawn, a sibling wake, a stray
+    Codex Shells are alive at once — a strand, a sibling wake, a stray
     interactive session — since this function has no way to tell whose
     rollout it just picked. :func:`load_levels` now prefers exact
     ``thread_id`` correlation (:func:`_rollout_for_thread`) whenever the

@@ -30,7 +30,7 @@ def _hermetic_git_env(tmp_path_factory, monkeypatch):
     **Containment.** ``GIT_DIR``/``GIT_WORK_TREE`` outrank *every* cwd-based
     discovery mechanism — ``cwd=``, ``-C <path>``, an absolute pathspec — so
     a process that inherits them addresses the pinned tree no matter which
-    repository it names. #703 pins both into a run run's environment on
+    repository it names. #703 pins both into a strand's environment on
     purpose (``daemon._child_git_pin``), and a run that runs this suite
     inherits them: the ~319 ``["git", …]`` call sites under ``tests/`` then
     ``git init`` and ``git config`` into the *shared* host checkout rather

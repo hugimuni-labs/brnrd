@@ -3104,7 +3104,7 @@ def _build_strand_preamble(repo_root: Path) -> str:
     """Read ``strand.md`` plus the working-register contract (``weave.md``).
 
     The slim counterpart to :func:`_read_preamble_with_weave`: a strand wake
-    (B4, ``kb/design-director-loop.md`` §orchestrator/strand) gets the bounded
+    (B4, ``kb/design-director-loop.md`` §orchestrator/worker) gets the bounded
     task preamble instead of the resident's ``run.md`` — no dominion write,
     no kb governance, no "reconsider intent" stewardship framing, none of
     which apply to a bounded handoff. ``weave.md`` still rides: it governs
@@ -3183,7 +3183,7 @@ def build_daemon_prompt(
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
 
-    ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/strand)
+    ``strand=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
     swaps in the slim strand stack: ``strand.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
     (identity core, dominion digest, work surface, runner policy, pitfalls,
@@ -3725,7 +3725,7 @@ def _build_run_context_bundle(
         sections.append("### Also awake right now")
         sections.append(
             "Other thoughts are active in this repo (ad-hoc sessions, or "
-            "another strand). You share one dominion, so if one is on the "
+            "another run). You share one dominion, so if one is on the "
             "same stream or files, expect its edits to land alongside yours "
             "— don't fight it. Contradictions in shared memory are normal "
             "and get reconciled by judgement, not locks (see your playbook)."

@@ -937,7 +937,7 @@ class TestPromptBuilding:
         assert "Rebuild the image before you trust the cache." not in prompt
         assert "bounded, single-purpose thought" in prompt
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
-        # Mechanics still ride — a run wake is still under the daemon.
+        # Mechanics still ride — a strand wake is still under the daemon.
         assert "single-flight" in prompt
 
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):

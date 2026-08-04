@@ -605,7 +605,7 @@ def _retired_command(name: str, replacement: str):
 def _drop_inherited_git_pin() -> None:
     """Drop ``GIT_DIR`` / ``GIT_WORK_TREE`` from this process's environment.
 
-    #703 pins both into a run run's environment so a bare ``git commit``
+    #703 pins both into a strand's environment so a bare ``git commit``
     from a drifted cwd cannot reach the shared host checkout. Those two
     variables outrank *every* cwd-based discovery mechanism — ``cwd=``,
     ``-C <path>``, an absolute pathspec — so any tool that inherits them
@@ -939,7 +939,7 @@ def _default_wake_run(runs_dir: Path) -> Path | None:
     """The run to print when the caller named none.
 
     ``BRR_RUN_ID`` first, most-recent-by-mtime second — and the order matters
-    more than it looks. Called from *inside* a run that has spawned a run,
+    more than it looks. Called from *inside* a run that has spawned a strand,
     newest-directory-wins resolves to the **child's** run, silently: the
     command answers a different question than the one asked and nothing about
     the output says so. A run asking for "the wake" means its own.
