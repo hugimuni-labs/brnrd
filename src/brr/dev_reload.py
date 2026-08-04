@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -137,6 +138,12 @@ def _stat_entry(path: Path, key: str) -> tuple[str, int, int] | None:
 
 
 _IMAGE_FINGERPRINT: tuple[tuple[str, str], ...] | None = None
+_IMAGE_CAPTURED_AT: str | None = None
+"""ISO-8601 UTC timestamp of the last :func:`capture_image_fingerprint` call.
+
+Set together with ``_IMAGE_FINGERPRINT`` so the two can never disagree about
+whether an image was captured — a consumer checks one and trusts the other.
+"""
 
 
 def _image_snapshot() -> tuple[tuple[str, str], ...]:
@@ -170,8 +177,9 @@ def capture_image_fingerprint() -> None:
     After a re-exec this runs again in the fresh process, so the fingerprint
     always describes *the code currently executing*, not the code on disk.
     """
-    global _IMAGE_FINGERPRINT
+    global _IMAGE_FINGERPRINT, _IMAGE_CAPTURED_AT
     _IMAGE_FINGERPRINT = _image_snapshot()
+    _IMAGE_CAPTURED_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def image_is_stale() -> bool:
@@ -187,6 +195,32 @@ def image_is_stale() -> bool:
     if _IMAGE_FINGERPRINT is None:
         return False
     return _image_snapshot() != _IMAGE_FINGERPRINT
+
+
+def image_fingerprint_digest() -> str | None:
+    """Short stable digest identifying the captured image, or ``None`` if untracked.
+
+    Derived from ``_IMAGE_FINGERPRINT`` itself rather than cached alongside
+    it, so it can never disagree with :func:`image_is_stale` about whether an
+    image was captured — there is exactly one source of truth to go stale.
+    Hashes the sorted ``(path, sha256)`` tuple :func:`_image_snapshot` already
+    produced (cheap: it hashes digests already computed, not file contents
+    again) and keeps ten hex characters — enough to eyeball two builds apart,
+    short enough for a kernel line.
+    """
+    if _IMAGE_FINGERPRINT is None:
+        return None
+    combined = "\n".join(f"{path}:{sha}" for path, sha in _IMAGE_FINGERPRINT)
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:10]
+
+
+def image_captured_at() -> str | None:
+    """ISO-8601 UTC timestamp of the running image's fingerprint capture.
+
+    ``None`` exactly when :func:`image_fingerprint_digest` is ``None`` — the
+    two are captured together and read together.
+    """
+    return _IMAGE_CAPTURED_AT
 
 
 def is_reexec_for_current_process(pid: int | None) -> bool:
