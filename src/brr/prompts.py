@@ -1127,6 +1127,58 @@ def _worst_trim(results: list[TrimResult]) -> TrimResult:
     return max(trimmed, key=lambda r: r.dropped)
 
 
+# Per-page budget for the heading gist attached to a surface page the
+# budget dropped whole (#1111). Deliberately tiny — a coordinate for a page
+# a reader cannot open anyway is a nice-to-have next to the pages that did
+# render, and #1061 already starves the surface budget without this feature
+# adding to the bill. Measured against this account's own pages: a
+# structural page's headings run long (`workflow.md`'s six average 32 B,
+# but one alone is 90 B; `active.md`'s five average 64 B) — a handful of
+# titles routinely exceeds this budget, which is why the walk below falls
+# back to a bare count rather than stretching it.
+_OMITTED_HEADING_GIST_BUDGET_BYTES = 40
+
+
+def _page_heading_gist(content: str, max_bytes: int = _OMITTED_HEADING_GIST_BUDGET_BYTES) -> str:
+    """A budget-capped list of *content*'s own ``## `` heading titles.
+
+    For a page the surface budget drops whole (placeholder or fully
+    unannounced), this is the only coordinate left to offer — the page's
+    rendered text carries none of its own headings anymore. Walks titles in
+    document order, keeping whichever fit inside *max_bytes* together with a
+    ``· +N more`` tail when some were left out.
+
+    Never truncates an individual title to make it fit: a clipped title is
+    a fabricated anchor (mid-sentence text nobody wrote as a heading), which
+    is the same class of lie #1111 exists to end for URLs. When not even the
+    first title fits whole, the return value falls back to a bare count —
+    true, cheap, and never worse than silence. ``""`` only when the page has
+    no ``## `` headings to report (see :func:`_split_h2_entries`).
+    """
+    titles = [_heading_title(e) for e in _split_h2_entries(content)]
+    if not titles:
+        return ""
+    kept: list[str] = []
+    used = 0
+    for title in titles:
+        title_bytes = len(title.encode("utf-8"))
+        sep_bytes = 3 if kept else 0  # " · "
+        if kept and used + sep_bytes + title_bytes > max_bytes:
+            break
+        if not kept and title_bytes > max_bytes:
+            break
+        kept.append(title)
+        used += sep_bytes + title_bytes
+    if not kept:
+        noun = "heading" if len(titles) == 1 else "headings"
+        return f"{len(titles)} {noun}"
+    rest = len(titles) - len(kept)
+    gist = " · ".join(f"§{t}" for t in kept)
+    if rest:
+        gist += f" · +{rest} more"
+    return gist
+
+
 def _build_work_surface_block_scored(
     repo_root: Path,
 ) -> tuple[TrimResult, "frozenset[Path]"]:
@@ -1179,8 +1231,10 @@ def _build_work_surface_block_scored(
     # count of them. A count says a page is missing; only the name says which,
     # and "go read it" is not an instruction until the reader knows what to
     # open. This list is the last thing standing between a dropped page and
-    # silence, so it holds paths (#1020).
-    unannounced: list[str] = []
+    # silence, so it holds paths (#1020). Paired with each page's own
+    # content so the closing line can still offer a heading gist (#1111) —
+    # the one coordinate left for a page that rendered nothing at all.
+    unannounced: list[tuple[str, str]] = []
     for path in acc.work_surface_files(ctx):
         relative = path.relative_to(surface).as_posix()
         content = path.read_text(encoding="utf-8").strip()
@@ -1188,7 +1242,7 @@ def _build_work_surface_block_scored(
             continue
         page_bytes = len(content.encode("utf-8"))
         if remaining <= 0:
-            unannounced.append(relative)
+            unannounced.append((relative, content))
             continue
         # The per-page cap is a defence against *accreting* pages — see
         # `_MAX_ACCRETING_BLOCK_BYTES`, and `ledger/decisions.md`, 458 KB
@@ -1237,18 +1291,23 @@ def _build_work_surface_block_scored(
             # (smaller) file may still fit. **Say so**: a page dropped from a
             # wake with nothing naming it is the same class of silent loss
             # this whole change exists to end, and a reader who cannot see
-            # that `workflow.md` is absent cannot know to go read it.
+            # that `workflow.md` is absent cannot know to go read it. The
+            # heading gist (#1111) rides the same placeholder budget check
+            # below, so a gist too big to afford falls through to
+            # `unannounced` exactly like the bare placeholder always did.
+            gist = _page_heading_gist(content)
+            gist_suffix = f" · {gist}" if gist else ""
             placeholder = (
                 f"### {relative}\n\n_(page omitted — {page_bytes:,} B would not "
-                f"fit the {remaining:,} B left of the surface budget · full "
-                f"page: `surface/{relative}`)_"
+                f"fit the {remaining:,} B left of the surface budget{gist_suffix} "
+                f"· full page: `surface/{relative}`)_"
             )
             placeholder_size = len(placeholder.encode("utf-8"))
             if placeholder_size <= remaining:
                 blocks.append(placeholder)
                 remaining -= placeholder_size
             else:
-                unannounced.append(relative)
+                unannounced.append((relative, content))
             continue
         blocks.append(block)
         trims.append(trimmed)
@@ -1271,8 +1330,17 @@ def _build_work_surface_block_scored(
         # against a budget of tens of thousands, and it is charged to nothing:
         # the count was already being rendered, and the count was the part
         # that carried no information.
+        #
+        # Each name also carries a heading gist (#1111) — a page dropped
+        # whole leaves nothing else a reply could point at. Same reasoning
+        # as the name itself: uncharged, because the alternative is a
+        # coordinate that silently stops existing the moment a page misses
+        # even the placeholder.
         noun = "page" if len(unannounced) == 1 else "pages"
-        named = " · ".join(f"`{relative}`" for relative in unannounced)
+        named = " · ".join(
+            f"`{relative}`" + (f" ({gist})" if (gist := _page_heading_gist(content)) else "")
+            for relative, content in unannounced
+        )
         blocks.append(
             f"_({len(unannounced)} further surface {noun} omitted — the "
             f"surface budget was exhausted: {named} · read them under "
@@ -1291,7 +1359,9 @@ def _build_work_surface_block_scored(
         "The shared user/resident orientation, discovered from one authored "
         f"root: `{surface}`. Add, move, or link Markdown there; do not create "
         "parallel orientation roots elsewhere in home. The dashboard mirrors "
-        "the same discovered set.\n\n"
+        "the same discovered set. Cite a page as `path §Heading` — the path "
+        "is each block's own heading below, the heading is one of its own "
+        "`## ` lines. Unlike kb pages, no page URL exists for these.\n\n"
         + "\n\n---\n\n".join(blocks)
     )
     worst = _worst_trim(trims)

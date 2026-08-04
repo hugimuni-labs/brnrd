@@ -3263,6 +3263,171 @@ class TestWorkSurfaceInjection:
         assert "`zzz-last.md`" in result.text, "every dropped page, not just the first"
         assert "The signed clause" not in result.text, "and they really were dropped"
 
+    def test_work_surface_preamble_states_the_citation_convention(self, tmp_path):
+        """#1111 — the block states the coordinate formula once, up front.
+
+        Mirrors the ``kb page URL base`` line in the Delivery contract: a
+        single, resident-readable sentence the reader applies to every page
+        below, rather than a per-page repeat of the same fact.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (surface / "index.md").write_text("# Start here", encoding="utf-8")
+
+        result = _build_work_surface_block(tmp_path)
+
+        assert "path §Heading" in result
+        assert result.count("path §Heading") == 1, "stated once, not per page"
+
+    def test_the_exhausted_budget_line_gists_each_dropped_pages_headings(self, tmp_path):
+        """#1111 — a page dropped whole still announces what it held.
+
+        The trailing "N further pages omitted" line named paths only; a
+        reply had no way to cite what a dropped page contained without
+        opening it. Each name now carries a budget-capped gist of the
+        page's own ``## `` heading titles — the last coordinate available
+        once a page renders nothing at all.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Gating and merges\n\nThe signed clause.\n", encoding="utf-8"
+        )
+        (surface / "zzz-last.md").write_text("## Tail\n\nAlso dropped.\n", encoding="utf-8")
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "`workflow.md` (§Gating and merges)" in result.text
+        assert "`zzz-last.md` (§Tail)" in result.text
+
+    def test_a_dropped_pages_long_headings_gist_as_a_count_not_a_clipped_title(
+        self, tmp_path
+    ):
+        """#1111 — never fabricate an anchor by clipping a title mid-sentence.
+
+        A title too long to quote inside the gist's own tiny budget falls
+        back to a true, cheap count instead of a truncated fragment nobody
+        wrote as a heading.
+        """
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        long_title = "This heading title runs well past the forty byte gist budget on purpose"
+        assert len(long_title.encode("utf-8")) > 40
+        (surface / "workflow.md").write_text(
+            f"## {long_title}\n\nThe signed clause.\n", encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "`workflow.md` (1 heading)" in result.text
+        assert long_title not in result.text, "never a clipped or whole fragment of it"
+
+    def test_a_dropped_pages_headings_list_names_some_and_counts_the_rest(self, tmp_path):
+        """#1111 — the gist keeps whichever titles fit and counts the rest,
+        the same "name what fits, count what doesn't" shape as the
+        structural trim marker (:func:`_structural_trim_marker`)."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "## Section Alpha\n\nA.\n\n"
+            "## Section Beta\n\nB.\n\n"
+            "## Section Gamma\n\nC.\n",
+            encoding="utf-8",
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "`workflow.md` (§Section Alpha · §Section Beta · +1 more)" in result.text
+
+    def test_a_headingless_dropped_page_gists_nothing(self, tmp_path):
+        """#1111 — no ``## `` headings means no anchors to report; the name
+        alone (no dangling parens) stays the honest answer."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        budget = 900
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            f"dominion.surface_inject_budget_bytes={budget}\n",
+            encoding="utf-8",
+        )
+        (surface / "plan.md").write_text(
+            "# Active plan\n\n## Open, ranked\n\n"
+            + ("the plan's actual agenda " * 70)
+            + "\n",
+            encoding="utf-8",
+        )
+        (surface / "workflow.md").write_text(
+            "# Workflow\n\nno h2 sections here.\n", encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "`workflow.md`" in result.text
+        assert "`workflow.md` (" not in result.text
+
+    def test_a_page_omitted_via_placeholder_also_gists_its_headings(self, tmp_path):
+        """#1111 — the placeholder path (room for a notice, not for content)
+        gets the same gist as the fully-unannounced closing line."""
+        home = _seed_account_home(tmp_path)
+        surface = home / "surface"
+        surface.mkdir()
+        (tmp_path / ".brr" / "config").write_text(
+            f"home.path={home}\nrepo.label=local/default\n"
+            "dominion.surface_inject_budget_bytes=900\n",
+            encoding="utf-8",
+        )
+        (surface / "index.md").write_text("# Start here\n\n" + ("i" * 700), encoding="utf-8")
+        (surface / "workflow.md").write_text(
+            "## Gating and merges\n\n" + ("w" * 150), encoding="utf-8"
+        )
+
+        result, _whole = _build_work_surface_block_scored(tmp_path)
+
+        assert "### workflow.md" in result.text
+        assert "page omitted" in result.text
+        assert "§Gating and merges" in result.text
+
     def test_a_single_unannounced_skip_is_named_in_the_singular(self, tmp_path):
         """#1020 — the singular branch names its one page too.
 
