@@ -1085,7 +1085,11 @@ def _counted_notices(notices: list) -> list:
 def _gate_chip(receipt: dict[str, Any] | None) -> str | None:
     """``gate GREEN@e59f527`` — the verdict, and the tree it was earned on.
 
-    `.gate-receipt.json` decides whether a run may merge — ``workflow.md``
+    *receipt* is this run's own tree's entry from ``.gate-receipts.json``
+    (``gate_receipt.read_receipt``, keyed by ``ctx.repo_dir`` — #820), never
+    the raw file: a receipt for a tree this run is not asking about must not
+    be able to satisfy or trip this chip. ``.gate-receipts.json`` decides
+    whether a run may merge — ``workflow.md``
     self-merge condition 1 is, operationally, a question about this file —
     and until now it was the only control file in the outbox with no chip
     (#1048). Reaching the verdict meant grepping a log, which is exactly the
@@ -2007,12 +2011,14 @@ def format_delta(
     both keeps this a pure function of the snapshot — everything renders as
     a first appearance, and elided bodies point at ``inbox.json`` by name.
 
-    ``gate_receipt_data`` is this run's ``.gate-receipt.json``, read by the
-    caller for ``mood``'s reason — it is an outbox artifact, not part of the
-    portal snapshot, and the resident rewrites it mid-run by gating again
-    (#1048). Mid-run bar segment only: at seed there is never a receipt, and
-    at stop :func:`_gate_closeout_clause` already speaks with the repo dir in
-    hand and far more standing than a chip has.
+    ``gate_receipt_data`` is this run's own tree's entry from
+    ``.gate-receipts.json`` (``gate_receipt.read_receipt``, keyed by
+    ``ctx.repo_dir`` — #820), read by the caller for ``mood``'s reason — it is
+    an outbox artifact, not part of the portal snapshot, and the resident
+    rewrites it mid-run by gating again (#1048). Mid-run bar segment only: at
+    seed there is never a receipt, and at stop :func:`_gate_closeout_clause`
+    already speaks with the repo dir in hand and far more standing than a
+    chip has.
     ``plan`` is the run's blueprint joined against its produce
     (:mod:`brr.promises`, #1008) — computed by the caller for ``orient``'s
     reason: it is read off ``.promises.jsonl``, which is not in the portal
@@ -3042,19 +3048,20 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
         return None
     changed = max(commits, unpushed)
 
-    # `_read_json` collapses absent, unreadable and malformed into `{}`. That
-    # collapse is deliberate here rather than sloppy: all three mean *no
-    # trustworthy record that the gate ran*, and the direction this claim is
-    # allowed to be wrong in is the pessimistic one.
-    receipt = _read_json(
-        ctx.outbox_dir / GATE_RECEIPT_NAME if ctx.outbox_dir else None
-    )
+    # `gate_receipt.read_receipt` collapses absent outbox, absent repo root,
+    # absent file, unreadable file, malformed file, *and an entry for a
+    # different tree* into `None`. All of that means *no trustworthy record
+    # that this tree's gate ran*, and the direction this claim is allowed to
+    # be wrong in is the pessimistic one (#820: a receipt for a tree this
+    # guard is not asking about must not be able to satisfy it).
+    receipt = gate_receipt.read_receipt(ctx.outbox_dir, repo)
     if not receipt:
         return (
             f"the gate never ran — {changed} commit(s) and a changed tree, no "
-            f"`{ctx.gate_command}` receipt. The test command you remember is "
-            f"one leg of what CI runs; run `brnrd gate-run` (it runs "
-            f"`{ctx.gate_command}` and writes this receipt) before claiming green"
+            f"`{ctx.gate_command}` receipt for {repo}. The test command you "
+            f"remember is one leg of what CI runs; run `brnrd gate-run` (it "
+            f"runs `{ctx.gate_command}` and writes this receipt) before "
+            f"claiming green"
         )
     stale = (
         receipt.get("head") != head.strip()
@@ -3065,8 +3072,8 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
     )
     if stale:
         return (
-            f"the gate ran on a different tree than the one you are ending on "
-            f"(receipt: {str(receipt.get('verdict') or '?')} at "
+            f"the gate ran on a different tree than the one you are ending "
+            f"on ({repo}) (receipt: {str(receipt.get('verdict') or '?')} at "
             f"{str(receipt.get('head') or '?')[:8]}). Re-run `brnrd gate-run` "
             f"(runs `{ctx.gate_command}`) — a green verdict for a tree you "
             f"have since edited is a claim about code nobody ran"
@@ -3083,8 +3090,8 @@ def _gate_closeout_clause(ctx: "HookContext") -> str | None:
             f"the gate ran, and the tree moved under it while it ran — "
             f"{gate_receipt.moved_sentence(receipt, ctx.gate_command)}. The "
             f"receipt's {str(receipt.get('verdict') or '?')} is about the tree "
-            f"as it was before that change. Re-run `brnrd gate-run` now that "
-            f"the tree is still"
+            f"({repo}) as it was before that change. Re-run `brnrd gate-run` "
+            f"now that the tree is still"
         )
     return None
 
@@ -3371,12 +3378,11 @@ def compute_neutral(
         state[MOOD_EVER_WRITTEN_KEY] = True
     # Re-read every boundary, like `.mood` and `.card`: a resident gates
     # more than once in a long run, and a cached verdict is exactly the
-    # stale claim this chip exists to make visible. `_read_json` collapses
-    # absent/unreadable/malformed to `{}`, and the chip renders nothing for
-    # all three — a run that has not gated is not a run that failed.
-    gate_receipt_data = _read_json(
-        ctx.outbox_dir / GATE_RECEIPT_NAME if ctx.outbox_dir else None
-    )
+    # stale claim this chip exists to make visible. `gate_receipt.read_receipt`
+    # collapses absent/unreadable/malformed/wrong-tree to `None` (#820), and
+    # the chip renders nothing for all four — a run that has not gated *this*
+    # tree is not a run that failed.
+    gate_receipt_data = gate_receipt.read_receipt(ctx.outbox_dir, ctx.repo_dir)
     # The blueprint (#1008), read fresh for `.mood`'s reason: the resident
     # writes `.promises.jsonl` between hook fires and the point is that the
     # line rendered here reflects what it just claimed. Joined against the
