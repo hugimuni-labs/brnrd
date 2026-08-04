@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -1051,28 +1051,8 @@ def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db
     )
 
 
-def _surface_etag(account: Account) -> str:
-    """Weak validator for the corpus mirror: bumps only when the daemon republishes.
-
-    ``surface_updated_at`` is already the row's own publish timestamp — reused
-    here rather than minted fresh, so two dashboard reloads between publishes
-    carry the same ETag and the second can 304 instead of re-shipping all
-    ~2,841 pages with full markdown (#946).
-    """
-    if account.surface_updated_at is None:
-        return 'W/"surface-unset"'
-    return f'W/"surface-{account.surface_updated_at.isoformat()}"'
-
-
-def _if_none_match_hits(if_none_match: str | None, etag: str) -> bool:
-    if not if_none_match:
-        return False
-    candidates = [part.strip() for part in if_none_match.split(",")]
-    return etag in candidates or "*" in candidates
-
-
 @router.get("/v1/dashboard/surface")
-def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> Response:
+def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """Account-scoped discovered work surface for the SvelteKit frontend."""
     account_id = _account_id(request, db)
     if account_id is None:
@@ -1080,12 +1060,6 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> Re
     account = db.get(Account, account_id)
     if account is None:
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
-    etag = _surface_etag(account)
-    if _if_none_match_hits(request.headers.get("if-none-match"), etag):
-        # No body on a 304 (RFC 9110 §15.4.5) — the corpus this saves shipping
-        # is the whole point (#946), so the empty response is the fix, not an
-        # oversight.
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     try:
         files = json.loads(account.surface_json or "[]")
     except ValueError:
@@ -1101,8 +1075,7 @@ def dashboard_surface_api(request: Request, db: Session = Depends(get_db)) -> Re
             "files": files,
             "reported_at": account.surface_updated_at.isoformat() if account.surface_updated_at else None,
             **_withheld_lane(repos, "corpus"),
-        },
-        headers={"ETag": etag, "Cache-Control": "no-cache"},
+        }
     )
 
 

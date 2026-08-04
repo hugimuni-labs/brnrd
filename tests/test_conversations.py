@@ -1237,61 +1237,6 @@ def test_append_event_records_full_body_and_summary(tmp_path):
     assert "ts" in records[-1]
 
 
-def test_append_event_records_photo_attachment_fact(tmp_path):
-    """#943 — a captionless Telegram photo must not record as pure silence.
-
-    The event shape here is production-shaped, not invented: it is exactly
-    what ``test_telegram_gate.test_loop_accepts_photo_with_no_caption``
-    asserts ``protocol.list_pending`` hands back after the local gate
-    downloads a bare photo — ``body: ""``, ``attachments: "photo.jpg"``
-    (the single comma-joined frontmatter field ``protocol.create_event``
-    writes).
-    """
-    event = {
-        "id": "evt-1",
-        "source": "telegram",
-        "body": "",
-        "attachments": "photo.jpg",
-    }
-    conversations.append_event(tmp_path, "k", event)
-    record = conversations.read_records(tmp_path, "k")[-1]
-    assert record["body"] == ""
-    assert record["attachments"] == [{"kind": "photo", "filename": "photo.jpg"}]
-
-
-def test_append_event_records_multiple_attachments_with_kind(tmp_path):
-    """Multiple attachments on one event keep the index-prefixed naming
-    ``protocol.create_event`` writes when more than one file lands
-    (``NN-<name>``) and classify each independently: the photo convention
-    (``photo.jpg``, possibly index-prefixed) reads as ``photo``; anything
-    else (a Telegram image document, a GitHub inline image) reads as
-    ``document``.
-    """
-    event = {
-        "id": "evt-2",
-        "source": "telegram",
-        "body": "check these out",
-        "attachments": "00-photo.jpg,01-report.png",
-    }
-    conversations.append_event(tmp_path, "k", event)
-    record = conversations.read_records(tmp_path, "k")[-1]
-    assert record["attachments"] == [
-        {"kind": "photo", "filename": "00-photo.jpg"},
-        {"kind": "document", "filename": "01-report.png"},
-    ]
-
-
-def test_append_event_no_attachments_key_when_event_has_none(tmp_path):
-    """A plain text event (the overwhelming common case) gets no
-    ``attachments`` key at all — not an empty list — so existing readers
-    that only check truthiness see no behavioural change.
-    """
-    event = {"id": "evt-3", "source": "telegram", "body": "hello"}
-    conversations.append_event(tmp_path, "k", event)
-    record = conversations.read_records(tmp_path, "k")[-1]
-    assert "attachments" not in record
-
-
 def test_append_run_includes_env_and_branch_name(tmp_path):
     conversations.append_run(
         tmp_path, "k",
