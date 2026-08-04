@@ -1,4 +1,4 @@
-"""A run's git must not be able to reach the shared host checkout (#703).
+"""A worker's git must not be able to reach the shared host checkout (#703).
 
 Both halves of the containment, driven against real checkouts rather than
 mocks. The bug happened through a real ``git commit`` from a real drifted cwd,
@@ -9,7 +9,7 @@ happily as with the post-fix code — the failure mode this repo files under
 Layout every test builds:
 
     <tmp>/host          the shared checkout, on `main`   ← must never be written
-    <tmp>/wt/<run>      the run's own worktree, on its own branch
+    <tmp>/wt/<run>      the worker's own worktree, on its own branch
     <tmp>/other         an unrelated repository, for the `-C` blindness probes
 """
 
@@ -49,7 +49,7 @@ def _branch(repo):
 
 @pytest.fixture
 def trees(tmp_path):
-    """A host checkout with one commit, plus a linked run worktree."""
+    """A host checkout with one commit, plus a linked worker worktree."""
     host = tmp_path / "host"
     init_git_repo(host)
     (host / "README.md").write_text("host\n", encoding="utf-8")
@@ -61,10 +61,10 @@ def trees(tmp_path):
     return host, run_root
 
 
-def _strand(run_root, *, env="worktree", run_id="run-703-child"):
+def _worker(run_root, *, env="worktree", run_id="run-703-child"):
     return Run(
         id=run_id, event_id="evt-703", body="spec", env=env,
-        meta={"strand": True},
+        meta={"worker": True},
     )
 
 
@@ -78,11 +78,11 @@ def _pinned_env(task, run_root):
 
 def test_pin_names_the_worktree_not_the_shared_checkout(trees):
     host, run_root = trees
-    pin = daemon._child_git_pin(_strand(run_root), run_root)
+    pin = daemon._child_git_pin(_worker(run_root), run_root)
     assert set(pin) == {"GIT_DIR", "GIT_WORK_TREE"}
     assert pin["GIT_WORK_TREE"] == str(run_root)
     # The worktree's *own* administrative dir, not the shared common dir —
-    # pointing GIT_DIR at the common dir would put the run on the main
+    # pointing GIT_DIR at the common dir would put the worker on the main
     # checkout's HEAD, which is the bug wearing a hat.
     assert pin["GIT_DIR"] == str(gitops.absolute_git_dir(run_root))
     assert pin["GIT_DIR"] != str(host / ".git")
@@ -94,16 +94,16 @@ def test_bare_commit_from_execution_root_cannot_reach_host_branch(trees):
     The pre-fix outcome was 262 insertions on the shared checkout's `main`.
     """
     host, run_root = trees
-    task = _strand(run_root)
+    task = _worker(run_root)
     env = _pinned_env(task, run_root)
     host_head_before = _head(host)
 
-    # The run writes its deliverable into the *execution root* — the exact
+    # The worker writes its deliverable into the *execution root* — the exact
     # drift that opened #703 — then runs a bare add/commit there.
     (host / "deliverable.md").write_text("262 insertions\n", encoding="utf-8")
     _git(host, "add", "-A", env=env, check=False)
     committed = _git(
-        host, "commit", "-m", "feat: the run's deliverable",
+        host, "commit", "-m", "feat: the worker's deliverable",
         env=env, check=False,
     )
 
@@ -118,22 +118,22 @@ def test_bare_commit_from_execution_root_cannot_reach_host_branch(trees):
     assert (host / "deliverable.md").exists()
 
 
-def test_bare_commit_from_execution_root_lands_on_the_strand_branch(trees):
-    """The other half of "or fails loudly": when the run *has* work.
+def test_bare_commit_from_execution_root_lands_on_the_worker_branch(trees):
+    """The other half of "or fails loudly": when the worker *has* work.
 
     Same drifted cwd, but the worktree is dirty. The commit must succeed and
-    land on the run's own branch — a pin that only ever refused would make
-    every drifted run fail instead of quietly doing the right thing.
+    land on the worker's own branch — a pin that only ever refused would make
+    every drifted worker fail instead of quietly doing the right thing.
     """
     host, run_root = trees
-    task = _strand(run_root)
+    task = _worker(run_root)
     env = _pinned_env(task, run_root)
     host_head_before = _head(host)
     child_head_before = _head(run_root)
 
     (run_root / "deliverable.md").write_text("real work\n", encoding="utf-8")
     _git(host, "add", "-A", env=env)
-    _git(host, "commit", "-m", "feat: the run's deliverable", env=env)
+    _git(host, "commit", "-m", "feat: the worker's deliverable", env=env)
 
     assert _head(host) == host_head_before
     assert _head(run_root) != child_head_before
@@ -152,7 +152,7 @@ def test_pin_is_all_or_nothing(trees):
     corruption mode the incident never had.
     """
     _host, run_root = trees
-    pin = daemon._child_git_pin(_strand(run_root), run_root)
+    pin = daemon._child_git_pin(_worker(run_root), run_root)
     assert ("GIT_DIR" in pin) == ("GIT_WORK_TREE" in pin)
 
 
@@ -166,12 +166,12 @@ def test_no_pin_for_a_resident_or_a_host_run(trees):
     _host, run_root = trees
     resident = Run(id="run-res", event_id="e", body="b", env="worktree", meta={})
     assert daemon._child_git_pin(resident, run_root) == {}
-    host_strand = _strand(run_root, env="host")
-    assert daemon._child_git_pin(host_strand, run_root) == {}
+    host_worker = _worker(run_root, env="host")
+    assert daemon._child_git_pin(host_worker, run_root) == {}
 
 
 def test_pin_absent_rather_than_half_built_when_git_dir_unreadable(tmp_path):
-    task = _strand(tmp_path / "nope")
+    task = _worker(tmp_path / "nope")
     assert daemon._child_git_pin(task, tmp_path / "not-a-repo") == {}
 
 
@@ -181,27 +181,27 @@ def test_pin_absent_rather_than_half_built_when_git_dir_unreadable(tmp_path):
 # *logic* and says nothing about whether anything calls it. Deleting the
 # `env.update(_child_git_pin(...))` line in `_runner_runtime` would leave all
 # of them green — a guard can be perfect and unwired, and "counting call sites
-# overcounts coverage" is this repo's own lesson. These two drive `_execute_run`
+# overcounts coverage" is this repo's own lesson. These two drive `_run_worker`
 # end to end and read the env the runner is handed.
 
 
-def _drive_execute_run(tmp_path, monkeypatch, *, strand: bool, during=None,
+def _drive_run_worker(tmp_path, monkeypatch, *, worker: bool, during=None,
                       finalize=False):
-    """Run `_execute_run` against a real checkout + real worktree, and return
+    """Run `_run_worker` against a real checkout + real worktree, and return
     the environment the runner was actually invoked with.
 
     ``during`` is called with ``(repo_root, run_root)`` while the stub runner
-    is "executing", so a test can simulate what a drifted run does. With
-    ``finalize=True`` the whole ``_run_and_finalize`` path runs, which
+    is "executing", so a test can simulate what a drifted worker does. With
+    ``finalize=True`` the whole ``_run_worker_and_finalize`` path runs, which
     is what puts the stray-write check itself under test rather than just the
     function it calls.
     """
-    # `_execute_run` resolves a Shell+Core profile before it builds any
+    # `_run_worker` resolves a Shell+Core profile before it builds any
     # environment, and `resolve_runner_profile` raises when neither `claude`
     # nor `codex` is on PATH. Unstubbed, that makes this helper pass on every
     # dev machine (which has a Shell installed) and fail only on the gate,
     # which has none — the tests it drives went green locally and red on CI.
-    # Same stub every other `_execute_run` test in this suite already uses.
+    # Same stub every other `_run_worker` test in this suite already uses.
     monkeypatch.setattr(
         daemon.runner, "resolve_runner_profile",
         lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root),
@@ -215,7 +215,7 @@ def _drive_execute_run(tmp_path, monkeypatch, *, strand: bool, during=None,
     run_root.parent.mkdir(parents=True, exist_ok=True)
     _git(tmp_path, "worktree", "add", "-b", "brr/wiring", str(run_root), "main")
 
-    extra = {"strand": True} if strand else {}
+    extra = {"worker": True} if worker else {}
     event = make_event(tmp_path, eid="evt-wiring", **extra)
     seen: dict[str, str] = {}
 
@@ -254,28 +254,28 @@ def _drive_execute_run(tmp_path, monkeypatch, *, strand: bool, during=None,
         daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
     )
     driver = (
-        daemon._run_and_finalize if finalize else daemon._execute_run
+        daemon._run_worker_and_finalize if finalize else daemon._run_worker
     )
     task = driver(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
     return task, seen, run_root
 
 
 def test_the_pin_reaches_the_runners_environment(tmp_path, monkeypatch):
-    task, seen, run_root = _drive_execute_run(tmp_path, monkeypatch, strand=True)
-    assert task.meta.get("strand") is True
+    task, seen, run_root = _drive_run_worker(tmp_path, monkeypatch, worker=True)
+    assert task.meta.get("worker") is True
     assert seen.get("GIT_WORK_TREE") == str(run_root)
     assert seen.get("GIT_DIR") == str(gitops.absolute_git_dir(run_root))
 
 
-def test_no_pin_reaches_a_non_strand_runs_environment(tmp_path, monkeypatch):
-    _task, seen, _run_root = _drive_execute_run(tmp_path, monkeypatch, strand=False)
+def test_no_pin_reaches_a_non_worker_runs_environment(tmp_path, monkeypatch):
+    _task, seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, worker=False)
     assert "GIT_DIR" not in seen
     assert "GIT_WORK_TREE" not in seen
 
 
 def test_the_host_baseline_is_recorded_by_the_dispatch_path(tmp_path, monkeypatch):
     """Half 2's dispatch-time arm, wired rather than called directly."""
-    task, _seen, _run_root = _drive_execute_run(tmp_path, monkeypatch, strand=True)
+    task, _seen, _run_root = _drive_run_worker(tmp_path, monkeypatch, worker=True)
     assert task.meta.get("host_head_at_dispatch")
     assert "host_dirty_at_dispatch" in task.meta
 
@@ -283,8 +283,8 @@ def test_the_host_baseline_is_recorded_by_the_dispatch_path(tmp_path, monkeypatc
 def test_finalize_reports_a_stranded_deliverable_end_to_end(tmp_path, monkeypatch):
     """The whole containment, from dispatch to verdict, with no direct call.
 
-    A run whose cwd drifted writes its deliverable into the execution root
-    and commits nothing. `_run_and_finalize` must reach a verdict on
+    A worker whose cwd drifted writes its deliverable into the execution root
+    and commits nothing. `_run_worker_and_finalize` must reach a verdict on
     `task.meta` — otherwise the check is a function with no caller, which is
     the shape a guard has when it was wired and then quietly unwired.
     """
@@ -293,15 +293,15 @@ def test_finalize_reports_a_stranded_deliverable_end_to_end(tmp_path, monkeypatc
             "262 insertions\n", encoding="utf-8",
         )
 
-    task, _seen, _run_root = _drive_execute_run(
-        tmp_path, monkeypatch, strand=True, during=drift, finalize=True,
+    task, _seen, _run_root = _drive_run_worker(
+        tmp_path, monkeypatch, worker=True, during=drift, finalize=True,
     )
     assert task.meta.get("stray_host_write") == "stranded-worktree"
     detail = json.loads(task.meta["stray_host_write_detail"])
     assert "stranded-deliverable.md" in detail["stranded_paths"]
 
 
-def test_finalize_stays_silent_when_the_strand_behaved(tmp_path, monkeypatch):
+def test_finalize_stays_silent_when_the_worker_behaved(tmp_path, monkeypatch):
     """The positive control's counterpart: no verdict key at all when clean.
 
     Absent stays absent — never a "clean" or a False that a reader has to
@@ -312,8 +312,8 @@ def test_finalize_stays_silent_when_the_strand_behaved(tmp_path, monkeypatch):
         _git(run_root, "add", "-A")
         _git(run_root, "commit", "-m", "feat: work, in the right tree")
 
-    task, _seen, _run_root = _drive_execute_run(
-        tmp_path, monkeypatch, strand=True, during=behave, finalize=True,
+    task, _seen, _run_root = _drive_run_worker(
+        tmp_path, monkeypatch, worker=True, during=behave, finalize=True,
     )
     assert "stray_host_write" not in task.meta
 
@@ -332,12 +332,12 @@ def test_pin_blinds_a_hand_rolled_git_to_every_other_tree(trees, tmp_path):
     other = tmp_path / "other"
     init_git_repo(other)
     _git(other, "commit", "--allow-empty", "-m", "other: base")
-    env = _pinned_env(_strand(run_root), run_root)
+    env = _pinned_env(_worker(run_root), run_root)
 
     blinded = _git(other, "rev-parse", "--show-toplevel", env=env)
     assert blinded.stdout.strip() == str(run_root)  # not `other`
 
-    # The escape `prompts/strand.md` hands the run.
+    # The escape `prompts/worker.md` hands the worker.
     escaped_env = {
         k: v for k, v in env.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")
     }
@@ -349,8 +349,8 @@ def test_brnrd_own_git_reads_survive_an_inherited_pin(trees, monkeypatch):
     """brnrd names the repository it means, so the pin must not outrank it.
 
     Without `gitops.explicit_repo_env`, every ref read brnrd makes from inside
-    a pinned run — including the stray-write check below — would report the
-    run's worktree while naming the host checkout. The check would then be
+    a pinned worker — including the stray-write check below — would report the
+    worker's worktree while naming the host checkout. The check would then be
     verifiable only by the thing it guards.
     """
     host, run_root = trees
@@ -364,7 +364,7 @@ def test_brnrd_own_git_reads_survive_an_inherited_pin(trees, monkeypatch):
     host_head = _head(host)
     child_head = _head(run_root)
     assert host_head != child_head
-    for var, value in daemon._child_git_pin(_strand(run_root), run_root).items():
+    for var, value in daemon._child_git_pin(_worker(run_root), run_root).items():
         monkeypatch.setenv(var, value)
 
     assert gitops.rev_parse(host, "HEAD") == host_head
@@ -400,8 +400,8 @@ def test_explicit_repo_env_drops_only_the_overrides(monkeypatch):
 
 
 def _dispatched(host, run_root, *, env="worktree", run_id="run-703-child"):
-    """A run with its host baseline recorded, as `_execute_run` does."""
-    task = _strand(run_root, env=env, run_id=run_id)
+    """A run with its host baseline recorded, as `_run_worker` does."""
+    task = _worker(run_root, env=env, run_id=run_id)
     daemon._record_host_baseline(task, host)
     return task
 
@@ -513,7 +513,7 @@ def test_host_env_run_is_never_checked(trees):
 
 def test_no_baseline_disables_the_check_rather_than_guessing(trees):
     host, run_root = trees
-    task = _strand(run_root)  # never dispatched through _record_host_baseline
+    task = _worker(run_root)  # never dispatched through _record_host_baseline
     _commit_in_host_as(host, task.id)
     assert daemon._stray_host_write(task, host) is None
 
@@ -638,7 +638,7 @@ def test_notify_says_nothing_when_there_is_nothing_stray(tmp_path):
 
 
 def test_a_runner_that_never_ran_is_not_accused_of_a_stray_write(tmp_path):
-    """#633's rule, preserved: no run, nothing to have written."""
+    """#633's rule, preserved: no worker, nothing to have written."""
     task = _spawn_child(stray="stray-commit", detail={"stray_commits": ["a"]},
                         status="error")
     task.meta.pop("trace_dirs")  # no transcript ⇒ the Shell never gave a turn
@@ -690,8 +690,8 @@ def test_a_rename_reports_its_destination(trees):
 
 # ── half 3: the suite itself inherits the pin (#746) ─────────────────
 #
-# #703 pinned `GIT_DIR`/`GIT_WORK_TREE` into a run's environment on
-# purpose. Every subprocess that run starts inherits them — including
+# #703 pinned `GIT_DIR`/`GIT_WORK_TREE` into a worker's environment on
+# purpose. Every subprocess that worker starts inherits them — including
 # `pytest`, and *this* suite does `git init` and `git config` at ~319 call
 # sites. Under the inherited pin those writes leave the tmpdir they name and
 # land in the shared host checkout's common git dir: a `[user]` section and
@@ -710,7 +710,7 @@ def _inner_pytest(tmp_path, decoy: Path, body: str) -> subprocess.CompletedProce
     about a pin that exists *before the fixture runs*. Setting the variables
     inside a test body proves nothing: the autouse fixture already ran and
     already dropped them. The only faithful shape is a fresh interpreter
-    whose environment carries the pin at startup, exactly as a run's
+    whose environment carries the pin at startup, exactly as a worker's
     pytest does.
 
     The real `tests/conftest.py` is copied rather than imported so the inner
@@ -925,7 +925,7 @@ def test_the_refusal_reaches_the_run_state_doc(publishable, tmp_path):
 
 
 def test_the_refusal_reaches_a_spawning_parents_thread(publishable, tmp_path):
-    """The other reader: a run's parent, in its own conversation."""
+    """The other reader: a worker's parent, in its own conversation."""
     host, _remote = publishable
     _repoint(host, tmp_path / "elsewhere")
     task = _publish_run(
@@ -1048,7 +1048,7 @@ def hostile_identity(monkeypatch):
 def test_a_brnrd_commit_never_inherits_an_ambient_identity(
     tmp_path, hostile_identity,
 ):
-    """The secondary damage in #746: the run's commit was authored *and*
+    """The secondary damage in #746: the worker's commit was authored *and*
     committed as the human maintainer, because identity resolution went
     through the contaminated shared config."""
     repo = tmp_path / "dominion"

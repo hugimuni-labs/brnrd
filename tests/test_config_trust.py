@@ -317,7 +317,7 @@ def test_ignored_repo_security_key_surfaces_as_a_run_notice_and_warning(
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
 
-    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     outbox_dir = tmp_path / ".brr" / "outbox" / "evt-sec"
     notices = daemon._read_outbox_notices(outbox_dir)
@@ -345,7 +345,7 @@ def test_no_notice_when_no_security_key_is_set(tmp_path, monkeypatch):
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
 
-    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     outbox_dir = tmp_path / ".brr" / "outbox" / "evt-clean"
     notices = daemon._read_outbox_notices(outbox_dir)
@@ -1081,7 +1081,7 @@ def _drive_repo_profile_notice(tmp_path, monkeypatch, profile_text, eid):
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
 
-    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     notices = daemon._read_outbox_notices(
         tmp_path / ".brr" / "outbox" / eid
@@ -1178,7 +1178,7 @@ def test_no_profile_notice_when_the_repo_has_no_runners_file(tmp_path, monkeypat
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
 
-    daemon._execute_run(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     notices = daemon._read_outbox_notices(
         tmp_path / ".brr" / "outbox" / "evt-693-clean"
@@ -1334,7 +1334,7 @@ def test_unreachable_profile_catalog_surfaces_as_a_run_notice_and_warning(
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
 
-    daemon._execute_run(event, linked, linked / ".brr" / "responses", {}, 0)
+    daemon._run_worker(event, linked, linked / ".brr" / "responses", {}, 0)
 
     notices = daemon._read_outbox_notices(
         linked / ".brr" / "outbox" / "evt-700-notice"

@@ -178,7 +178,7 @@ def test_invoke_with_heartbeat_runs_runner_on_separate_thread():
 
     assert runner_thread, "runner never executed"
     assert callback_thread, "heartbeat never fired"
-    # Runner ran on the dedicated run; callback ran on the caller.
+    # Runner ran on the dedicated worker; callback ran on the caller.
     assert runner_thread[0].startswith("runner-")
     assert callback_thread[0] != runner_thread[0]
 

@@ -47,7 +47,7 @@ def _patch_runner_minimal(monkeypatch, captured_prompts=None):
     return captured_prompts
 
 
-def test_execute_run_routes_to_conversation_and_persists_records(tmp_path, monkeypatch):
+def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(
         tmp_path, eid="evt-conv-1", body="ship it",
@@ -56,7 +56,7 @@ def test_execute_run_routes_to_conversation_and_persists_records(tmp_path, monke
     _patch_runner_minimal(monkeypatch)
     _stub_env(monkeypatch)
 
-    task = daemon._execute_run(
+    task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -72,7 +72,7 @@ def test_execute_run_routes_to_conversation_and_persists_records(tmp_path, monke
     assert "response" in artifact_kinds
 
 
-def test_execute_run_threads_recent_conversation_through_prompt(tmp_path, monkeypatch):
+def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     first = make_event(
         tmp_path, eid="evt-thread-1", body="first",
@@ -87,10 +87,10 @@ def test_execute_run_threads_recent_conversation_through_prompt(tmp_path, monkey
     _patch_runner_minimal(monkeypatch, captured)
     _stub_env(monkeypatch)
 
-    daemon._execute_run(
+    daemon._run_worker(
         first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
-    daemon._execute_run(
+    daemon._run_worker(
         second, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -104,7 +104,7 @@ def test_execute_run_threads_recent_conversation_through_prompt(tmp_path, monkey
     assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)
 
 
-def test_execute_run_builds_communication_snapshot_and_history_files(
+def test_run_worker_builds_communication_snapshot_and_history_files(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -121,10 +121,10 @@ def test_execute_run_builds_communication_snapshot_and_history_files(
     _patch_runner_minimal(monkeypatch, captured)
     _stub_env(monkeypatch)
 
-    daemon._execute_run(
+    daemon._run_worker(
         first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
-    task = daemon._execute_run(
+    task = daemon._run_worker(
         second, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -143,7 +143,7 @@ def test_execute_run_builds_communication_snapshot_and_history_files(
     assert (history_path / "gate_thread-telegram__77__.jsonl").exists()
 
 
-def test_execute_run_threads_recent_correspondent_across_gate_channels(
+def test_run_worker_threads_recent_correspondent_across_gate_channels(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -164,10 +164,10 @@ def test_execute_run_threads_recent_correspondent_across_gate_channels(
     _patch_runner_minimal(monkeypatch, captured)
     _stub_env(monkeypatch)
 
-    daemon._execute_run(
+    daemon._run_worker(
         native, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
-    daemon._execute_run(
+    daemon._run_worker(
         cloud, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
@@ -183,7 +183,7 @@ def test_execute_run_threads_recent_correspondent_across_gate_channels(
     } == {"telegram:77:"}
 
 
-def test_execute_run_deduplicates_same_origin_message_across_channels(
+def test_run_worker_deduplicates_same_origin_message_across_channels(
     tmp_path, monkeypatch,
 ):
     write_repo_scaffold(tmp_path)
@@ -206,8 +206,8 @@ def test_execute_run_deduplicates_same_origin_message_across_channels(
     _patch_runner_minimal(monkeypatch, captured)
     _stub_env(monkeypatch)
 
-    first = daemon._execute_run(native, tmp_path, responses_dir, {}, 0)
-    second = daemon._execute_run(cloud, tmp_path, responses_dir, {}, 0)
+    first = daemon._run_worker(native, tmp_path, responses_dir, {}, 0)
+    second = daemon._run_worker(cloud, tmp_path, responses_dir, {}, 0)
 
     assert first.status == "done"
     assert second.status == "done"
@@ -219,7 +219,7 @@ def test_execute_run_deduplicates_same_origin_message_across_channels(
     assert [c[1] for c in captured] == ["evt-native"]
 
 
-def test_execute_run_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
+def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     _patch_runner_minimal(monkeypatch)
     _stub_env(monkeypatch)
@@ -233,10 +233,10 @@ def test_execute_run_followup_in_same_thread_reuses_conversation(tmp_path, monke
         telegram_chat_id=88, telegram_topic_id=3,
     )
 
-    task1 = daemon._execute_run(
+    task1 = daemon._run_worker(
         first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
-    task2 = daemon._execute_run(
+    task2 = daemon._run_worker(
         second, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 

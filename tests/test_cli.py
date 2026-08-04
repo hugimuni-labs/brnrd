@@ -1656,7 +1656,7 @@ def test_wake_dump_names_a_missing_boot_rather_than_omitting_it(tmp_path):
 
 
 def test_the_default_run_is_my_own_run_not_the_newest_directory(tmp_path, monkeypatch):
-    """Inside a run that spawned a run, newest-wins picks the *child*.
+    """Inside a run that spawned a worker, newest-wins picks the *child*.
 
     The failure this guards is silent: the command answers a different
     question than the one asked and nothing in the output says so. A run

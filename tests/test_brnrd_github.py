@@ -1159,11 +1159,11 @@ def test_issue_opened_title_mention_inside_a_fence_stays_inert(env):
 
 
 def test_pull_request_opened_from_our_own_branch_namespace_resolves_nothing(env):
-    """A strand PR must not summon a run off its own description.
+    """A worker PR must not summon a run off its own description.
 
-    Strand branches live in brnrd's ``brr/`` namespace and strand commits
+    Worker branches live in brnrd's ``brr/`` namespace and worker commits
     are pushed under the operator's identity, so the author-skip cannot see
-    them — a strand PR whose body @-mentions the bot would summon a run of
+    them — a worker PR whose body @-mentions the bot would summon a run of
     its own PR body, which may open another PR. The branch namespace is the
     structural tell; the face is not.
     """
@@ -1175,7 +1175,7 @@ def test_pull_request_opened_from_our_own_branch_namespace_resolves_nothing(env)
         client,
         _opened_payload(
             is_pr=True,
-            head_ref="brr/some-strand-slug",
+            head_ref="brr/some-worker-slug",
             association="COLLABORATOR",
         ),
         event="pull_request",

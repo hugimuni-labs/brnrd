@@ -917,9 +917,9 @@ class TestPromptBuilding:
 
         assert "- update available: 0.1.0 → 0.2.0" in prompt
 
-    def test_daemon_prompt_strand_excludes_resident_stack(self, tmp_path):
+    def test_daemon_prompt_worker_excludes_resident_stack(self, tmp_path):
         # A pitfall would normally surface for a matching task — confirm
-        # the run path skips the injected blocks entirely, not just the
+        # the worker path skips the injected blocks entirely, not just the
         # ones that happen to be empty in this fixture.
         _seed_pitfalls(
             tmp_path,
@@ -930,14 +930,14 @@ class TestPromptBuilding:
             "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
             tmp_path,
             run_id="task-9",
-            strand=True,
+            worker=True,
         )
         assert "Resident Identity Core" not in prompt
         assert "Pitfalls that match this task" not in prompt
         assert "Rebuild the image before you trust the cache." not in prompt
         assert "bounded, single-purpose thought" in prompt
         assert _says(prompt, "the turn frame in `weave.md` §The turn")
-        # Mechanics still ride — a run wake is still under the daemon.
+        # Mechanics still ride — a worker wake is still under the daemon.
         assert "single-flight" in prompt
 
     def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
@@ -997,13 +997,13 @@ class TestPromptBuilding:
         )
         assert "- Web research: not declared for this Shell" in prompt
 
-    def test_daemon_prompt_strand_still_sees_web_capability(self, tmp_path):
-        # Strands skip the resident inject stack but still get the bundle —
+    def test_daemon_prompt_worker_still_sees_web_capability(self, tmp_path):
+        # Workers skip the resident inject stack but still get the bundle —
         # the capability declaration must survive that path.
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
-            strand=True,
+            worker=True,
             runner_shell="codex",
         )
         assert "- Web research: native via web.run" in prompt
@@ -2114,7 +2114,7 @@ class TestScheduleTurnDedup:
     # rendered prompt.
     _ONE_FIRING = (
         "director-tick 5h cadence. Dispatch authority granted: spawn "
-        "runs for bounded plan items without waiting for a reply. "
+        "workers for bounded plan items without waiting for a reply. "
         "Merge authority history withdrawn 2026-07-05, see decision "
         "ledger for the incident. Notify bar widened 2026-06-20 to cover "
         "schedule-sourced turns. Cadence history 30m to 2h on 2026-05-01 "
@@ -2691,14 +2691,14 @@ class TestOwnOutboundReceipts:
                 "kind": "update",
                 "type": "progress",
                 "run_id": "run-1",
-                "stage": "run",
+                "stage": "worker",
             },
         ]
 
         block = _format_recent_conversation(records, brr_dir=brr_dir)
 
         assert "run run-1 status=done branch=brr/x" in block
-        assert "update progress run=run-1 stage=run" in block
+        assert "update progress run=run-1 stage=worker" in block
         assert "full turn:" not in block
 
     def test_empty_body_artifact_still_renders_the_path_line(self, tmp_path):
@@ -3496,7 +3496,7 @@ def test_kb_ownership_signal_zero_orphans_size_pressure_byte_identical():
         "pages to trim: a byte count cannot tell a load-bearing page from bloat — you "
         "can. The graph is 10 pages, log 5,000 B over 100 entries. Read this as the kb "
         "asking for a maintenance *round* — promote what's load-bearing, breadcrumb "
-        "what's spent, cut what's dead, relink the orphans. Strand-delegable; worth a "
+        "what's spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
         "dedicated pass, not a per-wake reflex to shorten the longest file. Full graph "
         "shape on demand: `brnrd kb`."
     )

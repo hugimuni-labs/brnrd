@@ -9,7 +9,7 @@ The gate polls the GitHub REST API for four configurable triggers:
   (``/issues/comments``) and inline PR review comments on diffs
   (``/pulls/comments``). PR-anchored comments carry the PR head branch
   as ``branch_target`` so the daemon's pre-task fetch+ff refreshes that
-  branch before the run runs. For ``@handle``-style triggers,
+  branch before the worker runs. For ``@handle``-style triggers,
   comments authored by ``handle`` are filtered so the named account
   cannot self-loop; the PAT holder can still @-mention that account
   from their own comments.
