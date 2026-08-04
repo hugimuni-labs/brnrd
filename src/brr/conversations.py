@@ -14,7 +14,7 @@ Runtime layout::
             <event-id>.jsonl    — append-only records for one pipeline run
 
 Each ``<event-id>.jsonl`` file has exactly one writer for its lifetime:
-the run handling that event-led run pipeline. This per-event-
+the worker handling that event-led run pipeline. This per-event-
 pipeline partitioning keeps overlapping thoughts (ad-hoc sessions, a
 second daemon) contention-free without per-shared-file locks — see
 ``kb/subject-daemon.md``.
@@ -40,7 +40,7 @@ the correspondent's conversation keys, merged chronologically by ``ts``,
 one shared ``limit`` for the whole woven set rather than a per-thread
 budget. Because the dispatcher persists an inbound event on every
 conversation key it lands on even when it recognises a mirrored
-delivery and skips a second run run, the same exchange can appear on
+delivery and skips a second worker run, the same exchange can appear on
 two sibling keys' stores; the weave dedups those before applying
 ``limit``, so a fixed budget is never spent twice on one exchange (see
 ``_dedupe_woven_records``). The surviving copy keeps the sibling
@@ -77,7 +77,7 @@ from typing import Any, Iterator, TypedDict
 def _now_iso() -> str:
     """Microsecond-precision UTC ISO 8601 timestamp.
 
-    Second-precision was fine when only one run wrote to the
+    Second-precision was fine when only one worker wrote to the
     conversation log at a time; concurrent writers from the same chat
     can land records in the same second and the projection sorts by
     ``ts`` across files, so we need finer granularity to keep ordering
@@ -685,7 +685,7 @@ def _correspondent_dedup_identity(record: dict[str, Any]) -> tuple[str, ...] | N
     Only ``event`` records are eligible. They are the only records the
     dispatcher persists on *every* conversation key an inbound message
     lands on — even when it recognises the delivery as a mirror of one
-    already seen and skips a second run run (``daemon.py``'s
+    already seen and skips a second worker run (``daemon.py``'s
     dispatch path calls :func:`append_event` before it checks
     :func:`find_event_by_origin_message`).
 
@@ -735,7 +735,7 @@ def _dedupe_woven_records(
     Two conversation keys for the same correspondent — a native gate and
     the one that mirrors it (``telegram:<chat>:`` / ``cloud:telegram:
     <chat>:``) — both persist the inbound event even when the dispatcher
-    recognises the mirrored delivery and skips a second run run. Left
+    recognises the mirrored delivery and skips a second worker run. Left
     unmerged, the woven view shows that one exchange twice and a fixed
     ``limit`` tail spends half its slots on the duplicate.
 
@@ -1218,7 +1218,7 @@ def build_communication_snapshot(
 # store of record, so it only needs a bounded recent tail. Before this
 # cap, one run's copy of a single long-lived thread ran to thousands of
 # records (one observed file: 7,868 records / 5.3 MB), multiplied by
-# every non-run wake on that thread — 847 run dirs, 1.7 GB, most of
+# every non-worker wake on that thread — 847 run dirs, 1.7 GB, most of
 # it the same records copied over and over.
 HISTORY_GROUP_TAIL_LIMIT = 400
 

@@ -37,7 +37,7 @@ A conversation key is the gate-thread fingerprint:
 - `github:<owner/repo>:<issue_or_pr_number>`
 
 For directory names, `:` is encoded as `__`. Each `<event-id>.jsonl`
-file is owned by the run that handles that event — the
+file is owned by the one worker that handles that event — the
 contention-free layout keeps overlapping thoughts (ad-hoc sessions, a
 second daemon) from sharing mutable state across pipelines. Every record carries a `ts` (UTC ISO
 8601, microsecond precision) and a `kind`:
@@ -96,7 +96,7 @@ curates it only when an arc is worth carrying across channels.
 ## Lifecycle
 
 Each incoming event is resolved to a conversation key before the
-run starts:
+worker runs:
 
 1. Explicit `conversation_key` carried on the event (rare).
 2. Gate-thread fingerprint based on the event's source (Telegram chat,

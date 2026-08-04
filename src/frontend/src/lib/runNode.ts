@@ -264,7 +264,7 @@ function edgeTo(repoSlug: string, runId: string, mirrored: Set<string>): Dispatc
  *
  * Sibling edges are deliberately absent: two children of one parent are
  * related through it, and rendering that as a direct edge would invent
- * structure the daemon never recorded — the exact move that let a strand pass
+ * structure the daemon never recorded — the exact move that let a worker pass
  * a sibling's receipt off as its own (wyrd §3).
  */
 export function dispatchEdges(

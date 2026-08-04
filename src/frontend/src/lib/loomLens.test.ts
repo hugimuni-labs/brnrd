@@ -96,7 +96,7 @@ test('a lens matching nothing is not offered', () => {
 	assert.ok(ids.includes('shape:bare'));
 	assert.ok(!ids.includes('shape:shipped'));
 	assert.ok(!ids.includes('shape:filed'));
-	assert.ok(!ids.includes('stack:strand'));
+	assert.ok(!ids.includes('stack:worker'));
 });
 
 test('no backchannel lens: the queue is a standing section, not a filter (#875)', () => {

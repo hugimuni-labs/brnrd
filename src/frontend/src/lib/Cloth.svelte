@@ -16,7 +16,7 @@
 	import type { RunLedgerRow } from './runLedger';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
-	// done work as root-run trees, one curated line each, strand strands
+	// done work as root-run trees, one curated line each, worker strands
 	// folded beneath and expanded on demand; the selvage (the cloth's
 	// self-finished edge) runs across the top as one compact spend→produce
 	// row. The page owns the rows and the window — this component only
@@ -71,7 +71,7 @@
 	     bar — width from `loomBarFraction` against the window-wide max (bars
 	     compare across days), color from the shelf's thermal-age stops, bare
 	     runs dimmed the way the shelf dims them. An accent, not a background:
-	     the text line stays the row's voice. Strand rows recede like the
+	     the text line stays the row's voice. Worker rows recede like the
 	     band's nested children — a shorter, thinner, dimmer bar. -->
 	<span
 		class="shrink-0 self-center overflow-hidden rounded-[1px] bg-stone-900/60 {child

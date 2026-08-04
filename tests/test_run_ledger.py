@@ -303,7 +303,7 @@ def test_read_run_name_control_uses_first_line_and_caps_length(tmp_path):
 
 
 def test_subspawn_row_carries_parent_run_id(tmp_path, monkeypatch):
-    """A concurrent run-stack child's row rolls up to its parent.
+    """A concurrent worker-stack child's row rolls up to its parent.
 
     kb/design-director-loop.md §"Concurrent sub-spawns": a sub-spawn's true
     cost is parent row + Σ(child rows), via this additive field — not a

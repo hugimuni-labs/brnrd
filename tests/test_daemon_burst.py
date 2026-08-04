@@ -220,15 +220,15 @@ def _loop_baseline(monkeypatch, cfg):
     monkeypatch.setattr(daemon.conf, "load_config", lambda _r: cfg)
 
 
-def _record_run(queue, entered, lock):
-    def execute_run(event, *_a, **_k):
+def _record_worker(queue, entered, lock):
+    def run_worker(event, *_a, **_k):
         eid = event["id"]
         with lock:
             entered.append(eid)
             queue[:] = [e for e in queue if e["id"] != eid]
         return Run(id=f"t-{eid}", event_id=eid, body="x", status="done")
 
-    return execute_run
+    return run_worker
 
 
 def test_loop_holds_burst_then_dispatches(tmp_path, monkeypatch):
@@ -242,7 +242,7 @@ def test_loop_holds_burst_then_dispatches(tmp_path, monkeypatch):
     queue = [a, b]
     entered: list[str] = []
     lock = threading.Lock()
-    monkeypatch.setattr(daemon, "_execute_run", _record_run(queue, entered, lock))
+    monkeypatch.setattr(daemon, "_run_worker", _record_worker(queue, entered, lock))
 
     scans = {"n": 0}
 
@@ -290,7 +290,7 @@ def test_config_window_zero_dispatches_burst_immediately(tmp_path, monkeypatch):
     queue = [a, b]
     entered: list[str] = []
     lock = threading.Lock()
-    monkeypatch.setattr(daemon, "_execute_run", _record_run(queue, entered, lock))
+    monkeypatch.setattr(daemon, "_run_worker", _record_worker(queue, entered, lock))
 
     idle = {"n": 0}
 

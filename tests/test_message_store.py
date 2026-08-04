@@ -101,7 +101,7 @@ def test_unknown_event_reply_becomes_undeliverable(tmp_path, monkeypatch):
     )
 
     count = daemon._drain_outbox(
-        daemon._RunEmit(brr_dir, "", "evt-current"),
+        daemon._WorkerEmit(brr_dir, "", "evt-current"),
         task,
         responses,
         "evt-current",
@@ -297,7 +297,7 @@ def test_reply_to_unowned_source_event_is_undeliverable_not_pending(tmp_path, mo
     )
 
     daemon._drain_outbox(
-        daemon._RunEmit(brr_dir, "", "evt-current"),
+        daemon._WorkerEmit(brr_dir, "", "evt-current"),
         task,
         responses,
         "evt-current",
@@ -338,7 +338,7 @@ def test_reply_to_configured_gate_event_stays_pending_when_gate_is_off(tmp_path,
     )
 
     daemon._drain_outbox(
-        daemon._RunEmit(brr_dir, "", "evt-current"),
+        daemon._WorkerEmit(brr_dir, "", "evt-current"),
         task,
         responses,
         "evt-current",
@@ -379,7 +379,7 @@ def test_collected_transition_stamps_a_dispatch_edge_receipt(tmp_path):
     assert collected["delivered_at"]
 
 
-def test_strand_report_is_collected_when_the_parent_is_notified(tmp_path):
+def test_worker_report_is_collected_when_the_parent_is_notified(tmp_path):
     """The parent reads the report via the completion event's message_path."""
     repo, _home, ctx = _context(tmp_path)
     brr_dir = repo / ".brr"
@@ -387,13 +387,13 @@ def test_strand_report_is_collected_when_the_parent_is_notified(tmp_path):
     inbox.mkdir(parents=True)
     responses = brr_dir / "responses"
     responses.mkdir(parents=True)
-    protocol.write_response(responses, "evt-child", "run verdict")
+    protocol.write_response(responses, "evt-child", "worker verdict")
     resp_path = protocol.response_path(responses, "evt-child")
     message_path = message_store.stage(
         ctx,
         repo_label="Gurio/brr",
         run_id="run-child",
-        body="run verdict",
+        body="worker verdict",
         kind="terminal",
         target_event="evt-child",
         target_gate="spawn",

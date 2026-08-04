@@ -164,7 +164,7 @@ branch carries no commits beyond the seed.
 
 When `brnrd up --dev-reload` or `dev_reload=true` is active, this is also
 the safe boundary where the daemon may re-exec itself if brnrd package
-files changed. Reload never interrupts the run in flight.
+files changed. Reload never interrupts a running worker.
 
 ## Artifact locations
 

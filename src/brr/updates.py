@@ -66,7 +66,7 @@ class UpdatePacket:
 
     *event_id* selects the per-event-pipeline jsonl file under that
     directory. The contention-free conversation layer (see
-    ``kb/subject-daemon.md``) routes every record one run emits into
+    ``kb/subject-daemon.md``) routes every record one worker emits into
     the same ``<event-id>.jsonl`` so overlapping thoughts never share a
     file. Packets without ``event_id`` fall through to the orphan log so
     a buggy emitter is observable rather than silently dropped.
