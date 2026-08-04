@@ -1767,7 +1767,12 @@ def test_scm_omits_forge_gate_route_when_unarmed(tmp_path):
 
 
 def _gate_receipt(tmp_path, repo, **overrides):
-    """Write the receipt `scripts/gate.py` would write for `repo`'s current tree."""
+    """Write the receipt `scripts/gate.py` would write for `repo`'s current
+    tree, into `repo`'s own slot of the outbox's receipts map (#820) — the
+    same map `hooks._gate_closeout_clause` reads via
+    `gate_receipt.read_receipt(outbox_dir, ctx.repo_dir)`."""
+    from brr import gate_receipt
+
     def out(*args):
         return subprocess.run(
             ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
@@ -1786,9 +1791,10 @@ def _gate_receipt(tmp_path, repo, **overrides):
         "legs": [],
     }
     payload.update(overrides)
-    (tmp_path / hooks.GATE_RECEIPT_NAME).write_text(
-        json.dumps(payload), encoding="utf-8",
-    )
+    receipt_path = tmp_path / hooks.GATE_RECEIPT_NAME
+    data = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.exists() else {}
+    data[gate_receipt.tree_key(repo)] = payload
+    receipt_path.write_text(json.dumps(data), encoding="utf-8")
     return payload
 
 
@@ -2038,6 +2044,32 @@ def test_gate_treats_a_malformed_receipt_as_no_receipt(tmp_path):
                             _armed_gate(tmp_path, repo))
     assert out["decision"] == "block"
     assert "the gate never ran" in out["reason"]
+
+
+def test_gate_a_receipt_for_a_different_tree_does_not_satisfy_this_one(tmp_path):
+    """#820: one run that gates two trees under one outbox — this repo's own
+    documented `host` pattern, a scratch `git worktree add` plus the checkout
+    — must not have the second, correct gate's receipt read as covering the
+    first tree, or vice versa. A receipt keyed to another tree is a different
+    question's answer, neither a pass nor a failure for this guard."""
+    repo = _seeded_repo(tmp_path)
+    (tmp_path / "other-tree").mkdir()
+    other = _seeded_repo(tmp_path / "other-tree")
+    (repo / "feature.py").write_text("x\n", encoding="utf-8")
+    # Gate `other`'s tree — a real, matching, GREEN receipt, just not for the
+    # tree this guard is asking about.
+    _gate_receipt(tmp_path, other)
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out["decision"] == "block"
+    assert "the gate never ran" in out["reason"]
+    # And once `repo` gets its own entry beside `other`'s, both survive and
+    # this guard reads only its own.
+    _gate_receipt(tmp_path, repo)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, _stdin(_GOOD_REPLY),
+                            _armed_gate(tmp_path, repo))
+    assert out.get("decision") != "block"
 
 
 # ── The `vigil` closeout obligation (#947: a claimed vigil must be armed) ─

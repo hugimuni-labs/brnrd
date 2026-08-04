@@ -1794,10 +1794,11 @@ def test_the_default_run_is_my_own_run_not_the_newest_directory(tmp_path, monkey
 # ── brnrd gate-run: the shipped `hooks.gate_command` writer ──────────
 #
 # hooks.gate_command arms a Stop-hook obligation that reads
-# .gate-receipt.json, but only this repo's own unshipped scripts/gate.py
-# ever wrote one — any other adopter got a permanent "the gate never ran"
-# (kb/design-io-layer-trim.md, THE OBLIGATION NOTHING CAN SATISFY). These
-# drive the real `brnrd gate-run` entry point end to end.
+# .gate-receipts.json — a map keyed per tree (#820) — but only this repo's
+# own unshipped scripts/gate.py ever wrote one — any other adopter got a
+# permanent "the gate never ran" (kb/design-io-layer-trim.md, THE OBLIGATION
+# NOTHING CAN SATISFY). These drive the real `brnrd gate-run` entry point
+# end to end.
 
 
 def _gate_run_repo(tmp_path: Path) -> Path:
@@ -1835,6 +1836,7 @@ def test_gate_run_reads_hooks_gate_command_from_config(tmp_path, monkeypatch):
     """The ordinary path: no override flag, just the repo's own configured
     gate command — the same value the resident set via the init playbook."""
     from brr import config as conf
+    from brr import gate_receipt
 
     repo = _gate_run_repo(tmp_path)
     # Not "true"/"false" — the flat `key=value` config format coerces those
@@ -1850,13 +1852,15 @@ def test_gate_run_reads_hooks_gate_command_from_config(tmp_path, monkeypatch):
         main(["gate-run"])
     assert exc.value.code == 0
 
-    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    payload = gate_receipt.read_receipt(outbox, repo)
     assert payload["verdict"] == "GREEN"
     assert payload["gate_command"] == "exit 0"
     assert payload["run_id"] == "run-abc"
 
 
 def test_gate_run_forwards_a_failing_commands_exit_code(tmp_path, monkeypatch):
+    from brr import gate_receipt
+
     repo = _gate_run_repo(tmp_path)
     outbox = tmp_path / "outbox"
     monkeypatch.chdir(repo)
@@ -1865,7 +1869,7 @@ def test_gate_run_forwards_a_failing_commands_exit_code(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         main(["gate-run", "--override-command", "exit 1"])
     assert exc.value.code == 1
-    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    payload = gate_receipt.read_receipt(outbox, repo)
     assert payload["verdict"] == "RED"
 
 
@@ -1910,7 +1914,7 @@ def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkey
     `gate_receipt.gated_run`) turns `tree_moved_during_gate` false, the hook
     goes silent, and both halves of this test fail.
     """
-    from brr import hooks
+    from brr import gate_receipt, hooks
 
     repo = _gate_run_repo(tmp_path)
     outbox = tmp_path / "outbox"
@@ -1922,7 +1926,7 @@ def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkey
               "printf 'no leg ever saw this\\n' > written-mid-gate.py"])
     assert exc.value.code == 0  # the command itself succeeded
 
-    payload = json.loads((outbox / ".gate-receipt.json").read_text(encoding="utf-8"))
+    payload = gate_receipt.read_receipt(outbox, repo)
     assert payload["verdict"] == "GREEN"
     assert payload["tree_moved_during_gate"] is True
     assert "written-mid-gate.py" in payload["status"]
@@ -1939,6 +1943,46 @@ def test_gate_run_refuses_a_tree_the_command_moved_under_itself(tmp_path, monkey
     assert reason is not None
     assert "written-mid-gate.py" in reason
     assert "the gate never ran" not in reason
+
+
+def test_gate_run_on_two_trees_under_one_outbox_both_survive(tmp_path, monkeypatch):
+    """#820 through the real entry point twice: this repo's own documented
+    `host` pattern is `git worktree add /tmp/brr-wt-<slug>`, gate there, then
+    gate the checkout too — one `BRR_OUTBOX_DIR` shared by both invocations.
+    The second `brnrd gate-run` must not destroy the first tree's receipt,
+    and each tree's own `_gate_closeout_clause` reader must see only its own."""
+    from brr import gate_receipt, hooks
+
+    scratch = _gate_run_repo(tmp_path / "scratch")
+    checkout = _gate_run_repo(tmp_path / "checkout")
+    outbox = tmp_path / "outbox"
+    monkeypatch.setenv("BRR_OUTBOX_DIR", str(outbox))
+
+    monkeypatch.chdir(scratch)
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run", "--override-command", "exit 0"])
+    assert exc.value.code == 0
+
+    monkeypatch.chdir(checkout)
+    with pytest.raises(SystemExit) as exc:
+        main(["gate-run", "--override-command", "exit 1"])
+    assert exc.value.code == 1
+
+    scratch_entry = gate_receipt.read_receipt(outbox, scratch)
+    checkout_entry = gate_receipt.read_receipt(outbox, checkout)
+    assert scratch_entry["verdict"] == "GREEN"
+    assert checkout_entry["verdict"] == "RED"
+
+    # And a guard asking about `scratch` is satisfied by `scratch`'s own
+    # entry, unmoved by `checkout`'s RED sitting right beside it.
+    ctx = hooks.HookContext({
+        "BRR_OUTBOX_DIR": str(outbox),
+        "BRR_REPO_DIR": str(scratch),
+        "BRR_SEED_REF": "main",
+        "BRR_GATE_COMMAND": "exit 0",
+    })
+    assert hooks._gate_closeout_clause(ctx) is None
+
 
 def test_close_check_refuses_a_pr_body_and_exits_nonzero(tmp_path, capsys):
     """The opt-in half of #839.

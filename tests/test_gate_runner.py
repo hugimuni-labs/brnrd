@@ -225,17 +225,23 @@ def test_no_receipt_is_written_outside_a_run(tmp_path, monkeypatch):
 
 def test_receipt_lands_in_the_outbox_and_names_the_verdict(tmp_path, monkeypatch):
     """Under a run it is written beside the other control dotfiles — never
-    delivered to chat (the drain skips dotfiles), read by the closeout guard."""
+    delivered to chat (the drain skips dotfiles), read by the closeout guard.
+
+    The file is a map keyed per tree (#820); `gate.REPO_ROOT` (unpatched here,
+    so this repo's own checkout) is looked up like any reader would.
+    """
+    from brr import gate_receipt
+
     gate = _gate()
     monkeypatch.setenv("BRR_OUTBOX_DIR", str(tmp_path))
     path = gate.write_receipt("RED", [("backend: Run tests", "FAIL rc=1", 12.34)])
     assert path == tmp_path / gate.RECEIPT_NAME
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    entry = gate_receipt.read_receipt(tmp_path, gate.REPO_ROOT)
     # RED is recorded, not suppressed: the obligation a reader checks is that
     # the gate *ran* on this tree, never that it was green.
-    assert payload["verdict"] == "RED"
-    assert payload["legs"][0]["verdict"] == "FAIL rc=1"
-    assert set(payload) >= {"head", "status", "diff_digest", "untracked_digest"}
+    assert entry["verdict"] == "RED"
+    assert entry["legs"][0]["verdict"] == "FAIL rc=1"
+    assert set(entry) >= {"head", "status", "diff_digest", "untracked_digest"}
 
 
 # ── #917: the receipt has to be about the tree the *legs* saw ─────────────
@@ -263,6 +269,7 @@ def test_a_file_written_while_the_legs_run_is_recorded_as_a_moved_tree(
 
     assert _drive(gate, monkeypatch, repo, outbox, []) == 0
     payload = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    payload = payload[gate_receipt.tree_key(repo)]
 
     assert payload["tree_moved_during_gate"] is True
     # The pair, not a boolean — which is what lets a reader name the file.
@@ -281,6 +288,8 @@ def test_a_still_tree_records_that_it_held_still(tmp_path, monkeypatch):
     """The honest path, and the reason the state is not a bare boolean-or-
     absent: `false` here means *a writer checked and the tree held*, which is
     a different claim from a receipt too old to have looked."""
+    from brr import gate_receipt
+
     gate = _gate()
     repo = _repo(tmp_path)
     # Not `true` — YAML coerces that to a bool and the leg stops being a
@@ -291,6 +300,7 @@ def test_a_still_tree_records_that_it_held_still(tmp_path, monkeypatch):
 
     assert _drive(gate, monkeypatch, repo, outbox, []) == 0
     payload = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    payload = payload[gate_receipt.tree_key(repo)]
 
     assert payload["tree_moved_during_gate"] is False
     assert "moved_referents" not in payload
@@ -317,6 +327,8 @@ def test_a_red_leg_that_also_moved_the_tree_records_both(tmp_path, monkeypatch):
     """Two independent facts, and neither suppresses the other: the verdict is
     about what the legs returned, the stillness record is about what the tree
     did underneath them."""
+    from brr import gate_receipt
+
     gate = _gate()
     repo = _repo(tmp_path)
     _fake_ci(repo, "printf 'x\\n' > written-mid-gate.py; exit 1")
@@ -325,5 +337,32 @@ def test_a_red_leg_that_also_moved_the_tree_records_both(tmp_path, monkeypatch):
 
     assert _drive(gate, monkeypatch, repo, outbox, []) == 1
     payload = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    payload = payload[gate_receipt.tree_key(repo)]
     assert payload["verdict"] == "RED"
     assert payload["tree_moved_during_gate"] is True
+
+
+def test_two_trees_gated_via_the_real_runner_both_survive(tmp_path, monkeypatch):
+    """#820 through the real entry point, not just the writer underneath it:
+    two separate `python scripts/gate.py` invocations against two different
+    trees, one `BRR_OUTBOX_DIR` — this repo's own documented `host` pattern
+    of gating a scratch worktree and then the checkout. The second run must
+    not destroy the first run's receipt."""
+    from brr import gate_receipt
+
+    gate = _gate()
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first = _repo(tmp_path / "first")
+    second = _repo(tmp_path / "second")
+    _fake_ci(first, "exit 0")
+    _fake_ci(second, "exit 1")
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+
+    assert _drive(gate, monkeypatch, first, outbox, []) == 0
+    assert _drive(gate, monkeypatch, second, outbox, []) == 1
+
+    data = json.loads((outbox / gate.RECEIPT_NAME).read_text(encoding="utf-8"))
+    assert data[gate_receipt.tree_key(first)]["verdict"] == "GREEN"
+    assert data[gate_receipt.tree_key(second)]["verdict"] == "RED"

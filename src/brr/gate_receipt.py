@@ -2,9 +2,9 @@
 
 ``hooks.gate_command`` in ``.brr/config`` arms a Stop-hook obligation
 (``hooks._gate_closeout_clause``): a run that changed the tree must leave a
-fresh ``.gate-receipt.json`` behind, or the resident is told "the gate never
-ran" and blocked. That obligation shipped; the writer did not. The only thing
-on a brnrd checkout that ever produced a receipt was this repo's own
+fresh receipt behind, or the resident is told "the gate never ran" and
+blocked. That obligation shipped; the writer did not. The only thing on a
+brnrd checkout that ever produced a receipt was this repo's own
 ``scripts/gate.py`` — unshipped (``pyproject.toml``'s ``package-data`` carries
 no ``scripts/`` entry) and specific to this repo (it parses
 ``.github/workflows/ci.yml`` for its own leg list). An adopter who follows the
@@ -21,6 +21,22 @@ compared to git's own output, never a private fingerprint algorithm — mirrors
 ``scripts/gate.py``'s ``tree_referents``/``write_receipt`` so a receipt this
 module writes reads identically to one ``scripts/gate.py`` writes, and
 ``hooks._gate_closeout_clause`` needs no changes to accept either.
+
+**The file is a map, keyed per tree, not one object (#820).** One run can
+gate more than one tree — this repo's own documented ``host`` pattern is
+``git worktree add /tmp/brr-wt-<slug>``, gate there, gate the checkout too —
+and every writer here shares one ``BRR_OUTBOX_DIR``. A single-object receipt
+made the second, correct gate destroy the first, correct one: the file
+answered "did the gate run", keyed only by *run*, when the question was
+always about a *tree*. :func:`write_receipt` / :func:`merge_entry` do a
+read-modify-write of one top-level map, keyed by :func:`tree_key`; readers
+call :func:`read_receipt` with their own repo root and see only their own
+entry — a receipt for a tree nobody asked about is neither a pass nor a
+failure for this one. The key is a digest of the resolved repo root, not the
+raw path: this file is copied verbatim onto a published run node
+(``daemon.py``'s ``PRESERVED`` table), which the module's own callers keep
+free of absolute host paths on purpose, and a literal path as a map key would
+put every gated tree's filesystem layout on that surface.
 """
 
 from __future__ import annotations
@@ -36,7 +52,12 @@ from typing import Any, TypeVar
 
 #: Written beside the run's other control dotfiles; same idiom as ``.card``,
 #: matching ``hooks.GATE_RECEIPT_NAME`` and ``scripts/gate.py``'s own.
-RECEIPT_NAME = ".gate-receipt.json"
+#: Plural on purpose (#820): the file is a map of tree -> receipt now, not one
+#: receipt, and the old singular name is not reused — this is pre-release,
+#: there is no adopter to migrate, and a name that still claimed "one receipt"
+#: would be the exact "two implementations of one question" shape this module
+#: exists to foreclose, just moved into the filename instead of the code.
+RECEIPT_NAME = ".gate-receipts.json"
 
 #: The referents :func:`tree_referents` returns, in the order a reader should
 #: hear about them: the coarse ones first. Named once so the writer, the
@@ -61,6 +82,85 @@ def git_out(repo_root: Path, args: list[str], timeout: int = 30) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout if result.returncode == 0 else None
+
+
+def tree_key(repo_root: Path) -> str:
+    """The stable map key naming *repo_root* inside the receipts file.
+
+    A sha256 digest of the *resolved, absolute* path — not the path itself.
+    Two readers computing this from the same tree agree without either
+    storing the path anywhere, which is what lets the file stay free of
+    absolute host paths while still keying deterministically per tree (see
+    the module docstring: this file is copied verbatim onto a published run
+    node). ``resolve()`` first so a receipt written from a symlinked or
+    relative checkout and read back from the canonical path still lands on
+    the same key.
+    """
+    return hashlib.sha256(
+        str(repo_root.resolve()).encode("utf-8", "replace")
+    ).hexdigest()
+
+
+def _read_receipts_map(path: Path) -> dict[str, Any]:
+    """The receipts file at *path*, or ``{}`` for absent/unreadable/malformed.
+
+    One parse, shared by every reader and writer below — the same discipline
+    :func:`untracked_digest` already argues for: two implementations of one
+    read agree with each other and are wrong together. A non-dict JSON value
+    (a stray file from something else, or a pre-#820 single-object receipt
+    nobody migrated) collapses to empty rather than crashing a Stop hook.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def merge_entry(
+    outbox_dir: Path, repo_root: Path, entry: dict[str, Any]
+) -> Path | None:
+    """Read-modify-write *entry* into *repo_root*'s slot of the receipts map.
+
+    The one place either writer (this module's :func:`write_receipt`,
+    ``scripts/gate.py``'s own) touches the file on disk — every other entry
+    already in the map survives untouched, which is the whole fix: the
+    second, correct gate of a second tree no longer destroys the first,
+    correct receipt of the first. Atomic (``.tmp`` + ``replace``) and
+    best-effort like every writer in this module; an unwritable receipt
+    degrades to no receipt, never a crash.
+    """
+    path = outbox_dir / RECEIPT_NAME
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        data = _read_receipts_map(path)
+        data[tree_key(repo_root)] = entry
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        return None
+    return path
+
+
+def read_receipt(
+    outbox_dir: Path | None, repo_root: Path | None
+) -> dict[str, Any] | None:
+    """*repo_root*'s own entry from *outbox_dir*'s receipts map, or ``None``.
+
+    The one lookup every reader (``hooks._gate_closeout_clause``, the mid-run
+    gate chip) shares rather than re-implementing the map access — the same
+    "one implementation, not two copies that agree and are wrong together"
+    discipline as the rest of this module. Absent outbox, absent repo root,
+    absent file, unreadable file, malformed file, and *a receipt that exists
+    but is for a different tree* all collapse to the same ``None``: none of
+    them is evidence this tree was gated, and a receipt for a tree nobody
+    asked about must not be able to satisfy or trip this lookup (#820).
+    """
+    if outbox_dir is None or repo_root is None:
+        return None
+    entry = _read_receipts_map(outbox_dir / RECEIPT_NAME).get(tree_key(repo_root))
+    return entry if isinstance(entry, dict) else None
 
 
 def untracked_digest(repo_root: Path) -> str:
@@ -266,11 +366,15 @@ def write_receipt(
     plus the stillness record. Omitted, this samples the end state alone, the
     way it always did: honest about *which* tree, silent about *when*, and
     that silence is what the reader keys off.
+
+    Writes *repo_root*'s own slot of the outbox's receipts map
+    (:func:`merge_entry`) — every other tree's entry already there survives
+    untouched (#820).
     """
     referents = tree if tree is not None else tree_referents(repo_root)
     if referents is None:
         return None
-    payload: dict[str, object] = {
+    entry: dict[str, object] = {
         **referents,
         "verdict": verdict,
         "gate_command": command,
@@ -278,16 +382,8 @@ def write_receipt(
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
     if seconds is not None:
-        payload["seconds"] = round(seconds, 1)
-    path = outbox_dir / RECEIPT_NAME
-    tmp = path.with_name(path.name + ".tmp")
-    try:
-        outbox_dir.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return None
-    return path
+        entry["seconds"] = round(seconds, 1)
+    return merge_entry(outbox_dir, repo_root, entry)
 
 
 def run_and_write_receipt(

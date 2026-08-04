@@ -32,18 +32,22 @@ a plausible wrong answer.
 
 **It leaves a receipt.** Running is only half of it: the other half is that
 somebody later can tell whether it ran, and *on which tree*. Under a brnrd run
-(`BRR_OUTBOX_DIR` set) this writes `.gate-receipt.json` beside the run's other
-control files, naming the tree it gated. That turns "did the gate run" from a
-thing a resident has to remember into a fact on disk — which is what
-`brr.hooks._gate_closeout_clause` reads before letting a run end. A script
-nobody is reminded to call gets called when forgetting it is *checkable*.
+(`BRR_OUTBOX_DIR` set) this writes this tree's entry into `.gate-receipts.json`
+beside the run's other control files — a map keyed per tree (#820), not one
+receipt, because a single run can gate more than one tree (this repo's own
+`host` pattern: a scratch worktree, then the checkout) under the same outbox.
+That turns "did the gate run, on this tree" from a thing a resident has to
+remember into a fact on disk — which is what `brr.hooks._gate_closeout_clause`
+reads before letting a run end. A script nobody is reminded to call gets
+called when forgetting it is *checkable*.
 
 The receipt's shape is **not defined here**. `brr.gate_receipt` owns the
-referents, the pre/post capture around the leg loop, and the comparison; this
-file calls `gated_run` and hands the result to its own `write_receipt`. It used
-to carry its own copy of `tree_referents`/`untracked_digest`, and that copy is
-the reason #917 had to be fixed in two places: two implementations of one
-fingerprint agree with each other and are wrong together (#722).
+referents, the pre/post capture around the leg loop, the tree-keyed map, and
+the comparison; this file calls `gated_run` and hands the result to its own
+`write_receipt`, which merges its entry in via `gate_receipt.merge_entry`. It
+used to carry its own copy of `tree_referents`/`untracked_digest`, and that
+copy is the reason #917 had to be fixed in two places: two implementations of
+one fingerprint agree with each other and are wrong together (#722).
 
 Usage:  python scripts/gate.py [--list] [--job backend]
 Exit:   0 iff every executed leg exited 0.
@@ -53,7 +57,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import json
 import os
 import subprocess
 import sys
@@ -161,6 +164,12 @@ def write_receipt(
     Omitted (a caller that never captured a "before"), this samples the end
     state alone and the receipt stays silent about stillness rather than
     claiming it.
+
+    Writes `REPO_ROOT`'s own slot of the outbox's receipts map
+    (`gate_receipt.merge_entry`) rather than the whole file — one run that
+    gates two trees under one `BRR_OUTBOX_DIR` (this repo's own `host`
+    pattern: a scratch worktree, then the checkout) must not have its first
+    receipt destroyed by its second (#820).
     """
     path = receipt_path()
     if path is None:
@@ -168,7 +177,7 @@ def write_receipt(
     referents = tree if tree is not None else tree_referents(REPO_ROOT)
     if referents is None:
         return None
-    payload = {
+    entry = {
         **referents,
         "verdict": verdict,
         "workflow": str(WORKFLOW.relative_to(REPO_ROOT)),
@@ -179,13 +188,7 @@ def write_receipt(
             for label, leg_verdict, elapsed in results
         ],
     }
-    tmp = path.with_name(path.name + ".tmp")
-    try:
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
-    except OSError:
-        return None
-    return path
+    return gate_receipt.merge_entry(path.parent, REPO_ROOT, entry)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,6 +1,6 @@
 """The gate receipt gets a chip (#1048).
 
-`.gate-receipt.json` decides whether a run may merge — `workflow.md`
+`.gate-receipts.json` decides whether a run may merge — `workflow.md`
 self-merge condition 1 is, operationally, a question about this file — and
 it was the only control file in the outbox with no boundary signal.
 
@@ -8,23 +8,29 @@ Every test here drives `hooks.compute_neutral` with a real hook context and
 a real receipt on disk, rather than calling `_gate_chip` directly: the
 defect this guards against is the verdict never *reaching* a boundary, and
 a unit test of the formatter cannot see that.
+
+The file is a map keyed per tree (#820) — `hooks.compute_neutral` looks up
+`ctx.repo_dir`'s own entry, so every fixture here declares `BRR_REPO_DIR` and
+`_receipt` writes under that tree's key, the same as a real writer would.
 """
 
 from __future__ import annotations
 
 import json
 
-from brr import hooks
+from brr import gate_receipt, hooks
 
 
 def _ctx(tmp_path):
     outbox = tmp_path / "outbox"
     outbox.mkdir(exist_ok=True)
     portal = outbox / "portal-state.json"
+    repo = tmp_path / "repo"
     ctx = hooks.HookContext({
         "BRR_OUTBOX_DIR": str(outbox),
         "BRR_PORTAL_STATE": str(portal),
         "BRR_RUN_ID": "run-260803-0737-4l69",
+        "BRR_REPO_DIR": str(repo),
     })
     return ctx, outbox, portal
 
@@ -52,14 +58,22 @@ def _portal(token: str, **extra):
 
 
 def _receipt(outbox, **fields):
-    payload = {
+    """Write this fixture's own tree's entry — `outbox.parent / "repo"`,
+    matching `_ctx`'s `BRR_REPO_DIR` — into the receipts map."""
+    entry = {
         "verdict": "GREEN",
         "head": "e59f52715d71ef1aa3a0de86f9c50ee19b10aa33",
         "run_id": "run-260803-0737-4l69",
     }
-    payload.update(fields)
+    entry.update(fields)
+    repo = outbox.parent / "repo"
+    data = {}
+    existing = outbox / hooks.GATE_RECEIPT_NAME
+    if existing.exists():
+        data = json.loads(existing.read_text(encoding="utf-8"))
+    data[gate_receipt.tree_key(repo)] = entry
     (outbox / hooks.GATE_RECEIPT_NAME).write_text(
-        json.dumps(payload), encoding="utf-8"
+        json.dumps(data), encoding="utf-8"
     )
 
 
