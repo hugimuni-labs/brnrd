@@ -429,17 +429,6 @@ class TrimResult:
     ``attest_blocks`` respects by staying silent rather than reassuring.
     """
 
-    floor_overflow_section: str | None = None
-    """The mandatory section that made this result exceed its byte budget.
-
-    ``_trim_sectioned_page`` owns this fact because it alone knows that the
-    overrun came from its documented one-section floor rather than from a
-    caller's heading overhead or another rendering layer.  The title also
-    lets callers explain which section needs attention without re-parsing
-    the rendered markdown.  ``None`` means the trimmer did not invoke its
-    floor past the supplied budget.
-    """
-
 
 def _trim_marker(
     omitted: int, oldest_item: str | None, newest_item: str | None,
@@ -738,11 +727,6 @@ def _trim_sectioned_page(content: str, max_bytes: int, source_hint: str) -> Trim
         source_newest=source_newest,
         stale=stale,
         precise=precise,
-        floor_overflow_section=(
-            _heading_title(_picked(1)[0])
-            if len(text.encode("utf-8")) > max_bytes
-            else None
-        ),
     )
 
 
@@ -1204,27 +1188,6 @@ def _build_work_surface_block_scored(
         block = f"### {relative}\n\n{trimmed.text}"
         size = len(block.encode("utf-8"))
         if size > remaining:
-            if trimmed.floor_overflow_section is not None:
-                # The trimmer deliberately exceeded its allowance to honour
-                # the one-section floor.  That stored fact distinguishes this
-                # from heading overhead or a headingless flat cut without
-                # making the renderer reverse-engineer the trimmed markdown.
-                trimmed_bytes = len(trimmed.text.encode("utf-8"))
-                notice = (
-                    "_(mandatory section floor exceeded this page's budget — "
-                    f"trimmed page: {trimmed_bytes:,} B · budget: {allowance:,} B "
-                    f"· overflowing section: `{trimmed.floor_overflow_section}` "
-                    f"· full page: `surface/{relative}`)_"
-                )
-                block = f"{block}\n\n{notice}"
-                blocks.append(block)
-                trims.append(trimmed)
-                # A floor overflow may crowd out later pages, but the shared
-                # arithmetic remains total and deterministic.  Those pages
-                # flow through `unannounced_skips` below because not even a
-                # placeholder can fit in a zero remainder.
-                remaining = 0
-                continue
             # Heading overhead can push a budget-trimmed page just past the
             # remainder. Skip *this* page, not every page after it — the next
             # (smaller) file may still fit. **Say so**: a page dropped from a
@@ -4185,9 +4148,6 @@ def _format_recent_conversation(
             summary = _cap_turn_body(
                 summary, record, limit=turn_max_bytes, brr_dir=brr_dir
             )
-            marker = _attachment_marker(record)
-            if marker:
-                summary = f"{summary} {marker}".strip() if summary else marker
             line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "run":
             tid = record.get("run_id", "")
@@ -4420,30 +4380,6 @@ def _cap_turn_body(
 def _conversation_body(record: dict[str, Any]) -> str:
     body = record.get("body")
     return body.strip() if isinstance(body, str) else ""
-
-
-def _attachment_marker(record: dict[str, Any]) -> str:
-    """``[photo ×2]``-style marker for a woven turn carrying attachments.
-
-    Issue #943: a captionless inbound photo/document used to render as a
-    blank turn in "Recent turns" — the fact of the attachment existed
-    nowhere the weave looked. ``conversations.append_event`` mints the fact
-    (``record["attachments"]``, a list of ``{"kind", "filename"}`` dicts);
-    this is the cheap render half — a marker cheap enough to always include
-    rather than a full describe-the-image pass. One bracket group per kind,
-    in first-appearance order, so ``[photo ×2] [document ×1]`` reads left
-    to right in the order the kinds arrived on the message.
-    """
-    attachments = record.get("attachments")
-    if not isinstance(attachments, list) or not attachments:
-        return ""
-    counts: dict[str, int] = {}
-    for item in attachments:
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind") or "attachment").strip() or "attachment"
-        counts[kind] = counts.get(kind, 0) + 1
-    return " ".join(f"[{kind} ×{n}]" for kind, n in counts.items())
 
 
 def _conversation_source_label(record: dict[str, Any]) -> str:

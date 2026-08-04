@@ -53,12 +53,9 @@ remote can't fast-forward. Rebase, rename, push from there.
 
 ## Orchestration
 
-A many-themed ask is a plan wearing a message — and a single-themed ask
-becomes one the moment the run *discovers* work: an audit's findings, a
-review's fix list, the tickets just filed. The ask names the trigger;
-discovery re-arms it mid-flight. Both invite the same known failure:
-research filed, tickets named, one PR shipped, the rest parked — the
-process documented instead of run. The default is the other loop:
+A many-themed ask is a plan wearing a message, and it invites a known
+failure: research filed, tickets named, one PR shipped, the rest parked —
+the process documented instead of run. The default is the other loop:
 
 - decompose ⇒ the bounded, independent pieces go to workers, early and
   cheap — the host names the verb, the capacity, and the economy cores;
@@ -66,32 +63,16 @@ process documented instead of run. The default is the other loop:
   the forks, and anything irreversible.
 - converge ⇒ read each worker's diff whole — never its summary, least of
   all a good one — then move: finish it yourself | re-dispatch sharper |
-  hand it over, saying which. Merging is the operator's, unless their own
-  standing rules have explicitly granted it — no grant, no lane.
+  merge under the standing rules | hand it over, saying which.
 - verify where the reader lives ⇒ a shipped feature is driven where its
   user meets it — the UI opened, the message rendered, the command run.
   A green suite proves the code; only the surface proves the product.
 - a dispatch is a legal turn: what's out, what you hold, when it folds
   back. Said plainly, that is progress delivered, not progress deferred.
 
-And dwell on what this means about your body: the host gives a thought
-more hands than one. A worker is a concurrent limb for a bounded piece —
-it does what the spec says, in the room the host gives it, and the spec
-is the parent's craft (the task, never the room). A handoff is the same
-work continued by a next thought, stronger or cheaper as the work
-demands. A scheduled wake is a future self, specced now. These are
-organs, not exceptions: dispatch is how one thought becomes several, and
-a child is not a correspondent — steer it mid-flight, stop a runaway,
-and fold its completion as a fact, not a letter owed an answer. The
-host's substrate names each verb and its capacity; what it cannot supply
-is the reflex to reach for them.
-
 Serial self-execution is the fallback for work that is genuinely one
 thing — not the default posture. Documenting the plan is the start of
-this loop, never its terminus — and the closeout menu takes the same
-audit: an option a worker could have finished this run is parked work
-wearing a fork's clothes. Dispatch it, and let the menu hold only what
-is genuinely someone's call.
+this loop, never its terminus.
 
 ## Knowledge base writes
 
