@@ -16,6 +16,14 @@ PROVIDER_ERROR = "provider_error"
 # — the work was never done, so a fresh attempt is not a duplicate.
 TRANSPORT_ERROR = "transport_error"
 RUNNER_ERROR = "runner_error"
+# The runner never reached its provider: an egress proxy refused the
+# tunnel. Distinct from AUTH_ERROR because the *credential was never
+# presented* — a `solitary` sidecar denies CONNECT to any host off the
+# allowlist and answers 403, and `\b403\b` is an AUTH_ERROR pattern, so
+# an egress denial used to be reported to the operator as "runner
+# authentication failed" (#1118). The remedy is `solitary.allow` or the
+# Shell's own host set, and it has nothing to do with a token.
+EGRESS_BLOCKED = "egress_blocked"
 NO_OUTPUT = "no_output"
 CORE_MISMATCH = "core_mismatch"
 INTERRUPTED = "interrupted"
@@ -48,6 +56,24 @@ _AUTH_PATTERNS = (
     r"\bapi key\b.*\binvalid\b",
     r"\b401\b",
     r"\b403\b",
+)
+
+# Egress-denial signatures. Every one of these names the *proxy* rather
+# than the endpoint, which is what makes the 403 disambiguable: a bare
+# 403 stays AUTH_ERROR, a 403 the runner attributes to a CONNECT tunnel
+# does not. Matched **before** the auth patterns for that reason.
+#
+# `not on allowlist` is the sidecar's own deny wording
+# (``data/solitary_proxy.py``) — present when a caller hands in the
+# sidecar log, absent from the runner's stdout, and harmless either way.
+_EGRESS_PATTERNS = (
+    r"\bproxy connection failed\b",
+    r"\bproxy connect\b.*\bfailed\b",
+    r"\b(?:http )?connect (?:to .* )?failed with status\b",
+    r"\btunnel connection failed\b",
+    r"\bnot on allowlist\b",
+    r"\bproxy\b.*\b(?:403|407)\b",
+    r"\b(?:403|407)\b.*\bproxy\b",
 )
 
 _PROVIDER_PATTERNS = (
@@ -127,6 +153,11 @@ def classify_failure(
             return INTERRUPTED
         if _matches_any(text, _QUOTA_PATTERNS):
             return QUOTA_EXHAUSTED
+        # Before AUTH: an egress denial answers 403, and `\b403\b` is an
+        # auth signature. The proxy-naming text is the only thing that
+        # tells the two apart, so it has to be asked first (#1118).
+        if _matches_any(text, _EGRESS_PATTERNS):
+            return EGRESS_BLOCKED
         if _matches_any(text, _AUTH_PATTERNS):
             return AUTH_ERROR
         if _matches_any(text, _PROVIDER_PATTERNS):
@@ -146,6 +177,11 @@ def reason_prefix(kind: str) -> str:
         TIMED_OUT: "runner timed out",
         QUOTA_EXHAUSTED: "runner quota was exhausted",
         AUTH_ERROR: "runner authentication failed",
+        EGRESS_BLOCKED: (
+            "runner egress was blocked — a proxy refused the tunnel to the "
+            "model provider (in `solitary`, the host is off the allowlist; "
+            "widen it with `solitary.allow`)"
+        ),
         PROVIDER_ERROR: "runner provider failed",
         TRANSPORT_ERROR: "runner connection dropped mid-response",
         RUNNER_ERROR: "runner failed",
