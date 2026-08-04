@@ -89,7 +89,16 @@ def render_plist(
     by PATH lookup. Freeze the installing shell's PATH into the agent, same
     contract as the Linux unit; re-running install refreshes it. The working
     directory is frozen the same way: launchd's default cwd is ``/``, which
-    is not the project repo ``daemon up`` requires."""
+    is not the project repo ``daemon up`` requires.
+
+    No counterpart here to the Linux unit's ``MemoryHigh=``/``MemoryMax=``
+    runner memory fence (``daemon_install/linux.py``, issue #1110): launchd
+    has no per-job cgroup-style memory cap. ``SoftResourceLimits`` /
+    ``HardResourceLimits`` exist but are a per-process ``setrlimit``, a
+    cruder and differently-scoped mechanism than a job-wide memory ceiling,
+    and are deliberately not used here as a substitute. macOS installs are
+    unfenced against the failure mode
+    ``incident-oom-cascade-salvage-on-main.md`` describes."""
     out_log, err_log = log_paths(home=home)
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     workdir_value = str(workdir) if workdir else str(resolve_workdir())

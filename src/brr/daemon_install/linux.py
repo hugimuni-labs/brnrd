@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from ..cli import brnrd_cmd
 
@@ -35,12 +35,33 @@ RestartSec=5s
 # retry accounting — so the right unit-level policy is to keep the daemon
 # alive and let it grieve one runner at a time.
 OOMPolicy=continue
+# The fence below OOMPolicy: that policy only decides what happens *after*
+# the kernel OOM-killer has already picked a victim process (no notion of
+# "which one is disposable here" — it took an unrelated healthy run down
+# with the runaway one in the same incident, see
+# incident-oom-cascade-salvage-on-main.md / issue #1110). MemoryHigh
+# throttles the cgroup's reclaimable memory before that point; MemoryMax
+# has systemd kill the cgroup outright rather than leaving the choice to
+# the kernel. Defaults below are sized to the incident host (30 GB box,
+# ~10 GB desktop baseline, ~5 GB real headroom) — override per machine via
+# `.brr/config`: `daemon.memory_high=<value>` / `daemon.memory_max=<value>`
+# (any systemd memory value, including `infinity` to lift one half of the
+# fence entirely). See `resolve_memory_limits` in daemon_install/linux.py.
+MemoryHigh={memory_high}
+MemoryMax={memory_max}
 Environment=BRR_INSTALL_MANAGED=1
 Environment="PATH={path_env}"
 
 [Install]
 WantedBy=default.target
 """
+
+#: Sized to the reference incident host, not derived from it — see the
+#: `MemoryHigh=` / `MemoryMax=` comment in ``SYSTEMD_UNIT`` above. These are
+#: the values `resolve_memory_limits` falls back to when `.brr/config` sets
+#: neither `daemon.memory_high` nor `daemon.memory_max`.
+DEFAULT_MEMORY_HIGH = "8G"
+DEFAULT_MEMORY_MAX = "12G"
 
 
 def supported() -> bool:
@@ -106,6 +127,31 @@ def resolve_workdir() -> Path:
         )
 
 
+def resolve_memory_limits(cfg: dict[str, Any] | None) -> tuple[str, str]:
+    """Read the runner memory ceiling from *cfg*, falling back to defaults.
+
+    ``daemon.memory_high`` / ``daemon.memory_max`` are the operator's knob
+    (see the ``MemoryHigh=`` / ``MemoryMax=`` comment in ``SYSTEMD_UNIT``);
+    an unset or blank key keeps the incident-sized default, and any
+    systemd-accepted memory value is passed through verbatim — including
+    ``infinity``, which lifts that half of the fence entirely rather than
+    requiring the operator to hand-edit the generated unit.
+    """
+    cfg = cfg or {}
+
+    def _value(key: str, default: str) -> str:
+        raw = cfg.get(key)
+        if raw is None:
+            return default
+        text = str(raw).strip()
+        return text or default
+
+    return (
+        _value("daemon.memory_high", DEFAULT_MEMORY_HIGH),
+        _value("daemon.memory_max", DEFAULT_MEMORY_MAX),
+    )
+
+
 def _systemd_escape(value: str) -> str:
     """Escape a value for a quoted systemd ``Environment=`` assignment.
 
@@ -117,11 +163,24 @@ def _systemd_escape(value: str) -> str:
     )
 
 
+def _percent_escape(value: str) -> str:
+    """Double a literal ``%`` for an *unquoted* unit-file value.
+
+    ``%`` starts a specifier expansion everywhere in a unit file, quoted or
+    not, so ``MemoryHigh=``/``MemoryMax=`` need the same doubling
+    ``_systemd_escape`` does for quoted ``Environment=`` values — but not
+    its backslash/quote handling, which would corrupt an unquoted
+    assignment instead of protecting it.
+    """
+    return value.replace("%", "%%")
+
+
 def render_systemd_unit(
     brr_path: str | Path | None = None,
     *,
     path_env: str | None = None,
     workdir: str | Path | None = None,
+    cfg: dict[str, Any] | None = None,
 ) -> str:
     """Render the unit with the resolved entrypoint, the installing shell's
     PATH, and the installing repo's root frozen in.
@@ -132,14 +191,35 @@ def render_systemd_unit(
     daemon itself starts.  Freezing the install-time PATH hands the service
     exactly the environment the install was verified in; re-running
     ``brnrd daemon install`` refreshes it.
+
+    *cfg* is the operator's ``.brr/config`` view (``config.load_config``'s
+    return shape) and supplies ``daemon.memory_high`` / ``daemon.memory_max``
+    (see ``resolve_memory_limits``). When omitted, it's loaded from
+    *workdir* — the same repo the memory-ceiling knob lives beside — so a
+    caller that already resolved ``workdir`` explicitly (tests; a future
+    multi-repo installer) doesn't pay a second, possibly-different lookup.
+    A *workdir* that isn't a usable git tree (a test double, a repo torn
+    down mid-call) falls back to the memory-ceiling defaults rather than
+    raising — this function's job is rendering a unit, not validating a
+    checkout.
     """
     exec_start = str(brr_path) if brr_path else resolve_brr_bin()
     path_value = path_env if path_env is not None else os.environ.get("PATH", "")
     workdir_value = str(workdir) if workdir else str(resolve_workdir())
+    if cfg is None:
+        from .. import config as _config
+
+        try:
+            cfg = _config.load_config(Path(workdir_value))
+        except Exception:  # noqa: BLE001 - unusable tree ⇒ ceiling defaults
+            cfg = {}
+    memory_high, memory_max = resolve_memory_limits(cfg)
     return SYSTEMD_UNIT.format(
         exec_start=_systemd_escape(exec_start),
         path_env=_systemd_escape(path_value),
         workdir=_systemd_escape(workdir_value),
+        memory_high=_percent_escape(memory_high),
+        memory_max=_percent_escape(memory_max),
     )
 
 
