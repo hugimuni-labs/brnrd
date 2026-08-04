@@ -8763,6 +8763,16 @@ def _spawn_contract_check(
     report_ok = report_found is not False
     return {
         "mismatch": (not branch_ok) or (not report_ok),
+        # #1097: which clause failed, carried rather than re-derived. The
+        # renderer had only the collapsed `mismatch` bool and therefore
+        # printed *both* the branch lines and the report line on any
+        # failure — so a worker that published exactly the branch it was
+        # told to, and merely had its report path mistyped by its parent,
+        # was shown to the operator under two branch lines that read as an
+        # indictment of the branch. A remedy is part of a diagnostic's
+        # truth claim; naming the wrong clause is a false one.
+        "branch_ok": branch_ok,
+        "report_ok": report_ok,
         "source": source,
         "spec_branch": spec_branch,
         "published_branch": published,
@@ -8876,22 +8886,43 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 "spawn_contract_published_branch": contract["published_branch"] or "",
             }
             if contract["spec_report"]:
-                report_line = (
-                    f"spec report:       {contract['spec_report']} "
-                    f"({'found' if contract['report_found'] else 'MISSING'})"
-                )
                 contract_kwargs["spawn_contract_spec_report"] = contract["spec_report"]
                 contract_kwargs["spawn_contract_report_found"] = bool(
                     contract["report_found"]
                 )
-            else:
-                report_line = "spec report:       (none named)"
-            contract_block = (
-                "\n\ncontract mismatch — spec vs published:\n"
-                f"spec branch:       {contract['spec_branch']}\n"
-                f"published branch:  {contract['published_branch'] or '(none)'}\n"
-                f"{report_line}"
+            # #1097: name the clause that failed, and only that one. Both
+            # clauses failing still prints both — what stops is a satisfied
+            # clause standing beside a violated one, where the reader cannot
+            # tell which of the two is the accusation.
+            branch_ok = bool(contract.get("branch_ok"))
+            report_ok = bool(contract.get("report_ok"))
+            failed = (["branch"] if not branch_ok else []) + (
+                ["report"] if not report_ok else []
             )
+            lines = [
+                "", "",
+                f"contract mismatch — {' and '.join(failed) or 'spec'} vs "
+                "published:",
+            ]
+            if not branch_ok:
+                lines.append(f"spec branch:       {contract['spec_branch']}")
+                lines.append(
+                    "published branch:  "
+                    f"{contract['published_branch'] or '(none)'}"
+                )
+            else:
+                lines.append(
+                    f"branch:            {contract['spec_branch']} ✓ as declared"
+                )
+            if not report_ok:
+                lines.append(
+                    f"spec report:       {contract['spec_report']} (MISSING)"
+                )
+            elif contract["spec_report"]:
+                lines.append(
+                    f"report:            {contract['spec_report']} ✓ written"
+                )
+            contract_block = "\n".join(lines)
         else:
             # Fuzzy read (first `brr/<slug>` in prose) — annotate only.
             # Status and the mismatch flag stay untouched: a scanned read
