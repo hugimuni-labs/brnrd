@@ -825,7 +825,18 @@ def main(argv: list[str] | None = None) -> None:
         raw = raw[:idx]
     args = build_parser().parse_args(raw)
     args.passthrough = passthrough
-    return args.func(args)
+    from . import gitops
+
+    try:
+        return args.func(args)
+    except gitops.RepoTreeUnusable as exc:
+        # #1108: the one failure where a traceback actively misleads. It
+        # names a path the user never typed, points at `subprocess.py`, and
+        # says nothing about the git config that caused it — so the operator
+        # reads "brnrd is broken" instead of "one line in .git/config is".
+        # Every frame between here and there is machinery; the message is
+        # the whole product.
+        raise SystemExit(f"[brnrd] {exc}") from None
 
 
 def _repo_root() -> Path:
@@ -3250,6 +3261,20 @@ def cmd_up(args):
     ``cmd_daemon_up``, which both ``brnrd up`` and ``brnrd daemon up`` reach.
     """
     from . import daemon as daemon_mod
+    from . import gitops
+
+    # #1108: the daemon is the one caller allowed to *repair* rather than
+    # only diagnose, and only for brnrd's own garbage — a `core.worktree`
+    # naming a deleted `.brr/worktrees/<run-id>`. Two reasons the line sits
+    # exactly here. Without it the boot cannot proceed at all: this pin
+    # crash-looped the service 312 times in 27 minutes on the very next
+    # statement, so "report and exit" is a loop with better prose. And the
+    # daemon owns those worktrees — it created them and it tore them down,
+    # which is what makes the value provably dead rather than merely
+    # suspicious. A read-only verb like `daemon status` still gets the
+    # diagnosis and leaves the operator's config alone; being asked a
+    # question is not consent to edit git config.
+    gitops.heal_stale_brnrd_worktree_pin(Path.cwd())
     try:
         root = _repo_root()
     except RuntimeError:

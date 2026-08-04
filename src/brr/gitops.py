@@ -243,6 +243,123 @@ def bot_identity_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+class RepoTreeUnusable(OSError):
+    """The working tree git names for a repository is not there. (#746, #1108)
+
+    **Why it subclasses ``OSError`` and not ``RuntimeError``.** The raw
+    failure it replaces *is* an ``OSError`` — ``subprocess`` raises
+    ``FileNotFoundError`` when handed a ``cwd=`` that does not exist — so
+    every existing ``except OSError`` around a git call keeps exactly the
+    behaviour it has today, only better informed. ``RuntimeError`` would be
+    actively wrong: the CLI's ``_maybe_*`` helpers swallow that class to
+    mean *not a brnrd repository*, and answering "no brnrd here" when the
+    truth is "your shared git config points at a tree that was deleted" is
+    the silent-narrowing failure this guard exists to end. The message is
+    the whole value — it must reach a human, not be caught and dropped.
+    """
+
+
+def diagnose_unusable_tree(named: Path, *, asked_from: Path) -> str:
+    """Explain why git named *named* as a working tree that isn't there.
+
+    Classified, never one confident sentence. The repair for a stale
+    ``core.worktree`` pin (unset it) fixes nothing when the real answer is
+    that the caller is standing in a directory that was deleted, and a
+    diagnostic that offers the wrong repair has lied twice — once about the
+    cause and once about the fix (#786, #792). Where the evidence does not
+    separate the cases, this says so rather than picking the likelier
+    branch.
+    """
+    head = (
+        f"git says this repository's working tree is {named}, and that "
+        f"directory does not exist."
+    )
+    pin = _config_value(asked_from, "core.worktree")
+    if pin and _same_path(Path(pin), named):
+        return (
+            f"{head}\n"
+            f"  cause: core.worktree in the *shared* git config pins it there. "
+            f"A git worktree isolates files, never .git/config — a torn-down "
+            f"run's worktree can leave this pin behind, and then every git "
+            f"command in this checkout answers about a tree that is gone, "
+            f"exit 0 throughout.\n"
+            f"  repair: git config --unset core.worktree"
+        )
+    if pin:
+        return (
+            f"{head}\n"
+            f"  cause: unclear. core.worktree is set in the shared git config, "
+            f"but to {pin}, which is not the path git resolved — so the pin is "
+            f"a repoint of its own and may not be the whole story.\n"
+            f"  repair: inspect `git config --get core.worktree` before "
+            f"unsetting it; something writes this config that should not."
+        )
+    return (
+        f"{head}\n"
+        f"  cause: unclear. No core.worktree pin explains it, so this is "
+        f"likely a checkout (or a cwd, asked from {asked_from}) that was "
+        f"deleted underneath the process.\n"
+        f"  repair: cd to a checkout that exists and retry; if that is where "
+        f"you already are, `git worktree prune` and re-check the config."
+    )
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    """Path equality that survives symlinks *and* non-existent paths."""
+    if left == right:
+        return True
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return False
+
+
+def _config_git(cwd: Path, *args: str) -> subprocess.CompletedProcess | None:
+    """Run ``git config`` in *cwd* so that a broken ``core.worktree`` can't block it.
+
+    Deliberately its own ``subprocess.run`` rather than :func:`_git`: this
+    runs *from* ``_git``'s failure path, and a guard that re-enters the
+    thing it is diagnosing is a guard that recurses.
+
+    **``GIT_WORK_TREE``, on purpose, in the one place it is the instrument.**
+    Everywhere else in this module that variable is the hazard
+    :data:`DISCOVERY_OVERRIDE_VARS` exists to scrub — it outranks every
+    cwd-based discovery mechanism, which is exactly why an inherited one is
+    poison. Here that ranking is the point: a ``core.worktree`` whose
+    *parent* directory is also missing makes git refuse **every** command in
+    the repository, ``git config --get`` included (driven, git 2.43:
+    ``fatal: Invalid path``, rc 128 — even with ``-f <the config file>``).
+    Pointing ``GIT_WORK_TREE`` at a directory that demonstrably exists — the
+    caller's own cwd — stops git validating the pin and lets the value be
+    read and unset.
+
+    Found by a test, not by reasoning: the first version of this helper used
+    a plain ``git config --get``, returned ``""`` for a deep-broken pin, and
+    the classifier above cheerfully reported *no pin explains this* about a
+    repository that had one. A search that cannot match is not evidence of
+    absence, and a diagnostic built on one lies with a straight face.
+    """
+    env = explicit_repo_env()
+    env["GIT_WORK_TREE"] = str(cwd)
+    try:
+        return subprocess.run(
+            ["git", "config", *args],
+            cwd=cwd, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env,
+        )
+    except OSError:
+        return None
+
+
+def _config_value(cwd: Path, key: str) -> str:
+    """Read one git config value as seen from *cwd*, or ``""``."""
+    result = _config_git(cwd, "--get", key)
+    if result is None or result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 def _git(
     repo_root: Path, *args: str,
     check: bool = True,
@@ -254,7 +371,18 @@ def _git(
     scrub every call in this module needs because it names its repository.
     Commit-creating calls pass :func:`bot_identity_env`, which is that same
     scrub plus brnrd's identity; nothing else should override it.
+
+    **The cwd guard.** ``subprocess`` raises a bare ``FileNotFoundError``
+    naming the *cwd* when the directory is gone — a message that reads like
+    a missing git binary and names a path the caller never typed. That is
+    how #1108 reached the operator: 312 identical tracebacks, a daemon in a
+    5-second restart loop for 27 minutes, and not one line saying which
+    config had repointed the checkout. Same failure, diagnosed.
     """
+    if not Path(repo_root).is_dir():
+        raise RepoTreeUnusable(
+            diagnose_unusable_tree(Path(repo_root), asked_from=Path.cwd())
+        )
     return subprocess.run(
         ["git", *args],
         cwd=repo_root,
@@ -266,13 +394,64 @@ def _git(
     )
 
 
+def heal_stale_brnrd_worktree_pin(cwd: Path) -> bool:
+    """Unset a ``core.worktree`` naming a deleted ``.brr/worktrees/<run>``.
+
+    Returns True when it repaired something. The narrowest possible
+    self-repair, and the narrowness is the argument for allowing it at all:
+    it fires only for a path that (a) does not exist, and (b) sits directly
+    under a ``.brr/worktrees`` directory — the tree brnrd creates and tears
+    down itself. Both conditions are structural. Neither requires knowing
+    who wrote the pin, which #746 never established and #1108 still hasn't.
+
+    Any *other* repoint — a real directory, or a path outside brnrd's own
+    worktree root — is left exactly where it is and reported by
+    :func:`diagnose_unusable_tree` instead. Somebody may mean that one; no
+    one can mean this one.
+    """
+    pinned = _config_value(cwd, "core.worktree")
+    if not pinned:
+        return False
+    path = Path(pinned)
+    if path.exists():
+        return False
+    if path.parent.name != "worktrees" or path.parent.parent.name != ".brr":
+        return False
+    result = _config_git(cwd, "--unset", "core.worktree")
+    if result is None or result.returncode != 0:
+        return False
+    print(
+        f"[brnrd] unset a stale core.worktree pin: it named {path}, a brnrd "
+        f"run worktree that no longer exists. Left in place it makes every "
+        f"git command in this checkout answer about a deleted tree at exit 0 "
+        f"(#746/#1108)."
+    )
+    return True
+
+
 def ensure_git_repo() -> Path:
-    """Return the repository root, or raise RuntimeError."""
+    """Return the repository root, or raise.
+
+    Two failures, deliberately different classes. *Not a git repository* is
+    a ``RuntimeError``, which callers legitimately treat as "no brnrd here"
+    and degrade around. A repository whose working tree **does not exist**
+    is :class:`RepoTreeUnusable` — a fault with a named cause and a repair
+    step, and one that no caller may quietly turn into a shrug.
+
+    Git will not raise here on its own: ``rev-parse --show-toplevel``
+    returns a deleted directory and *exits 0* (driven, git 2.43). The
+    existence check is the only thing between that answer and a
+    ``FileNotFoundError`` thrown by whichever call uses it as a cwd next.
+    """
+    cwd = Path.cwd()
     try:
-        result = _git(Path.cwd(), "rev-parse", "--show-toplevel")
+        result = _git(cwd, "rev-parse", "--show-toplevel")
     except subprocess.CalledProcessError as exc:
         raise RuntimeError("Not a Git repository; run `git init` first.") from exc
-    return Path(result.stdout.strip())
+    root = Path(result.stdout.strip())
+    if not root.is_dir():
+        raise RepoTreeUnusable(diagnose_unusable_tree(root, asked_from=cwd))
+    return root
 
 
 def current_branch(repo_root: Path) -> str:
@@ -437,9 +616,21 @@ def toplevel(repo_root: Path) -> Path | None:
     So this is deliberately *not* ``repo_root``-with-extra-steps: the whole
     value is that the two can disagree, and that a caller about to ship
     something can ask rather than assume. ``None`` means git declined to
-    answer (not a repository; a ``core.worktree`` pointing somewhere
-    deleted) — for an assertion that is a failure too, since "I cannot tell
-    which tree this is" is not a confirmation.
+    answer — this is not a repository — and for an assertion that is a
+    failure too, since "I cannot tell which tree this is" is not a
+    confirmation.
+
+    **What ``None`` does *not* cover, corrected #1108.** This docstring used
+    to claim ``None`` also meant "a ``core.worktree`` pointing somewhere
+    deleted". It does not, and never did: ``rev-parse --show-toplevel``
+    returns the deleted path and *exits 0* (driven, git 2.43), so that case
+    comes back here as a live-looking ``Path`` to a directory that is gone.
+    The reading is still correct for every caller — the path is what git
+    believes, and it compares unequal to any real checkout, which is how
+    ``_publish_tree_mismatch`` catches it — but a caller that hands the
+    result to ``cwd=`` gets :class:`RepoTreeUnusable`. Reporting what git
+    says is this function's job; existence is the caller's question, and
+    :func:`ensure_git_repo` is where brnrd asks it.
     """
     result = _git(repo_root, "rev-parse", "--show-toplevel", check=False)
     if result.returncode != 0:
