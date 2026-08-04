@@ -13,6 +13,8 @@
 	import { typeReveal } from '$lib/transitions';
 	import WinkWordmark from '$lib/WinkWordmark.svelte';
 	import HeroExchange from '$lib/HeroExchange.svelte';
+	import ShelfIcon from '$lib/ShelfIcon.svelte';
+	import { SHELLS, doorRows, fetchDoorStatus, type DoorStatus } from '$lib/supportMatrix';
 
 	// The landing (#509): what an anonymous visitor sees at brnrd.dev.
 	// Two doors, one truth — in both of them the agent executes on the
@@ -22,20 +24,30 @@
 	let stats = $state<PublicStats | null>(null);
 	let repo = $state<RepoStats | null>(null);
 	let countersLoaded = $state(false);
+	// null = no confirmed door status yet (pre-fetch or the fetch failed) —
+	// doorRows() renders every door in that state as `status: null`, never
+	// as a guessed `live` (see supportMatrix.ts).
+	let doorStatuses = $state<Map<string, DoorStatus> | null>(null);
 
 	const legalNoticeReady = legalNoticeIsComplete();
 
 	onMount(async () => {
 		// One shot each, no polling — counters are proof of life, not telemetry.
-		const [s, r] = await Promise.all([fetchPublicStats(), fetchRepoStats()]);
+		const [s, r, doors] = await Promise.all([
+			fetchPublicStats(),
+			fetchRepoStats(),
+			fetchDoorStatus()
+		]);
 		stats = s;
 		repo = r;
 		countersLoaded = true;
+		doorStatuses = doors;
 	});
 
 	let seatsLeft = $derived(
 		stats === null ? null : Math.max(0, stats.supporter_seats_total - stats.supporter_seats_taken)
 	);
+	let doors = $derived(doorRows(doorStatuses));
 </script>
 
 <div class="mx-auto max-w-4xl p-6">
@@ -164,6 +176,62 @@
 					class="mt-4 inline-flex items-center gap-2 border border-amber-700 bg-amber-950/40 px-3 py-2 font-mono text-[12px] tracking-wide text-amber-200 uppercase hover:bg-amber-950/70"
 					href={resolve('/login')}>sign in with GitHub</a
 				>
+			</div>
+		</div>
+	</section>
+
+	<!-- The shells-and-doors shelf (#1070's docs-page block, brought to this
+	     landing). Two different truths on purpose: Shells is static prose
+	     data (both bundled CLIs are always live — see supportMatrix.ts for
+	     why deriving two names from `_BUNDLED_CORES` live isn't worth a
+	     fetch + loading state); Doors is never hardcoded live/soon — that's
+	     exactly what went stale on the docs page in one day (#1072, #1074).
+	     A door with no confirmed status yet reads "checking…", never a
+	     guessed "live" — the failure #964/#1070's own soon-tags hazard was:
+	     silence reading as a claim of completeness. -->
+	<section class="ignite mt-10" style="--ignite-delay: 380ms" aria-label="shells and doors">
+		<p class="eyebrow">shells and doors</p>
+		<div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+			<div class="panel p-4">
+				<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">shells</p>
+				<ul class="mt-3 flex flex-col gap-2.5">
+					{#each SHELLS as shell (shell.slug)}
+						<li class="flex items-center gap-2.5">
+							<ShelfIcon icon={shell.icon} />
+							<span class="text-sm text-stone-300">{shell.label}</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+			<div class="panel p-4">
+				<p class="font-mono text-[10px] tracking-wide text-amber-200/80 uppercase">doors</p>
+				<ul class="mt-3 flex flex-col gap-2.5">
+					{#each doors as door (door.slug)}
+						<li class="flex items-center gap-2.5">
+							<ShelfIcon icon={door.icon} />
+							<span class="text-sm text-stone-300">{door.label}</span>
+							<span class="ml-auto flex shrink-0 items-center gap-1.5">
+								{#if door.tag}
+									<span
+										class="border border-stone-700 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+										>{door.tag}</span
+									>
+								{/if}
+								{#if door.status === 'soon'}
+									<span
+										class="border border-amber-700/50 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-amber-300 uppercase"
+										>soon</span
+									>
+								{:else if door.status === null}
+									<span
+										class="border border-stone-800 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
+										>checking…</span
+									>
+								{/if}
+							</span>
+						</li>
+					{/each}
+				</ul>
 			</div>
 		</div>
 	</section>
