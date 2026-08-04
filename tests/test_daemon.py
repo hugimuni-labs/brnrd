@@ -882,6 +882,24 @@ def test_presence_label_for_event_uses_summary_when_a_caller_sets_it():
     assert len(daemon._presence_label_for_event(event_long)) == 120
 
 
+def test_presence_label_for_event_prefers_declared_title_over_summary(tmp_path):
+    """#880 §1b: a spawn dispatcher's declared ``title:`` frontmatter — a
+    one-line, dispatcher-authored label, not the free-text ``task.body``
+    #585 guarded against — wins over ``summary`` and populates the
+    presence row from the first heartbeat, before the child has had a
+    chance to introduce itself via ``.name``."""
+    event = {
+        "id": "evt-1", "body": "irrelevant",
+        "title": "fix the frontend build",
+        "summary": "some other auto-derived text",
+    }
+    assert daemon._presence_label_for_event(event) == "fix the frontend build"
+
+    # No title ⇒ falls back to summary exactly as before.
+    event_no_title = {"id": "evt-2", "summary": "Add labels to live runs"}
+    assert daemon._presence_label_for_event(event_no_title) == "Add labels to live runs"
+
+
 def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(
@@ -1903,6 +1921,48 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
     child = protocol._read_event(spawned[0])
     assert child["spawn_contract_branch"] == "brr/declared-slug"
     assert child["spawn_contract_report"] == "/tmp/brr-declared-slug-report.md"
+
+
+def test_queue_spawn_request_carries_title_into_child_meta(tmp_path):
+    """#880 §1b: ``title:`` in the spawn frontmatter carries onto the
+    child's own meta as ``title`` — the field `_presence_label_for_event`
+    reads to populate that child's presence ``label``, so a parent
+    supervising several siblings can tell their rows apart before any of
+    them has written its own ``.name``. Absent ``title:`` ⇒ no key at all
+    (matches ``branch:``/``report:``'s optional shape), never an empty
+    string riding along as chrome."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {"spawn": True, "title": "fix the frontend build"},
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child = protocol._read_event(spawned[0])
+    assert child["title"] == "fix the frontend build"
+
+    # A second child with no `title:` gets no key at all.
+    accepted2 = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task, inbox, event_id, {"spawn": True}, "another bounded task", outbox,
+    )
+    assert accepted2 is True
+    spawned2 = [p for p in inbox.glob("*.md") if p.stem not in (event_id, spawned[0].stem)]
+    child2 = protocol._read_event(spawned2[0])
+    assert "title" not in child2
 
 
 def test_notify_spawn_parent_declared_contract_beats_sibling_prose(tmp_path):
@@ -4736,6 +4796,51 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     assert checked.is_set()
 
 
+def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, monkeypatch):
+    """#880 §1 guard: reaping a finished spawn calls ``_notify_spawn_parent``
+    outside any try/except of its own — a real crash there (a bad inbox
+    write, a permissions error) must still release the accepted-spawn slot,
+    or that slot is gone for the rest of the daemon process's life, no
+    restart required to lose it, just one unlucky notify. The exception
+    still propagates (unchanged behavior, out of this task's scope to
+    harden) — only the accounting must not leak."""
+    write_repo_scaffold(tmp_path)
+    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event["id"]
+        return Run(
+            id=f"task-{eid}", event_id=eid, body="spawned",
+            status="done", meta={"worker": True},
+        )
+
+    def crashing_notify(*_a, **_k):
+        raise RuntimeError("notify blew up")
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 1},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", crashing_notify)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    protocol.create_event(
+        tmp_path / ".brr" / "inbox", "spawn", "spawned work",
+        spawn_immediate=True, worker=True, environment="worktree",
+    )
+
+    with pytest.raises(RuntimeError, match="notify blew up"):
+        daemon.start(tmp_path)
+
+    assert daemon._spawn_pool_accepted_count() == 0
+
+
 def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
     tmp_path, monkeypatch,
 ):
@@ -5908,12 +6013,23 @@ def test_resources_facet_coexisting_known_when_siblings_passed():
 # ── _write_live_portal_state (coexisting_runs ← presence registry) ───────────
 
 
-def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
+def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path, monkeypatch):
     """``brr_dir`` wires a *live*, heartbeat-refreshed sibling-run read —
     the same presence query already used for the wake-time-only
     ``present_snapshot`` (``_run_worker``'s "Other thoughts awake right
     now"), extended to the portal-state facet a running resident's hooks
-    surface after every tool call."""
+    surface after every tool call.
+
+    ``spawn_pool`` used to ride the same ``coexisting_snapshot`` read this
+    facet is built from; #880 §1 moved its source to the accepted-spawn
+    registry (``_spawn_pool_accepted_count``) precisely because presence
+    undercounts a child that's been accepted onto the pool but hasn't
+    registered presence yet. So a sibling showing up in presence (this
+    test's third act) no longer moves ``spawn_pool`` at all — that's the
+    point of the decoupling, covered on its own registry-driven terms by
+    ``test_write_live_portal_state_spawn_pool_counts_accepted_not_registered``
+    below. Isolated from other tests' registry state via a fresh empty set."""
+    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
     brr_dir = tmp_path / ".brr"
     outbox_dir = brr_dir / "outbox" / "evt-1"
     inbox_dir = brr_dir / "inbox"
@@ -5926,16 +6042,20 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
         )
         return payload["resources"]["coexisting_runs"]
 
-    # No brr_dir given → unchanged legacy behaviour.
+    # No brr_dir given → the sibling-list facet stays "unimplemented" (no
+    # presence collector wired at this call site), but spawn_pool is
+    # independent of that wiring — it's main-loop bookkeeping, not a
+    # presence read, so it reports the registry's real (empty) count.
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
     )
     assert _read_facet()["status"] == "unimplemented"
     assert _read_facet()["spawn_pool"] == {
-        "max_concurrent": 4, "active": None, "available": None,
+        "max_concurrent": 4, "active": 0, "available": 4,
     }
 
-    # brr_dir given, nobody else present → affirmative-absent.
+    # brr_dir given, nobody else present → affirmative-absent; spawn_pool
+    # unchanged (still nothing accepted).
     daemon._write_live_portal_state(
         outbox_dir, inbox_dir, "evt-1", task, phase="running",
         brr_dir=brr_dir,
@@ -5946,7 +6066,9 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
     }
 
     # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
-    # known, self excluded by run_id.
+    # the sibling-list facet goes known, self excluded by run_id — but
+    # spawn_pool does NOT move: presence is identity, not capacity, and no
+    # spawn was ever accepted onto *this* pool in this test.
     presence.register(
         brr_dir, kind="daemon", stream="other", run_id="run-sibling",
         label="fix the frontend build", is_subspawn=True,
@@ -5959,8 +6081,82 @@ def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
     assert facet["status"] == "known"
     assert "fix the frontend build" in facet["summary"]
     assert facet["spawn_pool"] == {
-        "max_concurrent": 4, "active": 1, "available": 3,
+        "max_concurrent": 4, "active": 0, "available": 4,
     }
+
+
+def test_write_live_portal_state_spawn_pool_counts_accepted_not_registered(tmp_path, monkeypatch):
+    """#880 §1, the regression: a child ``_loop`` has accepted onto the pool
+    (``_spawn_pool_accept``, the same call the submission site makes the
+    instant ``pool.submit`` returns) counts as active *before* it has ever
+    registered presence — the exact dispatch→start window the ticket
+    reports as ~2-3 minutes wide on a saturated pool. Fails on pre-#880
+    code, which derived ``spawn_pool`` from
+    ``presence.list_active(...).is_subspawn`` and therefore read a
+    queued-but-not-started child as zero."""
+    monkeypatch.setattr(daemon, "_spawn_pool_accepted", set())
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
+
+    # Two children accepted onto the pool — neither has registered presence
+    # (no presence.register call for either), which is exactly the window
+    # between _loop's pool.submit and the child's own _run_worker starting.
+    daemon._spawn_pool_accept("evt-child-1")
+    daemon._spawn_pool_accept("evt-child-2")
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
+    assert spawn_pool == {"max_concurrent": 4, "active": 2, "available": 2}
+
+    # Release one (the reap path) — the count drops immediately, still with
+    # no presence entry ever having existed for either child.
+    daemon._spawn_pool_release("evt-child-1")
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
+    assert spawn_pool == {"max_concurrent": 4, "active": 1, "available": 3}
+
+
+def test_write_live_portal_state_spawn_pool_active_unknown_when_registry_unreadable(tmp_path, monkeypatch):
+    """An accounting-source failure must render ``active: null`` /
+    ``available: null`` — never a silent zero. Zero and unknown are both
+    live possibilities from a resident's seat (a genuinely idle pool vs. a
+    pool this call site can't assert about), and collapsing "unknown" into
+    "0 active / full headroom" is the same optimistic-direction lie #880
+    reports for the presence-derived read, just moved to a new source."""
+    def _boom():
+        raise RuntimeError("registry unreadable")
+
+    monkeypatch.setattr(daemon, "_spawn_pool_accepted_count", _boom)
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
+
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    payload = json.loads(
+        (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+    )
+    spawn_pool = payload["resources"]["coexisting_runs"]["spawn_pool"]
+    assert spawn_pool == {"max_concurrent": 4, "active": None, "available": None}
 
 
 def test_resources_facet_level_collector_flips_empty_to_absent():
