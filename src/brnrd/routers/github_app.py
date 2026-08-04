@@ -295,15 +295,7 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
             print(f"[brnrd] github installation sync failed: {e}")
             notice = "github-sync-failed"
     params = {k: v for k, v in {"installation_id": installation_id, "setup_action": setup_action, "notice": notice}.items() if v}
-    # Land on /repos, not the bare dashboard (#1084): /repos is the screen
-    # that reads `installations` / `installed_repos` and can act on what a
-    # GitHub App install just produced (enable a repo) — the dashboard's own
-    # cold-start block only ever names /repos as "another page" to go to.
-    # This is also what actually happened live: the reporter's own unblock
-    # was "setting enable button here https://brnrd.dev/repos". An anonymous
-    # arrival (no session cookie yet) still lands here — /repos already
-    # degrades to a sign-in link with `next=/repos` for that case.
-    return RedirectResponse(url=f"/repos?{urlencode(params)}", status_code=303)
+    return RedirectResponse(url=f"/?{urlencode(params)}", status_code=303)
 
 
 @router.post("/sync")

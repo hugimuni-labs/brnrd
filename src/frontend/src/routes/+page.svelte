@@ -69,12 +69,7 @@
 	import { CLOTH_WINDOW_MS } from '$lib/cloth';
 	import { loomPastWindowLabel } from '$lib/loomBand';
 	import WorkSurface from '$lib/WorkSurface.svelte';
-	import {
-		ReposAuthError,
-		fetchRepos,
-		type ConnectedRepo,
-		type GitHubInstallation
-	} from '$lib/repos';
+	import { ReposAuthError, fetchRepos, type ConnectedRepo } from '$lib/repos';
 	import Landing from '$lib/Landing.svelte';
 	import { SurfaceAuthError, fetchSurface, type SurfaceResponse } from '$lib/surface';
 	import { glitchReveal, typeReveal } from '$lib/transitions';
@@ -119,10 +114,6 @@
 	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
 	let runnersNote = $state<string | null>(null);
 	let connectedRepos = $state<ConnectedRepo[] | null>(null);
-	// GitHub App installations for this account, same fetch — ColdStart's
-	// step 02 reads this to tell "app installed, still need to enable a
-	// repo" apart from "nothing installed yet" (#1084).
-	let installations = $state<GitHubInstallation[] | null>(null);
 	// Backend-owned pairing lines for the cold start, from the same
 	// `/v1/dashboard/repos` fetch — an account with no repos has no repo row
 	// to read `setup_command` off, so the account-level spelling comes with
@@ -753,18 +744,6 @@
 		return Date.now() - coldRepoCheckAt >= COLD_REPO_POLL_MS;
 	}
 
-	// Mirrors ColdStart.svelte's own `daemonEverPaired` — the block (and so
-	// this poll) has to keep watching past "a repo exists" and up to "a
-	// daemon actually registered" (#1084): the old `repos.length === 0` gate
-	// stopped polling the instant a repo was enabled, which is exactly the
-	// state that used to hide the pairing step for good.
-	function daemonNotYetPaired(repos: ConnectedRepo[] | null): boolean {
-		return (
-			repos === null ||
-			!repos.some((r) => r.daemon_status === 'online' || r.daemon_status === 'offline')
-		);
-	}
-
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -816,9 +795,9 @@
 			}
 		}
 		// Once, normally — the repo list is not a live surface. The one
-		// exception is a cold account: while the cold-start block is still
-		// showing (no repo, or a repo with no daemon ever paired) the page
-		// has to notice the moment that changes (in the other tab this very
+		// exception is a cold account: while it has *no* repos the page is
+		// showing the cold-start block, and that block has to leave on its
+		// own the moment a repo is enabled (in the other tab this very
 		// block sends the reader to). A first-run panel that outstays its
 		// state is a worse bug than the blank page it replaced.
 		//
@@ -830,12 +809,11 @@
 		// answer arrives no sooner. So: a slow interval, plus a refetch the
 		// moment the tab regains focus, which is the *actual* signal that the
 		// reader has come back from doing the thing.
-		if (connectedRepos === null || (daemonNotYetPaired(connectedRepos) && coldRefetchDue())) {
+		if (connectedRepos === null || (connectedRepos.length === 0 && coldRefetchDue())) {
 			try {
 				coldRepoCheckAt = Date.now();
 				const repos = await fetchRepos();
 				connectedRepos = repos.connected_repos;
-				installations = repos.installations;
 				pairingCommand = repos.pairing_command ?? null;
 				githubLogin = repos.account.github_login;
 			} catch (e) {
@@ -906,7 +884,7 @@
 	// than all of them, so the throttle above never costs the reader a wait
 	// they can perceive.
 	function onFocus() {
-		if (connectedRepos !== null && daemonNotYetPaired(connectedRepos)) {
+		if (connectedRepos !== null && connectedRepos.length === 0) {
 			coldRepoCheckAt = 0;
 			refresh();
 		}
@@ -1011,12 +989,11 @@
 		<!-- The cold start, directly under the title and above everything
 		     else: for an account with nothing connected every section below
 		     is an empty state, so anything under the fold is under the
-		     horizon. It renders while `connectedRepos` is landed and no
-		     daemon has ever paired — the same source the rail and the
-		     consent notice read, never a second notion of "empty" — and
-		     leaves by itself once a daemon registers, not the moment a repo
-		     is merely enabled (#1084). -->
-		<ColdStart repos={connectedRepos} {installations} pairCommand={pairingCommand} />
+		     horizon. It renders only while `connectedRepos` is a landed,
+		     empty list — the same source the rail and the consent notice
+		     read, never a second notion of "empty" — and leaves by itself
+		     when the first repo appears. -->
+		<ColdStart repos={connectedRepos} pairCommand={pairingCommand} />
 
 		<PublishConsentNotice repos={connectedRepos} />
 

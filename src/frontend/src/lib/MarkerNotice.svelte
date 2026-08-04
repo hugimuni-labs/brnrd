@@ -24,13 +24,7 @@
 		const login = botLogin || 'the configured GitHub bot';
 		switch (status) {
 			case 'not-a-collaborator':
-				// Re-registered 2026-08-04 (`docs/concepts/gates.md`): the
-				// App-native `brnrd` label is already the universal summons —
-				// this is not a remediation notice for a broken mention path.
-				// The invite is an optional upgrade that only buys GitHub's own
-				// assignee/reviewer/@-autocomplete affordances, which an App
-				// cannot hold on its own.
-				return `${login} isn't a collaborator — optional, not required: the brnrd label already summons it. Invite it in Settings → Collaborators to add assignment, review requests, and @ autocomplete.`;
+				return `${login} not a collaborator — assigns / review-requests / comment-tags addressed to it won't reach the resident; invite it in Settings → Collaborators.`;
 			case 'permission-missing':
 				return "permission missing — the GitHub App lacks the grant for the collaborators endpoint; grant Administration: read in the App's repository permissions.";
 			case 'check-unavailable':

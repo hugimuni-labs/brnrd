@@ -59,22 +59,12 @@ def marker_absence_text(bot_login: str) -> str:
     collaborator — names the *effective* configured login (#874 ask 3), so a
     misconfigured call sign (the 2026-07-29 outage class) is visible in the
     UI rather than only discoverable by forensics.
-
-    Re-registered 2026-08-04 (`docs/concepts/gates.md`): this used to read as
-    a remediation notice for a broken summons path ("comment-tags... won't
-    reach the resident"), which overstated it — the App-native ``brnrd``
-    label already summons the resident unconditionally. The invite is an
-    optional upgrade for the affordances only a real GitHub account can hold
-    (assignee slot, reviewer slot, ``@`` autocomplete), not a defect to fix.
-    Kept in step with ``MarkerNotice.svelte``'s primary rendering of the same
-    fact — this copy only reaches clients on the legacy
-    ``github_bot_marker_notice`` compatibility field.
     """
     login = str(bot_login or "").strip().lstrip("@") or "the configured GitHub bot"
     return (
-        f"{login} isn't a collaborator — optional, not required: the brnrd "
-        "label already summons it. Invite it in Settings → Collaborators to "
-        "add assignment, review requests, and @ autocomplete."
+        f"{login} not a collaborator — assigns / review-requests / "
+        "comment-tags addressed to it won't reach the resident; invite it "
+        "in Settings → Collaborators."
     )
 
 

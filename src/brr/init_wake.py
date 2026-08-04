@@ -622,20 +622,12 @@ def collect_facts(
     detected_runners: list[str] | None = None,
     detected_shells: list[str] | None = None,
     knowledge_shape: str | None = None,
-    github_identity: str | None = None,
 ) -> dict[str, Any]:
     """Everything the wake would otherwise have to shell out for.
 
     Cheap and best-effort by construction: a fact that can't be read is
     omitted, never guessed, because the wake treats this block as ground
     truth and a confident wrong fact costs an interview beat to unwind.
-
-    ``github_identity`` is the caller's job, not this function's: ``adopt``
-    already resolves it once (via ``home_link.detect_identity()``, itself a
-    thin wrap over ``resolve_owner``) to state it on the terminal before the
-    wake even starts, and passing that same value through here means the
-    wake's own ``gh api user`` cost is paid exactly once per init, not
-    twice.
     """
     from . import home_link
     from .gates import runtime as gate_runtime
@@ -662,8 +654,6 @@ def collect_facts(
         facts["gh_available"] = home_link.gh_available()
     except Exception:  # noqa: BLE001
         pass
-    if github_identity:
-        facts["github_identity"] = github_identity
     try:
         import subprocess
 

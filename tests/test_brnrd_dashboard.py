@@ -182,12 +182,10 @@ def test_dashboard_repos_api_serves_one_pairing_command_to_a_cold_account():
 
     cold = client.get("/v1/dashboard/repos").json()
     assert cold["connected_repos"] == []
-    # Two lines, not three (#1084): `brnrd account connect` already installs
-    # and starts the native service, so a trailing `brnrd up` only restarted
-    # what the line above it just started.
     assert cold["pairing_command"].splitlines() == [
         "cd <repo>",
         "brnrd account connect https://brnrd.dev",
+        "brnrd up",
     ]
 
     _create_repo(client, token, repo="Gurio/brr")

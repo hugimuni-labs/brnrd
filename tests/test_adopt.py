@@ -14,20 +14,6 @@ from brr.runner import RunnerResult
 REPO = Path(__file__).parents[1]
 
 
-@pytest.fixture(autouse=True)
-def _no_gh_by_default(monkeypatch):
-    """Keep every ``init_repo()`` call in this file hermetic and gh-free.
-
-    ``_state_identity()`` (and ``collect_facts``'s ``gh_available`` fact)
-    call ``home_link.gh_available()`` / ``resolve_owner()`` on every init —
-    real work on a real machine, but a live ``gh api user`` network call
-    inside a test whenever ``gh`` happens to be on the test runner's PATH
-    and signed in (true of brnrd's own account-scoped credential). Tests
-    that exercise the identity behavior itself override this explicitly.
-    """
-    monkeypatch.setattr("brr.home_link.gh_available", lambda: False)
-
-
 def _mock_runner(monkeypatch, output=""):
     """Mock runner detection and execution to avoid calling real CLIs."""
     monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
@@ -773,23 +759,14 @@ class TestNpxSpelling:
         return repo
 
     def test_wake_closing_line_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
-        """The exact line the reporter was looking at when `brnrd` 404'd.
-
-        Superseded by the channel menu (#1084 family — see TestChannelMenu):
-        "next: `brnrd up`, then send it work" named no channel and is gone;
-        this now pins its replacement's npx spelling specifically.
-        """
+        """The exact line the reporter was looking at when `brnrd` 404'd."""
         monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
         self._wake_repo(tmp_path, monkeypatch)
 
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "next: `npx brnrd up`, then send it work." not in out
-        assert (
-            "next: `npx brnrd account connect` or "
-            "`npx brnrd gate setup telegram`" in out
-        )
+        assert "[brnrd] next: `npx brnrd up`, then send it work." in out
 
     def test_wake_closing_line_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -800,11 +777,7 @@ class TestNpxSpelling:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "next: `brnrd up`, then send it work." not in out
-        assert (
-            "next: `brnrd account connect` or `brnrd gate setup telegram`"
-            in out
-        )
+        assert "[brnrd] next: `brnrd up`, then send it work." in out
         assert "npx" not in out
 
     def test_setup_retry_line_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
@@ -921,194 +894,3 @@ class TestNpxSpelling:
         assert result.returncode != 0
         assert "re-run `npx brnrd init`" in output
         assert "Traceback" not in output
-
-
-# ── The identity already on the machine ──────────────────────────────
-#
-# "which repo" (`git remote`) has always been inferred silently; "who you
-# are" was resolvable the same way (`gh auth token` / `gh api user`, the
-# resolution the GitHub gate and `brnrd home link` already used) but
-# nothing on the init path called it. `_state_identity()` is the front
-# door. `gh` missing or signed out is a degradation, never a failure —
-# these pin both halves.
-
-
-class TestIdentityAtInit:
-    def test_states_identity_when_gh_resolves_a_login(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        from brr import home_link
-
-        repo = tmp_path / "repo"
-        _init_git(repo)
-        monkeypatch.chdir(repo)
-        _mock_runner(monkeypatch)
-        monkeypatch.setattr(home_link, "gh_available", lambda: True)
-        monkeypatch.setattr(home_link, "resolve_owner", lambda explicit=None: "octocat")
-
-        adopt.init_repo()
-
-        assert "[brnrd] you: @octocat (from `gh`)" in capsys.readouterr().out
-
-    def test_degrades_when_gh_is_not_on_path(self, tmp_path, monkeypatch, capsys):
-        # the module-level `_no_gh_by_default` fixture already pins
-        # `gh_available()` to False — this test only pins the wording.
-        repo = tmp_path / "repo"
-        _init_git(repo)
-        monkeypatch.chdir(repo)
-        _mock_runner(monkeypatch)
-
-        adopt.init_repo()
-
-        out = capsys.readouterr().out
-        assert "[brnrd] you: not detected" in out
-        assert "isn't installed or isn't signed in" in out
-
-    def test_degrades_when_gh_is_unauthenticated(self, tmp_path, monkeypatch, capsys):
-        """`gh` is on PATH but `gh api user` fails — still no crash, no block."""
-        from brr import home_link
-
-        repo = tmp_path / "repo"
-        _init_git(repo)
-        monkeypatch.chdir(repo)
-        _mock_runner(monkeypatch)
-        monkeypatch.setattr(home_link, "gh_available", lambda: True)
-
-        def _raise(explicit=None):
-            raise home_link.HomeLinkError("could not resolve the GitHub owner")
-
-        monkeypatch.setattr(home_link, "resolve_owner", _raise)
-
-        adopt.init_repo()  # must not raise
-
-        assert "[brnrd] you: not detected" in capsys.readouterr().out
-
-    def test_identity_is_stated_before_the_tty_branch(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        """Stated once in `init_repo`, ahead of the wake-vs-auto fork —
-        not duplicated inside either path."""
-        from brr import home_link
-
-        TestNpxSpelling._wake_repo(tmp_path, monkeypatch)
-        monkeypatch.setattr(home_link, "gh_available", lambda: True)
-        monkeypatch.setattr(home_link, "resolve_owner", lambda explicit=None: "octocat")
-
-        adopt.init_repo()
-
-        out = capsys.readouterr().out
-        assert out.count("[brnrd] you: @octocat") == 1
-
-
-# ── The closing menu: upgrades, never prerequisites ──────────────────
-#
-# adopt.py used to print "next: `brnrd up`, then send it work." — naming
-# no channel (#1084 family). `_print_channel_menu()` replaces it: point at
-# a door concretely (`account connect` / `gate setup telegram`), then list
-# the rest of the upgrades framed by what they *buy*
-# (design-onboarding-ladder.md). `brnrd run "<task>"` is no longer the
-# marquee moment here — it's a terminal-only smoke test, demoted per the
-# #1102 rework (host users drive the agent CLI directly; brnrd's value is
-# the door + resident continuity).
-
-
-class TestChannelMenu:
-    def test_states_the_working_channel_and_upgrades(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
-        TestNpxSpelling._wake_repo(tmp_path, monkeypatch)
-
-        adopt.init_repo()
-
-        out = capsys.readouterr().out
-        assert (
-            "[brnrd] next: `brnrd account connect` or "
-            "`brnrd gate setup telegram` — give the resident a door that "
-            "reaches it without a terminal open." in out
-        )
-        assert "a mailbox (`brnrd account connect`)" in out
-        assert "an identity that isn't you" in out
-        assert "brnrd.dev" in out
-        assert "more doors (`brnrd gate setup telegram`" in out
-        assert "`brnrd daemon install`" in out
-        # the line this replaces must be gone, not merely joined by the new one
-        assert "next: `brnrd up`, then send it work." not in out
-
-    def test_channel_menu_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("BRNRD_LAUNCHER", "npx")
-        TestNpxSpelling._wake_repo(tmp_path, monkeypatch)
-
-        adopt.init_repo()
-
-        out = capsys.readouterr().out
-        assert "`npx brnrd account connect`" in out
-        assert "`npx brnrd gate setup telegram`" in out
-        assert "`npx brnrd daemon install`" in out
-
-    def test_channel_menu_stays_bare_for_a_path_install(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        monkeypatch.delenv("BRNRD_LAUNCHER", raising=False)
-        TestNpxSpelling._wake_repo(tmp_path, monkeypatch)
-
-        adopt.init_repo()
-
-        out = capsys.readouterr().out
-        assert "`brnrd account connect`" in out
-        assert "npx" not in out
-
-    def test_gates_configured_line_points_at_up_before_the_menu(
-        self, tmp_path, monkeypatch, capsys,
-    ):
-        """When the interview already wired a gate, `brnrd up` is the
-        completion of a choice already made — not offered as an upgrade.
-        Drives `_init_via_wake` directly with a stubbed wake module so the
-        outcome (gates already configured) doesn't depend on threading the
-        real runner/portal loop through a canned reply."""
-        from brr import init_wake
-
-        repo = tmp_path / "repo"
-        _init_git(repo)
-        monkeypatch.chdir(repo)
-        monkeypatch.setattr(adopt, "_detect_shells", lambda: [])
-
-        class _FakeInitWakeMod:
-            @staticmethod
-            def collect_facts(*_a, **_kw):
-                return {}
-
-            @staticmethod
-            def run_init_wake(*_a, **_kw):
-                (repo / "AGENTS.md").write_text(
-                    "## Stewardship\n" + "x" * 200
-                    + "\n## Knowledge base\n\n## Guardrails\n",
-                    encoding="utf-8",
-                )
-                return init_wake.InitWakeResult(
-                    ok=True, event_id="evt", gates_configured=["telegram"],
-                )
-
-        adopt._init_via_wake(repo, ["mock-runner"], _FakeInitWakeMod)
-
-        out = capsys.readouterr().out
-        assert "gates configured: telegram" in out
-        assert "`brnrd up` makes them live." in out
-
-    def test_every_printed_command_is_a_real_cli_verb(self):
-        """The #1084 discipline: every command a fresh install reads must
-        exist and do what its line says. Parses the literal commands
-        `_print_channel_menu` prints against the real argparse tree."""
-        from brr.cli import build_parser
-
-        parser = build_parser()
-        for argv in (
-            ["run", "some task"],
-            ["account", "connect"],
-            ["gate", "setup", "telegram"],
-            ["gate", "setup", "slack"],
-            ["gate", "setup", "signal"],
-            ["daemon", "install"],
-            ["up"],
-        ):
-            parser.parse_args(argv)  # raises SystemExit on an unknown verb

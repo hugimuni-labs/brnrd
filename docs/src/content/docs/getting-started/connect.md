@@ -3,13 +3,8 @@ title: Connect
 description: Connect a managed account or self-host a gate to your local daemon.
 ---
 
-Connect gives the resident a *persistent* channel: one that reaches it
-without a terminal open, from your phone or a chat app, any time.
-
 Pick one door. Both routes run the agent on your machine. Self-hosted needs no
-brnrd account and no payment; managed layers a connected account on top. They
-compose — run a hosted and a self-hosted gate at once — only the repository
-identity underneath is either/or.
+brnrd account and no payment; managed layers a connected account on top.
 
 ## Managed: one account across repos
 

@@ -2678,12 +2678,6 @@ def build_boot_score(
             # the assembling happens.  Inert outside a live daemon (no captured
             # fingerprint ⇒ False), so ad-hoc runs and tests never see it.
             image_stale=dev_reload.image_is_stale(),
-            # Same "asked where the assembling happens" reasoning as
-            # `image_stale` above — and the same module-global state, so the
-            # two can never name a different image. `None` outside a live
-            # daemon (see `dev_reload.image_fingerprint_digest`).
-            image_digest=dev_reload.image_fingerprint_digest(),
-            image_captured_at=dev_reload.image_captured_at(),
         ),
         continuity=continuity if continuity is not None else BootContinuity(),
         attention=BootAttention(event_ids=event_ids, source_gate=source_gate),
@@ -2961,7 +2955,6 @@ def build_init_wake_facts(facts: dict[str, Any]) -> str:
         ("Shell families not on PATH", "missing_shells"),
         ("Configured gates", "configured_gates"),
         ("gh CLI", "gh_available"),
-        ("GitHub identity (via gh)", "github_identity"),
         ("git remotes", "git_remotes"),
         ("Existing AGENTS.md", "agents_md"),
         ("Knowledge shape (if already chosen)", "knowledge_shape"),
