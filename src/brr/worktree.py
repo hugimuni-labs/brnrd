@@ -634,21 +634,44 @@ def _gh_forge_verdict(repo_root: Path) -> _GhForgeVerdict:
     file on disk); this path keeps its own per-report dict. Imported lazily so
     this low-level module keeps its import-time dependency on ``gitops`` alone.
 
-    Two shapes are left queryable, both straight from that function's docstring:
+    **Only a forge brr can name is gated** — ``kind is not None and kind !=
+    "github"``. Everything else is queried, which is a deliberate narrowing of
+    :func:`forge_pr_cache.refresh`'s condition rather than an oversight, and
+    the reason is in that function's own docstring:
 
-    - ``label is None`` — the remote can't be read, or doesn't parse into an
-      ``owner/repo`` shape at all. There is nothing to base a verdict on, and
-      *this* call site's ``gh pr list --head`` is cwd-resolved with no
-      ``--repo``, so gh's own host detection is exactly the fallback
-      :func:`forge_pr_cache.refresh` keeps for the same case. One honest
-      failure beats a sentence about a remote that isn't there.
-    - a positive ``kind == "github"``.
+        both are a labeled remote ``gh --repo OWNER/REPO`` would silently
+        resolve against github.com instead, which is the hazard #852 gates on
 
-    Everything else is gated, and ``kind is None`` *with* a label is not told
-    apart from an explicitly non-GitHub kind — the docstring says callers must
-    not. A GitHub Enterprise host lands there (no host pattern matches it);
-    ``.brr/config`` ``forge.kind = github`` is the override that says so, and
-    it feeds this same call.
+    ``refresh`` must conflate the two ``kind is None`` shapes because it passes
+    ``--repo OWNER/REPO``. **This call site passes no ``--repo``** — its
+    ``gh pr list --head`` is cwd-resolved, so gh's own host detection is the
+    mechanism, and the hazard the conflation exists for cannot occur. Take
+    away ``--repo`` and the reason to conflate goes with it.
+
+    What the narrower gate buys, and it is not primarily a saved subprocess:
+    the ``unsupported`` state is only ever *claimed* about a forge brr named.
+    A GitHub Enterprise remote resolves to ``kind = None`` with a valid label
+    (``_HOST_PATTERNS`` has ``^github[.]com$`` and no fuzzy pattern), and
+    ``PR state unsupported — this remote isn't GitHub`` would be a **false**
+    sentence rendered with no hedge, since the ``(kind)`` parenthetical drops
+    out exactly when brr could not name the forge. A diagnostic that cannot
+    tell two cases apart must name the ambiguity, not pick the confident
+    branch.
+
+    So three shapes stay queryable:
+
+    - ``label is None`` — no remote, or one that doesn't parse. Nothing to
+      base a verdict on; gh's own detection is the honest fallback, the same
+      one :func:`forge_pr_cache.refresh` keeps for this case.
+    - ``kind is None`` with a label — a host no pattern matches (GHE, an
+      unrecognised self-host). Costs **one** subprocess for the whole report,
+      globally short-circuited by ``__gh_global_error__`` if it fails.
+    - ``kind == "github"``.
+
+    ``gitlab`` / ``bitbucket`` / ``gitea``, including the ``gitlab.<corp>``
+    self-hosted patterns ``forges.py`` matches, are named and therefore gated
+    — which is the saving this whole function exists for. ``.brr/config``
+    ``forge.kind`` moves a host into or out of the gated set either way.
     """
     from . import forge_pr_cache
 
@@ -656,7 +679,7 @@ def _gh_forge_verdict(repo_root: Path) -> _GhForgeVerdict:
         kind, label = forge_pr_cache._forge_kind_and_label(repo_root)
     except Exception:  # noqa: BLE001 - a report must not die on a remote read
         return _GhForgeVerdict(queryable=True, kind=None)
-    if label is not None and kind != "github":
+    if kind is not None and kind != "github":
         return _GhForgeVerdict(queryable=False, kind=kind)
     return _GhForgeVerdict(queryable=True, kind=kind)
 
