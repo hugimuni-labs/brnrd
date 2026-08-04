@@ -637,6 +637,145 @@ class TestAwaitingReply:
         assert len(init_wake.NEXT_PROMPT) <= 32
 
 
+# ── the clock that stops for a human (#1036) ────────────────────────
+#
+# All three tests drive the real session loop (`run_init_wake` /
+# `_Session.run`) — the caller the defect actually lives in — with
+# `time.monotonic` replaced by a test-controlled clock so "a human took N
+# seconds to answer" is a deterministic assignment, not a real sleep. The
+# background runner thread runs on real wall-clock time and only touches
+# the outbox/inbox files; only the *reader* (the human's side) advances the
+# fake clock, exactly where the real defect lived.
+
+
+class TestDeadlineAndHumanTime:
+    def test_reply_that_just_landed_is_always_processed(self, tmp_path, monkeypatch):
+        """Rec 3: the tick right after a reply lands never kills the wake.
+
+        The clock jump lives in ``writer`` — called synchronously, on the
+        main thread, the instant *before* ``_offer_reply`` captures the
+        start of the awaiting window (see ``drain_once``:
+        ``self.writer(body); self._offer_reply()``) — so it lands as work
+        time, not thinking time: rec 1's accounting alone gives this tick no
+        slack (awaiting time this round is ~0, and the budget is exactly
+        spent). Only rec 3's skip saves it. No thread races: the bump is on
+        the same thread, in the statement right before the read it protects.
+        """
+        repo = _repo(tmp_path)
+        clock = [0.0]
+        monkeypatch.setattr(init_wake.time, "monotonic", lambda: clock[0])
+
+        def writer(_body):
+            # The wake's own work burned the whole 1800s budget before it
+            # even finished printing this question — none of this is
+            # "awaiting"; the flag isn't up yet.
+            clock[0] = 1800.0
+
+        def reader():
+            return "go ahead"  # answers instantly: ~0 thinking time
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            _write_outbox(outbox, "01.md", "shall I proceed?")
+            for _ in range(500):
+                events = json.loads((outbox / "inbox.json").read_text())["events"]
+                if events:
+                    break
+                time.sleep(0.01)
+            # The thread ends right here — no tick after the reply lands
+            # other than the one under test.
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=writer, reader=reader,
+            timeout_seconds=1800, poll_interval=0.01,
+        )
+
+        assert result.replies == 1
+        assert result.ok, result.error
+
+    def test_time_spent_awaiting_a_reply_does_not_count_against_the_budget(
+        self, tmp_path, monkeypatch,
+    ):
+        """Rec 1: thinking time is excluded from the wake's own budget.
+
+        Three rounds each "think" for 500s against a 100s budget — total
+        elapsed clock (1500s) is 15x the budget, and every round's reply
+        lands exactly when rec 3 would otherwise skip the check, so the
+        pass here is rec 1's accounting, not rec 3's skip: the loop keeps
+        ticking (via the trailing sleep below) past the last reply, on a
+        tick where `just_replied` is False, and the deadline still holds.
+        """
+        repo = _repo(tmp_path)
+        clock = [0.0]
+        monkeypatch.setattr(init_wake.time, "monotonic", lambda: clock[0])
+
+        def reader():
+            clock[0] += 500.0
+            return "thought about it"
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            for i in range(3):
+                _write_outbox(outbox, f"{i:02d}.md", f"question {i}?")
+                for _ in range(500):
+                    events = json.loads(
+                        (outbox / "inbox.json").read_text()
+                    )["events"]
+                    if len(events) > i:
+                        break
+                    time.sleep(0.01)
+            # A beat with nothing pending, so the loop ticks the deadline
+            # check at least once with `just_replied` False.
+            time.sleep(0.05)
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None, reader=reader,
+            timeout_seconds=100, poll_interval=0.01,
+        )
+
+        assert result.replies == 3
+        assert result.ok, result.error
+
+    def test_abandoned_prompt_ceiling_still_fires(self, tmp_path, monkeypatch):
+        """Rec 1's stated cost: excluding thinking time needs its own,
+        much longer ceiling, or a terminal nobody ever answers holds the
+        run slot forever. Silence (never a landed reply) past that ceiling
+        still kills the wake, even though the ordinary budget — pushed out
+        by the same awaiting time — never would.
+        """
+        repo = _repo(tmp_path)
+        clock = [0.0]
+        monkeypatch.setattr(init_wake.time, "monotonic", lambda: clock[0])
+        release = threading.Event()
+
+        def reader():
+            clock[0] += 1000.0  # far past the tiny test ceiling below
+            return ""  # never actually answers — this is the abandonment
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            _write_outbox(outbox, "01.md", "still there?")
+            release.wait(5)  # keep the thread alive for the loop to tick
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None, reader=reader,
+            timeout_seconds=100_000,       # the ordinary budget never fires
+            abandoned_prompt_seconds=500,  # small ceiling for the test
+            poll_interval=0.01,
+        )
+        release.set()
+
+        assert not result.ok
+        assert "abandoned" in (result.error or "")
+        assert result.replies == 0
+
+
 # ── the secrets seam ────────────────────────────────────────────────
 
 
