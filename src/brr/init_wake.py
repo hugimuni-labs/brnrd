@@ -518,6 +518,7 @@ class _Session:
                 self._handle_control(verb)
                 continue
             self.result.messages += 1
+            self._clear_line()
             self._show_face()
             self.writer(body.strip())
             self._offer_reply()
@@ -559,10 +560,19 @@ class _Session:
         surface that has rendered a face so far threw all of it away. This
         is the place it was designed for.
 
+        **The cycle lives on the session, not on the call.** Driving it
+        found the obvious-looking version — build a breath, play it,
+        clear — never animated at all: one poll interval is a second, the
+        rest between breaths is three, so the rest consumed every beat, the
+        expression frames never played, and the clear at the end of each
+        call made the resting face flicker once a second. The animation is
+        longer than the tick that renders it, so its position has to
+        outlive the tick.
+
         Honest by construction: it breathes only while the runner thread is
         genuinely working, so it is a liveness signal and not a spinner
-        pretending. It stops when the thread ends, and clears its own line
-        before anything else can print on it.
+        pretending. The line is cleared when the wait ends because the
+        thread died, and by :meth:`_drain_once` before anything prints.
         """
         if not self._animates():
             thread.join(self.poll_interval)
@@ -571,39 +581,41 @@ class _Session:
         if face is None:
             thread.join(self.poll_interval)
             return
+        cycle = self._breath_cycle(face)
         deadline = time.monotonic() + self.poll_interval
-        try:
-            while time.monotonic() < deadline and thread.is_alive():
-                self._breathe(face, deadline, thread)
-        finally:
+        while time.monotonic() < deadline and thread.is_alive():
+            self._paint(cycle[self._beats % len(cycle)])
+            self._beats += 1
+            remaining = min(deadline, time.monotonic() + self._FRAME_SECONDS)
+            wait = remaining - time.monotonic()
+            if wait > 0:
+                thread.join(wait)
+        if not thread.is_alive():
             self._clear_line()
 
-    def _breathe(self, face, deadline: float, thread: threading.Thread) -> None:
-        """One rest-then-cycle beat of *face*, bounded by *deadline*."""
-        sequences = face.sequences or ((face.resting_frame,),)
-        # Which breath it takes comes off the beat counter, not a random
-        # draw: two runs of the same length then animate identically, and a
-        # recorded terminal stays reproducible.
-        sequence = sequences[self._beats % len(sequences)]
-        self._beats += 1
-        self._paint(face.resting_frame)
-        self._sleep_until(
-            min(deadline, time.monotonic() + self._REST_SECONDS), thread,
-        )
-        for frame in sequence:
-            if time.monotonic() >= deadline or not thread.is_alive():
-                return
-            self._paint(frame)
-            self._sleep_until(
-                min(deadline, time.monotonic() + self._FRAME_SECONDS), thread,
-            )
+    def _breath_cycle(self, face) -> tuple[str, ...]:
+        """Rest, held, then one breath — as a flat list of frames.
 
-    def _sleep_until(self, until: float, thread: threading.Thread) -> None:
-        remaining = until - time.monotonic()
-        if remaining > 0:
-            thread.join(remaining)
+        Flattened rather than played as a nested loop because the caller
+        renders *one frame per tick* and must be resumable at any index:
+        the whole point is that the cycle survives the poll interval that
+        interrupts it.
+
+        Which breath follows the rest comes off the beat counter rather
+        than a random draw, so a recorded terminal stays reproducible and
+        two runs of the same length animate the same way.
+        """
+        sequences = face.sequences or ((face.resting_frame,),)
+        sequence = sequences[
+            (self._beats // max(len(sequences), 1)) % len(sequences)
+        ]
+        rest_ticks = max(1, int(self._REST_SECONDS / self._FRAME_SECONDS))
+        return (face.resting_frame,) * rest_ticks + tuple(sequence)
 
     def _paint(self, frame: str) -> None:
+        """One frame, in place. Carriage return only — no escape codes, so
+        a terminal that lies about its capabilities still degrades to
+        legible text rather than to mojibake."""
         try:
             sys.stdout.write("\r  " + frame + "  ")
             sys.stdout.flush()
@@ -611,6 +623,7 @@ class _Session:
             pass
 
     def _clear_line(self) -> None:
+        """Take the line back before anything else claims it."""
         try:
             sys.stdout.write("\r" + " " * 24 + "\r")
             sys.stdout.flush()

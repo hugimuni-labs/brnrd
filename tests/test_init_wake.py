@@ -519,6 +519,38 @@ class TestTerminalLoop:
         )
         assert result.replies == 3
 
+    def test_the_breath_cycle_outlives_the_tick(self, tmp_path):
+        """The bug the first version shipped, pinned.
+
+        A poll interval is one second; the rest between breaths is three.
+        Built per call, the rest consumed every beat, the expression frames
+        never played at all, and the clear at the end of each call made the
+        resting face flicker once a second. The cycle is longer than the
+        tick that renders it, so its *position* has to live on the session.
+
+        Asserted structurally rather than by driving a terminal: the cycle
+        must contain frames the rest does not, and stepping through it by
+        beat must reach them.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        face = emotes.lookup("fo.cus")
+
+        cycle = session._breath_cycle(face)
+        assert len(cycle) > int(
+            session._REST_SECONDS / session._FRAME_SECONDS
+        ), "the cycle is all rest — no breath would ever play"
+        assert set(cycle) - {face.resting_frame}, "no expression frames in the cycle"
+
+        # One poll interval's worth of ticks must not exhaust the rest, or
+        # the expression is unreachable by construction.
+        ticks_per_interval = int(session.poll_interval / session._FRAME_SECONDS)
+        assert ticks_per_interval < len(cycle), (
+            "a single interval covers the whole cycle — position need not persist"
+        )
+        seen = {cycle[i % len(cycle)] for i in range(len(cycle))}
+        assert seen == set(cycle)
+
     def test_nothing_breathes_where_nobody_is_looking(self, tmp_path, monkeypatch):
         """The wait animates only for a person at a terminal.
 
