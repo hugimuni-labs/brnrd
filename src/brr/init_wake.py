@@ -369,6 +369,9 @@ class _Session:
         self._awaiting_started: float | None = None
         #: #1107: consecutive empty reads, reset by any real reply.
         self._empty_reads = 0
+        #: The last emote face shown to the terminal, so a face renders on
+        #: *change* and never on repeat.
+        self._last_face: str | None = None
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -499,9 +502,47 @@ class _Session:
                 self._handle_control(verb)
                 continue
             self.result.messages += 1
+            self._show_face()
             self.writer(body.strip())
             self._offer_reply()
         return handled
+
+    def _show_face(self) -> None:
+        """Put the resident's own face above its message, when it changes.
+
+        The wake already writes ``.mood`` — an emote handle plus private
+        narration — and that face rides the statusline, the run node and the
+        dashboard for every other kind of run. In the one conversation that
+        is a person's *first* contact with the resident, it was the only
+        surface that never showed it: brnrd swallowed the file as a control
+        dotfile and printed nothing.
+
+        Rendered on change only, which is the whole design. A face that
+        repeats above every message is decoration and stops being read; a
+        face that appears when it *moves* is the resident's expression
+        changing while it works, which is a true thing about what is
+        happening and costs one line to say. Only the glyph goes out — the
+        narration lines under it stay private, exactly as they do everywhere
+        else.
+        """
+        raw = (self.outbox_dir / _MOOD_NAME)
+        try:
+            handle = raw.read_text(encoding="utf-8").splitlines()[0].strip()
+        except (OSError, IndexError):
+            return
+        if not handle:
+            return
+        from . import emotes
+
+        face = emotes.glyph(handle)
+        # An unresolved handle prints nothing rather than the bare word: the
+        # honesty bar for moods is "never claim a face you do not have", and
+        # a stranger reading `satisfied` where a face belongs would learn a
+        # vocabulary that does not exist.
+        if not face or face == self._last_face:
+            return
+        self._last_face = face
+        self.writer(f"\n{face}")
 
     def _handle_control(self, verb: str) -> None:
         """Take the terminal back, run the ceremony, tell the wake what happened."""

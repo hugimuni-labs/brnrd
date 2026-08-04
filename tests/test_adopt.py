@@ -961,8 +961,15 @@ class TestIdentityAtInit:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "[brnrd] you: not detected" in out
-        assert "isn't installed or isn't signed in" in out
+        # The rule is "degrade, never block" — and, since 2026-08-04, never
+        # by negating the person. The old line read "you: not detected",
+        # which is a sentence about `gh` wearing a sentence about *them*,
+        # printed third in the first thing a stranger ever sees from this
+        # product. Both halves are pinned: the reason is still stated, and
+        # the subject of the sentence is the tool.
+        assert "`gh` isn't signed in here" in out
+        assert "you can link GitHub later" in out
+        assert "you: not detected" not in out
 
     def test_degrades_when_gh_is_unauthenticated(self, tmp_path, monkeypatch, capsys):
         """`gh` is on PATH but `gh api user` fails — still no crash, no block."""
@@ -981,7 +988,11 @@ class TestIdentityAtInit:
 
         adopt.init_repo()  # must not raise
 
-        assert "[brnrd] you: not detected" in capsys.readouterr().out
+        # Same wording rule as the sibling above: state the tool, never
+        # report the person as undetected.
+        out = capsys.readouterr().out
+        assert "`gh` isn't signed in here" in out
+        assert "you: not detected" not in out
 
     def test_identity_is_stated_before_the_tty_branch(
         self, tmp_path, monkeypatch, capsys,

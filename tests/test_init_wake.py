@@ -481,6 +481,40 @@ class TestTerminalLoop:
         )
         assert result.replies == 3
 
+    def test_the_resident_arrives_with_a_face(self, tmp_path):
+        """The wake writes `.mood`; the one conversation that is a person's
+        first contact was the only surface that never showed it.
+
+        Driven at the seam rather than through the scripted runner, because
+        the harness runs a whole script before a single drain — so a test
+        written through it would only ever see the *last* mood a script
+        wrote, which is the opposite of what this rule is about.
+
+        Three rules, one test: it renders, it renders only on **change**
+        (a face above every message is decoration and stops being read; a
+        face that appears when it moves is an expression changing while it
+        works), and an unresolved handle renders **nothing** rather than the
+        bare word — the mood channel's honesty bar is "never claim a face
+        you do not have".
+        """
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
+        mood = session.outbox_dir / ".mood"
+
+        mood.write_text("hmn_\nlooking around\n")
+        session._show_face()
+        session._show_face()          # unchanged — silent
+        mood.write_text("ooh_\nfound it\n")
+        session._show_face()          # moved — renders
+        mood.write_text("satisfied\na family word, four faces\n")
+        session._show_face()          # unresolvable — silent
+
+        faces = [line.strip() for line in printed if line.strip()]
+        assert len(faces) == 2, printed
+        assert faces[0] != faces[1]
+        assert not any("satisfied" in line for line in printed)
+
     def test_event_is_real_and_retired_at_closeout(self, tmp_path):
         """A real inbox event makes the whole portal grammar work unmodified —
         and a *pending* one left behind would re-wake a later `brnrd up`."""
@@ -1032,7 +1066,12 @@ class TestWakeDispatchFromInit:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "handing this session to the agent" in out
+        # No stage-manager line (2026-08-04). What this test is *for* is
+        # that the wake path ran and brnrd kept its post-passes — pinned by
+        # the assertions below. The removed line announced the actor
+        # instead of letting them speak; the resident's own first message
+        # already knows what the repo is, and that is the introduction.
+        assert "handing this session to the agent" not in out
         # brnrd still owns the post-passes: bridges + the structure gate.
         assert "✓ AGENTS.md" in out
         assert "interviewed, authored" in out
