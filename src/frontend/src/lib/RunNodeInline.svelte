@@ -156,7 +156,9 @@
 	/** The empty-state lines are text that *arrives* too — a run that has just
 	 *  started genuinely transitions through "no card written yet". */
 	let cardEmptyLabel = $derived(
-		digest?.status === 'running' ? 'no card written yet' : 'this run wrote no card'
+		digest?.status === 'running'
+			? 'no card written yet'
+			: digest?.failureExplanation || 'this run wrote no card'
 	);
 	let produceEmptyLabel = $derived(
 		digest?.status === 'running' ? 'nothing committed yet' : 'this run produced nothing'

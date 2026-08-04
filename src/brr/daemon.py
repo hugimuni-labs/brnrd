@@ -4514,8 +4514,15 @@ def _run_worker(
         "attempts": attempt,
         "failure_kind": failure_kind,
     }
+    # Carried onto the task's own meta, not just the transient "failed"
+    # packet: `_persist_run_state_doc` reads `task.meta`, and until this line
+    # `failure_kind` never survived past this function — a run that died here
+    # got `status: error` on its durable dashboard frame with no record of
+    # *why*, indistinguishable from a bare gap (operator report, 2026-08-04).
+    task.meta["failure_kind"] = failure_kind
     if last_failure:
         failed_payload["exit_code"] = last_failure["exit_code"]
+        task.meta["failure_exit_code"] = last_failure["exit_code"]
         if last_failure.get("error"):
             failed_payload["error"] = last_failure["error"]
         if last_failure.get("timed_out"):
@@ -9814,6 +9821,16 @@ def _persist_run_state_doc(
         # no parent to tell. Without this line the check would be one whose
         # only reader is the daemon's own uncaptured stdout.
         "stray_host_write",
+        # A terminal failure's own classification (`runner_failures.py`) and
+        # the subprocess exit code it was classified from — the durable half
+        # of what the give-up path already computes for the "failed" update
+        # packet (see the failure-give-up branch above `emit("failed", ...)`)
+        # but, before this, never carried past that one call. Absent on any
+        # run that didn't fail, so no gating on `status` is needed here; the
+        # dashboard node reads these to explain a bodyless failed run instead
+        # of rendering a bare "no body" gap.
+        "failure_kind",
+        "failure_exit_code",
     ):
         value = task.meta.get(key)
         if value not in (None, ""):

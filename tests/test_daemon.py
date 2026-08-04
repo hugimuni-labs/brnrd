@@ -3992,6 +3992,51 @@ def test_run_worker_writes_terminal_failure_response_on_runner_error(
     assert task.terminal_reply == response
 
 
+def test_run_worker_records_failure_kind_for_dashboard_frame(tmp_path, monkeypatch):
+    """The give-up path's own failure classification must survive on
+    ``task.meta`` — it used to live only in the transient "failed" update
+    packet, so a run's durable dashboard frame (``state.md``, written from
+    ``task.meta`` at closeout) recorded ``status: error`` with no trace of
+    *why*. A killed/errored run with no captured body then rendered as a
+    bare gap on the dashboard (operator report, 2026-08-04) instead of the
+    small, honest explanation the classifier already computed.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-run-fail-kind")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner_profile", lambda _root, _overrides=None: daemon.runner.runner_profile("codex", _root))
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="",
+            returncode=-9,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "error"
+    assert task.meta.get("failure_kind") == daemon.runner_failures.RUNNER_ERROR
+    assert task.meta.get("failure_exit_code") == -9
+
+
 def test_interrupted_terminal_failure_omits_stderr_detail(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-interrupted")
@@ -7454,6 +7499,51 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     # remote on the dominion there is no web URL to surface yet.
     assert task.meta["run_state_path"] == str(path)
     assert "run_state_url" not in task.meta
+
+
+def test_account_run_state_doc_carries_failure_kind(tmp_path):
+    """A terminal-failure frame names *why*, not just ``status: error``.
+
+    ``failure_kind``/``failure_exit_code`` are the only two failure-detail
+    keys ``_run_worker``'s give-up path stamps onto ``task.meta`` (see
+    ``test_run_worker_records_failure_kind_for_dashboard_frame``); this pins
+    the other half — that ``_persist_run_state_doc`` actually carries them
+    onto the durable frame the dashboard reads, instead of silently dropping
+    them like every key not on its allowlist.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "home.path": str(tmp_path / "account-home"),
+        },
+    )
+    task = Run(
+        id="run-died-unexplained",
+        event_id="evt-died",
+        body="a task that got killed mid-flight",
+        source="telegram",
+        status="error",
+        meta={
+            "failure_kind": "runner_error",
+            "failure_exit_code": -9,
+        },
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx,
+        task,
+        repo_label="Gurio/brr",
+        stage="finished",
+    )
+
+    text = path.read_text(encoding="utf-8")
+    assert "status: error" in text
+    assert "failure_kind: runner_error" in text
+    assert "failure_exit_code: -9" in text
 
 
 def test_account_run_state_doc_does_not_invent_clock_readings(tmp_path):
