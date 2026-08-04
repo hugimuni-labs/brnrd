@@ -187,8 +187,17 @@ PAIR_REPO_PLACEHOLDER = "<repo>"
 
 
 def pairing_command(repo_dir: str) -> str:
-    """The three lines that pair a local daemon to this control plane."""
-    return f"cd {repo_dir}\nbrnrd account connect {_PAIR_ENDPOINT}\nbrnrd up"
+    """The two lines that pair a local daemon to this control plane.
+
+    Used to be three: a trailing ``brnrd up``. Dropped 2026-08-04 (#1084) —
+    ``cmd_brnrd_connect`` (``src/brr/cli.py``) already calls
+    ``daemon_install.install(no_start=False, ...)`` unless ``--no-service``,
+    which installs *and starts* the native service and prints its own
+    "Connected and listening in the background." ``brnrd up`` on the
+    default path only re-starts what line 2 just started — a redundant
+    third step in the one command a first-time reader has to get right.
+    """
+    return f"cd {repo_dir}\nbrnrd account connect {_PAIR_ENDPOINT}"
 
 
 def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:

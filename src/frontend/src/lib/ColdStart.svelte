@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { DOCS_URL } from './publicStats';
-	import type { ConnectedRepo } from './repos';
+	import type { ConnectedRepo, GitHubInstallation } from './repos';
 
 	// The cold start (2026-08-03). Reported from a real signup on the
 	// deployed dashboard: "two screens - no clarity on the installation, or
@@ -18,15 +18,27 @@
 	//
 	// So: the three things that actually have to happen, in order, directly
 	// under the h1, because for this reader everything below it is empty and
-	// therefore below the horizon. It is not a tour and it does not track
-	// progress — nothing here can observe whether the CLI is installed, and
-	// a checkmark that guesses would be a worse lie than no checkmark.
+	// therefore below the horizon. It is not a tour, and step 01 does not
+	// track progress — nothing here can observe whether the CLI is
+	// installed, and a checkmark that guesses would be a worse lie than no
+	// checkmark. Steps 02 and 03 are different: App-installed, repo-enabled,
+	// and daemon-paired are all facts already on the wire (#1084's second
+	// trace — "the repos are not detected/synced… on a new account"), and a
+	// step whose completion is a fact gets marked done. The regression that
+	// forced this: the block used to leave the instant `repos.length` went
+	// non-zero, taking step 03 with it at the exact moment pairing the
+	// daemon was the only thing left — the maintainer's own "connected but
+	// not connected", reborn inside the component built to answer it.
 	interface Props {
 		// `null` = the repos fetch hasn't landed. Render nothing rather than
 		// flashing a cold start at an account that has fifteen repos: the
 		// same source the rest of the page gates on, never a second notion
 		// of "empty".
 		repos: ConnectedRepo[] | null;
+		// GitHub App installations for this account, from the same fetch.
+		// `null`/`undefined` reads as "unknown, don't claim installed" —
+		// distinct from `[]` ("checked, none installed").
+		installations?: GitHubInstallation[] | null;
 		// Backend-owned, from `GET /v1/dashboard/repos` — the same spelling
 		// every connected repo carries as `setup_command`, with `<repo>` in
 		// place of a checkout name (`_session.pairing_command`). Not retyped
@@ -35,11 +47,29 @@
 		pairCommand?: string | null;
 	}
 
-	let { repos, pairCommand = null }: Props = $props();
+	let { repos, installations = null, pairCommand = null }: Props = $props();
 
 	const INSTALL_COMMAND = 'npm install -g brnrd';
 
-	let cold = $derived(repos !== null && repos.length === 0);
+	let appInstalled = $derived((installations?.length ?? 0) > 0);
+	let repoEnabled = $derived((repos?.length ?? 0) > 0);
+	// "Paired" here means the one-time setup act completed, not "currently
+	// online" — `daemon_status` is `missing` only until step 03's own
+	// pairing command first registers this repo's daemon; after that it
+	// reads `online` or `offline` depending on whether it is heartbeating
+	// *right now*. This is a setup checklist, not a live health monitor (that job
+	// belongs to the daemon-status dot elsewhere on the page) — a laptop
+	// that's asleep must not resurrect "nothing is paired yet" for an
+	// account that has already done this step once.
+	let daemonEverPaired = $derived((repos ?? []).some((r) => r.daemon_status !== 'missing'));
+
+	// The block survives until the last *observable* step is done. That is
+	// daemon-pairing, not repo-enablement — an enabled repo with no daemon
+	// is precisely the state the old `repos.length === 0` check hid. (Chat
+	// gate / Telegram pairing is deliberately not part of this gate: it is
+	// optional infrastructure — self-hosted gates and local execution are
+	// the standing free path — not a requirement for a working daemon.)
+	let cold = $derived(repos !== null && !daemonEverPaired);
 
 	let copied = $state<string | null>(null);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -98,20 +128,49 @@
 			<li>
 				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
 					<span class="text-amber-200/80">02</span> enable a repository
+					{#if repoEnabled}
+						<span class="text-emerald-400">— done</span>
+					{/if}
 				</p>
-				<!-- Named as the reported confusion, in the first clause: "the
-				     actual repo enablement is the repos screen (another page)".
-				     Say that it is another page rather than let the reader
-				     discover it. -->
-				<p class="mt-1.5 text-sm text-stone-400">
-					A separate screen. Install the brnrd GitHub App where the repository lives, then enable
-					the repository there. Nothing on this board fills in until you do.
-				</p>
-				<a
-					href={resolve('/repos')}
-					class="mt-2 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
-					>enable a repository</a
-				>
+				{#if repoEnabled}
+					<!-- Marked done, not hidden: the block is still up because 03
+					     isn't, and a reader re-reading the ladder should see 02 as
+					     settled rather than wonder if it still applies. -->
+					<p class="mt-1.5 text-sm text-stone-400">
+						At least one repository is enabled. Enable another, or change what's enabled, on the
+						<a href={resolve('/repos')} class="text-sky-400 underline hover:text-sky-300"
+							>repos screen</a
+						>.
+					</p>
+				{:else if appInstalled}
+					<!-- The other half of the reported bug: an account that has
+					     already installed the App must not be told to install it
+					     again — that was step 05 of the trace ("connected but not
+					     connected"), one level up. -->
+					<p class="mt-1.5 text-sm text-stone-400">
+						The brnrd GitHub App is installed. Enable the repository on a separate screen. Nothing
+						on this board fills in until you do.
+					</p>
+					<a
+						href={resolve('/repos')}
+						class="mt-2 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
+						>enable a repository</a
+					>
+				{:else}
+					<!-- Named as the reported confusion, in the first clause: "the
+					     actual repo enablement is the repos screen (another page)".
+					     Say that it is another page rather than let the reader
+					     discover it. -->
+					<p class="mt-1.5 text-sm text-stone-400">
+						A separate screen. Install the brnrd GitHub App where the repository lives, then enable
+						the repository there. Nothing on this board fills in until you do.
+					</p>
+					<a
+						href={resolve('/repos')}
+						class="mt-2 inline-flex items-center border border-amber-700 bg-amber-950/40 px-3 py-1.5 font-mono text-[11px] tracking-wide text-amber-100 uppercase hover:border-amber-500"
+						>enable a repository</a
+					>
+				{/if}
 			</li>
 
 			<li>

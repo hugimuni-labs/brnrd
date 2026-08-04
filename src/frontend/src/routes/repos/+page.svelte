@@ -41,6 +41,40 @@
 	let manualRepo = $state('');
 	let manualBranch = $state('');
 
+	// The GitHub Setup URL return (#1084): `routers/github_app.py`'s
+	// `github_app_setup` 303s here with `?notice=…` after syncing an
+	// installation. Captured once, at mount, from the raw query-param code —
+	// not from `data.notice` (the backend-mapped *text*, which this drives
+	// the fetch with but which can't be switched on) — so a later plain
+	// `refresh()` (no params) naturally clears the banner without extra
+	// bookkeeping.
+	let setupNoticeCode = $state<string | null>(null);
+
+	// `github-sync-failed` / `github-sync-refused` must not read like
+	// `github-installed` — a refusal is not news. Reuses this page's own
+	// existing ok/not-ok register (amber = result, stone = not) rather than
+	// inventing a third visual language; "warn" (empty/partial) shares the
+	// not-ok side since neither is a completed success.
+	function setupSeverity(code: string | null): 'ok' | 'warn' | 'refused' | null {
+		if (!code) return null;
+		if (code === 'github-sync-failed' || code === 'github-sync-refused') return 'refused';
+		if (code === 'github-sync-empty' || code === 'github-sync-partial') return 'warn';
+		if (code === 'github-installed' || code === 'github-synced') return 'ok';
+		return null;
+	}
+
+	// "Show what just arrived" — the half of #1084's fix that a bare notice
+	// string can't carry: how many repos this installation made visible, and
+	// whether there is still an action left (enabling one).
+	function setupArrivalSummary(d: ReposResponse): string {
+		const total = d.installed_repos.length;
+		if (total === 0) return 'No repositories are visible from this installation yet.';
+		const pending = d.installed_repos.filter((repo) => !repo.connected).length;
+		const noun = total === 1 ? 'repository' : 'repositories';
+		if (pending === 0) return `${total} ${noun} visible, already enabled.`;
+		return `${total} ${noun} now visible — ${pending} not yet enabled, below.`;
+	}
+
 	// Publish-scope consent for the *next* repo this page connects (legal
 	// pack item 2, #417 follow-on) — one shared control above both connect
 	// paths (installed-repo buttons + the manual form), since the choice is
@@ -140,9 +174,17 @@
 	);
 	const connectedInstalled = $derived(data?.installed_repos.filter((repo) => repo.connected) ?? []);
 
-	async function refresh() {
+	async function refresh(forwardNotice = false) {
 		try {
-			data = await fetchRepos();
+			data = await fetchRepos(
+				fetch,
+				forwardNotice
+					? {
+							notice: page.url.searchParams.get('notice'),
+							installationId: page.url.searchParams.get('installation_id')
+						}
+					: undefined
+			);
 			error = null;
 			unauthenticated = false;
 		} catch (e) {
@@ -251,17 +293,31 @@
 	}
 
 	onMount(async () => {
-		await refresh();
+		setupNoticeCode = page.url.searchParams.get('notice');
+		await refresh(setupNoticeCode !== null);
 		restoreConnectScope();
 		const targetId = page.url.searchParams.get('scope');
 		const target = connectedRepos.find((repo) => repo.id === targetId);
-		if (!target) return;
-		startEditingScope(target);
-		await tick();
-		document.getElementById(`repo-${encodeURIComponent(target.id)}`)?.scrollIntoView({
-			behavior: 'smooth',
-			block: 'center'
-		});
+		if (target) {
+			startEditingScope(target);
+			await tick();
+			document.getElementById(`repo-${encodeURIComponent(target.id)}`)?.scrollIntoView({
+				behavior: 'smooth',
+				block: 'center'
+			});
+			return;
+		}
+		// Landed from a GitHub App install/sync with something still to enable
+		// (#1084 "land where the user was") — carry them the rest of the way
+		// to the one action left, the same section the cold-start block's own
+		// "enable a repository" link points at.
+		if (setupSeverity(setupNoticeCode) === 'ok' && availableInstalled.length > 0) {
+			await tick();
+			document.getElementById('available-repos')?.scrollIntoView({
+				behavior: 'smooth',
+				block: 'start'
+			});
+		}
 	});
 </script>
 
@@ -305,6 +361,33 @@
 	{:else if data === null}
 		<p class="mt-6 text-sm text-ink-quiet">Loading...</p>
 	{:else}
+		{#if data.notice}
+			<!-- The GitHub Setup URL return (#1084). `data.notice` is the
+			     backend-mapped text (`_notice_text`, `routers/_session.py`);
+			     `setupNoticeCode` (the raw query-param code, captured at mount
+			     before a plain refresh() can clear it) drives which register it
+			     renders in — a refusal must not read like a success. -->
+			<div
+				class={`subpanel mt-5 p-3 text-sm ${setupSeverity(setupNoticeCode) === 'ok' ? 'border-amber-900/60 text-amber-100' : 'border-stone-700 text-stone-200'}`}
+			>
+				<div class="flex items-start justify-between gap-3">
+					<div>
+						<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+							{setupSeverity(setupNoticeCode) === 'ok' ? 'github' : 'github — not news'}
+						</p>
+						<p class="mt-1">{data.notice}</p>
+						{#if setupSeverity(setupNoticeCode) === 'ok'}
+							<p class="mt-1 text-stone-400">{setupArrivalSummary(data)}</p>
+						{/if}
+					</div>
+					<button
+						type="button"
+						class="cursor-pointer font-mono text-[11px] tracking-wide text-ink-quiet uppercase hover:text-stone-300"
+						onclick={() => data && (data = { ...data, notice: null })}>clear</button
+					>
+				</div>
+			</div>
+		{/if}
 		{#if actionResult}
 			<div
 				class={`subpanel mt-5 p-3 text-sm ${actionResult.ok ? 'border-amber-900/60 text-amber-100' : 'border-stone-700 text-stone-200'}`}
@@ -595,7 +678,7 @@
 			{/if}
 		</section>
 
-		<section class="panel mt-6 p-4">
+		<section id="available-repos" class="panel mt-6 p-4">
 			<div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 				<div>
 					<p class="eyebrow">available</p>
@@ -618,6 +701,18 @@
 					target="_blank">{data.installations.length === 0 ? 'install app' : 'manage app'}</a
 				>
 			</div>
+
+			{#if data.installations.length === 0}
+				<!-- The exchange sentence (2026-08-04): a fresh reader reads the
+				     App as "more setup for the same thing" a personal access token
+				     already does, unless something here says what it buys instead.
+				     Stated once, at the moment it's asked for; not sold. -->
+				<p class="mb-4 max-w-2xl text-sm text-stone-400">
+					This trades a personal access token sitting on your laptop for a short-lived, repo-scoped
+					installation token: commits and comments post as a separate account, not you, and revoking
+					access is one click on github.com instead of a credential hunt.
+				</p>
+			{/if}
 
 			<div class="subpanel mb-4 p-3">
 				<p class="eyebrow">for the next repo you enable</p>
