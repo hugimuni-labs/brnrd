@@ -53,6 +53,20 @@ INIT_CONTRACT = (
 #: of a short budget here is killing the product's first conversation.
 DEFAULT_TIMEOUT_SECONDS = 1800
 
+#: Rec 1 (#1036): the wake budget above measures the *wake's* own work, and
+#: stops accruing while a human has the floor (``awaiting_reply`` — see
+#: ``_offer_reply``). That removes the only ceiling on a terminal that opens
+#: the interview and is never touched again — a closed laptop lid, a
+#: forgotten tab, a person who was never coming back — from holding the
+#: single-flight run slot indefinitely. This is that ceiling: much longer
+#: than any plausible thinking time (it must survive a real lunch break, a
+#: meeting, a step away from the desk), short enough that a session nobody
+#: has touched in that long releases the slot rather than sitting on it for
+#: days. It is charged only against cumulative *awaiting* time, never
+#: against the wake's own work, so it never competes with
+#: ``DEFAULT_TIMEOUT_SECONDS`` for the same seconds.
+ABANDONED_PROMPT_TIMEOUT_SECONDS = 6 * 3600
+
 _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
 _KEEPALIVE_NAME = ".keepalive"
@@ -313,6 +327,7 @@ class _Session:
         invoke: Callable[..., Any] | None = None,
         control: Callable[[Path, str], ControlOutcome] | None = None,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+        abandoned_prompt_seconds: float = ABANDONED_PROMPT_TIMEOUT_SECONDS,
         poll_interval: float = _POLL_INTERVAL,
         interactive: bool = True,
     ) -> None:
@@ -325,8 +340,15 @@ class _Session:
         self.invoke = invoke or runner_mod.invoke_runner
         self.control = control or dispatch_control
         self.timeout_seconds = timeout_seconds
+        self.abandoned_prompt_seconds = abandoned_prompt_seconds
         self.poll_interval = poll_interval
         self.interactive = interactive
+        #: Rec 1 (#1036): cumulative seconds spent with ``awaiting_reply``
+        #: up, across every question in the interview — see ``_offer_reply``
+        #: (where it accrues) and ``run`` (where it pushes the budget
+        #: deadline out and feeds the abandoned-prompt ceiling).
+        self._awaiting_elapsed = 0.0
+        self._awaiting_started: float | None = None
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -486,16 +508,28 @@ class _Session:
         exit — a sent reply, a bare Enter, EOF, ^C, or an unexpected error
         out of an injected reader. A flag left standing after the read
         returned would be a worse lie than the silence it replaces.
+
+        The same window is timed (``self._awaiting_elapsed``, #1036 rec 1):
+        the wall clock this blocks for is the human's, not the wake's own
+        work, so ``run`` excludes it from the budget deadline and separately
+        watches it against ``abandoned_prompt_seconds``.
         """
         if not self.interactive:
             return
         self.refresh_portals("interview", awaiting_reply=True)
+        self._awaiting_started = time.monotonic()
         reply = ""
         try:
             reply = self.reader()
         except (EOFError, KeyboardInterrupt):
             reply = ""
         finally:
+            # Rec 1 (#1036): bank the window before anything else, so a
+            # reader that raises still charges the wait to "awaiting", never
+            # to the wake's own budget.
+            if self._awaiting_started is not None:
+                self._awaiting_elapsed += time.monotonic() - self._awaiting_started
+                self._awaiting_started = None
             self.refresh_portals("interview")
         if not reply.strip():
             return
@@ -519,15 +553,31 @@ class _Session:
         start = time.monotonic()
         try:
             while thread.is_alive():
+                replies_before = self.result.replies
                 self.drain_once()
                 if self._abort.is_set():
                     break
+                just_replied = self.result.replies > replies_before
                 thread.join(self.poll_interval)
+                if just_replied:
+                    # Rec 3 (#1036): a reply that has just landed is always
+                    # processed. Skip the deadline entirely on this tick —
+                    # not "compute it more carefully" but "do not ask" —
+                    # so no accounting subtlety can reproduce the cruelty of
+                    # killing the runner in the same breath as the answer.
+                    # The accounting below is still what keeps every *other*
+                    # tick honest about what the budget measures.
+                    continue
                 # Recomputed each tick rather than carried: ``.keepalive`` is
                 # wall-clock and can be rewritten mid-wake, so the extension
                 # is translated into this loop's monotonic clock every time
                 # instead of being frozen at one reading.
-                deadline = start + self.timeout_seconds
+                #
+                # Rec 1 (#1036): the deadline is pushed out by however long
+                # this wake has spent with a human holding the floor
+                # (``self._awaiting_elapsed``, accrued in ``_offer_reply``)
+                # — that time is the human's, not the wake's work.
+                deadline = start + self.timeout_seconds + self._awaiting_elapsed
                 extended = _keepalive_deadline(self.outbox_dir, 0.0)
                 if extended:
                     deadline = max(
@@ -538,6 +588,18 @@ class _Session:
                     self.result.error = (
                         f"the init wake outlived its {self.timeout_seconds}s "
                         "budget"
+                    )
+                    self._kill_runner()
+                    break
+                if self._awaiting_elapsed >= self.abandoned_prompt_seconds:
+                    # The cost rec 1 named: excluding thinking time from the
+                    # budget removes the only ceiling on a terminal nobody
+                    # ever comes back to. This is that ceiling, firing on
+                    # its own clock — independent of, and much longer than,
+                    # the wake budget above.
+                    self.result.error = (
+                        "the init wake was abandoned at a prompt for over "
+                        f"{self.abandoned_prompt_seconds}s"
                     )
                     self._kill_runner()
                     break
