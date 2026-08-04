@@ -104,6 +104,24 @@ def resolve_owner(explicit: str | None = None) -> str:
     return login
 
 
+def detect_identity() -> str | None:
+    """Best-effort: the GitHub login already resolvable on this machine.
+
+    Same resolution :func:`resolve_owner` uses (``gh auth token`` /
+    ``gh api user``) — no new shell-out. Callers that only want to *state*
+    the identity, never require it, get a plain optional back instead of a
+    raised :class:`HomeLinkError`. ``init`` (stating who the developer is,
+    without an account) and the init wake's facts block are both callers;
+    neither may fail, or even ask, because ``gh`` is missing or signed out.
+    """
+    if not gh_available():
+        return None
+    try:
+        return resolve_owner(None)
+    except HomeLinkError:
+        return None
+
+
 def _repo_view(owner: str, name: str) -> dict[str, Any] | None:
     """Return ``{"url": …, "visibility": …}`` for ``owner/name``, or None.
 
