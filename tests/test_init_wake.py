@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from _helpers import init_git_repo
-from brr import adopt, init_wake, portals, prompts, runner
+from brr import adopt, emotes, init_wake, portals, prompts, runner
 from brr.runner import RunnerResult
 
 
@@ -518,6 +518,54 @@ class TestTerminalLoop:
             "a person alternating skips with answers was read as a pipe"
         )
         assert result.replies == 3
+
+    def test_nothing_breathes_where_nobody_is_looking(self, tmp_path, monkeypatch):
+        """The wait animates only for a person at a terminal.
+
+        Same discipline that keeps `.card` out of chat. A pipe, a CI log or
+        a ``TERM=dumb`` session would get carriage returns and frame litter
+        where a face was meant, so it gets nothing — and the *only* thing
+        that keeps that true is this predicate, since everything downstream
+        of it writes escape-free bytes that look fine right up until they
+        are in a log someone greps.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert session._animates() is True
+
+        monkeypatch.setenv("TERM", "dumb")
+        assert session._animates() is False
+
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: False, raising=False)
+        assert session._animates() is False
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        session.interactive = False
+        assert session._animates() is False
+
+    def test_the_waiting_face_is_the_residents_own(self, tmp_path):
+        """It breathes the mood the wake wrote, and falls back honestly.
+
+        An unresolved handle must not be rendered — the mood channel's bar
+        is "never claim a face you do not have" — so it falls through to the
+        telemetry face for a *running* run, which is true of the moment by
+        construction rather than by claim.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        mood = session.outbox_dir / ".mood"
+
+        assert session._current_emote().name == emotes.TELEMETRY_DEFAULTS["running"]
+
+        mood.write_text("ooh_\ncurious\n")
+        assert session._current_emote().name == "ooh_"
+
+        mood.write_text("satisfied\na family word\n")
+        assert session._current_emote().name == emotes.TELEMETRY_DEFAULTS["running"]
 
     def test_the_resident_arrives_with_a_face(self, tmp_path):
         """The wake writes `.mood`; the one conversation that is a person's
