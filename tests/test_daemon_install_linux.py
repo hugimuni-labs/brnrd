@@ -53,6 +53,119 @@ def test_render_systemd_unit_escapes_percent_in_path():
     assert 'Environment="PATH=/odd%%dir/bin:/usr/bin"' in unit
 
 
+# ── Runner memory ceiling (#1110) ───────────────────────────────────
+#
+# MemoryHigh=/MemoryMax= sit beside OOMPolicy=continue: that policy only
+# decides what happens *after* the kernel OOM-killer has already picked a
+# victim; nothing bounded the runner before that point. Verified by
+# behaviour — the rendered unit text — not by reading the template source
+# back, per the run's instructions.
+
+
+def test_render_systemd_unit_defaults_the_memory_ceiling():
+    """No `.brr/config` in play (a nonexistent workdir) ⇒ the incident-sized
+    defaults, matching what `systemctl --user show brr.service` reported
+    live on the reference machine (MemoryHigh=8589934592, MemoryMax=12884901888)."""
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir="/home/ada/src/proj-does-not-exist",
+    )
+
+    assert "MemoryHigh=8G" in unit
+    assert "MemoryMax=12G" in unit
+
+
+def test_render_systemd_unit_honours_config_override(tmp_path):
+    """`daemon.memory_high` / `daemon.memory_max` in `.brr/config` raise the
+    ceiling without editing the generated unit by hand."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    (brr_dir / "config").write_text(
+        "daemon.memory_high=16G\ndaemon.memory_max=24G\n", encoding="utf-8",
+    )
+
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir=tmp_path,
+    )
+
+    assert "MemoryHigh=16G" in unit
+    assert "MemoryMax=24G" in unit
+    assert "MemoryHigh=8G" not in unit
+    assert "MemoryMax=12G" not in unit
+
+
+def test_render_systemd_unit_honours_config_override_to_unlimited(tmp_path):
+    """`infinity` lifts one half of the fence entirely — the operator's
+    call, not a value `resolve_memory_limits` should second-guess."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    (brr_dir / "config").write_text(
+        "daemon.memory_high=infinity\ndaemon.memory_max=infinity\n", encoding="utf-8",
+    )
+
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir=tmp_path,
+    )
+
+    assert "MemoryHigh=infinity" in unit
+    assert "MemoryMax=infinity" in unit
+
+
+def test_render_systemd_unit_takes_explicit_cfg_over_workdir_lookup(tmp_path):
+    """An explicit `cfg=` wins without touching `workdir`'s `.brr/config` —
+    the same override-wins-over-lookup shape `brr_path`/`path_env`/`workdir`
+    already have."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    (brr_dir / "config").write_text("daemon.memory_high=16G\n", encoding="utf-8")
+
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir=tmp_path,
+        cfg={"daemon.memory_high": "2G", "daemon.memory_max": "4G"},
+    )
+
+    assert "MemoryHigh=2G" in unit
+    assert "MemoryMax=4G" in unit
+
+
+def test_render_systemd_unit_escapes_percent_in_memory_value(tmp_path):
+    """`%` is a specifier char everywhere in a unit file, quoted or not —
+    an operator who writes a stray `%` into the override must not corrupt
+    the unit."""
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir="/home/ada/src/proj-does-not-exist",
+        cfg={"daemon.memory_high": "8%G"},
+    )
+
+    assert "MemoryHigh=8%%G" in unit
+
+
+def test_resolve_memory_limits_defaults_on_empty_or_missing_config():
+    assert linux.resolve_memory_limits(None) == (
+        linux.DEFAULT_MEMORY_HIGH, linux.DEFAULT_MEMORY_MAX,
+    )
+    assert linux.resolve_memory_limits({}) == (
+        linux.DEFAULT_MEMORY_HIGH, linux.DEFAULT_MEMORY_MAX,
+    )
+    # A blank override string is treated as unset, not as an empty ceiling.
+    assert linux.resolve_memory_limits({"daemon.memory_high": "  "}) == (
+        linux.DEFAULT_MEMORY_HIGH, linux.DEFAULT_MEMORY_MAX,
+    )
+
+
+def test_resolve_memory_limits_reads_each_key_independently():
+    assert linux.resolve_memory_limits({"daemon.memory_high": "16G"}) == (
+        "16G", linux.DEFAULT_MEMORY_MAX,
+    )
+    assert linux.resolve_memory_limits({"daemon.memory_max": "24G"}) == (
+        linux.DEFAULT_MEMORY_HIGH, "24G",
+    )
+
+
 def test_resolve_workdir_refuses_non_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match="must run from inside the project"):
