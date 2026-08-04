@@ -236,6 +236,20 @@ class BootHost:
     believed*.
     """
 
+    image_digest: str | None = None
+    """Short digest of the running daemon's captured code image, or ``None``.
+
+    ``None`` means untracked, not current — no fingerprint was captured in
+    this process (an ad-hoc run: a fresh interpreter, never daemon-hosted).
+    Paired with :attr:`image_captured_at`; see #822.
+    """
+
+    image_captured_at: str | None = None
+    """ISO-8601 UTC timestamp :attr:`image_digest` was captured at.
+
+    ``None`` exactly when :attr:`image_digest` is ``None``.
+    """
+
 
 @dataclass(frozen=True)
 class BootAttention:
@@ -604,6 +618,28 @@ def format_kernel(score: BootScore) -> str:
             "  stale: ⚠ boot rendered by a daemon image the checkout has "
             "superseded · prompt .md is current, kernel/orientation code is "
             "NOT · a boot-code change cannot be measured from this wake"
+        )
+    elif host.image_digest is not None:
+        # Deliberately UNCONDITIONAL — the one line in this kernel that breaks
+        # its own stated rule ("differential ... says what is true now, not
+        # what is always true", `format_kernel`'s docstring above). `stale:`
+        # only fires when the code has drifted, which made a *current* image
+        # indistinguishable from "nobody ever checked": three ticks running
+        # answered "is the daemon on my merge?" from memory because silence
+        # reads the same either way (#822). A positive reading costs one line
+        # and turns that inference into a fact, the same trade every other
+        # resource line in the bundle already makes (`absent` renders,
+        # `known` renders). `image_digest is None` means *untracked*, not
+        # current — no fingerprint was ever captured (an ad-hoc run: a fresh
+        # interpreter, never daemon-hosted) — so it gets its own honest word
+        # rather than being folded into "current".
+        lines.append(
+            f"daemon image: current · fp {host.image_digest} · "
+            f"captured {host.image_captured_at}"
+        )
+    else:
+        lines.append(
+            "daemon image: not tracked · no fingerprint captured in this process"
         )
 
     for finding in attest_blocks(score.contracts):

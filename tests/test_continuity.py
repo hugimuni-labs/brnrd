@@ -515,16 +515,90 @@ def test_stale_image_is_announced_in_the_kernel() -> None:
     assert "code is NOT" in stale
 
 
-def test_healthy_image_costs_the_kernel_nothing() -> None:
-    """Differential, like every other line here: zero bytes on a healthy wake.
-
-    A warning that renders unconditionally is decoration, and a kernel that pays
-    for it every wake has reintroduced exactly the always-true prose the kernel
-    was built to evict.
+def test_healthy_image_never_renders_the_stale_warning() -> None:
+    """The drift warning stays differential even though #822 made its neighbour
+    unconditional (see the two tests below): `stale:` / `⚠` only cost a byte
+    when the image has actually moved.
     """
-    out = _kernel(host=BootHost(kind="daemon", environment="host"))
+    out = _kernel(
+        host=BootHost(
+            kind="daemon",
+            environment="host",
+            image_digest="8f3a91c2ab",
+            image_captured_at="2026-07-27T16:32:59Z",
+        )
+    )
     assert "stale:" not in out
     assert "⚠" not in out
+
+
+# ── #822 — a current image says so, not just a stale one ──────────────────────
+#
+# The gap the ticket names: `image_stale` collapsed "verified current" and
+# "never checked" into the same silent `False`, so three ticks answered "is
+# the daemon on my merge?" from memory because nothing distinguished them.
+# These pin the three mutually exclusive states the `daemon image:` line
+# renders — current / not tracked / (stale, covered above).
+
+
+def test_current_image_is_announced_in_the_kernel() -> None:
+    """A captured, unmoved fingerprint renders a positive fact, not silence."""
+    out = _kernel(
+        host=BootHost(
+            kind="daemon",
+            environment="worktree",
+            image_digest="8f3a91c2ab",
+            image_captured_at="2026-07-27T16:32:59Z",
+        )
+    )
+    lines = out.splitlines()
+    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+
+    # Same position as `stale:` — directly under `host:`, above `next:` — so a
+    # reader who has learned to check the first line after `host:` gets the
+    # answer either way, instead of only when it's bad news.
+    current = lines[host_i + 1]
+    assert current.startswith("daemon image: current"), out
+    assert "8f3a91c2ab" in current
+    assert "2026-07-27T16:32:59Z" in current
+    assert "stale:" not in out
+
+
+def test_untracked_image_is_not_the_same_word_as_current() -> None:
+    """"Cannot be stale" (an ad-hoc run) is not "verified current" — #822's ask.
+
+    Rendering a never-captured fingerprint as `current` would recreate the
+    exact defect this ticket exists to kill, one layer over.
+    """
+    out = _kernel(host=BootHost(kind="ad-hoc"))
+    lines = out.splitlines()
+    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+
+    line = lines[host_i + 1]
+    assert line == (
+        "daemon image: not tracked · no fingerprint captured in this process"
+    ), out
+    assert "current" not in line
+
+
+def test_stale_line_wins_over_the_current_line() -> None:
+    """A drifted image is stale, not "current with a warning attached" —
+    the two lines are mutually exclusive, never both rendered."""
+    out = _kernel(
+        host=BootHost(
+            kind="daemon",
+            environment="worktree",
+            image_stale=True,
+            image_digest="deadbeef01",
+            image_captured_at="2026-07-27T16:32:59Z",
+        )
+    )
+    lines = out.splitlines()
+    host_i = next(i for i, ln in enumerate(lines) if ln.startswith("host:"))
+
+    assert lines[host_i + 1].startswith("  stale: ⚠"), out
+    assert "daemon image: current" not in out
+    assert "not tracked" not in out
 
 
 # ── P1 — per-block content attestation, the kernel alarm (move 4a) ────────────

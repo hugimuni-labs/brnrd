@@ -91,6 +91,7 @@ def test_for_repo_includes_source_layout_pyproject(tmp_path, monkeypatch):
 def test_image_is_stale_false_without_a_captured_fingerprint():
     """An ad-hoc run is a fresh interpreter by construction — never stale."""
     dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
     assert dev_reload.image_is_stale() is False
 
 
@@ -107,6 +108,7 @@ def test_image_is_stale_after_package_code_changes(tmp_path, monkeypatch):
     assert dev_reload.image_is_stale() is True
 
     dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
 
 
 def test_markdown_edits_do_not_make_the_image_stale(tmp_path, monkeypatch):
@@ -130,6 +132,7 @@ def test_markdown_edits_do_not_make_the_image_stale(tmp_path, monkeypatch):
     assert dev_reload.image_is_stale() is False
 
     dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
 
 
 def test_edit_then_revert_is_not_stale(tmp_path, monkeypatch):
@@ -154,6 +157,64 @@ def test_edit_then_revert_is_not_stale(tmp_path, monkeypatch):
     assert dev_reload.image_is_stale() is False
 
     dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
+
+
+# ── Image digest + capture time: the positive reading (#822) ───────────────
+#
+# `image_is_stale` only ever answers the negative ("has it moved"). #822's
+# ask is the positive one — a wake needs to be able to say "current" as a
+# fact, not infer it from `stale:`'s absence. These pin the two accessors
+# that feed the kernel's `daemon image:` line.
+
+
+def test_digest_and_captured_at_are_none_without_a_captured_fingerprint():
+    """Untracked, not current — an ad-hoc run never captures a fingerprint."""
+    dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
+    assert dev_reload.image_fingerprint_digest() is None
+    assert dev_reload.image_captured_at() is None
+
+
+def test_digest_and_captured_at_are_set_together_on_capture(tmp_path, monkeypatch):
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "bootscore.py").write_text("KERNEL = 1\n", encoding="utf-8")
+    monkeypatch.setattr(dev_reload, "__file__", str(pkg / "dev_reload.py"))
+
+    dev_reload.capture_image_fingerprint()
+    digest = dev_reload.image_fingerprint_digest()
+    captured_at = dev_reload.image_captured_at()
+
+    assert digest is not None
+    assert len(digest) == 10
+    # ISO-8601 UTC, `time.strftime("%Y-%m-%dT%H:%M:%SZ", ...)`'s shape.
+    assert captured_at is not None
+    assert captured_at.endswith("Z")
+    assert captured_at[4] == "-" and captured_at[10] == "T"
+
+    dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
+
+
+def test_digest_changes_when_the_image_changes(tmp_path, monkeypatch):
+    """The digest tracks content, same as `image_is_stale` — not a constant label."""
+    pkg = tmp_path / "brr"
+    pkg.mkdir()
+    (pkg / "bootscore.py").write_text("KERNEL = 1\n", encoding="utf-8")
+    monkeypatch.setattr(dev_reload, "__file__", str(pkg / "dev_reload.py"))
+
+    dev_reload.capture_image_fingerprint()
+    first = dev_reload.image_fingerprint_digest()
+
+    (pkg / "bootscore.py").write_text("KERNEL = 2\n", encoding="utf-8")
+    dev_reload.capture_image_fingerprint()
+    second = dev_reload.image_fingerprint_digest()
+
+    assert first != second
+
+    dev_reload._IMAGE_FINGERPRINT = None
+    dev_reload._IMAGE_CAPTURED_AT = None
 
 
 # ── Changed-path tracking for the pre-exec breadcrumb (#421) ────────────────
