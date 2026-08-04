@@ -6474,6 +6474,16 @@ def _queue_child_message(
         )
         return False
     spawn_event_id = str(control["event_id"])
+    # Source-trust tiering (#517/#1118): ``dispatch_message`` is a
+    # daemon-minted source and so resolves to ``owner`` by default — the
+    # steer is only reachable through a run that already exists. Carry the
+    # steering run's own tier so an untrusted run cannot launder a wider
+    # tier into its child through the one verb that crosses the edge.
+    task_meta = getattr(task, "meta", None) or {}
+    tier_meta = (
+        {"trust_tier": task_meta["trust_tier"]}
+        if task_meta.get("trust_tier") else {}
+    )
     new_path = protocol.create_event(
         inbox_dir,
         "dispatch_message",
@@ -6481,6 +6491,7 @@ def _queue_child_message(
         spawn_message_for_event=spawn_event_id,
         spawn_message_for_run=str(control.get("run_id") or ""),
         spawn_message_from_run=task.id,
+        **tier_meta,
     )
     print(f"[brnrd] outbox: message to {target} ({new_path.stem}) by {task.id}")
     emit(
@@ -6546,6 +6557,13 @@ def _apply_run_stop(
                         spawned_by_event=spawn_event_id,
                         spawn_parent_run_id=stopped_by,
                         spawn_stopped=True,
+                        # Third of the three backwards edges (#1118): the
+                        # cancelled child never ran, but its dispatch event
+                        # still carries the tier it was going to run at.
+                        **(
+                            {"trust_tier": pending["trust_tier"]}
+                            if pending.get("trust_tier") else {}
+                        ),
                     )
                 except OSError as exc:
                     print(f"[brnrd] stop notify failed for {spawn_event_id}: {exc}")
@@ -9087,6 +9105,16 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
             # ever have the event id, never a run id.
             spawned_by_event=str(getattr(task, "event_id", "") or ""),
             spawn_parent_run_id=parent_run_id,
+            # The completion note wakes the *parent*, and the child
+            # inherited the parent's tier at dispatch — so the child's own
+            # tier is the parent's, and carrying it keeps the backwards
+            # edge from re-tiering a run that was contained on the way out
+            # (#1118). Absent a stamp the source resolves to ``owner``,
+            # which is right for the ordinary case and wrong for this one.
+            **(
+                {"trust_tier": task.meta["trust_tier"]}
+                if task.meta.get("trust_tier") else {}
+            ),
             **contract_kwargs,
             **produce_kwargs,
         )
@@ -9158,6 +9186,12 @@ def _notify_spawn_parent_of_crash(
             spawned_by_event=spawn_event_id,
             spawn_parent_run_id=parent_run_id,
             spawn_failed=True,
+            # Same backwards edge as the ``done`` note above (#1118): the
+            # crashed child's dispatch event carries the tier it inherited.
+            **(
+                {"trust_tier": event["trust_tier"]}
+                if event.get("trust_tier") else {}
+            ),
         )
     except OSError as exc:
         print(f"[brnrd] spawn-crash notify failed for {spawn_event_id}: {exc}")

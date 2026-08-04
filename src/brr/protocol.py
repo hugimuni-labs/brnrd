@@ -296,6 +296,37 @@ def _generate_id() -> str:
     return f"evt-{ts}-{rand}"
 
 
+# ── Event sources ────────────────────────────────────────────────────
+
+#: Sources brnrd mints for **itself** — no ingress path can produce one,
+#: so no stranger can forge one. Every event whose ``source`` is in this
+#: set was written by brnrd's own code on the operator's machine: a
+#: schedule firing, a CLI invocation, a respawn/spawn dispatch, a child's
+#: completion note back to its parent, a steer to a child, a bench
+#: scenario, an install wake.
+#:
+#: This lives here, next to :func:`create_event`, because *minting is the
+#: property*: the only way onto this list is to write a ``create_event``
+#: call, and ``tests/test_trust.py::test_every_minted_source_is_declared``
+#: AST-parses this package for exactly those calls and fails on a source
+#: string that is neither declared here nor owned by a gate. The previous
+#: spelling was a hand-list in ``trust.py`` that named five of the eight
+#: (#1118): ``spawn`` was owner and ``spawn_completed`` — the *same*
+#: dispatch edge, walked backwards — was a stranger, so a parent woken to
+#: collect its own child's result was jailed in ``solitary`` with no
+#: forge egress and no credential for a substituted Shell.
+INTERNAL_SOURCES: frozenset[str] = frozenset({
+    "bench",
+    "cli",
+    "dispatch_message",
+    "init",
+    "respawn",
+    "schedule",
+    "spawn",
+    "spawn_completed",
+})
+
+
 # ── Event files ──────────────────────────────────────────────────────
 
 
