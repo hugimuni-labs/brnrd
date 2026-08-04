@@ -52,6 +52,39 @@ def _spy_sync(monkeypatch, calls: list):
     monkeypatch.setattr(github_marker, "sync_marker_for_repos", fake)
 
 
+@pytest.fixture(autouse=True)
+def refresh_runs_inside_the_test(monkeypatch):
+    """#903 — every test here owns the lifetime of the refresh it triggers.
+
+    `_start_github_background_refresh` is deliberately fire-and-forget in
+    production (#885: the dashboard GET must never block on GitHub, so the
+    sync runs on a daemon thread with its own session from
+    `app.state.SessionLocal` — never the request's). That is not a defect,
+    and this fixture does not patch it away because it is one: it patches it
+    because a daemon thread that outlives the test races both the assertions
+    below and the teardown of an in-memory SQLite engine, and the tests here
+    are about *which* repos the worker selects, not about thread timing.
+
+    Autouse and module-wide on purpose. Four tests in this file GET
+    `/v1/dashboard/repos`, so four of them could leak a thread; patching only
+    the one that flaked would leave the same race in the other three and in
+    every test added next to them.
+    """
+
+    def run_refresh_synchronously(request, account_id):
+        session_router._run_github_background_refresh(
+            request.app.state.SessionLocal,
+            request.app.state.settings,
+            account_id,
+        )
+
+    monkeypatch.setattr(
+        dashboard_router,
+        "_start_github_background_refresh",
+        run_refresh_synchronously,
+    )
+
+
 def test_dashboard_connect_triggers_marker_sync(monkeypatch):
     calls: list = []
     _spy_sync(monkeypatch, calls)
@@ -154,22 +187,6 @@ def test_installation_sync_without_a_bound_account_never_calls_marker_sync(monke
 def test_dashboard_coarse_recheck_only_touches_stale_repos(monkeypatch):
     calls: list = []
     _spy_sync(monkeypatch, calls)
-
-    # This test owns the refresh lifetime: it is about which stale repos the
-    # worker selects, not whether a fire-and-forget thread wins a race with
-    # the assertions (or with teardown of the in-memory SQLite engine).
-    def run_refresh_synchronously(request, account_id):
-        session_router._run_github_background_refresh(
-            request.app.state.SessionLocal,
-            request.app.state.settings,
-            account_id,
-        )
-
-    monkeypatch.setattr(
-        dashboard_router,
-        "_start_github_background_refresh",
-        run_refresh_synchronously,
-    )
     client = _client()
     _token, account_id = _login(client)
 
