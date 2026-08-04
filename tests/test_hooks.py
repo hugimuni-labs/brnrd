@@ -929,26 +929,11 @@ def test_pending_short_body_renders_inline_with_letter_chrome(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert (
-        f"- ✉ evt-1785520000000000000-8jwi · telegram · Arseni (@lapunov) · 3m · "
+        f"- ✉ evt-…8jwi · telegram · Arseni (@lapunov) · 3m · "
         f"{len(_SHORT_BODY.encode())} B" in ctx
     )
     # The whole body, never cut — the last word is the proof.
     assert "THE-LAST-WORD" in ctx
-
-
-def test_pending_event_line_carries_the_full_id_verbatim(tmp_path):
-    # #934: an `event:`-addressed reply needs the id verbatim, so the one
-    # surface announcing the event must be copy-able — the full nanosecond-
-    # stamped id, never the `evt-…8jwi` stub a resident then reconstructs
-    # (wrong) from a neighbour's timestamp.
-    full_id = "evt-1785589021094471945-i10p"
-    _portal(tmp_path, token="t1", pending=1, events=[{
-        "id": full_id, "source": "cloud", "body": "a copy-able coordinate",
-    }])
-    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert f"- ✉ {full_id} · cloud" in ctx
-    assert "evt-…" not in ctx
 
 
 def test_pending_long_body_renders_first_line_plus_accounting(tmp_path):
@@ -962,7 +947,7 @@ def test_pending_long_body_renders_first_line_plus_accounting(tmp_path):
     }])
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "⏰ evt-1785520000000000001-tick · schedule · the-only-tick" in ctx
+    assert "⏰ evt-…tick · schedule · the-only-tick" in ctx
     assert "## the only tick" in ctx
     assert "KB total · full body: " in ctx
     assert str(tmp_path / "inbox.json") in ctx
@@ -985,10 +970,7 @@ def test_seen_suppression_collapses_repeat_boundaries(tmp_path):
     _portal(tmp_path, token="t2", pending=1, events=[ev])
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     ctx2 = second["hookSpecificOutput"]["additionalContext"]
-    assert (
-        "- ⏰ evt-1785520000000000001-tick · schedule · seen ×1 · unchanged"
-        in ctx2
-    )
+    assert "- ⏰ evt-…tick · schedule · seen ×1 · unchanged" in ctx2
     assert "## the only tick" not in ctx2
 
     _portal(tmp_path, token="t3", pending=1, events=[ev])

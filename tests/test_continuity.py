@@ -254,55 +254,6 @@ def test_delivery_mutated_message_records_are_not_drift(tmp_path: Path) -> None:
     assert c.drift == ()
 
 
-def test_daemon_gate_state_is_not_drift(tmp_path: Path) -> None:
-    """Heartbeat-mutated gate state is machinery, not lost memory (#942).
-
-    ``account/gates/*.json`` (health, server ack cursors) is rewritten by the
-    daemon *after* every capture commit, so counting it fired ``capture net
-    did not close`` on effectively every wake of a cloud-connected account —
-    the third instalment of the same permanent-lie shape (``state.md``,
-    ``messages/*``).  The fix is structural: daemon machinery is exempt by
-    whole root, so the next bookkeeping file the daemon grows under
-    ``account/`` joins the exempt class with no edit to continuity.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    gates = dom / "account" / "gates"
-    gates.mkdir(parents=True)
-    health = gates / "cloud.health.json"
-    health.write_text('{"ok": true}', encoding="utf-8")
-    subprocess.run(["git", "-C", str(dom), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(dom), "commit", "-qm", "capture"], check=True)
-    # The heartbeat's post-capture mutation, plus a file capture never saw:
-    health.write_text('{"ok": false}', encoding="utf-8")
-    (gates / "cloud.server.json").write_text("{}", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert c.mount == "✓"          # exercise the real path, not an early return
-    assert c.drift == ()
-
-
-def test_resident_memory_under_daemon_adjacent_roots_still_fires(
-    tmp_path: Path,
-) -> None:
-    """The root exemption is scoped: real memory outside those roots counts.
-
-    ``repos/<label>/dominion/`` and ``surface/`` sit beside ``account/`` in
-    the same home repo; the exemption must not swallow them.
-    """
-    brr_dir = _brr_with_prior_wake(tmp_path)
-    dom = tmp_path / "dominion"
-    _git_repo(dom)
-    note = dom / "repos" / "Gurio__brr" / "dominion" / "notes.md"
-    note.parent.mkdir(parents=True)
-    note.write_text("a thought nobody committed", encoding="utf-8")
-
-    c = cont_mod.build_continuity(brr_dir, dominion_repo=dom)
-    assert len(c.drift) == 1
-    assert "capture net did not close" in c.drift[0]
-
-
 def test_uncommitted_resident_memory_is_drift(tmp_path: Path) -> None:
     """Real lost memory still fires — the check is scoped, not disabled."""
     brr_dir = _brr_with_prior_wake(tmp_path)

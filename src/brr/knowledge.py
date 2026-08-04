@@ -1312,19 +1312,9 @@ def _source_excerpt(source: KnowledgeSource) -> str:
         if path.is_file():
             body = path.read_text(encoding="utf-8", errors="replace").strip()
             if len(body.encode("utf-8")) > _MAX_SOURCE_BYTES:
-                clipped = body.encode("utf-8")[:_MAX_SOURCE_BYTES].decode(
+                body = body.encode("utf-8")[:_MAX_SOURCE_BYTES].decode(
                     "utf-8", errors="ignore",
-                )
-                # Never end mid-line: a bare byte slice lands wherever the
-                # budget falls — on a real index, the middle of a word — and
-                # this excerpt is the entry point of the whole knowledge
-                # graph (#944).  Cut back to the last complete line; the
-                # index head-matter's "what stands above this line has to
-                # stand alone" contract assumes exactly this.
-                boundary = clipped.rfind("\n")
-                if boundary > 0:
-                    clipped = clipped[:boundary]
-                body = clipped.rstrip() + "\n\n..."
+                ).rstrip() + "\n\n..."
             return f"### {source.name} — {name}\n\n{body}"
 
     docs = list(_iter_docs(source.root))

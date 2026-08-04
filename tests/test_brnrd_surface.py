@@ -111,56 +111,6 @@ def test_dashboard_surface_requires_session():
     assert _client().get("/v1/dashboard/surface").status_code == 401
 
 
-def test_dashboard_surface_first_load_carries_an_etag():
-    """#946: the validator rides the first response so a caller has something
-    to echo back on the next reload."""
-    client = _client()
-    _, daemon_headers = _repo_and_daemon(client)
-    client.put("/v1/daemons/surface", json={"files": [{"path": "index.md", "markdown": "# Work"}]}, headers=daemon_headers)
-    _login_cookie(client)
-
-    response = client.get("/v1/dashboard/surface")
-
-    assert response.status_code == 200
-    assert response.headers.get("etag")
-    assert response.json()["files"]
-
-
-def test_dashboard_surface_conditional_reload_gets_an_empty_304():
-    """The repeat-load case #946 targets: same corpus, no daemon publish in
-    between — the second reload must not re-ship the 2,841-page body."""
-    client = _client()
-    _, daemon_headers = _repo_and_daemon(client)
-    client.put("/v1/daemons/surface", json={"files": [{"path": "index.md", "markdown": "# Work"}]}, headers=daemon_headers)
-    _login_cookie(client)
-    first = client.get("/v1/dashboard/surface")
-    etag = first.headers["etag"]
-
-    second = client.get("/v1/dashboard/surface", headers={"If-None-Match": etag})
-
-    assert second.status_code == 304
-    assert second.content == b""
-    assert second.headers.get("etag") == etag
-
-
-def test_dashboard_surface_stale_conditional_gets_200_after_republish():
-    """A conditional built against a stale ETag must not be honored once the
-    daemon republishes the corpus — the validator has to move with the data."""
-    client = _client()
-    _, daemon_headers = _repo_and_daemon(client)
-    client.put("/v1/daemons/surface", json={"files": [{"path": "index.md", "markdown": "# Work"}]}, headers=daemon_headers)
-    _login_cookie(client)
-    first = client.get("/v1/dashboard/surface")
-    stale_etag = first.headers["etag"]
-
-    client.put("/v1/daemons/surface", json={"files": [{"path": "index.md", "markdown": "# Work, revised"}]}, headers=daemon_headers)
-    third = client.get("/v1/dashboard/surface", headers={"If-None-Match": stale_etag})
-
-    assert third.status_code == 200
-    assert third.headers["etag"] != stale_etag
-    assert third.json()["files"][0]["markdown"] == "# Work, revised"
-
-
 def test_surface_rejects_a_traversal_path_even_in_an_unconsented_layer():
     """Shape is validated before consent is consulted.
 

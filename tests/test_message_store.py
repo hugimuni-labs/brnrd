@@ -118,10 +118,7 @@ def test_unknown_event_reply_becomes_undeliverable(tmp_path, monkeypatch):
     assert len(messages) == 1
     assert messages[0]["status"] == "undeliverable"
     assert messages[0]["target_event"] == "evt-orphan"
-    # #936: the stored reason names the actual cause — the old "no live
-    # gate owner" text was wrong for this case (the event is unknown, not
-    # gate-less), and the refusal no longer conflates its causes.
-    assert "not found in any inbox" in messages[0]["reason"]
+    assert "no live gate owner" in messages[0]["reason"]
     assert not source.exists()
     assert (outbox / ".processed" / "reply.md").exists()
 

@@ -1785,26 +1785,20 @@ def _repo_for_event(
     return fallback_repo_root, fallback_label
 
 
-def _dispatchable_inbox_sources(
+def _dispatchable_targets(
     account_context: account.AccountContext,
     default_repo_root: Path,
-) -> list[tuple[Path, Path, Path, str]]:
-    """The inboxes dispatch scans, each paired with its responses dir.
+    cfg: dict,
+) -> list[_DispatchTarget]:
+    """Return pending events across the account daemon's known inboxes.
 
-    ``(inbox_dir, responses_dir, repo_root, repo_label)`` tuples. Factored
-    out of :func:`_dispatchable_targets` so outbox ``event:``/``note:``
-    addressing (:func:`_outbox_address_sources`) reads the *same* set —
-    one source of truth for which drawers exist, so a run can close any
-    letter dispatch could wake on (#936: a telegram-woken run's reply to a
-    cloud letter was refused "already handled" while dispatch, reading the
-    other inbox, re-woke on the still-pending event).
-
-    The default repo inbox is always present; other inboxes only when they
-    actually contain event files, avoiding extra work and preserving tests
-    that monkeypatch the protocol scanner.
+    The existing single-repo path remains the hot path: the default repo inbox
+    is always scanned. Additional repo inboxes and the account dispatch inbox
+    are scanned only when they actually contain event files, avoiding extra work
+    and preserving tests that monkeypatch the protocol scanner.
     """
     default_label = account_context.default_repo.label
-    sources: list[tuple[Path, Path, Path, str]] = []
+    sources: list[tuple[Path, Path, Path, str, bool]] = []
     seen: set[Path] = set()
 
     def add_source(
@@ -1823,7 +1817,7 @@ def _dispatchable_inbox_sources(
             return
         seen.add(key)
         if always or _event_files_present(inbox_dir):
-            sources.append((inbox_dir, responses_dir, repo_root, repo_label))
+            sources.append((inbox_dir, responses_dir, repo_root, repo_label, always))
 
     add_source(
         _repo_inbox(default_repo_root),
@@ -1846,25 +1840,9 @@ def _dispatchable_inbox_sources(
                 repo.root,
                 repo.label,
             )
-    return sources
 
-
-def _dispatchable_targets(
-    account_context: account.AccountContext,
-    default_repo_root: Path,
-    cfg: dict,
-) -> list[_DispatchTarget]:
-    """Return pending events across the account daemon's known inboxes.
-
-    The existing single-repo path remains the hot path: the default repo inbox
-    is always scanned. Additional repo inboxes and the account dispatch inbox
-    are scanned only when they actually contain event files, avoiding extra work
-    and preserving tests that monkeypatch the protocol scanner
-    (:func:`_dispatchable_inbox_sources` owns that enumeration).
-    """
-    sources = _dispatchable_inbox_sources(account_context, default_repo_root)
     targets: list[_DispatchTarget] = []
-    for inbox_dir, responses_dir, source_repo, source_label in sources:
+    for inbox_dir, responses_dir, source_repo, source_label, _always in sources:
         for event in protocol.list_dispatchable(inbox_dir):
             repo_root, repo_label = _repo_for_event(
                 account_context,
@@ -5368,215 +5346,41 @@ def _short_id_tail(target: str) -> str:
     return raw.lstrip(".…")
 
 
-def _outbox_address_sources(
-    inbox_dir: Path | None,
-    responses_dir: Path | None,
-    account_context: account.AccountContext | None,
-    repo_root: Path | None,
-) -> list[tuple[Path, Path]]:
-    """Every inbox an outbox ``event:`` / ``note:`` target may live in.
+def _resolve_event_short_id(
+    inbox_dir: Path | None, target: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Resolve *target* against pending/processing events, short-id aware.
 
-    Ordered ``(inbox_dir, responses_dir)`` pairs: the waking run's own
-    inbox first, then the union of inboxes dispatch itself scans
-    (:func:`_dispatchable_inbox_sources` — the same source of truth, so
-    addressing never sees a narrower world than dispatch does). #936: a
-    telegram-woken run could not close a cloud letter in the account
-    dispatch inbox — its reply was refused "already handled" while
-    dispatch, reading the other drawer, woke the next run on the very
-    event the resident had just answered.
+    An exact full-id match wins outright. Otherwise *target* is tried as a
+    shortened id — matched against the tail of every pending event's full
+    id (the segment after the last ``-``, which is exactly what the letter
+    chrome renders and a reconstructed short-id reply reproduces). Returns:
+
+    - ``(full_id, [])`` — the target resolved unambiguously (full match,
+      or exactly one short-id match).
+    - ``(None, [])`` — nothing matches at all; the caller's existing
+      "unknown target" handling applies unchanged.
+    - ``(None, candidates)`` — more than one pending event shares the same
+      short tail; never guess, the caller must refuse and name them.
     """
-    sources: list[tuple[Path, Path]] = []
-    seen: set[Path] = set()
-
-    def add(ibx: Path | None, resp: Path | None) -> None:
-        if ibx is None or resp is None:
-            return
-        try:
-            key = ibx.resolve()
-        except OSError:
-            key = ibx
-        if key in seen:
-            return
-        seen.add(key)
-        sources.append((ibx, resp))
-
-    add(inbox_dir, responses_dir)
-    if account_context is not None:
-        default_root = repo_root or account_context.default_repo.root
-        for ibx, resp, _repo, _label in _dispatchable_inbox_sources(
-            account_context, default_root,
-        ):
-            add(ibx, resp)
-    return sources
-
-
-def _resolve_event_target(
-    sources: list[tuple[Path, Path]], target: str,
-) -> tuple[dict | None, Path | None, list[dict[str, Any]]]:
-    """Resolve *target* against pending/processing events across *sources*.
-
-    The union-aware successor of #906's single-inbox short-id resolution
-    (#936): an exact full-id match anywhere wins outright; otherwise the
-    short-id tail is matched against every source's pending set. Returns
-    ``(event, responses_dir, ambiguous)``:
-
-    - ``(event, responses_dir, [])`` — resolved unambiguously; the
-      responses dir is the one paired with the event's own inbox, i.e.
-      where its delivery loop actually looks, so a cross-inbox reply is
-      never staged in a queue nobody polls.
-    - ``(None, None, [])`` — nothing pending matches anywhere.
-    - ``(None, None, candidates)`` — the short tail is shared, within or
-      across inboxes; never guess, the caller must refuse and name them.
-    """
-    pending: list[tuple[dict[str, Any], Path]] = []
-    seen_ids: set[str] = set()
-    for ibx, resp in sources:
-        for ev in protocol.list_pending(ibx):
-            eid = str(ev.get("id") or "")
-            if eid and eid in seen_ids:
-                continue
-            seen_ids.add(eid)
-            pending.append((ev, resp))
-    for ev, resp in pending:
+    if not inbox_dir:
+        return None, []
+    pending = protocol.list_pending(inbox_dir)
+    for ev in pending:
         if str(ev.get("id") or "") == target:
-            return ev, resp, []
+            return target, []
     tail = _short_id_tail(target)
     if not tail:
-        return None, None, []
+        return None, []
     matches = [
-        (ev, resp) for ev, resp in pending
+        ev for ev in pending
         if str(ev.get("id") or "").rsplit("-", 1)[-1] == tail
     ]
     if len(matches) == 1:
-        return matches[0][0], matches[0][1], []
+        return str(matches[0].get("id") or ""), []
     if len(matches) > 1:
-        return None, None, [ev for ev, _resp in matches]
-    return None, None, []
-
-
-def _locate_event_any_status(
-    sources: list[tuple[Path, Path]], target: str,
-) -> tuple[dict[str, Any] | None, Path | None]:
-    """Find *target* across *sources* with no status filter.
-
-    Only for naming a refusal's true cause: the old message conflated
-    "the id is wrong" with "already handled", and #936 showed the actual
-    cause could be a third thing (wrong drawer) the message couldn't say.
-    Exact id first (the event file is ``<inbox>/<id>.md``), then an
-    unambiguous short tail. Returns ``(event, inbox_dir)``, or
-    ``(None, None)`` when nothing — or more than one thing — matches.
-    """
-    for ibx, _resp in sources:
-        ev = protocol._read_event(ibx / f"{target}.md")
-        if ev is not None:
-            return ev, ibx
-    tail = _short_id_tail(target)
-    if not tail:
-        return None, None
-    matches: list[tuple[dict[str, Any], Path]] = []
-    seen_ids: set[str] = set()
-    for ibx, _resp in sources:
-        if not ibx.is_dir():
-            continue
-        for path in sorted(ibx.glob("*.md")):
-            ev = protocol._read_event(path)
-            if not ev:
-                continue
-            eid = str(ev.get("id") or "")
-            if not eid or eid in seen_ids:
-                continue
-            seen_ids.add(eid)
-            if eid.rsplit("-", 1)[-1] == tail:
-                matches.append((ev, ibx))
-    if len(matches) == 1:
-        return matches[0]
-    return None, None
-
-
-def _event_refusal_cause(
-    sources: list[tuple[Path, Path]], raw_target: str, target: str,
-) -> str:
-    """One honest clause for why an ``event:``/``note:`` target was refused.
-
-    Splits the two causes the old message conflated — and names the third
-    (#936's "wrong drawer") that it couldn't: an event found anywhere in
-    the union is reported with its location and actual status; one found
-    nowhere is reported as exactly that.
-    """
-    located, located_inbox = _locate_event_any_status(sources, raw_target)
-    if located is not None:
-        return (
-            f"event {located.get('id')} found in {located_inbox}, but "
-            f"status={located.get('status') or '?'} (not pending)"
-        )
-    return f"event {target} not found in any inbox (the id is wrong, or the event is gone)"
-
-
-def _note_event_closed(
-    task: Run,
-    address_sources: list[tuple[Path, Path]],
-    raw_target: str,
-    body: str,
-    outbox_dir: Path | None,
-) -> str | None:
-    """Retire a pending event deliberately, with no outbound message.
-
-    The ``note:`` outbox verb — the design's ``noted`` state
-    (kb design-the-post → The letter's five states). Today only a reply
-    can close a letter, which forces a run answering a burst to choose
-    between chat spam and permanently-queued events. A note is a decision,
-    not a default: it resolves its target across the same inbox union an
-    ``event:`` reply does (short-id allowed, ambiguity refused), stamps
-    who closed the letter and when (``noted_by`` / ``noted_at`` — the same
-    flat-frontmatter provenance dispatch stamps with ``run_id``), and sets
-    ``status: noted`` — terminal for dispatch and retention alike, and
-    delivered by no gate. Body text is ignored, but logged to notices so
-    the words are never silently eaten; a non-pending or unknown target is
-    refused to notices exactly like an ``event:`` reply.
-
-    Returns the retired event's full id, or ``None`` on refusal.
-    """
-    resolved_event, _responses, ambiguous = _resolve_event_target(
-        address_sources, raw_target,
-    )
-    if ambiguous:
-        candidates = ", ".join(
-            hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
-        )
-        _record_outbox_notice(
-            outbox_dir,
-            f"note dropped: event {raw_target} is ambiguous — matches "
-            f"{len(ambiguous)} pending events ({candidates}); address the "
-            "full id — nothing was retired",
-        )
-        return None
-    if resolved_event is None:
-        cause = _event_refusal_cause(address_sources, raw_target, raw_target)
-        _record_outbox_notice(
-            outbox_dir, f"note dropped: {cause} — nothing was retired",
-        )
-        return None
-    noted_id = str(resolved_event.get("id") or "")
-    try:
-        protocol.update_event_meta(
-            resolved_event, noted_by=task.id, noted_at=_utc_now(),
-        )
-    except OSError:
-        pass
-    if not _set_event_status_if_present(resolved_event, "noted"):
-        _record_outbox_notice(
-            outbox_dir,
-            f"note dropped: event {noted_id} vanished before it could be "
-            "marked noted",
-        )
-        return None
-    if body.strip():
-        _record_outbox_notice(
-            outbox_dir,
-            f"note: body text ignored — a note closes event {noted_id} "
-            "without speaking; use event: to reply",
-        )
-    return noted_id
+        return None, matches
+    return None, []
 
 
 def _truthy(value: object) -> bool:
@@ -6352,15 +6156,9 @@ def _drain_outbox(
     - **Another pending event** (``event: <id>``, interleaving): the
       resident folded a quick request in without waiting for its own
       spawn — promote the body to *that* event's queue and mark *that*
-      event ``done`` so the gate delivers the reply to its thread. The
-      target may live in *any* of the daemon's dispatchable inboxes
-      (#936), and the reply lands in the responses dir paired with the
-      target's own inbox. A target that isn't live becomes an
-      ``undeliverable`` run message (never misrouted or silently dropped).
-    - **A deliberate close** (``note: <id>``): retire another pending
-      event with *no* outbound message — the ``noted`` state
-      (kb design-the-post). Same union addressing and short-id rules as
-      ``event:``; refusals land in notices; body text is ignored.
+      event ``done`` so the gate delivers the reply to its thread. A target
+      that isn't live becomes an ``undeliverable`` run message (never
+      misrouted or silently dropped).
     - **A gate destination** (``gate: <name>`` + target metadata): an
       agent-initiated message with no waiting event (a scheduled ping, an
       out-of-bound note). ``_deliver_out_of_bound`` synthesizes an
@@ -6389,13 +6187,6 @@ def _drain_outbox(
     except OSError:
         return 0
     promoted = 0
-    # The union of inboxes an ``event:`` / ``note:`` target may live in
-    # (#936) — the dirs are enumerated once per drain; the pending sets
-    # themselves are re-read from disk at each resolution, so an earlier
-    # file's retire is visible to the next.
-    address_sources = _outbox_address_sources(
-        inbox_dir, responses_dir, account_context, repo_root,
-    )
     for fpath in entries:
         # ``.tmp`` anywhere in the suffix chain is the agent's atomic-write
         # staging name (``portals.is_staging_name`` — a bare ``.suffix``
@@ -6541,26 +6332,6 @@ def _drain_outbox(
                     stats["stop"] = stats.get("stop", 0) + 1
             _retire_outbox_staging(fpath)
             continue
-        note_target = str(fm.get("note") or "").strip()
-        if note_target:
-            # Close-without-speaking (the design's ``noted`` state): retire
-            # a pending event deliberately with no outbound message. Same
-            # union resolution as ``event:``; refusals land in notices.
-            noted_id = _note_event_closed(
-                task, address_sources, note_target, body, outbox_dir,
-            )
-            if noted_id:
-                promoted += 1
-                if stats is not None:
-                    stats["note"] = stats.get("note", 0) + 1
-                emit(
-                    "event_noted",
-                    run_id=task.id,
-                    event_id=event_id,
-                    target_event=noted_id,
-                )
-            _retire_outbox_staging(fpath)
-            continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
@@ -6603,13 +6374,9 @@ def _drain_outbox(
         # where the mismatch used to misfire ``cross`` and bounce the reply
         # as "not pending". Resolve before computing ``cross`` so a short
         # form of *this* event or another pending one both land correctly.
-        # Resolution spans the whole inbox union (#936) — a telegram-woken
-        # run can close a cloud letter and vice versa — and an ambiguous
-        # short id (shared tail across pending events, within or across
-        # inboxes) is refused, never guessed.
-        resolved_event, target_responses, ambiguous = _resolve_event_target(
-            address_sources, raw_target,
-        )
+        # An ambiguous short id (shared tail across pending events) is
+        # refused, never guessed.
+        resolved, ambiguous = _resolve_event_short_id(inbox_dir, raw_target)
         if ambiguous:
             candidates = ", ".join(
                 hooks_mod._short_event_id(ev.get("id")) for ev in ambiguous
@@ -6632,29 +6399,16 @@ def _drain_outbox(
             )
             _retire_outbox_staging(fpath)
             continue
-        target = (
-            str(resolved_event.get("id") or "") if resolved_event else raw_target
-        )
+        target = resolved or raw_target
         cross = target != event_id
-        target_event = resolved_event if cross else None
-        # A cross-inbox target's partials must land in the responses dir
-        # its own delivery loop reads (the one paired with its inbox), or
-        # the reply would sit in a queue nobody polls.
-        target_responses_dir = (
-            target_responses
-            if cross and target_event is not None and target_responses is not None
-            else responses_dir
-        )
+        target_event = _find_pending_event(inbox_dir, target) if cross else None
         if cross and target_event is None:
-            # Unknown or non-pending target — don't deliver to the wrong
-            # thread; drop with a console note that names the actual cause
-            # (#936: "already handled, or the id is wrong" hid a third
-            # cause, the wrong inbox — now impossible, and the remaining
-            # two are stated apart).
-            cause = _event_refusal_cause(address_sources, raw_target, target)
+            # Unknown or already-handled target — don't deliver to the
+            # wrong thread; drop with a console note.
             _record_outbox_notice(
                 outbox_dir,
-                f"reply dropped: {cause} — the message was NOT delivered",
+                f"reply dropped: event {target} is not pending (already handled, "
+                f"or the id is wrong) — the message was NOT delivered",
             )
             _stage_outbound(
                 task,
@@ -6664,7 +6418,7 @@ def _drain_outbox(
                 target_event=target,
                 source_ref=str(fpath),
                 status=message_store.UNDELIVERABLE,
-                reason=cause,
+                reason=f"event {target} has no live gate owner",
             )
             _retire_outbox_staging(fpath)
             continue
@@ -6720,7 +6474,6 @@ def _drain_outbox(
             target = event_id
             cross = False
             target_event = None
-            target_responses_dir = responses_dir
             target_source = own_source
             redirected = True
         # Interim replies ride the target event's own gate. Dispatch-tree
@@ -6782,7 +6535,7 @@ def _drain_outbox(
             )
         ppath = (
             protocol.write_partial(
-                target_responses_dir, target, body, message_path=message_path,
+                responses_dir, target, body, message_path=message_path,
             )
             if body and deliverable else None
         )

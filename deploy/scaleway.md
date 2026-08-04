@@ -57,19 +57,7 @@ question it was named for.
 
 ## Facts about the platform
 
-The five that have each cost a run (or an afternoon):
-
-**A console form is a snapshot, and saving it is a rollback.** The container
-settings page submits the *entire* configuration it loaded — the image
-reference included. A tab opened at 10:30 and saved at 14:30 silently
-re-pinned `registry_image` to the morning's tag, four hours and five CI
-rollouts later; the save even *won* against a rollout that had settled
-`ready` three minutes earlier (2026-08-01 — cost two deploys and a
-"dashboard regression" that was really the old build). The 409
-`transient_state` guard only catches the *concurrent* collision; a stale
-form saved into a quiet moment succeeds. Close console tabs before deploys,
-and after any console save, verify `built_at` — the same check as for a
-rollout, for the same reason.
+The four that have each cost a run:
 
 **A registry push does not update the running container.** Scaleway's FAQ, in
 its own words: *"When you push a new image with the same tag (e.g. `:latest`)
