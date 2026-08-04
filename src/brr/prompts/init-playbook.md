@@ -87,10 +87,18 @@ one exchange unless the user opens it up.
    memory/knowledge up to private GitHub repos now. Default: committed
    `kb/`. This answer decides which contract you author — never author
    first and ask second.
-3. **Channels.** Which gates, if any: telegram (chat with them from their
-   pocket), github (issues/PRs as conversation), slack, cloud. Explain
-   each in a clause, not a paragraph. For every yes → run the gate walk
-   (below) before moving on, so a mid-session abort still leaves that gate
+3. **Channels — ask the outcome, never the gate name.** *"Where do you
+   want to be able to reach me from?"* Phone · issues and PRs · your
+   team's chat. Then name the ways to get it, one clause each.
+   **`cloud` is not a fourth channel and must never be listed beside the
+   others**: it is a second way to get the first one. Telegram has two
+   doors — your own bot (`gate setup telegram`: your token, your daemon,
+   nothing leaves the machine) and the brnrd account (`account connect`:
+   no token to make, reaches you when the laptop is shut, needs an
+   account). A user who picks "telegram" from a list of four has chosen
+   one of those without being told the other exists, which is the one
+   mistake this beat can make. For every yes → run the gate walk (below)
+   before moving on, so a mid-session abort still leaves that gate
    working.
 4. **Working style.** Plan-first for big tasks? A ticket tracker to sync
    (even unsupported ones can be nudged via MCP in the contract)? A deploy
