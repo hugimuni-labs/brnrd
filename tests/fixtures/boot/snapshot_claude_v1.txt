@@ -15,6 +15,7 @@
 brnrd boot · score v1 · depth compact
 body requested: claude-sonnet (claude / claude-sonnet-4-6) · Tier 2 hooks installed · requested from the dashboard spool rack
 host: daemon · worktree · resident-owned
+daemon image: not tracked · no fingerprint captured in this process
 continuity: ✗ first wake
 attention: evt-fixture-0001
 posture: brr/fixture-branch · session 72% left (resets 10:30pm); week 57% left · budget 120m
@@ -108,7 +109,7 @@ hooks:
 source manifest:
     block                                           owner        authority      bytes  location / freshness
   ---------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                daemon-live  runtime          649  computed
+  ✓ Boot kernel (action-first score)                daemon-live  runtime          718  computed
   ✓ Operational preamble (run.md)                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
   ✓ Working register (weave.md)                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
   ✓ Working register, worked example (register.md)  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
