@@ -67,6 +67,18 @@ DEFAULT_TIMEOUT_SECONDS = 1800
 #: ``DEFAULT_TIMEOUT_SECONDS`` for the same seconds.
 ABANDONED_PROMPT_TIMEOUT_SECONDS = 6 * 3600
 
+#: Consecutive empty reads after which the interview stops asking (#1107).
+#: The abandoned-prompt ceiling above governs a read that *blocks*; this one
+#: governs a read that *returns instantly and forever* — a closed pipe, a
+#: `yes ''` feed, an unattended shell — which the wall clock cannot see at
+#: all, because no time passes.
+#:
+#: Three, not one: an empty reply is a documented way to skip a question
+#: ("sending nothing skips the question"), so a single one is an answer and
+#: must stay one. Three in a row is nobody. The counter resets on any real
+#: reply, so skipping one question mid-conversation costs nothing.
+EMPTY_READS_BEFORE_DEGRADING = 3
+
 _POLL_INTERVAL = 1.0
 _CARD_NAME = ".card"
 _KEEPALIVE_NAME = ".keepalive"
@@ -94,6 +106,12 @@ class InitWakeResult:
     reply: str | None = None
     error: str | None = None
     aborted: bool = False
+    #: #1107: the interview stopped asking because the terminal stopped
+    #: answering. Not an error — the install proceeds on defaults — but a
+    #: caller that wants to say "this ran unattended" needs to be able to
+    #: tell, and `replies == 0` cannot: a person who answers nothing and a
+    #: pipe that answers nothing look identical from there.
+    degraded_to_defaults: bool = False
 
 
 # ── Control verbs (the secrets seam) ────────────────────────────────
@@ -349,6 +367,8 @@ class _Session:
         #: deadline out and feeds the abandoned-prompt ceiling).
         self._awaiting_elapsed = 0.0
         self._awaiting_started: float | None = None
+        #: #1107: consecutive empty reads, reset by any real reply.
+        self._empty_reads = 0
 
         brr_dir = gitops.shared_brr_dir(repo_root)
         self.brr_dir = brr_dir
@@ -532,9 +552,54 @@ class _Session:
                 self._awaiting_started = None
             self.refresh_portals("interview")
         if not reply.strip():
+            # #1107: an empty read is ambiguous — a person skipping a
+            # question, or a pipe with nothing behind it. One of those
+            # repeats forever. The count is what tells them apart, and it
+            # resets on any real answer, so a user who skips a question in
+            # the middle of a conversation never trips it.
+            self._empty_reads += 1
+            if self._empty_reads >= EMPTY_READS_BEFORE_DEGRADING:
+                self._degrade_to_defaults()
             return
+        self._empty_reads = 0
         self.result.replies += 1
         self.post_event(reply.strip(), reply_to=self.event_id)
+
+    def _degrade_to_defaults(self) -> None:
+        """Stop offering the floor: there is nobody on the other end.
+
+        The 2026-08-04 OOM incident (#1104/#1107) fed the interview
+        ``yes ''`` through a pty. Every read returned instantly, every beat
+        re-prompted, and the loop consumed empty lines at memory speed until
+        the kernel killed the host at 10.4 GB. The harness had no timeout,
+        which was the trigger — but an interactive loop that cannot tell a
+        pipe from a person is the defect, and it is this side of the seam.
+
+        Degrading rather than aborting is deliberate: silence is already a
+        valid answer here (a vanished user takes defaults and the install
+        finishes), so the honest response to *sustained* silence is the same
+        answer, said once, with the floor taken back. Aborting would turn a
+        non-interactive install — CI, a pipe, a container — from "works with
+        defaults" into "fails", which is a worse trade than the spin.
+
+        Idempotent: once ``interactive`` is False, ``_offer_reply`` returns
+        before it can reach here again.
+        """
+        self.interactive = False
+        self.result.degraded_to_defaults = True
+        self.writer(
+            f"[brnrd] {EMPTY_READS_BEFORE_DEGRADING} empty replies in a row — "
+            "reading this as a pipe rather than a person. Taking defaults for "
+            "the rest of the interview."
+        )
+        self.post_event(
+            "The terminal stopped answering: "
+            f"{EMPTY_READS_BEFORE_DEGRADING} consecutive empty reads, which "
+            "is a closed pipe or an unattended shell, not a person choosing "
+            "to skip. No further questions will reach anyone — finish the "
+            "install on sensible defaults and say what you assumed.",
+            interview_degraded=True,
+        )
 
     # ── run ─────────────────────────────────────────────────────
 
