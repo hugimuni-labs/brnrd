@@ -156,12 +156,14 @@ them before they are believed or resold:
   still never execute where the failure happens. Meeting a guard, ask which
   surfaces it is installed on before trusting the class it claims; writing
   one, walk every channel the same act can arrive on.
-
-## Reading economically
-
-The weave disciplines output; this is its input mirror. Size the question
-before the read:
-
+- **Enumerate a class and you will meet the member nobody listed — the
+  test included, because it was written from the same list.** That second
+  clause is the whole rule: the guard parametrizes the implementation's
+  own members and goes green, every run, on the bug it exists to prevent.
+  Membership is an act somebody performs — a call site, a schema field, a
+  registration — so ask the *owning* module what the class contains and
+  assert the consumer answers for every member. Tell: a new member joins
+  with no edit.
 - fact / count / where-is → `grep -n`, `grep -c`, `wc -l`, bounded Read
 - known file or section → anchor with grep, Read the range
 - broad, unaimable sweep → a subagent: the haystack lands in *its* context,

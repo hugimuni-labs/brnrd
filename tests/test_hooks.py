@@ -116,14 +116,52 @@ def test_stop_waits_for_flush_ack_then_reads_fresh_portal(tmp_path):
 
 
 def test_post_tool_no_reinject_when_token_unchanged(tmp_path):
+    """Rewritten for #1116's typed channel — the rule moved, deliberately.
+
+    It used to hold with a *pending event* in the payload, which is the one
+    case where it must not: an obligation repeats because nothing was
+    *done*, not because nothing happened, and byte-identical is the
+    signature of both. #963 argued exactly this and could not act on it
+    because the channel was untyped; now it is, so an unmet obligation
+    bypasses the token gate and the dedupe on purpose.
+
+    What the test is *for* — an unchanged portal produces no second
+    injection — is unchanged, and now asserted on the payload where it is
+    actually true: nothing pending.
+    """
+    # Laden enough to render (a quota reading is a *vital* — the
+    # maintainer's named exemption: no discharge, but must stay legible),
+    # and carrying nothing anyone owes anyone.
+    _portal(
+        tmp_path, token="t1", pending=0, events=[],
+        resources={"quota": {"status": "known", "summary": "session 80% left"}},
+    )
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" in first
+    # Same token, nothing owed → no second injection (would be noise).
+    second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
+    assert "hookSpecificOutput" not in second
+
+
+def test_an_unmet_obligation_repeats_until_it_is_discharged(tmp_path):
+    """The other half, and the whole point of typing the channel (#1116).
+
+    The maintainer's rule: *every notification is actionable and
+    turn-off-able, unless it is a necessary tick update.* A pending event
+    is actionable — so it must keep asking until it is answered, even
+    though the portal token has not moved and the bytes are identical to
+    last boundary. Suppressing it is the failure #963 named and could not
+    prevent.
+    """
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
     env = _env(tmp_path)
     first, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "hookSpecificOutput" in first
-    # Same token → no second injection (would be noise).
     second, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
-    assert "hookSpecificOutput" not in second
+    assert "hookSpecificOutput" in first
+    assert "hookSpecificOutput" in second, "an unmet obligation went quiet"
+    assert "evt-2" in second["hookSpecificOutput"]["additionalContext"]
 
 
 def test_post_tool_reinjects_when_token_moves(tmp_path):
@@ -3976,8 +4014,15 @@ def test_a_silent_boundary_is_still_recorded(tmp_path):
     someone reasoning about the environment from this file would make.
     """
     env, run_dir = _transcript_env(tmp_path)
-    _portal(tmp_path, token="t1", pending=1,
-            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    # A payload with nothing owed, so the second boundary is genuinely
+    # silent. Since #1116 a *pending* one is not: an obligation repeats
+    # until discharged, by design, so it can no longer serve as the fixture
+    # for silence. What this test is for — a fired-but-silent hook is a
+    # recorded result, not a gap — is unchanged.
+    _portal(
+        tmp_path, token="t1", pending=0, events=[],
+        resources={"quota": {"status": "known", "summary": "session 80% left"}},
+    )
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
     hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", env)
 
@@ -4150,3 +4195,53 @@ def test_the_gateless_set_agrees_with_the_daemons():
         assert hooks._reaches_nobody(source) == (
             not daemon._gate_owns_source(source)
         ), source
+# ── #1116: the typed channel ────────────────────────────────────────────────
+
+
+def test_every_bar_segment_declares_its_class():
+    """The class is structural, not a list (#1118's lesson, applied).
+
+    `_BarSegment.klass` has no default, so a segment added later has to
+    answer *"what turns this off?"* rather than inherit an answer — and the
+    cheap inherited answer would be AMBIENT, which is exactly how a new
+    obligation would go silent on the boundary it exists for.
+    """
+    for segment in hooks.BAR_SEGMENTS:
+        assert segment.klass in hooks._SEGMENT_CLASSES, segment.key
+    # And every key the renderer can emit is classified, including the
+    # inline `✉?` chip that has no vocabulary entry.
+    assert set(hooks.SEGMENT_CLASS) >= {s.key for s in hooks.BAR_SEGMENTS}
+    assert hooks.SEGMENT_CLASS["pending_unknown"] == hooks.OBLIGATION
+
+
+def test_a_quiet_boundary_keeps_the_vitals_and_drops_the_wallpaper():
+    """The maintainer's rule, rendered.
+
+    *Every notification is actionable and turn-off-able — unless it is a
+    necessary tick update: cost, execution time, spawns.* So a boundary
+    with no ambient news still carries cost and quota (VITAL: no
+    discharge, and losing them would cost the cost-awareness the whole
+    exemption exists for) and drops the ones that are neither news nor
+    obligation.
+    """
+    payload = _bar_payload(
+        budget={"elapsed_seconds": 60, "budget_seconds": 7200},
+        resources={"quota": {"status": "known", "summary": "session 80% left"}},
+        outbound={"replies_current": 0, "replies_other": 0,
+                  "outbound_messages": 0},
+        produce={"known": False, "counts": {}},
+    )
+    loud = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+                              ambient_emit=True)
+    quiet = hooks.format_delta(payload, orient=(1, 3), census="wake 40 KB",
+                               ambient_emit=False)
+
+    assert loud is not None and quiet is not None
+    # Vitals survive: this is the exemption, and it is the difference
+    # between cost-aware navigation and a number you see twice a run.
+    assert "⏱" in quiet and "q S" in quiet
+    # Obligations survive.
+    assert "orient 1/3" in quiet
+    # Wallpaper does not: a run-long constant is neither news nor a debt.
+    assert "wake 40 KB" in loud
+    assert "wake 40 KB" not in quiet
