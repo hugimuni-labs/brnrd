@@ -3,10 +3,8 @@ title: Connect
 description: Connect a managed account or self-host a gate to your local daemon.
 ---
 
-This page is optional. `brnrd run "<task>"` already works right after
-[Install](../install/) — nothing here is between you and a working resident.
-What connecting buys is a *persistent* one: a channel that reaches it without
-a terminal open, from your phone or a chat app, any time.
+Connect gives the resident a *persistent* channel: one that reaches it
+without a terminal open, from your phone or a chat app, any time.
 
 Pick one door. Both routes run the agent on your machine. Self-hosted needs no
 brnrd account and no payment; managed layers a connected account on top. They

@@ -57,15 +57,14 @@ continuing. No brnrd account, no token entry, and no separate step: `gh` not
 installed or not signed in just means init continues without stating an
 identity, same as any other optional step here.
 
-By the end of the interview, the resident already works:
+The interview leaves a working resident behind. A quick sanity check, if you
+want one:
 
 ```bash
 brnrd run "summarize the test layout; do not change files"
 ```
 
 runs it right there, in the terminal — nothing else installed or connected.
-[Connect](../connect/) and the gates below it are upgrades layered on top of
-that working resident, not steps between you and it.
 
 ## Next
 

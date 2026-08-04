@@ -786,7 +786,10 @@ class TestNpxSpelling:
 
         out = capsys.readouterr().out
         assert "next: `npx brnrd up`, then send it work." not in out
-        assert '`npx brnrd run "<task>"` runs it now, right here' in out
+        assert (
+            "next: `npx brnrd account connect` or "
+            "`npx brnrd gate setup telegram`" in out
+        )
 
     def test_wake_closing_line_stays_bare_for_a_path_install(
         self, tmp_path, monkeypatch, capsys,
@@ -798,7 +801,10 @@ class TestNpxSpelling:
 
         out = capsys.readouterr().out
         assert "next: `brnrd up`, then send it work." not in out
-        assert '`brnrd run "<task>"` runs it now, right here' in out
+        assert (
+            "next: `brnrd account connect` or `brnrd gate setup telegram`"
+            in out
+        )
         assert "npx" not in out
 
     def test_setup_retry_line_is_npx_spelled(self, tmp_path, monkeypatch, capsys):
@@ -997,9 +1003,13 @@ class TestIdentityAtInit:
 # ── The closing menu: upgrades, never prerequisites ──────────────────
 #
 # adopt.py used to print "next: `brnrd up`, then send it work." — naming
-# no channel (#1084 family). `_print_channel_menu()` replaces it: state
-# what already works, concretely, then list upgrades framed by what they
-# *buy* (design-onboarding-ladder.md).
+# no channel (#1084 family). `_print_channel_menu()` replaces it: point at
+# a door concretely (`account connect` / `gate setup telegram`), then list
+# the rest of the upgrades framed by what they *buy*
+# (design-onboarding-ladder.md). `brnrd run "<task>"` is no longer the
+# marquee moment here — it's a terminal-only smoke test, demoted per the
+# #1102 rework (host users drive the agent CLI directly; brnrd's value is
+# the door + resident continuity).
 
 
 class TestChannelMenu:
@@ -1013,8 +1023,9 @@ class TestChannelMenu:
 
         out = capsys.readouterr().out
         assert (
-            '[brnrd] this already works — `brnrd run "<task>"` runs it now, '
-            "right here, nothing else needed." in out
+            "[brnrd] next: `brnrd account connect` or "
+            "`brnrd gate setup telegram` — give the resident a door that "
+            "reaches it without a terminal open." in out
         )
         assert "a mailbox (`brnrd account connect`)" in out
         assert "an identity that isn't you" in out
@@ -1031,7 +1042,6 @@ class TestChannelMenu:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert '`npx brnrd run "<task>"`' in out
         assert "`npx brnrd account connect`" in out
         assert "`npx brnrd gate setup telegram`" in out
         assert "`npx brnrd daemon install`" in out
@@ -1045,7 +1055,7 @@ class TestChannelMenu:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert '`brnrd run "<task>"`' in out
+        assert "`brnrd account connect`" in out
         assert "npx" not in out
 
     def test_gates_configured_line_points_at_up_before_the_menu(
