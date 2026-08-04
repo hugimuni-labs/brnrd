@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from _helpers import init_git_repo
-from brr import adopt, init_wake, portals, prompts, runner
+from brr import adopt, emotes, init_wake, portals, prompts, runner
 from brr.runner import RunnerResult
 
 
@@ -477,6 +477,44 @@ class TestTerminalLoop:
             f"{init_wake.EMPTY_READS_BEFORE_DEGRADING}"
         )
 
+    def test_a_hand_pressing_enter_is_not_a_pipe(self, tmp_path):
+        """The refutation of #1107's first spelling, found by driving it.
+
+        Count alone fired on a *person*: pressing Enter to accept defaults
+        is the single most normal thing to do at the end of an interview,
+        three beats running, and the guard read them as a pipe and stopped
+        asking. Time is the honest discriminator — `yes ''` returns in
+        microseconds and a hand cannot.
+
+        The sleep here is above ``EMPTY_READ_HUMAN_FLOOR`` and nothing else
+        about this test differs from the flood test, which is the point:
+        same empties, same count, opposite verdict, decided by how fast
+        they came back.
+        """
+        repo = _repo(tmp_path)
+
+        def slow_empty():
+            time.sleep(init_wake.EMPTY_READ_HUMAN_FLOOR * 2)
+            return ""
+
+        def script(invocation):
+            outbox = Path(invocation.env["BRR_OUTBOX_DIR"])
+            for index in range(6):
+                _write_outbox(outbox, f"{index:02d}.md", f"question {index}?")
+
+        result = init_wake.run_init_wake(
+            repo, "mock-runner", cfg={},
+            invoke=_scripted_runner(script),
+            writer=lambda _t: None,
+            reader=slow_empty,
+            poll_interval=0.01,
+        )
+
+        assert result.ok, result.error
+        assert not result.degraded_to_defaults, (
+            "a person accepting defaults was read as a pipe"
+        )
+
     def test_one_skipped_question_is_still_an_answer(self, tmp_path):
         """The counter resets, so skipping mid-conversation costs nothing.
 
@@ -507,6 +545,120 @@ class TestTerminalLoop:
             "a person alternating skips with answers was read as a pipe"
         )
         assert result.replies == 3
+
+    def test_the_breath_cycle_outlives_the_tick(self, tmp_path):
+        """The bug the first version shipped, pinned.
+
+        A poll interval is one second; the rest between breaths is three.
+        Built per call, the rest consumed every beat, the expression frames
+        never played at all, and the clear at the end of each call made the
+        resting face flicker once a second. The cycle is longer than the
+        tick that renders it, so its *position* has to live on the session.
+
+        Asserted structurally rather than by driving a terminal: the cycle
+        must contain frames the rest does not, and stepping through it by
+        beat must reach them.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        face = emotes.lookup("fo.cus")
+
+        cycle = session._breath_cycle(face)
+        assert len(cycle) > int(
+            session._REST_SECONDS / session._FRAME_SECONDS
+        ), "the cycle is all rest — no breath would ever play"
+        assert set(cycle) - {face.resting_frame}, "no expression frames in the cycle"
+
+        # One poll interval's worth of ticks must not exhaust the rest, or
+        # the expression is unreachable by construction.
+        ticks_per_interval = int(session.poll_interval / session._FRAME_SECONDS)
+        assert ticks_per_interval < len(cycle), (
+            "a single interval covers the whole cycle — position need not persist"
+        )
+        seen = {cycle[i % len(cycle)] for i in range(len(cycle))}
+        assert seen == set(cycle)
+
+    def test_nothing_breathes_where_nobody_is_looking(self, tmp_path, monkeypatch):
+        """The wait animates only for a person at a terminal.
+
+        Same discipline that keeps `.card` out of chat. A pipe, a CI log or
+        a ``TERM=dumb`` session would get carriage returns and frame litter
+        where a face was meant, so it gets nothing — and the *only* thing
+        that keeps that true is this predicate, since everything downstream
+        of it writes escape-free bytes that look fine right up until they
+        are in a log someone greps.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert session._animates() is True
+
+        monkeypatch.setenv("TERM", "dumb")
+        assert session._animates() is False
+
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: False, raising=False)
+        assert session._animates() is False
+
+        monkeypatch.setattr(init_wake.sys.stdout, "isatty", lambda: True, raising=False)
+        session.interactive = False
+        assert session._animates() is False
+
+    def test_the_waiting_face_is_the_residents_own(self, tmp_path):
+        """It breathes the mood the wake wrote, and falls back honestly.
+
+        An unresolved handle must not be rendered — the mood channel's bar
+        is "never claim a face you do not have" — so it falls through to the
+        telemetry face for a *running* run, which is true of the moment by
+        construction rather than by claim.
+        """
+        repo = _repo(tmp_path)
+        session = _session(repo, writer=lambda _t: None, reader=lambda: "")
+        mood = session.outbox_dir / ".mood"
+
+        assert session._current_emote().name == emotes.TELEMETRY_DEFAULTS["running"]
+
+        mood.write_text("ooh_\ncurious\n")
+        assert session._current_emote().name == "ooh_"
+
+        mood.write_text("satisfied\na family word\n")
+        assert session._current_emote().name == emotes.TELEMETRY_DEFAULTS["running"]
+
+    def test_the_resident_arrives_with_a_face(self, tmp_path):
+        """The wake writes `.mood`; the one conversation that is a person's
+        first contact was the only surface that never showed it.
+
+        Driven at the seam rather than through the scripted runner, because
+        the harness runs a whole script before a single drain — so a test
+        written through it would only ever see the *last* mood a script
+        wrote, which is the opposite of what this rule is about.
+
+        Three rules, one test: it renders, it renders only on **change**
+        (a face above every message is decoration and stops being read; a
+        face that appears when it moves is an expression changing while it
+        works), and an unresolved handle renders **nothing** rather than the
+        bare word — the mood channel's honesty bar is "never claim a face
+        you do not have".
+        """
+        repo = _repo(tmp_path)
+        printed: list[str] = []
+        session = _session(repo, writer=printed.append, reader=lambda: "")
+        mood = session.outbox_dir / ".mood"
+
+        mood.write_text("hmn_\nlooking around\n")
+        session._show_face()
+        session._show_face()          # unchanged — silent
+        mood.write_text("ooh_\nfound it\n")
+        session._show_face()          # moved — renders
+        mood.write_text("satisfied\na family word, four faces\n")
+        session._show_face()          # unresolvable — silent
+
+        faces = [line.strip() for line in printed if line.strip()]
+        assert len(faces) == 2, printed
+        assert faces[0] != faces[1]
+        assert not any("satisfied" in line for line in printed)
 
     def test_event_is_real_and_retired_at_closeout(self, tmp_path):
         """A real inbox event makes the whole portal grammar work unmodified —
@@ -1059,7 +1211,12 @@ class TestWakeDispatchFromInit:
         adopt.init_repo()
 
         out = capsys.readouterr().out
-        assert "handing this session to the agent" in out
+        # No stage-manager line (2026-08-04). What this test is *for* is
+        # that the wake path ran and brnrd kept its post-passes — pinned by
+        # the assertions below. The removed line announced the actor
+        # instead of letting them speak; the resident's own first message
+        # already knows what the repo is, and that is the introduction.
+        assert "handing this session to the agent" not in out
         # brnrd still owns the post-passes: bridges + the structure gate.
         assert "✓ AGENTS.md" in out
         assert "interviewed, authored" in out
