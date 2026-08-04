@@ -2339,3 +2339,47 @@ def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):
     _expire_sessions(app, account_id)
 
     assert client.get("/v1/dashboard/repos").status_code == 401
+
+
+# --- the door list cannot have an unstated member -------------------------
+#
+# ``_SummonsSpec.requires_authz`` decides whether a webhook-borne summons is
+# checked against the #408 authorization gate before it becomes a run. On a
+# public repository that is the difference between "a collaborator asked for
+# work" and "any account on GitHub can spend this operator's model quota".
+#
+# The failure this pins is not a wrong value — it is an *absent* one: with a
+# ``= False`` default on the field, a spec added later is un-gated by
+# omission, with no diff line to review and a green suite. Neuter check:
+# restore the default and `test_every_summons_spec_states_its_authz` goes
+# red; flip any policy row and the second test goes red.
+
+
+def test_every_summons_spec_states_its_authz():
+    """No default on the field, so a new spec cannot forget to answer."""
+    import dataclasses
+
+    from brnrd import github_summons
+
+    for cls in (github_summons._SummonsSpec, github_summons.GitHubSummons):
+        field = {f.name: f for f in dataclasses.fields(cls)}["requires_authz"]
+        assert field.default is dataclasses.MISSING, (
+            f"{cls.__name__}.requires_authz has a default again — a summons "
+            "spec can now open its door by omission"
+        )
+        assert field.default_factory is dataclasses.MISSING
+
+
+def test_mention_sourced_summons_are_the_ones_that_need_authz():
+    """The policy itself, pinned: GitHub's permission model gates the
+    action-sourced specs (assign/label/review-request all need triage or
+    higher); nothing gates a mention, so brnrd must."""
+    from brnrd import github_summons
+
+    for spec in github_summons._SUMMONS_SPECS:
+        expected = spec.target_source == "mention"
+        assert spec.requires_authz is expected, (
+            f"{spec.kind}: target_source={spec.target_source!r} but "
+            f"requires_authz={spec.requires_authz} — a mention proves no "
+            "permission, an assign/label/review-request does"
+        )

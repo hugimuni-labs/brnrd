@@ -49,7 +49,9 @@ class GitHubSummons:
     # a mention does not (anyone who can comment can mention). ``actor_*``
     # names who to check; unset (empty/False) for the non-mention specs,
     # which don't use them.
-    requires_authz: bool = False
+    #
+    # No default, deliberately: see ``_SummonsSpec.requires_authz``.
+    requires_authz: bool
     actor_login: str = ""
     actor_association: str = ""
     # Set only when the event body content lives somewhere other than
@@ -75,7 +77,19 @@ class _SummonsSpec:
     actor_reply: str
     anonymous_reply: str
     reply_key: str
-    requires_authz: bool = False
+    # Every spec states this, and there is no default on purpose. This is
+    # the door list for a *public* repository: with ``= False`` here, a spec
+    # added later opened its door to anyone who can perform the action —
+    # silently, by omission, with a green suite. A class whose members are
+    # enumerated meets the member nobody thought about; the structural
+    # property that saves it is that the field cannot be left unsaid.
+    #
+    # ``False`` is legitimate only where GitHub's own permission model is
+    # the gate: assign, label and review-request all require triage-or-
+    # higher on the repository (docs.github.com → repository roles), so the
+    # signed webhook is its own proof of authorization. A *mention* proves
+    # nothing — anyone who can open an issue on a public repo can write one.
+    requires_authz: bool
     content_field: str | None = None
     # Match the *same* text the event body forwards. ``_format_event_body``
     # hands downstream ``title + body`` for an issue/PR, so matching ``body``
@@ -100,6 +114,8 @@ _SUMMONS_SPECS = (
         actor_reply="Work assigned by",
         anonymous_reply="the assignment",
         reply_key="assignee",
+        # GitHub requires triage-or-higher to assign.
+        requires_authz=False,
     ),
     _SummonsSpec(
         event="pull_request",
@@ -114,6 +130,8 @@ _SUMMONS_SPECS = (
         actor_reply="Work assigned by",
         anonymous_reply="the assignment",
         reply_key="assignee",
+        # GitHub requires triage-or-higher to assign.
+        requires_authz=False,
     ),
     _SummonsSpec(
         event="pull_request",
@@ -128,6 +146,8 @@ _SUMMONS_SPECS = (
         actor_reply="Review requested by",
         anonymous_reply="the review request",
         reply_key="requested_reviewer",
+        # GitHub requires triage-or-higher to request a review.
+        requires_authz=False,
     ),
     _SummonsSpec(
         event="issues",
@@ -142,6 +162,8 @@ _SUMMONS_SPECS = (
         actor_reply="Work labeled by",
         anonymous_reply="the label",
         reply_key="label",
+        # GitHub requires triage-or-higher to label.
+        requires_authz=False,
     ),
     _SummonsSpec(
         event="pull_request",
@@ -156,6 +178,8 @@ _SUMMONS_SPECS = (
         actor_reply="Work labeled by",
         anonymous_reply="the label",
         reply_key="label",
+        # GitHub requires triage-or-higher to label.
+        requires_authz=False,
     ),
     # #879 member 3 — a review *summary* (the review box itself, no inline
     # comment) mentioning the bot. ``review`` carries the text to match and
