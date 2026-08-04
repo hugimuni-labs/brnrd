@@ -250,9 +250,9 @@ def test_dashboard_repo_view_exposes_marker_state_and_the_absence_line(monkeypat
     assert row["github_bot_collaborator"] is False
     assert row["github_bot_status"] == "not-a-collaborator"
     assert row["github_bot_marker_notice"] == (
-        "brnrd-bot not a collaborator — assigns / review-requests / "
-        "comment-tags addressed to it won't reach the resident; invite it "
-        "in Settings → Collaborators."
+        "brnrd-bot isn't a collaborator — optional, not required: the brnrd "
+        "label already summons it. Invite it in Settings → Collaborators to "
+        "add assignment, review requests, and @ autocomplete."
     )
     assert row["github_bot_notice"] is None
 

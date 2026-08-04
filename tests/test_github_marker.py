@@ -279,9 +279,9 @@ def test_collaborator_check_refuses_an_unexpected_200(monkeypatch):
 
 def test_marker_absence_text_names_the_effective_configured_login():
     text = github_marker.marker_absence_text("brnrd-bot")
-    assert text.startswith("brnrd-bot not a collaborator")
+    assert text.startswith("brnrd-bot isn't a collaborator")
     assert "Settings → Collaborators" in text
     # A leading "@" (as GitHub renders handles) is stripped so the sentence
-    # doesn't read "@brnrd-bot not a collaborator" — matches how
+    # doesn't read "@brnrd-bot isn't a collaborator" — matches how
     # dashboard.py already normalizes `github_bot_login` for display.
-    assert github_marker.marker_absence_text("@brnrd-bot").startswith("brnrd-bot not")
+    assert github_marker.marker_absence_text("@brnrd-bot").startswith("brnrd-bot isn't")
