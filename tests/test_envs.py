@@ -2206,3 +2206,132 @@ def test_solitary_cred_stage_is_outside_the_repo_mount(tmp_path, monkeypatch):
     )
     # cleanup: the test bypasses finalize
     envs.shutil.rmtree(stage.parent, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# #1118 — the jail fitted to the first Shell
+# ---------------------------------------------------------------------------
+
+
+def _codex_fallback_profile() -> runner_select.RunnerProfile:
+    return runner_select.RunnerProfile(
+        name="codex-gpt-5.4", profile="codex", shell="codex",
+    )
+
+
+def _solitary_invoke_with(
+    backend, ctx, recorder, cfg, response_path, tmp_path, profile, label,
+):
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label=label,
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+        selected_runner=profile,
+    )
+    return backend.invoke(
+        ctx, profile.name, invocation,
+        {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+
+def test_a_shell_change_mid_run_rebuilds_the_egress_allowlist(
+    tmp_path, monkeypatch,
+):
+    """#1118: a substituted Shell used to inherit the first Shell's jail.
+
+    Live on ``run-260804-1746-pmg9``: attempt 1 was claude and died on an
+    Anthropic 500, the daemon's automatic fallback swapped in
+    ``codex-gpt-5.4``, and the sidecar — built once, on the first invoke —
+    still answered ``allow=api.anthropic.com,…``. 74 CONNECTs to
+    ``api.openai.com`` were denied 403, three attempts, and the operator
+    was told the runner failed to *authenticate*.
+
+    The union rather than a swap is deliberate: a run that has booted two
+    Shells may retry either.
+    """
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    _solitary_invoke_with(
+        backend, ctx, recorder, cfg, response_path, tmp_path,
+        _claude_profile(), "evt-sol-1",
+    )
+    first_allow = _proxy_allow(recorder)
+    assert "api.anthropic.com" in first_allow
+    assert "api.openai.com" not in first_allow
+
+    recorder.commands.clear()
+    _solitary_invoke_with(
+        backend, ctx, recorder, cfg, response_path, tmp_path,
+        _codex_fallback_profile(), "evt-sol-2",
+    )
+    second_allow = _proxy_allow(recorder)
+    # The new Shell can reach its provider …
+    assert "api.openai.com" in second_allow
+    # … and the old one has not been locked out.
+    assert "api.anthropic.com" in second_allow
+    # The sidecar is replaced in place, not duplicated …
+    assert recorder.only("docker", "rm", "-f"), (
+        f"no sidecar teardown before the rebuild: {recorder.commands}"
+    )
+    # … and the internal network, which still has containers on it, is not
+    # torn down and recreated underneath them.
+    assert not recorder.only("docker", "network", "create"), (
+        f"network recreated on a rebuild: {recorder.commands}"
+    )
+    # One proxy name in the manifest, not two.
+    proxies = [
+        name for name in ctx.env_state.get("docker_containers", [])
+        if "solitary-proxy" in name
+    ]
+    assert len(proxies) == 1, proxies
+
+
+def test_a_shell_change_mid_run_stages_the_new_shells_credential(
+    tmp_path, monkeypatch,
+):
+    """The other half of the same jail (#1118).
+
+    Egress alone would not have saved that run: the container kept
+    bind-mounting ``.claude`` while codex ran inside it, so codex had no
+    ``~/.codex`` to authenticate with either.
+    """
+    fake_home = tmp_path / "fakehome"
+    (fake_home / ".claude").mkdir(parents=True)
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".gitconfig").write_text("[user]\n")
+    monkeypatch.setattr(envs.os.path, "expanduser", lambda _p: str(fake_home))
+
+    backend, ctx, recorder, cfg, task, response_path = _solitary_ctx_and_recorder(
+        tmp_path, monkeypatch,
+    )
+    _solitary_invoke_with(
+        backend, ctx, recorder, cfg, response_path, tmp_path,
+        _claude_profile(), "evt-sol-1",
+    )
+    assert ".claude" in ctx.env_state["solitary_cred_paths"]
+    assert ".codex" not in ctx.env_state["solitary_cred_paths"]
+
+    recorder.commands.clear()
+    _solitary_invoke_with(
+        backend, ctx, recorder, cfg, response_path, tmp_path,
+        _codex_fallback_profile(), "evt-sol-2",
+    )
+    assert ".codex" in ctx.env_state["solitary_cred_paths"], (
+        "the substituted Shell's credential was never staged"
+    )
+    mounts = " ".join(recorder.runner_argv())
+    assert "/brr-home/.codex" in mounts, mounts
+
+
+def _proxy_allow(recorder) -> set[str]:
+    for command in recorder.commands:
+        if command[:3] != ["docker", "run", "-d"]:
+            continue
+        for index, arg in enumerate(command):
+            if arg.startswith("BRR_SOLITARY_ALLOW="):
+                return set(arg.split("=", 1)[1].split(","))
+    raise AssertionError(f"no sidecar launch in {recorder.commands}")

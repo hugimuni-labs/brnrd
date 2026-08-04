@@ -1728,6 +1728,55 @@ class TestFailureDetailRedaction:
             exit_code=1, detail="the model is overloaded",
         ) == runner_failures.PROVIDER_ERROR
 
+    def test_a_proxy_403_is_an_egress_denial_not_an_auth_failure(self):
+        """#1118: the sentence that named the wrong cause.
+
+        ``run-260804-1746-pmg9`` ran ``solitary`` with a sidecar allowlist
+        built for ``claude``, then had its Shell substituted to ``codex``.
+        The sidecar answered ``403`` to 74 CONNECTs for ``api.openai.com``
+        — and ``\\b403\\b`` is an AUTH_ERROR signature, so the operator was
+        told *"runner authentication failed"* while the sidecar's own log
+        read ``not on allowlist``. The credential was never presented; the
+        remedy is an allowlist, not a token.
+
+        The verbatim text below is the runner's, from that run's capture.
+        """
+        from brr import runner_failures
+
+        verbatim = (
+            "stream disconnected before completion: URL error: Proxy "
+            "connection failed: HTTP CONNECT failed with status 403"
+        )
+        assert runner_failures.classify_failure(
+            exit_code=1, detail=verbatim,
+        ) == runner_failures.EGRESS_BLOCKED
+        assert "allowlist" in runner_failures.reason_prefix(
+            runner_failures.EGRESS_BLOCKED
+        )
+        # The sidecar's own deny wording, for a caller that hands it in.
+        assert runner_failures.classify_failure(
+            exit_code=1, detail="deny: api.openai.com:443 not on allowlist",
+        ) == runner_failures.EGRESS_BLOCKED
+
+    def test_a_bare_403_is_still_an_auth_failure(self):
+        """The disambiguation is the word *proxy*, and only that.
+
+        Without this the new class would eat every real 401/403 and move
+        the lie one door down — the operator would be sent to widen an
+        allowlist while their token sat expired.
+        """
+        from brr import runner_failures
+
+        for detail in (
+            "API error 403: forbidden",
+            "401 Unauthorized",
+            "invalid api key",
+            "authentication failed",
+        ):
+            assert runner_failures.classify_failure(
+                exit_code=1, detail=detail,
+            ) == runner_failures.AUTH_ERROR, detail
+
 
 class TestExtraRunnerArgs:
     """``RunnerInvocation.extra_runner_args`` injects argv before the prompt

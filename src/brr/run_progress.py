@@ -936,17 +936,32 @@ def _format_attempt_ledger(view: RunProgressView) -> list[str]:
     return lines
 
 
+#: Card-width label per failure kind. ``runner_failures`` owns the class;
+#: this owns only the *short* spelling for a ledger line, and
+#: ``tests/test_run_progress.py::test_every_failure_kind_has_a_card_label``
+#: asserts one exists for every kind that module declares. Before #1118
+#: this was a bare dict with a ``"failed"`` default, and four of the
+#: eleven kinds — transport, Core mismatch, interrupted, and the new
+#: egress denial — collapsed onto that same word, so the attempt ledger
+#: could not tell an operator *which wall* the run hit.
+_ATTEMPT_STATUS_LABELS: dict[str, str] = {
+    "timed_out": "timed out",
+    "quota_exhausted": "quota exhausted",
+    "auth_error": "auth failed",
+    "egress_blocked": "egress blocked",
+    "provider_error": "provider failed",
+    "transport_error": "connection dropped",
+    "runner_error": "runner failed",
+    "no_output": "no reply",
+    "core_mismatch": "wrong Core",
+    "interrupted": "interrupted",
+    "host_interrupted": "host interrupted",
+}
+
+
 def _attempt_status_label(entry: AttemptEntry) -> str:
     if entry.failure_kind:
-        return {
-            "timed_out": "timed out",
-            "quota_exhausted": "quota exhausted",
-            "auth_error": "auth failed",
-            "provider_error": "provider failed",
-            "runner_error": "runner failed",
-            "no_output": "no reply",
-            "host_interrupted": "interrupted",
-        }.get(entry.failure_kind, "failed")
+        return _ATTEMPT_STATUS_LABELS.get(entry.failure_kind, "failed")
     return "failed"
 
 

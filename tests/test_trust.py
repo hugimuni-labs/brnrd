@@ -9,18 +9,111 @@ sender facts it already holds.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
+from brr import protocol
 from brr import trust
+from brr.gates import BUILTIN_GATES
 from brr.run import Run
 
 
 # ── tier resolution: source × stamp matrix ──────────────────────────────
 
 
-@pytest.mark.parametrize("source", ["schedule", "cli", "respawn", "spawn", "cloud"])
+@pytest.mark.parametrize(
+    "source", sorted(protocol.INTERNAL_SOURCES | {"cloud"})
+)
 def test_owner_only_sources_resolve_owner_without_a_stamp(source):
     assert trust.resolve_tier({"source": source}) == trust.OWNER
+
+
+def test_spawn_completed_is_owner_not_a_stranger():
+    """#1118: the backwards half of the dispatch edge.
+
+    ``spawn`` resolved to owner and ``spawn_completed`` — the completion
+    note the daemon mints for the *same* edge — did not, so a parent woken
+    to collect its own child's result was tiered ``untrusted`` and jailed
+    in ``solitary``: no forge egress, and (with a substituted Shell) no
+    credential either. Observed live on ``run-260804-1746-pmg9``.
+
+    Written as a literal event rather than a parametrize entry because the
+    regression is about *this* shape, and the parametrize above would go
+    green again the moment someone re-listed the members by hand.
+    """
+    event = {
+        "source": "spawn_completed",
+        "spawn_parent_run_id": "run-260804-1657-wlt2",
+        "spawn_status": "done",
+    }
+    assert trust.resolve_tier(event) == trust.OWNER
+
+
+@pytest.mark.parametrize(
+    "source", ["spawn_completed", "dispatch_message", "bench", "init"]
+)
+def test_the_four_sources_the_hand_list_missed(source):
+    # Each of these is minted by brnrd itself and was absent from the
+    # pre-#1118 hand-list, so each ran fail-closed into solitary.
+    assert trust.resolve_tier({"source": source}) == trust.OWNER
+
+
+def test_a_stamp_still_caps_a_backwards_edge():
+    # Owner-by-source is a *default*, not a floor: an untrusted parent's
+    # child carries the tier out and the completion note carries it back.
+    event = {"source": "spawn_completed", "trust_tier": trust.UNTRUSTED}
+    assert trust.resolve_tier(event) == trust.UNTRUSTED
+
+
+def test_every_minted_source_is_declared():
+    """The class is structural, not a list — a new mint site must declare.
+
+    AST-parses this package for every ``create_event(inbox, "<source>")``
+    call with a literal source and asserts it is either a gate's ingress
+    source or declared in :data:`protocol.INTERNAL_SOURCES`. Adding a new
+    daemon-minted source without deciding its tier now fails here instead
+    of silently resolving ``untrusted`` and routing the run into a jail.
+    """
+    import ast
+
+    pkg = pathlib.Path(trust.__file__).parent
+    found: dict[str, str] = {}
+    for path in sorted(pkg.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", None) or getattr(
+                node.func, "id", None
+            )
+            if name != "create_event":
+                continue
+            literal = None
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                literal = node.args[1].value
+            for kw in node.keywords:
+                if kw.arg == "source" and isinstance(kw.value, ast.Constant):
+                    literal = kw.value.value
+            if isinstance(literal, str) and literal:
+                found.setdefault(
+                    literal, f"{path.relative_to(pkg)}:{node.lineno}"
+                )
+
+    # Sanity: the scan must actually find the known mint sites, or a
+    # refactor that renames the call silently turns this guard into a
+    # no-op that passes on an empty set.
+    assert {"spawn_completed", "dispatch_message", "schedule"} <= set(found), (
+        f"AST scan found no known mint sites — it stopped scanning: {found}"
+    )
+
+    declared = protocol.INTERNAL_SOURCES | set(BUILTIN_GATES)
+    undeclared = {s: where for s, where in found.items() if s not in declared}
+    assert not undeclared, (
+        "these sources are minted but declared nowhere — decide their trust "
+        "tier: add to protocol.INTERNAL_SOURCES if brnrd mints them itself, "
+        f"otherwise they fail closed to untrusted and run jailed: {undeclared}"
+    )
 
 
 @pytest.mark.parametrize("source", ["github", "telegram", "slack", "some-future-gate", ""])

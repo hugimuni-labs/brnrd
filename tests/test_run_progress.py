@@ -1303,3 +1303,33 @@ def test_compact_card_issue_block_silent_without_an_action(tmp_path):
     assert view2 is not None
     assert view2.issue_actions == relics.IssueActions(unattributed=2)
     assert "issues:" not in run_progress.render_text(view2, compact=True)
+
+
+def test_every_failure_kind_has_a_card_label():
+    """#1118: the card's own list of the same class, one member short.
+
+    ``_attempt_status_label`` mapped seven of ``runner_failures``' kinds
+    and defaulted the rest to the bare word "failed" — so a transport
+    death, a Core mismatch, an external interrupt and (once it existed) an
+    egress denial all rendered identically on the attempt ledger, which is
+    the one surface an operator reads to find out *which wall* a run hit.
+
+    The guard is coverage, not wording: the module that owns the class
+    enumerates it, and this asserts the renderer answers for every member.
+    Adding a kind without a label now fails here rather than rendering as
+    the least informative one.
+    """
+    from brr import run_progress, runner_failures
+
+    declared = {
+        value for name, value in vars(runner_failures).items()
+        if name.isupper() and not name.startswith("_") and isinstance(value, str)
+    }
+    missing = declared - set(run_progress._ATTEMPT_STATUS_LABELS)
+    assert not missing, (
+        "these runner_failures kinds render as the generic 'failed' on the "
+        f"attempt ledger — give each a short card label: {sorted(missing)}"
+    )
+    # And nothing stale in the other direction.
+    stale = set(run_progress._ATTEMPT_STATUS_LABELS) - declared
+    assert not stale, f"labels for kinds that no longer exist: {sorted(stale)}"
