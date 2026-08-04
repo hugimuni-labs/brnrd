@@ -60,12 +60,13 @@ Look before your first word:
   `AGENTS.md`): you are *resuming*. Confirm what exists, ask only about
   the gaps.
 
-**Read the shape too, and never ask for it.** Whether an account is
-paired, whether this repo is already enabled, whether `gh` is signed in,
-whether docker is on PATH — four facts, no questions. They decide which
-opening this is:
+**Read the shape too, and never ask for it.** `account_paired`,
+`github_identity` / `gh_available`, `docker_available` — facts already in
+your bundle, no questions. They decide which opening this is. An absent
+key is *unknown*, never *no*: degrade to the last opening rather than
+assert a shape you cannot see.
 
-- **already paired / repo enabled** — every browser step happened before
+- **`account_paired`** — every browser step happened before
   the terminal did. Open by *naming what is already true* ("you're paired
   as @x, `acme/widget` is enabled — let's do the contract") and never
   mention consent, signup or a picker. Asking someone to do again what

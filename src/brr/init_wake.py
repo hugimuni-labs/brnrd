@@ -806,6 +806,31 @@ def collect_facts(
         pass
     if knowledge_shape:
         facts["knowledge_shape"] = knowledge_shape
+    # The *shape* of this install, so the wake can open on what is already
+    # true instead of asking. A service user signed up, installed the App
+    # and picked repos in a browser *before* touching a terminal — a first
+    # message that offers them consent asks them to redo what they just
+    # finished, which is `you: not detected` one layer up.
+    #
+    # Both reads are local and best-effort; a fact that cannot be read is
+    # omitted rather than guessed, like every other fact here. Absent keys
+    # mean *unknown*, never *no* — the playbook's three openings key on
+    # presence, so a failed read degrades to the local opening rather than
+    # asserting an install shape that isn't there.
+    try:
+        from . import account as account_mod
+
+        account_id = account_mod._connected_account_id(repo_root)
+        if account_id:
+            facts["account_paired"] = True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import shutil as _shutil
+
+        facts["docker_available"] = bool(_shutil.which("docker"))
+    except Exception:  # noqa: BLE001
+        pass
     return facts
 
 
