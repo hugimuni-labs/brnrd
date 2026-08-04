@@ -212,3 +212,35 @@ def fetch_pull_head_ref(
     payload = resp.json() or {}
     ref = ((payload.get("head") or {}).get("ref") or "").strip()
     return ref or None
+
+
+def fetch_collaborator_permission(
+    token: str,
+    api_base_url: str,
+    api_version: str,
+    repo: str,
+    username: str,
+    *,
+    timeout: float = 15.0,
+) -> str | None:
+    """``username``'s permission on ``repo`` — the managed lane's half of #408.
+
+    Mirrors ``brr.gates.github.client.get_collaborator_permission``, which
+    the self-hosted gate has always used, so both lanes read the same fact
+    from the same endpoint. Returns one of
+    ``admin``/``write``/``maintain``/``read``/``none``, or ``None`` when the
+    lookup could not be made — which callers must treat as *unknown*, never
+    as *permitted*.
+    """
+    resp = httpx.get(
+        _url(api_base_url, paths.collaborator_permission(repo, username)),
+        headers=_headers(token, api_version),
+        timeout=timeout,
+    )
+    if resp.status_code == 404:
+        # Not a collaborator at all. A definite answer, not a failure.
+        return "none"
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    permission = payload.get("permission")
+    return str(permission) if isinstance(permission, str) and permission else None
