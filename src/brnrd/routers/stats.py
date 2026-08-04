@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from brr import support_matrix
+
 from .. import stripe_api
 from ..auth import get_db
 from ..models import Account, Subscription
@@ -108,6 +110,25 @@ def pricing(request: Request) -> dict[str, Any]:
         payload[tier] = {"amount": amount, "currency": currency} if amount and currency else None
     _price_cache.update(at=now, payload=payload)
     return payload
+
+
+@router.get("/support")
+def support(request: Request) -> dict[str, Any]:
+    """The shells-and-doors shelf on brnrd.dev's own landing (see
+    ``brr.support_matrix`` for the design and why this differs from the
+    docs site's shelf). Live, uncached: every input is either a Python
+    import (cheap) or an already-loaded ``Settings`` attribute, so there is
+    nothing here worth staling behind a TTL the way ``/public`` and
+    ``/pricing`` are — a hosted gate flipping configured/unconfigured
+    should show up on the next page load, not up to a minute later.
+    """
+    settings = request.app.state.settings
+    return {
+        "doors": [
+            {"slug": door.slug, "status": support_matrix.hosted_status(door, settings)}
+            for door in support_matrix.DOORS
+        ]
+    }
 
 
 @router.get("/version")
