@@ -296,8 +296,8 @@ def _print_channel_menu() -> None:
     cmd = brnrd_cmd()
     print()
     print(
-        f'[brnrd] this already works — `{cmd} run "<task>"` runs it now, '
-        "right here, nothing else needed."
+        f"[brnrd] next: `{cmd} account connect` or `{cmd} gate setup telegram` "
+        "— give the resident a door that reaches it without a terminal open."
     )
     print("[brnrd] optional, any combination, any time:")
     print(

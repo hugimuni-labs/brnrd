@@ -823,11 +823,11 @@ class TestWakeDispatchFromInit:
         # brnrd still owns the post-passes: bridges + the structure gate.
         assert "✓ AGENTS.md" in out
         assert "interviewed, authored" in out
-        # the closing channel menu (#1084 family) — states what already
-        # works, then lists upgrades; see test_adopt.py::TestChannelMenu
-        # for the full pin.
-        assert 'brnrd run "<task>"' in out
+        # the closing channel menu (#1084 family) — points at a door
+        # (account connect / gate setup telegram), then lists upgrades;
+        # see test_adopt.py::TestChannelMenu for the full pin.
         assert "brnrd account connect" in out
+        assert "brnrd gate setup telegram" in out
 
     def test_failed_wake_stops_before_verification_and_next_step(
         self, tmp_path, monkeypatch, capsys,
