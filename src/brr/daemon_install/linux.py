@@ -26,6 +26,15 @@ WorkingDirectory={workdir}
 ExecStart={exec_start} daemon up --foreground
 Restart=on-failure
 RestartSec=5s
+# A runner subprocess OOM-killed by the kernel must not tear down the whole
+# daemon: the default OOMPolicy=stop turns one bloated runner into a full
+# unit stop, which SIGKILLs every *other* in-flight run on the way down
+# (2026-08-04: a 10.7 GB runner drew the OOM killer, systemd stopped the
+# unit, and an unrelated healthy run died with it). The daemon's give-up
+# path already handles a dead runner gracefully — salvage, failure packet,
+# retry accounting — so the right unit-level policy is to keep the daemon
+# alive and let it grieve one runner at a time.
+OOMPolicy=continue
 Environment=BRR_INSTALL_MANAGED=1
 Environment="PATH={path_env}"
 
