@@ -17,9 +17,11 @@ from brr.gitops import (
     push_branch,
     shared_brr_dir,
 )
+from brr import forge_pr_cache, worktree
 from brr.worktree import (
     WorktreeHygieneEntry,
     WorktreeHygieneSnapshot,
+    build_worktree_hygiene_report,
     classify_worktree_hygiene,
     create,
     format_worktree_hygiene_line,
@@ -566,6 +568,238 @@ def test_classify_worktree_hygiene_unknown_on_pr_lookup_failure():
 
     assert report.classification == "unknown"
     assert report.reason == "PR lookup failed: gh auth failed"
+
+
+# ── the forge-kind gate on the hygiene report (#1064) ─────────────────
+#
+# ``gh pr list --head <branch>`` here is cwd-resolved with no ``--repo``, so
+# #852's *worse* outcome (a same-named github.com repo answering for this
+# one) cannot happen on this path. What is left is a subprocess spent on a
+# question this forge can never answer, degrading to a ``pr_lookup_error``
+# that implies a retry might help. These drive the real entry point,
+# ``build_worktree_hygiene_report``, exactly as ``brnrd`` calls it, and
+# assert the *subprocess count* — a test that only reads the rendered string
+# passes on a fix that still shells out.
+
+
+def _gh_only(handler):
+    """Intercept ``gh`` calls with *handler*; let git through to the real thing.
+
+    ``worktree.subprocess`` *is* the stdlib module, so a blanket patch would
+    also swallow the ``git worktree list`` / ``git rev-list`` reads the report
+    is built from.
+    """
+    real_run = subprocess.run
+
+    def dispatch(cmd, *args, **kwargs):
+        argv = list(cmd) if isinstance(cmd, (list, tuple)) else [cmd]
+        if argv[:1] == ["gh"]:
+            return handler(argv, **kwargs)
+        return real_run(cmd, *args, **kwargs)
+
+    return dispatch
+
+
+def _hygiene_repo(tmp_path: Path, origin: str, *, worktrees: int = 2) -> Path:
+    """A committed repo with *origin* and *worktrees* run worktrees on it."""
+    repo = _committed_repo(tmp_path)
+    subprocess.run(["git", "remote", "add", "origin", origin], cwd=repo, check=True)
+    for index in range(worktrees):
+        wt_path, _branch = create(repo, f"run-hygiene-{index}")
+        commit_files(wt_path, {f"feature-{index}.txt": "wip\n"}, message="feature")
+    return repo
+
+
+def _branch_rows(reports):
+    """Report rows for the run worktrees — the main checkout is not the subject."""
+    return [row for row in reports if (row.branch or "").startswith("brr/run-hygiene-")]
+
+
+def test_hygiene_report_never_shells_out_on_a_non_github_remote(tmp_path, monkeypatch):
+    repo = _hygiene_repo(tmp_path, "https://gitlab.com/group/proj.git")
+    calls: list[list[str]] = []
+
+    def forbidden(cmd, **kwargs):
+        calls.append(cmd)
+        raise AssertionError(f"the hygiene report shelled out to gh: {cmd}")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(forbidden))
+    reports = build_worktree_hygiene_report(repo)
+
+    assert calls == []  # the count, not just the wording
+    rows = _branch_rows(reports)
+    assert len(rows) == 2
+    for row in rows:
+        assert row.classification == "unknown"
+        assert row.reason == (
+            "PR state unsupported (gitlab) — this remote isn't GitHub, "
+            "and gh is never queried for it"
+        )
+        assert "lookup failed" not in row.reason
+
+
+def test_hygiene_report_resolves_the_forge_kind_once_per_report(tmp_path, monkeypatch):
+    """Once per *report*, not once per branch — the whole point of #1064."""
+    repo = _hygiene_repo(tmp_path, "https://gitlab.com/group/proj.git", worktrees=3)
+    real = forge_pr_cache._forge_kind_and_label
+    calls: list[Path] = []
+
+    def counting(repo_root):
+        calls.append(repo_root)
+        return real(repo_root)
+
+    monkeypatch.setattr(forge_pr_cache, "_forge_kind_and_label", counting)
+    reports = build_worktree_hygiene_report(repo)
+
+    assert len(_branch_rows(reports)) == 3
+    assert len(calls) == 1
+
+
+def test_hygiene_report_gates_a_forge_it_cannot_even_name(tmp_path, monkeypatch):
+    """The gate is ``kind == "github"``, not a list of known non-GitHub kinds.
+
+    ``git.example.com`` matches no host pattern, so ``kind`` is ``None`` with a
+    valid label — the shape ``_forge_kind_and_label``'s docstring says callers
+    must not tell apart from an explicit ``gitlab``. An enumerating gate would
+    let this one through and shell out anyway.
+    """
+    repo = _hygiene_repo(tmp_path, "https://git.example.com/group/proj.git")
+
+    def forbidden(cmd, **kwargs):
+        raise AssertionError(f"shelled out to gh for an unnameable forge: {cmd}")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(forbidden))
+    rows = _branch_rows(build_worktree_hygiene_report(repo))
+
+    assert len(rows) == 2
+    for row in rows:
+        assert row.classification == "unknown"
+        assert row.reason == (
+            "PR state unsupported — this remote isn't GitHub, "
+            "and gh is never queried for it"
+        )
+
+
+def test_hygiene_report_honours_the_forge_kind_override(tmp_path, monkeypatch):
+    """The escape hatch for the host brr cannot name: ``.brr/config`` ``forge.kind``.
+
+    A GitHub Enterprise remote lands in the gated shape above, and this is what
+    un-gates it — the same override :func:`forge_pr_cache._forge_kind_and_label`
+    already reads, reached through the same call.
+    """
+    repo = _hygiene_repo(tmp_path, "https://github.corp.example/group/proj.git")
+    (repo / ".brr").mkdir(exist_ok=True)
+    (repo / ".brr" / "config").write_text("forge.kind=github\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_gh(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(fake_gh))
+    rows = _branch_rows(build_worktree_hygiene_report(repo))
+
+    assert calls, "the override must reach gh"
+    assert all("unsupported" not in row.reason for row in rows)
+
+
+def test_hygiene_report_still_queries_a_github_remote(tmp_path, monkeypatch):
+    """The gate must not catch the case it is meant to leave alone."""
+    repo = _hygiene_repo(tmp_path, "https://github.com/Gurio/brr.git")
+    heads: list[str] = []
+
+    def fake_gh(cmd, **kwargs):
+        assert cmd[:3] == ["gh", "pr", "list"]
+        assert "--repo" not in cmd  # cwd-resolved by design on this path
+        head = cmd[cmd.index("--head") + 1]
+        heads.append(head)
+        rows = '[{"state": "OPEN"}]' if head.startswith("brr/run-hygiene-") else "[]"
+        return subprocess.CompletedProcess(cmd, 0, rows, "")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(fake_gh))
+    reports = build_worktree_hygiene_report(repo)
+
+    rows = _branch_rows(reports)
+    assert len(rows) == 2
+    assert sorted(heads) == ["brr/run-hygiene-0", "brr/run-hygiene-1", "main"]
+    for row in rows:
+        assert row.classification == "preserve"
+        assert row.reason == "open PR"
+
+
+def test_hygiene_report_keeps_the_global_error_for_a_broken_gh(tmp_path, monkeypatch):
+    """A ``gh`` that is installed and broken is not an unsupported forge.
+
+    Folding the two states together would lose exactly this distinction: the
+    remote *is* GitHub, the question *is* answerable, and the failure is one a
+    retry might fix — so it must still read as an error, and must still cost
+    exactly one subprocess for the whole report (``__gh_global_error__``).
+    """
+    repo = _hygiene_repo(tmp_path, "https://github.com/Gurio/brr.git")
+    calls: list[list[str]] = []
+
+    def broken_gh(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "gh: not authenticated\n")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(broken_gh))
+    reports = build_worktree_hygiene_report(repo)
+
+    assert len(calls) == 1  # the first failure poisons the report, once
+    rows = _branch_rows(reports)
+    assert len(rows) == 2
+    for row in rows:
+        assert row.classification == "unknown"
+        assert row.reason == "PR lookup failed: gh: not authenticated"
+        assert "unsupported" not in row.reason
+
+
+def test_hygiene_report_still_asks_gh_when_the_remote_does_not_parse(tmp_path, monkeypatch):
+    """``label is None`` is left alone, following ``_forge_kind_and_label``'s docstring.
+
+    Nothing parsed out of the remote means nothing to base a verdict on, and
+    this call site's ``gh`` invocation is cwd-resolved anyway — so gh's own
+    host detection stays the fallback, and one honest failure beats a sentence
+    claiming "this remote isn't GitHub" about a remote brr could not read.
+    """
+    repo = _committed_repo(tmp_path)  # no origin at all
+    create(repo, "run-hygiene-0")
+    calls: list[list[str]] = []
+
+    def broken_gh(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "no git remotes found\n")
+
+    monkeypatch.setattr(worktree.subprocess, "run", _gh_only(broken_gh))
+    reports = build_worktree_hygiene_report(repo)
+
+    assert len(calls) == 1
+    rows = _branch_rows(reports)
+    assert rows and all("unsupported" not in row.reason for row in rows)
+
+
+def test_classify_worktree_hygiene_names_the_unsupported_forge_without_a_kind():
+    """``kind is None`` with a label — a self-hosted forge brr cannot name.
+
+    Still gated (the docstring says the two ``None`` shapes must not be told
+    apart), and the sentence just drops the parenthetical rather than printing
+    ``(None)``.
+    """
+    report = classify_worktree_hygiene(
+        WorktreeHygieneSnapshot(
+            path=Path("/repo/.brr/worktrees/task-1"),
+            branch="brr/task-1",
+            dirty=False,
+            pr_lookup_unsupported=True,
+            forge_kind=None,
+        )
+    )
+
+    assert report.classification == "unknown"
+    assert report.reason == (
+        "PR state unsupported — this remote isn't GitHub, "
+        "and gh is never queried for it"
+    )
 
 
 def test_commit_all_stamps_conversation_trailer(tmp_path):
