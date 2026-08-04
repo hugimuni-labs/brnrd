@@ -130,9 +130,14 @@ def _state_identity() -> str | None:
     if identity:
         print(f"[brnrd] you: @{identity} (from `gh`)")
     else:
+        # Never open on a negation of the person. The old line read
+        # "you: not detected", which is a sentence about `gh` wearing a
+        # sentence about them — and it is the third line a stranger ever
+        # reads from this product. State the tool, not the human, and say
+        # it costs nothing, because it doesn't.
         print(
-            "[brnrd] you: not detected — `gh` isn't installed or isn't "
-            "signed in; continuing without it"
+            "[brnrd] `gh` isn't signed in here — nothing in this setup "
+            "needs it; you can link GitHub later"
         )
     return identity
 
@@ -232,7 +237,12 @@ def _init_via_wake(
     if configured != "auto" and configured in available:
         runner_name = configured
     print(f"[brnrd] runner: {runner_name}")
-    print("[brnrd] handing this session to the agent — talk to it below.\n")
+    # No stage-manager line here. It used to read "handing this session to
+    # the agent — talk to it below", which announces the actor instead of
+    # letting them speak: the resident's own first message already knows
+    # what this repo is, and that *is* the introduction. A blank line is
+    # the whole handoff.
+    print()
 
     facts = init_wake_mod.collect_facts(
         repo_root,
@@ -727,7 +737,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
     else:
         gi.write_text(f"# brr runtime\n{marker}\n", encoding="utf-8")
 
-    print("[brnrd] .brr/ directory ready")
+    print("[brnrd] made room: `.brr/` for the runtime")
 
 
 def _bootstrap_dominion(repo_root: Path) -> None:
@@ -745,7 +755,13 @@ def _bootstrap_dominion(repo_root: Path) -> None:
     ))
     try:
         path = dominion.ensure_dominion(repo_root, branch=branch)
-        print(f"[brnrd] dominion ready: {path} (branch {branch})")
+        # `dominion` is the product's own word and it is lore a
+        # first-timer has no way to hold yet. Say what it *is* here; the
+        # resident teaches the word later, when it means something.
+        print(
+            f"[brnrd] made room: a memory branch (`{branch}`) — this is "
+            "what lets the next conversation start where this one ends"
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"[brnrd] dominion setup skipped: {exc}")
 
