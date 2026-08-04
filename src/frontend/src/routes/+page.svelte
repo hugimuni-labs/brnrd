@@ -759,7 +759,10 @@
 	// stopped polling the instant a repo was enabled, which is exactly the
 	// state that used to hide the pairing step for good.
 	function daemonNotYetPaired(repos: ConnectedRepo[] | null): boolean {
-		return repos === null || !repos.some((r) => r.daemon_status !== 'missing');
+		return (
+			repos === null ||
+			!repos.some((r) => r.daemon_status === 'online' || r.daemon_status === 'offline')
+		);
 	}
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;

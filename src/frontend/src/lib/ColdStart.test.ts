@@ -128,6 +128,17 @@ for (const daemon_status of ['online', 'offline']) {
 	});
 }
 
+// The predicate must be an allowlist of the two known-paired values, not a
+// blocklist of 'missing' — a value the backend never sends (a future status,
+// a malformed payload) is not evidence of pairing, and must not fail open
+// and hide step 03 the same way `!== 'missing'` used to.
+test('an unrecognized daemon_status does not count as paired', async () => {
+	const html = await renderColdStart([repo({ daemon_status: 'weird' })]);
+	ok(html.includes('the cold start'), 'an unknown status is not silently treated as paired');
+	ok(html.includes('nothing is paired yet'));
+	ok(html.includes('pair the daemon'), 'step 03 still renders');
+});
+
 // The other half of the regression: an account that already installed the
 // GitHub App must not be told to install it again (#1084's "instructing a
 // user who just installed it to install it").

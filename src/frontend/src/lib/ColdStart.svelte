@@ -61,7 +61,9 @@
 	// belongs to the daemon-status dot elsewhere on the page) — a laptop
 	// that's asleep must not resurrect "nothing is paired yet" for an
 	// account that has already done this step once.
-	let daemonEverPaired = $derived((repos ?? []).some((r) => r.daemon_status !== 'missing'));
+	let daemonEverPaired = $derived(
+		(repos ?? []).some((r) => r.daemon_status === 'online' || r.daemon_status === 'offline')
+	);
 
 	// The block survives until the last *observable* step is done. That is
 	// daemon-pairing, not repo-enablement — an enabled repo with no daemon
