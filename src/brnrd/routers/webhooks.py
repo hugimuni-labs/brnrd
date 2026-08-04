@@ -37,7 +37,17 @@ logger = logging.getLogger(__name__)
 # authorization gate. Everything else (NONE, CONTRIBUTOR,
 # FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, ...) is denied unless
 # the login is separately allowlisted.
+# ``author_association`` has **no permission grain** — it answers "how is
+# this person related to the repo", not "what may they do here". This set is
+# therefore only the cheap *negative*: anything outside it is denied without
+# an API call. Membership is not admission; see `_github_authorized`.
 _AUTHORIZED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+# The population both lanes admit, read from the same endpoint. The
+# self-hosted gate has always used this set (`brr.gates.github.polling`);
+# the managed lane used to stop at the association above, which let in any
+# read-only invited collaborator and any member of the owning org.
+_AUTHORIZED_PERMISSIONS = frozenset({"admin", "write", "maintain"})
 
 _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
 # WhatsApp has no slash-command surface (`_handle_command`'s /repo, /repos,
@@ -232,20 +242,66 @@ def _maybe_pr_branch(
         return None
 
 
-def _github_authorized(settings, association: str, login: str) -> tuple[bool, str]:
+def _github_authorized(
+    settings,
+    association: str,
+    login: str,
+    *,
+    repo: str = "",
+    token: str | None = None,
+) -> tuple[bool, str]:
     """Default-closed authorization gate (#408) for the managed webhook.
 
     The HMAC signature already proves the payload came from GitHub; this
-    decides whether *this particular commenter* may enqueue an
-    autonomous run. Allowed iff the comment's ``author_association`` is
-    OWNER/MEMBER/COLLABORATOR, or the login is on the configured
-    allowlist. Everything else is denied — no warn-but-allow grace.
+    decides whether *this particular commenter* may enqueue an autonomous
+    run — which spends the operator's quota, on the operator's machine.
+
+    **Two lanes, one population.** The self-hosted gate has always read the
+    collaborator-permission API and admitted ``{admin, write, maintain}``.
+    This lane stopped at ``author_association``, which has no permission
+    grain at all: ``COLLABORATOR`` covers a *read-only* invited
+    collaborator and ``MEMBER`` covers any member of the owning org. So the
+    multi-tenant lane — the one facing public org repos — admitted a
+    strictly wider population than the single-tenant one, for the same
+    ticket number. It now reads the same fact from the same endpoint.
+
+    The association survives as the **cheap negative**: outside the set, the
+    answer is no and no API call is made. Inside it, the permission decides.
+    ``OWNER`` is the one association that carries its own answer.
+
+    A lookup that cannot be made is **unknown, and unknown is denied** —
+    #408's "no warn-but-allow grace", applied to the failure it now has.
+    The rejection is logged with a distinct reason so a token or rate-limit
+    problem is never mistaken for a hostile stranger.
     """
-    if association in _AUTHORIZED_ASSOCIATIONS:
-        return True, f"association={association}"
     if login and login.casefold() in settings.github_authz_allowlist:
         return True, "allowlisted"
-    return False, f"unauthorized: association={association or 'NONE'}"
+    if association not in _AUTHORIZED_ASSOCIATIONS:
+        return False, f"unauthorized: association={association or 'NONE'}"
+    if association == "OWNER":
+        return True, "association=OWNER"
+    if not repo or not login:
+        return False, f"unverified: no repo/login to check (association={association})"
+    token = token or settings.github_bot_token
+    if not token:
+        return False, f"unverified: no token for permission read (association={association})"
+    try:
+        permission = gh.fetch_collaborator_permission(
+            token,
+            settings.github_api_base_url,
+            settings.github_api_version,
+            repo,
+            login,
+        )
+    except Exception as exc:  # noqa: BLE001 — any failure is "unknown"
+        return False, f"unverified: permission lookup failed ({type(exc).__name__})"
+    if permission is None:
+        return False, "unverified: permission lookup returned nothing"
+    if permission in _AUTHORIZED_PERMISSIONS:
+        return True, f"permission={permission}"
+    return False, (
+        f"unauthorized: permission={permission} (association={association})"
+    )
 
 
 def _handle_github_issue_comment(
@@ -272,7 +328,9 @@ def _handle_github_issue_comment(
     if gh_parse._skip_mention_comment_author(author, trigger_text, settings.github_bot_login):
         return
     association = str(comment.get("author_association") or "").strip().upper()
-    authorized, reason = _github_authorized(settings, association, author)
+    authorized, reason = _github_authorized(
+        settings, association, author, repo=repo_name, token=token,
+    )
     if not authorized:
         logger.warning(
             "github authz reject repo=%s author=%s trigger=%s reason=%s",
@@ -347,7 +405,8 @@ def _handle_github_summons(
         ):
             return
         authorized, reason = _github_authorized(
-            settings, summons.actor_association, summons.actor_login
+            settings, summons.actor_association, summons.actor_login,
+            repo=repo_name, token=token,
         )
         if not authorized:
             logger.warning(
