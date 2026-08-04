@@ -47,6 +47,24 @@ def test_shipped_status_reads_live_code_not_a_memory_of_having_checked():
     assert support_matrix.shipped_status(unshipped) == "soon"
 
 
+def test_module_shipped_answers_false_for_a_non_import_error_too(monkeypatch):
+    """``_module_shipped``'s docstring promises a missing/broken module
+    answers ``False`` rather than raising — but a module can fail to
+    import with more than ``ImportError`` (a bad top-level statement, a
+    broken third-party dependency). This function feeds the live
+    ``/v1/stats/support`` endpoint, so a narrower except would 500 the
+    whole matrix the day some gate's import starts raising something
+    else. Regression for that: import_module raising RuntimeError must
+    still answer False, not propagate."""
+    import importlib
+
+    def _boom(name, *args, **kwargs):
+        raise RuntimeError("this module explodes at import time")
+
+    monkeypatch.setattr(importlib, "import_module", _boom)
+    assert support_matrix._module_shipped("brr.gates.not_a_real_module") is False
+
+
 # --- hosted_status (brnrd.dev app landing truth) -----------------------------
 
 

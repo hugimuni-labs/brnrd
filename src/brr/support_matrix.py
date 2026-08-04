@@ -60,12 +60,17 @@ def _module_shipped(dotted: str) -> bool:
     ``importlib`` rather than a filesystem path so this stays correct if
     gates are ever repackaged; a missing/broken module answers ``False``
     rather than raising, since a broken import is itself "not shipped".
+    Broadly caught: a module can fail import with more than
+    ``ImportError`` (a bad top-level statement raises ``SyntaxError``, a
+    broken dependency can raise anything at import time), and this feeds
+    the live ``/v1/stats/support`` endpoint — one door's broken import
+    must read as "not shipped", not 500 the whole matrix.
     """
     import importlib
 
     try:
         importlib.import_module(dotted)
-    except ImportError:
+    except Exception:  # noqa: BLE001 - a broken import is "not shipped", not a crash
         return False
     return True
 
