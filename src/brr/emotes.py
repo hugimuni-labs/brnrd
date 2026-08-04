@@ -741,7 +741,69 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
 
     if lookup(name) is not None:
         return []
-    return [e for e in search(name, limit=limit) if e.kind == "situational"]
+    hits = [e for e in search(name, limit=limit) if e.kind == "situational"]
+    # #1117: `search` has no thesaurus and no spell-check, so a handle
+    # written from memory — `thinking_face`, `focussed` — matched nothing
+    # and this returned nothing, while `daemon-substrate.md` promised "the
+    # chip names near misses". Fall through to the typo pass rather than
+    # leave the contract aspirational.
+    return hits or nearest(name, limit=limit)
+
+
+def families() -> tuple[str, ...]:
+    """Every plain feeling-word the situational palette is organised by.
+
+    **The vocabulary, which is the honest answer to a miss.** ``search``
+    matches handles, families and trigger sentences, and it is forgiving
+    about punctuation and suffixes — but it has no thesaurus, so a real
+    feeling-word that simply is not one of ours (``confused``, when the
+    family is ``puzzled``) matches nothing at all and no amount of fuzzing
+    will bridge it. Thirty-three words fit on three lines; printing them
+    turns a dead end into the way in, and does it without guessing on the
+    resident's behalf.
+    """
+    return tuple(sorted({
+        e.family for e in EMOTES.values()
+        if e.family and e.kind == "situational"
+    }))
+
+
+def nearest(query: str, *, limit: int = 4) -> list[Emote]:
+    """Faces a *typo* was reaching for — the other half of a miss.
+
+    Distinct from :func:`near_misses`, which answers "this handle did not
+    resolve, what is it near" using the same forgiving ``search``. This one
+    runs after ``search`` has already returned nothing, and asks the only
+    remaining question worth asking: was that a misspelling? Compared
+    against handles and families, both normalised, so ``focussed`` finds
+    ``focused`` and ``smugg`` finds ``smug_``.
+
+    Deliberately empty for a word that is merely *absent* rather than
+    misspelled: ``confused`` shares almost nothing with ``puzzled``, and a
+    bridge built by string distance would either miss it or, tuned looser,
+    confidently offer something unrelated. That case is answered by
+    :func:`families`, which shows rather than guesses.
+    """
+    import difflib
+
+    candidates: dict[str, Emote] = {}
+    for emote in EMOTES.values():
+        if emote.kind != "situational":
+            continue
+        candidates.setdefault(_norm(emote.name), emote)
+        if emote.family:
+            candidates.setdefault(_norm(emote.family), emote)
+    out: list[Emote] = []
+    for token in [_norm(query), *(_norm(w) for w in query.split())]:
+        if not token:
+            continue
+        for match in difflib.get_close_matches(
+            token, list(candidates), n=limit, cutoff=0.72,
+        ):
+            emote = candidates[match]
+            if emote not in out:
+                out.append(emote)
+    return out[:limit]
 
 
 def glyph(name: str) -> str | None:

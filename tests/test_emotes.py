@@ -437,3 +437,41 @@ def test_near_misses_is_empty_exactly_when_lookup_succeeds():
         assert emotes.near_misses(name) == []
     assert emotes.near_misses("sa.tis"), "the maintainer's invented handle must guide"
     assert emotes.near_misses("xyzzy-not-a-feeling") == []
+
+
+def test_a_miss_bridges_instead_of_scolding():
+    """#1117: `brnrd emotes confused` told a person who had typed a feeling
+    to "try a feeling, not a handle".
+
+    Two populations, two honest answers, and the distinction is the point:
+
+    - a **typo** gets the face it was reaching for (`nearest`)
+    - a word that is simply **not ours** gets the vocabulary (`families`),
+      because there is no thesaurus here — `confused` shares almost nothing
+      with `puzzled`, and a bridge built by string distance would either
+      miss it or, tuned looser, confidently offer something unrelated
+
+    Pinned in both directions on purpose: loosening `nearest` until it
+    "solves" `confused` is exactly the change this test exists to stop.
+    """
+    assert [e.name for e in emotes.nearest("fokus")] == ["fo.cus"]
+    assert emotes.nearest("confused") == [], (
+        "a word that is merely absent must not be guessed at"
+    )
+    assert "puzzled" in emotes.families()
+    assert len(emotes.families()) >= 30
+
+
+def test_near_misses_falls_through_to_the_typo_pass():
+    """`daemon-substrate.md` promises "the chip names near misses", and
+    `search` has neither a thesaurus nor a spell-check — so a handle
+    written from memory returned nothing and the contract was aspirational.
+    """
+    # `lookup` is already tolerant of separators and suffixes, so the
+    # fixture has to be a real misspelling rather than a variant spelling —
+    # `focussed` resolves outright, which is the tolerance working.
+    assert emotes.lookup("wearry") is None
+    assert emotes.search("wearry") == [], "search has no spell-check"
+    assert [e.name for e in emotes.near_misses("wearry")][:1] == ["weary_"]
+    # A handle that *does* resolve still has no near misses to name.
+    assert emotes.near_misses("fo.cus") == []
