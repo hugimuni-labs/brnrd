@@ -15,6 +15,31 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app, ids  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _collaborator_has_write(monkeypatch):
+    """#408, second half: the managed lane now reads the permission API.
+
+    ``author_association`` has no permission grain, so ``COLLABORATOR`` in a
+    fixture payload no longer decides admission on its own — the gate asks
+    GitHub what that login may actually do. Every payload in this file is
+    written from the point of view of someone who *can* trigger a run, so
+    the default here is ``write``; the tests that care about the boundary
+    override it explicitly.
+
+    Autouse rather than per-test because the alternative is a live HTTP call
+    from the suite, and a test that silently reaches the network is a test
+    that passes for the wrong reason on a good day and fails for the wrong
+    reason on a bad one.
+    """
+    from brnrd.routers import webhooks as _webhooks
+
+    monkeypatch.setattr(
+        _webhooks.gh, "fetch_collaborator_permission",
+        lambda *a, **k: "write",
+    )
+
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import Event, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.platforms import github_app as github_app_platform  # noqa: E402
@@ -1441,6 +1466,95 @@ def test_github_webhook_allows_collaborator_association(env):
     with app.state.SessionLocal() as db:
         event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
         assert event.repo_id == rid
+
+
+def _settings_stub():
+    """The two fields `_github_authorized` reads directly, and nothing else —
+    the rest of the decision is arguments."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        github_authz_allowlist=frozenset(),
+        github_bot_token="t",
+        github_api_base_url="https://api.github.com",
+        github_api_version="2022-11-28",
+    )
+
+
+def test_a_read_only_collaborator_cannot_spend_the_operators_quota(env, monkeypatch):
+    """#408's two lanes, made one population.
+
+    ``author_association: COLLABORATOR`` covers a *read-only* invited
+    collaborator, and ``MEMBER`` covers any member of the owning org — the
+    field answers "how are you related to this repo", never "what may you
+    do here". The self-hosted gate has always read the permission API and
+    admitted ``{admin, write, maintain}``; this lane, the multi-tenant one
+    facing public org repos, stopped at the association and therefore
+    admitted a strictly wider population for the same ticket number.
+
+    A run is the operator's quota, on the operator's machine. Read access
+    is not a licence to spend it.
+    """
+    from brnrd.routers import webhooks as _webhooks
+
+    app, client, posts = env
+    _repo(client, _account(client))
+    monkeypatch.setattr(
+        _webhooks.gh, "fetch_collaborator_permission", lambda *a, **k: "read",
+    )
+
+    assert _github_post(client, _payload(association="COLLABORATOR")).status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.source == "github")).first() is None
+
+
+def test_an_unreadable_permission_is_denied_not_assumed(env, monkeypatch):
+    """Unknown is denied — #408's "no warn-but-allow grace" applied to the
+    failure mode the permission read introduces.
+
+    A rate limit or a dead token must not become an open door, and the
+    rejection carries a distinct `unverified:` reason so an operator
+    debugging a silent gate is never told a colleague is a stranger.
+    """
+    from brnrd.routers import webhooks as _webhooks
+
+    app, client, posts = env
+    _repo(client, _account(client))
+
+    def _boom(*a, **k):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(_webhooks.gh, "fetch_collaborator_permission", _boom)
+
+    assert _github_post(client, _payload(association="MEMBER")).status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event).where(Event.source == "github")).first() is None
+
+    ok, reason = _webhooks._github_authorized(
+        _settings_stub(), "MEMBER", "alice", repo="acme/widget", token="t",
+    )
+    assert ok is False and reason.startswith("unverified:")
+
+
+def test_owner_needs_no_lookup(monkeypatch):
+    """The one association that carries its own answer — and the cheap
+    negative still costs no API call at all."""
+    from brnrd.routers import webhooks as _webhooks
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        _webhooks.gh, "fetch_collaborator_permission",
+        lambda *a, **k: calls.append(a) or "read",
+    )
+    assert _webhooks._github_authorized(
+        _settings_stub(), "OWNER", "alice", repo="acme/widget", token="t",
+    )[0] is True
+    assert _webhooks._github_authorized(
+        _settings_stub(), "NONE", "stranger", repo="acme/widget", token="t",
+    )[0] is False
+    assert calls == [], "an association outside the set must cost no API call"
 
 
 def test_github_webhook_allows_allowlisted_login_despite_none_association(env_allowlist):
