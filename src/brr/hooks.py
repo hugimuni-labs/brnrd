@@ -48,6 +48,7 @@ from . import facets
 from . import gate_receipt
 from . import portals
 from . import promises
+from . import protocol
 from . import relics
 
 PHASE_POST_TOOL = "post-tool"
@@ -1732,7 +1733,27 @@ def _event_header(
     parts.append(_fmt_body_size(size))
     if changed:
         parts.append("Δ changed")
+    if _reaches_nobody(source):
+        parts.append("no correspondent — `note:` clears it")
     return " · ".join(parts)
+
+
+def _reaches_nobody(source: str) -> bool:
+    """True when an ``event:`` reply to this source is delivered nowhere.
+
+    brnrd mints these itself (``protocol.INTERNAL_SOURCES``) — a schedule
+    firing, a child's completion note, a steer to a child — so there is no
+    gate behind them and no correspondent waiting. A reply is accepted,
+    clears the event, and reaches no one; the run has to *learn* that from
+    a "NOT delivered" notice after the fact, and this row is where the
+    decision was made.
+
+    Derived rather than listed, and the derivation is checked: a source
+    brnrd mints is exactly one no gate owns, which
+    ``tests/test_hooks.py::test_the_gateless_set_agrees_with_the_daemons``
+    asserts against ``daemon._gate_owns_source`` so the two cannot drift.
+    """
+    return source.strip().casefold() in protocol.INTERNAL_SOURCES
 
 
 def _event_body_block(
