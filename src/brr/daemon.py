@@ -9418,6 +9418,17 @@ def _capture_worktree(
        beyond the seed, so a run that failed before doing anything stays
        silent.
 
+    The floor commit never lands on the branch the operator was standing on
+    (``host_context_branch``). A host-env run that dies before moving off it
+    would otherwise leave a bot commit sitting on the operator's own branch —
+    the 2026-08-04 incident: a daemon restart killed a host run mid-edit,
+    salvage committed onto local ``main``, and the operator's next
+    ``git pull`` rebased that stale floor commit into conflict with the
+    merged version of the same work. In that case the in-flight edits are
+    diverted to a dedicated ``brr/salvage-<run-id>`` branch (created at
+    HEAD, committed, published) and the operator's branch is switched back
+    to exactly the state they own.
+
     Best-effort and gated by ``salvage.enabled`` (default on); a detached
     HEAD or unreadable tree is skipped. Runs before finalize so the
     publish_branch it sets survives finalize's ``task.save``.
@@ -9437,7 +9448,40 @@ def _capture_worktree(
         # Detached HEAD — no branch to publish; finalize keeps the worktree
         # for forensic inspection.
         return
+    protected = str(task.meta.get("host_context_branch") or "").strip()
     try:
+        if branch == protected and gitops.worktree_dirty(run_root):
+            # The run died standing on the operator's own branch (a host-env
+            # run that never moved off it). Divert the floor commit to a
+            # salvage branch and hand the operator's branch back untouched —
+            # a bot commit on their branch is a rebase conflict waiting for
+            # their next pull (2026-08-04 incident, run-260804-1017-mlcm).
+            salvage_branch = f"brr/salvage-{task.id}"
+            worktree.switch_to(run_root, salvage_branch)
+            try:
+                committed = gitops.commit_all(
+                    run_root,
+                    f"brr salvage: in-flight work from interrupted run {task.id}",
+                    conversation_id=task.conversation_key or None,
+                    run_id=task.id,
+                )
+            finally:
+                worktree.switch_to(run_root, protected)
+            if not committed:
+                return
+            print(
+                f"[brnrd] salvage: diverted in-flight work off {protected!r} "
+                f"to {salvage_branch} for {task.id}"
+            )
+            task.meta["has_new_commit"] = True
+            task.meta["publish_branch"] = salvage_branch
+            task.meta["branch_name"] = salvage_branch
+            task.save(runs_dir)
+            print(
+                f"[brnrd] salvage: arming publish of {salvage_branch} "
+                f"for failed {task.id}"
+            )
+            return
         if gitops.worktree_dirty(run_root):
             if gitops.commit_all(
                 run_root,
