@@ -9970,7 +9970,15 @@ PRESERVED: dict[str, str] = {
     # absolute host path in any field ``gate_receipt.write_receipt``
     # writes. See the report for the one residual case (a ``gate_command``
     # an operator configured as an absolute path) this can't rule out.
-    gate_receipt.RECEIPT_NAME: "gate-receipt.json",
+    #
+    # #820 made the file a map, one entry per tree a run gated, keyed by
+    # ``gate_receipt.tree_key`` — a sha256 digest of the tree's *resolved
+    # absolute path*, never the path itself. That is the reason the key is a
+    # digest and not the path #820's own spec first suggested: this table is
+    # exactly the published, unredacted surface the paragraph above already
+    # keeps host paths off of, and a literal repo root as a map key would
+    # have put every gated tree's filesystem layout on it.
+    gate_receipt.RECEIPT_NAME: "gate-receipts.json",
     # #1027's whole retention gap: a complete, correct spend reading that
     # today survives nowhere. Renamed for the reader, not just dot-stripped
     # — "spend" is the word #1027 and the maintainer both used.
