@@ -1158,17 +1158,25 @@ def _page_heading_gist(content: str, max_bytes: int = _OMITTED_HEADING_GIST_BUDG
     titles = [_heading_title(e) for e in _split_h2_entries(content)]
     if not titles:
         return ""
+    # Account against the *rendered* bytes, not the raw title: each kept
+    # title ships as `§{title}` (the `§` is 2 bytes UTF-8) joined by `" · "`
+    # (4 bytes UTF-8, the middle dot is not ASCII). Measuring `len(title)`
+    # alone silently overshoots `max_bytes` — the "bytes, not len()" trap, in
+    # the one function whose whole job is a byte budget. Derive both widths
+    # from the literals so a future edit to the separator cannot desync them.
+    _PREFIX_BYTES = len("§".encode("utf-8"))
+    _SEP_BYTES = len(" · ".encode("utf-8"))
     kept: list[str] = []
     used = 0
     for title in titles:
-        title_bytes = len(title.encode("utf-8"))
-        sep_bytes = 3 if kept else 0  # " · "
-        if kept and used + sep_bytes + title_bytes > max_bytes:
+        token_bytes = _PREFIX_BYTES + len(title.encode("utf-8"))
+        sep_bytes = _SEP_BYTES if kept else 0
+        if kept and used + sep_bytes + token_bytes > max_bytes:
             break
-        if not kept and title_bytes > max_bytes:
+        if not kept and token_bytes > max_bytes:
             break
         kept.append(title)
-        used += sep_bytes + title_bytes
+        used += sep_bytes + token_bytes
     if not kept:
         noun = "heading" if len(titles) == 1 else "headings"
         return f"{len(titles)} {noun}"
