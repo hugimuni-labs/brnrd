@@ -1278,12 +1278,46 @@ class SolitaryEnv(DockerEnv):
     def _ensure_isolated_network(
         self, ctx: RunContext, cfg: dict[str, Any], shell: str,
     ) -> None:
-        if ctx.env_state.get("solitary_proxy_ready"):
+        # #1118: the guard used to be "has a proxy ever been built for this
+        # run", which is the wrong question — the right one is "was it
+        # built for *this Shell*". `daemon.py`'s automatic fallback swaps
+        # the runner and loops back into `invoke` with the same env_ctx, so
+        # a claude→codex substitution inside solitary met an
+        # anthropic-only allowlist: 74 denied CONNECTs to `api.openai.com`
+        # on `run-260804-1746-pmg9`, reported to the operator as an auth
+        # failure. The line above this one already recorded the new Shell
+        # in `env_state["solitary_shell"]` and then reused the old jail.
+        #
+        # The widening is a *union*, not a replacement: a run that has used
+        # two Shells may retry either, and a jail that ping-pongs is a jail
+        # that fails on alternating attempts. The sidecar keeps its name
+        # and network, so runner containers — which address it by name —
+        # need no knowledge that it was replaced.
+        served = ctx.env_state.setdefault("solitary_proxy_shells", [])
+        if ctx.env_state.get("solitary_proxy_ready") and shell in served:
             return
+        rebuilding = bool(ctx.env_state.get("solitary_proxy_ready"))
+        if shell and shell not in served:
+            served.append(shell)
         run_id = str(ctx.env_state.get("run_id", "") or "run")
         network = _docker_container_name(run_id, "solitary-net")
         proxy_name = _docker_container_name(run_id, "solitary-proxy")
-        allow = self._allow_hosts(cfg, shell)
+        allow: list[str] = []
+        for served_shell in served:
+            for host in self._allow_hosts(cfg, served_shell):
+                if host not in allow:
+                    allow.append(host)
+        if rebuilding:
+            print(
+                f"[brnrd] solitary: Shell changed to {shell!r} mid-run — "
+                f"rebuilding the egress allowlist for {sorted(served)}"
+            )
+            # Same name, same network: replace the sidecar in place.
+            subprocess.run(
+                ["docker", "rm", "-f", proxy_name],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            ctx.env_state["solitary_proxy_ready"] = False
         if not allow:
             print(
                 "[brnrd] solitary: no provider hosts known for shell "
@@ -1295,10 +1329,11 @@ class SolitaryEnv(DockerEnv):
             or str(ctx.env_state.get("docker_image") or _docker_cfg(cfg, "image"))
         )
         script = _solitary_proxy_script()
-        self._run_docker(
-            ["network", "create", "--internal", network],
-            f"create internal network {network}",
-        )
+        if not rebuilding:
+            self._run_docker(
+                ["network", "create", "--internal", network],
+                f"create internal network {network}",
+            )
         ctx.env_state["solitary_network"] = network
         ctx.env_state["docker_network"] = network
         try:
@@ -1316,7 +1351,10 @@ class SolitaryEnv(DockerEnv):
                 f"start proxy sidecar {proxy_name}",
             )
             containers = ctx.env_state.setdefault("docker_containers", [])
-            if isinstance(containers, list):
+            # A rebuild reuses the name, so the manifest already has it —
+            # appending again would double it in the preserved-container
+            # notice the operator reads.
+            if isinstance(containers, list) and proxy_name not in containers:
                 containers.append(proxy_name)
             # Second leg: the bridge, so the sidecar can reach the
             # allowlisted providers. The runner container never joins it.
@@ -1331,11 +1369,15 @@ class SolitaryEnv(DockerEnv):
                 ["docker", "rm", "-f", proxy_name],
                 capture_output=True, text=True, timeout=30, check=False,
             )
-            subprocess.run(
-                ["docker", "network", "rm", network],
-                capture_output=True, text=True, timeout=30, check=False,
-            )
-            ctx.env_state.pop("solitary_network", None)
+            # Only tear the network down if this call built it. On a
+            # Shell-change rebuild the network predates us and may still
+            # have a runner container attached.
+            if not rebuilding:
+                subprocess.run(
+                    ["docker", "network", "rm", network],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                ctx.env_state.pop("solitary_network", None)
             raise
         ctx.env_state["solitary_proxy"] = proxy_name
         ctx.env_state["solitary_proxy_ready"] = True
@@ -1355,20 +1397,37 @@ class SolitaryEnv(DockerEnv):
     def _ensure_credential_copies(
         self, ctx: RunContext, cfg: dict[str, Any], shell: str,
     ) -> None:
-        if "solitary_cred_stage" in ctx.env_state:
+        # #1118, the other half of the same jail: the guard asked "has a
+        # stage been built" instead of "does it hold *this* Shell's
+        # credential". A claude→codex fallback therefore ran codex with
+        # `.claude` mounted and no `~/.codex` anywhere — so even with
+        # egress fixed it could not have authenticated.
+        #
+        # Additive on purpose. Staging codex's token does not un-stage
+        # claude's, and "never the other CLIs' tokens" still holds in the
+        # sense that matters: only Shells this run has actually been asked
+        # to boot are staged, never the whole catalog.
+        staged_shells = ctx.env_state.setdefault("solitary_cred_shells", [])
+        if "solitary_cred_stage" in ctx.env_state and shell in staged_shells:
             return
-        stage = self._credential_stage_dir(ctx)
+        if shell and shell not in staged_shells:
+            staged_shells.append(shell)
+        stage = (
+            Path(str(ctx.env_state["solitary_cred_stage"]))
+            if "solitary_cred_stage" in ctx.env_state
+            else self._credential_stage_dir(ctx)
+        )
         stage.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(stage, 0o700)
         except OSError:
             pass
         home = Path(os.path.expanduser("~"))
-        copied: list[str] = []
+        copied: list[str] = list(ctx.env_state.get("solitary_cred_paths") or [])
         for rel in (*_SOLITARY_SHELL_CRED_PATHS.get(shell, ()), ".gitconfig"):
             src = home / rel
             dst = stage / rel
-            if not src.exists():
+            if not src.exists() or dst.exists():
                 continue
             try:
                 if src.is_dir():
