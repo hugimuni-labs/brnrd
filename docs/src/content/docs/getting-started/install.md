@@ -40,9 +40,37 @@ key of its own.
 Self-hosted gates and local execution are free. No brnrd account is needed to
 use them.
 
+## `brnrd init`
+
+```bash
+brnrd init
+```
+
+Run this once, from the repository you want brnrd to work in. It sets up a
+`.brr/` directory, detects your coding-agent CLI, and hands you an interview
+that writes the repository's contract (`AGENTS.md`) with you.
+
+If the [GitHub CLI](https://cli.github.com/) (`gh`) is already installed and
+signed in, `brnrd init` reads that identity — the same `gh auth token` / `gh
+api user` resolution the GitHub gate uses — and states who you are before
+continuing. No brnrd account, no token entry, and no separate step: `gh` not
+installed or not signed in just means init continues without stating an
+identity, same as any other optional step here.
+
+The interview leaves a working resident behind. A quick sanity check, if you
+want one:
+
+```bash
+brnrd run "summarize the test layout; do not change files"
+```
+
+runs it right there, in the terminal — nothing else installed or connected.
+
 ## Next
 
-Continue to [Connect](../connect/) and choose your door.
+Continue to [Connect](../connect/) for a persistent channel — your phone, a
+chat gate, an identity that isn't you — or skip straight to
+[First task](../first-task/) and keep working from the terminal.
 
 ## Trying it without installing
 

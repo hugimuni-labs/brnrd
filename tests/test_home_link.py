@@ -239,6 +239,34 @@ def test_resolve_owner_failure_is_actionable(monkeypatch):
         home_link.resolve_owner(None)
 
 
+# ── identity detection — init states it, without an account ──────────────
+#
+# `detect_identity()` is the caller `init` was missing: same resolution as
+# `resolve_owner`, but never raises. Callers that only want to *state* the
+# identity (never require it) get a plain `str | None` back.
+
+
+def test_detect_identity_returns_the_resolved_login(monkeypatch):
+    monkeypatch.setattr(home_link, "gh_available", lambda: True)
+    monkeypatch.setattr(
+        home_link, "_run_gh", lambda args: _cp(0, stdout="octocat\n")
+        if args == ["api", "user", "-q", ".login"] else _fail_if_called(),
+    )
+    assert home_link.detect_identity() == "octocat"
+
+
+def test_detect_identity_none_when_gh_is_not_on_path(monkeypatch):
+    monkeypatch.setattr(home_link, "gh_available", lambda: False)
+    monkeypatch.setattr(home_link, "_run_gh", _fail_if_called)
+    assert home_link.detect_identity() is None
+
+
+def test_detect_identity_none_when_gh_is_unauthenticated(monkeypatch):
+    monkeypatch.setattr(home_link, "gh_available", lambda: True)
+    monkeypatch.setattr(home_link, "_run_gh", lambda args: _cp(1, stderr="not logged in"))
+    assert home_link.detect_identity() is None
+
+
 def test_refuses_to_adopt_a_public_repo(tmp_path, monkeypatch):
     """The create path was careful (`--private`); the *adopt* path was never
     asked. Wiring origin to an existing public `brnrd-home` would push the
