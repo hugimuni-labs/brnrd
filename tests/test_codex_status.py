@@ -291,7 +291,7 @@ def test_safe_thread_id_rejects_traversal_and_separators():
 # ── credits-based plans (2026-07-24) ──────────────────────────────────
 #
 # The payload below is verbatim from this account's rollout at the moment
-# two dispatched Codex runs died on their first token: no windows at
+# two dispatched Codex workers died on their first token: no windows at
 # all, the whole quota fact in ``credits``. The window reader produced no
 # summary, the ``quota`` slot came back absent, and absent renders
 # everywhere as "no reading yet" rather than "this Shell cannot run".
@@ -311,7 +311,7 @@ _EXHAUSTED_CREDITS = {
 def test_exhausted_credits_produce_a_quota_slot_not_silence():
     """A zero-balance plan must be *readable*, not absent.
 
-    This is the regression that cost two run dispatches: with no
+    This is the regression that cost two worker dispatches: with no
     ``primary``/``secondary`` windows the collector emitted no ``quota``
     key at all, so every downstream surface reported the Shell as
     unmeasured while it was in fact unusable.

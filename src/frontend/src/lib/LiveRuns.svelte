@@ -115,7 +115,7 @@
 
 	// Multi-workstream slice 1 (kb/design-multi-workstream-concurrency.md
 	// "Ranked moves" #1): `spawn:`'s pool grew past a cap of 1, so this grid
-	// can now hold several concurrent strand-stack children alongside the
+	// can now hold several concurrent worker-stack children alongside the
 	// resident thought that dispatched them. "Flatten the view, not the
 	// write-authority" was the recommendation, not a full parent/child tree
 	// — every run still gets an equal peer card, in the same chronological

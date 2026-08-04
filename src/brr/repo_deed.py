@@ -144,8 +144,8 @@ def write_deed(repo_path: Path, slot: str) -> bool:
 def _git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     # ``bot_identity_env`` for every call, not just the commit: it carries
     # the ``GIT_DIR``/``GIT_WORK_TREE`` scrub too, and without it a deed
-    # written from inside a pinned run run would ``git add`` into that
-    # run's worktree while naming the home repo (#703, #746).
+    # written from inside a pinned worker run would ``git add`` into that
+    # worker's worktree while naming the home repo (#703, #746).
     return subprocess.run(
         ["git", *args],
         cwd=repo_path,

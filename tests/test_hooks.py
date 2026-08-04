@@ -1121,7 +1121,7 @@ def test_source_glyphs_cover_the_channel_vocabulary():
     assert hooks._event_glyph("github") == "⎇"
     assert hooks._event_glyph("forge") == "⎇"
     assert hooks._event_glyph("spawn_message") == "⚙"
-    assert hooks._event_glyph("strand") == "⚙"
+    assert hooks._event_glyph("worker") == "⚙"
     assert hooks._event_glyph("carrier-pigeon") == "✉"
 
 
@@ -2175,7 +2175,7 @@ class TestVigilMatcher:
 
     def test_topic_words_are_not_continuation_claims(self):
         for line in (
-            "Holding the run count constant proved the race.",
+            "Holding the worker count constant proved the race.",
             "The vigil design belongs in issue 959.",
         ):
             assert hooks.vigil_claim(f"body\n\n{line}") is None

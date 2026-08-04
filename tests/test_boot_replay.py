@@ -566,19 +566,19 @@ class TestBootScore:
         # Runtime trailer
         assert "run-context-bundle" in keys
 
-    def test_strand_prompt_skips_inject_blocks(self, empty_repo):
-        """A run wake omits the inject-stack blocks in its score."""
+    def test_worker_prompt_skips_inject_blocks(self, empty_repo):
+        """A worker wake omits the inject-stack blocks in its score."""
         from brr.prompts import build_daemon_prompt_with_score
 
         _, score = build_daemon_prompt_with_score(
-            "Strand task", "evt-001", "/tmp/r.md", empty_repo,
-            strand=True,
+            "Worker task", "evt-001", "/tmp/r.md", empty_repo,
+            worker=True,
         )
         keys = {c.block_key for c in score.contracts}
-        # Strand preamble, not run.md
-        assert "strand-preamble" in keys
+        # Worker preamble, not run.md
+        assert "worker-preamble" in keys
         assert "run-preamble" not in keys
-        # Inject stack absent for runs
+        # Inject stack absent for workers
         assert "identity-core" not in keys
         assert "dominion" not in keys
 
@@ -864,11 +864,11 @@ class TestBootScore:
         assert "branch before you edit" not in actions   # the daemon publishes it
         assert not any(a.startswith("answer") for a in actions)  # nothing queued
 
-    def test_strand_kernel_omits_resident_only_steps(self, empty_repo):
-        """A run never writes a card — ``strand.md`` does not grant it one."""
+    def test_worker_kernel_omits_resident_only_steps(self, empty_repo):
+        """A worker never writes a card — ``worker.md`` does not grant it one."""
         from brr.prompts import build_boot_score
 
-        score = build_boot_score(empty_repo, is_strand=True, has_event_body=True)
+        score = build_boot_score(empty_repo, is_worker=True, has_event_body=True)
         actions = [s.action for s in score.orientation]
         assert not any("card" in a for a in actions)
 

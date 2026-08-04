@@ -52,7 +52,7 @@ def _write_menu(outbox, payload) -> None:
 
 
 def _emit(brr_dir, thread="telegram:555:"):
-    return daemon._RunEmit(
+    return daemon._WorkerEmit(
         brr_dir=brr_dir,
         conversation_key=thread,
         event_id="evt-lead",

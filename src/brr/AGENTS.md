@@ -333,7 +333,7 @@ author, stop and surface the conflict instead.
 ### When the brnrd daemon runs you
 
 Everything in this subsection applies only when you're being launched
-by `brnrd up` / the daemon run — the Run Context Bundle's `### Mode`
+by `brnrd up` / the daemon worker — the Run Context Bundle's `### Mode`
 section confirms the stage. In an ad-hoc coding-agent or editor session
 Claude Code without brnrd orchestrating), skip the subsection — the
 machinery it describes isn't in play.
