@@ -206,6 +206,17 @@ body::before {
 	color: #9a8a6a;
 }
 
+/* The eyebrow's uppercase is right for a label and wrong for a name. The
+   dashboard header wears the wordmark inside an eyebrow, so `brnrd` read as
+   `BRNRD` — and the wink cycle (`b^n<d`, `bRnЯd`) is authored letter by
+   letter, mirror axis and all, so uppercasing it destroys the one thing the
+   animation is made of. The brand is lowercase; the label style may not
+   overrule it (maintainer, 2026-08-04: "it looks weird when animation
+   happens to it"). */
+.eyebrow--asis {
+	text-transform: none;
+}
+
 /* Boot glitch (kb/design-brand-visual-language.md §3): `_` -> `b_d` ->
    `br_rd` -> `brnrd` -glitch-> `bRnЯd`, letters revealed symmetrically
    from the outside in around the underscore cursor as mirror axis, then

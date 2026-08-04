@@ -951,7 +951,7 @@
 				     nothing is. With neither it is the plain wink the landing page
 				     has always shown — the frontend owns no emote table, so "no mood
 				     on the wire" renders as no mood, not as a default face. -->
-				<p class="eyebrow">
+				<p class="eyebrow eyebrow--asis">
 					<WinkWordmark frames={wordmark.frames} pitch={wordmark.pitch} />
 				</p>
 				<!-- Named directly as a real gap (2026-07-08): no way to end a
