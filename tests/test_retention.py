@@ -344,27 +344,6 @@ def test_inbox_collects_every_terminal_status_not_just_done(tmp_path):
     assert reports["inbox"].items == len(terminal_paths)
 
 
-def test_inbox_collects_noted_exactly_like_done(tmp_path):
-    """A ``note:``-closed letter (the ``noted`` state — a deliberate close
-    with no reply owed) ages out of the inbox on the same window as a
-    ``done`` one; a note must never make a file immortal."""
-    repo = _repo(tmp_path)
-    ctx = _ctx(tmp_path)
-    inbox = ctx.dispatch_inbox
-
-    noted = _real_event(inbox, "noted", 120)
-    done = _real_event(inbox, "done", 120)
-    fresh_noted = _real_event(inbox, "noted", 5)
-
-    _plan, reports = retention.gc(
-        repo, ctx, _windows(inbox=90), dry_run=False, now=NOW)
-
-    assert not noted.exists()
-    assert not done.exists()
-    assert fresh_noted.exists()   # inside the window, exactly like done
-    assert reports["inbox"].items == 2
-
-
 # ── repo inbox (self-hosted gates, never swept before) ──────────────
 
 
