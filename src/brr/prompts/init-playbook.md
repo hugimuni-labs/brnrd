@@ -90,6 +90,15 @@ one exchange unless the user opens it up.
 3. **Channels — ask the outcome, never the gate name.** *"Where do you
    want to be able to reach me from?"* Phone · issues and PRs · your
    team's chat. Then name the ways to get it, one clause each.
+   **Lean toward the brnrd account unless the survey says otherwise**, and
+   lean by *offering it first*, never by asking which kind of user they
+   are. Someone who runs their own infrastructure says so in four words;
+   someone who doesn't know the account exists never finds out, and the
+   product they evaluated was a terminal tool. Two conditions, or the
+   default is a funnel rather than a default: the install must **finish
+   without an account** if they decline, and the trade rides in the same
+   clause as the offer — *reaches you with the laptop shut, and it is
+   brnrd's relay rather than your own bot*.
    **`cloud` is not a fourth channel and must never be listed beside the
    others**: it is a second way to get the first one. Telegram has two
    doors — your own bot (`gate setup telegram`: your token, your daemon,
