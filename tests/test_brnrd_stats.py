@@ -128,6 +128,40 @@ def test_deployed_version_pre_fix_two_line_file_reads_as_unknown(tmp_path, monke
     assert payload["built_at"] == "2026-07-21T18:00:00+00:00"
 
 
+# --- Shells-and-doors support matrix (#1070 follow-up) ----------------------
+
+
+def test_support_matrix_reads_soon_when_deployment_is_unconfigured():
+    client = _client()
+    payload = client.get("/v1/stats/support").json()
+    by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
+    assert by_slug["telegram"] == "soon"
+    assert by_slug["whatsapp"] == "soon"
+    assert by_slug["github"] == "soon"
+    # No hosted axis at all for these — always mirrors shipped code, not
+    # this deployment's Settings.
+    assert by_slug["slack"] == "live"
+    assert by_slug["signal"] == "live"
+    assert by_slug["dashboard"] == "live"
+
+
+def test_support_matrix_reads_live_once_this_deployment_is_configured():
+    app = create_app(
+        Settings(
+            database_url="sqlite:///:memory:",
+            public_base_url="https://brnrd.example",
+            telegram_bot_token="t",
+            telegram_bot_username="brnrd_bot",
+        )
+    )
+    client = TestClient(app, base_url="https://testserver")
+    payload = client.get("/v1/stats/support").json()
+    by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
+    assert by_slug["telegram"] == "live"
+    # Unaffected by an unrelated door's configuration.
+    assert by_slug["whatsapp"] == "soon"
+
+
 # --- Stripe-derived pricing (#831) -------------------------------------------
 
 
