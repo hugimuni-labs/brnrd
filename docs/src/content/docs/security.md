@@ -13,16 +13,36 @@ hostile tasks.
 
 ## Who can trigger work
 
-GitHub, Telegram, and Signal authorize the individual sender before enqueue. The
-self-hosted GitHub gate verifies `write`, `maintain`, or `admin` permission; the
-managed webhook requires GitHub's signed `OWNER`, `MEMBER`, or `COLLABORATOR`
-association; both also accept explicitly allowlisted logins. Telegram accepts the
+GitHub, Telegram, and Signal authorize the individual sender before enqueue.
+**Both GitHub lanes verify `write`, `maintain`, or `admin` permission on the
+repository**, read from GitHub's collaborator-permission API; the managed
+webhook uses the signed `author_association` only as a cheap first refusal,
+because that field carries no permission grain (`COLLABORATOR` includes a
+read-only invited collaborator, `MEMBER` any member of the owning org). A
+permission lookup that cannot be completed is treated as unknown and denied.
+Both lanes also accept explicitly allowlisted logins. Telegram accepts the
 paired user plus explicitly allowlisted user ids; Signal accepts the paired
 number plus explicitly allowlisted numbers, and every group message is denied
 outright (the self-hosted Signal gate is direct-message only). Anonymous admins,
 channel posts, public commenters, read-only self-hosted GitHub users, and other
 group members are denied by default. Slack remains channel-scoped, so every
 member of its configured channel can submit work.
+
+### One deliberate exception: assign, label, and review-request
+
+A **mention** proves nothing — anyone who can comment on a public repository can
+write one — so it is gated as above. Assigning the bot, applying the `brnrd`
+label, or requesting its review are gated by GitHub itself, which requires the
+**triage** role or higher for all three, and brnrd accepts the signed webhook as
+its own proof rather than making a second call.
+
+**Triage is a lower bar than `write`.** On a repository where you hand out triage
+freely, someone who cannot trigger a run by mentioning the resident *can* trigger
+one by labelling an issue. That is a deliberate trade — it keeps the natural
+GitHub workflow working without a second permission read on every label event —
+and it is stated here so it is a decision you made rather than one you discover.
+If you do not want it, remove the `brnrd` label and the bot's team membership
+from anyone at triage level, or keep triage narrow.
 
 Authorization says who may instruct the agent; it does not make their text safe.
 Keep principal lists narrow. For people who may submit work but should not inherit
