@@ -2023,6 +2023,70 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
     assert "status=contract-mismatch" in note["body"]
 
 
+def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
+    """#1097: the perfect worker indicted for its parent's typo.
+
+    ``report:`` is a filesystem path and no prompt surface says so, making a
+    parent naming a path the child never writes an ordinary, entirely
+    parent-side error. The completion note used to print the branch lines on
+    *any* mismatch — so a child that published exactly the branch it was
+    declared, and only missed a report it was never told to create, was
+    reported under two branch lines that read as the accusation.
+
+    Both clauses failing still prints both; what stops is a satisfied clause
+    standing beside a violated one with nothing to tell them apart.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/exactly-as-told",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    header = body.split("contract mismatch — ")[1].split(" vs published")[0]
+    assert header == "report", header
+    assert "never-written.md" in body and "MISSING" in body
+    # The branch is not on trial: no spec-vs-published pair for a branch
+    # that matched, because that pair *is* the indictment's grammar.
+    assert "published branch:" not in body, body
+    assert "brr/exactly-as-told" in body  # still stated, as kept
+
+
+def test_both_clauses_failing_still_names_both(tmp_path):
+    """The twin. Narrowing a message must not start hiding real failures —
+    that moves the lie one door down instead of ending it."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/declared",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/something-else",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "branch and report" in body
+    assert "published branch:  brr/something-else" in body
+    assert "MISSING" in body
+
+
 # ── #633: contract-mismatch requires evidence the worker ran ────────
 
 
