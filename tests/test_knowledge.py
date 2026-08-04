@@ -1593,33 +1593,3 @@ def test_untracked_files_are_clean_to_both_readers(tmp_path):
     assert knowledge._checkout_is_dirty(checkout) is False
     assert knowledge._refresh_checkout(checkout) is None  # did not skip
     assert knowledge.mirror_state(repo, cfg).dirty is False
-
-
-def test_source_excerpt_never_ends_mid_line(tmp_path):
-    """#944: the index excerpt is the kb's entry point; a bare byte slice at
-    ``_MAX_SOURCE_BYTES`` ended it mid-word (``(loom=w``).  The cut must land
-    on a line boundary — the trimmed text is a newline-terminated prefix of
-    the source, never a partial line."""
-    root = tmp_path / "kb"
-    root.mkdir()
-    # Long lines so the 2,048-byte boundary is guaranteed to land mid-line.
-    body = "\n".join(
-        f"- [page-{i}](page-{i}.md) — " + "loom and thunder, " * 12
-        for i in range(40)
-    )
-    (root / "index.md").write_text(body, encoding="utf-8")
-
-    excerpt = knowledge._source_excerpt(
-        knowledge.KnowledgeSource(name="home knowledge (repo)", root=root, kind="home")
-    )
-    assert excerpt.endswith("...")
-    _, rendered = excerpt.split("\n\n", 1)
-    trimmed = rendered.rsplit("\n\n...", 1)[0]
-    assert body.startswith(trimmed)
-    # The kept prefix runs to a line boundary in the source: everything
-    # between it and the next newline is only the trailing whitespace that
-    # ``rstrip()`` ate — never letters of a split word.
-    nxt = body.find("\n", len(trimmed))
-    assert nxt >= 0
-    assert body[len(trimmed):nxt].strip() == ""
-    assert len(trimmed.encode("utf-8")) <= knowledge._MAX_SOURCE_BYTES

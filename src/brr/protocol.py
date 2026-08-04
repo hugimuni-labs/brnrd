@@ -443,16 +443,13 @@ def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
 #: * ``"cancelled"`` — a parent- or dashboard-initiated stop
 #:   (``_set_event_status_if_present(event, "cancelled")`` in the
 #:   stopped-run finalizer).
-#: * ``"noted"`` — the resident retired the event deliberately, no reply
-#:   owed (the ``note:`` outbox verb — ``daemon.py``'s drain sets it with
-#:   ``noted_by``/``noted_at`` provenance; no gate ever delivers one).
 #:
 #: ``"pending"`` and ``"processing"`` are excluded on purpose — they are
 #: exactly the two statuses ``list_pending`` (above) and every
 #: still-eligible-work check still treat as unhandled. A status-less or
 #: unparseable event is likewise never assumed terminal.
 TERMINAL_EVENT_STATUSES = frozenset({
-    "done", "delivered", "error", "conflict", "stopped", "cancelled", "noted",
+    "done", "delivered", "error", "conflict", "stopped", "cancelled",
 })
 
 

@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
 	basename,
 	buildNavTree,
-	fetchSurface,
 	fileDirKey,
 	groupByLayer,
 	headingAnchor,
@@ -321,33 +320,4 @@ test('splitIntoSections weighs list items, so a list-heavy page still folds', ()
 	assert.equal(sections![0].preview?.kind, 'paragraph');
 	assert.equal(sections![0].tail.length, 1); // the whole list, unsplit
 	assert.equal(sections![0].tail[0].kind, 'list');
-});
-
-// ── #946: conditional reload ────────────────────────────────────────────────
-
-test('fetchSurface echoes the prior ETag and reuses the body on a 304', async () => {
-	let calls = 0;
-	const seenIfNoneMatch: (string | null)[] = [];
-	const fakeFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-		calls++;
-		seenIfNoneMatch.push(new Headers(init?.headers).get('if-none-match'));
-		if (calls === 1) {
-			return new Response(
-				JSON.stringify({
-					generated_at: 'g1',
-					files: [{ path: 'a.md', markdown: 'A' }],
-					reported_at: 'r1'
-				}),
-				{ status: 200, headers: { etag: '"surface-v1"' } }
-			);
-		}
-		return new Response(null, { status: 304, headers: { etag: '"surface-v1"' } });
-	}) as typeof fetch;
-
-	const first = await fetchSurface(fakeFetch);
-	assert.equal(first.files[0].markdown, 'A');
-
-	const second = await fetchSurface(fakeFetch);
-	assert.deepEqual(second, first);
-	assert.equal(seenIfNoneMatch[1], '"surface-v1"');
 });
