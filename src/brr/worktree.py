@@ -412,7 +412,15 @@ class WorktreeHygieneEntry:
 
 @dataclass(frozen=True)
 class WorktreeHygieneSnapshot:
-    """Inspection results for one worktree before classification."""
+    """Inspection results for one worktree before classification.
+
+    ``pr_lookup_error`` and ``pr_lookup_unsupported`` are two different
+    facts and never both set (#1064): *we asked ``gh`` and it failed*
+    implies a retry might help, and *this forge is not one ``gh`` answers
+    for* does not. The second is resolved once per report, before any
+    subprocess runs, and ``forge_kind`` carries the name it was resolved
+    to (``None`` when brr can't name the forge at all).
+    """
 
     path: Path
     branch: str | None
@@ -423,6 +431,8 @@ class WorktreeHygieneSnapshot:
     origin_main_is_ancestor: bool | None = None
     pr_states: tuple[str, ...] = ()
     pr_lookup_error: str | None = None
+    pr_lookup_unsupported: bool = False
+    forge_kind: str | None = None
     commit_lookup_error: str | None = None
 
 
@@ -499,6 +509,26 @@ def classify_worktree_hygiene(
             branch=None,
             classification="unknown",
             reason="detached HEAD",
+        )
+
+    if snapshot.pr_lookup_unsupported:
+        # Not "PR lookup failed" — nothing was asked, and nothing will be
+        # while this holds, so the error phrasing would imply a retry that
+        # is not coming.  Still ``unknown`` rather than falling through to
+        # the commit checks: a GitLab remote can have an open MR we cannot
+        # see, and "reap-safe; no open PR" would assert a check we now know
+        # was never made.  Deliberately not "permanent" — the kind is
+        # re-derived on every report, so a ``git remote set-url`` or a
+        # ``.brr/config`` ``forge.kind`` fix is picked up on the next run.
+        forge = f" ({snapshot.forge_kind})" if snapshot.forge_kind else ""
+        return WorktreeHygieneReport(
+            path=path,
+            branch=branch,
+            classification="unknown",
+            reason=(
+                f"PR state unsupported{forge} — this remote isn't GitHub, "
+                "and gh is never queried for it"
+            ),
         )
 
     if snapshot.pr_lookup_error:
@@ -583,19 +613,76 @@ def format_worktree_hygiene_line(report: WorktreeHygieneReport) -> str:
     return f"{report.path} | {branch} | {report.classification} | {report.reason}"
 
 
+@dataclass(frozen=True)
+class _GhForgeVerdict:
+    """Whether ``gh`` is worth asking about this repo's remote at all.
+
+    A property of the *repo*, so it is resolved once per report and threaded
+    down — not rediscovered per branch.
+    """
+
+    queryable: bool
+    kind: str | None
+
+
+def _gh_forge_verdict(repo_root: Path) -> _GhForgeVerdict:
+    """Resolve whether ``gh pr list`` can answer for *repo_root*'s remote (#1064).
+
+    Reuses :func:`forge_pr_cache._forge_kind_and_label` as a *function* — the
+    one place that owns "read the remote, honour the ``[forge]`` overrides,
+    name the kind" — while deliberately not borrowing its cache shape (a JSON
+    file on disk); this path keeps its own per-report dict. Imported lazily so
+    this low-level module keeps its import-time dependency on ``gitops`` alone.
+
+    Two shapes are left queryable, both straight from that function's docstring:
+
+    - ``label is None`` — the remote can't be read, or doesn't parse into an
+      ``owner/repo`` shape at all. There is nothing to base a verdict on, and
+      *this* call site's ``gh pr list --head`` is cwd-resolved with no
+      ``--repo``, so gh's own host detection is exactly the fallback
+      :func:`forge_pr_cache.refresh` keeps for the same case. One honest
+      failure beats a sentence about a remote that isn't there.
+    - a positive ``kind == "github"``.
+
+    Everything else is gated, and ``kind is None`` *with* a label is not told
+    apart from an explicitly non-GitHub kind — the docstring says callers must
+    not. A GitHub Enterprise host lands there (no host pattern matches it);
+    ``.brr/config`` ``forge.kind = github`` is the override that says so, and
+    it feeds this same call.
+    """
+    from . import forge_pr_cache
+
+    try:
+        kind, label = forge_pr_cache._forge_kind_and_label(repo_root)
+    except Exception:  # noqa: BLE001 - a report must not die on a remote read
+        return _GhForgeVerdict(queryable=True, kind=None)
+    if label is not None and kind != "github":
+        return _GhForgeVerdict(queryable=False, kind=kind)
+    return _GhForgeVerdict(queryable=True, kind=kind)
+
+
 def build_worktree_hygiene_report(repo_root: Path) -> list[WorktreeHygieneReport]:
-    """Inspect all worktrees in *repo_root* and classify them."""
+    """Inspect all worktrees in *repo_root* and classify them.
+
+    The forge kind is resolved **once**, before the first ``gh`` call, and
+    threaded into every inspection (#1064). It is a fact about the repo, not
+    about a branch, and asking it per branch is how a permanent cause gets
+    rediscovered N times.
+    """
     result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(detail or "failed to list worktrees")
 
     entries = parse_worktree_hygiene_list(result.stdout)
+    forge = _gh_forge_verdict(repo_root)
     pr_cache: dict[str, tuple[tuple[str, ...], str | None]] = {}
     reports: list[WorktreeHygieneReport] = []
     for entry in entries:
         try:
-            snapshot = inspect_worktree_hygiene(repo_root, entry, pr_cache=pr_cache)
+            snapshot = inspect_worktree_hygiene(
+                repo_root, entry, pr_cache=pr_cache, forge=forge,
+            )
         except Exception as exc:  # pragma: no cover - defensive, report-only tool
             snapshot = WorktreeHygieneSnapshot(
                 path=entry.path,
@@ -612,8 +699,13 @@ def inspect_worktree_hygiene(
     entry: WorktreeHygieneEntry,
     *,
     pr_cache: dict[str, tuple[tuple[str, ...], str | None]],
+    forge: _GhForgeVerdict,
 ) -> WorktreeHygieneSnapshot:
-    """Collect the git/gh facts needed to classify one worktree."""
+    """Collect the git/gh facts needed to classify one worktree.
+
+    *forge* is required rather than defaulted so no caller can reach the ``gh``
+    call without having decided whether ``gh`` can answer at all.
+    """
     try:
         dirty = has_uncommitted_changes(entry.path)
     except Exception as exc:
@@ -628,7 +720,11 @@ def inspect_worktree_hygiene(
     if branch is None:
         return WorktreeHygieneSnapshot(path=entry.path, branch=None, dirty=dirty)
 
-    pr_states, pr_error = _lookup_pr_states(repo_root, branch, pr_cache=pr_cache)
+    pr_states: tuple[str, ...] = ()
+    pr_error: str | None = None
+    if forge.queryable:
+        pr_states, pr_error = _lookup_pr_states(repo_root, branch, pr_cache=pr_cache)
+
     upstream_ref: str | None = None
     commits_ahead: int | None = None
     commit_lookup_error: str | None = None
@@ -661,6 +757,8 @@ def inspect_worktree_hygiene(
         origin_main_is_ancestor=origin_main_is_ancestor,
         pr_states=pr_states,
         pr_lookup_error=pr_error,
+        pr_lookup_unsupported=not forge.queryable,
+        forge_kind=forge.kind,
         commit_lookup_error=commit_lookup_error,
     )
 
@@ -680,6 +778,14 @@ def _lookup_pr_states(
     *,
     pr_cache: dict[str, tuple[tuple[str, ...], str | None]],
 ) -> tuple[tuple[str, ...], str | None]:
+    """``(states, error)`` for one branch, asking ``gh`` at most once per report.
+
+    Reached only when :func:`_gh_forge_verdict` said ``gh`` can answer for this
+    remote, so ``__gh_global_error__`` keeps the job it has always had and only
+    that one: a ``gh`` that is *installed and broken* (unauthenticated, timing
+    out, talking nonsense). That is a failure a retry might fix, which is
+    exactly why it stays a separate state from the forge-kind verdict above.
+    """
     global_error = pr_cache.get("__gh_global_error__")
     if global_error is not None:
         return global_error
