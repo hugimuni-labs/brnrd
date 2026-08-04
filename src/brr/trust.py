@@ -40,6 +40,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from . import protocol
+
 
 OWNER = "owner"
 COLLABORATOR = "collaborator"
@@ -48,16 +50,28 @@ TIERS = (OWNER, COLLABORATOR, UNTRUSTED)
 
 # Sources that can only originate from the operator/daemon itself — no
 # stranger can forge one, so they resolve to ``owner`` without a stamp.
-# ``cloud`` is here because a cloud event only exists when the operator
-# paired the account and the brnrd server authorized the sender into a
-# bound room; the relay is the account's own channel (a finer server-side
-# stamp can still override this default per event).
+#
+# **Derived, not listed** (#1118). The membership property is *who mints
+# it*, and the mint site is the authority on that, so the internal set
+# lives at :data:`protocol.INTERNAL_SOURCES` next to ``create_event`` and
+# is guarded by an AST test over this package. The hand-list this
+# replaced named five of eight: a ``spawn`` was owner while the
+# ``spawn_completed`` note closing that same dispatch edge was a
+# stranger, and a parent woken to collect its own child's result ran
+# jailed. A class defined by listing its members meets the member nobody
+# listed; this one met four.
+#
+# ``cloud`` is added on top because it is the one *ingress* source that
+# defaults to owner: a cloud event only exists when the operator paired
+# the account and the brnrd server authorized the sender into a bound
+# room; the relay is the account's own channel (a finer server-side stamp
+# can still override this default per event).
 #
 # Deliberately *not* here: the empty source. ``protocol.create_event``
 # requires a source, so a sourceless event is malformed/unattributed —
 # and an allowlist entry for "we don't know where this came from" would
 # be fail-open in the one place this module promises fail-closed.
-_OWNER_SOURCES = frozenset({"schedule", "cli", "respawn", "spawn", "cloud"})
+_OWNER_SOURCES = protocol.INTERNAL_SOURCES | {"cloud"}
 
 
 @dataclass(frozen=True)
