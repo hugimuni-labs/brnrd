@@ -81,6 +81,7 @@ resident with a twitching face reads as a resident that isn't well.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 __all__ = [
     "Emote",
@@ -93,6 +94,7 @@ __all__ = [
     "for_telemetry",
     "sequences_of",
     "search",
+    "resolve_mood_fields",
 ]
 
 
@@ -742,6 +744,39 @@ def near_misses(name: str, *, limit: int = 4) -> list[Emote]:
     if lookup(name) is not None:
         return []
     return [e for e in search(name, limit=limit) if e.kind == "situational"]
+
+
+def resolve_mood_fields(handle: object) -> dict[str, Any]:
+    """Resolve a raw mood handle into the wire fields every face-rendering
+    surface shares: ``mood``, ``mood_glyph``, ``mood_frames``, ``mood_rest``,
+    ``mood_pitch``.
+
+    This is the one place that turns a resident-authored handle into a
+    drawable face, so the live-runs wire (``gates/cloud.py``) and the durable
+    per-run state document (``daemon.py``'s ``_persist_run_state_doc``, #701)
+    resolve from the same table instead of each holding its own copy that
+    could drift. ``mood_glyph``/``mood_frames``/``mood_rest``/``mood_pitch``
+    are present only when *handle* resolves in the emote library — an
+    unresolved handle degrades to name-only, never a guessed face (the
+    honesty bar this module states for itself).
+    """
+
+    normalized = str(handle or "").strip() or None
+    payload: dict[str, Any] = {
+        "mood": normalized,
+        "mood_glyph": None,
+        "mood_frames": None,
+        "mood_rest": None,
+        "mood_pitch": None,
+    }
+    if normalized:
+        emote = lookup(normalized)
+        if emote is not None:
+            payload["mood_glyph"] = emote.frames[0]
+            payload["mood_frames"] = [list(seq) for seq in emote.sequences]
+            payload["mood_rest"] = emote.resting_frame
+            payload["mood_pitch"] = emote.pitch
+    return payload
 
 
 def glyph(name: str) -> str | None:

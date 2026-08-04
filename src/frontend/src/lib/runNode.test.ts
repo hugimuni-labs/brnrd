@@ -259,6 +259,19 @@ test('edge fields are lifted out of the generic frame list, not duplicated', () 
 	assert.deepEqual(labels, ['status']);
 });
 
+test('title and mood_frames are lifted out of the generic frame list too', () => {
+	// `title` gets the run's own heading (`nodeDigest.title`); `mood_frames`
+	// is a JSON-encoded wire blob for the mood chip (`nodeDigest.moodFrames`)
+	// — neither belongs in the raw key/value grid `frameFields` renders.
+	const labels = frameFields({
+		status: 'done',
+		title: 'one command in the repo',
+		mood_frames: '[["b·_·d","b-_-d","b·_·d"]]'
+	}).map((field) => field.label);
+
+	assert.deepEqual(labels, ['status']);
+});
+
 test('nowProjection mirrors the daemon card projection, including its fallback', () => {
 	assert.equal(
 		nowProjection('## Now\n\nDriving tests.\n\n## Arc\n\nA long permanent story.'),
@@ -412,10 +425,90 @@ test('nodeDigest carries the frame mood as a bare handle (#566)', () => {
 			)
 		);
 
-	// A closed run's frame is a text record: the handle survives, the glyph
-	// never existed there. The chip renders the bare name, which is exactly
-	// what the emote library's honesty bar asks for.
-	assert.equal(node('status: done\nmood: id_l\n').mood, 'id_l');
+	// A closed run's frame is a text record: the handle survives. A frame
+	// written before #701 (or one whose `.mood` handle never resolved) has
+	// no glyph beside it — the chip renders the bare name, exactly what the
+	// emote library's honesty bar asks for.
+	const bare = node('status: done\nmood: id_l\n');
+	assert.equal(bare.mood, 'id_l');
+	assert.equal(bare.moodGlyph, null);
+	assert.equal(bare.moodFrames, null);
+	assert.equal(bare.moodRest, null);
+	assert.equal(bare.moodPitch, null);
 	// A run that set no mood reports none — and '' renders nothing at all.
 	assert.equal(node('status: done\n').mood, '');
+});
+
+test('nodeDigest resolves a closed run face from the frame (#701)', () => {
+	// Until #701 `daemon._persist_run_state_doc` wrote only the raw `mood:`
+	// handle, so a closed run's face was unrecoverable — the dashboard drew
+	// a bare dim handle forever after. The daemon now resolves the handle
+	// against `brr.emotes` (the same resolution `gates/cloud.py::
+	// _mood_payload` uses for the live wire) and writes glyph/frames/
+	// rest/pitch beside the handle; `mood_frames` rides as one JSON-encoded
+	// line since `state.md`'s frontmatter is deliberately flat, no nesting.
+	const node = (frontmatter: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: `---\n${frontmatter}---\n`,
+						layer: 'runs'
+					}
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	const resolved = node(
+		[
+			'status: done\n',
+			'mood: fo.cus\n',
+			'mood_glyph: b·_·d\n',
+			'mood_frames: [["b·_·d","b-_-d","b·_·d"],["b·_·d","bx_xd","b·_·d"]]\n',
+			'mood_rest: b·_·d\n',
+			'mood_pitch: 0.45\n'
+		].join('')
+	);
+	assert.equal(resolved.mood, 'fo.cus');
+	assert.equal(resolved.moodGlyph, 'b·_·d');
+	assert.deepEqual(resolved.moodFrames, [
+		['b·_·d', 'b-_-d', 'b·_·d'],
+		['b·_·d', 'bx_xd', 'b·_·d']
+	]);
+	assert.equal(resolved.moodRest, 'b·_·d');
+	assert.equal(resolved.moodPitch, 0.45);
+
+	// Malformed or hand-edited JSON degrades to null rather than throwing —
+	// a resolved-face amenity is never worth failing the whole frame over.
+	assert.equal(node('status: done\nmood: fo.cus\nmood_frames: not json\n').moodFrames, null);
+});
+
+test('nodeDigest carries a spawn title from the frame (spawn frontmatter, #880 §1b)', () => {
+	// `_queue_spawn_request` threads a dispatcher's declared `title:` onto
+	// the presence label; `daemon._persist_run_state_doc` now also writes it
+	// into the durable frame, so a reviewed strand keeps its name past both
+	// the presence row and the ledger's own retention window.
+	const node = (frontmatter: string) =>
+		nodeDigest(
+			runNodeFromSurface(
+				surface([
+					{
+						path: 'runs/Gurio__brr/run-1/state.md',
+						markdown: `---\n${frontmatter}---\n`,
+						layer: 'runs'
+					}
+				]),
+				'Gurio__brr',
+				'run-1'
+			)
+		);
+
+	assert.equal(
+		node('status: done\ntitle: one command in the repo\n').title,
+		'one command in the repo'
+	);
+	assert.equal(node('status: done\n').title, '');
 });

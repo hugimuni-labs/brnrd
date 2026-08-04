@@ -8681,6 +8681,100 @@ def test_account_run_state_doc_carries_mood_frontmatter(tmp_path):
     assert "narration" not in text
 
 
+def test_account_run_state_doc_carries_resolved_mood_face(tmp_path):
+    """#701: a closed run's frame used to write `mood: <handle>` and nothing
+    else, so the face was unrecoverable once the run closed — the dashboard
+    rendered a bare dim handle forever after. The daemon now resolves the
+    handle against `brr.emotes` (the same resolution the live-runs wire uses,
+    `gates/cloud.py::_mood_payload` -> `emotes.resolve_mood_fields`) and
+    writes glyph/frames/rest/pitch beside the handle, so a closed node
+    renders exactly what the live one did."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / ".mood").write_text("fo.cus\n")
+    task = Run(
+        id="run-face", event_id="evt-face", body="face check",
+        source="telegram", status="done", meta={},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished", outbox_dir=outbox,
+    )
+    text = path.read_text(encoding="utf-8")
+    emote = daemon.emotes.lookup("fo.cus")
+    assert f"mood_glyph: {emote.frames[0]}" in text
+    assert f"mood_rest: {emote.resting_frame}" in text
+    assert f"mood_pitch: {emote.pitch}" in text
+    fields = daemon.protocol.parse_frontmatter(text)
+    assert json.loads(fields["mood_frames"]) == [
+        list(seq) for seq in emote.sequences
+    ]
+
+    # An unresolved handle degrades to name-only, the same honesty bar the
+    # live packet holds — never a guessed face.
+    (outbox / ".mood").write_text("not-a-real-handle\n")
+    daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished", outbox_dir=outbox,
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "mood: not-a-real-handle" in text
+    assert "mood_glyph:" not in text
+    assert "mood_frames:" not in text
+    assert "mood_rest:" not in text
+    assert "mood_pitch:" not in text
+
+
+def test_account_run_state_doc_carries_spawn_title(tmp_path):
+    """A spawned strand's dispatcher-declared `title:` (spawn frontmatter,
+    `_queue_spawn_request` #880 §1b) already reaches the presence label, but
+    used to stop there: the durable state document wrote a bare
+    `# Run <run-id>` heading and no `title:` field, so a reviewed run node
+    forgot the strand's name the moment the presence row (or the ledger's
+    own retention window) expired. `Run.from_event` already carries every
+    event field not in `_EVENT_META_FIELDS` onto `task.meta`, so the title
+    is sitting on the run — this just persists it, both as a frontmatter
+    field and as a heading suffix."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {"repo.label": "Gurio/brr", "home.path": str(tmp_path / "account-home")},
+    )
+    task = Run(
+        id="run-titled", event_id="evt-titled", body="work",
+        source="spawn", status="done",
+        meta={"title": "one command in the repo"},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx, task, repo_label="Gurio/brr", stage="finished",
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "title: one command in the repo" in text
+    assert "# Run run-titled — one command in the repo" in text
+
+    # No title declared: the old bare heading, no stray field.
+    untitled = Run(
+        id="run-untitled", event_id="evt-untitled", body="work",
+        source="telegram", status="done", meta={},
+    )
+    untitled_path = daemon._persist_run_state_doc(
+        ctx, untitled, repo_label="Gurio/brr", stage="finished",
+    )
+    untitled_text = untitled_path.read_text(encoding="utf-8")
+    assert "title:" not in untitled_text
+    assert "# Run run-untitled" in untitled_text
+    assert "—" not in untitled_text
+
+
 # ── #632 review additions: the layers the PR's own tests never reached ──
 #
 # The shipped tests all drive ``_render_runner_catalog`` with hand-built rows

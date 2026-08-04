@@ -2257,28 +2257,12 @@ def _mood_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
     ``mood_glyph`` stays for the surfaces that genuinely cannot move (and for a
     dashboard deployed before this field existed), but it is the *resting*
     frame and a renderer with ``mood_frames`` should prefer those.
+
+    Resolution itself lives in ``emotes.resolve_mood_fields`` (#701) so this
+    wire and the durable per-run state document resolve a handle the same
+    way instead of each keeping its own copy of the emote table.
     """
-    handle = str(entry.get("mood") or "").strip() or None
-    payload: dict[str, Any] = {
-        "mood": handle,
-        "mood_glyph": None,
-        "mood_frames": None,
-        "mood_rest": None,
-        "mood_pitch": None,
-    }
-    if handle:
-        emote = emotes.lookup(handle)
-        if emote is not None:
-            payload["mood_glyph"] = emote.frames[0]
-            payload["mood_frames"] = [list(seq) for seq in emote.sequences]
-            # What the chip holds between flickers. Not ``frames[0]``: that is
-            # the animation's base and is shared across a whole face family,
-            # so a surface resting on it says "a mood is set here" without
-            # saying which. ``Emote.resting_frame`` is the library's answer to
-            # "what does this face look like while still".
-            payload["mood_rest"] = emote.resting_frame
-            payload["mood_pitch"] = emote.pitch
-    return payload
+    return emotes.resolve_mood_fields(entry.get("mood"))
 
 
 def _daemon_mood_payload(brr_dir: Path) -> dict[str, Any] | None:
