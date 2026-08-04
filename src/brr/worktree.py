@@ -373,6 +373,41 @@ def uncommitted_file_count(worktree_path: Path) -> int:
     return sum(1 for line in result.stdout.splitlines() if line.strip())
 
 
+def clear_stale_worktree_pin(repo_root: Path, removed: Path) -> bool:
+    """Unset ``core.worktree`` when it names *removed*. Returns True if it did.
+
+    **Structural, not a guess about who wrote it.** #746 never established
+    the writer — a test fixture, a drifted `git config`, something in a
+    child's own suite — and a repair that waits for that answer is a repair
+    that never ships. It does not need the answer: whoever set the pin, a
+    value naming a directory *this function has just deleted* is garbage
+    from the moment the removal completes. Nothing can want it.
+
+    Left in place it is not inert. ``rev-parse --show-toplevel`` keeps
+    answering with the deleted path at exit 0, so every git command in the
+    shared checkout — the operator's own — addresses a tree that is gone,
+    and the first one to use that answer as a ``cwd`` dies. #1108 is that
+    bill: the daemon crash-looped on its own first line 312 times across 27
+    minutes, restarting every 5 seconds, while `brnrd daemon status` — the
+    one command an operator types to ask what is wrong — died in the same
+    three frames.
+
+    Best-effort by construction: a config that cannot be read or written is
+    not a reason to fail a teardown that has already succeeded.
+    """
+    pinned = gitops._config_value(repo_root, "core.worktree")
+    if not pinned or not gitops._same_path(Path(pinned), removed):
+        return False
+    unset = gitops._config_git(repo_root, "--unset", "core.worktree")
+    if unset is None or unset.returncode != 0:
+        return False
+    print(
+        f"[brnrd] unset core.worktree — it pinned the shared checkout to "
+        f"{removed}, the worktree just removed (#746/#1108)"
+    )
+    return True
+
+
 def remove(
     repo_root: Path,
     run_id: str,
@@ -391,6 +426,8 @@ def remove(
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(detail or f"failed to remove worktree {worktree_path}")
+
+    clear_stale_worktree_pin(repo_root, worktree_path)
 
     if delete_branch and branch:
         result = _git(repo_root, "branch", "-D", branch, check=False)
