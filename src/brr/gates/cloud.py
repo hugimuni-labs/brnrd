@@ -1043,37 +1043,99 @@ def _safe_attachment_name(pointer: dict, index: int) -> str:
     return raw[:128]
 
 
-def _ingest_event_attachments(state: dict, ev: dict, workdir: Path) -> tuple[list[Path], list[str]]:
-    """Pull *ev*'s attachment pointers down into local files under *workdir*.
+def _attachment_names(raw: object) -> list[str] | None:
+    """One best-effort filename per attachment on the wire, or ``None``.
 
-    Returns ``(downloaded_paths, failed_names)``. Downloaded files land in
-    the exact ``attachment_files`` shape the telegram and github gates
-    produce (one convention, three gates — see
-    ``gates/github/attachments.py``); failures come back by name for an
-    honest #553-style annotation in the event body.
+    The bytes are fetched **by index** (``/attachments/{i}``), never by any
+    field of the pointer — so all this has to recover is *how many* and *what
+    to call them*. That makes it worth being generous about shape and strict
+    about silence.
+
+    ``None`` is the load-bearing return: *the event announced attachments and
+    no count could be derived from them*. The predecessor of this function was
+    a filter —
+
+        pointers = [p for p in (ev.get("attachments") or []) if isinstance(p, dict)]
+
+    — which answered that case with ``[]``, the same value it returns for an
+    event that simply has no attachments. Zero pointers, zero downloads, zero
+    failures, zero annotation: a drop byte-identical to a no-op at every
+    surface a reader can see, including the resident's. It cost two days and a
+    direct user question (#1154). **A filter is not a parser** — it cannot say
+    "I did not understand this", and a shape it does not understand is
+    precisely the shape that arrives after the other end changes.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, (str, bytes)):
+        # A bare filename, not an iterable of pointers. Iterating it yields
+        # characters, which is how this shape used to vanish.
+        name = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        return [_safe_attachment_name({"filename": name}, 0)]
+    if isinstance(raw, dict):
+        return [_safe_attachment_name(raw, 0)]
+    if isinstance(raw, (list, tuple)):
+        names: list[str] = []
+        for i, item in enumerate(raw):
+            if isinstance(item, dict):
+                names.append(_safe_attachment_name(item, i))
+            elif isinstance(item, str):
+                names.append(_safe_attachment_name({"filename": item}, i))
+            else:
+                names.append(f"attachment-{i:02d}")
+        return names
+    return None
+
+
+def _ingest_event_attachments(
+    state: dict, ev: dict, workdir: Path,
+) -> tuple[list[Path], list[str], str | None]:
+    """Pull *ev*'s attachments down into local files under *workdir*.
+
+    Returns ``(downloaded_paths, failed_names, unrecognised)``. Downloaded
+    files land in the exact ``attachment_files`` shape the telegram and github
+    gates produce (one convention, three gates — see
+    ``gates/github/attachments.py``); failures come back by name for an honest
+    #553-style annotation in the event body, and ``unrecognised`` carries a
+    description of an announced-but-unparseable ``attachments`` field so the
+    drop can be announced too (#1154).
     """
     files: list[Path] = []
     failed: list[str] = []
-    pointers = [p for p in (ev.get("attachments") or []) if isinstance(p, dict)]
-    for i, pointer in enumerate(pointers):
-        name = _safe_attachment_name(pointer, i)
-        dest = workdir / f"{i:02d}-{name}" if len(pointers) > 1 else workdir / name
+    raw = ev.get("attachments")
+    names = _attachment_names(raw)
+    if names is None:
+        # Name the observed shape, not just the fact — the next occurrence
+        # should hand back enough to write the parser without another round
+        # trip to the wire.
+        return files, failed, f"{type(raw).__name__}: {str(raw)[:160]}"
+    for i, name in enumerate(names):
+        dest = workdir / f"{i:02d}-{name}" if len(names) > 1 else workdir / name
         if _download_attachment(state["brnrd_url"], state["token"], str(ev.get("event_id") or ""), i, dest):
             files.append(dest)
         else:
             failed.append(name)
-    return files, failed
+    return files, failed, None
 
 
-def _annotate_failures(body: str, failed: list[str]) -> str:
-    if not failed:
-        return body
-    notes = "\n".join(
+def _annotate_failures(
+    body: str, failed: list[str], unrecognised: str | None = None,
+) -> str:
+    notes = [
         f"[attachment \"{name}\" could not be fetched — the telegram file link may have "
         "expired or the file exceeds the size cap; ask the sender to re-send it]"
         for name in failed
-    )
-    return f"{body}\n\n{notes}" if body else notes
+    ]
+    if unrecognised:
+        notes.append(
+            "[this event announced attachments in a shape this daemon could not read, "
+            f"so none were fetched — observed {unrecognised}. The bytes did not arrive; "
+            "report this shape rather than assuming the message had no images]"
+        )
+    if not notes:
+        return body
+    joined = "\n".join(notes)
+    return f"{body}\n\n{joined}" if body else joined
 
 
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
@@ -1108,11 +1170,21 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # server holds no bytes, telegram links expire, and the wake's Read
         # tool wants a plain local path (``attachment_files`` convention).
         with tempfile.TemporaryDirectory() as tmpdir:
-            attachment_files, failed = _ingest_event_attachments(state, ev, Path(tmpdir))
+            attachment_files, failed, unrecognised = _ingest_event_attachments(
+                state, ev, Path(tmpdir)
+            )
+            if unrecognised:
+                # Loud, not silent: an announced attachment that never became
+                # bytes is a drop, and the operator is the only one who can
+                # act on the shape (#1154).
+                print(
+                    f"[brnrd:cloud] event {ev.get('event_id')} announced attachments "
+                    f"this daemon could not read — {unrecognised}"
+                )
             protocol.create_event(
                 inbox_dir,
                 source="cloud",
-                body=_annotate_failures(ev.get("body") or "", failed),
+                body=_annotate_failures(ev.get("body") or "", failed, unrecognised),
                 attachment_files=attachment_files or None,
                 cloud_event_id=ev["event_id"],
                 repo_label=ev.get("repo_label") or "",
