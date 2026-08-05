@@ -75,6 +75,20 @@ what survives for consumers and professionals, and say whether any exclusion
 category or severability wording is likely to be struck. Confirm whether the
 documented approval model changes that analysis.
 
+**Update, 2026-08-05 (r3).** The first paragraph's carve-out dropped "for
+death or personal injury caused by our negligence," keeping "fraud or
+fraudulent misrepresentation", "dol or faute lourde", and the general
+catch-all ("any other liability that the law does not permit us to exclude
+or limit"). This is engineering's provisional reading, not counsel's: the
+deleted phrase is UCTA 1977 s.2(1) boilerplate with no forum here (§16 sets
+French law and French courts), it is redundant under French law (a clause
+limiting liability for *dommage corporel* is void regardless, and Code
+conso L212-1/R212-1/R212-2 reach it independently for consumers), and the
+paragraph's own catch-all already covers it. Please confirm the deletion
+changes no substantive protection and that the remaining `dol`/`faute
+lourde` carve-out still does the load-bearing work the removed phrase was
+never doing.
+
 ## 3. Stripe merchant-of-record boundary
 
 **Question.** Who owes the withdrawal-right presentation, VAT invoice, refund
@@ -263,6 +277,26 @@ acceptance, whether 30 days' dashboard notice is adequate for paid consumers,
 whether individual notice is required, and whether continued use can evidence
 acceptance of any non-trivial change. Confirm the evidence record and hosted
 point-of-use gate.
+
+**Update, 2026-08-05 (r3), a concrete instance of this question.** §15's
+last sentence — "For other changes, continuing to use the service after the
+new version is published means you accept it" — treats materiality as
+self-judged, which is fragile under Code conso L212-1 against a consumer.
+The maintainer read this and deliberately left it unedited pending your
+review; it is deferred to you rather than decided. It is also the same
+question as a decision the maintainer made the same day on r3 itself:
+`TERMS_VERSION` stayed unbumped for the wording changes in this revision
+(the draft-pending-counsel clause and six other edits below), on the basis
+that the acceptance population was empty of third parties at the time, so
+nobody needed to re-accept. That basis is a fact about today's user count,
+not a claim that the edits were immaterial, and it expires the moment a
+second person accepts these terms. §15's continued-use-as-acceptance clause
+is the machinery a *future* non-bumping edit would lean on once that basis
+no longer holds — so both halves belong in front of you together: is
+continued use sufficient consent for a non-material change at all, and if
+so, is "the acceptance population is currently empty" a sound basis for an
+engineering team (rather than counsel) to decide a given edit is
+non-material.
 
 ## 9. Planned France-to-Spain entity conversion
 
