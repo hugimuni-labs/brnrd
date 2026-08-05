@@ -173,13 +173,21 @@ def check_repository_collaborator(
     200-means-member reading, everyone becomes a collaborator. Membership and
     effective access are different questions, and this check exists for
     membership (will assigns / review-requests / comment-tags reach the
-    resident). A 403 here means the *calling credential* lacks the grant for
-    the collaborators endpoints; that is a classifiable, remediable state
-    (``MarkerCheckState.PERMISSION_MISSING``), not a reason to switch to an
-    endpoint that answers a different question. Anything else (5xx, network)
-    is a genuine "couldn't tell" and is raised rather than folded into either
-    answer — the caller records that as unknown, not a guess (see
-    ``github_marker.sync_marker_for_repos``).
+    resident). A 403 here does NOT uniformly mean the calling credential
+    lacks a grant (rescoped 2026-08-05, #1141): on the GitHub App
+    installation token it does — that credential only needs
+    ``Metadata: read``, which the App already holds, so a 403 is a genuine
+    gap. On a *user* access token, GitHub's own docs require the caller to
+    already have push access just to use this endpoint at all, so a bot
+    lacking push access 403s regardless of whether it is itself a
+    collaborator — "not a collaborator" wearing a permission fault's
+    clothes. The caller disambiguates by passing the right
+    ``MarkerCheckPrincipal`` to
+    ``github_marker.classify_marker_check_failure``; this function only
+    makes the HTTP call and stays credential-agnostic. Anything else (5xx,
+    network) is a genuine "couldn't tell" and is raised rather than folded
+    into either answer — the caller records that as unknown, not a guess
+    (see ``github_marker.sync_marker_for_repos``).
     """
     resp = httpx.get(
         _url(api_base_url, f"/repos/{repo}/collaborators/{quote(username, safe='')}"),
