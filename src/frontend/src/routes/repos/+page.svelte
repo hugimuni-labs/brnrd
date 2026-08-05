@@ -338,6 +338,35 @@
 	});
 </script>
 
+<!-- The manual-connect controls, shared by both render sites: door b of the
+     no-installation fork below, and (once at least one installation exists)
+     the standalone row it has always occupied at the foot of "installed
+     repositories" — connecting a repo the App was never given access to.
+     One definition so the two sites can't drift on field names or the
+     submit handler; each site supplies its own heading and wrapper. -->
+{#snippet manualConnectFields()}
+	<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
+		<input
+			class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
+			bind:value={manualRepo}
+			placeholder="owner/name"
+			autocomplete="off"
+		/>
+		<input
+			class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
+			bind:value={manualBranch}
+			placeholder="default branch"
+			autocomplete="off"
+		/>
+		<button
+			type="submit"
+			class="cursor-pointer border border-stone-800 px-3 py-1.5 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
+			disabled={pendingAction !== null}
+			>{actionBusy('connect:manual') ? 'enabling' : 'enable repo'}</button
+		>
+	</div>
+{/snippet}
+
 <div class="mx-auto max-w-4xl p-6">
 	<div class="flex items-start justify-between gap-4">
 		<p class="eyebrow">brnrd · repos</p>
@@ -468,13 +497,16 @@
 		</div>
 
 		{#if data.installations.length === 0}
-			<!-- The install action, with its own position and weight (#1084):
-			     no installation ⇒ this is the page's primary act, not a cell in a
-			     readout grid. Steer'd 2026-08-05: lead with the command — "the
-			     terminal drives, the web consents once" (design-onboarding-ladder.md,
-			     direction A) — because execution is local and GitHub's picker is
-			     the only place repo selection can happen (classic-PAT-only add-repo
-			     endpoint; no "brnrd picks for you" alternative exists). -->
+			<!-- The fork (2026-08-05 steer, following #1084): App install and
+			     manual connect are two independent ways to get a repo working,
+			     not two steps of one path. The prior shape here read "step 1,
+			     step 2" as if the App were the only route and the pairing
+			     command its prelude — it isn't; `_connect_repo_core`
+			     (`_session.py`) never consults an installation. Each door below
+			     states only what it buys, each claim traced to the code that
+			     backs it (see the PR body); the fork's relative weight and
+			     whether the manual form belongs here at all are left open on
+			     purpose — both doors are simply visible and labelled. -->
 			<section class="panel mt-5 p-4" aria-labelledby="connect-heading">
 				<p class="eyebrow">start here</p>
 				<h2
@@ -484,12 +516,57 @@
 					connect this repository
 				</h2>
 				<p class="mt-2 max-w-2xl text-sm text-stone-400">
-					Two steps, in order: run the pairing command from a checkout, then finish on GitHub.
+					Two independent doors — pick either, or both.
 				</p>
 
-				<div class="mt-4">
+				<div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+					<div class="subpanel p-4">
+						<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+							<span class="text-amber-200/80">door a</span> install the github app
+						</p>
+						<p class="mt-2 text-sm text-stone-400">
+							Buys runs that start themselves from GitHub activity: assign this repo's issue or PR
+							to it, request it as a reviewer, label an issue or PR, or @mention it in an issue, a
+							PR, a PR review, or a comment — each reaches brnrd with no chat client open. Trades a
+							personal access token sitting on your laptop for a short-lived, repo-scoped
+							installation token: commits and comments post as a separate account, not you, and
+							revoking access is one click on github.com instead of a credential hunt.
+						</p>
+						<a
+							class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
+							href={data.install_url}
+							rel="external noreferrer"
+							target="_blank">install the github app</a
+						>
+						<p class="mt-2 font-mono text-[11px] text-ink-mute">
+							Opens github.com to choose repositories; enable this one from the list below once it
+							appears there.
+						</p>
+					</div>
+
+					<div class="subpanel p-4">
+						<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+							<span class="text-amber-200/80">door b</span> connect this repo by name
+						</p>
+						<p class="mt-2 text-sm text-stone-400">
+							Buys an enabled repo right now — no App, no waiting on GitHub's picker; works
+							immediately from a paired chat (Telegram, WhatsApp) or the CLI. Does not buy anything
+							GitHub-triggered: an assignment, a label, a review request, or an @mention on GitHub
+							never reaches brnrd for a repo connected this way.
+						</p>
+						<form class="mt-3" onsubmit={connectManual}>
+							{@render manualConnectFields()}
+						</form>
+					</div>
+				</div>
+
+				<div class="mt-5 border-t border-stone-800/70 pt-4">
 					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-						<span class="text-amber-200/80">1</span> run this in your checkout
+						either door: pair a local daemon
+					</p>
+					<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
+						Runs execute on your own machine, never brnrd's. Once this repo is connected (either
+						door above), pair a daemon to it from a checkout:
 					</p>
 					<div class="mt-1.5 flex items-start gap-2">
 						<pre
@@ -507,26 +584,6 @@
 						No <code class="text-stone-400">brnrd</code> on this machine yet?
 						<code class="text-stone-400">npx brnrd account connect …</code> does the whole cold start
 						in one line.
-					</p>
-				</div>
-
-				<div class="mt-5 border-t border-stone-800/70 pt-4">
-					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
-						<span class="text-amber-200/80">2</span> install the github app
-					</p>
-					<p class="mt-1.5 max-w-2xl text-sm text-stone-400">
-						This trades a personal access token sitting on your laptop for a short-lived,
-						repo-scoped installation token: commits and comments post as a separate account, not
-						you, and revoking access is one click on github.com instead of a credential hunt.
-					</p>
-					<a
-						class="mt-3 inline-flex items-center border border-amber-700 bg-amber-950/40 px-4 py-2 font-mono text-sm tracking-wide text-amber-100 uppercase hover:border-amber-500"
-						href={data.install_url}
-						rel="external noreferrer"
-						target="_blank">install the github app</a
-					>
-					<p class="mt-2 font-mono text-[11px] text-ink-mute">
-						Opens github.com — that's where you choose repositories, not here.
 					</p>
 				</div>
 			</section>
@@ -868,29 +925,20 @@
 				</div>
 			{/if}
 
-			<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
-				<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">manual connect</p>
-				<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
-					<input
-						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
-						bind:value={manualRepo}
-						placeholder="owner/name"
-						autocomplete="off"
-					/>
-					<input
-						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
-						bind:value={manualBranch}
-						placeholder="default branch"
-						autocomplete="off"
-					/>
-					<button
-						type="submit"
-						class="cursor-pointer border border-stone-800 px-3 py-1.5 font-mono text-[11px] tracking-wide text-stone-400 uppercase hover:text-stone-200 disabled:cursor-wait disabled:opacity-50"
-						disabled={pendingAction !== null}
-						>{actionBusy('connect:manual') ? 'enabling' : 'enable repo'}</button
-					>
-				</div>
-			</form>
+			{#if data.installations.length > 0}
+				<!-- Door b lives above, inside the no-installation fork, while
+				     nothing is installed. Once an installation exists that panel
+				     is gone (its `{#if}` is the same predicate as this one, only
+				     inverted), so the same control comes back here — it never
+				     stopped being a way to connect a repo the App has no access
+				     to. -->
+				<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
+					<p class="font-mono text-[11px] tracking-wide text-ink-quiet uppercase">
+						connect another repo by name
+					</p>
+					{@render manualConnectFields()}
+				</form>
+			{/if}
 		</section>
 	{/if}
 </div>
