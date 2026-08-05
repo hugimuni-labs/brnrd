@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from brnrd import github_marker, publish_scope, run_stop_requests, wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
+from brnrd.capabilities import evaluate_capabilities
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
 from ._session import (
@@ -826,6 +827,11 @@ def dashboard_repos_api(
                 _installed_repo_out(row, connected_names=connected_names)
                 for row in installed
             ],
+            # design-capability-panel.md build step 1: one server-evaluated
+            # registry, additive to this response — no existing field
+            # changes, nothing removed. Flat (each row carries its own
+            # `scope`/`subject`); grouping is the renderer's job, not ours.
+            "capabilities": [cap.to_wire() for cap in evaluate_capabilities(db, account, settings)],
             "github_sync_configured": _github_sync_configured(request),
             "oauth_ready": _github_oauth_ready(request),
             "install_url": settings.github_install_url,
