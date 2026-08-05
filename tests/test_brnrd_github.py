@@ -2331,14 +2331,14 @@ def test_github_sync_refuses_an_expired_session_cookie(monkeypatch):
     # about expiry and not about the cookie never having been accepted.
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/?notice=github-synced"
+    assert r.headers["location"] == "/repos?notice=github-synced"
     assert len(synced) == 1
 
     _expire_sessions(app, account_id)
 
     r = client.post("/api/github/sync", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/login?next=/", "expired cookie still authenticated"
+    assert r.headers["location"] == "/login?next=/repos", "expired cookie still authenticated"
     assert len(synced) == 1, "sync ran for an expired session"
 
 
@@ -2505,7 +2505,7 @@ def test_github_sync_notice_refuses_all_skipped_installations(monkeypatch):
     response = client.post("/api/github/sync", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/?notice=github-sync-refused"
+    assert response.headers["location"] == "/repos?notice=github-sync-refused"
 
 
 def test_github_setup_does_not_attribute_an_install_to_an_expired_session(monkeypatch):
@@ -2550,7 +2550,71 @@ def test_github_setup_lands_on_repos_not_the_bare_dashboard(monkeypatch):
     assert location.startswith("/repos?"), location
     assert "notice=github-synced" in location
     assert "installation_id=42" in location
-    assert "setup_action=install" in location
+    # setup_action is read by nobody downstream (grep -rn setup_action over
+    # the whole repo, pre-fix, found only this handler's own two lines) — a
+    # param no reader consumes is noise on a URL a human sees.
+    assert "setup_action" not in location
+
+
+def test_github_setup_classifies_a_pending_admin_approval(monkeypatch):
+    """GitHub sends `setup_action=request` when a non-admin asked for the
+    install and an org admin has not approved it yet — nothing was
+    installed, no repos will appear. Before this fix the handler forwarded
+    `setup_action` unread and defaulted to `github-installed`, a false
+    positive at exactly the moment the user most needs a true negative.
+
+    The common shape for this case has **no** `installation_id` (GitHub
+    docs: "about the setup URL"), which used to make the sync block skip
+    entirely and fall through to the same false-positive default — so the
+    classification must run whether or not `installation_id` is present.
+    """
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_installation",
+        lambda *a, **k: synced.append(a),
+    )
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installation_for_account",
+        lambda *a, **k: synced.append(a),
+    )
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+
+    r = client.get(
+        "/api/github/setup",
+        params={"setup_action": "request"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    location = r.headers["location"]
+    assert location.startswith("/repos?"), location
+    assert "notice=github-install-requested" in location
+    assert synced == [], "a pending-approval request must not run a sync"
+
+
+def test_github_setup_classifies_a_pending_admin_approval_even_with_an_installation_id(
+    monkeypatch,
+):
+    """Same as above, but covering the edge case where GitHub did send an
+    `installation_id` alongside `setup_action=request` — classification must
+    still win over the sync branch; nothing was actually installed."""
+    synced = []
+    monkeypatch.setattr(
+        "brnrd.routers.github_app.sync_app_installation_for_account",
+        lambda *a, **k: synced.append(a),
+    )
+    app, client, _acc, _account_id = _session_cookie_client(monkeypatch)
+
+    r = client.get(
+        "/api/github/setup",
+        params={"installation_id": "42", "setup_action": "request"},
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    location = r.headers["location"]
+    assert "notice=github-install-requested" in location
+    assert synced == [], "setup_action=request must not run the sync block"
 
 
 def test_github_setup_refuses_an_unproven_installation(
@@ -2583,6 +2647,26 @@ def test_github_setup_refuses_an_unproven_installation(
     assert response.status_code == 303
     assert response.headers["location"].endswith("notice=github-sync-refused")
     assert attached == []
+
+
+def test_notice_text_states_pending_approval_and_next_action():
+    """`github-install-requested` says the install is pending an org admin's
+    approval (not a generic "received"); `github-sync-empty` reads as the
+    user's next action ("install the App"), not a diagnosis of the server —
+    #1084's own reported symptom fires this exact code on a brand-new
+    account that has simply not installed the App yet.
+    """
+    from brnrd.routers import _session
+
+    requested = _session._notice_text("github-install-requested")
+    assert requested is not None
+    assert "admin" in requested.lower()
+    assert "approv" in requested.lower()
+
+    empty = _session._notice_text("github-sync-empty")
+    assert empty is not None
+    assert "install" in empty.lower()
+    assert "no github app installations were found for this app" not in empty.lower()
 
 
 def test_dashboard_json_refuses_an_expired_session_cookie(monkeypatch):

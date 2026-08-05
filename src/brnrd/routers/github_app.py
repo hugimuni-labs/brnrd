@@ -278,23 +278,42 @@ def github_app_callback(code: str | None = None, state: str | None = None, error
 @router.get("/setup")
 def github_app_setup(request: Request, installation_id: str | None = None, setup_action: str | None = None, db: Session = Depends(get_db)) -> RedirectResponse:
     account_id = account_id_from_session_cookie(request, db)
-    notice = "github-installed"
-    if installation_id:
-        try:
-            if account_id is None:
-                sync_installation(
-                    db, request.app.state.settings, installation_id, None
-                )
-                notice = "github-synced"
-            else:
-                result = sync_app_installation_for_account(
-                    db, request.app.state.settings, account_id, installation_id
-                )
-                notice = github_sync_notice(result)
-        except Exception as e:
-            print(f"[brnrd] github installation sync failed: {e}")
-            notice = "github-sync-failed"
-    params = {k: v for k, v in {"installation_id": installation_id, "setup_action": setup_action, "notice": notice}.items() if v}
+    if setup_action == "request":
+        # GitHub's own setup_action vocabulary is install / update / request
+        # (docs: "about the setup URL"; confirmed against community
+        # discussion #134189) — "request" fires when a non-admin asked for
+        # the installation and an org admin has not approved it yet. Nothing
+        # was installed, no repos will appear, and installation_id is
+        # typically absent for this case — so without this branch running
+        # unconditionally, the sync block below is skipped entirely and
+        # falls through to the default "github-installed", a false positive
+        # at exactly the moment the user most needs a true negative (#1084's
+        # own reported symptom: "repos not detected/synced on a new
+        # account"). Runs whether or not installation_id is present.
+        notice = "github-install-requested"
+    else:
+        notice = "github-installed"
+        if installation_id:
+            try:
+                if account_id is None:
+                    sync_installation(
+                        db, request.app.state.settings, installation_id, None
+                    )
+                    notice = "github-synced"
+                else:
+                    result = sync_app_installation_for_account(
+                        db, request.app.state.settings, account_id, installation_id
+                    )
+                    notice = github_sync_notice(result)
+            except Exception as e:
+                print(f"[brnrd] github installation sync failed: {e}")
+                notice = "github-sync-failed"
+    # setup_action itself is dropped from the redirect: grep -rn setup_action
+    # over the repo (before this fix) found only this handler's own two lines
+    # reading it — a param no reader consumes is noise on a URL a human
+    # sees. installation_id stays: routes/repos/+page.svelte forwards it to
+    # refresh().
+    params = {k: v for k, v in {"installation_id": installation_id, "notice": notice}.items() if v}
     # Land on /repos, not the bare dashboard (#1084): /repos is the screen
     # that reads `installations` / `installed_repos` and can act on what a
     # GitHub App install just produced (enable a repo) — the dashboard's own
@@ -310,7 +329,10 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
 def github_installation_sync(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
     account_id = account_id_from_session_cookie(request, db)
     if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+        # Same reasoning as /setup's anonymous-arrival branch: /repos is the
+        # page that can act on a sync outcome, so that's the post-login
+        # landing too, not the bare dashboard.
+        return RedirectResponse(url="/login?next=/repos", status_code=303)
     try:
         result = sync_app_installations_for_account(
             db, request.app.state.settings, account_id
@@ -319,7 +341,11 @@ def github_installation_sync(request: Request, db: Session = Depends(get_db)) ->
     except Exception as e:
         print(f"[brnrd] github manual installation sync failed: {e}")
         notice = "github-sync-failed"
-    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
+    # Land on /repos, not the bare dashboard root (#1084 / this fix's sibling
+    # defect): the root `+page.svelte` reads no `notice` param at all, so
+    # every outcome of a manual re-sync rendered identically — nothing. Same
+    # target and param spelling as /setup below.
+    return RedirectResponse(url=f"/repos?notice={notice}", status_code=303)
 
 
 @router.post("/webhook")
