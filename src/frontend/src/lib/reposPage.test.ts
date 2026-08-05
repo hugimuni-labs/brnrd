@@ -26,13 +26,21 @@ function source(): string {
 // install command.
 test('the "connect this repository" section defers to the dashboard cold-start block by name', () => {
 	const src = source();
+	// Anchored inside the "connect this repository" section specifically —
+	// both `cold-start` (a pre-existing, unrelated comment at "the same
+	// section the cold-start block's own...") and a bare `dashboard` (the
+	// page's own header nav link) already existed in this file, so a loose
+	// substring check on either alone would pass whether or not the actual
+	// defer sentence was ever written. This regex pins the sentence itself.
 	ok(
-		src.includes('cold-start'),
-		'names the cold-start block the reader is sent to for the install rung'
+		/starts one rung earlier, with the install command/.test(src),
+		'names, by content, that the dashboard ladder carries the install rung'
 	);
+	const connectSection = src.match(/id="connect-heading"[\s\S]{0,600}/);
+	ok(connectSection, 'the "connect this repository" heading exists');
 	ok(
-		src.includes("href={resolve('/')}") && src.includes('dashboard'),
-		'links the dashboard by name rather than silently assuming the CLI is present'
+		/dashboard/.test(connectSection![0]) && /href=\{resolve\('\/'\)\}/.test(connectSection![0]),
+		'the defer sentence, naming the dashboard, sits inside that same section'
 	);
 	// One constant: this page must not retype the install command that
 	// already lives in ColdStart.svelte — only defer to it.
