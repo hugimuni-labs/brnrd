@@ -1147,6 +1147,61 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     assert [ev["id"] for ev in events] == [real_followup.stem]
 
 
+def test_pending_event_record_carries_local_attachment_path(tmp_path):
+    """A folded-in event's downloaded attachment gets an openable path.
+
+    #1156: the bytes for a *pending, not-yet-woken* event are already on
+    disk (``protocol.attachments_dir_for_event``) — only the waking event
+    used to have its attachments resolved to paths. A resident that folds
+    in a different pending event via ``event: <id>`` must not be left with
+    only the bare ``attachments:`` filename string.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    src = tmp_path / "photo.jpg"
+    src.write_bytes(b"fake-jpeg-bytes")
+    protocol.create_event(
+        inbox, "telegram", "look at this", attachment_files=[src],
+    )
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert len(events) == 1
+    paths = events[0]["attachment_paths"]
+    assert len(paths) == 1
+    assert Path(paths[0]).read_bytes() == b"fake-jpeg-bytes"
+    assert "attachment_unfetched" not in events[0]
+
+
+def test_pending_event_record_flags_unfetched_attachment(tmp_path):
+    """An announced attachment with no local file renders as unfetched, not absent.
+
+    #1156: ``event_attachment_paths`` silently drops a name with no file on
+    disk — correct for a caller that only wants openable paths, wrong for a
+    caller that needs to tell "no attachment" apart from "announced, never
+    became bytes". A hand-edited/retention-swept event exercises the same
+    path a real never-downloaded attachment (#1154) would.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(inbox, "telegram", "current task")
+    current_id = current.stem
+    ghost = protocol.create_event(inbox, "telegram", "a photo that never arrived")
+    ghost_ev = next(
+        ev for ev in protocol.list_pending(inbox) if ev["id"] == ghost.stem
+    )
+    protocol.update_event_meta(ghost_ev, attachments="ghost.png")
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert len(events) == 1
+    assert events[0]["id"] == ghost.stem
+    assert events[0]["attachment_unfetched"] == ["ghost.png"]
+    assert "attachment_paths" not in events[0]
+
+
 def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     """A respawn event must never be flagged as a duplicate of its parent.
 

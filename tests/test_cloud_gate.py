@@ -2624,6 +2624,69 @@ def test_drain_downloads_attachment_pointers_into_local_files(tmp_path, monkeypa
     assert paths[0].read_bytes() == b"JPEG!"
 
 
+def test_log_raw_attachments_observation_is_type_and_bounded_repr(capsys):
+    """#1156 §2 — the measurement #1155 named and did not build: every
+    inbound event's raw ``attachments`` field, as it actually arrived on
+    the wire, not the parser's inference about it. Type name plus a
+    size-bounded repr, so an oversized or hostile payload can't blow up
+    the log line."""
+    cloud._log_raw_attachments_observation(
+        {"event_id": "evt-9", "attachments": "x" * 500}
+    )
+    out = capsys.readouterr().out
+    assert "evt-9" in out
+    assert "type=str" in out
+    # Bounded: the 500-char value must not appear in full.
+    assert "x" * 500 not in out
+    assert len(out) < 400
+
+
+def test_log_raw_attachments_observation_fires_even_without_attachments(capsys):
+    """Logged for every inbound event, not only ones carrying attachments —
+    the absence of the field is itself part of the measurement."""
+    cloud._log_raw_attachments_observation({"event_id": "evt-plain"})
+    out = capsys.readouterr().out
+    assert "evt-plain" in out
+    assert "type=NoneType" in out
+
+
+def test_drain_logs_raw_attachment_wire_shape_for_every_event(tmp_path, monkeypatch, capsys):
+    """#1156 §2 wired into the real ingest loop: the next occurrence of a
+    drop like #1154 must leave a trace of what actually arrived, not just
+    an inference about it after the fact."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_download_attachment", lambda *a, **kw: False)
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "repo_id": pid,
+            "body": "look at this",
+            "source": "telegram",
+            "reply_to": {"platform": "telegram", "chat_id": "555"},
+            "attachments": [
+                {"file_id": "photo-big", "filename": "photo.jpg", "kind": "photo"}
+            ],
+        },
+        headers=acc,
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    out = capsys.readouterr().out
+    assert "attachments wire shape: type=list" in out
+    assert "photo.jpg" in out
+
+
 def test_attachment_fetch_failure_annotates_body(tmp_path, monkeypatch):
     """#525 — a stale telegram file link degrades to an honest annotation
     (#553-style): never silent, never fabricated bytes."""

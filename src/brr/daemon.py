@@ -4764,7 +4764,22 @@ def _emit_preserved_containers(
 
 
 def _pending_event_record(ev: dict) -> dict[str, object]:
-    """Return the agent-facing JSON shape for one pending event."""
+    """Return the agent-facing JSON shape for one pending event.
+
+    A folded-in event's downloaded attachments live on disk right now
+    (``protocol.attachments_dir_for_event``), keyed to the event's own
+    lifecycle — but until this the only call sites for
+    ``event_attachment_paths`` resolved the *waking* event, so a resident
+    that folded in a different pending event via ``event: <id>`` saw only
+    the raw ``attachments:`` filename string, with no path to open it by.
+    Resolve it here, once, so every renderer of this record (the daemon
+    prompt's inbox block, ``inbox.json``) gets the same answer. When names
+    were announced but none resolved to a file — retention swept it, a
+    hand-edited event, or (still live, #1156 §2) a shape the ingest gate
+    could not parse in the first place — ``attachment_unfetched`` carries
+    the names so a renderer can say "announced, not fetched" instead of
+    rendering the same nothing as "no attachment at all".
+    """
     body = str(ev.get("body") or "")
     summary = " ".join(body.split())
     if len(summary) > 240:
@@ -4776,6 +4791,13 @@ def _pending_event_record(ev: dict) -> dict[str, object]:
         out[key] = value
     out["summary"] = summary
     out["body"] = body
+    names = protocol.event_attachment_names(ev)
+    if names:
+        paths = protocol.event_attachment_paths(ev)
+        if paths:
+            out["attachment_paths"] = [str(p) for p in paths]
+        else:
+            out["attachment_unfetched"] = names
     return out
 
 
