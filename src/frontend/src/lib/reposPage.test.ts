@@ -74,6 +74,7 @@ test('the sync control is not labelled "sync"', () => {
 // backend already serves for exactly this and that no component read yet.
 test('the sync control is gated on github_sync_configured', () => {
 	const src = source();
-	const guardThenForm = /\{#if data\.github_sync_configured\}[\s\S]{0,1200}?action="\/api\/github\/sync"/;
+	const guardThenForm =
+		/\{#if data\.github_sync_configured\}[\s\S]{0,1200}?action="\/api\/github\/sync"/;
 	ok(guardThenForm.test(src), 'the sync form sits inside a github_sync_configured guard');
 });

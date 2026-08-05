@@ -110,7 +110,10 @@ test('the block survives an enabled repo until a daemon has ever paired', async 
 	const html = await renderColdStart([repo({ daemon_status: 'missing' })]);
 	ok(html.includes('the cold start'), 'an enabled repo with no daemon is still the cold start');
 	ok(html.includes('nothing is paired yet'));
-	ok(html.includes('pair the daemon'), 'the pairing step survives — this is exactly what used to vanish');
+	ok(
+		html.includes('pair the daemon'),
+		'the pairing step survives — this is exactly what used to vanish'
+	);
 	ok(html.includes('brnrd account connect'), 'the pairing command still renders');
 	ok(html.includes('— done'), 'the enable-a-repository step reads done, not repeated');
 });
@@ -129,8 +132,14 @@ test('the ladder reads install → pair → enable, matching /repos rung order',
 	const pairAt = html.indexOf('pair the daemon');
 	const enableAt = html.indexOf('enable a repository');
 	ok(installAt >= 0 && pairAt >= 0 && enableAt >= 0, 'all three rungs render');
-	ok(installAt < pairAt, 'install precedes pair — the CLI is a prerequisite to the pairing command');
-	ok(pairAt < enableAt, 'pair precedes enable — /repos itself runs the pairing command before the App install');
+	ok(
+		installAt < pairAt,
+		'install precedes pair — the CLI is a prerequisite to the pairing command'
+	);
+	ok(
+		pairAt < enableAt,
+		'pair precedes enable — /repos itself runs the pairing command before the App install'
+	);
 });
 
 // The failure mode the old pin was actually guarding, restated correctly:

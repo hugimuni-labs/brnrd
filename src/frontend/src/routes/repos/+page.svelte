@@ -484,11 +484,11 @@
 					connect this repository
 				</h2>
 				<p class="mt-2 max-w-2xl text-sm text-stone-400">
-					Two steps, in order: run the pairing command from a checkout, then finish on GitHub.
-					This assumes <code class="text-stone-400">brnrd</code> is already on that machine — no
-					CLI yet? The
-					<a href={resolve('/')} class="text-sky-400 underline hover:text-sky-300">dashboard</a
-					>'s cold-start block starts one rung earlier, with the install command.
+					Two steps, in order: run the pairing command from a checkout, then finish on GitHub. This
+					assumes <code class="text-stone-400">brnrd</code> is already on that machine — no CLI yet?
+					The
+					<a href={resolve('/')} class="text-sky-400 underline hover:text-sky-300">dashboard</a>'s
+					cold-start block starts one rung earlier, with the install command.
 				</p>
 
 				<div class="mt-4">
