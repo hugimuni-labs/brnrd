@@ -4245,3 +4245,177 @@ def test_a_quiet_boundary_keeps_the_vitals_and_drops_the_wallpaper():
     # Wallpaper does not: a run-long constant is neither news nor a debt.
     assert "wake 40 KB" in loud
     assert "wake 40 KB" not in quiet
+
+
+# ── The in-process subagent boundary (#1095) ─────────────────────────────
+#
+# The payloads below are *captured*, not invented: dumped from live claude
+# `PostToolBatch` hook fires on 2026-08-05 (run-260805-1041-c1b3), one from
+# the resident's own boundary and one from an `Agent`-tool subagent's, with
+# the ids shortened. They are the evidence the discriminator rests on — every
+# other field, `session_id` and `transcript_path` included, was byte-identical
+# across the two, because the child shares the parent's session.
+
+_PARENT_PAYLOAD = {
+    "cwd": "/home/gurio/src/misc/brr",
+    "effort": {"level": "high"},
+    "hook_event_name": "PostToolBatch",
+    "permission_mode": "bypassPermissions",
+    "prompt_id": "e738ebed-c29b-4e74-9397-fb9d3a28f305",
+    "session_id": "46435b5d-b82e-4fb6-9a2c-b3f382c0bd44",
+    "tool_calls": [],
+    "transcript_path": "/home/gurio/.claude/projects/x/46435b5d.jsonl",
+}
+
+_SUBAGENT_PAYLOAD = {
+    "agent_id": "aaa08adde62eae409",
+    "agent_type": "Explore",
+    "cwd": "/home/gurio/src/misc/brr",
+    "hook_event_name": "PostToolBatch",
+    "permission_mode": "bypassPermissions",
+    "prompt_id": "e738ebed-c29b-4e74-9397-fb9d3a28f305",
+    "session_id": "46435b5d-b82e-4fb6-9a2c-b3f382c0bd44",
+    "tool_calls": [],
+    "transcript_path": "/home/gurio/.claude/projects/x/46435b5d.jsonl",
+}
+
+
+def _run_env(tmp_path):
+    """`_env` plus a run directory — the latch and transcript need one."""
+    env = _env(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(exist_ok=True)
+    env["BRR_BOOT_SCORE"] = str(run_dir / "boot-score.json")
+    return env
+
+
+def test_the_resident_is_never_mistaken_for_a_child(tmp_path):
+    """The discriminator, against both captured payloads.
+
+    The expensive failure is the *false positive*: a resident boundary read as
+    a subagent's would starve the run of its own correspondence silently, and
+    a starved resident renders identically to a quiet one.
+    """
+    assert hooks.subagent_identity(_PARENT_PAYLOAD) is None
+    assert hooks.subagent_identity({}) is None
+    assert hooks.subagent_identity({"tool_calls": []}) is None
+
+    identity = hooks.subagent_identity(_SUBAGENT_PAYLOAD)
+    assert identity == {
+        "agent_id": "aaa08adde62eae409",
+        "agent_type": "Explore",
+    }
+
+
+def test_a_subagent_boundary_carries_none_of_the_parents_correspondence(tmp_path):
+    """#1095: found live when a worker read the maintainer's chat messages."""
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "summary": "merge it",
+        "body": "merge the PR and deploy the batch",
+        "cloud_user": "Gurio", "cloud_username": "StasisRush",
+    }])
+    env = _run_env(tmp_path)
+
+    parent, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, json.dumps(_PARENT_PAYLOAD), env)
+    parent_text = parent["hookSpecificOutput"]["additionalContext"]
+    assert "merge the PR and deploy the batch" in parent_text
+    assert "evt-2" in parent_text
+
+    child, code = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, json.dumps(_SUBAGENT_PAYLOAD), env)
+    assert code == 0
+    child_text = child["hookSpecificOutput"]["additionalContext"]
+    # Not the message, not the sender, not the event, not the obligation.
+    for leak in ("merge the PR", "evt-2", "Gurio", "StasisRush",
+                 "pending", "event:", "note:"):
+        assert leak not in child_text, leak
+    # What it does carry is itself.
+    assert "Explore" in child_text
+    assert "run-1" in child_text
+
+
+def test_a_subagent_boundary_never_spends_the_parents_state(tmp_path):
+    """A limb reads and writes none of the dispatcher's memory.
+
+    The seen-ledger, the once-per-run latches and the change token are all
+    per-*run* memory held in one file. A child consuming them would suppress
+    the parent's next injection — the same defect one layer quieter than the
+    leak.
+    """
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "summary": "hi", "body": "hi",
+    }])
+    env = _run_env(tmp_path)
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(_PARENT_PAYLOAD), env)
+    state_path = tmp_path / hooks.HOOK_STATE_NAME
+    before = state_path.read_bytes()
+    flush_before = (tmp_path / hooks.FLUSH_SIGNAL_NAME).read_bytes()
+
+    for _ in range(3):
+        hooks.run_hook(
+            hooks.PHASE_POST_TOOL, json.dumps(_SUBAGENT_PAYLOAD), env)
+
+    assert state_path.read_bytes() == before
+    # Nor does it flush the daemon's portal on the parent's behalf.
+    assert (tmp_path / hooks.FLUSH_SIGNAL_NAME).read_bytes() == flush_before
+
+
+def test_the_child_names_itself_once_then_falls_silent(tmp_path):
+    """An ambient line that repeats every boundary is the noise class."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _run_env(tmp_path)
+
+    first, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, json.dumps(_SUBAGENT_PAYLOAD), env)
+    assert "subagent" in first["hookSpecificOutput"]["additionalContext"]
+
+    second, _ = hooks.run_hook(
+        hooks.PHASE_POST_TOOL, json.dumps(_SUBAGENT_PAYLOAD), env)
+    assert second == {} or not second.get("hookSpecificOutput", {}).get(
+        "additionalContext")
+
+    # A *different* limb is a different addressee and gets its own greeting.
+    sibling = dict(_SUBAGENT_PAYLOAD, agent_id="bbb11ceef", agent_type="Plan")
+    other, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(sibling), env)
+    assert "Plan" in other["hookSpecificOutput"]["additionalContext"]
+
+
+def test_a_child_can_never_be_blocked_at_the_parents_closeout(tmp_path):
+    """A child owes the parent's correspondents nothing, so it cannot be held."""
+    _portal(tmp_path, token="t1", pending=2,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    env = _run_env(tmp_path)
+
+    child, code = hooks.run_hook(
+        hooks.PHASE_STOP, json.dumps(_SUBAGENT_PAYLOAD), env)
+    assert code == 0
+    assert child.get("decision") != "block"
+
+    # And the parent's own block is still live — the child did not spend it.
+    parent, _ = hooks.run_hook(
+        hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    assert parent["decision"] == "block"
+
+
+def test_a_childs_boundary_is_tagged_and_left_out_of_the_runs_verdict(tmp_path):
+    """`boundaries.json` answers *did this run end over an objection*."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _run_env(tmp_path)
+    run_dir = tmp_path / "run"
+
+    hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    hooks.run_hook(hooks.PHASE_STOP, json.dumps(_SUBAGENT_PAYLOAD), env)
+
+    transcript = run_dir / hooks.BOUNDARIES_NAME
+    records = [json.loads(line) for line in
+               transcript.read_text(encoding="utf-8").splitlines() if line]
+    tagged = [r for r in records if r.get("subagent")]
+    assert len(tagged) == 1
+    assert tagged[0]["subagent"]["agent_type"] == "Explore"
+
+    summary = hooks.derive_boundaries_summary(transcript)
+    # The child's Stop is later in file order; it must not become the run's.
+    assert summary["stops"] == 1
+    assert summary["total"] == len(records) - 1
