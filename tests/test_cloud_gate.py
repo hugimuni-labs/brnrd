@@ -3201,3 +3201,110 @@ def test_schedule_activity_omits_links_when_nothing_is_served(tmp_path, monkeypa
     record = cloud._schedule_activity_records(brr_dir)[0]
 
     assert record["links"] == {}
+
+
+# ── #1154: an announced attachment that never becomes bytes ───────────────────
+#
+# The measured failure: four screenshots reached the resident as
+# ``attachments: "photo.jpg"`` with no local file anywhere on the machine, no
+# error, and no annotation. The cause was a *filter* standing in for a parser —
+# ``[p for p in (ev.get("attachments") or []) if isinstance(p, dict)]`` — which
+# answers "a shape I don't recognise" with ``[]``, the same value it returns for
+# "no attachments at all". Every surface a reader can see rendered the drop
+# identically to a no-op.
+
+
+def test_a_bare_string_attachment_field_is_one_attachment_not_zero():
+    """The shape the wire actually showed, and the one iteration destroyed.
+
+    ``"photo.jpg"`` is iterable, so the old filter walked its *characters* and
+    kept none of them — zero pointers, zero downloads, silence.
+    """
+    from brr.gates import cloud
+
+    assert cloud._attachment_names("photo.jpg") == ["photo.jpg"]
+    assert cloud._attachment_names(b"photo.jpg") == ["photo.jpg"]
+
+
+def test_attachment_names_accepts_every_shape_that_carries_a_count():
+    """The bytes are fetched by *index*, so a name is all a pointer owes us."""
+    from brr.gates import cloud
+
+    assert cloud._attachment_names([{"filename": "a.png"}, {"filename": "b.png"}]) == [
+        "a.png", "b.png",
+    ]
+    assert cloud._attachment_names(["a.png", "b.png"]) == ["a.png", "b.png"]
+    # A shape with no name in it still has a *count*, which is the part that
+    # decides whether the download loop runs at all.
+    assert cloud._attachment_names([1, 2, 3]) == [
+        "attachment-00", "attachment-01", "attachment-02",
+    ]
+    # A path is never smuggled through a name.
+    assert cloud._attachment_names(["../../etc/passwd"]) == ["passwd"]
+
+
+def test_no_attachments_and_an_unreadable_shape_are_different_answers():
+    """The whole defect in one assertion.
+
+    ``[]`` means *this event had none*; ``None`` means *this event announced
+    some and I could not count them*. Collapsing the second into the first is
+    what made a drop invisible — so a test that only checked the happy shapes
+    would have gone green on the bug it exists to prevent.
+    """
+    from brr.gates import cloud
+
+    assert cloud._attachment_names(None) == []
+    assert cloud._attachment_names([]) == []
+    assert cloud._attachment_names(0) == []
+
+    assert cloud._attachment_names(42) is None
+    assert cloud._attachment_names({"unexpected"}) is None
+
+
+def test_an_unreadable_shape_is_announced_in_the_body(tmp_path):
+    """The durable half: the next shape change reports itself.
+
+    Half one fixes the shape we measured. This is the half that matters — the
+    annotation names the observed type and value, so the parser for the *next*
+    shape can be written from the message the resident was handed instead of
+    from another round trip to the wire.
+    """
+    from brr.gates import cloud
+
+    files, failed, unrecognised = cloud._ingest_event_attachments(
+        {"brnrd_url": "https://example.invalid", "token": "t"},
+        {"event_id": "ev_x", "attachments": 42},
+        tmp_path,
+    )
+    assert files == [] and failed == []
+    assert unrecognised is not None and "int" in unrecognised and "42" in unrecognised
+
+    body = cloud._annotate_failures("look at this", [], unrecognised)
+    assert "look at this" in body
+    assert "could not read" in body
+    assert "The bytes did not arrive" in body
+    # An honest annotation must not read as "there were no images" — that is
+    # the reading that cost two days.
+    assert "int: 42" in body
+
+
+def test_a_readable_shape_annotates_nothing(tmp_path, monkeypatch):
+    """The guard's own sanity check: silence stays available for the good path.
+
+    Without this, an annotation bug that fired on *every* event would leave the
+    test above green while making the body unreadable.
+    """
+    from brr.gates import cloud
+
+    monkeypatch.setattr(
+        cloud, "_download_attachment",
+        lambda base, token, eid, i, dest: (dest.write_bytes(b"x"), True)[1],
+    )
+    files, failed, unrecognised = cloud._ingest_event_attachments(
+        {"brnrd_url": "https://example.invalid", "token": "t"},
+        {"event_id": "ev_x", "attachments": "photo.jpg"},
+        tmp_path,
+    )
+    assert [p.name for p in files] == ["photo.jpg"]
+    assert failed == [] and unrecognised is None
+    assert cloud._annotate_failures("hi", failed, unrecognised) == "hi"
