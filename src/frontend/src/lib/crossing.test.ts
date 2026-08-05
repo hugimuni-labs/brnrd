@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildCrossingIndex, crossingCells, crossingThreads } from './crossing.ts';
-import { THREAD_SCALE, threadColor } from './statusPalette.ts';
+import { THREAD_SCALE, threadColor, threadColorFor } from './statusPalette.ts';
 import type { WarpLayer } from './warp.ts';
 
 function layer(callSign: string, items: { headline: string; taken: string[] }[]): WarpLayer {
@@ -81,12 +81,43 @@ test('an unwelded run draws no strip at all — not a row of dark ticks', () => 
 // hovering — his read: "nice to see which one(s) is / are being worked … but
 // the current version doesn't convey that correctly."
 
-test('a thread wears the hue of its place in the authored order', () => {
+test('a thread wears the hue of its call sign, not of its seat', () => {
+	// #1029, his question: "what to do when we add/split/merge layers?" Under
+	// the old rule the hue was `threadColor(index)` — a seat number — so any
+	// edit to the warp repainted every layer below the edit. Colour named a
+	// position, and this canvas's rule is *position orders, colour names*.
 	const cells = crossingCells(crossingThreads(LAYERS), ['the-post']);
 	assert.deepEqual(
 		cells.map((cell) => cell.color),
-		[threadColor(0), threadColor(1), threadColor(2)]
+		crossingThreads(LAYERS).map((callSign) => threadColorFor(callSign))
 	);
+});
+
+test('inserting a layer leaves every other layer its colour', () => {
+	// The whole point. Under the seat rule this assertion is false for every
+	// layer after the insertion point.
+	const before = new Map(
+		crossingCells(crossingThreads(LAYERS), crossingThreads(LAYERS)).map((c) => [
+			c.callSign,
+			c.color
+		])
+	);
+	const grown = [{ ...LAYERS[0], callSign: 'a-new-band' }, ...LAYERS];
+	for (const cell of crossingCells(crossingThreads(grown), crossingThreads(grown))) {
+		if (before.has(cell.callSign)) assert.equal(cell.color, before.get(cell.callSign));
+	}
+});
+
+test('reordering the warp changes nothing visually — order is a different channel', () => {
+	const forward = crossingCells(crossingThreads(LAYERS), crossingThreads(LAYERS));
+	const reversed = [...LAYERS].reverse();
+	const back = new Map(
+		crossingCells(crossingThreads(reversed), crossingThreads(reversed)).map((c) => [
+			c.callSign,
+			c.color
+		])
+	);
+	for (const cell of forward) assert.equal(back.get(cell.callSign), cell.color);
 });
 
 test('the hue rides the cell, so a legend and a strip cannot drift apart', () => {
@@ -100,9 +131,19 @@ test('the hue rides the cell, so a legend and a strip cannot drift apart', () =>
 	);
 });
 
-test('a ninth thread reuses the first hue rather than inventing one', () => {
-	// A generated colour would be a hue nobody chose; the order still
-	// disambiguates, and wrapping is the honest failure.
+test('a ninth thread reuses an existing hue rather than inventing one', () => {
+	// A generated colour would be a hue nobody chose; position still
+	// disambiguates on screen, and collision is the honest failure. That
+	// argument is unchanged by #1029 — only the *assignment* stopped depending
+	// on the seat, so the ramp accessor keeps wrapping and every call sign
+	// still lands on one of the eight authored hues.
 	assert.equal(threadColor(THREAD_SCALE.length), THREAD_SCALE[0]);
 	assert.equal(threadColor(THREAD_SCALE.length + 2), THREAD_SCALE[2]);
+	for (const sign of ['the-loom', 'the-post', 'adoption', 'legal', 'a-ninth-band']) {
+		assert.ok(THREAD_SCALE.includes(threadColorFor(sign) as (typeof THREAD_SCALE)[number]));
+	}
+});
+
+test('a call sign always gets the same hue, in every process', () => {
+	assert.equal(threadColorFor('the-loom'), threadColorFor('the-loom'));
 });
