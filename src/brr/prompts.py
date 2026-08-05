@@ -2158,11 +2158,11 @@ def _collect_preamble_contracts(
             bytes=_rendered_bytes(text),
         )
 
-    # Preamble: run.md / worker.md
+    # Preamble: run.md / strand.md
     entries.append(_file_entry(
-        "worker.md" if is_worker else "run.md",
+        "strand.md" if is_worker else "run.md",
         block_key="worker-preamble" if is_worker else "run-preamble",
-        label="Worker preamble (worker.md)" if is_worker
+        label="Strand preamble (strand.md)" if is_worker
               else "Operational preamble (run.md)",
         authority=AUTHORITY_CONTRACT,
     ))
@@ -2282,7 +2282,7 @@ def _build_orientation(
     # twelve of the user's messages to the resident, in the resident's thread,
     # with no context for any of them.
     #
-    # ``worker.md`` states plainly that the spawning conversation "is not yours
+    # ``strand.md`` states plainly that the dispatching conversation "is not yours
     # to hold or extend" — and it states it in *prose*, *below* this list. The
     # kernel overrode it. That is the whole thesis of the boot work confirmed
     # from the wrong end: **the imperative action-list at the hot slot is what
@@ -3099,7 +3099,7 @@ def _preamble_parts(repo_root: Path, *, worker: bool) -> list[tuple[str, str]]:
     string is precisely what made that impossible.
     """
     key = "worker-preamble" if worker else "run-preamble"
-    parts = [(key, read_prompt("worker.md" if worker else "run.md", repo_root))]
+    parts = [(key, read_prompt("strand.md" if worker else "run.md", repo_root))]
     # Order mirrors read/authority: how you write (weave), you having written
     # (register — resident only), then who drives (daemon-substrate). Kept in
     # lockstep with :func:`_collect_preamble_contracts`, which registers the same
@@ -3126,7 +3126,7 @@ def _glue_preamble(parts: list[str]) -> str:
 
 
 def _build_worker_preamble(repo_root: Path) -> str:
-    """Read ``worker.md`` plus the working-register contract (``weave.md``).
+    """Read ``strand.md`` plus the working-register contract (``weave.md``).
 
     The slim counterpart to :func:`_read_preamble_with_weave`: a worker wake
     (B4, ``kb/design-director-loop.md`` §orchestrator/worker) gets the bounded
@@ -3135,7 +3135,7 @@ def _build_worker_preamble(repo_root: Path) -> str:
     which apply to a bounded handoff. ``weave.md`` still rides: it governs
     *how* any wake writes to its working surfaces, resident or worker alike.
     """
-    preamble = read_prompt("worker.md", repo_root)
+    preamble = read_prompt("strand.md", repo_root)
     weave = read_prompt("weave.md", repo_root)
     if weave.strip():
         preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
@@ -3209,7 +3209,7 @@ def build_daemon_prompt(
     a one-shot has no daemon to fire schedules or drain an outbox.
 
     ``worker=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
-    swaps in the slim worker stack: ``worker.md`` + ``weave.md`` instead of
+    swaps in the slim child stack: ``strand.md`` + ``weave.md`` instead of
     the resident's ``run.md``, and the resident-only injected blocks
     (identity core, dominion digest, work surface, runner policy, pitfalls,
     knowledge sources, kb health, introspection) are

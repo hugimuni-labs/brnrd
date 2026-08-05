@@ -40,6 +40,27 @@ editor session ⇒ none of this applies.
   - quota bends `every:` cadence (stretch when low, pause when critical) —
     never an `at:` deadline, never a reply someone is waiting on
 
+### The other limb — your Shell's own subagent
+
+Your Shell may hand you an in-process subagent (claude's `Agent` tool). It is
+**not** a brnrd verb and the daemon does not own it, which is the whole of what
+you need to know about it:
+
+- **it dies when your stream ends.** No completion event, no notice, no relic —
+  a finished, uncommitted diff in its worktree is simply lost (#996, twice in
+  one run). If a closeout could plausibly arrive first, `spawn:` instead.
+- **its boundaries are its own** (#1095). brnrd recognises a subagent's hook
+  payload and gives it its own state and nothing of yours: no pending
+  events, no correspondence, no closeout obligations. One message to one run
+  must not make every limb of that run act on it.
+- **it cannot publish.** No branch, no outbox, no `.pr`, no kb write that
+  survives. Its return value is text, to you, inside this thought.
+
+So: read-only fan-out, bounded lookups, anything whose value is an *answer* —
+the subagent, gladly and in parallel. Anything whose value is a *diff* — a
+strand. `run.md` §Orchestration owns the judgement; this block only says which
+limb the daemon can account for.
+
 ### Delivery portals
 
 The bundle's Delivery contract = this run's live *values*; this block = the
@@ -61,7 +82,7 @@ and the reply are yours.
   - the Stop boundary fires only on a run about to end with *nothing*
     communicated anywhere. A mid-run reply buys no warning about a closeout
     landing in a file, and nobody re-runs you to extract a sentence.
-  - a worker's terminal stream is its return value, collected by the
+  - a strand's terminal stream is its return value, collected by the
     spawning parent along the dispatch edge — not a chat message (#743)
   - `terminal_route` recorded per run: `gate-sole` · `gate-extra` ·
     `dispatch-edge` · `duplicate` · `undeliverable`. `gate-sole` = a gate
@@ -78,9 +99,9 @@ and the reply are yours.
   | `note: <event-or-short-id>` | retire a pending event deliberately, **no message goes out** | the `noted` close. Economy governs: answering a burst, one `event:` reply carries the substance and `note:` clears the rest — but silence never auto-drops a correspondent's question; a note is a decision, not a default. Body text is ignored (logged, never delivered); unknown / non-pending id ⇒ refused → `notices` |
   | `gate: <name>` | send with no waiting event | `gate: forge` is the explicit PR handoff (`head` / `base` / `title`; body = PR body); diffense may supply title/body from a checked pack but does not own PR creation. **A close keyword closes from a PR body exactly as from a commit message** — same rule, both channels: at line start, nothing after the ref but more refs. The drain checks it and refuses to `notices`; a PR opened by hand is on no such path ⇒ `brnrd close-check <body-file>` first. Quoting a bad line? Mask the digits (`Closes #NNN`) |
   | `respawn: true` | park a handoff to another run | name `shell:` / `core:`, or `quality: escalate` for the stronger local Core |
-  | `spawn: true` | a *concurrent* worker-stack child for bounded independent work | **capacity:** `portal-state.json` → `resources.coexisting_runs.spawn_pool` — **read it, never memorise a number**. **cost:** `shell:` / `core:` name the child's Runner; unset ⇒ the config default, which is the *strongest* local Core — downshift for tedium, never by omission. **contract:** `branch:` / `report:` declare what the child will publish — declared, the completion check indicts a mismatch; scanned out of your prose, it can only advise (#640). **identity:** `title:` — one line, the label its presence row wears from the first heartbeat, so a supervised fleet reads as N distinct children instead of N blank rows until each names itself. Completion returns as a pending event; the parent still owns the original and answers it with `event: <id>`. Spawning alone clears nothing. The *when* is `run.md` §Orchestration — a many-themed ask decomposes by default, and discovered work re-arms the trigger mid-run; this row is only the limb |
-  | `stop: <run-or-event-id>` | kill a child *this run* dispatched | wrong contract, superseded, runaway. Ownership-checked: queued ⇒ cancelled · running ⇒ killed, finalizes `stopped` (partial work salvaged; completion note returns as a pending event). Refusals → `notices` |
-  | `to: <run-or-event-id>` | mid-flight steer to a child this run dispatched | lands as an event only that worker's `inbox.json` / portal-state shows; the child folds it in — not a new contract, not for `event:`-addressing; unconsumed ⇒ dies with the child. Workers are thread-isolated — steer through this verb, never prose in the thread |
+  | `spawn: true` | a *concurrent* daemon-owned **strand** for bounded independent work — the limb that outlives you | **capacity:** `portal-state.json` → `resources.coexisting_runs.spawn_pool` — **read it, never memorise a number**. **cost:** `shell:` / `core:` name the strand's Runner; unset ⇒ the config default, which is the *strongest* local Core — downshift for tedium, never by omission. **contract:** `branch:` / `report:` declare what the strand will publish — declared, the completion check indicts a mismatch; scanned out of your prose, it can only advise (#640). **identity:** `title:` — one line, the label its presence row wears from the first heartbeat, so a supervised fleet reads as N distinct strands instead of N blank rows until each names itself. Completion returns as a pending event; the parent still owns the original and answers it with `event: <id>`. Spawning alone clears nothing. The *when* is `run.md` §Orchestration — a many-themed ask decomposes by default, and discovered work re-arms the trigger mid-run; this row is only the limb |
+  | `stop: <run-or-event-id>` | kill a strand *this run* dispatched | wrong contract, superseded, runaway. Ownership-checked: queued ⇒ cancelled · running ⇒ killed, finalizes `stopped` (partial work salvaged; completion note returns as a pending event). Refusals → `notices` |
+  | `to: <run-or-event-id>` | mid-flight steer to a strand this run dispatched | lands as an event only that strand's `inbox.json` / portal-state shows; the strand folds it in — not a new contract, not for `event:`-addressing; unconsumed ⇒ dies with the strand. Strands are thread-isolated by construction — a correspondent's message never reaches one, so steer through this verb, never prose in the thread |
   | `runner_policy: propose` | park a policy change for operator approval | |
 
 - **inbox.json / portal-state.json** — daemon-owned, heartbeat-refreshed;
@@ -88,7 +109,7 @@ and the reply are yours.
   - re-read at plan / todo boundaries + once immediately before a terminal
     closeout; `inbox.json` misses messages landing after the runner has
     already returned
-  - Own every pending event: fold it in | `spawn:` it (worker capacity and
+  - Own every pending event: fold it in | `spawn:` it (strand capacity and
     quota are healthy) | defer for a named resource / priority / dependency /
     authority reason
   - `notices` = directives brnrd *refused or dropped*; a refused file is
@@ -123,7 +144,7 @@ and the reply are yours.
 - **linger** — conversation clearly live ⇒ deliver via outbox, write
   `.keepalive`, poll `portal-state.json`, backoff 30s → cap 240s.
   - a same-thread follow-up folds in and resets the backoff
-  - any *other* pending event ends passive waiting — `spawn:` it when worker
+  - any *other* pending event ends passive waiting — `spawn:` it when strand
     capacity and quota are healthy, or defer with a reason; the queue never
     starves
   - horizon ~10–15m past last delivery; longer vigils are scheduled wakes
