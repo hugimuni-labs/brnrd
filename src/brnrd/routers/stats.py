@@ -57,7 +57,21 @@ def public_stats(request: Request, db: Session = Depends(get_db)) -> dict[str, A
     if _cache["payload"] is not None and now - _cache["at"] < _CACHE_TTL_S:
         return _cache["payload"]
     settings = request.app.state.settings
-    accounts = db.execute(select(func.count()).select_from(Account)).scalar_one()
+    # `deleted_at` is the Art-17 tombstone, not a hard delete: `delete_account`
+    # keeps the row so the retained billing ledger's FK stays valid, scrubs the
+    # identity, and frees `github_id` (rewriting it to a tombstone value) so the
+    # same person can sign up again. Counting rows therefore counted erasures —
+    # a delete-and-recreate cycle incremented this public number by one,
+    # permanently, and the landing page called the result "accounts".
+    #
+    # A count is a claim about a population, and this one has to state which
+    # population it means: living accounts. The tombstone is the only fact that
+    # separates them, so the filter belongs at the count, not at the caller.
+    accounts = db.execute(
+        select(func.count())
+        .select_from(Account)
+        .where(Account.deleted_at.is_(None))
+    ).scalar_one()
     supporters = db.execute(
         select(func.count())
         .select_from(Subscription)

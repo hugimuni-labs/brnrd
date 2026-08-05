@@ -52,6 +52,54 @@ def test_public_stats_counts_accounts():
     assert payload["supporter_seats_total"] == 2
 
 
+def test_public_stats_does_not_count_erased_accounts():
+    """The landing counter names living accounts, not rows.
+
+    Driven through the real deletion endpoint, not a hand-set ``deleted_at``:
+    ``delete_account`` keeps the row (the retained billing ledger's FK needs
+    it) and rewrites ``github_id`` to a tombstone value, which frees the
+    unique constraint so the same person can sign up again. So one
+    delete-and-recreate cycle leaves two rows behind one living account —
+    exactly the shape that made the public number climb during a user test
+    and made it unable to answer "is that a new user?".
+    """
+    client = _client()
+    headers = brnrd_account_headers(
+        client.app, github_id="7", login="octocat", email="octocat@example.com"
+    )
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 1
+
+    assert (
+        client.post(
+            "/v1/accounts/delete",
+            json={"confirm_login": "octocat"},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+
+    # The row survives — this is the fact the count has to see past, and
+    # asserting it here is what keeps the test honest if erasure ever
+    # becomes a hard delete and the filter turns into a silent no-op.
+    from brnrd.models import Account as _Account
+
+    with client.app.state.SessionLocal() as db:
+        assert db.query(_Account).count() == 1
+
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 0
+
+    # And the same person signing up again is one account, not three rows.
+    brnrd_account_headers(
+        client.app, github_id="8", login="octocat", email="octocat@example.com"
+    )
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 1
+    with client.app.state.SessionLocal() as db:
+        assert db.query(_Account).count() == 2
+
+
 def test_public_stats_caches_between_calls():
     client = _client()
     assert client.get("/v1/stats/public").json()["accounts"] == 0
