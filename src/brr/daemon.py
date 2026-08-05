@@ -10224,6 +10224,13 @@ NOT_PRESERVED: dict[str, str] = {
         "archive subdirectory name (menus.STORE_NAME), never a file in a "
         "run's own outbox"
     ),
+    hooks_mod.SUBAGENT_LATCH_DIR_NAME: (
+        "not a file in the outbox at all — the per-agent first-boundary "
+        "latch subdirectory under the daemon's own run scratch dir "
+        "(hooks._subagent_latch), same class as boundaries.jsonl; and its "
+        "contents are one timestamp per in-process subagent, which the "
+        "tagged boundary records already carry"
+    ),
 }
 
 
