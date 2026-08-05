@@ -3796,6 +3796,15 @@ def compute_neutral(
         # otherwise be told "something broke" at every boundary of the
         # debugging, which is the habituation this whole change exists to
         # avoid; the interesting moment is clean → broken, once.
+        # Count subagent dispatches as they happen, so the Stop boundary can
+        # tell whether the discriminator this run depends on actually fired
+        # (see `_discriminator_drift_line`). Cheap, and the only place the
+        # parent ever sees the dispatch.
+        dispatched = _count_subagent_dispatches(payload)
+        if dispatched:
+            state[SUBAGENT_DISPATCH_KEY] = (
+                int(state.get(SUBAGENT_DISPATCH_KEY) or 0) + dispatched
+            )
         surprise = _tool_surprise(payload) if mood else None
         was_surprised = bool(state.get("mood_surprised"))
         edge = surprise if (surprise and not was_surprised) else None
@@ -3939,6 +3948,11 @@ def compute_neutral(
             if reason is not None:
                 block = True
                 block_reason = reason
+
+        # Last: did the seam this run's isolation rests on actually fire?
+        drift = _discriminator_drift_line(ctx, state)
+        if drift is not None:
+            inject = f"{inject}\n{drift}" if inject else drift
 
     # Commit the seen ledger for exactly what this boundary rendered: every
     # rendered delta (bar, seed, closeout) carries the whole pending list, so
@@ -4201,6 +4215,81 @@ def install_hook_config(
 
 #: Per-run directory of first-boundary latches, one file per `agent_id`.
 SUBAGENT_LATCH_DIR_NAME = "subagents"
+
+#: Hook-state key: how many subagent dispatches this run has made.
+SUBAGENT_DISPATCH_KEY = "subagent_dispatches"
+
+#: Hook-state key: the drift annotation below has been said once.
+SUBAGENT_DRIFT_KEY = "subagent_drift_said"
+
+#: Tool names that dispatch an in-process subagent. This *is* a list of
+#: members, with the failure mode that implies — a Shell that renames its
+#: subagent tool goes unnoticed here. It is kept anyway, and kept honest by
+#: its remedy tier: this set only ever feeds an *annotation*, never a block
+#: and never a suppression decision. The suppression itself keys on
+#: `subagent_identity`, which reads the child's own payload and needs no
+#: list at all.
+SUBAGENT_DISPATCH_TOOLS = frozenset({"Agent", "Task"})
+
+
+def _count_subagent_dispatches(payload: dict[str, Any]) -> int:
+    """How many subagent dispatches are in this tool batch."""
+    calls = payload.get("tool_calls")
+    if not isinstance(calls, list):
+        return 0
+    count = 0
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("tool_name") or "") in SUBAGENT_DISPATCH_TOOLS:
+            count += 1
+    return count
+
+
+def _discriminator_drift_line(ctx: HookContext, state: dict) -> str | None:
+    """Say so when this run dispatched subagents and none was ever recognised.
+
+    The isolation in :func:`subagent_identity` keys on `agent_id` /
+    `agent_type` — *the Shell's* fields, not brnrd's. brnrd deliberately fails
+    **open**: a payload carrying neither is treated as the resident, because
+    reading the resident as a child would silently starve the run of its own
+    correspondence, and a starved run renders identically to a quiet one.
+
+    The cost of that choice is that a Shell which renames those fields
+    restores the leak in silence — the "a surface that narrows renders as if
+    it hadn't" class, turned on the fix for it. This is the second source that
+    should agree: the parent counts its own dispatches, the children leave
+    latch files, and the two disagreeing is evidence the seam stopped working.
+
+    Annotation only, and once. The signal is real but not exact — a subagent
+    that makes no tool call at all produces no boundary and therefore no latch
+    — so the remedy matches the confidence: it names what it saw and what that
+    would mean, and decides nothing.
+    """
+    if state.get(SUBAGENT_DRIFT_KEY):
+        return None
+    dispatched = int(state.get(SUBAGENT_DISPATCH_KEY) or 0)
+    if dispatched <= 0:
+        return None
+    directory = ctx.run_dir
+    if directory is None:
+        return None
+    latch_dir = directory / SUBAGENT_LATCH_DIR_NAME
+    try:
+        recognised = sum(1 for _ in latch_dir.glob("*.claimed"))
+    except OSError:  # pragma: no cover - defensive
+        return None
+    if recognised:
+        return None
+    state[SUBAGENT_DRIFT_KEY] = True
+    return (
+        f"⚠ subagent isolation unverified: this run dispatched {dispatched} "
+        "subagent(s) and brnrd recognised none of their boundaries. Either "
+        "they made no tool calls, or the payload fields the isolation keys on "
+        "(`agent_id` / `agent_type`) have changed — in which case their "
+        "boundaries carried your correspondence. Worth one check before "
+        "dispatching more (#1095)."
+    )
 
 
 def subagent_identity(payload: dict[str, Any]) -> dict[str, str] | None:

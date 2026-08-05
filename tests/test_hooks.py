@@ -4419,3 +4419,58 @@ def test_a_childs_boundary_is_tagged_and_left_out_of_the_runs_verdict(tmp_path):
     # The child's Stop is later in file order; it must not become the run's.
     assert summary["stops"] == 1
     assert summary["total"] == len(records) - 1
+
+
+def _dispatch_payload(n=1):
+    return dict(
+        _PARENT_PAYLOAD,
+        tool_calls=[{"tool_name": "Agent", "tool_input": {}} for _ in range(n)],
+    )
+
+
+def test_a_dispatch_with_no_recognised_child_says_the_seam_may_have_moved(tmp_path):
+    """The isolation keys on the Shell's field, so it can be taken away.
+
+    brnrd fails open on purpose. This is the second source that should agree
+    with the first: the parent counts its own dispatches, the children leave
+    latch files. Disagreement is the only evidence available that the
+    discriminator stopped working, and without it the leak returns silently.
+    """
+    _portal(tmp_path, token="t1", pending=0)
+    env = _run_env(tmp_path)
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(_dispatch_payload(2)), env)
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    text = stop["hookSpecificOutput"]["additionalContext"]
+    assert "subagent isolation unverified" in text
+    assert "2 subagent(s)" in text
+    # Annotation, never a block: the signal is real but not exact.
+    assert stop.get("decision") != "block"
+
+    # Once. A warning that repeats every boundary stops being read.
+    again, _ = hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    assert "subagent isolation unverified" not in (
+        again.get("hookSpecificOutput", {}).get("additionalContext") or "")
+
+
+def test_a_recognised_child_clears_the_drift_warning(tmp_path):
+    """The healthy case is silent — and must be reachable, or it is a nag."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _run_env(tmp_path)
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(_dispatch_payload(1)), env)
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(_SUBAGENT_PAYLOAD), env)
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    text = stop.get("hookSpecificOutput", {}).get("additionalContext") or ""
+    assert "subagent isolation unverified" not in text
+
+
+def test_a_run_that_dispatched_nothing_is_never_warned(tmp_path):
+    """A guard that fires for a non-reason stops being read by the tenth."""
+    _portal(tmp_path, token="t1", pending=0)
+    env = _run_env(tmp_path)
+
+    hooks.run_hook(hooks.PHASE_POST_TOOL, json.dumps(_PARENT_PAYLOAD), env)
+    stop, _ = hooks.run_hook(hooks.PHASE_STOP, json.dumps(_PARENT_PAYLOAD), env)
+    text = stop.get("hookSpecificOutput", {}).get("additionalContext") or ""
+    assert "subagent isolation unverified" not in text
