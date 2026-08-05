@@ -1218,7 +1218,7 @@ def build_communication_snapshot(
 # store of record, so it only needs a bounded recent tail. Before this
 # cap, one run's copy of a single long-lived thread ran to thousands of
 # records (one observed file: 7,868 records / 5.3 MB), multiplied by
-# every non-worker wake on that thread — 847 run dirs, 1.7 GB, most of
+# every non-strand wake on that thread — 847 run dirs, 1.7 GB, most of
 # it the same records copied over and over.
 HISTORY_GROUP_TAIL_LIMIT = 400
 

@@ -25,7 +25,7 @@ PENDING = "pending"
 DELIVERED = "delivered"
 COLLECTED = "collected"
 UNDELIVERABLE = "undeliverable"
-# ``collected`` is the dispatch-edge counterpart of ``delivered``: a worker's
+# ``collected`` is the dispatch-edge counterpart of ``delivered``: a strand's
 # terminal report is consumed by the parent run that spawned it, not by a
 # gate. Both carry a receipt, so both stamp the same receipt fields.
 _RECEIPTED = {DELIVERED, COLLECTED}
@@ -195,7 +195,7 @@ def message_path_from_queue(path: Path) -> Path | None:
     # caller's contract is already "None means no message path here". Before
     # this it *raised*, out of ``_mark_report_collected`` and therefore out of
     # ``_notify_spawn_parent`` — after the completion event had already been
-    # written — so an undecodable worker response took the reap path down
+    # written — so an undecodable strand response took the reap path down
     # behind a receipt that had already landed. Surfaced by the undecodable
     # -reply test added with the #770 review.
     try:
@@ -240,7 +240,7 @@ def resolve_stranded(
     nothing ever moved it — the residue #454 tracked after #459 made the
     class visible. Two populations wear that one status:
 
-    * a worker's terminal report (``target_gate: spawn``), which the
+    * a strand's terminal report (``target_gate: spawn``), which the
       spawning parent *did* read along the dispatch edge → ``collected``;
     * everything else — interims to ``spawn``/``spawn_completed``/
       ``dispatch_message``/``schedule`` events, which nothing consumes →

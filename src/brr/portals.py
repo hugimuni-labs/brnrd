@@ -122,7 +122,7 @@ def write_live_inbox(
     not a deliverable outbox message.
 
     *events* is computed by the caller — the daemon applies its own
-    visibility rules (worker isolation, respawn-origin exclusion, dispatch
+    visibility rules (strand isolation, respawn-origin exclusion, dispatch
     edges); init has exactly one rule (everything pending that is not the
     current event), and neither belongs in a file writer.
     """

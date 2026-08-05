@@ -94,7 +94,7 @@ export interface ShelfGroupable {
  * parent that's scrolled out of the window or filtered out by the active
  * lens. Root rows keep the shelf's existing newest-first order; each root's
  * children are age-ordered immediately beneath it, so a fleet reads as one
- * bar with its workers trailing it rather than scattered wherever their own
+ * bar with its strands trailing it rather than scattered wherever their own
  * age would otherwise place them.
  *
  * Single level only, matching `groupWithChildren`: only children of *root*

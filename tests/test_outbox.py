@@ -1851,7 +1851,7 @@ def test_terminal_route_names_what_carried_the_stream():
     # content, not the run's only voice.
     assert route("telegram", delivered_elsewhere=True) == "gate-extra"
 
-    # A worker's report on the dispatch edge. Not a chat delivery: an
+    # A strand's report on the dispatch edge. Not a chat delivery: an
     # unambiguous return value to one parent, with nothing to duplicate and
     # no addressing to guess.
     assert route(

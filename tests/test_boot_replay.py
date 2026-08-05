@@ -572,11 +572,11 @@ class TestBootScore:
 
         _, score = build_daemon_prompt_with_score(
             "Worker task", "evt-001", "/tmp/r.md", empty_repo,
-            worker=True,
+            strand=True,
         )
         keys = {c.block_key for c in score.contracts}
         # Worker preamble, not run.md
-        assert "worker-preamble" in keys
+        assert "strand-preamble" in keys
         assert "run-preamble" not in keys
         # Inject stack absent for workers
         assert "identity-core" not in keys
@@ -868,7 +868,7 @@ class TestBootScore:
         """A worker never writes a card — ``strand.md`` does not grant it one."""
         from brr.prompts import build_boot_score
 
-        score = build_boot_score(empty_repo, is_worker=True, has_event_body=True)
+        score = build_boot_score(empty_repo, is_strand=True, has_event_body=True)
         actions = [s.action for s in score.orientation]
         assert not any("card" in a for a in actions)
 

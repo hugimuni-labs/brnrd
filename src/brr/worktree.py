@@ -28,7 +28,7 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
 
     ``env`` drops git's environment-level repository overrides — see
     ``gitops.explicit_repo_env``. Every call here names its worktree, and a
-    ``GIT_DIR`` inherited from a pinned worker run (#703) would outrank that.
+    ``GIT_DIR`` inherited from a pinned strand run (#703) would outrank that.
     """
     return subprocess.run(
         ["git", *args],
