@@ -2325,10 +2325,10 @@ def _presence_label_for_event(event: dict) -> str:
     ``event`` dict before a run exists (audited for #585:
     ``_pending_event_record`` and ``conversations.append_event`` each build
     a *different*, display-only ``summary`` on a copy of the event/log
-    record, never on this one). That made every spawn worker's presence
+    record, never on this one). That made every spawn strand's presence
     label its own task prose, leaked into every sibling's model context at
     every tool-call boundary — the mechanism behind #574's real incident (a
-    worker read a sibling's leaked spec as a directive and shipped the
+    strand read a sibling's leaked spec as a directive and shipped the
     wrong issue).
 
     Do not resurrect a ``task.body`` (or any other free-text) fallback
@@ -2357,7 +2357,7 @@ def _presence_label_for_event(event: dict) -> str:
 
 
 def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
-    """``GIT_DIR``/``GIT_WORK_TREE`` pinning a worker to its own worktree (#703).
+    """``GIT_DIR``/``GIT_WORK_TREE`` pinning a strand to its own worktree (#703).
 
     Empty dict when the pin does not apply, so the caller can ``update()``
     unconditionally.
@@ -2366,9 +2366,9 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     cwd, and cwd is the thing that drifts. Driven against a real checkout +
     linked worktree (git 2.43): with both set, `cd <host checkout> && git add
     -A && git commit` leaves the host's HEAD *unmoved* and either commits the
-    worker's real work onto the worker's own branch (when its worktree has
+    strand's real work onto the strand's own branch (when its worktree has
     changes) or exits 1 with "nothing to commit". `git push origin HEAD` from
-    the same drifted cwd pushes the worker's branch. That is the maintainer's
+    the same drifted cwd pushes the strand's branch. That is the maintainer's
     "lands in the worktree it was given, or fails loudly", both halves.
 
     **Why both, rather than one.** The issue offered either alone. Both alone
@@ -2378,31 +2378,31 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     tree's index, which is a corruption mode the incident never had. Pinning
     both is the only self-consistent setting.
 
-    **Why workers only.** A resident authors knowledge in ``.brnrd-kb/`` — a
+    **Why strands only.** A resident authors knowledge in ``.brnrd-kb/`` — a
     *separate* git repository beside the checkout — and commits there itself.
     Under a pin those commits would land in the run's worktree instead, so
-    the pin would break the resident's one durable write path. A worker has
+    the pin would break the resident's one durable write path. A strand has
     no kb governance and no dominion write (``prompts/strand.md``), so it has
     nothing to commit outside the worktree it was handed. Scope follows the
     contract, not the calendar.
 
     **The cost, and it is real.** The pin is global: it also outranks ``-C``
-    and an explicit ``cwd=``, so under it a worker cannot read *any* tree but
+    and an explicit ``cwd=``, so under it a strand cannot read *any* tree but
     its own — ``git -C <other repo> rev-parse --show-toplevel`` answers with
     the pinned worktree, exit 0, no warning. brnrd's own code is immune by
     construction (``gitops.explicit_repo_env`` and
-    ``cli._drop_inherited_git_pin``); a worker driving scratch repositories
+    ``cli._drop_inherited_git_pin``); a strand driving scratch repositories
     by hand is not, and ``prompts/strand.md`` tells it the escape
     (``env -u GIT_DIR -u GIT_WORK_TREE git -C …``). Not a silent trade: the
     stray-write check below is fact-based precisely because this readability
-    cost means a worker cannot always verify its own containment.
+    cost means a strand cannot always verify its own containment.
     """
-    if not task.meta.get("worker"):
+    if not task.meta.get("strand"):
         return {}
     # `host` never gets a pin: its cwd *is* the checkout, and its commits
-    # legitimately land there. Belt and braces with the meta check — a worker
+    # legitimately land there. Belt and braces with the meta check — a strand
     # is forced to `worktree` at dispatch (see `_queue_spawn_request`), so a
-    # `host` worker should not exist, and if one ever does the pin would be
+    # `host` strand should not exist, and if one ever does the pin would be
     # actively wrong rather than merely unnecessary.
     if task.env == "host":
         return {}
@@ -2411,7 +2411,7 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     if git_dir is None:
         # No readable git dir (a non-repo run root, a docker env whose host
         # path is not the container's). Absent stays absent: an unpinned
-        # worker behaves exactly as it did before #703, and the finalize-time
+        # strand behaves exactly as it did before #703, and the finalize-time
         # check is the arm that notices. Never a half-pin — one variable
         # alone is the cross-wiring mode described above.
         return {}
@@ -2473,7 +2473,7 @@ def _stray_host_write(task: Run, repo_root: Path) -> dict | None:
     - ``stray-commit`` — commits in ``host_head_at_dispatch..HEAD`` carrying
       *this run's* ``Brnrd-Run-Id`` trailer. Proof, not inference: the
       ``commit-msg`` hook lives in the shared ``.git/hooks``, so a drifted
-      worker stamped its own id onto the stray commits it made in the host
+      strand stamped its own id onto the stray commits it made in the host
       checkout. Driven — see ``test_daemon_child_git.py``.
     - ``stranded-worktree`` — the host checkout gained dirty paths during the
       run's life. This is the mode the pin *creates*: ``git add -A`` sweeps
@@ -3040,18 +3040,18 @@ def _run_worker(
     task.meta["outbox_path"] = str(outbox_dir)
     task.meta.update(branch_plan.meta_items())
 
-    # Wyrd §3, worker thread isolation: a worker-stack child talks to its
+    # Wyrd §3, strand isolation: a strand-stack child talks to its
     # dispatcher and its dispatchees, nobody else. It gets its contract
     # (the event body) and any parent messages — not the user thread's
     # recent turns, history, or burst siblings. The agenda-lock pitfall
-    # (a worker following the thread's hottest topic instead of its
+    # (a strand following the thread's hottest topic instead of its
     # contract, and once forging a receipt from a sibling's SHA riding
     # the decoration, both caught live 2026-07) retires at the daemon
     # instead of by prompt discipline.
-    is_worker_run = bool(event.get("worker"))
+    is_strand_run = bool(event.get("strand"))
     event_body_for_prompt = event.get("body", "") or ""
     woven_body, woven_sibling_ids = (
-        (None, set()) if is_worker_run
+        (None, set()) if is_strand_run
         else _weave_burst_siblings_into_body(
             inbox_dir,
             event,
@@ -3175,7 +3175,7 @@ def _run_worker(
             brr_dir, brr_dir / "runs" / task.id / "history",
             conv_key, correspondent_key,
         )
-        if conv_key and not is_worker_run else []
+        if conv_key and not is_strand_run else []
     )
     communication_snapshot = (
         conversations.build_communication_snapshot(
@@ -3187,7 +3187,7 @@ def _run_worker(
             recent_limit=prompts.RECENT_CONVERSATION_MAX,
             history_groups=history_groups,
         )
-        if conv_key and not is_worker_run else None
+        if conv_key and not is_strand_run else None
     )
     if communication_snapshot is not None:
         # Forge-state facet (co-maintainer §5, #113): the resident's
@@ -3237,14 +3237,14 @@ def _run_worker(
     # Snapshot of other waiting events so the resident has immediate
     # orientation at wake. A live copy is also refreshed in the outbox
     # below and on every heartbeat.
-    # Workers get the same isolation here as the live inbox below: the
+    # Strands get the same isolation here as the live inbox below: the
     # user thread's pending events belong to the dispatcher. Found live
-    # 2026-07-18 — a worker's boot prompt listed two of the maintainer's
+    # 2026-07-18 — a strand's boot prompt listed two of the maintainer's
     # telegram messages while inbox.json correctly showed none.
     pending_events_snapshot = _pending_events_for_agent(
         inbox_dir,
         eid,
-        worker=is_worker_run,
+        strand=is_strand_run,
         account_context=account_context,
         repo_label=repo_label,
     )
@@ -3257,7 +3257,7 @@ def _run_worker(
         outbox_dir,
         inbox_dir,
         eid,
-        worker=is_worker_run,
+        strand=is_strand_run,
         account_context=account_context,
         repo_label=repo_label,
     )
@@ -3361,12 +3361,12 @@ def _run_worker(
         if task.conversation_key:
             env["BRR_CONVERSATION_ID"] = task.conversation_key
 
-        # #703: pin this worker's git to the worktree it was given, so a shell
+        # #703: pin this strand's git to the worktree it was given, so a shell
         # whose cwd drifted to the execution root cannot commit into the
         # *shared host checkout*. Live 2026-07-24: run-260724-2109-hqfz put 262
         # insertions of its deliverable on the maintainer's own `main`, twice,
         # while its own branch published empty — and an empty publish is
-        # indistinguishable from a worker that correctly had nothing to commit,
+        # indistinguishable from a strand that correctly had nothing to commit,
         # so nothing refused it and nothing reported it. Worktree isolation is
         # the filesystem lane; git's notion of "which working tree am I in" is
         # just cwd, and cwd is not contained.
@@ -3377,11 +3377,11 @@ def _run_worker(
         # drift bench, which makes it the cleanest baseline on the board — any
         # non-zero in the armed arm is signal. Measure, then default it on.
         #
-        # Not armed for workers: `strand.md` grants no chat seam, so a worker owes no
+        # Not armed for strands: `strand.md` grants no chat seam, so a strand owes no
         # closeout, and a guard demanding one would block a run for failing to keep a
         # contract it was never given.
         obligations: list[str] = []
-        if cfg.get("hooks.next_move", False) and not task.meta.get("worker"):
+        if cfg.get("hooks.next_move", False) and not task.meta.get("strand"):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
             # Same arming, same control-arm discipline: the guard also escalates
             # the clean artifact obligation (card) from format_delta's soft
@@ -3425,16 +3425,16 @@ def _run_worker(
         # needs the same fresh-git read, so it arms `BRR_REPO_DIR` itself when
         # the host branch above did not.
         #
-        # Workers stay out for now, and the reason is cost, not principle: the
+        # Strands stay out for now, and the reason is cost, not principle: the
         # parent reviews the child's diff and runs the gate on the merged tree
-        # itself (that is the standing rule, because a worker's own suite claim
+        # itself (that is the standing rule, because a strand's own suite claim
         # is not evidence), so the tree that matters is already covered — while
         # arming every child would multiply full-gate minutes across a fleet, a
         # regression nobody has measured.
         gate_command = str(cfg.get("hooks.gate_command", "") or "").strip()
         if (
             gate_command
-            and not task.meta.get("worker")
+            and not task.meta.get("strand")
             and task.meta.get("root_kind") != "home"
         ):
             obligations.append("gate")
@@ -3451,10 +3451,10 @@ def _run_worker(
         # reply-*shape* nudge, it is a claim that was false twice in one day,
         # each time costing the maintainer a wait on a run already `done`.
         #
-        # Not for workers, for the #779 reason: `strand.md` grants no chat seam,
-        # so a worker owes no closeout and its terminal text is a return value,
+        # Not for strands, for the #779 reason: `strand.md` grants no chat seam,
+        # so a strand owes no closeout and its terminal text is a return value,
         # not a promise to a reader.
-        if not task.meta.get("worker"):
+        if not task.meta.get("strand"):
             obligations.append("vigil")
 
         if obligations:
@@ -3759,7 +3759,7 @@ def _run_worker(
             ),
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
-            worker=bool(task.meta.get("worker")),
+            strand=bool(task.meta.get("strand")),
             hooks_installed=run_hooks_installed,
         )
 
@@ -3889,7 +3889,7 @@ def _run_worker(
                 outbox_dir,
                 inbox_dir,
                 eid,
-                worker=is_worker_run,
+                strand=is_strand_run,
                 account_context=account_context,
                 repo_label=repo_label,
             )
@@ -3962,7 +3962,7 @@ def _run_worker(
                 outbox_dir,
                 inbox_dir,
                 eid,
-                worker=is_worker_run,
+                strand=is_strand_run,
                 account_context=account_context,
                 repo_label=repo_label,
             )
@@ -4069,7 +4069,7 @@ def _run_worker(
             outbox_dir,
             inbox_dir,
             eid,
-            worker=is_worker_run,
+            strand=is_strand_run,
             account_context=account_context,
             repo_label=repo_label,
         )
@@ -4783,7 +4783,7 @@ def _pending_events_for_agent(
     inbox_dir: Path,
     current_event_id: str,
     *,
-    worker: bool = False,
+    strand: bool = False,
     account_context: account.AccountContext | None = None,
     repo_label: str | None = None,
 ) -> list[dict[str, object]]:
@@ -4853,9 +4853,9 @@ def _pending_events_for_agent(
             edge_target = str(ev.get("spawn_message_for_event") or "")
             if edge_target and edge_target != current_event_id:
                 continue
-            # A worker-stack run sees only its own edge traffic — the user
+            # A strand-stack run sees only its own edge traffic — the user
             # thread's pending events belong to its dispatcher, not to it.
-            if worker and not edge_target:
+            if strand and not edge_target:
                 continue
             events.append(ev)
     return [
@@ -4869,7 +4869,7 @@ def _write_live_inbox(
     inbox_dir: Path,
     current_event_id: str,
     *,
-    worker: bool = False,
+    strand: bool = False,
     account_context: account.AccountContext | None = None,
     repo_label: str | None = None,
 ) -> Path | None:
@@ -4889,7 +4889,7 @@ def _write_live_inbox(
         _pending_events_for_agent(
             inbox_dir,
             current_event_id,
-            worker=worker,
+            strand=strand,
             account_context=account_context,
             repo_label=repo_label,
         ),
@@ -5437,7 +5437,7 @@ def _write_live_portal_state(
         outbox_dir.mkdir(parents=True, exist_ok=True)
         events = _pending_events_for_agent(
             inbox_dir, current_event_id,
-            worker=bool(task.meta.get("worker")) if hasattr(task, "meta") else False,
+            strand=bool(task.meta.get("strand")) if hasattr(task, "meta") else False,
             account_context=account_context,
             repo_label=repo_label,
         )
@@ -6033,13 +6033,24 @@ def _queue_respawn_request(
             lifetime="run",
         )
         return False
-    worker = _truthy(fm.get("worker"))
+    strand = _truthy(fm.get("strand"))
+    if not strand and _truthy(fm.get("worker")):
+        # `worker:` is the pre-rename spelling (see prompts/strand.md and
+        # run.md §Orchestration) — still honored, but flagged so a
+        # dispatcher migrates rather than silently keeps working forever.
+        strand = True
+        _record_outbox_notice(
+            outbox_dir,
+            "`worker: true` is a legacy spelling — use `strand: true` instead.",
+            kind="advisory",
+            lifetime="run",
+        )
     reserved = {
         "_path", "id", "body", "status", "created", "source",
         "origin_message_key", "respawn", "event", "gate",
         "runner", "proposed_runner", "shell", "core", "at", "defer_until",
         "carry_forward", "quality", "quality_escalation", "escalation",
-        "worker",
+        "worker", "strand",
     }
     meta = {
         k: v for k, v in current.items()
@@ -6060,8 +6071,8 @@ def _queue_respawn_request(
     defer_until = _respawn_defer_until(fm)
     if defer_until:
         meta["defer_until"] = defer_until
-    if worker:
-        meta["worker"] = True
+    if strand:
+        meta["strand"] = True
     reason = str(fm.get("reason") or "").strip()
     meta["respawned_from_event"] = event_id
     meta["respawned_by_run"] = task.id
@@ -6421,7 +6432,7 @@ def _queue_child_message(
     """Handle a ``to: <id>`` outbox directive (wyrd §3, the message verb).
 
     Parent→child traffic along the dispatch edge: an inbox event only the
-    addressed worker sees (its ``inbox.json`` / portal-state; every other
+    addressed strand sees (its ``inbox.json`` / portal-state; every other
     view filters it out, and it never dispatches a run of its own). The
     child folds it into its work — it is a steer, not a new contract, and
     not an event the child should ``event:``-address. Ownership-checked
@@ -6585,9 +6596,9 @@ def _queue_stop_request(
 
     Ownership-checked and attested: the target must be a concurrent child
     *this* run dispatched (matched by spawn event id or child run id), and
-    the kill is the daemon's own — it does not depend on the worker reading
+    the kill is the daemon's own — it does not depend on the strand reading
     anything. A running child's runner process is killed immediately (the
-    worker's attempt loop then finalizes it as ``stopped`` and the normal
+    strand's attempt loop then finalizes it as ``stopped`` and the normal
     reap path notifies this parent); a child still queued in the inbox is
     cancelled before it ever dispatches, with the completion note posted
     right here since no future will ever exist for it. Refusals land in
@@ -6656,22 +6667,22 @@ def _queue_spawn_request(
     body: str,
     outbox_dir: Path | None = None,
 ) -> bool:
-    """Queue a concurrent worker-stack child (``spawn:``, slice 1).
+    """Queue a concurrent strand-stack child (``spawn:``, slice 1).
 
     Sibling to :func:`_queue_respawn_request`, with one structural
     difference: a respawn only ever starts once *this* run ends (queued
     into the ordinary inbox, dispatched by the next idle tick); a spawn is
     picked up by the main loop's *second* dispatch slot immediately,
     alongside this still-running thought (see ``active_spawns`` and
-    ``_max_concurrent_spawns`` in the daemon loop). Always ``worker: true`` — never the
+    ``_max_concurrent_spawns`` in the daemon loop). Always ``strand: true`` — never the
     resident stack — a concurrent child does not get dominion write, kb
     governance, or scheduling authority any more than a sequential
-    worker-stack respawn does (`kb/design-director-loop.md` §"Concurrent
+    strand-stack respawn does (`kb/design-director-loop.md` §"Concurrent
     sub-spawns": that's exactly why it doesn't reopen the dominion-
     coherence problem single-flight exists to close).
 
-    A worker-stack run spawning *its own* child is refused — nesting was
-    never part of the slice-1 shape (cap=1, one level), and a worker has
+    A strand-stack run spawning *its own* child is refused — nesting was
+    never part of the slice-1 shape (cap=1, one level), and a strand has
     no business creating further daemon-dispatched work anyway.
     """
     if task.meta.get("root_kind") == "home":
@@ -6683,10 +6694,10 @@ def _queue_spawn_request(
             lifetime="run",
         )
         return False
-    if bool(task.meta.get("worker")):
+    if bool(task.meta.get("strand")):
         _record_outbox_notice(
             outbox_dir,
-            "spawn refused: a worker-stack run cannot spawn (no nested spawns). "
+            "spawn refused: a strand-stack run cannot spawn (no nested spawns). "
             "Do the work inline, or hand it back to the resident.",
             kind="refused",
             lifetime="run",
@@ -6704,7 +6715,7 @@ def _queue_spawn_request(
     # spawn without them was *dropped*, with the only trace a print to the
     # daemon's uncaptured stdout: the prompt contract said the keys were
     # optional, the code required them, and a resident who believed the
-    # contract sat waiting for a worker that never existed. Caught by living
+    # contract sat waiting for a strand that never existed. Caught by living
     # it — this run's own setup-assist spawn vanished that way.
     proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
     core = str(fm.get("core") or "").strip()
@@ -6731,7 +6742,7 @@ def _queue_spawn_request(
         )
         return False
     source = str(fm.get("source") or "spawn")
-    meta: dict = {"worker": True}
+    meta: dict = {"strand": True}
     # A spawn is the one primitive that deliberately runs concurrently
     # with its still-running parent in the *same* daemon process — every
     # other dispatch path (respawn:, a fresh event) only ever starts once
@@ -7087,10 +7098,10 @@ def _drain_outbox(
             # `kind="refused"` (a well-formed directive brnrd declines) except
             # the malformed-input cases, which are `"dropped"` (nothing
             # resolvable was there to refuse).
-            if bool(task.meta.get("worker")):
+            if bool(task.meta.get("strand")):
                 _record_outbox_notice(
                     outbox_dir,
-                    "await refused: a worker-stack run cannot arm a wait — "
+                    "await refused: a strand-stack run cannot arm a wait — "
                     "hold happens in the resident that dispatched it.",
                     kind="refused",
                     lifetime="run",
@@ -7304,7 +7315,7 @@ def _drain_outbox(
             redirected = True
         # Interim replies ride the target event's own gate. Dispatch-tree
         # sources (spawn, spawn_completed, dispatch_message) have no gate and
-        # no collector for interims — only a worker's *terminal* report is
+        # no collector for interims — only a strand's *terminal* report is
         # collected — so a partial written here would orphan and the record
         # would sit pending forever. Say so at staging time instead — but
         # only about a source we can actually see: an absent one is unknown,
@@ -7594,7 +7605,7 @@ def _terminal_route(
       the static dispatch went away.
     - ``undeliverable`` — nobody owns the source; already dispatched
       nowhere (#562).
-    - ``dispatch-edge`` — a spawning parent collects it as the worker's
+    - ``dispatch-edge`` — a spawning parent collects it as the strand's
       report (``_mark_report_collected``). Structurally *not* a chat
       delivery: it is a return value on an unambiguous edge, with no
       addressing guess and no second channel to duplicate. The predicate
@@ -7910,7 +7921,7 @@ def _drain_live_menu(
     Like ``.card``, the menu is observed at heartbeat and synchronous runner
     boundaries. Content digests make an unchanged file a no-op and make one
     malformed generation produce one notice rather than a notice per tick.
-    The single-flight owner is the only v1 writer: worker-stack children
+    The single-flight owner is the only v1 writer: strand-stack children
     report prose to their parent and do not get a second menu transport.
     """
     if menu_path is None or not menu_path.is_file():
@@ -7924,13 +7935,13 @@ def _drain_live_menu(
         return False
     state["digest"] = digest
 
-    if task.meta.get("worker"):
+    if task.meta.get("strand"):
         _record_outbox_notice(
             outbox_dir,
-            f"{_LIVE_MENU_NAME} ignored: worker-stack children may propose "
+            f"{_LIVE_MENU_NAME} ignored: strand-stack children may propose "
             "items in their report, but the single-flight owner composes the "
             "live menu in v1",
-            # A policy denial of a well-formed write — workers don't get
+            # A policy denial of a well-formed write — strands don't get
             # this authority, full stop.
             kind="refused",
             lifetime="run",
@@ -8042,11 +8053,11 @@ def _emit_mirror_cards(
     mirror must never break a run.
     """
     try:
-        if bool(task.meta.get("worker")):
-            # A worker-stack run owns no thread and folds nothing (live
+        if bool(task.meta.get("strand")):
+            # A strand-stack run owns no thread and folds nothing (live
             # incident 2026-07-16: two spawn children stamped "folded into a
             # running thought" under the whole backlog of a chat that their
-            # parent was actively answering). Workers stay silent here.
+            # parent was actively answering). Strands stay silent here.
             return
         run_conv = task.conversation_key or ""
         mirrors = card_state.setdefault("mirrors", {})
@@ -8673,7 +8684,7 @@ _SPAWN_NOTIFY_RESPONSE_MAX_CHARS = 2000
 # this check missed — `.brr/worktrees/<run-id>` and `.brr/outbox/…`, which
 # every *host*-environment spawn spec names in its working rules, and which
 # yielded a confident `brr/worktrees` as the "spec branch". A guard that
-# false-positives on a worker that did everything right is worse than no
+# false-positives on a strand that did everything right is worse than no
 # guard: it teaches the reader to skip the flag, and it is gone the one time
 # it is right (`hooks.py:441-444`, the #562 lesson, one module over).
 _SPAWN_CONTRACT_BRANCH_RE = re.compile(r"(?<![\w/.])brr/[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -8689,7 +8700,7 @@ def _extract_spawn_contract(spec_text: str) -> tuple[str | None, str | None]:
     Mechanical, no model in the loop — the *first* match of each pattern,
     nothing smarter. Deliberately does **not** attempt an issue-number
     extraction: prose like "related: #565" would false-positive, and #574's
-    own live case is a worker *inventing* a justifying reference to a wrong
+    own live case is a strand *inventing* a justifying reference to a wrong
     issue — a noisy heuristic there would be one more thing to explain away.
     Branch + report path are the load-bearing two.
     """
@@ -8718,11 +8729,11 @@ def _spawn_contract_check(
       child's meta. A stated fact, not an inference.
     - **scanned** — falls back to :func:`_extract_spawn_contract`'s first-
       match-in-prose read of ``spec_text`` when nothing was declared. A
-      spec responsibly naming a *sibling* worker's branch (worktree-
+      spec responsibly naming a *sibling* strand's branch (worktree-
       discipline prose, ahead of its own Deliverable section) can match
       here first — a real false-positive mode, not a hypothetical one
       (found live 2026-07-23/24, #640). The caller is the one that decides
-      what a *scanned* mismatch is allowed to do to the worker's status;
+      what a *scanned* mismatch is allowed to do to the strand's status;
       this function only reports where the contract came from.
 
     Returns ``None`` when there is nothing to check — no branch declared
@@ -8736,7 +8747,7 @@ def _spawn_contract_check(
     ``"scanned"``. Pure string/filesystem-existence logic, no model call —
     a caller wraps this in try/except per the fail-open posture
     (`_notify_spawn_parent`'s docstring): a bug in this check must never
-    itself read as a worker-run failure.
+    itself read as a strand-run failure.
 
     Live case, 2026-07-22: run-260722-2337-pqav was specced for #564 on
     `brr/wake-request-source-gate`, delivered #565 on
@@ -8766,7 +8777,7 @@ def _spawn_contract_check(
         # #1097: which clause failed, carried rather than re-derived. The
         # renderer had only the collapsed `mismatch` bool and therefore
         # printed *both* the branch lines and the report line on any
-        # failure — so a worker that published exactly the branch it was
+        # failure — so a strand that published exactly the branch it was
         # told to, and merely had its report path mistyped by its parent,
         # was shown to the operator under two branch lines that read as an
         # indictment of the branch. A remedy is part of a diagnostic's
@@ -8781,13 +8792,13 @@ def _spawn_contract_check(
     }
 
 
-def _spawn_worker_ran(task: Run) -> bool:
+def _spawn_strand_ran(task: Run) -> bool:
     """True when there's direct evidence the spawned child executed a turn.
 
     #633: a Shell that errors before the agent gets a single turn (auth
     failure, provider quota exhausted before the first token) leaves
-    ``task.status == "error"`` exactly like a worker that made several
-    attempts and still gave up — but there was no worker to have a
+    ``task.status == "error"`` exactly like a strand that made several
+    attempts and still gave up — but there was no strand to have a
     *contract* with in the former case. Reuses signals the daemon already
     computed rather than inventing a new probe:
 
@@ -8828,9 +8839,9 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     which is a reasonable stand-in for "someone should look at this."
     Best-effort: a spawn without parent linkage (or no inbox) is silently
     skipped rather than raising — a notification bug must never surface
-    as a worker-run failure. Same posture governs the #574 contract check
+    as a strand-run failure. Same posture governs the #574 contract check
     below: extraction/comparison failures are logged and swallowed, never
-    allowed to turn a notify bug into an apparent worker failure.
+    allowed to turn a notify bug into an apparent strand failure.
     """
     if inbox_dir is None:
         return
@@ -8842,9 +8853,9 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
 
     # #574: does what the child actually published match the contract it
     # was given? ``task.body`` is the spec text as the child saw it — never
-    # rewoven for a worker run (the burst-sibling weave at the top of the
-    # dispatch loop is gated `if not is_worker_run`, and a spawned child is
-    # always `worker: true`) — so it is safe to read straight off the
+    # rewoven for a strand run (the burst-sibling weave at the top of the
+    # dispatch loop is gated `if not is_strand_run`, and a spawned child is
+    # always `strand: true`) — so it is safe to read straight off the
     # reaped ``Run`` here, no ``prompt.md`` reread needed. ``spawn_contract_
     # branch``/``spawn_contract_report`` are the declared contract, carried
     # onto the child's meta by ``_queue_spawn_request`` when the dispatcher
@@ -8864,7 +8875,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         contract = None
 
     # #633: a contract violation is only ever a *behavioural* accusation —
-    # it requires evidence a worker existed to violate it. A Shell that
+    # it requires evidence a strand existed to violate it. A Shell that
     # errored before the agent's first turn leaves ``task.status ==
     # "error"`` with nothing else to show for it; that is a runner
     # failure, not a contract failure, and the #574 check must never
@@ -8872,7 +8883,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # when it fires, there is nothing left to compare, so no contract
     # block, no mismatch flag, regardless of what the (possibly still
     # correct) contract check above found.
-    runner_failed = task.status == "error" and not _spawn_worker_ran(task)
+    runner_failed = task.status == "error" and not _spawn_strand_ran(task)
 
     if runner_failed:
         status_label = "runner-failed"
@@ -8937,7 +8948,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
                 "\n\nadvisory — a `brr/<slug>` scanned from the spec prose "
                 f"({contract['spec_branch']}) doesn't match the published "
                 f"branch ({contract['published_branch'] or '(none)'}). This "
-                "is a fuzzy read, not a declared contract, so the worker's "
+                "is a fuzzy read, not a declared contract, so the strand's "
                 f"own status is unaffected.{report_note}"
             )
 
@@ -8947,7 +8958,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
     # write says its work is not on its branch at all — and the incident that
     # opened #703 published a branch whose name was perfectly correct and
     # perfectly empty. Never overrides ``runner-failed``: that arm means no
-    # worker existed to have written anything (#633).
+    # strand existed to have written anything (#633).
     stray_block = ""
     stray_kind = str(task.meta.get("stray_host_write") or "").strip()
     if stray_kind and not runner_failed:
@@ -9156,7 +9167,7 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
 
 
 def _mark_report_collected(task: Run, completion: Path) -> None:
-    """Stamp a worker's terminal report as collected on the dispatch edge.
+    """Stamp a strand's terminal report as collected on the dispatch edge.
 
     No gate owns ``spawn``, so the report would otherwise sit ``pending``
     forever in the run's message store — the residue #454 named. It is not
@@ -9184,7 +9195,7 @@ def _notify_spawn_parent_of_crash(
 
     Bug found live 2026-07-07 (issue: a spawned run's completion silently
     never reached its parent thread): the main loop's reap step called
-    ``_notify_spawn_parent`` only in the success branch — when the worker
+    ``_notify_spawn_parent`` only in the success branch — when the strand
     future raised instead of returning a ``Run`` (a runner-launch failure,
     an unhandled exception mid-thought), the parent got no signal at all,
     silently contradicting design-director-loop.md's "Concurrent
@@ -9195,7 +9206,7 @@ def _notify_spawn_parent_of_crash(
     fallback, not something a crash should have to rely on every time.
 
     Built from the raw inbox *event* dict rather than a ``Run``/task
-    object, since a worker that crashed before returning one never
+    object, since a strand that crashed before returning one never
     produces the richer object ``_notify_spawn_parent`` reads from.
     Best-effort, mirroring that function's own failure posture.
     """
@@ -10810,7 +10821,7 @@ def _reconcile_orphaned_spawn_dispatches(
     durable on the spawned event itself (``spawn_parent_run_id`` /
     ``spawn_parent_conversation_key``, written by ``_queue_spawn_request``
     and never stripped by ``Run.from_event`` — #268's hand-traced seam). So
-    on startup, sweep for spawn events stuck in ``processing`` whose worker
+    on startup, sweep for spawn events stuck in ``processing`` whose strand
     is provably no longer running and deliver the crash notification the
     reap block would have delivered.
 
@@ -10824,7 +10835,7 @@ def _reconcile_orphaned_spawn_dispatches(
       the dispatching process (the runner's parent) may still be mid-flight
       ⇒ leave it alone;
     - **proof of death**: a closed ledger row for the event's run (the
-      worker finished; only the reap-notify was lost), or no write to the
+      strand finished; only the reap-notify was lost), or no write to the
       event file / run manifest for longer than *stale_after_seconds*
       (defaults to the janitors' 24h crash-recovery horizon — beyond any
       runner budget, keepalive-extended or not).
@@ -10889,7 +10900,7 @@ def _reconcile_orphaned_spawn_dispatches(
             else "no write for longer than the reconciliation safety horizon"
         )
         # Status first, notify after — same order as the live path (the
-        # worker thread resolves the event before the reap block notifies).
+        # strand thread resolves the event before the reap block notifies).
         # A crash between the two loses one notification; the reverse order
         # would double-notify on every restart that hits the window.
         protocol.set_status(event, "error")
@@ -11020,7 +11031,7 @@ _MAX_CONCURRENT_SPAWNS_DEFAULT = 4
 
 
 def _max_concurrent_spawns(cfg: dict) -> int:
-    """Configured worker-stack ``spawn:`` pool width.
+    """Configured strand-stack ``spawn:`` pool width.
 
     Slice 1 (kb/design-director-loop.md §"Concurrent sub-spawns") shipped
     this hardcoded at a cap of 1. Generalized to a small configurable pool
@@ -11040,7 +11051,7 @@ def _max_concurrent_spawns(cfg: dict) -> int:
     return max(1, value)
 
 
-# Accepted-but-not-yet-finalized worker-stack children (#880 §1). ``_loop``'s
+# Accepted-but-not-yet-finalized strand-stack children (#880 §1). ``_loop``'s
 # local ``active_spawns`` list is the real source of truth for *which*
 # children are live, but it's a stack-local variable on the main loop
 # thread — unreachable from ``_write_live_portal_state``, which runs on each
@@ -11074,7 +11085,7 @@ def _spawn_pool_release(event_id: str) -> None:
 
 
 def _spawn_pool_accepted_count() -> int:
-    """Live count of accepted-and-not-yet-finalized worker-stack children.
+    """Live count of accepted-and-not-yet-finalized strand-stack children.
 
     In-process, main-loop-owned bookkeeping — not a cross-process or
     filesystem read, so this never legitimately raises today. Callers still
@@ -12030,7 +12041,7 @@ def start(
     # generalized past cap-of-1 in kb/design-multi-workstream-concurrency.md
     # "slice 1"): `current` remains the one resident-stack thought
     # single-flight protects (dominion write, kb governance, scheduling).
-    # `active_spawns` holds up to `_max_concurrent_spawns(cfg)` *worker-
+    # `active_spawns` holds up to `_max_concurrent_spawns(cfg)` *strand-
     # stack-only* concurrent children a running thought can dispatch via
     # `spawn:` outbox frontmatter — none of them touch the surface
     # single-flight exists to protect, so they share a pool of their own
@@ -12108,7 +12119,7 @@ def start(
                     current_eid = None
                 current = None
 
-            # Reap any concurrent worker-stack children that have finished,
+            # Reap any concurrent strand-stack children that have finished,
             # and notify each one's still-running parent thought (or leave a
             # normal pending event behind if the parent already ended —
             # the next dispatch tick picks it up like any other follow-up,
@@ -12153,7 +12164,7 @@ def start(
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
-            # A resident slot is quiescent only when its worker-stack is too.
+            # A resident slot is quiescent only when its strand-stack is too.
             # ``pool.shutdown(wait=True)`` joins every worker, so re-execing
             # while spawned children remain would turn their whole runtime
             # into latency for a new correspondent despite the executor's
@@ -12198,7 +12209,7 @@ def start(
             # Scanning is gated on an open slot existing at all, not on
             # ``reload_requested`` — a pending package-file reload no
             # longer holds the spawn slot shut (see below).  Active spawn
-            # workers also keep the reserved resident thread admissible for
+            # strands also keep the reserved resident thread admissible for
             # a fresh correspondent, until the process can re-exec safely.
             scanned: list[_DispatchTarget] | None = None
             if len(active_spawns) < max_spawns or (
@@ -12206,7 +12217,7 @@ def start(
             ):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
-            # Concurrent worker-stack children (slice 1, generalized past
+            # Concurrent strand-stack children (slice 1, generalized past
             # cap-of-1): dispatched independently of the resident's own
             # `current` slot — that's the entire point, a spawn runs
             # *alongside* the still-live parent thought rather than after it
@@ -12240,7 +12251,7 @@ def start(
             # radius is not "a few lines of orchestration" — it is the
             # child's whole wake. Measured: on 2026-07-13 two spawned
             # children rendered the pre-#388 kernel, complete with the
-            # worker-queue bug #388 had already fixed in the tree.
+            # strand-queue bug #388 had already fixed in the tree.
             #
             # And yet the decision stands, because **gating here is
             # incoherent**, not merely costly. Re-exec fires only on
@@ -12352,10 +12363,10 @@ def start(
             # picks them up at a plan boundary (multi-response), or the
             # next spawn handles them. Reload ordinarily holds this resident
             # dispatch so the slot can drain and re-exec can proceed. An
-            # active worker stack is the exception: re-exec cannot happen
+            # active strand stack is the exception: re-exec cannot happen
             # until those threads finish anyway, while a correspondent can
             # use the reserved resident thread now.  Keep background
-            # follow-ups parked, but do not make a person wait on workers.
+            # follow-ups parked, but do not make a person wait on strands.
             burst_hold = 0.0
             if current is None and (not reload_requested or active_spawns):
                 pending = [

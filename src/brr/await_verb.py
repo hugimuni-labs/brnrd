@@ -1,6 +1,6 @@
 """``await:`` — the outbox verb for a select, not a sleep (#959).
 
-The measured failure this closes: a resident waiting on a dispatched worker
+The measured failure this closes: a resident waiting on a dispatched strand
 or a background gate wrote ``until <condition>; do sleep 25; done`` as one
 shell call. By the letter of the older liveness contract that "survives the
 closeout" — ``.keepalive`` was armed, the thought never ended — but it

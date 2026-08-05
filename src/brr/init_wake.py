@@ -414,7 +414,7 @@ class _Session:
     def _pending_for_wake(self) -> list[dict[str, Any]]:
         """Every pending event that is not the wake's own contract.
 
-        Init has exactly one visibility rule; the daemon's worker/respawn/
+        Init has exactly one visibility rule; the daemon's strand/respawn/
         dispatch-edge carveouts describe a lifecycle init does not have.
         """
         return [
