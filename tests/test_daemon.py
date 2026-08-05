@@ -1749,6 +1749,81 @@ def test_spawn_contract_check_no_report_named_only_branch_checked():
     assert result["report_found"] is None
 
 
+def test_spawn_contract_check_declared_report_alone_is_a_contract(tmp_path):
+    """A declared ``report:`` with no ``branch:`` is still a contract.
+
+    The gate used to be ``if declared_branch:`` alone, so this shape fell
+    through to the prose scan: the declared report was discarded, and with
+    no ``brr/`` token in the prose the whole contract evaporated
+    (``return None``) — a dispatcher's stated commitment, dropped in
+    silence. Either clause alone is a contract; the branch clause simply
+    has nothing to say."""
+    missing = Path(f"/tmp/brr-report-only-{tmp_path.name}.md")
+    assert not missing.exists()
+    result = daemon._spawn_contract_check(
+        "no branch named anywhere in this prose",
+        "brr/whatever-the-child-picked",
+        declared_report=str(missing),
+    )
+    assert result is not None
+    assert result["source"] == "declared"
+    assert result["spec_branch"] is None
+    assert result["branch_ok"] is True
+    assert result["report_ok"] is False
+    assert result["mismatch"] is True
+
+
+def test_spawn_contract_check_declared_report_alone_ignores_prose_branch(tmp_path):
+    """...and the scan must not run alongside it.
+
+    Falling through to the scan did not merely drop the declared report —
+    an incidental ``brr/<slug>`` anywhere in the prose (a sibling's branch,
+    #640's own live false positive) became an enforced branch commitment
+    nobody made. A declaration on either clause makes the whole contract
+    declared."""
+    written = tmp_path / "report.md"
+    written.write_text("done", encoding="utf-8")
+    result = daemon._spawn_contract_check(
+        "A sibling worker is live on `brr/sibling-branch` — don't collide.",
+        "brr/what-this-child-published",
+        declared_report=str(written),
+    )
+    assert result["spec_branch"] is None
+    assert result["mismatch"] is False
+
+
+def test_report_only_mismatch_prints_no_branch_line(tmp_path):
+    """#1097's rule, applied to the clause that does not exist.
+
+    A report-only contract has no branch commitment, so the completion note
+    must carry neither a branch accusation nor a ``✓ as declared`` absolution
+    — both would be a verdict on a commitment nobody made."""
+    inbox = tmp_path / ".brr" / "inbox"
+    missing = Path(f"/tmp/brr-report-only-note-{tmp_path.name}.md")
+    assert not missing.exists()
+    task = Run(
+        id="run-child", event_id="evt-child",
+        body="research the thing; no branch expected",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_report": str(missing),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    note = protocol.list_pending(inbox)[0]
+    assert note["spawn_contract_mismatch"] is True
+    assert "spawn_contract_spec_branch" not in note
+    assert "spawn_contract_published_branch" not in note
+    assert "status=contract-mismatch" in note["body"]
+    assert "contract mismatch — report vs published:" in note["body"]
+    assert "branch:" not in note["body"]
+    assert str(missing) in note["body"]
+
+
 def _spawn_child_run(*, body, publish_branch=None, status="done"):
     meta = {
         "spawn_parent_run_id": "run-parent",
@@ -1921,6 +1996,79 @@ def test_queue_spawn_request_declares_contract_from_frontmatter(tmp_path):
     child = protocol._read_event(spawned[0])
     assert child["spawn_contract_branch"] == "brr/declared-slug"
     assert child["spawn_contract_report"] == "/tmp/brr-declared-slug-report.md"
+
+
+def test_queue_spawn_request_renders_declared_contract_into_child_body(tmp_path):
+    """The declared contract must reach the child that is held to it.
+
+    Live 2026-08-05, run-260805-1527-y100: specced ``branch:
+    brr/both-doors-named`` + ``report: /tmp/brr-report-both-doors.md``,
+    finalized ``contract-mismatch`` on both clauses — and its own report
+    said, correctly, that no ``report:`` path was declared anywhere in the
+    event's frontmatter *or body*. It wasn't: the frontmatter is consumed
+    for routing and the body is the whole of what a child reads. #1097's
+    own test already named this gap from the parent's side ("no prompt
+    surface says so"); this is the child's side of it.
+
+    Both values must appear verbatim — the branch as a name to rename to,
+    the report as a path to write."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {
+            "spawn": True,
+            "branch": "brr/declared-slug",
+            "report": "/tmp/brr-declared-slug-report.md",
+        },
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    child_body = protocol._read_event(spawned[0])["body"]
+    assert "bounded side task" in child_body
+    assert "brr/declared-slug" in child_body
+    assert "/tmp/brr-declared-slug-report.md" in child_body
+
+
+def test_queue_spawn_request_undeclared_contract_leaves_the_body_alone(tmp_path):
+    """Guard the guard: no ``branch:``/``report:`` ⇒ no rendered block.
+
+    A spawn with no declared contract is checked by the prose scan, and an
+    appended block would be one more thing for that scan to read. Byte-for-
+    byte the spec as written is the contract for those, exactly as before."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    task = Run(id="run-parent", event_id=event_id, body="original", source="telegram")
+
+    accepted = daemon._queue_spawn_request(
+        daemon._WorkerEmit(brr_dir, "", event_id),
+        task,
+        inbox,
+        event_id,
+        {"spawn": True},
+        "bounded side task",
+        outbox,
+    )
+
+    assert accepted is True
+    spawned = [p for p in inbox.glob("*.md") if p.stem != event_id]
+    assert protocol._read_event(spawned[0])["body"].strip() == "bounded side task"
 
 
 def test_queue_spawn_request_carries_title_into_child_meta(tmp_path):
