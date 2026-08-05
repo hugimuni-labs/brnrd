@@ -1087,6 +1087,32 @@ def _attachment_names(raw: object) -> list[str] | None:
     return None
 
 
+def _log_raw_attachments_observation(ev: dict) -> None:
+    """Unconditional wire-shape trace for one inbound event (#1156 §2).
+
+    #1155 hardened ``_attachment_names`` so an unparseable shape is loud
+    instead of silent — but its own incident report named a *cause*
+    ("the wire sent a bare string") that was inferred from a filename
+    convention, never actually observed on the wire: nothing recorded what
+    ``attachments`` looked like before the parser ran. That gap survives
+    #1155 intact for the case that matters most — a shape the parser
+    accepts without complaint but that still doesn't end in bytes, which
+    is silent by construction on the unrecognised-only path #1155 shipped.
+    Logged for every inbound event, not only ones that carry attachments,
+    through the same ``print`` channel this gate already narrates failures
+    on (stdout, captured to the daemon's own log — never the wake response).
+    Type name plus a size-bounded ``repr`` only: an attachment pointer is
+    ``{"file_id", "filename", "kind", "file_size"}`` (``schemas.py``), never
+    a bearer token, but the bound is unconditional regardless of what the
+    field actually holds.
+    """
+    raw = ev.get("attachments")
+    print(
+        f"[brnrd:cloud] event {ev.get('event_id')} attachments wire shape: "
+        f"type={type(raw).__name__} repr={repr(raw)[:200]}"
+    )
+
+
 def _ingest_event_attachments(
     state: dict, ev: dict, workdir: Path,
 ) -> tuple[list[Path], list[str], str | None]:
@@ -1166,6 +1192,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             # what makes a cursor reset cost nothing.
             replayed += 1
             continue
+        _log_raw_attachments_observation(ev)
         # #525 — pointers become local files *now*, at ingestion time: the
         # server holds no bytes, telegram links expire, and the wake's Read
         # tool wants a plain local path (``attachment_files`` convention).
