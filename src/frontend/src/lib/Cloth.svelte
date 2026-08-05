@@ -30,7 +30,7 @@
 	import MoodChip from './MoodChip.svelte';
 
 	// The cloth — the past band, v1 (design-work-layers.md). The window's
-	// done work as root-run trees, one curated line each, worker strands
+	// done work as root-run trees, one curated line each, strands
 	// folded beneath and expanded on demand; the selvage (the cloth's
 	// self-finished edge) runs across the top as one compact spend→produce
 	// row. The page owns the rows and the window — this component only
@@ -101,7 +101,7 @@
 	// cloth is where the 24-glyph alphabet actually runs out — a 30-day
 	// window routinely draws more roots than there are runes — so this reads
 	// off `runFace` directly no longer; every id in the rendered weave (roots
-	// and worker children, in the weave's own newest-first order) shares one
+	// and strand children, in the weave's own newest-first order) shares one
 	// probe pass instead. Recomputed whenever the weave changes (a re-poll, a
 	// lens switch); ids outside today's weave (a folded-away day, a dropped
 	// root past the cap) simply aren't in the map — nothing reads their face.
@@ -205,7 +205,7 @@
 	     work in, so a day of runs reads as a *shape* before it reads as text,
 	     which is what a band of cloth is supposed to do.
 	     Width from `loomBarFraction` against the window-wide max (bars compare
-	     across days), colour from the thermal-age stops, bare runs dimmed. Worker
+	     across days), colour from the thermal-age stops, bare runs dimmed. Strand
 	     rows recede: thinner, dimmer, like the band's nested children. -->
 	<span
 		class="pointer-events-none absolute inset-x-0 bottom-0 block rounded-[1px] bg-stone-900/50 {child

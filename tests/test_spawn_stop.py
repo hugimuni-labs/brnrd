@@ -349,7 +349,7 @@ class TestMessageVerb:
 
         # Visibility: only the addressed child's view carries it.
         child_view = daemon._pending_events_for_agent(
-            inbox, "evt-child", worker=True)
+            inbox, "evt-child", strand=True)
         assert [e["id"] for e in child_view] == [msg["id"]]
         resident_view = daemon._pending_events_for_agent(inbox, "evt-lead")
         assert msg["id"] not in [e["id"] for e in resident_view]
@@ -405,11 +405,11 @@ class TestWorkerViewIsolation:
         )
 
         worker_view = daemon._pending_events_for_agent(
-            inbox, "evt-child", worker=True)
+            inbox, "evt-child", strand=True)
         assert [e["id"] for e in worker_view] == [msg.stem]
 
         other_worker = daemon._pending_events_for_agent(
-            inbox, "evt-other-child", worker=True)
+            inbox, "evt-other-child", strand=True)
         assert other_worker == []
 
     def test_resident_view_hides_edge_messages_keeps_user_events(self, tmp_path):

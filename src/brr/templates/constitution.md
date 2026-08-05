@@ -94,7 +94,7 @@ code, tests, and pages that no longer fit; carrying old shape costs more
 than it saves.
 <!-- /brnrd:block -->
 
-<!-- brnrd:block id=workflow v=2 hash=732c9af0c316 -->
+<!-- brnrd:block id=workflow v=2 hash=bf3ae8916c33 -->
 ## Workflow
 
 **Orientation.** At the start of every session: read the knowledge base's
@@ -110,7 +110,7 @@ left open questions, address them.
 - *Research / plan* — investigate, write findings to the kb. Commit.
 - *Orchestrate* — a request with several separable parts: decompose,
   delegate the bounded pieces through whatever parallel means the host
-  provides (subagents, workers), review each result whole, converge into
+  provides (subagents, strands), review each result whole, converge into
   one deliverable. Documenting the plan is the first step of this type,
   not a type of its own.
 - *Release / deploy* — follow the project's release process exactly.
