@@ -24,14 +24,16 @@ export interface FuelRow {
 	percentLabel: string;
 	/** Compact time-to-reset, e.g. `4d2h` / `3h50m` / `47m`. */
 	resetShort: string | null;
-	/** Fraction of this window already elapsed (0..1), for the time track. */
-	timeFraction: number | null;
+	/** Fraction of the window still to run, 1 → 0 as reset approaches. The
+	 *  dial draws this, so it **drains**: the wedge is what is left, not what
+	 *  is spent. */
+	timeRemaining: number | null;
 	tooltip: string;
 	stale: boolean;
 }
 
 /** Known window lengths by compact name; a window we can't size renders
- *  its countdown text but no elapsed track (never a fabricated fraction). */
+ *  its countdown text but no dial (never a fabricated fraction). */
 const WINDOW_DURATION_S: Record<string, number> = {
 	'5h': 5 * 3600,
 	week: 7 * 86400
@@ -40,7 +42,14 @@ const WINDOW_DURATION_S: Record<string, number> = {
 /** The reset dial is a filled pie: a circle of radius R/2 stroked at width R
  *  covers the full disc, so a stroke-dasharray arc reads as a wedge. 2026-07-22
  *  ask — the old second bar shared the fuel bar's grammar while meaning time,
- *  and nothing on screen said so; a filling disc reads as a clock natively. */
+ *  and nothing on screen said so; a disc reads as a clock natively.
+ *
+ *  2026-08-05: the wedge **drains**. It filled for two weeks, which is the
+ *  progress-bar idiom — a thing being accomplished — beside a fuel bar that
+ *  already means "what is left". A quota window is a reserve of time and a
+ *  reserve empties; a draining disc is the cooldown/countdown idiom every
+ *  reader already holds, and it now agrees with its neighbour instead of
+ *  running against it. */
 export const DIAL_WEDGE_RADIUS = 2.75;
 const DIAL_CIRCUMFERENCE = 2 * Math.PI * DIAL_WEDGE_RADIUS;
 
@@ -178,10 +187,8 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 					: reading.resets_at - nowMs / 1000;
 			const resetShort = secondsLeft === null ? null : shortDelta(secondsLeft);
 			const duration = WINDOW_DURATION_S[compact.window];
-			const timeFraction =
-				secondsLeft === null || !duration
-					? null
-					: Math.max(0, Math.min(1, 1 - secondsLeft / duration));
+			const timeRemaining =
+				secondsLeft === null || !duration ? null : Math.max(0, Math.min(1, secondsLeft / duration));
 
 			return {
 				id: `${shell.shell}:${window.label}:${index}`,
@@ -189,8 +196,8 @@ export function fuelRows(shells: QuotaShell[], nowMs: number = Date.now()): Fuel
 				percent,
 				percentLabel,
 				resetShort,
-				timeFraction,
-				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}${timeFraction === null ? '' : ` · window ${Math.round(timeFraction * 100)}% elapsed`}`,
+				timeRemaining,
+				tooltip: `${label}: ${percent === null ? 'unknown' : `${Math.round(percent)}% left`}${reset ? ` · ${reset}` : ''}${timeRemaining === null ? '' : ` · ${Math.round(timeRemaining * 100)}% of window left`}`,
 				stale: shell.status === 'stale'
 			};
 		})
