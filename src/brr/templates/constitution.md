@@ -94,7 +94,7 @@ code, tests, and pages that no longer fit; carrying old shape costs more
 than it saves.
 <!-- /brnrd:block -->
 
-<!-- brnrd:block id=workflow v=2 hash=732c9af0c316 -->
+<!-- brnrd:block id=workflow v=2 hash=bf3ae8916c33 -->
 ## Workflow
 
 **Orientation.** At the start of every session: read the knowledge base's
