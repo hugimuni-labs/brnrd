@@ -52,6 +52,54 @@ def test_public_stats_counts_accounts():
     assert payload["supporter_seats_total"] == 2
 
 
+def test_public_stats_does_not_count_erased_accounts():
+    """The landing counter names living accounts, not rows.
+
+    Driven through the real deletion endpoint, not a hand-set ``deleted_at``:
+    ``delete_account`` keeps the row (the retained billing ledger's FK needs
+    it) and rewrites ``github_id`` to a tombstone value, which frees the
+    unique constraint so the same person can sign up again. So one
+    delete-and-recreate cycle leaves two rows behind one living account —
+    exactly the shape that made the public number climb during a user test
+    and made it unable to answer "is that a new user?".
+    """
+    client = _client()
+    headers = brnrd_account_headers(
+        client.app, github_id="7", login="octocat", email="octocat@example.com"
+    )
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 1
+
+    assert (
+        client.post(
+            "/v1/accounts/delete",
+            json={"confirm_login": "octocat"},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+
+    # The row survives — this is the fact the count has to see past, and
+    # asserting it here is what keeps the test honest if erasure ever
+    # becomes a hard delete and the filter turns into a silent no-op.
+    from brnrd.models import Account as _Account
+
+    with client.app.state.SessionLocal() as db:
+        assert db.query(_Account).count() == 1
+
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 0
+
+    # And the same person signing up again is one account, not three rows.
+    brnrd_account_headers(
+        client.app, github_id="8", login="octocat", email="octocat@example.com"
+    )
+    stats_router._reset_cache()
+    assert client.get("/v1/stats/public").json()["accounts"] == 1
+    with client.app.state.SessionLocal() as db:
+        assert db.query(_Account).count() == 2
+
+
 def test_public_stats_caches_between_calls():
     client = _client()
     assert client.get("/v1/stats/public").json()["accounts"] == 0
@@ -131,17 +179,24 @@ def test_deployed_version_pre_fix_two_line_file_reads_as_unknown(tmp_path, monke
 # --- Shells-and-doors support matrix (#1070 follow-up) ----------------------
 
 
-def test_support_matrix_reads_soon_when_deployment_is_unconfigured():
+def test_support_matrix_reads_ready_when_deployment_is_unconfigured():
+    """"soon" means the gate's code does not exist yet — every door here is
+    shipped, so an unconfigured deployment reads "ready" (shipped, no
+    confirmed brnrd.dev identity), never "soon" and never a fabricated
+    "live". Slack and Signal have no hosted axis at all (self-hosted
+    gates, full stop) and land on "ready" the same way an unconfigured
+    WhatsApp does — one state for "no confirmed identity", regardless of
+    which of the two reasons caused it."""
     client = _client()
     payload = client.get("/v1/stats/support").json()
     by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
-    assert by_slug["telegram"] == "soon"
-    assert by_slug["whatsapp"] == "soon"
-    assert by_slug["github"] == "soon"
-    # No hosted axis at all for these — always mirrors shipped code, not
-    # this deployment's Settings.
-    assert by_slug["slack"] == "live"
-    assert by_slug["signal"] == "live"
+    assert by_slug["telegram"] == "ready"
+    assert by_slug["whatsapp"] == "ready"
+    assert by_slug["github"] == "ready"
+    assert by_slug["slack"] == "ready"
+    assert by_slug["signal"] == "ready"
+    # The one door with no cloud_settings that stays live regardless: it
+    # *is* brnrd.dev.
     assert by_slug["dashboard"] == "live"
 
 
@@ -159,7 +214,7 @@ def test_support_matrix_reads_live_once_this_deployment_is_configured():
     by_slug = {door["slug"]: door["status"] for door in payload["doors"]}
     assert by_slug["telegram"] == "live"
     # Unaffected by an unrelated door's configuration.
-    assert by_slug["whatsapp"] == "soon"
+    assert by_slug["whatsapp"] == "ready"
 
 
 # --- Stripe-derived pricing (#831) -------------------------------------------

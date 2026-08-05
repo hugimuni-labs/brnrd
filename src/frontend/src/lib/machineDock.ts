@@ -90,6 +90,16 @@ export interface MachineHeadFields {
 	/** The right-hand tail: `N armed · next in …`. The armed rows below say it
 	 *  row by row, with their own clocks. */
 	armedTail: boolean;
+	/** The head run's mood chip (rest/blink glyph, worn beside the clock).
+	 *  Suppressed with the lane on screen for the same reason `clock` is, not
+	 *  because it is identity: a feeling turns between beats the same way a
+	 *  clock ticks, so it belongs on this side of the identity/measurement
+	 *  split, not the other. His 2026-08-05 read — "it repeats after the main
+	 *  run card mood block" — is the concrete case: with a run focused or
+	 *  selected, `RunNodeInline`'s own `MoodChip` already carries this run's
+	 *  feeling one screen below, and the head repeating it here measured
+	 *  nothing new. */
+	mood: boolean;
 }
 
 /**
@@ -152,7 +162,8 @@ export function machineHeadFields(bodyOnScreen: boolean): MachineHeadFields {
 		clock: !bodyOnScreen,
 		note: !bodyOnScreen,
 		extra: !bodyOnScreen,
-		armedTail: !bodyOnScreen
+		armedTail: !bodyOnScreen,
+		mood: !bodyOnScreen
 	};
 }
 

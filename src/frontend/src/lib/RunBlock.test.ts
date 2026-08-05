@@ -128,6 +128,53 @@ test('a selection that has since dropped out of `burning` falls back to the lead
 	equal(pulse, staleSelection);
 });
 
+// His 2026-08-05 read: the head's mood chip repeats `RunNodeInline`'s own
+// `MoodChip` once the lane is on screen, and should sit beside the clock
+// instead of the name.
+const grinning = pick({
+	id: 'run-a',
+	label: 'Alpha',
+	clock: '3m12s',
+	note: null,
+	mood: {
+		name: 'grinning',
+		glyph: 'b^u^d',
+		sequences: [['brnrd', 'b^u^d', 'brnrd']],
+		rest: 'b^u^d',
+		pitch: 0.6
+	}
+});
+
+test('collapsed, the mood chip renders beside the clock', async () => {
+	const body = await renderBlock({ burning: [grinning], armed: [], open: false });
+	ok(body.includes('b^u^d'), "the lead's rest mood glyph renders");
+	ok(body.includes('3m12s'), 'the clock still renders alongside it');
+});
+
+test('open, the mood chip is gone — the run card below already carries it', async () => {
+	const collapsed = await renderBlock({ burning: [grinning], armed: [], open: false });
+	const opened = await renderBlock({ burning: [grinning], armed: [], open: true });
+	ok(collapsed.includes('b^u^d'), 'sanity: the collapsed line does carry the mood glyph');
+	ok(!opened.includes('b^u^d'), 'the open line does not repeat it');
+	// The clock is suppressed the same way, for the same reason — the lane one
+	// line below is the same run with the same clock.
+	ok(!opened.includes('3m12s'), 'the clock is suppressed on the same predicate');
+});
+
+test('the mood chip sits outside the name group, not mid-row with the identity face', async () => {
+	// Regression guard for the reposition: the mood span must not be a
+	// descendant of the name's own flex group any more — it is a sibling next
+	// to the clock now.
+	const body = await renderBlock({ burning: [grinning], armed: [], open: false });
+	const nameGroupStart = body.indexOf('Alpha');
+	const moodGlyphIndex = body.indexOf('b^u^d');
+	const nameGroupClose = body.indexOf('</span>', nameGroupStart);
+	ok(
+		moodGlyphIndex > nameGroupClose,
+		'the mood glyph markup appears after the name group span closes, not inside it'
+	);
+});
+
 test('a wake selection is not a run selection: the page never passes a wake id here, and nothing here would swap for one', async () => {
 	// The page narrows `loomSelection` to `null` for a wake before this prop is
 	// set (`+page.svelte`); this only pins that an arbitrary id the lead never

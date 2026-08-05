@@ -62,13 +62,47 @@ KNOWLEDGE_PATH = "knowledge"
 # retained only so the idempotent migration can find pre-message-store homes.
 REPLIES_PATH = "replies"
 
-GITIGNORE = """\
+# Mirrors ``config.SECURITY_CONFIG_FILENAME`` — duplicated rather than
+# imported (same reasoning as ``gates/cloud.py``'s ``_PUBLISH_CORPUS_SLICES``
+# mirroring ``account.CORPUS_LAYERS``: this module stays free of a
+# module-level dependency on ``config``, which itself resolves *through*
+# this module at call time). ``test_account_security_filename_matches_config``
+# pins the two together.
+SECURITY_CONFIG_FILENAME = "security.config"
+
+# The live bearer token's home once split out of the tracked
+# ``account/gates/cloud.json`` (see ``gates/cloud.py``'s ``_token_path`` —
+# same basename, duplicated for the same reason as the filename above).
+CLOUD_TOKEN_FILENAME = "cloud.token"
+_CLOUD_TOKEN_RELPATH = f"{ACCOUNT_GATES_PATH}/{CLOUD_TOKEN_FILENAME}"
+
+GITIGNORE = f"""\
 /dispatch/inbox/
 /dispatch/responses/
 /knowledge/
 /.brr/
+/{SECURITY_CONFIG_FILENAME}
+/{_CLOUD_TOKEN_RELPATH}
 *.tmp
 """
+
+# Real files (never directories, never the ``*.tmp`` glob) this home's
+# ``.gitignore`` keeps out of the tracked tree — the set both the untrack
+# migration below and a capture-cycle test check against ``git ls-files``,
+# so neither hand-maintains a second list that can drift from the rules
+# above. The generator this closes: ``dominion.commit`` -> ``gitops.
+# commit_all`` runs ``git add -A`` on the whole home root and cannot tell a
+# secret from a note (issue: the account daemon token committed 107 times
+# in a tracked ``cloud.json`` before this file existed).
+NEVER_TRACKED_FILES = (SECURITY_CONFIG_FILENAME, _CLOUD_TOKEN_RELPATH)
+
+# Of those, which ones a *pre-existing* home's git index might already
+# track from before its ``.gitignore`` rule existed, and therefore need
+# ``git rm --cached`` rather than just the new line (which never untracks a
+# file already in the index). ``cloud.token`` never existed before this same
+# change introduced it, so no install has ever tracked it — nothing to
+# untrack there, only ``security.config``.
+_UNTRACK_ON_GITIGNORE_MIGRATION = (SECURITY_CONFIG_FILENAME,)
 
 
 @dataclass(frozen=True)
@@ -234,22 +268,50 @@ def _write_gitignore(path: Path) -> None:
     already-git-tracked home is exactly the "embedded repository" confusion
     gitignoring exists to avoid) would otherwise carry a stale
     ``.gitignore`` forever, since ``resolve_context`` only calls this once
-    at first creation.
+    at first creation. ``/security.config`` and the cloud-gate token path
+    followed the same shape 2026-08-05: a home created before *those* rules
+    existed has both already sitting in the git index, which a gitignore
+    line alone does not fix — see :func:`_untrack_newly_ignored`, run
+    unconditionally below regardless of whether this pass had new lines to
+    append.
     """
     ignore = path / ".gitignore"
     existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
     existing_lines = set(existing.splitlines())
     wanted_lines = [line for line in GITIGNORE.splitlines() if line]
     missing = [line for line in wanted_lines if line not in existing_lines]
-    if not missing:
+    if missing:
+        new_text = existing
+        if new_text and not new_text.endswith("\n"):
+            new_text += "\n"
+        new_text += "\n".join(missing) + "\n"
+        tmp = ignore.with_suffix(ignore.suffix + ".tmp")
+        tmp.write_text(new_text, encoding="utf-8")
+        tmp.replace(ignore)
+    _untrack_newly_ignored(path)
+
+
+def _untrack_newly_ignored(home_root: Path) -> None:
+    """``git rm --cached`` any file a standing ignore rule covers but the
+    index still remembers from before the rule existed.
+
+    Idempotent and best-effort, called on every :func:`_write_gitignore`
+    pass (not only when it just wrote new lines) so an operator who added a
+    rule by hand, or a home mid-migration across two daemon versions, still
+    gets repaired. A tracked ``security.config`` today carries no secret by
+    luck, not design (``config.py``'s module docstring names it as exactly
+    the file whose whole purpose is to hold security material); this closes
+    the gap before it does.
+    """
+    if not (home_root / ".git").exists():
         return
-    new_text = existing
-    if new_text and not new_text.endswith("\n"):
-        new_text += "\n"
-    new_text += "\n".join(missing) + "\n"
-    tmp = ignore.with_suffix(ignore.suffix + ".tmp")
-    tmp.write_text(new_text, encoding="utf-8")
-    tmp.replace(ignore)
+    for relname in _UNTRACK_ON_GITIGNORE_MIGRATION:
+        try:
+            tracked = gitops.is_tracked_in(home_root, relname)
+        except Exception:  # noqa: BLE001 - a bootstrap step must not abort here
+            continue
+        if tracked:
+            gitops.untrack_cached(home_root, relname)
 
 
 def _load_registry(path: Path) -> tuple[dict[str, AccountRepo], str | None]:
