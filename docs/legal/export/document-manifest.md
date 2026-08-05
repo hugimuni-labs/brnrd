@@ -13,7 +13,7 @@ Hash snapshot:
 
 - Date: 2026-08-06
 - Source revision (parent of this export-only change):
-  `e23e0c78cc5c67cd88555c85b41f7b141162519c`
+  `1756570a0d66e2e0c927b467eeb7789c010b8065`
 - Algorithm: SHA-256 over raw repository file bytes
 - Machine-readable list: [`SHA256SUMS`](SHA256SUMS)
 - Verification from the repository root:
@@ -48,7 +48,7 @@ hashes below remain authoritative for the snapshot if a deployed page changes.
 | Data Processing Agreement | [`docs/legal/dpa.md`](../dpa.md) | `ee366853701826282da0326092fc4ff504aab99f726e6dfcf234f4d9854f43fd` |
 | Article 30 record of processing | [`docs/legal/art-30-record.md`](../art-30-record.md) | `3d23e2289ce10bbb59f9fa1c235dc6f207bfd5b2c6e596c99b1f6ae0768d88b3` |
 | Driven data-flow and trust inventory | [`SECURITY.md`](../../../SECURITY.md) | `2883c0835519ffd0aafed284983b8e5bbe9ef6662aaaa3da476701f0446645a5` |
-| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `49d76c4c45cd5c4e1440ca8bd8353eec6f71de7e1adaad60f6cf3abfbabb81a3` |
+| Pricing and offer page | [`src/frontend/src/routes/pricing/+page.svelte`](../../../src/frontend/src/routes/pricing/+page.svelte) | `d5e9feede83d088461ae5873be558a2f37d7a6c6de39dc36a18ce3ffdc7ad242` |
 | MIT license | [`LICENSE`](../../../LICENSE) | `3101d42b24f94e634de450ea11eca86b144900590896948376f67936acf02d92` |
 | License boundary overview | [`LICENSE-OVERVIEW.md`](../../../LICENSE-OVERVIEW.md) | `37ed3bb589c5b2a46bcb4a674548d49d433efdda573c003332f7c13405ada0d8` |
 
