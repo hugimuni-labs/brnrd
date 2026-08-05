@@ -2313,6 +2313,30 @@ def _build_continuity_facet(
         return BootContinuity(mount="✗ unreachable")
 
 
+def _is_strand(record: dict | None) -> bool:
+    """True when *record* describes a strand-stack run, in either spelling.
+
+    ``strand`` is canonical; ``worker`` is what every event file and run
+    manifest on disk was stamped with before the rename. Those records
+    outlive the image that wrote them: a ``spawn:``/``respawn:`` queued by
+    the old image and dispatched after a reload (``dev_reload`` re-execs at
+    quiescence — which is precisely when a queued dispatch is waiting) would
+    otherwise read as *not a strand*, and wake with the resident's contract
+    — the user thread's correspondence and pending events (#574), the
+    closeout obligations it was never given (#779), no ``GIT_DIR`` pin on
+    the shared checkout (#703), mirror cards, live-menu authority, and the
+    right to spawn nested children.
+
+    So: **read both spellings, write only ``strand``.** The legacy key is
+    read-only compatibility for records already on disk, not a second
+    supported way to say it — ``_queue_respawn_request`` is where a
+    *resident* writing ``worker: true`` gets told to migrate.
+    """
+    if not record:
+        return False
+    return bool(record.get("strand") or record.get("worker"))
+
+
 def _presence_label_for_event(event: dict) -> str:
     """Derive a run's presence ``label`` — dashboard chrome, not content.
 
@@ -2397,7 +2421,7 @@ def _child_git_pin(task: Run, run_root: Path) -> dict[str, str]:
     stray-write check below is fact-based precisely because this readability
     cost means a strand cannot always verify its own containment.
     """
-    if not task.meta.get("strand"):
+    if not _is_strand(task.meta):
         return {}
     # `host` never gets a pin: its cwd *is* the checkout, and its commits
     # legitimately land there. Belt and braces with the meta check — a strand
@@ -3048,7 +3072,7 @@ def _run_worker(
     # contract, and once forging a receipt from a sibling's SHA riding
     # the decoration, both caught live 2026-07) retires at the daemon
     # instead of by prompt discipline.
-    is_strand_run = bool(event.get("strand"))
+    is_strand_run = _is_strand(event)
     event_body_for_prompt = event.get("body", "") or ""
     woven_body, woven_sibling_ids = (
         (None, set()) if is_strand_run
@@ -3381,7 +3405,7 @@ def _run_worker(
         # closeout, and a guard demanding one would block a run for failing to keep a
         # contract it was never given.
         obligations: list[str] = []
-        if cfg.get("hooks.next_move", False) and not task.meta.get("strand"):
+        if cfg.get("hooks.next_move", False) and not _is_strand(task.meta):
             env["BRR_NEXT_MOVE_GUARD"] = "1"
             # Same arming, same control-arm discipline: the guard also escalates
             # the clean artifact obligation (card) from format_delta's soft
@@ -3434,7 +3458,7 @@ def _run_worker(
         gate_command = str(cfg.get("hooks.gate_command", "") or "").strip()
         if (
             gate_command
-            and not task.meta.get("strand")
+            and not _is_strand(task.meta)
             and task.meta.get("root_kind") != "home"
         ):
             obligations.append("gate")
@@ -3454,7 +3478,7 @@ def _run_worker(
         # Not for strands, for the #779 reason: `strand.md` grants no chat seam,
         # so a strand owes no closeout and its terminal text is a return value,
         # not a promise to a reader.
-        if not task.meta.get("strand"):
+        if not _is_strand(task.meta):
             obligations.append("vigil")
 
         if obligations:
@@ -3759,7 +3783,7 @@ def _run_worker(
             ),
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
-            strand=bool(task.meta.get("strand")),
+            strand=_is_strand(task.meta),
             hooks_installed=run_hooks_installed,
         )
 
@@ -5437,7 +5461,7 @@ def _write_live_portal_state(
         outbox_dir.mkdir(parents=True, exist_ok=True)
         events = _pending_events_for_agent(
             inbox_dir, current_event_id,
-            strand=bool(task.meta.get("strand")) if hasattr(task, "meta") else False,
+            strand=_is_strand(task.meta) if hasattr(task, "meta") else False,
             account_context=account_context,
             repo_label=repo_label,
         )
@@ -6694,7 +6718,7 @@ def _queue_spawn_request(
             lifetime="run",
         )
         return False
-    if bool(task.meta.get("strand")):
+    if _is_strand(task.meta):
         _record_outbox_notice(
             outbox_dir,
             "spawn refused: a strand-stack run cannot spawn (no nested spawns). "
@@ -7098,7 +7122,7 @@ def _drain_outbox(
             # `kind="refused"` (a well-formed directive brnrd declines) except
             # the malformed-input cases, which are `"dropped"` (nothing
             # resolvable was there to refuse).
-            if bool(task.meta.get("strand")):
+            if _is_strand(task.meta):
                 _record_outbox_notice(
                     outbox_dir,
                     "await refused: a strand-stack run cannot arm a wait — "
@@ -7935,7 +7959,7 @@ def _drain_live_menu(
         return False
     state["digest"] = digest
 
-    if task.meta.get("strand"):
+    if _is_strand(task.meta):
         _record_outbox_notice(
             outbox_dir,
             f"{_LIVE_MENU_NAME} ignored: strand-stack children may propose "
@@ -8053,7 +8077,7 @@ def _emit_mirror_cards(
     mirror must never break a run.
     """
     try:
-        if bool(task.meta.get("strand")):
+        if _is_strand(task.meta):
             # A strand-stack run owns no thread and folds nothing (live
             # incident 2026-07-16: two spawn children stamped "folded into a
             # running thought" under the whole backlog of a chat that their
