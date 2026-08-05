@@ -4164,6 +4164,151 @@ def install_hook_config(
     return settings_path
 
 
+# ── The in-process subagent boundary (#1095) ─────────────────────────────
+#
+# A Shell's own subagent (claude's `Agent` tool) runs *inside* the runner
+# process. It inherits the runner's environment and `.claude/settings.local.json`
+# wholesale, so every hook subprocess it spawns resolves the parent's
+# `BRR_*` handles — the parent's portal state, the parent's outbox, the
+# parent's hook state. Until this seam existed, a subagent's tool boundaries
+# were therefore decorated with the *parent's* correspondence: pending
+# events, the correspondent's name and handle, message bodies, and the
+# instruction to answer them. Found live on run-260804-1017-mlcm, where a
+# research worker read the maintainer's chat messages, correctly classified
+# them as prompt injection, and said so in its report. From inside a child,
+# brnrd's control channel is indistinguishable from an attack.
+#
+# The isolation this restores is about *addressing*, not secrecy: one message
+# to one run must not make every limb of that run act on it. brnrd's own
+# `spawn:` children — separate daemon runs — have answered this since
+# 2026-07-18 (`daemon._pending_events_for_agent(worker=True)`: a worker sees
+# only its own dispatch-edge traffic). This is the same rule, finally applied
+# to the in-process lane.
+#
+# The discriminator is measured, not assumed. Captured from live claude
+# `PostToolBatch` payloads on 2026-08-05:
+#
+#   parent:   cwd effort hook_event_name permission_mode prompt_id
+#             session_id tool_calls transcript_path
+#   subagent: cwd agent_id agent_type hook_event_name permission_mode
+#             prompt_id session_id tool_calls transcript_path
+#
+# `session_id`, `transcript_path` and every `BRR_*` variable are *identical*
+# across the two — the child shares the parent's session. `agent_id` /
+# `agent_type` are the only fields that appear on one and not the other, so
+# they are what this keys on. A payload that carries neither is the resident's
+# own boundary and takes the ordinary path.
+
+#: Per-run directory of first-boundary latches, one file per `agent_id`.
+SUBAGENT_LATCH_DIR_NAME = "subagents"
+
+
+def subagent_identity(payload: dict[str, Any]) -> dict[str, str] | None:
+    """The `agent_id` / `agent_type` of an in-process subagent, or ``None``.
+
+    ``None`` means "this is the resident's own boundary" — the ordinary path.
+    Absence is the common case and must stay cheap and total: any payload
+    shape that is not a dict carrying at least one of the two fields resolves
+    to the resident, because the failure this guards against is *starving the
+    resident*, which is far more expensive than one un-suppressed child.
+    """
+    if not isinstance(payload, dict):
+        return None
+    agent_id = str(payload.get("agent_id") or "").strip()
+    agent_type = str(payload.get("agent_type") or "").strip()
+    if not agent_id and not agent_type:
+        return None
+    return {
+        "agent_id": agent_id or "unknown",
+        "agent_type": agent_type or "subagent",
+    }
+
+
+def _subagent_latch(ctx: HookContext, agent_id: str) -> bool:
+    """Claim the first boundary for *agent_id*. ``True`` exactly once.
+
+    The latch lives in its own per-agent file under the run directory rather
+    than in `.hook-state.json`: the whole point of this seam is that a child
+    neither reads nor writes the parent's state, and subagents run
+    concurrently, so a shared JSON document would be both a violation and a
+    race. ``O_CREAT | O_EXCL`` makes the claim atomic between siblings.
+
+    No run directory (an older daemon, an ad-hoc hook run) ⇒ ``False``: the
+    child stays silent. Silence is the honest default here — brnrd knows
+    nothing about a child it did not dispatch, and a line that cannot be
+    latched is a line that repeats at every boundary forever.
+    """
+    directory = ctx.run_dir
+    if directory is None or not directory.is_dir():
+        return False
+    safe = "".join(c for c in agent_id if c.isalnum() or c in "-_")[:64]
+    if not safe:
+        return False
+    latch_dir = directory / SUBAGENT_LATCH_DIR_NAME
+    try:
+        latch_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(
+            str(latch_dir / f"{safe}.claimed"),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(fd, _utc_now_iso().encode("utf-8") + b"\n")
+    except OSError:  # pragma: no cover - defensive
+        pass
+    finally:
+        os.close(fd)
+    return True
+
+
+def subagent_neutral(
+    phase: str, ctx: HookContext, identity: dict[str, str]
+) -> dict[str, Any]:
+    """The neutral result for an in-process subagent's boundary.
+
+    Carries the child's own state and nothing of the parent's. Deliberately
+    *not* a filtered :func:`compute_neutral`: the portal is never read, the
+    hook state is never read or written, no latch of the parent's is spent, no
+    seen-ledger advances, and no Stop can ever be blocked — a child owes the
+    parent's correspondents nothing, and cannot be held at a closeout it does
+    not own.
+
+    What is left is what brnrd actually knows about an in-process child: who
+    it is, whose limb it is, and the one fact that costs work when it is
+    unknown — that it dies with the parent's stream (#996). Said once, on the
+    child's first boundary, then silence.
+    """
+    result: dict[str, Any] = {
+        "inject": None,
+        "block": False,
+        "block_reason": None,
+        "subagent": dict(identity),
+    }
+    if phase != PHASE_POST_TOOL:
+        # Stop / session-start for a child: nothing to say, and nothing of the
+        # parent's to say it with.
+        return result
+    if not _subagent_latch(ctx, identity["agent_id"]):
+        return result
+    run_label = f" of {ctx.run_id}" if ctx.run_id else ""
+    short = identity["agent_id"][:8]
+    result["inject"] = (
+        f"[brnrd] subagent · {identity['agent_type']} · {short} — "
+        f"a limb{run_label}.\n"
+        "This boundary carries your own state. The run's correspondence and "
+        "closeout obligations belong to the parent and are not shown here; "
+        "you have no outbox of your own, and your final message is the return "
+        "value the parent collects.\n"
+        "You die when the parent's stream ends — land or report your work "
+        "rather than holding it."
+    )
+    return result
+
+
 # ── Entry point ──────────────────────────────────────────────────────────
 
 
@@ -4184,7 +4329,15 @@ def run_hook(
     if phase not in PHASES:
         return {}, 0
     ctx = HookContext(env)
-    neutral = compute_neutral(phase, ctx, _safe_json(stdin_text))
+    payload = _safe_json(stdin_text)
+    # An in-process subagent shares every env handle with the resident, so the
+    # payload is the only place the two differ (#1095). Branch before anything
+    # reads the portal or the hook state — the isolation is the point.
+    identity = subagent_identity(payload)
+    if identity is not None:
+        neutral = subagent_neutral(phase, ctx, identity)
+    else:
+        neutral = compute_neutral(phase, ctx, payload)
     # Record the *neutral* result, not the rendered native JSON: the neutral
     # shape is the one thing every Shell flavour shares, so a transcript
     # written from here reads the same whether the run was claude or codex.
@@ -4227,6 +4380,13 @@ def record_boundary(
         "block": bool(neutral.get("block")),
         "block_reason": neutral.get("block_reason"),
     }
+    # An in-process subagent's boundary is recorded (it happened, and a reader
+    # asking "what did this run's environment say" wants it) but tagged, so
+    # `derive_boundaries_summary` can keep the run's own verdict — which is
+    # about the *resident's* closeout — free of a child's fires (#1095).
+    subagent = neutral.get("subagent")
+    if isinstance(subagent, dict) and subagent:
+        record["subagent"] = subagent
     try:
         line = json.dumps(record, sort_keys=True)
     except (TypeError, ValueError):  # pragma: no cover - defensive
@@ -4329,6 +4489,13 @@ def derive_boundaries_summary(path: Path) -> dict[str, Any] | None:
             continue
         if not isinstance(record, dict) or not isinstance(record.get("phase"), str):
             skipped += 1
+            continue
+        if record.get("subagent"):
+            # A limb's boundary, not the run's (#1095). Skipped rather than
+            # counted: this summary answers "did *this run* end over a live
+            # objection", and a child — which can never be blocked, and whose
+            # Stop is not the resident's — would only dilute the count and, at
+            # Stop, overwrite the resident's own final verdict.
             continue
         total += 1
         at = record.get("at")
