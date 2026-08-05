@@ -34,6 +34,42 @@ cost/quota metadata). A profile with both Shell and Core pinned is one
 selectable Runner. The **resident** inhabits whichever Runner this wake
 was given; `prompts/runners.md` (this file) catalogs what's available.
 
+## Workers and subagents — one word each, on purpose
+
+Two kinds of parallelism exist around a runner, and they used to share a
+word; a "spawn workers" instruction read as either. They don't share it
+any more:
+
+- A **worker** is a brnrd-dispatched sibling run: a *full Runner* — its
+  own Shell + Core, its own worktree and publish lane, its own
+  single-flight slot, visible in the wyrd with its own run node and
+  relics. Dispatched via an outbox file with `spawn: true` (optionally
+  `shell:` / `core:`); its completion returns to the parent as a pending
+  event. A worker **inherits the parent's Core unless the spec names
+  one** — naming a cheaper Shell/Core (`shell: codex`, an economy core)
+  is the deliberate downshift lever for bounded tedium.
+- A **subagent** is in-harness parallelism *inside one shell* (Claude
+  Code's Agent tool and its kin): same process family, same Core and
+  quota as the run that launched it, invisible to the loom — no slot, no
+  run node, no relics of its own, and no way for the daemon or the user
+  to see or steer it.
+
+Any prompt, schedule entry, or chat instruction that says "spawn
+workers" means brnrd workers — another Shell, never a subagent. A runner
+that means in-shell parallelism says "subagent". When capacity matters,
+the worker pool is `resources.coexisting_runs.spawn_pool` in
+`portal-state.json`; subagents are bounded only by the shell's own
+limits and the Core's quota.
+
+In the loom register a dispatched worker is a **strand** (settled
+2026-08-01): the resident's own weft yarn divided — the same thread
+crossing a different stretch of warp — not staff at arm's length.
+"Throw a strand" = spawn a worker; the Runner is the shuttle any strand
+rides. The name is deliberate orientation, not decoration: a strand's
+diff is still read whole, and *being the resident's own* is exactly why.
+Mundane register keeps `worker`, `spawn:`, and the pool key in code and
+config.
+
 The runner contract is deliberately abstract: a runner is a process that
 can intelligently operate files in its working directory. brnrd pipes the
 assembled prompt to the runner on **stdin** (written whole, then closed —
