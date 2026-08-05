@@ -1362,6 +1362,38 @@ class TestPromptBuilding:
         assert "inbox.json" in prompt
         assert "snapshot from when you woke" not in prompt
 
+    def test_daemon_prompt_lists_pending_event_attachment_path(self, tmp_path):
+        """#1156: a folded-in event's already-downloaded attachment renders
+        an openable path in the inbox block, not just the bare summary."""
+        image_path = tmp_path / "evt-B.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "a photo",
+                 "attachment_paths": [str(image_path)]},
+            ],
+        )
+        assert "evt-B" in prompt
+        assert str(image_path) in prompt
+
+    def test_daemon_prompt_flags_unfetched_pending_event_attachment(self, tmp_path):
+        """An announced-but-never-downloaded attachment on a folded-in event
+        renders as a distinguishable "announced, not fetched" line rather
+        than being silently indistinguishable from no attachment at all."""
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            run_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram", "summary": "a photo",
+                 "attachment_unfetched": ["ghost.png"]},
+            ],
+        )
+        assert "announced, not fetched" in prompt
+        assert "ghost.png" in prompt
+
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
@@ -2085,6 +2117,50 @@ def test_recent_conversation_no_marker_without_attachments():
     ]
     block = _format_recent_conversation(recent)
     assert "[" not in block
+
+
+def test_recent_conversation_marker_names_local_path_when_resolvable(tmp_path):
+    """#1156: the bracket count used to be the whole answer even when the
+    bytes it counted sat right there on disk. When this run's own inbox
+    drawer still has the file (``<brr_dir>/inbox/<event_id>.attachments/``),
+    the marker names it so the resident doesn't have to re-derive the path
+    from a bare count."""
+    adir = tmp_path / "inbox" / "evt-photo.attachments"
+    adir.mkdir(parents=True)
+    (adir / "photo.jpg").write_bytes(b"fake-jpeg-bytes")
+    recent = [
+        {
+            "ts": "2026-08-05T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "event_id": "evt-photo",
+            "body": "",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent, brr_dir=tmp_path)
+    assert "[photo ×1]" in block
+    assert str(adir / "photo.jpg") in block
+
+
+def test_recent_conversation_marker_falls_back_when_bytes_not_local(tmp_path):
+    """A record whose bytes never reached this drawer (a different account
+    dispatch inbox, or already swept by retention) keeps the bare count —
+    the marker never claims a path this reader cannot see."""
+    (tmp_path / "inbox").mkdir()
+    recent = [
+        {
+            "ts": "2026-08-05T21:44:00Z",
+            "kind": "event",
+            "source": "telegram",
+            "event_id": "evt-ghost",
+            "body": "",
+            "attachments": [{"kind": "photo", "filename": "photo.jpg"}],
+        },
+    ]
+    block = _format_recent_conversation(recent, brr_dir=tmp_path)
+    assert "[photo ×1]" in block
+    assert "local:" not in block
 
 
 def _read_bundled_agents_md() -> str:
