@@ -1048,6 +1048,83 @@ def test_plan_injected_whole_leaves_the_orientation_walk(
     assert names == ["AGENTS.md", "subject-boot-sequence.md"]
 
 
+def test_dropped_workflow_page_is_named_in_the_walk(tmp_path: Path) -> None:
+    """The measured defect (#1061): the one two-party contract page falls off
+    the surface block's path-order walk and nothing else points at it.
+
+    ``workflow.md`` sorts last under ``surface/``, so on a busy surface the
+    byte budget is spent before the walk reaches it — measured four wakes
+    running on this account, each of them acting on remembered merge
+    permissions. The fixture reproduces exactly that: a page sorting earlier
+    (``aaa.md``) eats the budget, and ``workflow.md`` must come back as a
+    named orientation read rather than as silence.
+    """
+    from brr import prompts
+    from brr import account as acc_mod
+    from brr import config as conf_mod
+
+    home = _seed_account_home_for_orientation(
+        tmp_path, extra_config="dominion.surface_inject_budget_bytes=200\n",
+    )
+    surface = home / "surface"
+    surface.mkdir(exist_ok=True)
+    (surface / "aaa.md").write_text("x" * 180, encoding="utf-8")
+    (surface / "workflow.md").write_text(
+        "# Workflow\n\nself-merge conditions 1-3\n", encoding="utf-8",
+    )
+
+    trim, whole = prompts._build_work_surface_block_scored(tmp_path)
+    cfg = conf_mod.load_config(tmp_path)
+    ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
+    workflow = (acc_mod.work_surface_path(ctx) / "workflow.md").resolve()
+
+    # The fixture's own claim: the surface block did NOT hand it over whole.
+    assert workflow not in whole
+    assert "self-merge conditions" not in trim.text
+
+    entries = prompts._build_orientation_set(
+        tmp_path, runner_shell="claude", injected_whole=whole,
+    )
+    assert workflow in {Path(e.path) for e in entries}, (
+        "the contract page was dropped from the injection and must be named "
+        "in the walk — otherwise the wake never learns it went missing"
+    )
+
+
+def test_workflow_page_injected_whole_leaves_the_walk(tmp_path: Path) -> None:
+    """The other half, and the one a blanket "always name it" would break.
+
+    A surface with room hands ``workflow.md`` over whole; naming it again in
+    the walk would bill the wake for a Read of a file it is already holding —
+    the #628 subtraction, applied to the page #1061 is about. Without this
+    the fix trades one wasted budget for another and the guard above would
+    still be green.
+    """
+    from brr import prompts
+    from brr import account as acc_mod
+    from brr import config as conf_mod
+
+    home = _seed_account_home_for_orientation(tmp_path)
+    surface = home / "surface"
+    surface.mkdir(exist_ok=True)
+    (surface / "workflow.md").write_text(
+        "# Workflow\n\nself-merge conditions 1-3\n", encoding="utf-8",
+    )
+
+    trim, whole = prompts._build_work_surface_block_scored(tmp_path)
+    cfg = conf_mod.load_config(tmp_path)
+    ctx = acc_mod.resolve_context(tmp_path, cfg, create=False)
+    workflow = (acc_mod.work_surface_path(ctx) / "workflow.md").resolve()
+
+    assert workflow in whole
+    assert "self-merge conditions" in trim.text
+
+    entries = prompts._build_orientation_set(
+        tmp_path, runner_shell="claude", injected_whole=whole,
+    )
+    assert workflow not in {Path(e.path) for e in entries}
+
+
 def test_codex_plan_whole_no_hub_match_empties_the_walk(tmp_path: Path) -> None:
     """On codex, with the plan injected whole and no touched hub, the walk
     is genuinely empty — and the rendered kernel must not show an ``orient:``

@@ -2441,6 +2441,23 @@ def _build_orientation(
 #: is a set it does not pad ("the set is 3 files, not 5 with two guesses").
 _ORIENTATION_SET_MAX = 5
 
+#: The two-party contract page on the work surface — the third structural
+#: role in the orientation set, beside the repo's ``AGENTS.md`` (the project's
+#: contract) and ``plans/<repo>/active.md`` (the resident's own queue).  Not a
+#: member of a list of nice-to-read pages: it is the file that says what a run
+#: may merge, what it owes the maintainer, and what shape a reply takes, so a
+#: wake that cannot cite it is a wake acting on remembered permissions.
+#:
+#: It earns a named slot because the work-surface block cannot be relied on to
+#: carry it.  That block walks ``account.work_surface_files`` in **path
+#: order** and stops at the byte budget (#1020/#1061), and ``workflow.md``
+#: sorts last under ``surface/`` — so on a busy surface it is the first page
+#: dropped and the wake never learns it went missing.  Naming it here is not a
+#: second copy: ``injected_whole`` (#628) removes it from the walk on every
+#: wake the surface block *did* hand it over whole, so the slot is spent only
+#: on the wakes that would otherwise have had nothing.
+_WORKFLOW_PAGE = "workflow.md"
+
 
 def _kb_hub_matches(slug: str, task_text: str) -> bool:
     """Deterministic touched-subject test: every token of *slug* in the task.
@@ -2492,6 +2509,9 @@ def _build_orientation_set(
     - the repo's ``AGENTS.md`` — **unless the Shell already read it**, see
       :func:`shell_reads_agents_md_natively`;
     - the active inter-run plan (``account.active_plan_path``);
+    - the work surface's two-party contract page (:data:`_WORKFLOW_PAGE`),
+      which sorts last in the surface block's path-order walk and is
+      therefore the page a busy surface drops first;
     - every ``subject-*.md`` kb hub whose slug the task text provably touches
       (:func:`_kb_hub_matches`), from the same home-knowledge dir the recent-
       activity tail reads (:func:`_home_knowledge_log_path`), in sorted-name
@@ -2533,6 +2553,7 @@ def _build_orientation_set(
         ctx = account.resolve_context(repo_root, cfg, create=False)
         label = account.repo_label(repo_root, cfg)
         candidates.append(account.active_plan_path(ctx, label))
+        candidates.append(account.work_surface_path(ctx) / _WORKFLOW_PAGE)
     except Exception:  # noqa: BLE001 — orientation must never fail a wake
         pass
 
