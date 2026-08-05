@@ -222,6 +222,17 @@
 										class="border border-amber-700/50 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-amber-300 uppercase"
 										>soon</span
 									>
+								{:else if door.status === 'ready'}
+									<!-- Shipped, no confirmed brnrd.dev identity yet (no Signal
+									     number, no Slack app, no WhatsApp Business number) — never
+									     the same badge as "soon" (that reads as unwritten code) and
+									     never a bare live tile (that reads as an address to message
+									     today, which for these doors it isn't). -->
+									<span
+										class="border border-sky-700/50 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
+										title="the gate ships on main; brnrd.dev doesn't have a live identity for it yet"
+										>ready</span
+									>
 								{:else if door.status === null}
 									<span
 										class="border border-stone-800 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-ink-mute uppercase"
