@@ -354,6 +354,167 @@ def test_dashboard_repos_api_reports_telegram_paired_state():
     assert "telegram_pair_enabled" not in by_name["Gurio/paired"]
 
 
+def test_dashboard_repos_api_carries_the_channel_directory_onto_the_wire():
+    """The branch is named *reaches the wire*, and this is the wire.
+
+    `_repo_views` assembling `channels` is not the same as a client seeing
+    it: `dashboard.py`'s `_repo_view_out` builds an **explicit** dict, so a
+    key added upstream is dropped here unless someone adds it here too.
+    That is the whole failure class this branch exists to close, one layer
+    up — a correct classifier behind a serializer that never learned about
+    it (#786). Asserted through the HTTP round trip on purpose; the
+    `_repo_views`-level test below cannot see this gap by construction.
+
+    Three states, all distinguishable by a reader of the payload:
+    a paired non-Telegram route, a route with a NULL principal (#885 — it
+    authorizes nobody, so `paired: false`), and a repo with no route at all
+    (absent from its list entirely, which is *not* the same as unpaired).
+    """
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    wa_repo_id = _create_repo(client, token, repo="Gurio/wire-wa")
+    null_repo_id = _create_repo(client, token, repo="Gurio/wire-null")
+    _create_repo(client, token, repo="Gurio/wire-none")
+    account_id = _account_id(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-wire-wa",
+                platform="whatsapp",
+                channel_id="wa-1",
+                account_id=account_id,
+                repo_id=wa_repo_id,
+                paired_user_id=777,
+            )
+        )
+        db.add(
+            ChannelRoute(
+                id="cr-wire-null",
+                platform="whatsapp",
+                channel_id="wa-2",
+                account_id=account_id,
+                repo_id=null_repo_id,
+                paired_user_id=None,
+            )
+        )
+        db.commit()
+
+    r = client.get("/v1/dashboard/repos")
+
+    assert r.status_code == 200
+    by_name = {row["repo_full_name"]: row for row in r.json()["connected_repos"]}
+    assert "channels" in by_name["Gurio/wire-wa"], (
+        "the channel directory never reached the payload — `_repo_view_out` "
+        "builds an explicit dict and drops any key it was not told about"
+    )
+    assert by_name["Gurio/wire-wa"]["channels"] == [
+        {"platform": "whatsapp", "paired": True}
+    ]
+    assert by_name["Gurio/wire-null"]["channels"] == [
+        {"platform": "whatsapp", "paired": False}
+    ], "a NULL principal authorizes nobody (#885), on every platform"
+    assert by_name["Gurio/wire-none"]["channels"] == [], (
+        "no route at all is an empty directory, not a fabricated unpaired row"
+    )
+    # The deprecated bit stays derived from the directory rather than tracked
+    # beside it, so the two cannot disagree: a whatsapp-only repo is not
+    # telegram-paired.
+    assert by_name["Gurio/wire-wa"]["telegram_paired"] is False
+
+
+def test_repo_views_channel_directory_carries_a_paired_whatsapp_route():
+    """brr/the-directory-reaches-the-wire: `ChannelRoute` already carries a
+    `platform` column and rows are written for more than Telegram
+    (`webhooks.py` writes `platform="whatsapp"` too, `_handle_whatsapp_pair`)
+    — `_repo_views`' `channels` must report the whole directory, not narrow
+    every platform down to one Telegram-shaped boolean the way the old
+    `_telegram_paired_repo_ids` did. #885's NULL-`paired_user_id`-means-
+    unpaired rule is a pairing predicate, not a Telegram one, so it must
+    hold identically on a non-Telegram platform too.
+
+    Exercised as a direct call to `_repo_views` (not the `/v1/dashboard/repos`
+    HTTP round trip the sibling `telegram_paired` test above uses) — this
+    branch is scoped to `_session.py`/`capabilities.py`; forwarding
+    `channels` onto the actual wire response is `dashboard.py`'s
+    `_repo_view_out`, out of scope here (see the PR body / report)."""
+    from sqlalchemy import select
+
+    from brnrd.models import ChannelRoute, Repo
+    from brnrd.routers._session import _repo_views
+
+    client = _client()
+    token = _login(client, login="Gurio")
+    wa_paired_repo_id = _create_repo(client, token, repo="Gurio/wa-paired")
+    wa_null_principal_repo_id = _create_repo(client, token, repo="Gurio/wa-null-principal")
+    no_route_repo_id = _create_repo(client, token, repo="Gurio/no-route")
+    account_id = _account_id(client)
+
+    # A second account's paired route must never leak into the first
+    # account's directory — `_account_channel_directory` is account-scoped,
+    # not global.
+    other_token = _login(client, github_id="99999", login="Other")
+    other_repo_id = _create_repo(client, other_token, repo="Other/repo")
+    other_account_id = _account_id(client, login="Other")
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-wa-paired",
+                platform="whatsapp",
+                channel_id="wa-chat-1",
+                account_id=account_id,
+                repo_id=wa_paired_repo_id,
+                paired_user_id=999,
+            )
+        )
+        db.add(
+            ChannelRoute(
+                id="cr-wa-null-principal",
+                platform="whatsapp",
+                channel_id="wa-chat-2",
+                account_id=account_id,
+                repo_id=wa_null_principal_repo_id,
+                paired_user_id=None,
+            )
+        )
+        db.add(
+            ChannelRoute(
+                id="cr-other-account",
+                platform="whatsapp",
+                channel_id="wa-chat-3",
+                account_id=other_account_id,
+                repo_id=other_repo_id,
+                paired_user_id=1,
+            )
+        )
+        db.commit()
+
+    with client.app.state.SessionLocal() as db:
+        repos = list(
+            db.execute(
+                select(Repo).where(
+                    Repo.id.in_([wa_paired_repo_id, wa_null_principal_repo_id, no_route_repo_id])
+                )
+            ).scalars()
+        )
+        views = {v["repo"].id: v for v in _repo_views(db, repos)}
+
+    assert views[wa_paired_repo_id]["channels"] == [{"platform": "whatsapp", "paired": True}]
+    # #885, generalised: a NULL principal is not paired, on any platform.
+    assert views[wa_null_principal_repo_id]["channels"] == [{"platform": "whatsapp", "paired": False}]
+    # Never attempted on any platform -> absent from the directory entirely,
+    # distinct from "attempted, not yet paired".
+    assert views[no_route_repo_id]["channels"] == []
+    # The compatibility alias stays keyed on Telegram specifically; none of
+    # these routes are Telegram, so it stays False for all three.
+    assert views[wa_paired_repo_id]["telegram_paired"] is False
+    assert views[wa_null_principal_repo_id]["telegram_paired"] is False
+    assert views[no_route_repo_id]["telegram_paired"] is False
+
+
 def test_dashboard_connect_repo_api_enables_repo():
     client = _client()
     _login(client, login="Gurio")

@@ -722,6 +722,19 @@ def _repo_view_out(row: dict[str, Any], *, bot_login: str = "") -> dict[str, Any
         "environment_default": row.get("environment_default"),
         "environments": row.get("environments", []),
         "setup_command": row["setup_command"],
+        # The channel directory, whole (brr/the-directory-reaches-the-wire).
+        # This line is the point of that branch and it was the one place the
+        # branch did not reach: `_repo_views` assembled `channels` and this
+        # serializer, which builds an explicit dict, dropped it — the fix
+        # stopping one layer below the lie (#786's class). A reader can tell
+        # three states apart here: a platform absent from the list (never
+        # attempted on this repo), present with `paired: false` (attempted,
+        # no principal — #885's rule), present with `paired: true`.
+        "channels": row.get("channels", []),
+        # DEPRECATED, superseded by `channels` above. Derived from it in
+        # `_repo_views`, so the two cannot drift. Still read by
+        # `src/frontend/src/lib/repos.ts` and `/repos/+page.svelte`; it goes
+        # when the directory list replaces the per-transport button.
         "telegram_paired": bool(row.get("telegram_paired")),
         # None = no consent recorded (legacy repo, connected before the
         # publish-scope consent step shipped) — the settings UI renders that

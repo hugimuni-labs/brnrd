@@ -340,12 +340,22 @@ class _Context:
             }
 
         repo_ids = [r.id for r in repos]
+        # Platform-general on purpose (brr/the-directory-reaches-the-wire):
+        # `channel-bound`'s own detector (`_detect_channel_bound` below) asks
+        # only "can this repo be reached by chat at all" — nothing in its
+        # id, its evidence source, or its wire shape (`Capability.to_wire`
+        # carries no platform) is Telegram-specific. The literal
+        # `platform == "telegram"` filter that used to sit here was the same
+        # narrowing bug as `_session._telegram_paired_repo_ids`: a paired
+        # WhatsApp (or any future-platform) route left this dark forever.
+        # No platform is named below — the directory this reads from already
+        # carries whichever platforms have rows; enumerating them here would
+        # reintroduce the bug in list form.
         channel_bound_repo_ids: dict[str, datetime | None] = {}
         if repo_ids:
             for route in db.execute(
                 select(ChannelRoute).where(
                     ChannelRoute.repo_id.in_(repo_ids),
-                    ChannelRoute.platform == "telegram",
                     ChannelRoute.paired_user_id.isnot(None),
                 )
             ).scalars():
