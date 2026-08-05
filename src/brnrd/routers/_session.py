@@ -148,24 +148,85 @@ def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
     )
 
 
-def _telegram_paired_repo_ids(db: Session, repo_ids: list[str]) -> set[str]:
-    """Repos with a *real* paired Telegram route — one query, no N+1.
+def _account_channel_directory(db: Session, account_id: str) -> list[dict[str, Any]]:
+    """The channel directory for one *account* — one query, no N+1, and
+    account-first rather than repo-first (2026-08-05 steer, mid-flight on
+    brr/the-directory-reaches-the-wire: "one directory list... the per
+    project approach as it is now is quite dumb").
+
+    ``ChannelRoute`` carries both ``account_id`` and ``repo_id`` — a route is
+    an account-level address that *optionally* names a repo, not a row filed
+    under one. This reads every route for the account, unfiltered by which
+    repos are "in play", so ``repo_id`` rides through per row (``None`` for
+    an account-wide route bound to no particular repo) rather than being the
+    key rows are grouped under before a caller ever sees them; every other
+    read in this module that needs a channel view derives from this same
+    list (see ``_paired_channels_by_repo``) instead of re-querying.
 
     A ``ChannelRoute`` with a NULL ``paired_user_id`` authorizes nobody
     (``models.py`` ~line 339: rows created before #409 shipped predate the
-    principal column) and must not count as paired (#885).
+    principal column) and must not count as paired (#885) — that rule is a
+    property of *pairing*, not of Telegram, so it applies identically to
+    every platform here, not just the one #885 was filed against.
+
+    The platform vocabulary is never enumerated by this function — each
+    row's ``platform`` is exactly whatever ``ChannelRoute.platform`` already
+    holds, so a new transport shows up the moment its first route is
+    written, with no edit here.
+
+    **Schema note, checked rather than assumed:** ``ChannelRoute.repo_id``
+    is ``Mapped[str]`` (NOT NULL) today, and no migration has relaxed it —
+    compare ``daemons.repo_id``, which *did* get an explicit
+    ``ALTER COLUMN ... DROP NOT NULL`` (#migrating account-scoped daemons)
+    that ``channel_routes`` never received. Both write sites
+    (``webhooks.py`` — ``_handle_telegram_pair``, ``_handle_whatsapp_pair``)
+    always pass a ``repo_id`` sourced from a repo-scoped ``TgPairCode``, so
+    no row with ``repo_id IS NULL`` exists in practice and every row read
+    here is 100% repo-bound today. The account-first shape below is
+    forward-compatible with a future schema change, not a response to data
+    that exists yet — flagged rather than silently assumed either way.
     """
-    if not repo_ids:
-        return set()
-    return set(
-        db.execute(
-            select(ChannelRoute.repo_id).where(
-                ChannelRoute.repo_id.in_(repo_ids),
-                ChannelRoute.platform == "telegram",
-                ChannelRoute.paired_user_id.isnot(None),
+    return [
+        {"platform": platform, "paired": paired_user_id is not None, "repo_id": repo_id}
+        for repo_id, platform, paired_user_id in db.execute(
+            select(ChannelRoute.repo_id, ChannelRoute.platform, ChannelRoute.paired_user_id).where(
+                ChannelRoute.account_id == account_id
             )
-        ).scalars()
-    )
+        )
+    ]
+
+
+def _paired_channels_by_repo(directory: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group an account channel directory (``_account_channel_directory``) by
+    repo — the per-repo ``channels`` shape ``_repo_views`` needs, derived
+    from the one account-level list rather than a second query.
+
+    Rows are aggregated to one ``paired`` bit per ``(repo, platform)`` pair.
+    A repo/platform pair with *no* row at all is simply absent from that
+    repo's list — distinct from a row that exists with ``paired: False`` —
+    so a caller can tell "never attempted on this platform" from
+    "attempted, not (yet) paired".
+
+    A row with ``repo_id is None`` (account-wide, bound to no particular
+    repo) is not filed under any repo here — it belongs to the account-level
+    list a future consumer would read from ``_account_channel_directory``
+    directly, not to any one repo's directory. See that function's schema
+    note: no such row exists today, so this branch is currently a no-op,
+    not a silent drop of live data.
+    """
+    paired_by_repo_platform: dict[tuple[str, str], bool] = {}
+    for row in directory:
+        repo_id = row["repo_id"]
+        if repo_id is None:
+            continue
+        key = (repo_id, row["platform"])
+        paired_by_repo_platform[key] = paired_by_repo_platform.get(key, False) or row["paired"]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for (repo_id, platform), paired in paired_by_repo_platform.items():
+        out.setdefault(repo_id, []).append({"platform": platform, "paired": paired})
+    for channels in out.values():
+        channels.sort(key=lambda c: c["platform"])
+    return out
 
 
 # The daemon-pairing command, spelled once (2026-08-03). It is printed on
@@ -213,7 +274,16 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
         for daemon in daemon_rows:
             daemons_by_repo.setdefault(daemon.repo_id, []).append(daemon)
 
-    telegram_paired_ids = _telegram_paired_repo_ids(db, repo_ids)
+    # Account-first (see `_account_channel_directory`): one query for the
+    # whole account's channel directory, then grouped by repo in Python —
+    # never a second, repo-scoped query. `repos` is always one account's
+    # repos (the sole caller is `dashboard_repos_api`, `_repos(db, account.id)`
+    # straight into this function), so any repo's `account_id` names it.
+    channels_by_repo = (
+        _paired_channels_by_repo(_account_channel_directory(db, repos[0].account_id))
+        if repos
+        else {}
+    )
 
     reported_daemons = [daemon for daemon in daemon_rows if _dt(daemon.runners_updated_at)]
     dispatch_default_repo_id = (
@@ -225,6 +295,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
     now = datetime.now(timezone.utc)
     views: list[dict] = []
     for repo in repos:
+        channels = channels_by_repo.get(repo.id, [])
         daemons = daemons_by_repo.get(repo.id, [])
         latest = max(daemons, key=lambda d: _dt(d.last_seen_at) or datetime.min.replace(tzinfo=timezone.utc), default=None)
         online = any(d.online and _dt(d.last_seen_at) and now - _dt(d.last_seen_at) <= _DAEMON_ONLINE_AFTER for d in daemons)
@@ -258,7 +329,20 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
             {
                 "repo": repo,
                 "dispatch_default": repo.id == dispatch_default_repo_id,
-                "telegram_paired": repo.id in telegram_paired_ids,
+                "channels": channels,
+                # DEPRECATED (brr/the-directory-reaches-the-wire): superseded
+                # by `channels` above, which carries every platform rather
+                # than collapsing the directory to one Telegram-shaped bit.
+                # Kept, not removed: `dashboard.py`'s `_repo_view_out` and the
+                # frontend (`src/frontend/src/lib/repos.ts`,
+                # `/repos/+page.svelte`) both still read this exact key and
+                # neither is in scope for this branch (backend-only,
+                # frontend owned by a sibling strand) — removing it here
+                # would silently break both without anyone touching them.
+                # Safe to derive rather than track separately: identical to
+                # the old query's own definition, "the telegram platform has
+                # at least one paired route".
+                "telegram_paired": any(c["platform"] == "telegram" and c["paired"] for c in channels),
                 "daemon_count": len(daemons),
                 "daemon_status": daemon_status,
                 "daemon_label": daemon_label,
