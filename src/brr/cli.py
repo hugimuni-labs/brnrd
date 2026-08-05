@@ -1268,8 +1268,10 @@ def cmd_prompts_transcript(args):
         hook_stamps={},
     )
 
-    # Read each file-backed block from disk. For an untrimmed block that is
-    # exactly what the wake received; a trimmed one gets `_trim_note`. Blocks at
+    # Reconstruct each file-backed block from disk via `prompts.mountable_block_text`
+    # — a raw file read for most blocks (exactly what the wake received; a trimmed
+    # one gets `_trim_note`), or a block's own extractor for the few blocks that
+    # mount a curated slice of a larger file rather than the whole thing. Blocks at
     # `location == "computed"` are live state and stay prose — they are not on
     # disk and a Read returning them would be fiction.
     block_text: dict[str, str] = {}
@@ -1277,8 +1279,8 @@ def cmd_prompts_transcript(args):
         if not entry.present or entry.location == tx.COMPUTED:
             continue
         try:
-            block_text[entry.block_key] = Path(entry.location).read_text(
-                encoding="utf-8"
+            block_text[entry.block_key] = prompts.mountable_block_text(
+                entry, repo_root
             )
         except OSError:
             continue

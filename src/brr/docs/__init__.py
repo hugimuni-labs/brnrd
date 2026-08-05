@@ -37,6 +37,22 @@ def list_topics(repo_root: Path | None = None) -> list[str]:
     return sorted(topics)
 
 
+def effective_topic_path(topic: str, repo_root: Path | None = None) -> Path:
+    """The path a doc topic *would* be read from — mirrors ``prompts.effective_prompt_path``.
+
+    Order: the per-repo override (``<shared-brr-dir>/docs/<topic>.md``), then the
+    bundled ``src/brr/docs/<topic>.md``. Returns the bundled path even when neither
+    exists, so a caller that wants one *location* to report (a manifest, a mounted
+    ``Perceive``) always has something to name.
+    """
+    overrides = _override_dir(repo_root)
+    if overrides is not None:
+        candidate = overrides / f"{topic}.md"
+        if candidate.exists():
+            return candidate
+    return _DOCS_DIR / f"{topic}.md"
+
+
 def read_topic(topic: str, repo_root: Path | None = None) -> str | None:
     """Read a topic's markdown, preferring a per-repo override.
 

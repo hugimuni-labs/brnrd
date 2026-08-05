@@ -33,6 +33,144 @@ below: reference · `brnrd prompts show` names every block and its cost
 
 {{BODY verbatim: prompts/daemon-substrate.md}}
 
+### `brnrd do` — the verdict rides the act
+
+`brnrd do` is porcelain over the grammar above, not a new channel: every
+write it makes lands as one of the same outbox files this manual already
+describes, staged and drained exactly the way a hand-written `note.md` /
+`event: <id>` reply would be. What it adds is the read-back — instead of
+staging a file and separately remembering to poll `notices`, one call
+stages the file, waits for the daemon's own drain to consume it, and diffs
+`notices` from just before the stage to report `✓` / `✗ <notice>` / `?
+still queued` in the same call.
+
+```
+brnrd do [--outbox DIR] [--timeout SECONDS] \
+  [--mood <feeling-or-handle> [--mood-note "…"]] \
+  [--note <event-id>]... \
+  [--reply <event-id> --body-file FILE | --body "…"]... \
+  [--gate <name> --body-file FILE]... \
+  [--card FILE] \
+  [-- <command> [args…]]
+```
+
+- `--note` / `--reply` / `--gate` each stage the canonical `note:` /
+  `event:` / `gate:` fenced frontmatter this manual already specifies, wait
+  up to `--timeout` (default 30s) for the drain to consume the file, and
+  report the verdict: `✓` (consumed, no fresh matching notice), `✗
+  <kind>: <text>` (a fresh notice named this directive), or `? still
+  queued` (still sitting in the outbox at the timeout — never a hang).
+  `--mood` / `--card` write the `.mood` / `.card` control files directly
+  (never drained, so the verdict is just the write) — `--mood` resolves
+  through the same `emotes.lookup` / `emotes.near_misses` this manual's
+  `.mood` row already points at, so a near-miss reports candidates instead
+  of writing nothing silently.
+- Bare `brnrd do` (no verbs) prints a compact one-screen read of pending
+  events, outbound counts, notices, the quota line, and spawn-pool
+  headroom — the canonical replacement for hand-parsing
+  `portal-state.json`.
+- `-- <command> [args…]` (only recognised for `do`, split out of argv
+  before anything else parses it) runs the given command via `execvp`
+  after the verbs above are staged — argv passthrough, never shell
+  interpretation, so it does no globbing/piping/env-expansion beyond what
+  your own shell already did. Verdict lines move to stderr so the
+  command's stdout stays pipeable, and the command's own stdout/stderr/
+  exit code become `brnrd do`'s — the boundary carries both the speech
+  acts and the real work in one call. Omit `--` for a pure update call,
+  exactly as above.
+
+**One correlation gap, named rather than patched around.** A notice
+records its verb and target in the message text (`"note dropped: event
+evt-… …"`, `"reply dropped: …"`) but never the staged filename that
+produced it, so `brnrd do` matches a fresh notice to "was this about the
+directive I just staged" by substring, not by identity. It works because
+every refusal/drop/redirect notice in `daemon.py`'s `_drain_outbox` names
+both its verb and its target — but a concurrent notice from unrelated
+activity that happened to share both substrings would still misattribute.
+The precise fix is daemon-side: give `_record_outbox_notice`
+(`daemon.py`, the function starting ~L6135) an optional `source_file:`
+field threaded from each call site's own `fpath.name`, so a reader could
+join on identity instead of text. Not done here — no daemon-side changes
+in this change — named so the gap has one place to live.
+
+### `await:` — a select, not a sleep (#959)
+
+The measurement this closes: a resident waiting on a dispatched worker or a
+background gate wrote `until <condition>; do sleep 25; done` as one shell
+call. By the older liveness contract that "survives the closeout" —
+`.keepalive` was armed, the thought never ended — but it emitted **zero tool
+boundaries** for the whole span, and the daemon only ever reaches a resident
+*at* a tool boundary. Three of the maintainer's messages queued behind a
+wait that was doing exactly what it was told. **A wait a correspondent
+cannot interrupt is not a wait. It is a gap.**
+
+```
+---
+await: <condition> [| <condition> ...]
+timeout: <duration>          # required — a wait with no ceiling is a hang
+---
+```
+
+**Conditions** (`|`-separated; the fenced form is required — the value has
+spaces, so the unfenced lenient shortcut other verbs get doesn't apply):
+
+- `file:<path>` — the path exists.
+- `pid:<n>` — the process has exited.
+- `spawn:<run-or-event-id>` — a concurrent child **this run** dispatched has
+  finished (matched against either the child's eventual run id or the
+  `spawn: true` dispatch's own event id — you may only have one of the two
+  on hand, depending on when you wrote the `await:`).
+- `event` — **a new pending event arrived.** Always a member of the set,
+  whether or not you name it — parsing appends it structurally. You cannot
+  construct a blind wait by forgetting to mention "did a message arrive",
+  because forgetting is no longer an available state.
+
+**The condition set is evaluated by the daemon on its own heartbeat tick**
+(every ~10s, independent of whether you call anything at all) — that is
+what makes this a *listening* wait rather than a *sleeping* one. The outcome
+lands in `portal-state.json` → `await`:
+
+```jsonc
+{"armed": true, "conditions": ["file:/tmp/gate.log", "event"],
+ "timeout_seconds": 1200, "deadline": "…", "capped": false,
+ "resolved": true, "outcome": "condition", "which": "file:/tmp/gate.log"}
+```
+
+`resolved` flips to `true` on exactly one of three outcomes — never
+silence:
+
+- `"condition"` — a named `file:`/`pid:`/`spawn:` term fired; `which` names it.
+- `"event"` — some other pending event arrived that no named condition
+  already explains.
+- `"timeout"` — the deadline passed with nothing else firing.
+
+**`.keepalive` is extended for you**, to the timeout deadline (never
+shortened below an existing one you wrote yourself) — you do not also have
+to remember a separate keepalive write on top of the `await:`. If the
+requested `timeout:` would outlive this run's remaining hard budget
+ceiling, the hold is armed for the capped duration instead of the full
+request — silently truncating a promised wait is worse than warning about
+one, so the cap is announced once as an `advisory` notice, not swallowed.
+
+**Poll it with `brnrd portal await`** (or read `portal-state.json` →
+`await` yourself, e.g. from §linger's own poll loop). One call blocks for
+at most **15 seconds** — a small, code-level bound, not a documentation
+convention — before returning `{"outcome": "pending", ...}`; call it again.
+Because the daemon's own evaluation tick runs independently of this call,
+a resolution that lands mid-sleep is still reported the moment you wake up
+and re-read, with no extra round trip. This is the structural fix for the
+measured failure: a wait built from a sequence of short, separately
+boundary-visible tool calls gives the daemon (and anything it wants to
+inject) a seam at least every 15 seconds, for as long as the wait runs —
+never the multi-minute blind stretch a hand-rolled shell loop can produce.
+
+**v1 is the verb and the hold path only.** `await:` never ends this run to
+service a wait — it holds the slot, the way `.keepalive` always has. A
+`worker: true` (concurrent spawn) run may not arm one: the hold is a
+resident-level cost decision, and a worker has no business spending its
+parent's slot on its own wait. Malformed input (no `timeout:`, an
+unrecognised condition) is dropped to `notices`, same as any other verb.
+
 {{BODY verbatim: prompts/identity-core.md}}
 
 ## Work surface
@@ -107,26 +245,27 @@ hooks:
   session-start: declared, installed; last-fired=not fired here
 
 source manifest:
-    block                                           owner        authority      bytes  location / freshness
-  ---------------------------------------------------------------------------------------------------------
-  ✓ Boot kernel (action-first score)                daemon-live  runtime          718  computed
-  ✓ Operational preamble (run.md)                   product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
-  ✓ Working register (weave.md)                     product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
-  ✓ Working register, worked example (register.md)  product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
-  ✓ Daemon mechanics (daemon-substrate.md)          product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
-  · diffense review-pack prompt                     product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
-  · Introspection dev-mode invitation               product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
-  ✓ Resident identity core                          product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
-  · Stranded-memory warning (repo moved)            daemon-live  health             0  computed
-  · Dominion digest (self-inject)                   resident     memory             0  computed
-  ✓ Discovered work surface                         resident     surface          147  computed
-  · Stored runner policy (CS6)                      resident     policy             0  computed
-  · Task-matched pitfalls                           resident     memory             0  computed
-  · Knowledge sources (home+repo+docs)              project      knowledge          0  computed
-  · Recent activity (kb/log.md tail)                daemon-live  activity           0  computed
-  · Your last run (node frame + Now + shape)        resident     memory             0  computed
-  · kb health (deterministic preflight)             daemon-live  health             0  computed
-  ✓ Run Context Bundle (runtime facts)              daemon-live  runtime        4,240  computed
+    block                                                      owner        authority      bytes  location / freshness
+  --------------------------------------------------------------------------------------------------------------------
+  ✓ Boot kernel (action-first score)                           daemon-live  runtime          718  computed
+  ✓ Operational preamble (run.md)                              product      contract     [bytes]  {PACKAGE_ROOT}/prompts/run.md  [mtime]
+  ✓ Working register (weave.md)                                product      contract     [bytes]  {PACKAGE_ROOT}/prompts/weave.md  [mtime]
+  ✓ Working register, worked example (register.md)             product      contract     [bytes]  {PACKAGE_ROOT}/prompts/register.md  [mtime]
+  ✓ Daemon mechanics (daemon-substrate.md)                     product      substrate    [bytes]  {PACKAGE_ROOT}/prompts/daemon-substrate.md  [mtime]
+  ✓ Portal verb grammar (`await:` / `brnrd do`, docs portals)  product      substrate      7,441  {PACKAGE_ROOT}/docs/portals.md  [mtime]
+  · diffense review-pack prompt                                product      config             0  {PACKAGE_ROOT}/prompts/diffense.md  [mtime]
+  · Introspection dev-mode invitation                          product      config             0  {PACKAGE_ROOT}/prompts/introspection.md  [mtime]
+  ✓ Resident identity core                                     product      identity     [bytes]  {PACKAGE_ROOT}/prompts/identity-core.md  [mtime]
+  · Stranded-memory warning (repo moved)                       daemon-live  health             0  computed
+  · Dominion digest (self-inject)                              resident     memory             0  computed
+  ✓ Discovered work surface                                    resident     surface          147  computed
+  · Stored runner policy (CS6)                                 resident     policy             0  computed
+  · Task-matched pitfalls                                      resident     memory             0  computed
+  · Knowledge sources (home+repo+docs)                         project      knowledge          0  computed
+  · Recent activity (kb/log.md tail)                           daemon-live  activity           0  computed
+  · Your last run (node frame + Now + shape)                   resident     memory             0  computed
+  · kb health (deterministic preflight)                        daemon-live  health             0  computed
+  ✓ Run Context Bundle (runtime facts)                         daemon-live  runtime        4,240  computed
 
   ✓ present in this wake · · in scope but silent (absent source or toggle off)
 
