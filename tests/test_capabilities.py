@@ -354,6 +354,76 @@ def test_publish_scope_null_is_dark_explicit_none_is_lit():
 
 
 # --------------------------------------------------------------------------
+# channel-bound: platform-general, not Telegram-only
+# (brr/the-directory-reaches-the-wire)
+# --------------------------------------------------------------------------
+
+
+def test_channel_bound_lights_on_a_paired_non_telegram_route():
+    """The old `_Context.build` read filtered `ChannelRoute.platform ==
+    "telegram"`, so a repo reachable only over a paired WhatsApp route read
+    `channel-bound: dark` forever — the same narrowing bug fixed in
+    `_session._telegram_paired_repo_ids` (now `_paired_channels_by_repo`).
+    `channel-bound`'s own detector asks "can this repo be reached by chat at
+    all" — nothing about its id, evidence, or wire shape
+    (`Capability.to_wire` carries no platform) is Telegram-specific, so a
+    paired WhatsApp route must light it exactly like a paired Telegram one
+    would."""
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token)
+    account_id = _account_id(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-wa-bound",
+                platform="whatsapp",
+                channel_id="wa-chat-1",
+                account_id=account_id,
+                repo_id=repo_id,
+                paired_user_id=999,
+            )
+        )
+        db.commit()
+
+    caps = {(c.id, c.subject): c for c in _evaluate(client, account_id)}
+    channel_bound = caps[("channel-bound", repo_id)]
+    assert channel_bound.state == STATE_LIT
+
+
+def test_channel_bound_stays_dark_for_a_null_principal_non_telegram_route():
+    """#885 generalised: a `ChannelRoute` with no principal authorizes
+    nobody regardless of platform, so it must not light `channel-bound`
+    either — same rule as the paired case above, opposite fixture."""
+    from brnrd.models import ChannelRoute
+
+    client = _client()
+    token = _login(client)
+    repo_id = _create_repo(client, token)
+    account_id = _account_id(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ChannelRoute(
+                id="cr-wa-null-principal",
+                platform="whatsapp",
+                channel_id="wa-chat-2",
+                account_id=account_id,
+                repo_id=repo_id,
+                paired_user_id=None,
+            )
+        )
+        db.commit()
+
+    caps = {(c.id, c.subject): c for c in _evaluate(client, account_id)}
+    channel_bound = caps[("channel-bound", repo_id)]
+    assert channel_bound.state == STATE_DARK
+
+
+# --------------------------------------------------------------------------
 # Wire shape on the real endpoint
 # --------------------------------------------------------------------------
 
