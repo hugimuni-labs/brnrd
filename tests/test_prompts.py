@@ -930,7 +930,7 @@ class TestPromptBuilding:
             "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
             tmp_path,
             run_id="task-9",
-            worker=True,
+            strand=True,
         )
         assert "Resident Identity Core" not in prompt
         assert "Pitfalls that match this task" not in prompt
@@ -1003,7 +1003,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
-            worker=True,
+            strand=True,
             runner_shell="codex",
         )
         assert "- Web research: native via web.run" in prompt
@@ -3655,7 +3655,7 @@ def test_kb_ownership_signal_zero_orphans_size_pressure_byte_identical():
         "pages to trim: a byte count cannot tell a load-bearing page from bloat — you "
         "can. The graph is 10 pages, log 5,000 B over 100 entries. Read this as the kb "
         "asking for a maintenance *round* — promote what's load-bearing, breadcrumb "
-        "what's spent, cut what's dead, relink the orphans. Worker-delegable; worth a "
+        "what's spent, cut what's dead, relink the orphans. Strand-delegable; worth a "
         "dedicated pass, not a per-wake reflex to shorten the longest file. Full graph "
         "shape on demand: `brnrd kb`."
     )

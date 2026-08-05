@@ -857,7 +857,7 @@ def test_presence_label_for_event_never_falls_back_to_task_body():
     """#585: a presence `label` is dashboard chrome, not a content channel.
 
     The pre-fix shape derived the label as
-    ``event.get("summary") or task.body``, so a spawn worker's presence
+    ``event.get("summary") or task.body``, so a spawn strand's presence
     label was its own full task spec whenever `summary` was unpopulated —
     which it always was (audited: no writer sets it on this creation-time
     `event` dict). `_presence_label_for_event` must never read `body`
@@ -1119,7 +1119,7 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     """A respawn this run just queued must not show up as attention-owed.
 
     Found live (2026-07-06): a run that queued a codex-shell respawn for a
-    bounded worker task kept re-triggering the Stop-hook fold-in-or-explain
+    bounded strand task kept re-triggering the Stop-hook fold-in-or-explain
     gate every phase after, because the queued event was indistinguishable
     from an unaddressed user message in ``_pending_events_for_agent`` —
     ``pending_event_count`` could never reach zero from inside the very run
@@ -1218,7 +1218,7 @@ def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
     assert response == "real respawn answer\n"
 
 
-def test_drain_outbox_queues_worker_respawn_request(tmp_path):
+def test_drain_outbox_queues_strand_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1266,7 +1266,7 @@ def test_drain_outbox_queues_worker_respawn_request(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("respawned_from_event") == event_id
     ][0]
-    assert spawned["worker"] is True
+    assert spawned["strand"] is True
 
 
 def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
@@ -1316,7 +1316,7 @@ def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("respawned_from_event") == event_id
     ][0]
-    assert "worker" not in spawned
+    assert "strand" not in spawned
 
 
 def test_drain_outbox_quality_respawn_resolves_local_escalation(
@@ -1445,7 +1445,7 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
         ev for ev in protocol.list_pending(inbox)
         if ev.get("spawn_parent_run_id") == "run-parent"
     ][0]
-    assert spawned["worker"] is True
+    assert spawned["strand"] is True
     assert spawned["spawn_immediate"] is True
     # Forced regardless of the repo's own `environment=` config — a
     # spawn shares the daemon process with its still-running parent, so
@@ -1501,7 +1501,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
     ]
     assert len(spawned) == 1
     assert spawned[0]["environment"] == "solitary"
-    assert spawned[0]["worker"] is True
+    assert spawned[0]["strand"] is True
 
     # `host` — an opt *up* — is refused, leaves a notice, queues nothing.
     (outbox / "spawn-host.md").write_text(
@@ -1523,7 +1523,7 @@ def test_drain_outbox_spawn_env_optdown_and_host_refusal(tmp_path):
 
 
 def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
-    """A worker-stack run must not itself spawn a further child (no nesting)."""
+    """A strand-stack run must not itself spawn a further child (no nesting)."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1537,7 +1537,7 @@ def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
     )
     task = Run(
         id="run-worker-child", event_id=event_id, body="original task",
-        source="telegram", meta={"worker": True},
+        source="telegram", meta={"strand": True},
     )
 
     promoted = daemon._drain_outbox(
@@ -2026,12 +2026,13 @@ def test_notify_spawn_parent_declared_branch_mismatch_still_indicts(tmp_path):
 def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
     """#1097: the perfect worker indicted for its parent's typo.
 
-    ``report:`` is a filesystem path and no prompt surface says so, making a
-    parent naming a path the child never writes an ordinary, entirely
-    parent-side error. The completion note used to print the branch lines on
-    *any* mismatch — so a child that published exactly the branch it was
-    declared, and only missed a report it was never told to create, was
-    reported under two branch lines that read as the accusation.
+    ``report:`` is a filesystem path — the ``spawn:`` row now says so, after
+    this docstring's own observation that no prompt surface did went on to
+    cost a live run — making a parent naming a path the child never writes an
+    ordinary, entirely parent-side error. The completion note used to print
+    the branch lines on *any* mismatch — so a child that published exactly the
+    branch it was declared, and only missed a report it was never told to
+    create, was reported under two branch lines that read as the accusation.
 
     Both clauses failing still prints both; what stops is a satisfied clause
     standing beside a violated one with nothing to tell them apart.
@@ -2060,6 +2061,68 @@ def test_a_kept_branch_is_not_printed_as_an_accusation(tmp_path):
     # that matched, because that pair *is* the indictment's grammar.
     assert "published branch:" not in body, body
     assert "brr/exactly-as-told" in body  # still stated, as kept
+
+
+def test_a_prose_report_declaration_says_whose_it_was(tmp_path):
+    """The live 2026-08-05 case, end to end: a declaration that was never a path.
+
+    ``report: the PR body is the report`` cannot be ``stat``-ed, so the check
+    reports ``MISSING`` for a strand whose commit was pushed and whose PR was
+    open — and the note names the *strand's* run id, so the reader arrives
+    primed to distrust the child. The declaration is the dispatcher's, carried
+    onto the child's meta at spawn.
+
+    Driven through ``_notify_spawn_parent`` rather than the note builder: what
+    is being pinned is what the reader of the completion event actually sees.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/exactly-as-told",
+            "spawn_contract_report": "the PR body is the report",
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "the PR body is the report" in body and "MISSING" in body
+    # Who declared it — a fact, stated unconditionally.
+    assert "dispatcher's declaration" in body, body
+    # The ambiguity, named rather than resolved: a path may legally contain a
+    # space, so the note may not assert that this one is not a path.
+    assert "meant as prose" in body, body
+    assert "not a path" not in body, body
+
+
+def test_a_missing_but_path_shaped_report_makes_no_prose_guess(tmp_path):
+    """A strand that simply never wrote the file gets no prose accusation."""
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(
+        id="run-child", event_id="evt-child", body="do the thing",
+        source="telegram", status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "spawn_contract_branch": "brr/exactly-as-told",
+            "spawn_contract_report": str(tmp_path / "never-written.md"),
+            "publish_branch": "brr/exactly-as-told",
+            "has_new_commit": True,
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+    body = protocol.list_pending(inbox)[0]["body"]
+
+    assert "MISSING" in body
+    assert "dispatcher's declaration" in body
+    assert "meant as prose" not in body, body
 
 
 def test_both_clauses_failing_still_names_both(tmp_path):
@@ -2576,7 +2639,7 @@ def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
     respects_configured_width`` and its siblings drive the real
     ``start()`` loop's dispatch/reap wiring, but monkeypatch
     ``_notify_spawn_parent`` away entirely and hand the fake worker a
-    ``Run`` with bare ``meta={"worker": True}`` — never exercising the
+    ``Run`` with bare ``meta={"strand": True}`` — never exercising the
     real ``spawn_parent_run_id``/``spawn_parent_conversation_key``
     propagation ``Run.from_event`` performs from the actual dispatched
     event. ``test_drain_outbox_queues_spawn_request``'s own docstring
@@ -4811,7 +4874,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
             running_ids.discard(eid)
         return Run(
             id=f"task-{eid}", event_id=eid, body="spawned",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     checked = threading.Event()
@@ -4851,7 +4914,7 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     for i in range(3):
         protocol.create_event(
             tmp_path / ".brr" / "inbox", "spawn", f"spawned work {i}",
-            spawn_immediate=True, worker=True, environment="worktree",
+            spawn_immediate=True, strand=True, environment="worktree",
         )
 
     with pytest.raises(StopIteration):
@@ -4875,7 +4938,7 @@ def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, 
         eid = event["id"]
         return Run(
             id=f"task-{eid}", event_id=eid, body="spawned",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     def crashing_notify(*_a, **_k):
@@ -4896,7 +4959,7 @@ def test_concurrent_spawn_pool_releases_slot_when_reap_notify_crashes(tmp_path, 
 
     protocol.create_event(
         tmp_path / ".brr" / "inbox", "spawn", "spawned work",
-        spawn_immediate=True, worker=True, environment="worktree",
+        spawn_immediate=True, strand=True, environment="worktree",
     )
 
     with pytest.raises(RuntimeError, match="notify blew up"):
@@ -4941,7 +5004,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
         release.wait(timeout=5)
         return Run(
             id=f"task-{event['id']}", event_id=event["id"], body="spawned",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     ticks_since_start = 0
@@ -4974,7 +5037,7 @@ def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
 
     protocol.create_event(
         tmp_path / ".brr" / "inbox", "spawn", "spawned work",
-        spawn_immediate=True, worker=True, environment="worktree",
+        spawn_immediate=True, strand=True, environment="worktree",
     )
 
     with pytest.raises(StopIteration):
@@ -5041,7 +5104,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
         record("spawn-run")
         return Run(
             id="task-spawn", event_id=eid, body="spawned work",
-            status="done", meta={"worker": True},
+            status="done", meta={"strand": True},
         )
 
     monkeypatch.setattr(
@@ -5067,7 +5130,7 @@ def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypat
         resident_started.wait(timeout=5)
         protocol.create_event(
             tmp_path / ".brr" / "inbox", "spawn", "spawned work",
-            spawn_immediate=True, worker=True, environment="worktree",
+            spawn_immediate=True, strand=True, environment="worktree",
         )
         # Give the loop a couple of ticks to observe reload_requested
         # flip true and still dispatch the spawn before unblocking the
@@ -5131,7 +5194,7 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
             order.append(f"spawn-{event['id']}-done")
             return Run(
                 id=f"run-{event['id']}", event_id=event["id"], body="worker",
-                status="done", meta={"worker": True},
+                status="done", meta={"strand": True},
             )
         resident_started.set()
         order.append("resident-started")
@@ -5173,7 +5236,7 @@ def test_dev_reload_does_not_hold_the_resident_seat_for_active_spawns(
     for i in range(2):
         protocol.create_event(
             inbox, "spawn", f"worker {i}", spawn_immediate=True,
-            worker=True, environment="worktree",
+            strand=True, environment="worktree",
         )
 
     try:
@@ -8328,7 +8391,7 @@ def test_drain_outbox_spawns_without_an_explicit_shell_or_core(tmp_path):
     assert len(spawned) == 1
     child = protocol._read_event(spawned[0])
     assert child["body"].strip() == "bounded side task"
-    assert child["worker"] is True
+    assert child["strand"] is True
     assert child["spawn_immediate"] is True
     # No shell/core keys — dispatch resolves the account default.
     assert "shell" not in child
@@ -8349,10 +8412,10 @@ def test_refused_spawn_leaves_a_notice_the_running_resident_can_read(tmp_path):
     (outbox / "spawn.md").write_text(
         "---\nspawn: true\n---\nnested work\n", encoding="utf-8",
     )
-    # A worker-stack run: nesting is refused by design.
+    # A strand-stack run: nesting is refused by design.
     task = Run(
         id="run-worker", event_id=event_id, body="original", source="telegram",
-        meta={"worker": True},
+        meta={"strand": True},
     )
 
     promoted = daemon._drain_outbox(
@@ -8400,7 +8463,7 @@ def test_worker_boot_prompt_excludes_foreign_pending_events(
 
     Found live (2026-07-18, first wyrd fleet): the live inbox correctly
     showed a worker zero foreign events, but the boot-prompt snapshot was
-    built without ``worker=`` — so the worker's prompt listed two of the
+    built without ``strand=`` — so the worker's prompt listed two of the
     maintainer's pending telegram messages under "Inbox — other pending
     events" while inbox.json stayed empty. Isolation must hold on both
     surfaces; the prompt is the one the worker actually reads at wake.
@@ -8411,7 +8474,7 @@ def test_worker_boot_prompt_excludes_foreign_pending_events(
         body="bounded worker task",
     )
     event["spawn_immediate"] = True
-    event["worker"] = True
+    event["strand"] = True
     event["environment"] = "worktree"
     # A foreign user message pending in the shared inbox at worker boot.
     protocol.create_event(
@@ -9035,7 +9098,7 @@ def test_drain_outbox_await_unparseable_condition_is_dropped_with_a_notice(tmp_p
 
 
 def test_drain_outbox_await_refuses_from_a_worker_run(tmp_path):
-    """v1 scope: only the resident may arm a hold — a worker-stack run has
+    """v1 scope: only the resident may arm a hold — a strand-stack run has
     no business spending the parent's slot on its own wait."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -9049,7 +9112,7 @@ def test_drain_outbox_await_refuses_from_a_worker_run(tmp_path):
     )
     task = Run(
         id="run-worker", event_id=event_id, body="original", source="telegram",
-        meta={"worker": True},
+        meta={"strand": True},
     )
 
     promoted = daemon._drain_outbox(
@@ -9062,7 +9125,7 @@ def test_drain_outbox_await_refuses_from_a_worker_run(tmp_path):
     notices = daemon._read_outbox_notices(outbox)
     assert len(notices) == 1
     assert notices[0]["kind"] == "refused"
-    assert "worker-stack run" in notices[0]["text"]
+    assert "strand-stack run" in notices[0]["text"]
 
 
 def test_drain_outbox_await_key_present_with_empty_value_still_arms(tmp_path):

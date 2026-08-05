@@ -178,7 +178,7 @@ class PushResult:
 # pathspec — so a process that inherits them cannot address any repository
 # but the pinned one.
 #
-# #703 pins these into a worker run's environment on purpose (see
+# #703 pins these into a strand run's environment on purpose (see
 # `daemon._child_git_pin`), which makes the inheritance a hazard for brnrd's
 # own code: every git call in this module names the repository it means, and
 # under an inherited pin each one would silently report the pinned worktree
@@ -477,7 +477,7 @@ def absolute_git_dir(repo_root: Path) -> Path | None:
     For a linked worktree this is the worktree's own administrative dir
     (``<main>/.git/worktrees/<name>``), *not* the shared common dir — which
     is exactly the distinction ``GIT_DIR`` needs: pointing it at the common
-    dir would put a worker on the main checkout's HEAD (#703).
+    dir would put a strand on the main checkout's HEAD (#703).
     """
     try:
         result = _git(repo_root, "rev-parse", "--absolute-git-dir", check=False)
@@ -1274,7 +1274,7 @@ def dirty_paths(worktree_path: Path) -> set[str]:
 
     The path-set sibling of :func:`worktree_dirty`, for callers that need to
     compare two readings rather than ask a yes/no. Used by #703's stray-write
-    check: a worker whose deliverable landed in the *shared* checkout leaves
+    check: a strand whose deliverable landed in the *shared* checkout leaves
     new entries here that were not present when the run was dispatched.
 
     Paths only — the two-character status prefix is dropped, because the
@@ -1312,7 +1312,7 @@ def commits_owned_by_run(
     That second path is what makes this an *attribution* primitive rather
     than a time window, and #703 leans on it: the hook lives in the shared
     ``.git/hooks`` (a linked worktree resolves to the same file), so a
-    worker whose cwd drifted into the host checkout stamped its stray
+    strand whose cwd drifted into the host checkout stamped its stray
     commits there with its own run id. Driven against a real checkout —
     ``test_gitops.py::test_commits_owned_by_run_*``.
 

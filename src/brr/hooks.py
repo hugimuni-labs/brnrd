@@ -4195,7 +4195,7 @@ def install_hook_config(
 # The isolation this restores is about *addressing*, not secrecy: one message
 # to one run must not make every limb of that run act on it. brnrd's own
 # `spawn:` children — separate daemon runs — have answered this since
-# 2026-07-18 (`daemon._pending_events_for_agent(worker=True)`: a worker sees
+# 2026-07-18 (`daemon._pending_events_for_agent(strand=True)`: a strand sees
 # only its own dispatch-edge traffic). This is the same rule, finally applied
 # to the in-process lane.
 #
