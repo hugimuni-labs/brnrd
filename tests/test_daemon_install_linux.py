@@ -75,6 +75,38 @@ def test_render_systemd_unit_defaults_the_memory_ceiling():
     assert "MemoryMax=12G" in unit
 
 
+def test_render_systemd_unit_opts_the_daemon_out_of_systemd_oomd(tmp_path):
+    """The fence above answers the *kernel* OOM-killer; this answers the other one.
+
+    `systemd-oomd` kills by ancestor-slice PSI pressure and by whole cgroup, and
+    consults neither `MemoryMax=` nor `OOMPolicy=`. Measured 2026-08-05: it killed
+    brr.service at 176 MB RSS -- three orders of magnitude inside the fence --
+    because the surrounding `user@1000.service` crossed 50% pressure under an
+    editor, six Electron windows and two browsers, and the unit shipped
+    `ManagedOOMPreference=none` (i.e. eligible victim). A live run died with it.
+
+    Asserted on the *rendered* unit rather than the template source, and pinned to
+    the exact spelling systemd parses: `avoid` only deprioritises, `omit` removes
+    the cgroup from the candidate list, and the difference is the whole fix.
+    """
+    unit = linux.render_systemd_unit(
+        "/opt/venv/bin/brnrd", path_env="/opt/venv/bin:/usr/bin",
+        workdir=str(tmp_path / "does-not-exist"),
+    )
+
+    assert "ManagedOOMPreference=omit" in unit
+    # A supervisor is never merely deprioritised: `avoid` still leaves it in the
+    # candidate pool, which is what the pre-fix unit effectively had.
+    assert "ManagedOOMPreference=avoid" not in unit
+    assert "ManagedOOMPreference=none" not in unit
+    # The setting has to sit in [Service], not trail after [Install] -- systemd
+    # would parse it into the wrong section and silently ignore it.
+    service_section = unit.split("[Install]")[0]
+    assert "ManagedOOMPreference=omit" in service_section
+    # Sanity: this test can only pass because the fence it complements is present.
+    assert "OOMPolicy=continue" in service_section
+
+
 def test_render_systemd_unit_honours_config_override(tmp_path):
     """`daemon.memory_high` / `daemon.memory_max` in `.brr/config` raise the
     ceiling without editing the generated unit by hand."""
@@ -375,3 +407,111 @@ def test_install_next_steps_stay_bare_for_a_path_install(
     out = capsys.readouterr().out
     assert "next: `brnrd daemon status`" in out
     assert "npx" not in out
+
+
+# ── Installed-unit drift (#1160) ────────────────────────────────────
+#
+# `install()` rewrites the unit; nothing else ever does, and nothing compared
+# the installed file to the template. So every hardening line the project adds
+# reaches only the machines whose owner re-ran the installer. The 2026-08-05
+# oomd kill landed on exactly such a host.
+
+
+def test_missing_policy_directives_flags_a_unit_that_predates_the_oomd_fence(
+    tmp_path, monkeypatch
+):
+    """A pre-#1160 unit — correct in every other way — is named as drifted."""
+    unit_file = tmp_path / "brr.service"
+    unit_file.write_text(
+        "[Unit]\n"
+        "Description=brnrd daemon\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        "WorkingDirectory=/home/ada/proj\n"
+        "ExecStart=/opt/venv/bin/brnrd daemon up --foreground\n"
+        "Restart=on-failure\n"
+        "RestartSec=5s\n"
+        "OOMPolicy=continue\n"
+        "MemoryHigh=8G\n"
+        "MemoryMax=12G\n"
+        'Environment="PATH=/usr/bin"\n'
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(linux, "unit_path", lambda: unit_file)
+
+    assert linux.missing_policy_directives() == ["ManagedOOMPreference"]
+
+
+def test_missing_policy_directives_is_quiet_on_a_current_unit(tmp_path, monkeypatch):
+    """The alarm must not fire for a non-reason.
+
+    Rendered with a *different* PATH and workdir than any other test uses:
+    machine pins are excluded by name, so they can never produce drift.
+    """
+    unit_file = tmp_path / "brr.service"
+    unit_file.write_text(
+        linux.render_systemd_unit(
+            "/somewhere/else/brnrd",
+            path_env="/a/totally/different/path",
+            workdir=str(tmp_path / "other-repo"),
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(linux, "unit_path", lambda: unit_file)
+
+    assert linux.missing_policy_directives() == []
+
+
+def test_missing_policy_directives_does_not_accuse_an_operator_override(
+    tmp_path, monkeypatch
+):
+    """A deliberately different `MemoryMax=` is a choice, not drift.
+
+    The check asks *is this directive mentioned at all*, never *does it match* —
+    an operator who raised the ceiling by hand must not be nagged forever.
+    """
+    unit_file = tmp_path / "brr.service"
+    unit_file.write_text(
+        linux.render_systemd_unit(
+            "/opt/venv/bin/brnrd", path_env="/usr/bin",
+            workdir=str(tmp_path / "nope"),
+        ).replace("MemoryMax=12G", "MemoryMax=64G"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(linux, "unit_path", lambda: unit_file)
+
+    assert linux.missing_policy_directives() == []
+
+
+def test_missing_policy_directives_scans_a_nonempty_set_of_directives():
+    """Sanity: a rename in SYSTEMD_UNIT must not turn the check into a no-op.
+
+    Without this, a template refactor that changed the section header or the
+    `[Install]` split would make every assertion above pass over an empty
+    candidate set — green, and blind.
+    """
+    scanned = linux.template_service_directives()
+    assert len(scanned) >= 5, scanned
+    assert "ManagedOOMPreference" in scanned
+    assert "OOMPolicy" in scanned
+    assert "MemoryMax" in scanned
+    # [Unit] and [Install] directives are out of scope — an older unit that
+    # spells `After=` differently is not drifted hardening.
+    assert "After" not in scanned
+    assert "Wants" not in scanned
+    assert "WantedBy" not in scanned
+    assert "Description" not in scanned
+    # ...and the machine pins never appear, or every differing PATH is drift.
+    for pinned in linux._MACHINE_PINNED_DIRECTIVES:
+        assert pinned not in scanned
+
+
+def test_missing_policy_directives_is_silent_when_nothing_is_installed(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(linux, "unit_path", lambda: tmp_path / "absent.service")
+    assert linux.missing_policy_directives() == []
